@@ -1,8 +1,9 @@
 [tool.poetry]
 name = "cycls-dev"
+packages = [{ include = "cycls" }]
 version = "0.0.0.1"
 description = "Cycls SDK"
-authors = ["Mohammed Jamal <58256600+aburjg@users.noreply.github.com>"]
+authors = ["Mohammed Jamal <mj@cycls.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
