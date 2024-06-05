@@ -100,8 +100,10 @@ from types import AsyncGeneratorType
 Text = lambda x: StreamingResponse(x, media_type='text/event-stream') if type(x)==AsyncGeneratorType else PlainTextResponse(str(x))
 Message = Request
 
-# publish = Cycls(debug=True,port=8000)
+# poetry publish --build
 
-# @publish("hub")
+# push = Cycls(debug=True,port=8000)
+
+# @push("hub")
 # async def entry_point(x:Message):
 #     return Text(x.content)
