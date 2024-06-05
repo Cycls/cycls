@@ -7,6 +7,11 @@ import uvicorn, socket, httpx
 from concurrent.futures import ThreadPoolExecutor
 import time, subprocess
 
+import os
+current_dir = os.path.dirname(os.path.abspath(__file__))
+key_path = os.path.join(current_dir, 'key.pub')
+# print(key_path)
+
 class DictAsObject:
     def __init__(self, dict_data):
         self.__dict__.update(dict_data)
@@ -87,7 +92,8 @@ class Cycls:
 
     def tunnel(self):
         # ssh_command = ['ssh', '-q', '-i', 'tuns', '-o', 'StrictHostKeyChecking=no', '-R', f'{self.handle}-cycls:80:localhost:{self.port}', 'tuns.sh']
-        ssh_command = ['ssh', '-q', '-i', 'key.pub', '-o', 'StrictHostKeyChecking=no', '-R', f'{self.handle}-cycls:80:localhost:{self.port}', 'serveo.net']
+        # ssh_command = ['ssh', '-q', '-i', 'key.pub', '-o', 'StrictHostKeyChecking=no', '-R', f'{self.handle}-cycls:80:localhost:{self.port}', 'serveo.net']
+        ssh_command = ['ssh', '-q', '-i', key_path, '-o', 'StrictHostKeyChecking=no', '-R', f'{self.handle}-cycls:80:localhost:{self.port}', 'serveo.net']
         try:
             if self.debug: 
                 process = subprocess.run(ssh_command,stdin=subprocess.DEVNULL) # very tricky! STDIN is what was messing with me
@@ -101,9 +107,3 @@ Text = lambda x: StreamingResponse(x, media_type='text/event-stream') if type(x)
 Message = Request
 
 # poetry publish --build
-
-# push = Cycls(debug=True,port=8000)
-
-# @push("hub")
-# async def entry_point(x:Message):
-#     return Text(x.content)
