@@ -47,7 +47,9 @@ def push(m: Message):
 ```py
 from cycls import Cycls, Text, Message
 
-@Cycls("hi")
+push = Cycls()
+
+@push("hi")
 def app(m: Message):
     return Text(m.content)
 ```
@@ -55,7 +57,9 @@ def app(m: Message):
 ```py
 from cycls import Cycls, Text, Message
 
-@Cycls("hi")
+push = Cycls()
+
+@push("hi")
 async def app(m: Message):
     return Text(m.content)
 ```
