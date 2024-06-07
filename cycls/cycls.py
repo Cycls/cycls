@@ -1,8 +1,10 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, PlainTextResponse
+from pydantic import BaseModel
 
 from functools import wraps
 import uvicorn, socket, httpx
+import inspect
 
 from concurrent.futures import ThreadPoolExecutor
 import time, subprocess
@@ -12,12 +14,9 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 key_path = os.path.join(current_dir, 'key.pub')
 # print(key_path)
 
-class DictAsObject:
-    def __init__(self, dict_data):
-        self.__dict__.update(dict_data)
-
-    def __getattr__(self, item):
-        return self.__dict__.get(item)
+class Message(BaseModel):
+    content: str
+    handle: str
 
 def find_available_port(start_port):
     port = start_port
@@ -28,26 +27,32 @@ def find_available_port(start_port):
             port += 1
 
 class Cycls:
-    def __init__(self, network="https://cycls.com", port=find_available_port(8001),url="",debug=True):
+    def __init__(self,network="https://cycls.com", port=find_available_port(8001),url="",debug=False):
+        self.handle = None
         self.server = FastAPI()
         self.network = network
         self.port = port
-        self.handle = None
         self.url = url
         self.debug = debug
 
-    def __call__(self, handle): 
+    def __call__(self, handle):
         self.handle = handle
         def decorator(func):
-            @wraps(func)
-            async def decorated_func(x):
-                request_json = await x.json()
-                return await func(DictAsObject(request_json))
-            self.server.post('/main')(decorated_func)
-            self.publish()
-            return decorated_func
+            if inspect.iscoroutinefunction(func):
+                @wraps(func)
+                async def async_wrapper(*args, **kwargs):
+                    return await func(*args, **kwargs)
+                self.server.post('/main')(async_wrapper)
+                self.publish()
+                return async_wrapper
+            else:
+                @wraps(func)
+                def sync_wrapper(*args, **kwargs):
+                    return func(*args, **kwargs)
+                self.server.post('/main')(sync_wrapper)
+                self.publish()
+                return sync_wrapper
         return decorator
-
 
     def publish(self):
         prod=False
@@ -104,6 +109,5 @@ class Cycls:
 
 from types import AsyncGeneratorType
 Text = lambda x: StreamingResponse(x, media_type='text/event-stream') if type(x)==AsyncGeneratorType else PlainTextResponse(str(x))
-Message = Request
 
 # poetry publish --build
