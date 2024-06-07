@@ -1,10 +1,10 @@
-### cycls-py
+# cycls.py
 
 ```sh
 pip install cycls
 ```
 
-### sync 
+## sync app
 ```py
 from cycls import Cycls, Message, Text
 
@@ -16,7 +16,7 @@ def app(m: Message):
 ```
 `https://cycls.com/@cake`
 
-### async
+## async app
 ```py
 from cycls import Cycls, Message, Text
 
@@ -28,12 +28,12 @@ async def app(m: Message):
 ```
 `https://cycls.com/@her`
 
-### debug
+## debug
 ```py
 push = Cycls(debug=True)
 ```
 
-## groq example
+## groq app
 ```py
 from cycls import Cycls, Message, Text
 from groq import AsyncGroq
