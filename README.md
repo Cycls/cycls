@@ -67,6 +67,3 @@ async def app(x:Message):
     return Text(stream)
 ```
 `https://cycls.com/@groq-app`
-
-
-✦/✧
