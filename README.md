@@ -67,3 +67,6 @@ async def app(x:Message):
     return Text(stream)
 ```
 `https://cycls.com/@groq-app`
+
+# Known issues
+- Dev mode doesn't work on Windows machines
