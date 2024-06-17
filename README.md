@@ -75,6 +75,7 @@ def app(m:Message):
    print(m.history)
    return Text(m.content)
 ```
+`https://cycls.com/@cake`
 
 ## groq app with history
 ```py
@@ -107,6 +108,7 @@ async def app(m:Message):
     stream = await llm(x)
     return Text(stream)
 ```
+`https://cycls.com/@groq-app`
 
 # Known issues
 - Dev mode doesn't work on Windows machines
