@@ -14,11 +14,13 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 key_path = os.path.join(current_dir, 'key.pub')
 # print(key_path)
 
-from typing import List, Dict
+from typing import List, Dict, Optional
 class Message(BaseModel):
     handle: str
     content: str
-    history: List[Dict[str, str]]
+    # history: List[Dict[str, str]] = []
+    history: Optional[List[Dict[str, str]]] = None
+
 
 def find_available_port(start_port):
     port = start_port
@@ -111,4 +113,4 @@ class Cycls:
 
 Text = StreamingResponse
 
-# poetry publish --build
+# ç

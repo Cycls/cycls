@@ -3,7 +3,7 @@
 #version = "0.0.1.3"
 
 name = "cycls"
-version = "0.0.2.9"
+version = "0.0.2.12"
 
 packages = [{ include = "cycls" }]
 description = "Cycls SDK"
@@ -14,7 +14,6 @@ readme = "README.md"
 python = "^3.8"
 fastapi = "^0.111.0"
 httpx = "^0.27.0"
-groq = "^0.9.0"
 
 
 [build-system]
