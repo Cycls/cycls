@@ -14,9 +14,11 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 key_path = os.path.join(current_dir, 'key.pub')
 # print(key_path)
 
+from typing import List, Dict
 class Message(BaseModel):
-    content: str
     handle: str
+    content: str
+    history: List[Dict[str, str]]
 
 def find_available_port(start_port):
     port = start_port
@@ -107,7 +109,6 @@ class Cycls:
         except Exception as e:
             print(f"An error occurred: {e}") # exit app
 
-from types import AsyncGeneratorType
-Text = lambda x: StreamingResponse(x, media_type='text/event-stream') if type(x)==AsyncGeneratorType else PlainTextResponse(str(x))
+Text = StreamingResponse
 
 # poetry publish --build
