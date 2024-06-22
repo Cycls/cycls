@@ -30,7 +30,6 @@ network = "https://7c0ed7ef-03ed-48bd-8eda-a6a9a5e846e2-00-2bs5oneddesjb.picard.
 push = Cycls(network=network)
 @push("spark")
 def app(m: Message):
-    # print(x)
     print("history",m.history)
     print("session_id",m.session_id)
     return Text(m.content)

@@ -86,9 +86,11 @@ class Cycls:
         print(f"\n✦/✧ serving at port: {self.port}\n")
         if prod:
             print("✦/✧","production mode",f"url: {self.url}\n")
+            register(self.handle, self.network, self.url, "prod")
         else:
             self.url = f"http://{self.handle}-cycls.tuns.karpov.solutions"
             print("✦/✧","development mode\n")
+            register(self.handle, self.network, self.url, "dev")
             t2 = asyncio.create_task(run_server(self.server,self.port))
             
         print("✦/✧",f"visit app: {self.network}/@{self.handle}","\n")
