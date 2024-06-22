@@ -16,10 +16,6 @@
 
 #     return event_stream()
 
-from cycls import Cycls, Message, Text
-
-push = Cycls(debug=True)
-
 # @push("groq-app")
 # async def app(m:Message):
 #     x  = [{"role": "system", "content": "you are a helpful assistant."}]
@@ -30,8 +26,11 @@ push = Cycls(debug=True)
 
 from cycls import Cycls
 from cycls import Message, Text
-push = Cycls(debug=True)
+network = "https://7c0ed7ef-03ed-48bd-8eda-a6a9a5e846e2-00-2bs5oneddesjb.picard.replit.dev"
+push = Cycls(network=network)
 @push("spark")
 def app(m: Message):
-    print(m.history)
+    # print(x)
+    print("history",m.history)
+    print("session_id",m.session_id)
     return Text(m.content)
