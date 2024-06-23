@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Dict, Optional
@@ -17,7 +17,7 @@ key_path = os.path.join(current_dir, 'tuns')
 class Message(BaseModel):
     handle: str
     content: str
-    session_id: str
+    id: str
     history: Optional[List[Dict[str, str]]] = None
 
 def find_available_port(start_port):
@@ -29,23 +29,23 @@ def find_available_port(start_port):
             port += 1
 
 import asyncssh, asyncio
+
 async def create_ssh_tunnel(x,y,z='tuns.sh'):
     try:
         async with asyncssh.connect(z,client_keys=[key_path],known_hosts=None) as conn:
-            await conn.forward_remote_port(x, 80, 'localhost', y)
+            listener = await conn.forward_remote_port(x, 80, 'localhost', y)
             print("✦/✧","tunnel established\n")
-            await asyncio.Future()  # run forever
+            await listener.wait_closed()
     except (OSError, asyncssh.Error) as e:
         print("✦/✧",f"tunnel disconnected: {e}")
 
-def register(handle, network, url, mode):
+def register(handles, network, url, mode):
     try:
         with httpx.Client() as client:
-            response = client.post(f"{network}/register", json={"handle":f"@{handle}", "url":url, "mode":mode})
+            response = client.post(f"{network}/register", json={"handles":handles, "url":url, "mode":mode})
             if response.status_code==200:
                 data = (response.json()).get("content")
-                print(f"✦/✧ {data}")
-                print("")
+                for i in data:print(f"✦/✧ {i}")
             else:
                 print("✦/✧ failed to register ⚠️")
     except Exception as e:
@@ -57,15 +57,16 @@ async def run_server(x,y):
     await server.serve()
 
 class Cycls:
-    def __init__(self,network="https://cycls.com", port=find_available_port(8001),url=""):
-        self.handle = None
+    def __init__(self, url="", network="https://cycls.com", port=find_available_port(8001)):
+        import uuid
+        self.subdomain = str(uuid.uuid4())[:8]
         self.server = FastAPI()
         self.network = network
         self.port = port
         self.url = url
+        self.apps = {}
 
     def __call__(self, handle):
-        self.handle = handle
         def decorator(func):
             @wraps(func)
             async def async_wrapper(*args, **kwargs):
@@ -74,11 +75,21 @@ class Cycls:
             def sync_wrapper(*args, **kwargs):
                 return func(*args, **kwargs)
             wrapper = async_wrapper if inspect.iscoroutinefunction(func) else sync_wrapper
-            self.server.post(f'/@{handle}', name=f"handle")(wrapper)
+            self.apps["@"+handle] = wrapper
             return wrapper
         return decorator
+    
+    async def gateway(self, request: Request):
+        data = await request.json()
+        handle = data.get('handle')
+        if handle in self.apps:
+            func = self.apps[handle]
+            message = Message(**data)
+            return await func(message) if inspect.iscoroutinefunction(func) else func(message)
+        return {"error": "Handle not found"}
 
-    def start(self):
+    def push(self):
+        self.server.post("/gateway")(self.gateway)
         asyncio.run(self.publish())
 
     async def publish(self):
@@ -86,20 +97,21 @@ class Cycls:
         if self.url != "":
             prod=True
 
-        print(f"\n✦/✧ serving at port: {self.port}\n")
+        print(f"✦/✧ serving at port: {self.port}")
         if prod:
-            print("✦/✧","production mode",f"url: {self.url}\n")
-            register(self.handle, self.network, self.url, "prod")
+            print("✦/✧","production mode",f"url: {self.url}")
+            register(list(self.apps.keys()), self.network, self.url+"/gateway", "prod")
         else:
-            self.url = f"http://{self.handle}-cycls.tuns.sh"
-            print("✦/✧","development mode\n")
-            print("✦/✧",f"url {self.url}\n")
-            register(self.handle, self.network, self.url, "dev")
+            self.url = f"http://{self.subdomain}-cycls.tuns.sh"
+            print("✦/✧","development mode")
+            print("✦/✧",f"url {self.url}")
+            register(list(self.apps.keys()), self.network, self.url+"/gateway", "dev")
             t2 = asyncio.create_task(run_server(self.server,self.port))
             
-        print("✦/✧",f"visit app: {self.network}/@{self.handle}","\n")
+        for i in self.apps:
+            print("✦/✧",f"visit app: {self.network}/{i}")
 
-        t1 = asyncio.create_task(create_ssh_tunnel(f"{self.handle}-cycls", self.port))
+        t1 = asyncio.create_task(create_ssh_tunnel(f"{self.subdomain}-cycls", self.port))
         await asyncio.gather(t1, t2) if not prod else asyncio.gather(t2)
 
 Text = StreamingResponse
