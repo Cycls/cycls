@@ -106,10 +106,11 @@ class Cycls:
             print("✦/✧","development mode")
             # print("✦/✧",f"url {self.url}")
             register(list(self.apps.keys()), self.network, self.url+"/gateway", "dev")
-            t2 = asyncio.create_task(run_server(self.server,self.port))
+            t1 = asyncio.create_task(create_ssh_tunnel(f"{self.subdomain}-cycls", self.port))
 
-        t1 = asyncio.create_task(create_ssh_tunnel(f"{self.subdomain}-cycls", self.port))
-        await asyncio.gather(t1, t2) if not prod else asyncio.gather(t2)
+        t2 = asyncio.create_task(run_server(self.server,self.port))
+        
+        await asyncio.gather(t1, t2) if not prod else await asyncio.gather(t2)
 
 Text = StreamingResponse
 
