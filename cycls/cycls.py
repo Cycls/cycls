@@ -10,6 +10,10 @@ import inspect
 import logging
 logging.basicConfig(level=logging.ERROR)
 
+import os
+current_dir = os.path.dirname(os.path.abspath(__file__))
+key_path = os.path.join(current_dir, 'tuns')
+
 class Message(BaseModel):
     handle: str
     content: str
@@ -25,9 +29,9 @@ def find_available_port(start_port):
             port += 1
 
 import asyncssh, asyncio
-async def create_ssh_tunnel(x,y,z='tuns.karpov.solutions'):
+async def create_ssh_tunnel(x,y,z='tuns.sh'):
     try:
-        async with asyncssh.connect(z,port=2222,known_hosts=None) as conn:
+        async with asyncssh.connect(z,client_keys=[key_path],known_hosts=None) as conn:
             await conn.forward_remote_port(x, 80, 'localhost', y)
             print("✦/✧","tunnel established\n")
             await asyncio.Future()  # run forever
@@ -62,20 +66,16 @@ class Cycls:
     def __call__(self, handle):
         self.handle = handle
         def decorator(func):
-            if inspect.iscoroutinefunction(func):
-                @wraps(func)
-                async def async_wrapper(*args, **kwargs):
-                    return await func(*args, **kwargs)
-                self.server.post('/main')(async_wrapper)
-                asyncio.run(self.publish())
-                return async_wrapper
-            else:
-                @wraps(func)
-                def sync_wrapper(*args, **kwargs):
-                    return func(*args, **kwargs)
-                self.server.post('/main')(sync_wrapper)
-                asyncio.run(self.publish())
-                return sync_wrapper
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                return await func(*args, **kwargs)
+            @wraps(func)
+            def sync_wrapper(*args, **kwargs):
+                return func(*args, **kwargs)
+            wrapper = async_wrapper if inspect.iscoroutinefunction(func) else sync_wrapper
+            self.server.post('/main')(wrapper)
+            asyncio.run(self.publish())
+            return wrapper
         return decorator
 
     async def publish(self):
@@ -88,8 +88,9 @@ class Cycls:
             print("✦/✧","production mode",f"url: {self.url}\n")
             register(self.handle, self.network, self.url, "prod")
         else:
-            self.url = f"http://{self.handle}-cycls.tuns.karpov.solutions"
+            self.url = f"http://{self.handle}-cycls.tuns.sh"
             print("✦/✧","development mode\n")
+            print("✦/✧",f"url {self.url}\n")
             register(self.handle, self.network, self.url, "dev")
             t2 = asyncio.create_task(run_server(self.server,self.port))
             
