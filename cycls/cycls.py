@@ -34,7 +34,7 @@ async def create_ssh_tunnel(x,y,z='tuns.sh'):
     try:
         async with asyncssh.connect(z,client_keys=[key_path],known_hosts=None) as conn:
             listener = await conn.forward_remote_port(x, 80, 'localhost', y)
-            print("✦/✧","tunnel established\n")
+            print("✦/✧","tunnel\n")
             await listener.wait_closed()
     except (OSError, asyncssh.Error) as e:
         print("✦/✧",f"tunnel disconnected: {e}")
@@ -45,7 +45,7 @@ def register(handles, network, url, mode):
             response = client.post(f"{network}/register", json={"handles":handles, "url":url, "mode":mode})
             if response.status_code==200:
                 data = (response.json()).get("content")
-                for i in data:print(f"✦/✧ {i}")
+                for i in data:print(f"✦/✧ {i[0]} / {network}/{i[1]}")
             else:
                 print("✦/✧ failed to register ⚠️")
     except Exception as e:
@@ -99,19 +99,18 @@ class Cycls:
 
         print(f"✦/✧ serving at port: {self.port}")
         if prod:
-            print("✦/✧","production mode",f"url: {self.url}")
+            print("✦/✧",f"production mode | url: {self.url}")
             register(list(self.apps.keys()), self.network, self.url+"/gateway", "prod")
         else:
             self.url = f"http://{self.subdomain}-cycls.tuns.sh"
             print("✦/✧","development mode")
-            print("✦/✧",f"url {self.url}")
+            # print("✦/✧",f"url {self.url}")
             register(list(self.apps.keys()), self.network, self.url+"/gateway", "dev")
             t2 = asyncio.create_task(run_server(self.server,self.port))
-            
-        for i in self.apps:
-            print("✦/✧",f"visit app: {self.network}/{i}")
 
         t1 = asyncio.create_task(create_ssh_tunnel(f"{self.subdomain}-cycls", self.port))
         await asyncio.gather(t1, t2) if not prod else asyncio.gather(t2)
 
 Text = StreamingResponse
+
+# poetry publish --build
