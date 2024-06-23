@@ -35,8 +35,19 @@ push = Cycls(network=network)
 #     print("session_id",m.session_id)
 #     return Text(m.content)
 
+
+# @push("cake")
+# async def app1(m: Message):
+#     print("history",m.history)
+#     print("session_id",m.session_id)
+#     return Text(m.content)
+
 @push("spark")
-async def app(m: Message):
+async def app2(m: Message):
     print("history",m.history)
     print("session_id",m.session_id)
     return Text(m.content)
+
+print(push.server.routes)
+
+push.start()

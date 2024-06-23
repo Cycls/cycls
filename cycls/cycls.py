@@ -43,7 +43,8 @@ def register(handle, network, url, mode):
         with httpx.Client() as client:
             response = client.post(f"{network}/register", json={"handle":f"@{handle}", "url":url, "mode":mode})
             if response.status_code==200:
-                print(f"✦/✧ published 🎉")
+                data = (response.json()).get("content")
+                print(f"✦/✧ {data}")
                 print("")
             else:
                 print("✦/✧ failed to register ⚠️")
@@ -73,10 +74,12 @@ class Cycls:
             def sync_wrapper(*args, **kwargs):
                 return func(*args, **kwargs)
             wrapper = async_wrapper if inspect.iscoroutinefunction(func) else sync_wrapper
-            self.server.post('/main')(wrapper)
-            asyncio.run(self.publish())
+            self.server.post(f'/@{handle}', name=f"handle")(wrapper)
             return wrapper
         return decorator
+
+    def start(self):
+        asyncio.run(self.publish())
 
     async def publish(self):
         prod=False
