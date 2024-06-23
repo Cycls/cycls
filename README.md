@@ -41,5 +41,10 @@ cycls.push()
 - `Text` renders markdown
 - `Text` is both streaming/bulk based on input
 
+try it live
+- https://cycls.com/@groq
+- https://cycls.com/@openai
 
-Try it live https://cycls.com/@groq
+code examples
+- https://github.com/Cycls/examples/blob/main/groq.py
+- https://github.com/Cycls/examples/blob/main/openai.py
