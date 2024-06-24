@@ -16,30 +16,29 @@ pip install cycls
 ```
 
 ```py
-from cycls import Cycls, Text
+from cycls import Cycls
 
 cycls = Cycls()
 
 # sync app on https://cycls.com/@spark
 @cycls("spark")
-def spark_app(x):
-    print("history", x.history)
-    print("session id", x.id)
-    return Text(x.content+" from spark")
+def spark_app(message):
+    print("history", message.history)
+    print("session id", message.id)
+    return message.content + "from spark"
 
 # async app on https://cycls.com/@cake
 @cycls("cake")
-async def cake_app(x):
-    print("history", x.history)
-    print("session id", x.id)
-    return Text(x.content+" from cake")
+async def cake_app(message):
+    print("history", message.history)
+    print("session id", message.id)
+    return message.content + "from cake"
 
 # publish to https://cycls.com
 cycls.push()
 ```
 
-- `Text` renders markdown
-- `Text` is both streaming/bulk based on input
+Return a string. Supports markdown. Supports generators for streaming responses.
 
 try it live
 - https://cycls.com/@groq

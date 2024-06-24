@@ -70,10 +70,10 @@ class Cycls:
         def decorator(func):
             @wraps(func)
             async def async_wrapper(*args, **kwargs):
-                return await func(*args, **kwargs)
+                return StreamingResponse(await func(*args, **kwargs))
             @wraps(func)
             def sync_wrapper(*args, **kwargs):
-                return func(*args, **kwargs)
+                return StreamingResponse(func(*args, **kwargs))
             wrapper = async_wrapper if inspect.iscoroutinefunction(func) else sync_wrapper
             self.apps["@"+handle] = wrapper
             return wrapper
@@ -111,7 +111,5 @@ class Cycls:
         t2 = asyncio.create_task(run_server(self.server,self.port))
         
         await asyncio.gather(t1, t2) if not prod else await asyncio.gather(t2)
-
-Text = StreamingResponse
 
 # poetry publish --build
