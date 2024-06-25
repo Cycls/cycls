@@ -15,17 +15,28 @@
 pip install cycls
 ```
 
+# Apps
+Instantly publish and share AI-native apps
+
 ```py
 from cycls import Cycls
 
 cycls = Cycls()
 
-# sync app on https://cycls.com/@spark
+# app on https://cycls.com/@spark
 @cycls("@spark")
 def spark_app(message):
-    print("history", message.history)
-    print("session id", message.id)
     return message.content + "from spark"
+
+# publish
+cycls.push()
+```
+
+Async app with history and session id
+```py
+from cycls import Cycls
+
+cycls = Cycls()
 
 # async app on https://cycls.com/@cake
 @cycls("@cake")
@@ -34,16 +45,26 @@ async def cake_app(message):
     print("session id", message.id)
     return message.content + "from cake"
 
-# publish to https://cycls.com
 cycls.push()
 ```
 
-Return a string. Supports markdown. Supports generators for streaming responses.
+Try it now
+- https://cycls.com/@groq   | [groq.py](https://github.com/Cycls/examples/blob/main/groq.py)
+- https://cycls.com/@openai | [openai.py](https://github.com/Cycls/examples/blob/main/openai.py)
+ 
+# Agents
+Apps in Cycls double as **agents**. Call agents from the Cycls universe.
+```py
+from cycls import Cycls
 
-try it live
-- https://cycls.com/@groq
-- https://cycls.com/@openai
+cycls = Cycls()
 
-code examples
-- https://github.com/Cycls/examples/blob/main/groq.py
-- https://github.com/Cycls/examples/blob/main/openai.py
+# agent/app on https://cycls.com/@sparkle
+@cycls("@sparkle")
+async def sparkle_app(message):
+    return cycls.call("@groq", message.content)
+
+cycls.push()
+```
+    
+   
