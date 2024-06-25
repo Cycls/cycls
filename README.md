@@ -21,14 +21,14 @@ from cycls import Cycls
 cycls = Cycls()
 
 # sync app on https://cycls.com/@spark
-@cycls("spark")
+@cycls("@spark")
 def spark_app(message):
     print("history", message.history)
     print("session id", message.id)
     return message.content + "from spark"
 
 # async app on https://cycls.com/@cake
-@cycls("cake")
+@cycls("@cake")
 async def cake_app(message):
     print("history", message.history)
     print("session id", message.id)
