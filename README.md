@@ -16,7 +16,7 @@ pip install cycls
 ```
 
 # Apps
-Instantly publish and share AI-native apps
+Instantly publish & share AI agents/apps
 
 ```py
 from cycls import Cycls
