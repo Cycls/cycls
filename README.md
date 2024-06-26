@@ -25,8 +25,8 @@ cycls = Cycls()
 
 # https://cycls.com/@spark
 @cycls("@spark")
-def app(message):
-    return message.content + "from spark"
+def app(x):
+    return x.content + "from spark"
 
 # publish
 cycls.push()
@@ -39,10 +39,10 @@ from cycls import Cycls
 cycls = Cycls()
 
 @cycls("@spark")
-async def app(message):
-    print("history", message.history)
-    print("session id", message.id)
-    return message.content + "from spark"
+async def app(x):
+    print("history", x.history)
+    print("session id", x.id)
+    return x.content + "from spark"
 
 cycls.push()
 ```
@@ -55,9 +55,9 @@ from cycls import Cycls
 cycls = Cycls()
 
 @cycls("@spark")
-async def app(message):
+async def app(x):
     # call to agent @groq
-    return cycls.call("@groq", message.content)
+    return cycls.call("@groq", x.content)
 
 cycls.push()
 ```
