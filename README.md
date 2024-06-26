@@ -63,7 +63,7 @@ async def sparkle_app(message):
 cycls.push()
 ```
 
-Try it now
+### Try it live
 - https://cycls.com/@groq   | [groq.py](https://github.com/Cycls/examples/blob/main/groq.py)
 - https://cycls.com/@openai | [openai.py](https://github.com/Cycls/examples/blob/main/openai.py)
 
