@@ -47,7 +47,7 @@ cycls.push()
 ```
 
 # Agents
-Apps in Cycls double as `agents`. Call agents from the Cycls [universe](https://explore.cycls.com).
+Apps in Cycls double as `agents`. Call agents from the Cycls [Universe](https://explore.cycls.com).
 ```py
 from cycls import Cycls
 
@@ -62,8 +62,8 @@ cycls.push()
 ```
 
 ### Try it live
-- [cycls.com/@groq](https://cycls.com/@groq)   | [groq.py](https://github.com/Cycls/examples/blob/main/groq.py)
-- [cycls.com/@groq](https://cycls.com/@openai) | [openai.py](https://github.com/Cycls/examples/blob/main/openai.py)
+- [cycls.com/@groq](https://cycls.com/@groq)     | [groq.py](https://github.com/Cycls/examples/blob/main/groq.py)
+- [cycls.com/@openai](https://cycls.com/@openai) | [openai.py](https://github.com/Cycls/examples/blob/main/openai.py)
 
 </br>✦/✧</br>
    
