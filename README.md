@@ -27,11 +27,11 @@ cycls = Cycls()
 def app(x):
     return x.content + "from spark"
 
-# https://cycls.com/@spark
 cycls.push()
 ```
-
-Async app with message `history` and session `id`
+`cycls.push()` will then publish the app `@spark` on https://cycls.com/@spark
+## Async Apps
+For performance and scale, make the app function asynchronous. The following is an async app with message `history` and session `id`
 ```py
 from cycls import Cycls
 
@@ -39,8 +39,8 @@ cycls = Cycls()
 
 @cycls("@spark")
 async def app(x):
-    print(x.history) # history
-    print(x.id)      # session id 
+    print(x.history)
+    print(x.id)
     return x.content + "from spark"
 
 cycls.push()
