@@ -53,7 +53,7 @@ Try it now
 - https://cycls.com/@openai | [openai.py](https://github.com/Cycls/examples/blob/main/openai.py)
  
 # Agents
-Apps in Cycls double as `agents`. Call agents from the Cycls universe.
+Apps in Cycls double as `agents`. Call agents from the Cycls [universe](https://explore.cycls.com).
 ```py
 from cycls import Cycls
 
