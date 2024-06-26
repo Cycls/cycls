@@ -16,7 +16,7 @@ pip install cycls
 ```
 
 # Apps
-Instantly publish & share AI agents/apps
+Instantly publish & share AI `agents` / `apps`
 
 ```py
 from cycls import Cycls
@@ -32,7 +32,7 @@ def spark_app(message):
 cycls.push()
 ```
 
-Async app with history and session id
+Async app with `history` and session `id`
 ```py
 from cycls import Cycls
 
@@ -53,7 +53,7 @@ Try it now
 - https://cycls.com/@openai | [openai.py](https://github.com/Cycls/examples/blob/main/openai.py)
  
 # Agents
-Apps in Cycls double as **agents**. Call agents from the Cycls universe.
+Apps in Cycls double as `agents`. Call agents from the Cycls universe.
 ```py
 from cycls import Cycls
 
@@ -66,5 +66,5 @@ async def sparkle_app(message):
 
 cycls.push()
 ```
-    
+</br>✦/✧</br>
    
