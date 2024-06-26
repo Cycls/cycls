@@ -29,7 +29,7 @@ def app(x):
 
 cycls.push()
 ```
-`cycls.push()` will then publish the app `@spark` on https://cycls.com/@spark
+`cycls.push()` will then publish the app `@spark` on [cycls.com/@spark](https://cycls.com/@spark)
 ## Async Apps
 For performance and scale, make the app function asynchronous. The following is an async app with message `history` and session `id`
 ```py
@@ -62,8 +62,8 @@ cycls.push()
 ```
 
 ### Try it live
-- https://cycls.com/@groq   | [groq.py](https://github.com/Cycls/examples/blob/main/groq.py)
-- https://cycls.com/@openai | [openai.py](https://github.com/Cycls/examples/blob/main/openai.py)
+- [cycls.com/@groq](https://cycls.com/@groq)   | [groq.py](https://github.com/Cycls/examples/blob/main/groq.py)
+- [cycls.com/@groq](https://cycls.com/@openai) | [openai.py](https://github.com/Cycls/examples/blob/main/openai.py)
 
 </br>✦/✧</br>
    
