@@ -15,8 +15,8 @@
 pip install cycls
 ```
 
-# Agents
-Instantly publish and share AI agents
+# Apps
+Instantly publish and share AI apps
 
 ```py
 from cycls import Cycls
@@ -24,14 +24,14 @@ from cycls import Cycls
 cycls = Cycls()
 
 @cycls("@spark")
-def agent(x):
+def app(x):
     return x.content + "from spark"
 
 cycls.push()
 ```
-`cycls.push()` will then publish the agent `@spark` on [cycls.com/@spark](https://cycls.com/@spark)
-## Async Agents
-For performance, make the agent function asynchronous. The following is an async agent with message `history` and session `id`
+`cycls.push()` will then publish the app `@spark` on [cycls.com/@spark](https://cycls.com/@spark)
+## Async Apps
+For performance, make the function asynchronous. The following is an async app with message `history` and session `id`
 ```py
 from cycls import Cycls
 
@@ -45,8 +45,8 @@ async def agent(x):
 cycls.push()
 ```
 
-## Call Agents
-Call any public agent, see [explore](https://explore.cycls.com)
+# Agents
+Call any public app as an agent, see [explore](https://explore.cycls.com)
 ```py
 from cycls import Cycls
 
