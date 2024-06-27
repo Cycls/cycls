@@ -64,5 +64,5 @@ cycls.push()
 - [cycls.com/@groq](https://cycls.com/@groq)     | [groq.py](https://github.com/Cycls/examples/blob/main/groq.py)
 - [cycls.com/@openai](https://cycls.com/@openai) | [openai.py](https://github.com/Cycls/examples/blob/main/openai.py)
 
-</br>✦/✧</br>
-   
+</br>
+</br>
