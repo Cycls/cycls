@@ -38,7 +38,7 @@ from cycls import Cycls
 cycls = Cycls()
 
 @cycls("@spark")
-async def agent(x):
+async def app(x):
     print(x.history, x.id)
     return x.content + "from spark"
 
@@ -53,7 +53,7 @@ from cycls import Cycls
 cycls = Cycls()
 
 @cycls("@spark")
-async def agent(x):
+async def app(x):
     return cycls.call("@groq",
                        x.content)
 
