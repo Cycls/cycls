@@ -15,7 +15,7 @@
 pip install cycls
 ```
 
-# Apps ✧
+# Apps ✦
 Instantly publish and share AI apps
 
 ```py
@@ -45,7 +45,7 @@ async def app(x):
 cycls.push()
 ```
 
-# Agents ✦
+# Agents ✧
 Call any public app as an agent, see [explore](https://explore.cycls.com)
 ```py
 from cycls import Cycls
