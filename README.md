@@ -15,8 +15,8 @@
 pip install cycls
 ```
 
-# Apps
-Instantly publish and share AI `agents` / `apps`
+# Agents
+Instantly publish and share AI agents
 
 ```py
 from cycls import Cycls
@@ -24,21 +24,21 @@ from cycls import Cycls
 cycls = Cycls()
 
 @cycls("@spark")
-def app(x):
+def agent(x):
     return x.content + "from spark"
 
 cycls.push()
 ```
-`cycls.push()` will then publish the app `@spark` on [cycls.com/@spark](https://cycls.com/@spark)
-## Async Apps
-For performance and scale, make the app function asynchronous. The following is an async app with message `history` and session `id`
+`cycls.push()` will then publish the agent `@spark` on [cycls.com/@spark](https://cycls.com/@spark)
+## Async Agents
+For performance, make the agent function asynchronous. The following is an async agent with message `history` and session `id`
 ```py
 from cycls import Cycls
 
 cycls = Cycls()
 
 @cycls("@spark")
-async def app(x):
+async def agent(x):
     print(x.history)
     print(x.id)
     return x.content + "from spark"
@@ -46,17 +46,17 @@ async def app(x):
 cycls.push()
 ```
 
-# Agents
-Apps in Cycls double as `agents`. Call agents from the Cycls [Universe](https://explore.cycls.com).
+## Call Agents
+Call any public agent, see [explore](https://explore.cycls.com)
 ```py
 from cycls import Cycls
 
 cycls = Cycls()
 
 @cycls("@spark")
-async def app(x):
-    # agent call @groq
-    return cycls.call("@groq", x.content)
+async def agent(x):
+    return cycls.call("@groq",
+                       x.content)
 
 cycls.push()
 ```
