@@ -39,8 +39,7 @@ cycls = Cycls()
 
 @cycls("@spark")
 async def agent(x):
-    print(x.history)
-    print(x.id)
+    print(x.history, x.id)
     return x.content + "from spark"
 
 cycls.push()
