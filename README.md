@@ -1,4 +1,12 @@
-</br></br><p align="center"><img src="https://cycls.com/static/assets/logo-gold.svg" alt="Cycls" width="150"></p></br>
+</br></br>
+<p align="center">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://cycls.com/static/assets/logo-gold.svg">
+      <source media="(prefers-color-scheme: light)" srcset="https://cycls.com/static/assets/logo.svg">
+      <img alt="Cycls" src="https://cycls.com/static/assets/logo.svg" width="150">
+    </picture>
+</p>
+</br></br>
 
 <div align="center">
     <a href="https://pypi.org/project/cycls/" target="_blank" rel="noopener noreferrer">
