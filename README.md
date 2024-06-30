@@ -37,7 +37,7 @@ def app(x):
 
 cycls.push()
 ```
-`cycls.push()` will then publish the app `@spark` on [cycls.com/@spark](https://cycls.com/@spark)
+`cycls.push()` will then publish the app `@spark-dev` on [cycls.com/@spark-dev](https://cycls.com/@spark-dev)
 ## Async Apps
 For performance, make the function asynchronous. The following is an async app with message `history` and session `id`
 ```py
