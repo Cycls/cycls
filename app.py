@@ -1,7 +1,8 @@
 from cycls import Cycls
 
-graph = "https://7c0ed7ef-03ed-48bd-8eda-a6a9a5e846e2-00-2bs5oneddesjb.picard.replit.dev"
-cycls = Cycls(graph=graph)
+net = "https://7c0ed7ef-03ed-48bd-8eda-a6a9a5e846e2-00-2bs5oneddesjb.picard.replit.dev"
+
+cycls = Cycls(net=net)
 
 # cycls = Cycls()
 
@@ -17,7 +18,7 @@ async def take_app(x):
     print("session id", x.id)
     return x.content + " take"
 
-@cycls("@op")
+@cycls("@agent")
 async def agent_app(x):
     return cycls.call("@groq", x.content) # why not await?
     
