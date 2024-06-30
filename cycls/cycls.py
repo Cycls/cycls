@@ -89,7 +89,6 @@ class Cycls:
     async def gateway(self, request: Request):
         data = await request.json()
         handle = data.get('handle')
-        print(handle,self.apps)
         if handle in self.apps:
             func = self.apps[handle]
             message = Message(**data)
