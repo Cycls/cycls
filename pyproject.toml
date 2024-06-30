@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cycls"
-version = "0.0.2.21"
+version = "0.0.2.22"
 
 packages = [{ include = "cycls" }]
 description = "Cycls SDK"
