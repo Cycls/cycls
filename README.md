@@ -31,13 +31,13 @@ from cycls import Cycls
 
 cycls = Cycls()
 
-@cycls("@spark")
+@cycls("@spark") # pick a unique handle name
 def app(x):
     return x.content + "from spark"
 
 cycls.push()
 ```
-`cycls.push()` will then publish the app `@spark-dev` on [cycls.com/@spark-dev](https://cycls.com/@spark-dev)
+`cycls.push()` will then publish the app `@spark-dev` on [cycls.com/@spark-dev](https://cycls.com/@spark-dev) in development mode. Make sure to pick a unique app name; Cycls maintains a global namespace for handles.
 ## Async Apps
 For performance, make the function asynchronous. The following is an async app with message `history` and session `id`
 ```py
