@@ -10,7 +10,7 @@ import inspect
 import logging
 logging.basicConfig(level=logging.ERROR)
 
-O = lambda x,y: print(f"✦/✧ {str(x).ljust(11)} | {y}")
+O = lambda x,y: print(f"✦/✧ {str(x).ljust(12)} | {y}")
 
 import os
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -42,30 +42,32 @@ async def create_ssh_tunnel(x,y,z='tuns.sh'):
     except (OSError, asyncssh.Error) as e:
         O("tunnel",f"disconnected ({e})")
 
-def register(handles, net, url, email):
+def register(handles, net, api_key):
     try:
         with httpx.Client() as client:
-            response = client.post(f"{net}/register", json={"handles":handles, "url":url, "email":email})
+            response = client.post(f"{net}/register", json={"handles":handles, "net":net, "api_key":api_key})
+            data = response.json()
             if response.status_code==200:
-                data = (response.json()).get("content")
                 for i in data:
-                    O(i[0],f"{net}/{i[1]}")
+                    O(f"{i['status']}/{i['mode']}", f"{net}/{i['handle']}" if i["status"] != "taken" else "")
+                return True
             else:
-                print("✦/✧ failed to register ⚠️")
+                O("failed", data.get("error"))
+                return False
     except Exception as e:
-        print(f"An error occurred: {e}")
+        O("error",e)
+        return False
 
 class Cycls:
-    def __init__(self, url="", net="https://cycls.com", port=find_available_port(8001), email=None):
+    def __init__(self, url="", net="https://cycls.com", port=find_available_port(8001), api_key=None):
         import uuid
-        self.subdomain = str(uuid.uuid4())[:8]
+        self.subdomain = str(uuid.uuid4())[:8] #!
         self.server = FastAPI()
         self.net = net
         self.port = port
         self.url = url
         self.apps = {}
-        self.prod = False
-        self.email = email
+        self.api_key = api_key
 
     def __call__(self, handle):
         def decorator(func):
@@ -76,13 +78,7 @@ class Cycls:
             def sync_wrapper(*args, **kwargs):
                 return StreamingResponse(func(*args, **kwargs))
             wrapper = async_wrapper if inspect.iscoroutinefunction(func) else sync_wrapper
-
-            if self.url != "": self.prod=True #!
-            if not self.prod:
-                self.apps[handle + "-dev"] = wrapper
-            else:
-                self.apps[handle] = wrapper
-
+            self.apps[handle] = wrapper
             return wrapper
         return decorator
     
@@ -96,29 +92,22 @@ class Cycls:
         return {"error": "Handle not found"}
 
     def push(self):
-        if self.email:
-            O("email",self.email)
         O("port",self.port)
-        if self.prod:
-            O("mode",f"production @ {self.url}")
-            register(list(self.apps.keys()), self.net, self.url+"/gateway", self.email)
+        if self.url=="":
+            self.url = f"https://{self.subdomain}-cycls.tuns.sh"
+            mode = "dev"
         else:
-            self.url = f"http://{self.subdomain}-cycls.tuns.sh"
-            O("mode","development")
-            O("docs","for more information, visit https://github.com/Cycls/cycls-py")
-            register(list(self.apps.keys()), self.net, self.url+"/gateway", self.email)
-
-        self.server.post("/gateway")(self.gateway)
-        @self.server.on_event("startup")
-        def startup_event():
-            if self.prod:
-                pass
-            else:
+            mode = "prod"
+        config = [{"handle": handle, "url": self.url+"/gateway", "mode":mode} for handle in list(self.apps.keys())]
+        if on := register(config, self.net, self.api_key):
+            self.server.post("/gateway")(self.gateway)
+            @self.server.on_event("startup")
+            def startup_event():
                 asyncio.create_task(create_ssh_tunnel(f"{self.subdomain}-cycls", self.port))
-        try:
-            uvicorn.run(self.server, host="127.0.0.1", port=self.port, log_level="error")
-        except KeyboardInterrupt:
-            print(" ");O("exit","done")
+            try:
+                uvicorn.run(self.server, host="127.0.0.1", port=self.port, log_level="error")
+            except KeyboardInterrupt:
+                print(" ");O("exit","done")
 
     async def call(self, handle, content):
         data = {"handle":handle, "content":content, "session":{}, "agent":"yes"}
