@@ -4,11 +4,11 @@
 </p>
 
 <h1 align="center">
-  Streaming for AI Apps / AI Agents
+  Apps with Agency
 </h1>
 
 <h3 align="center">
-  Turn LLMs into instant web apps that double as agents
+  The network for native AI apps and AI agents
 </h3>
 
 <h4 align="center">
@@ -26,3 +26,54 @@
 </h4>
 
 ## What is Cycls?
+Cycls is a network for AI-native apps, where apps can work together. Our SDK turns your apps into nodes in the network, acting as both server and client. This enables seamless integration between AI apps while serving users. Your apps are streamed directly from your infrastructure, giving you full control over your data and deployment.
+
+Cycls is designed to break down the barriers between isolated apps and maximize their collective potential. [Learn more about Cycls streaming architecture](https://docs.cycls.com/home/overview).
+
+with **app streaming** you can:
+- Turn existing code into instant web apps
+- Allow apps to call and utilize each other
+- Generate UIs on-the-fly with LLMs
+- Integrate with any model, framework, or infrastructure
+
+---
+## Getting started
+1. Install SDK
+```sh
+pip install cycls
+```
+2. Start Streaming
+   
+In this example, the `@spark` app simply echoes the user's input by accessing `message.content` string and returning it back:
+```python
+from cycls import Cycls
+
+cycls = Cycls()
+
+@cycls("@spark")
+def app(message):
+    return message.content
+
+cycls.push()
+```
+
+3. Connect to LLM
+   
+To connect `@spark` app to an LLM, simply wrap the `message.content` with your LLM function and return the result. Here's an example:
+```python
+...
+@cycls("@spark")
+def app(message):
+    return llm(message.content)
+...
+```
+
+> Visit our [documentation](https://docs.cycls.com/home/getting-started) to learn more about Cycls and how to get started.
+
+---
+
+Check out our [Explore page](https://explore.cycls.com/) to see Cycls apps in action and visit our [Cookbook](https://github.com/Cycls/examples) for practical examples and use cases.
+
+
+
+
