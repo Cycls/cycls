@@ -57,11 +57,16 @@ def app():
 
 cycls.push()
 ```
+
+> [!IMPORTANT]
+> Pick a unique handle, as Cycls maintains a global namespace for handle names
+
 The `@cycls(handle)` decorator registers the app function with the unique handle `@spark`.
-`cycls.push()` command publishes the app on cycls.com/@spark:dev in development mode.
 
 > [!NOTE]
-> Pick a unique handle, as Cycls maintains a global namespace for handle names
+> Your apps are streamed directly from your infrastructure, giving you full control over your data and deployment
+
+`cycls.push()` command streams the app to the link https://cycls.com/@spark:dev in development mode.
 
 ## 📖 Documentation
 For more detailes and instructions, visit our documentation at [docs.cycls.com](https://docs.cycls.com/).
