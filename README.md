@@ -45,7 +45,6 @@ pip install cycls
 
 ### Basic usage
 In this example, the `@spark` app simply responds with "Hello World!" to the user:
-
 ```py
 from cycls import Cycls
 
@@ -59,16 +58,12 @@ cycls.push()
 ```
 
 > [!IMPORTANT]
-> Pick a unique handle, as Cycls maintains a global namespace for handle names
+> Choose a unique name for your app, similar to selecting a Twitter/X handle. This becomes your app's global identifier on the Cycls platform (e.g., `@app-name`).
 
-The `@cycls(handle)` decorator registers the app function with the unique handle `@spark`.
+The `@cycls(handle)` decorator registers the app name and function (entry point). `cycls.push()` command streams the app to https://cycls.com in development mode. If you want to try a running app now (production mode), visit https://cycls.com/@spark.
 
 > [!NOTE]
 > Your apps are streamed directly from your infrastructure, giving you full control over your data and deployment
-
-`cycls.push()` command streams the app to the link https://cycls.com/@spark:dev in development mode.
-
-Visit https://cycls.com/@spark to try the app in production mode.
 
 ## 📖 Documentation
 For more detailes and instructions, visit our documentation at [docs.cycls.com](https://docs.cycls.com/).
