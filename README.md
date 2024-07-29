@@ -25,7 +25,7 @@ Generate live apps from code in minutes with built-in memory, <br/>rich hypermed
 
 
 ## Cycls: The AI App Generator
-Cycls streamlines AI application development by generating apps from high-level descriptions. It eliminates boilerplate, ensures cross-platform compatibility, and manages memory - all from a single codebase.
+Cycls[^1] streamlines AI application development by generating apps from high-level descriptions. It eliminates boilerplate, ensures cross-platform compatibility, and manages memory - all from a single codebase.
 
 With Cycls, you can quickly prototype ideas and then turn them into production apps, while focusing on AI logic and user interactions rather than wrestling with implementation details.
 
@@ -86,4 +86,4 @@ Join our Discord community for support and discussions. You can reach us on:
 - [Follow us on Twitter](https://x.com/cycls_)
 - [Email us](mailto:hi@cycls.com)
 
-> The name "Cycls" is a play on "cycles," referring to the continuous exchange between AI prompts (generators) and their responses (generated).
+[^1]: The name "Cycls" is a play on "cycles," referring to the continuous exchange between AI prompts (generators) and their responses (generated).
