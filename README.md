@@ -36,34 +36,35 @@ With Cycls, you can quickly prototype ideas and then turn them into production a
 - **Framework Agnostic**: Compatible with a wide range of AI frameworks and models
 
 ## 🚀 Quickstart
-Cycls Python SDK enables easy creation and management of AI-powered apps.
-
 ### Installation
 ```
 pip install cycls
 ```
 
 ### Basic usage
-In this example, the `@spark` app simply responds with "Hello World!" to the user:
 ```py
 from cycls import Cycls
 
 cycls = Cycls()
 
-@cycls("@spark")
+@cycls("@my-app")
 def app():
     return "Hello World!"
 
 cycls.push()
 ```
+This creates an app named "@my-app" that responds with "Hello World!".
+
 
 > [!IMPORTANT]
-> Choose a unique name for your app, similar to selecting a Twitter/X handle. This becomes your app's global identifier on the Cycls platform (e.g., `@app-name`).
+> Use a unique name for your app (like "@my-app"). This is your app's identifier on Cycls.
 
-The `@cycls(handle)` decorator registers the app name and function (entry point). `cycls.push()` command streams the app to https://cycls.com in development mode. If you want to try a running app now (production mode), visit https://cycls.com/@spark.
+The `@cycls("@my-app")` decorator registers your app, and `cycls.push()` streams it to https://cycls.com in development mode.
+
+To see a live example, visit https://cycls.com/@spark.
 
 > [!NOTE]
-> Your apps are streamed directly from your infrastructure, giving you full control over your data and deployment
+> Your apps run on your infrastructure
 
 ## 📖 Documentation
 For more detailes and instructions, visit our documentation at [docs.cycls.com](https://docs.cycls.com/).
