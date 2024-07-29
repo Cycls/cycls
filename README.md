@@ -1,79 +1,84 @@
-</br>
 <p align="center">
-  <img width="200" src="https://cycls.com/static/assets/logo-gold.svg" alt="cycls logo">
+  <img src="https://github.com/user-attachments/assets/96bd304d-8116-4bce-8b8f-b08980875ad7" width="800px" alt="Cycls Banner">
 </p>
 
-<h1 align="center">
-  Apps with Agency
-</h1>
-
 <h3 align="center">
-  The network for native AI apps and AI agents
+Generate live apps from code in minutes with built-in memory, <br/>rich hypermedia content, and cross-platform support
 </h3>
 
 <h4 align="center">
-  <a href="https://docs.cycls.com">Docs</a> |
   <a href="https://cycls.com">Website</a> |
-  <a href="https://discord.gg/XbxcTFBf7J">Discord</a> |
-  <a href="https://x.com/cycls_">Twitter</a>
+  <a href="https://docs.cycls.com">Docs</a> |
+  <a href="https://docs.cycls.com">Blog</a>
 </h4>
 
 <h4 align="center">
-  <a href="https://pypi.org/project/cycls/">
-    <img alt="Last 1 month downloads for the Python SDK" loading="lazy" width="200" height="20" decoding="async" data-nimg="1"
-    style="color:transparent;width:auto;height:100%" src="https://img.shields.io/pypi/dm/cycls?label=PyPI%20Downloads">
+  <a href="https://pypi.python.org/pypi/cycls"><img src="https://img.shields.io/pypi/v/cycls.svg?label=cycls+pypi&color=blueviolet" alt="cycls Python package on PyPi" /></a>
+  <a href="https://discord.gg/XbxcTFBf7J">
+    <img src="https://dcbadge.vercel.app/api/server/XbxcTFBf7J?style=flat" alt="Cycls Discord" />
+  </a>
+  <a href="https://blog.cycls.com"><img src="https://img.shields.io/badge/newsletter-blueviolet.svg?logo=substack&label=cycls" alt="Cycls newsletter" /></a>
+  <a href="https://x.com/cycls_">
+    <img src="https://img.shields.io/twitter/follow/cycls_" alt="Cycls Twitter" />
   </a>
 </h4>
 
-## What is Cycls?
-Cycls is a network for AI-native apps, where apps can work together. Our SDK turns your apps into nodes in the network, acting as both server and client. This enables seamless integration between AI apps while serving users. Your apps are streamed directly from your infrastructure, giving you full control over your data and deployment.
 
-Cycls is designed to break down the barriers between isolated apps and maximize their collective potential. [Learn more about Cycls streaming architecture](https://docs.cycls.com/home/overview).
+## Cycls: The AI App Generator
+Cycls streamlines AI application development by generating apps from high-level descriptions. It eliminates boilerplate, ensures cross-platform compatibility, and manages memory - all from a single codebase.
 
-with **app streaming** you can:
-- Turn existing code into instant web apps
-- Allow apps to call and utilize each other
-- Generate UIs on-the-fly with LLMs
-- Integrate with any model, framework, or infrastructure
+With Cycls, you can quickly prototype ideas and then turn them into production apps, while focusing on AI logic and user interactions rather than wrestling with implementation details.
 
----
-## Getting started
-1. Install SDK
-```sh
+## ✨ Core Features
+- **Fast App Generation**: Create live web apps from code in minutes
+- **Built-in Memory Management**: Integrated state and session management
+- **Rich Hypermedia Content**: Support for various media types (text, images, audio, video, interactive elements)
+- **Framework Agnostic**: Compatible with a wide range of AI frameworks and models
+
+## 🚀 Quickstart
+Cycls Python SDK enables easy creation and management of AI-powered apps.
+
+### Installation
+```
 pip install cycls
 ```
-2. Start Streaming
-   
-In this example, the `@spark` app simply echoes the user's input by accessing `message.content` string and returning it back:
-```python
+
+### Basic usage
+In this example, the `@spark` app simply responds with "Hello World!" to the user:
+
+```py
 from cycls import Cycls
 
 cycls = Cycls()
 
 @cycls("@spark")
-def app(message):
-    return message.content
+def app():
+    return "Hello World!"
 
 cycls.push()
 ```
+The `@cycls(handle)` decorator registers the app function with the unique handle `@spark`.
+`cycls.push()` command publishes the app on cycls.com/@spark:dev in development mode.
 
-3. Connect to LLM
-   
-To connect `@spark` app to an LLM, simply wrap the `message.content` with your LLM function and return the result. Here's an example:
-```python
-...
-@cycls("@spark")
-def app(message):
-    return llm(message.content)
-...
-```
+> [!NOTE]
+> Pick a unique handle, as Cycls maintains a global namespace for handle names
 
-> Visit our [documentation](https://docs.cycls.com/home/getting-started) to learn more about Cycls and how to get started.
+## 📖 Documentation
+For more detailes and instructions, visit our documentation at [docs.cycls.com](https://docs.cycls.com/).
 
----
+## 🗺️ Roadmap
+- **iOS and Android apps**
+- **User management**
+- **JavaScript SDK**
+- **Public API**
+- **Cross-app communication**
 
-Check out our [Explore page](https://explore.cycls.com/) to see Cycls apps in action and visit our [Cookbook](https://github.com/Cycls/examples) for practical examples and use cases.
+## 🙌 Support 
+Join our Discord community for support and discussions. You can reach us on:
 
+- [Join our Discord](https://discord.gg/XbxcTFBf7J)
+- [Join our newsletter](https://blog.cycls.com)
+- [Follow us on Twitter](https://x.com/cycls_)
+- [Email us](mailto:hi@cycls.com)
 
-
-
+> The name "Cycls" is a play on "cycles," referring to the continuous exchange between AI prompts (generators) and their responses (generated).
