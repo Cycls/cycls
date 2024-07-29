@@ -55,16 +55,15 @@ cycls.push()
 ```
 This creates an app named "@my-app" that responds with "Hello World!".
 
+The `@cycls("@my-app")` decorator registers your app, and `cycls.push()` streams it to Cycls platform.
+
+To see a live example, visit https://cycls.com/@spark.
 
 > [!IMPORTANT]
 > Use a unique name for your app (like "@my-app"). This is your app's identifier on Cycls.
 
-The `@cycls("@my-app")` decorator registers your app, and `cycls.push()` streams it to https://cycls.com in development mode.
-
-To see a live example, visit https://cycls.com/@spark.
-
 > [!NOTE]
-> Your apps run on your infrastructure
+> Your apps run on your infrastructure and are streamed in real-time to Cycls.
 
 ## 📖 Documentation
 For more detailes and instructions, visit our documentation at [docs.cycls.com](https://docs.cycls.com/).
