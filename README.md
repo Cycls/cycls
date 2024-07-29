@@ -68,6 +68,8 @@ The `@cycls(handle)` decorator registers the app function with the unique handle
 
 `cycls.push()` command streams the app to the link https://cycls.com/@spark:dev in development mode.
 
+Visit https://cycls.com/@spark to try the app in production mode.
+
 ## 📖 Documentation
 For more detailes and instructions, visit our documentation at [docs.cycls.com](https://docs.cycls.com/).
 
