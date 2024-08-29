@@ -32,6 +32,7 @@ def find_available_port(start_port):
             port += 1
 
 import asyncssh, asyncio
+# ssh -q -i tuns -o StrictHostKeyChecking=no -R 80:localhost:9000 tuns.sh
 async def create_ssh_tunnel(x,y,z='tuns.sh'):
     try:
         async with asyncssh.connect(z,client_keys=[key_path],known_hosts=None) as conn:
@@ -94,7 +95,8 @@ class Cycls:
     def push(self):
         O("port",self.port)
         if self.url=="":
-            self.url = f"https://{self.subdomain}-cycls.tuns.sh"
+            # self.url = f"https://{self.subdomain}-cycls.tuns.sh"
+            self.url = f"https://cycls-{self.subdomain}.tuns.sh"
             mode = "dev"
         else:
             mode = "prod"
@@ -103,7 +105,8 @@ class Cycls:
             self.server.post("/gateway")(self.gateway)
             @self.server.on_event("startup")
             def startup_event():
-                asyncio.create_task(create_ssh_tunnel(f"{self.subdomain}-cycls", self.port))
+                # asyncio.create_task(create_ssh_tunnel(f"{self.subdomain}-cycls", self.port))
+                asyncio.create_task(create_ssh_tunnel(f"{self.subdomain}", self.port))
             try:
                 uvicorn.run(self.server, host="127.0.0.1", port=self.port, log_level="error")
             except KeyboardInterrupt:
