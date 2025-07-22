@@ -1,1 +1,1 @@
-from .cycls import Cycls
+from .cycls import Agent
