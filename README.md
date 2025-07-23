@@ -1,15 +1,10 @@
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/96bd304d-8116-4bce-8b8f-b08980875ad7" width="800px" alt="Cycls Banner">
-</p>
-
 <h3 align="center">
-Generate live apps from code in minutes with built-in memory, <br/>rich hypermedia content, and cross-platform support
+The Anti-Framework for AI Agents.
 </h3>
 
 <h4 align="center">
   <a href="https://cycls.com">Website</a> |
-  <a href="https://docs.cycls.com">Docs</a> |
-  <a href="https://docs.cycls.com">Blog</a>
+  <a href="https://docs.cycls.com">Docs</a>
 </h4>
 
 <h4 align="center">
@@ -21,63 +16,109 @@ Generate live apps from code in minutes with built-in memory, <br/>rich hypermed
 </h4>
 
 
-## Cycls: The AI App Generator
-Cycls[^1] streamlines AI application development by generating apps from high-level descriptions. It eliminates boilerplate, ensures cross-platform compatibility, and manages memory - all from a single codebase.
+# Cycls 🚲
 
-With Cycls, you can quickly prototype ideas and then turn them into production apps, while focusing on AI logic and user interactions rather than wrestling with implementation details.
+`cycls` is a zero-config, anti-framework for building and publishing AI agents. With a single decorator and one command, you can deploy your code as a web application complete with a front-end UI and an OpenAI-compatible API endpoint.
 
-## ✨ Core Features
-- **Fast App Generation**: Create live web apps from code in minutes
-- **Built-in Memory Management**: Integrated state and session management
-- **Rich Hypermedia Content**: Support for various media types (text, images, audio, video, interactive elements)
-- **Framework Agnostic**: Compatible with a wide range of AI frameworks and models
+### Design Philosophy
+`cycls` is an anti-framework. We treat the boilerplate, config files, and infrastructure that surround modern applications as a bug to be eliminated. A developer's focus is the most valuable resource, and context-switching is its greatest enemy.
 
-## 🚀 Quickstart
-### Installation
-```
+Our zero-config approach makes your Python script the single source of truth for the entire application. When your code is all you need, you stay focused, iterate faster, and ship with confidence.
+
+This philosophy has a powerful side-effect: it makes development genuinely iterative. The self-contained nature of an agent encourages you to 'build in cycles'—starting simple and adding complexity without penalty. This same simplicity also makes `cycls` an ideal target for code generation. Because the entire application can be expressed in one file, LLMs can write, modify, and reason about `cycls` agents far more effectively than with traditional frameworks. It's a seamless interface for both human and machine.
+
+
+## Key Features
+
+* ✨ **Zero-Config Deployment:** No YAML or Dockerfiles. `cycls` infers your dependencies, and APIs directly from your Python code.
+* 🚀 **One-Command Push to Cloud:** Go from local code to a globally scalable, serverless application with a single `agent.push()`.
+* 💻 **Instant Local Testing:** Run `agent.run()` to spin up a local server with hot-reloading for rapid iteration and debugging.
+* 🤖 **OpenAI-Compatible API:** Automatically serves a streaming `/chat/completions` endpoint.
+* 🌐 **Automatic Web UI:** Get a clean, interactive front-end for your agent out of the box, with no front-end code required.
+* 🔐 **Built-in Authentication:** Secure your agent for production with a simple `auth=True` flag that enables JWT-based authentication.
+* 📦 **Declarative Dependencies:** Define all your `pip`, `apt`, or local file dependencies directly in Python.
+
+
+## Installation
+
+```bash
 pip install cycls
 ```
 
-### Basic usage
+## How to Use
+### 1. Local Development: "Hello, World!"
+
+Create a file main.py. This simple example creates an agent that streams back the message "hi".
+
 ```py
-from cycls import Cycls
+import cycls
 
-cycls = Cycls()
+# Initialize the agent
+agent = cycls.Agent()
 
-@cycls("@my-app")
-def app():
-    return "Hello World!"
+# Decorate your function to register it as an agent
+@agent()
+async def hello(context):
+    yield "hi"
 
-cycls.push()
+agent.run()
 ```
-This creates an app named "@my-app" that responds with "Hello World!".
 
-The `@cycls("@my-app")` decorator registers your app, and `cycls.push()` streams it to Cycls platform.
+Run it from your terminal:
 
-To see a live example, visit https://cycls.com/@spark.
+```bash
+python main.py
+```
+This will start a local server. Open your browser to http://127.0.0.1:8000 to interact with your agent.
 
-> [!IMPORTANT]
-> Use a unique name for your app (like "@my-app"). This is your app's identifier on Cycls.
+### 2. Cloud Deployment: An OpenAI-Powered Agent
+This example creates a more advanced agent that calls the OpenAI API. It will be deployed to the cloud with authentication enabled.
 
-> [!NOTE]
-> Your apps run on your infrastructure and are streamed in real-time to Cycls.
+```py
+# deploy.py
+import cycls
+import openai
 
-## 📖 Documentation
-For more detailes and instructions, visit our documentation at [docs.cycls.com](https://docs.cycls.com/).
+# Initialize the agent with dependencies and API keys
+agent = cycls.Agent(
+    pip=["openai"],
+    keys=["ak-<your_modal_token_id>", "as-<your_modal_token_secret>"]
+)
 
-## 🗺️ Roadmap
-- **iOS and Android apps**
-- **User management**
-- **JavaScript SDK**
-- **Public API**
-- **Cross-app communication**
+# A helper function to call the LLM
+async def llm(messages):
+    client = openai.AsyncOpenAI(api_key="sk-...") # Your OpenAI key
+    model = "gpt-4o"
+    response = await client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=1.0,
+        stream=True
+    )
+    # Yield the content from the streaming response
+    async def event_stream():
+        async for chunk in response:
+            content = chunk.choices[0].delta.content
+            if content:
+                yield content
+    return event_stream()
 
-## 🙌 Support 
-Join our Discord community for support and discussions. You can reach us on:
+# Register the function as an agent named "cake" and enable auth
+@agent("cake", auth=True)
+async def cake_agent(context):
+    # The context object contains the message history
+    return await llm(context.messages)
 
-- [Join our Discord](https://discord.gg/XbxcTFBf7J)
-- [Join our newsletter](https://blog.cycls.com)
-- [Follow us on Twitter](https://x.com/cycls_)
-- [Email us](mailto:hi@cycls.com)
+# Deploy the agent to the cloud
+agent.push(prod=True)
+```
 
-[^1]: The name "Cycls" is a play on "cycles," referring to the continuous exchange between AI prompts (generators) and their responses (generated).
+Run the deployment command from your terminal:
+
+```bash
+python main.py
+```
+After a few moments, your agent will be live and accessible at a public URL like https://cake.cycls.ai.
+
+### License
+This project is licensed under the MIT License.
