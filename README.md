@@ -77,16 +77,17 @@ This example creates a more advanced agent that calls the OpenAI API. It will be
 ```py
 # deploy.py
 import cycls
-import openai
 
 # Initialize the agent with dependencies and API keys
 agent = cycls.Agent(
     pip=["openai"],
-    keys=["ak-<your_modal_token_id>", "as-<your_modal_token_secret>"]
+    keys=["ak-<token_id>", "as-<token_secret>"]
 )
 
 # A helper function to call the LLM
 async def llm(messages):
+    # Import inside the function: 'openai' is only needed at runtime in the container.
+    import openai
     client = openai.AsyncOpenAI(api_key="sk-...") # Your OpenAI key
     model = "gpt-4o"
     response = await client.chat.completions.create(
