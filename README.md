@@ -10,8 +10,8 @@ The Distribution SDK for AI Agents.
 <h4 align="center">
   <a href="https://pypi.python.org/pypi/cycls"><img src="https://img.shields.io/pypi/v/cycls.svg?label=cycls+pypi&color=blueviolet" alt="cycls Python package on PyPi" /></a>
   <a href="https://blog.cycls.com"><img src="https://img.shields.io/badge/newsletter-blueviolet.svg?logo=substack&label=cycls" alt="Cycls newsletter" /></a>
-  <a href="https://x.com/cycls_">
-    <img src="https://img.shields.io/twitter/follow/cycls_" alt="Cycls Twitter" />
+  <a href="https://x.com/cyclsai">
+    <img src="https://img.shields.io/twitter/follow/CyclsAI" alt="Cycls Twitter" />
   </a>
 </h4>
 
