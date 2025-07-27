@@ -1,5 +1,5 @@
 <h3 align="center">
-The Anti-Framework for AI Agents.
+The Distribution SDK for AI Agents.
 </h3>
 
 <h4 align="center">
@@ -18,7 +18,7 @@ The Anti-Framework for AI Agents.
 
 # Cycls 🚲
 
-`cycls` is a zero-config, anti-framework for building and publishing AI agents. With a single decorator and one command, you can deploy your code as a web application complete with a front-end UI and an OpenAI-compatible API endpoint.
+`cycls` is a zero-config framework for building and publishing AI agents. With a single decorator and one command, you can deploy your code as a web application complete with a front-end UI and an OpenAI-compatible API endpoint.
 
 ### Design Philosophy
 `cycls` is an anti-framework. We treat the boilerplate, config files, and infrastructure that surround modern applications as a bug to be eliminated. A developer's focus is the most valuable resource, and context-switching is its greatest enemy.
