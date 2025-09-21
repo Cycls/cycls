@@ -100,25 +100,18 @@ def web(func, front_end_path="", prod=False, org=None, api_token=None, header=""
     return app
 
 class Agent:
-    def __init__(self, front_end=theme_path, organization=None, api_token=None, pip=[], apt=[], copy=[], production=False, keys=["",""]):
-        self.prod, self.org, self.api_token = production, organization, api_token
-        self.front_end = front_end
+    def __init__(self, theme=theme_path, org=None, api_token=None, pip=[], apt=[], copy=[], keys=["",""]):
+        self.org, self.api_token = org, api_token
+        self.theme = theme
+        self.keys, self.pip, self.apt, self.copy = keys, pip, apt, copy
+
         self.registered_functions = []
-        self.client = modal.Client.from_credentials(*keys)
-        image = (modal.Image.debian_slim()
-                            .pip_install("fastapi[standard]", "pyjwt", "cryptography", *pip)
-                            .apt_install(*apt)
-                            .add_local_dir(front_end, "/root/public")
-                            .add_local_python_source("cycls"))        
-        for item in copy:
-            image = image.add_local_file(item, f"/root/{item}") if "." in item else image.add_local_dir(item, f'/root/{item}')
-        self.app = modal.App("development", image=image)
 
     def __call__(self, name="", header="", intro="", domain=None, auth=False):
         def decorator(f):
             self.registered_functions.append({
                 "func": f,
-                "config": ["public", self.prod, self.org, self.api_token, header, intro, auth],
+                "config": ["public", False, self.org, self.api_token, header, intro, auth],
                 "name": name,
                 "domain": domain or f"{name}.cycls.ai",
             })
@@ -127,26 +120,39 @@ class Agent:
 
     def run(self, port=8000):
         if not self.registered_functions:
-            return print("Error: No @agent decorated function found.")
+            print("Error: No @agent decorated function found.")
+            return
         
         i = self.registered_functions[0]
         if len(self.registered_functions) > 1:
             print(f"⚠️  Warning: Multiple agents found. Running '{i['name']}'.")
-        print(f"🚀 Starting local server at http://127.0.0.1:{port}")
-        i["config"][0] = self.front_end
-        uvicorn.run(web(i["func"], *i["config"]), host="127.0.0.1", port=port)
+        print(f"🚀 Starting local server at localhost:{port}")
+        i["config"][0], i["config"][6] = self.theme, False
+        uvicorn.run(web(i["func"], *i["config"]), host="0.0.0.0", port=port)
         return
 
-    def push(self): # local / prod?
+    def push(self, prod=False):
+        self.client = modal.Client.from_credentials(*self.keys)
+        image = (modal.Image.debian_slim()
+                            .pip_install("fastapi[standard]", "pyjwt", "cryptography", *self.pip)
+                            .apt_install(*self.apt)
+                            .add_local_dir(self.theme, "/root/public")
+                            .add_local_python_source("cycls"))        
+        for item in self.copy:
+            image = image.add_local_file(item, f"/root/{item}") if "." in item else image.add_local_dir(item, f'/root/{item}')
+        self.app = modal.App("development", image=image)
+    
         if not self.registered_functions:
-            return print("Error: No @agent decorated function found.")
+            print("Error: No @agent decorated function found.")
+            return
 
         for i in self.registered_functions:
+            i["config"][1] = True if prod else False
             self.app.function(serialized=True, name=i["name"])(
                 modal.asgi_app(label=i["name"], custom_domains=[i["domain"]])
                 (lambda: web(i["func"], *i["config"]))
             )
-        if self.prod:
+        if prod:
             for i in self.registered_functions:
                 print(f"✅ Deployed to ⇒ https://{i['domain']}")
             self.app.deploy(client=self.client, name=self.registered_functions[0]["name"])
@@ -158,5 +164,6 @@ class Agent:
                 with modal.enable_output(), run_app(app=self.app, client=self.client): 
                     while True: time.sleep(10)
 
+# poetry config pypi-token.pypi <your-token>
 # poetry run python agent.py
 # poetry publish --build
