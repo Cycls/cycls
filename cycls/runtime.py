@@ -132,7 +132,11 @@ class Runtime:
             if self.apt_packages else ""
         )
         run_shell_commands = "\n".join([f"RUN {cmd}" for cmd in self.run_commands]) if self.run_commands else ""
-        copy_lines = "\n".join([f"COPY {src} {dst}" for src, dst in self.copy.items()])
+
+        # fixes absolute path copy, but causes collision
+        copy_lines = "\n".join([f"COPY {Path(src).name} {dst}" for src, dst in self.copy.items()])
+        # copy_lines = "\n".join([f"COPY {src} {dst}" for src, dst in self.copy.items()])
+
         expose_line = f"EXPOSE {port}" if port else ""
 
         return f"""
@@ -166,8 +170,14 @@ COPY {self.payload_file} {self.io_dir}/
             (workdir / self.payload_file).write_bytes(payload_bytes)
 
         if self.copy:
+            # for src in self.copy.keys():
+            #     _copy_path(Path(src), workdir / src)
+
+            # fixes absolute path copy
             for src in self.copy.keys():
-                _copy_path(Path(src), workdir / src)
+                src_path = Path(src)
+                dest_path = workdir / src_path.name if src_path.is_absolute() else workdir / src
+                _copy_path(src_path, dest_path)
 
     def _build_image_if_needed(self):
         """Checks if the base Docker image exists locally and builds it if not."""
