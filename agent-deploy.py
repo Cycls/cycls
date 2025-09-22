@@ -1,15 +1,9 @@
-from cycls import function
+import cycls
 
-@function(pip_install=["cycls"],
-          api_key="")
-def cycls_agent(port):
-    import cycls
-    agent = cycls.Agent()
-    @agent()
-    async def hello(context):
-        yield "hi"
+agent = cycls.Agent(api_key="...")
 
-    agent.run(port=port)
+@agent()
+async def func(context):
+    yield "hi"
 
-cycls_agent.deploy(port=8080)
-# cycls_agent.run(port=8080)
+agent.deploy(prod=True)

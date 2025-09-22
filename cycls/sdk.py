@@ -1,22 +1,102 @@
+import json, time, modal, inspect, uvicorn
 from .runtime import Runtime
+from modal.runner import run_app
+from .web import web
+import importlib.resources
 
-def function(python_version="3.12", pip_install=None, apt_install=None, run_commands=None, copy=None, name=None, base_url=None, api_key=None):
-    # """
-    # A decorator factory that transforms a Python function into a containerized,
-    # remotely executable object.
+theme_path = importlib.resources.files('cycls').joinpath('theme')
+cycls_path = importlib.resources.files('cycls')
 
-    # Args:
-    #     pip (list[str], optional): A list of pip packages to install.
-    #     apt (list[str], optional): A list of apt packages to install.
-    #     copy (list[str], optional): A list of local paths to copy to the
-    #         same path inside the image. For static dependencies.
-    #     name (str, optional): A name for this function. Defaults to the function's name.
+class Agent:
+    def __init__(self, theme=theme_path, org=None, api_token=None, pip=[], apt=[], copy=[], keys=["",""], api_key=None):
+        self.org, self.api_token = org, api_token
+        self.theme = theme
+        self.keys, self.pip, self.apt, self.copy = keys, pip, apt, copy
+        self.api_key = api_key
 
-    # Returns:
-    #     A decorator that replaces the decorated function with a Runtime instance.
-    # """
-    def decorator(func):
-        Name = name or func.__name__ # should be moved to runtime... or default?
-        copy_dict = {i:i for i in copy or []}
-        return Runtime(func, Name.replace('_', '-'), python_version, pip_install, apt_install, run_commands, copy_dict, base_url, api_key)
-    return decorator
+        self.registered_functions = []
+
+    def __call__(self, name="", header="", intro="", domain=None, auth=False):
+        def decorator(f):
+            self.registered_functions.append({
+                "func": f,
+                "config": ["public", False, self.org, self.api_token, header, intro, auth],
+                "name": name,
+                "domain": domain or f"{name}.cycls.ai",
+            })
+            return f
+        return decorator
+
+    def run(self, port=8080):
+        if not self.registered_functions:
+            print("Error: No @agent decorated function found.")
+            return
+        
+        i = self.registered_functions[0]
+        if len(self.registered_functions) > 1:
+            print(f"⚠️  Warning: Multiple agents found. Running '{i['name']}'.")
+        print(f"🚀 Starting local server at localhost:{port}")
+        i["config"][0], i["config"][6] = self.theme, False
+        uvicorn.run(web(i["func"], *i["config"]), host="0.0.0.0", port=port)
+        return
+
+    def deploy(self, prod=False, port=8080):
+        if not self.registered_functions:
+            print("Error: No @agent decorated function found.")
+            return
+        if (self.api_key is None) and prod:
+            print("🛑  Error: Please add your Cycls API key")
+            return
+
+        i = self.registered_functions[0]
+        if len(self.registered_functions) > 1:
+            print(f"⚠️  Warning: Multiple agents found. Running '{i['name']}'.")
+
+        i["config"][6] = False
+
+        new = Runtime(
+            func=lambda port: __import__("uvicorn").run(__import__("web").web(i["func"], *i["config"]), host="0.0.0.0", port=port),
+            name="web-agent",
+            pip_packages=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", *self.pip],
+            copy={str(cycls_path.joinpath('theme')):"public", str(cycls_path)+"/web.py":"app/web.py"},
+            api_key=self.api_key
+        )
+        new.deploy(port=port) if prod else new.run(port=port) 
+        return
+        
+    def push(self, prod=False):
+        self.client = modal.Client.from_credentials(*self.keys)
+        image = (modal.Image.debian_slim()
+                            .pip_install("fastapi[standard]", "pyjwt", "cryptography", *self.pip)
+                            .apt_install(*self.apt)
+                            .add_local_dir(self.theme, "/root/public")
+                            .add_local_file(str(cycls_path)+"/web.py", "/root/web.py"))
+        for item in self.copy:
+            image = image.add_local_file(item, f"/root/{item}") if "." in item else image.add_local_dir(item, f'/root/{item}')
+        self.app = modal.App("development", image=image)
+    
+        if not self.registered_functions:
+            print("Error: No @agent decorated function found.")
+            return
+
+        for i in self.registered_functions:
+            i["config"][1] = True if prod else False
+            self.app.function(serialized=True, name=i["name"])(
+                modal.asgi_app(label=i["name"], custom_domains=[i["domain"]])
+                (lambda: __import__("web").web(i["func"], *i["config"]))
+            )
+        if prod:
+            for i in self.registered_functions:
+                print(f"✅ Deployed to ⇒ https://{i['domain']}")
+            self.app.deploy(client=self.client, name=self.registered_functions[0]["name"])
+            return
+        else:
+            with modal.enable_output():
+                run_app(app=self.app, client=self.client)
+                print(" Modal development server is running. Press Ctrl+C to stop.")
+                with modal.enable_output(), run_app(app=self.app, client=self.client): 
+                    while True: time.sleep(10)
+
+# poetry config pypi-token.pypi <your-token>
+# poetry run python agent.py
+# poetry publish --build
