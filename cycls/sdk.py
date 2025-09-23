@@ -16,12 +16,13 @@ class Agent:
 
         self.registered_functions = []
 
-    def __call__(self, name="", header="", intro="", domain=None, auth=False):
+    def __call__(self, name=None, header="", intro="", domain=None, auth=False):
         def decorator(f):
             self.registered_functions.append({
                 "func": f,
                 "config": ["public", False, self.org, self.api_token, header, intro, auth],
-                "name": name,
+                # "name": name,
+                "name": name or (f.__name__).replace('_', '-'),
                 "domain": domain or f"{name}.cycls.ai",
             })
             return f
@@ -40,7 +41,7 @@ class Agent:
         uvicorn.run(web(i["func"], *i["config"]), host="0.0.0.0", port=port)
         return
 
-    def deploy(self, prod=False, port=8080):
+    def cycls(self, prod=False, port=8080):
         if not self.registered_functions:
             print("Error: No @agent decorated function found.")
             return
@@ -54,11 +55,15 @@ class Agent:
 
         i["config"][6] = False
 
+        copy={str(cycls_path.joinpath('theme')):"public", str(cycls_path)+"/web.py":"app/web.py"}
+        copy.update({i:i for i in self.copy})
+
         new = Runtime(
             func=lambda port: __import__("uvicorn").run(__import__("web").web(i["func"], *i["config"]), host="0.0.0.0", port=port),
-            name="web-agent",
+            name=i["name"],
+            apt_packages=self.apt,
             pip_packages=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", *self.pip],
-            copy={str(cycls_path.joinpath('theme')):"public", str(cycls_path)+"/web.py":"app/web.py"},
+            copy=copy,
             api_key=self.api_key
         )
         new.deploy(port=port) if prod else new.run(port=port) 

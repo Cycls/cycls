@@ -9,14 +9,6 @@ from pathlib import Path
 from contextlib import contextmanager
 import tarfile
 
-# --- Docker Client Initialization ---
-try:
-    docker_client = docker.from_env()
-except docker.errors.DockerException:
-    print("❌ Error: Docker is not running or not installed.")
-    print("Please start the Docker daemon and try again.")
-    sys.exit(1)
-
 # --- Top-Level Helper Functions ---
 
 def _bootstrap_script(payload_file: str, result_file: str) -> str:
@@ -84,7 +76,7 @@ class Runtime:
     """
     def __init__(self, func, name, python_version=None, pip_packages=None, apt_packages=None, run_commands=None, copy=None, base_url=None, api_key=None):
         self.func = func
-        self.python_version = python_version or "3.12"
+        self.python_version = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
         self.pip_packages = sorted(pip_packages or [])
         self.apt_packages = sorted(apt_packages or [])
         self.run_commands = sorted(run_commands or [])
@@ -104,6 +96,50 @@ class Runtime:
         self.tag = self._generate_base_tag()
 
         self.api_key = api_key
+        self._docker_client = None
+        self.managed_label = f"cycls.runtime"
+
+    @property
+    def docker_client(self):
+        """
+        Lazily initializes and returns a Docker client.
+        This ensures Docker is only required for methods that actually use it.
+        """
+        if self._docker_client is None:
+            try:
+                print("🐳 Initializing Docker client...")
+                client = docker.from_env()
+                client.ping()
+                self._docker_client = client
+            except docker.errors.DockerException:
+                print("\n❌ Error: Docker is not running or is not installed.")
+                print("   This is required for local 'run' and 'build' operations.")
+                print("   Please start the Docker daemon and try again.")
+                sys.exit(1)
+        return self._docker_client
+    
+    def _perform_auto_cleanup(self):
+        """Performs a simple, automatic cleanup of old Docker resources."""
+        try:
+            for container in self.docker_client.containers.list(all=True, filters={"label": self.managed_label}):
+                container.remove(force=True)
+
+            cleaned_images = 0
+            for image in self.docker_client.images.list(name=self.image_prefix):
+                is_current = self.tag in image.tags
+                is_deployable = any(t.startswith(f"{self.image_prefix}:deploy-") for t in image.tags)
+
+                if not is_current and not is_deployable:
+                    self.docker_client.images.remove(image.id, force=True)
+                    cleaned_images += 1
+            
+            if cleaned_images > 0:
+                print(f"🧹 Cleaned up {cleaned_images} old image version(s).")
+
+            self.docker_client.images.prune(filters={'label': self.managed_label})
+
+        except Exception as e:
+            print(f"⚠️  An error occurred during cleanup: {e}")
 
     def _generate_base_tag(self) -> str:
         """Creates a unique tag for the base Docker image based on its dependencies."""
@@ -182,7 +218,7 @@ COPY {self.payload_file} {self.io_dir}/
     def _build_image_if_needed(self):
         """Checks if the base Docker image exists locally and builds it if not."""
         try:
-            docker_client.images.get(self.tag)
+            self.docker_client.images.get(self.tag)
             print(f"✅ Found cached base image: {self.tag}")
             return
         except docker.errors.ImageNotFound:
@@ -194,7 +230,7 @@ COPY {self.payload_file} {self.io_dir}/
             self._prepare_build_context(tmpdir)
             
             print("--- 🐳 Docker Build Logs (Base Image) ---")
-            response_generator = docker_client.api.build(
+            response_generator = self.docker_client.api.build(
                 path=str(tmpdir),
                 tag=self.tag,
                 forcerm=True,
@@ -215,6 +251,7 @@ COPY {self.payload_file} {self.io_dir}/
     def runner(self, *args, **kwargs):
         """Context manager to set up, run, and tear down the container for local execution."""
         port = kwargs.get('port', None)
+        self._perform_auto_cleanup()
         self._build_image_if_needed()
         container = None
         ports_mapping = {f'{port}/tcp': port} if port else None
@@ -228,10 +265,11 @@ COPY {self.payload_file} {self.io_dir}/
                 cloudpickle.dump((self.func, args, kwargs), f)
 
             try:
-                container = docker_client.containers.create(
+                container = self.docker_client.containers.create(
                     image=self.tag,
                     volumes={str(tmpdir): {'bind': self.io_dir, 'mode': 'rw'}},
-                    ports=ports_mapping
+                    ports=ports_mapping,
+                    labels={self.managed_label: "true"} 
                 )
                 container.start()
                 yield container, result_path
@@ -279,7 +317,7 @@ COPY {self.payload_file} {self.io_dir}/
         final_tag = f"{self.image_prefix}:deploy-{payload_hash}"
 
         try:
-            docker_client.images.get(final_tag)
+            self.docker_client.images.get(final_tag)
             print(f"✅ Found cached deployable image: {final_tag}")
             return final_tag
         except docker.errors.ImageNotFound:
@@ -290,7 +328,7 @@ COPY {self.payload_file} {self.io_dir}/
             self._prepare_build_context(tmpdir, include_payload=True, args=args, kwargs=kwargs)
 
             print("--- 🐳 Docker Build Logs (Final Image) ---")
-            response_generator = docker_client.api.build(
+            response_generator = self.docker_client.api.build(
                 path=str(tmpdir), tag=final_tag, forcerm=True, decode=True
             )
             try:
