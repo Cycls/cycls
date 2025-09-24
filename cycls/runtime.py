@@ -118,6 +118,7 @@ class Runtime:
                 sys.exit(1)
         return self._docker_client
     
+    # docker system prune -af
     def _perform_auto_cleanup(self):
         """Performs a simple, automatic cleanup of old Docker resources."""
         try:
@@ -125,7 +126,7 @@ class Runtime:
                 container.remove(force=True)
 
             cleaned_images = 0
-            for image in self.docker_client.images.list(name=self.image_prefix):
+            for image in self.docker_client.images.list(all=True, filters={"label": self.managed_label}):
                 is_current = self.tag in image.tags
                 is_deployable = any(t.startswith(f"{self.image_prefix}:deploy-") for t in image.tags)
 
@@ -168,11 +169,7 @@ class Runtime:
             if self.apt_packages else ""
         )
         run_shell_commands = "\n".join([f"RUN {cmd}" for cmd in self.run_commands]) if self.run_commands else ""
-
-        # fixes absolute path copy, but causes collision
-        copy_lines = "\n".join([f"COPY {Path(src).name} {dst}" for src, dst in self.copy.items()])
-        # copy_lines = "\n".join([f"COPY {src} {dst}" for src, dst in self.copy.items()])
-
+        copy_lines = "\n".join([f"COPY context_files/{dst} {dst}" for dst in self.copy.values()])
         expose_line = f"EXPOSE {port}" if port else ""
 
         return f"""
@@ -198,22 +195,22 @@ COPY {self.payload_file} {self.io_dir}/
         """Prepares a complete build context in the given directory."""
         port = kwargs.get('port') if kwargs else None
         
+        # Create a dedicated subdirectory for all user-copied files
+        context_files_dir = workdir / "context_files"
+        context_files_dir.mkdir()
+
+        if self.copy:
+            for src, dst in self.copy.items():
+                src_path = Path(src).resolve() # Resolve to an absolute path
+                dest_in_context = context_files_dir / dst
+                _copy_path(src_path, dest_in_context)
+
         (workdir / "Dockerfile").write_text(self._generate_dockerfile(port=port))
         (workdir / self.runner_filename).write_text(self.runner_script)
 
         if include_payload:
             payload_bytes = cloudpickle.dumps((self.func, args or [], kwargs or {}))
             (workdir / self.payload_file).write_bytes(payload_bytes)
-
-        if self.copy:
-            # for src in self.copy.keys():
-            #     _copy_path(Path(src), workdir / src)
-
-            # fixes absolute path copy
-            for src in self.copy.keys():
-                src_path = Path(src)
-                dest_path = workdir / src_path.name if src_path.is_absolute() else workdir / src
-                _copy_path(src_path, dest_path)
 
     def _build_image_if_needed(self):
         """Checks if the base Docker image exists locally and builds it if not."""
@@ -235,7 +232,8 @@ COPY {self.payload_file} {self.io_dir}/
                 tag=self.tag,
                 forcerm=True,
                 decode=True,
-                target='base' # Only build the 'base' stage
+                target='base', # Only build the 'base' stage
+                labels={self.managed_label: "true"}, # image label
             )
             try:
                 for chunk in response_generator:
@@ -269,7 +267,7 @@ COPY {self.payload_file} {self.io_dir}/
                     image=self.tag,
                     volumes={str(tmpdir): {'bind': self.io_dir, 'mode': 'rw'}},
                     ports=ports_mapping,
-                    labels={self.managed_label: "true"} 
+                    labels={self.managed_label: "true"} # container label
                 )
                 container.start()
                 yield container, result_path
