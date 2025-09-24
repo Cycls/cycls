@@ -102,6 +102,7 @@ class Agent:
                 with modal.enable_output(), run_app(app=self.app, client=self.client): 
                     while True: time.sleep(10)
 
+# docker system prune -af
 # poetry config pypi-token.pypi <your-token>
-# poetry run python agent.py
+# poetry run python agent-cycls.py
 # poetry publish --build
