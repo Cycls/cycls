@@ -181,6 +181,7 @@ RUN mkdir -p {self.io_dir}
 {run_apt_install}
 {run_pip_install}
 {run_shell_commands}
+WORKDIR app
 {copy_lines}
 COPY {self.runner_filename} {self.runner_path}
 ENTRYPOINT ["python", "{self.runner_path}", "{self.io_dir}"]
