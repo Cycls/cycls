@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cycls"
-version = "0.0.2.36"
+version = "0.0.2.37"
 
 packages = [{ include = "cycls" }]
 include = ["cycls/theme/**/*"]
@@ -16,7 +16,6 @@ modal = "^1.1.0"
 jwt = "^1.4.0"
 docker = "^7.1.0"
 cloudpickle = "^3.1.1"
-
 
 [build-system]
 requires = ["poetry-core"]
