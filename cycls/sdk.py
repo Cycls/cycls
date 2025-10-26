@@ -55,7 +55,8 @@ class Agent:
 
         i["config"][6] = False
 
-        copy={str(cycls_path.joinpath('theme')):"public", str(cycls_path)+"/web.py":"web.py"}
+        # copy={str(cycls_path.joinpath('theme')):"public", str(cycls_path)+"/web.py":"web.py"}
+        copy={str(self.theme):"public", str(cycls_path)+"/web.py":"web.py"}
         copy.update({i:i for i in self.copy})
 
         new = Runtime(
