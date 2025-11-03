@@ -3,18 +3,58 @@ from .runtime import Runtime
 from modal.runner import run_app
 from .web import web
 import importlib.resources
+from pathlib import Path
 
 theme_path = importlib.resources.files('cycls').joinpath('theme')
 cycls_path = importlib.resources.files('cycls')
 
 class Agent:
     def __init__(self, theme=theme_path, org=None, api_token=None, pip=[], apt=[], copy=[], keys=["",""], api_key=None):
+        self._validate_theme(theme)
         self.org, self.api_token = org, api_token
         self.theme = theme
         self.keys, self.pip, self.apt, self.copy = keys, pip, apt, copy
         self.api_key = api_key
 
         self.registered_functions = []
+
+    def _validate_theme(self, theme):
+        """Validate theme folder has required files"""
+        theme_path = Path(theme)
+
+        # Check if theme folder exists
+        if not theme_path.exists():
+            raise FileNotFoundError(
+                f"\n❌ Theme folder not found: {theme_path}\n"
+                f"   Please provide a valid theme directory.\n"
+                f"   Make sure the folder exists."
+            )
+
+        # Check if index.html exists
+        index_file = theme_path / "index.html"
+        if not index_file.exists():
+            raise FileNotFoundError(
+                f"\n❌ index.html not found in theme folder\n"
+                f"   Theme path: {theme_path}\n"
+                f"   Expected file: {index_file}\n"
+                f"   \n"
+                f"   Required theme structure:\n"
+                f"   {theme_path}/\n"
+                f"   ├── index.html\n"
+                f"   └── assets/\n"
+                f"       └── index-*.js"
+            )
+
+        # Check if assets folder has JavaScript files
+        assets_dir = theme_path / "assets"
+        if not assets_dir.exists():
+            print(f"\n⚠️  Warning: assets folder not found in {theme_path}")
+            print(f"   Frontend may not work properly")
+        else:
+            js_files = list(assets_dir.glob("*.js"))
+            if not js_files:
+                print(f"\n⚠️  Warning: No JavaScript files found in {assets_dir}")
+                print(f"   Frontend may not work properly")
 
     def __call__(self, name=None, header="", intro="", domain=None, auth=False):
         def decorator(f):
