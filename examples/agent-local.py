@@ -6,4 +6,4 @@ agent = cycls.Agent()
 async def func(context):
     yield "hi"
 
-agent.run()
+agent.local()

@@ -1,2 +1,2 @@
-from .sdk import Agent
+from .sdk import Agent, function
 from .runtime import Runtime
