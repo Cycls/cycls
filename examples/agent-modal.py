@@ -13,8 +13,8 @@ async def llm(x):
                 yield content
     return event_stream()
 
-@agent("cake", auth=True)
+@agent("cake", auth=False)
 async def func(context):
     return await llm(context.messages)
 
-agent.push()
+agent.modal()

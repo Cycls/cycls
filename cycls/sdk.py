@@ -7,6 +7,16 @@ import importlib.resources
 theme_path = importlib.resources.files('cycls').joinpath('theme')
 cycls_path = importlib.resources.files('cycls')
 
+def function(python_version=None, pip=None, apt=None, run_commands=None, copy=None, name=None, base_url=None, api_key=None):
+    # """
+    # A decorator factory that transforms a Python function into a containerized,
+    # remotely executable object.
+    def decorator(func):
+        Name = name or func.__name__
+        copy_dict = {i:i for i in copy or []}
+        return Runtime(func, Name.replace('_', '-'), python_version, pip, apt, run_commands, copy_dict, base_url, api_key)
+    return decorator
+
 class Agent:
     def __init__(self, theme=theme_path, org=None, api_token=None, pip=[], apt=[], copy=[], keys=["",""], api_key=None):
         self.org, self.api_token = org, api_token
@@ -28,7 +38,7 @@ class Agent:
             return f
         return decorator
 
-    def run(self, port=8080):
+    def local(self, port=8080):
         if not self.registered_functions:
             print("Error: No @agent decorated function found.")
             return
@@ -41,7 +51,7 @@ class Agent:
         uvicorn.run(web(i["func"], *i["config"]), host="0.0.0.0", port=port)
         return
 
-    def cycls(self, prod=False, port=8080):
+    def deploy(self, prod=False, port=8080):
         if not self.registered_functions:
             print("Error: No @agent decorated function found.")
             return
@@ -70,7 +80,7 @@ class Agent:
         new.deploy(port=port) if prod else new.run(port=port) 
         return
         
-    def push(self, prod=False):
+    def modal(self, prod=False):
         self.client = modal.Client.from_credentials(*self.keys)
         image = (modal.Image.debian_slim()
                             .pip_install("fastapi[standard]", "pyjwt", "cryptography", *self.pip)
