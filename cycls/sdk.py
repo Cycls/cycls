@@ -65,7 +65,6 @@ class Agent:
 
         i["config"][6] = False
 
-        # copy={str(cycls_path.joinpath('theme')):"public", str(cycls_path)+"/web.py":"web.py"}
         copy={str(self.theme):"public", str(cycls_path)+"/web.py":"web.py"}
         copy.update({i:i for i in self.copy})
 
@@ -115,5 +114,5 @@ class Agent:
 
 # docker system prune -af
 # poetry config pypi-token.pypi <your-token>
-# poetry run python agent-cycls.py
+# poetry run python agent-deploy.py
 # poetry publish --build

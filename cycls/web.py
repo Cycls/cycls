@@ -43,7 +43,6 @@ def web(func, front_end_path="", prod=False, org=None, api_token=None, header=""
     import jwt
     from pydantic import BaseModel, EmailStr
     from typing import List, Optional
-    from fastapi.templating import Jinja2Templates
     from fastapi.staticfiles import StaticFiles
 
     class User(BaseModel):
@@ -52,6 +51,15 @@ def web(func, front_end_path="", prod=False, org=None, api_token=None, header=""
         email: EmailStr
         org: Optional[str] = None
         plans: List[str] = []
+
+    class Metadata(BaseModel):
+        header: str
+        intro: str
+        prod: bool
+        auth: bool
+        org: Optional[str]
+        pk_live: str
+        pk_test: str
 
     class Context(BaseModel):
         messages: List[dict]
@@ -84,12 +92,17 @@ def web(func, front_end_path="", prod=False, org=None, api_token=None, header=""
             stream = openai_encoder(stream)
         return StreamingResponse(stream, media_type="text/event-stream")
 
-    templates = Jinja2Templates(directory=front_end_path)
-    @app.get("/", response_class=HTMLResponse)
-    async def front(request: Request):
-        return templates.TemplateResponse("index.html", {
-                "request": request, "header": header, "intro": intro, "prod": prod, "auth": auth, "org": org,
-                "pk_live": "pk_live_Y2xlcmsuY3ljbHMuY29tJA", "pk_test": "pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ"
-            })
-    app.mount("/", StaticFiles(directory=front_end_path, html=False))
+    @app.get("/metadata")
+    async def metadata():
+        return Metadata(
+            header=header,
+            intro=intro,
+            prod=prod,
+            auth=auth,
+            org=org,
+            pk_live="pk_live_Y2xlcmsuY3ljbHMuY29tJA",
+            pk_test="pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ"
+        )
+
+    app.mount("/", StaticFiles(directory=front_end_path, html=True))
     return app
