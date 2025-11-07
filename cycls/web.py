@@ -38,13 +38,13 @@ XwIDAQAB
 
 def web(func, front_end_path="", prod=False, org=None, api_token=None, header="", intro="", auth=True): # API auth
     from fastapi import FastAPI, Request, HTTPException, status, Depends
-    from fastapi.responses import StreamingResponse , HTMLResponse
+    from fastapi.responses import StreamingResponse, FileResponse
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
     import jwt
     from pydantic import BaseModel, EmailStr
     from typing import List, Optional
-    from fastapi.templating import Jinja2Templates
     from fastapi.staticfiles import StaticFiles
+    import os
 
     class User(BaseModel):
         id: str
@@ -56,6 +56,15 @@ def web(func, front_end_path="", prod=False, org=None, api_token=None, header=""
     class Context(BaseModel):
         messages: List[dict]
         user: Optional[User] = None
+
+    class Metadata(BaseModel):
+        header: str
+        intro: str
+        prod: bool
+        auth: bool
+        org: Optional[str]
+        pk_live: str
+        pk_test: str
 
     app = FastAPI()
     bearer_scheme = HTTPBearer()
@@ -84,12 +93,27 @@ def web(func, front_end_path="", prod=False, org=None, api_token=None, header=""
             stream = openai_encoder(stream)
         return StreamingResponse(stream, media_type="text/event-stream")
 
-    templates = Jinja2Templates(directory=front_end_path)
-    @app.get("/", response_class=HTMLResponse)
-    async def front(request: Request):
-        return templates.TemplateResponse("index.html", {
-                "request": request, "header": header, "intro": intro, "prod": prod, "auth": auth, "org": org,
-                "pk_live": "pk_live_Y2xlcmsuY3ljbHMuY29tJA", "pk_test": "pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ"
-            })
+    @app.get("/metadata")
+    async def metadata_endpoint():
+        """Returns app metadata for frontend configuration"""
+        return Metadata(
+            header=header,
+            intro=intro,
+            prod=prod,
+            auth=auth,
+            org=org,
+            pk_live="pk_live_Y2xlcmsuY3ljbHMuY29tJA",
+            pk_test="pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ"
+        )
+
+    @app.get("/")
+    async def front():
+        """Serves index.html from frontend directory"""
+        index_path = os.path.join(front_end_path, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path, media_type="text/html")
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not found")
+
     app.mount("/", StaticFiles(directory=front_end_path, html=False))
     return app

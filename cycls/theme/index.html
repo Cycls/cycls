@@ -4,18 +4,39 @@
     <meta charset="UTF-8" />
     <title>AI Agent</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/x-icon" href="/assets/favicon.ico">
     <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/github-dark.min.css"/>
     <link rel="stylesheet" href="https://esm.sh/katex@0.16.8/dist/katex.min.css" />
     <script>
-      const HEADER = `{{ header | safe }}`;
-      const INTRO = `{{ intro | safe }}`;
-      const ORG = "{{ org }}";
-      const AUTH = {{ auth | tojson }};
-      const PROD = {{ prod | tojson }};
-      const PUBLISHABLE_KEY = "{{ pk_live if prod else pk_test }}";
+      // Fetch metadata from API endpoint
+      async function loadMetadata() {
+        try {
+          const response = await fetch('/metadata');
+          const metadata = await response.json();
+          window.HEADER = metadata.header;
+          window.INTRO = metadata.intro;
+          window.ORG = metadata.org;
+          window.AUTH = metadata.auth;
+          window.PROD = metadata.prod;
+          window.PUBLISHABLE_KEY = metadata.prod ? metadata.pk_live : metadata.pk_test;
+          // Load the main app after metadata is ready
+          const script = document.createElement('script');
+          script.type = 'module';
+          script.crossOrigin = 'anonymous';
+          script.src = '/assets/index-D0-uI8sw.js';
+          document.head.appendChild(script);
+        } catch (error) {
+          console.error('Failed to load metadata:', error);
+        }
+      }
+      // Load metadata when DOM is ready
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', loadMetadata);
+      } else {
+        loadMetadata();
+      }
     </script>
-    <script type="module" crossorigin src="/assets/index-D0-uI8sw.js"></script>
   </head>
   <body>
     <div id="root"></div>
