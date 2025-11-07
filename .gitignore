@@ -22,3 +22,4 @@ rad.json
 TestResults.xml
 dist/
 **/__pycache__/
+.*
