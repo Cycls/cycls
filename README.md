@@ -31,8 +31,8 @@ This philosophy has a powerful side-effect: it makes development genuinely itera
 ## Key Features
 
 * ✨ **Zero-Config Deployment:** No YAML or Dockerfiles. `cycls` infers your dependencies, and APIs directly from your Python code.
-* 🚀 **One-Command Push to Cloud:** Go from local code to a globally scalable, serverless application with a single `agent.push()`.
-* 💻 **Instant Local Testing:** Run `agent.run()` to spin up a local server with hot-reloading for rapid iteration and debugging.
+* 🚀 **One-Command Push to Cloud:** Go from local code to a globally scalable, serverless application with a single `agent.deploy()`.
+* 💻 **Instant Local Testing:** Run `agent.local()` to spin up a local server with hot-reloading for rapid iteration and debugging.
 * 🤖 **OpenAI-Compatible API:** Automatically serves a streaming `/chat/completions` endpoint.
 * 🌐 **Automatic Web UI:** Get a clean, interactive front-end for your agent out of the box, with no front-end code required.
 * 🔐 **Built-in Authentication:** Secure your agent for production with a simple `auth=True` flag that enables JWT-based authentication.
@@ -61,7 +61,7 @@ agent = cycls.Agent()
 async def hello(context):
     yield "hi"
 
-agent.run()
+agent.local()
 ```
 
 Run it from your terminal:
@@ -111,7 +111,7 @@ async def cake_agent(context):
     return await llm(context.messages)
 
 # Deploy the agent to the cloud
-agent.push(prod=True)
+agent.deploy(prod=True)
 ```
 
 Run the deployment command from your terminal:
