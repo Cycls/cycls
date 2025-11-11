@@ -1,7 +1,19 @@
 import json, inspect
 
-async def openai_encoder(stream): # clean up the meta data / new API?
+async def async_openai_encoder(stream): # clean up the meta data / new API?
     async for message in stream:
+        payload = {"id": "chatcmpl-123",
+                   "object": "chat.completion.chunk",
+                   "created": 1728083325,
+                   "model": "model-1-2025-01-01",
+                   "system_fingerprint": "fp_123456",
+                   "choices": [{"delta": {"content": message}}]}
+        if message:
+            yield f"data: {json.dumps(payload)}\n\n"
+    yield "data: [DONE]\n\n"
+
+def openai_encoder(stream):
+    for message in stream:
         payload = {"id": "chatcmpl-123",
                    "object": "chat.completion.chunk",
                    "created": 1728083325,
@@ -89,7 +101,8 @@ def web(func, front_end_path="", prod=False, org=None, api_token=None, header=""
         context = Context(messages = messages, user = User(**user_data) if user_data else None)
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
         if request.url.path == "/chat/completions":
-            stream = openai_encoder(stream)
+            # stream = openai_encoder(stream)
+            stream = async_openai_encoder(stream) if inspect.isasyncgen(stream) else openai_encoder(stream)
         return StreamingResponse(stream, media_type="text/event-stream")
 
     @app.get("/metadata")

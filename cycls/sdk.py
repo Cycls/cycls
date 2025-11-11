@@ -47,7 +47,8 @@ class Agent:
         if len(self.registered_functions) > 1:
             print(f"⚠️  Warning: Multiple agents found. Running '{i['name']}'.")
         print(f"🚀 Starting local server at localhost:{port}")
-        i["config"][0], i["config"][6] = self.theme, False
+        # i["config"][0], i["config"][6] = self.theme, False
+        i["config"][0] = self.theme
         uvicorn.run(web(i["func"], *i["config"]), host="0.0.0.0", port=port)
         return
 
@@ -63,7 +64,7 @@ class Agent:
         if len(self.registered_functions) > 1:
             print(f"⚠️  Warning: Multiple agents found. Running '{i['name']}'.")
 
-        i["config"][6] = False
+        # i["config"][6] = False
 
         copy={str(self.theme):"public", str(cycls_path)+"/web.py":"web.py"}
         copy.update({i:i for i in self.copy})
