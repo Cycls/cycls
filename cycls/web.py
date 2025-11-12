@@ -1,4 +1,5 @@
 import json, inspect
+from pathlib import Path
 
 async def async_openai_encoder(stream): # clean up the meta data / new API?
     async for message in stream:
@@ -48,7 +49,7 @@ XwIDAQAB
 -----END PUBLIC KEY-----
 """
 
-def web(func, front_end_path="", prod=False, org=None, api_token=None, header="", intro="", auth=True): # API auth
+def web(func, public_path="", prod=False, org=None, api_token=None, header="", intro="", title="", auth=True): # API auth
     from fastapi import FastAPI, Request, HTTPException, status, Depends
     from fastapi.responses import StreamingResponse , HTMLResponse
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -67,6 +68,7 @@ def web(func, front_end_path="", prod=False, org=None, api_token=None, header=""
     class Metadata(BaseModel):
         header: str
         intro: str
+        title: str
         prod: bool
         auth: bool
         org: Optional[str]
@@ -101,7 +103,6 @@ def web(func, front_end_path="", prod=False, org=None, api_token=None, header=""
         context = Context(messages = messages, user = User(**user_data) if user_data else None)
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
         if request.url.path == "/chat/completions":
-            # stream = openai_encoder(stream)
             stream = async_openai_encoder(stream) if inspect.isasyncgen(stream) else openai_encoder(stream)
         return StreamingResponse(stream, media_type="text/event-stream")
 
@@ -110,6 +111,7 @@ def web(func, front_end_path="", prod=False, org=None, api_token=None, header=""
         return Metadata(
             header=header,
             intro=intro,
+            title=title,
             prod=prod,
             auth=auth,
             org=org,
@@ -117,5 +119,8 @@ def web(func, front_end_path="", prod=False, org=None, api_token=None, header=""
             pk_test="pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ"
         )
 
-    app.mount("/", StaticFiles(directory=front_end_path, html=True))
+    if Path("a").is_dir():
+        app.mount("/a", StaticFiles(directory="a", html=True))
+    app.mount("/", StaticFiles(directory=public_path, html=True))
+
     return app

@@ -18,19 +18,19 @@ def function(python_version=None, pip=None, apt=None, run_commands=None, copy=No
     return decorator
 
 class Agent:
-    def __init__(self, theme=theme_path, org=None, api_token=None, pip=[], apt=[], copy=[], keys=["",""], api_key=None):
+    def __init__(self, theme=theme_path, org=None, api_token=None, pip=[], apt=[], copy=[], copy_public=[], keys=["",""], api_key=None):
         self.org, self.api_token = org, api_token
         self.theme = theme
-        self.keys, self.pip, self.apt, self.copy = keys, pip, apt, copy
+        self.keys, self.pip, self.apt, self.copy, self.copy_public = keys, pip, apt, copy, copy_public
         self.api_key = api_key
 
         self.registered_functions = []
 
-    def __call__(self, name=None, header="", intro="", domain=None, auth=False):
+    def __call__(self, name=None, header="", intro="", title="", domain=None, auth=False):
         def decorator(f):
             self.registered_functions.append({
                 "func": f,
-                "config": ["public", False, self.org, self.api_token, header, intro, auth],
+                "config": ["public", False, self.org, self.api_token, header, intro, title, auth],
                 # "name": name,
                 "name": name or (f.__name__).replace('_', '-'),
                 "domain": domain or f"{name}.cycls.ai",
@@ -47,7 +47,6 @@ class Agent:
         if len(self.registered_functions) > 1:
             print(f"⚠️  Warning: Multiple agents found. Running '{i['name']}'.")
         print(f"🚀 Starting local server at localhost:{port}")
-        # i["config"][0], i["config"][6] = self.theme, False
         i["config"][0] = self.theme
         uvicorn.run(web(i["func"], *i["config"]), host="0.0.0.0", port=port)
         return
@@ -64,10 +63,11 @@ class Agent:
         if len(self.registered_functions) > 1:
             print(f"⚠️  Warning: Multiple agents found. Running '{i['name']}'.")
 
-        # i["config"][6] = False
+        i["config"][1] = False
 
         copy={str(self.theme):"public", str(cycls_path)+"/web.py":"web.py"}
         copy.update({i:i for i in self.copy})
+        copy.update({i:f"a/{i}" for i in self.copy_public})
 
         new = Runtime(
             func=lambda port: __import__("uvicorn").run(__import__("web").web(i["func"], *i["config"]), host="0.0.0.0", port=port),
