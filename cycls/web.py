@@ -115,7 +115,7 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
             prod=prod,
             auth=auth,
             org=org,
-            pk_live="pk_live_Y2xlcmsuY3ljbHMuY29tJA",
+            pk_live="pk_live_Y2xlcmsuY3ljbHMuYWkk",
             pk_test="pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ"
         )
 
