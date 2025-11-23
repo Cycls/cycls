@@ -30,7 +30,7 @@ class Agent:
         def decorator(f):
             self.registered_functions.append({
                 "func": f,
-                "config": ["public", False, self.org, self.api_token, header, intro, title, auth],
+                "config": ["theme", False, self.org, self.api_token, header, intro, title, auth],
                 # "name": name,
                 "name": name or (f.__name__).replace('_', '-'),
                 "domain": domain or f"{name}.cycls.ai",
@@ -65,9 +65,9 @@ class Agent:
 
         i["config"][1] = False
 
-        copy={str(self.theme):"public", str(cycls_path)+"/web.py":"web.py"}
+        copy={str(self.theme):"theme", str(cycls_path)+"/web.py":"web.py"}
         copy.update({i:i for i in self.copy})
-        copy.update({i:f"a/{i}" for i in self.copy_public})
+        copy.update({i:f"public/{i}" for i in self.copy_public})
 
         def runner(port):
             import uvicorn, logging
@@ -93,10 +93,15 @@ class Agent:
         image = (modal.Image.debian_slim()
                             .pip_install("fastapi[standard]", "pyjwt", "cryptography", *self.pip)
                             .apt_install(*self.apt)
-                            .add_local_dir(self.theme, "/root/public")
+                            .add_local_dir(self.theme, "/root/theme")
                             .add_local_file(str(cycls_path)+"/web.py", "/root/web.py"))
+       
         for item in self.copy:
             image = image.add_local_file(item, f"/root/{item}") if "." in item else image.add_local_dir(item, f'/root/{item}')
+        
+        for item in self.copy_public:
+            image = image.add_local_file(item, f"/root/public/{item}") if "." in item else image.add_local_dir(item, f'/root/public/{item}')
+
         self.app = modal.App("development", image=image)
     
         if not self.registered_functions:
