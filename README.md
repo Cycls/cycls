@@ -69,7 +69,7 @@ Run it from your terminal:
 ```bash
 python main.py
 ```
-This will start a local server. Open your browser to http://127.0.0.1:8000 to interact with your agent.
+This will start a local server. Open your browser to http://localhost:8080 to interact with your agent.
 
 ### 2. Cloud Deployment: An OpenAI-Powered Agent
 This example creates a more advanced agent that calls the OpenAI API. It will be deployed to the cloud with authentication enabled.

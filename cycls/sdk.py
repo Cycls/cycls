@@ -69,8 +69,16 @@ class Agent:
         copy.update({i:i for i in self.copy})
         copy.update({i:f"a/{i}" for i in self.copy_public})
 
+        def runner(port):
+            import uvicorn, logging
+            # This one-liner hides the confusing "0.0.0.0" message
+            logging.getLogger("uvicorn.error").addFilter(type("F",(),{"filter": lambda s,r: "0.0.0.0" not in r.getMessage()})())
+            print(f"\n🚀 Local Link: http://localhost:{port}\n")
+            uvicorn.run(__import__("web").web(i["func"], *i["config"]), host="0.0.0.0", port=port)
+
         new = Runtime(
-            func=lambda port: __import__("uvicorn").run(__import__("web").web(i["func"], *i["config"]), host="0.0.0.0", port=port),
+            # func=lambda port: __import__("uvicorn").run(__import__("web").web(i["func"], *i["config"]), host="0.0.0.0", port=port),
+            func=runner,
             name=i["name"],
             apt_packages=self.apt,
             pip_packages=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", *self.pip],
