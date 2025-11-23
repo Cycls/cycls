@@ -24,3 +24,4 @@ dist/
 **/__pycache__/
 .*
 examples/cake.py
+examples/humain.png
