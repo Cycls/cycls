@@ -119,8 +119,8 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
             pk_test="pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ"
         )
 
-    if Path("a").is_dir():
-        app.mount("/a", StaticFiles(directory="a", html=True))
+    if Path("public").is_dir():
+        app.mount("/public", StaticFiles(directory="public", html=True))
     app.mount("/", StaticFiles(directory=public_path, html=True))
 
     return app
