@@ -128,5 +128,5 @@ class Agent:
 
 # docker system prune -af
 # poetry config pypi-token.pypi <your-token>
-# poetry run python agent-deploy.py
+# poetry run python cake.py
 # poetry publish --build
