@@ -69,20 +69,19 @@ This will start a local server. Open your browser to http://localhost:8080 to in
 This example creates a more advanced agent that calls the OpenAI API. It will be deployed to the cloud with authentication enabled.
 
 ```py
-# deploy.py
 import cycls
 
 # Initialize the agent with dependencies and API keys
 agent = cycls.Agent(
     pip=["openai"],
-    key=["YOUR_CYCLS_KEY"] # Get yours from cycls.com
+    key="YOUR_CYCLS_KEY" # Get yours from https://cycls.com
 )
 
 # A helper function to call the LLM
 async def llm(messages):
     # Import inside the function: 'openai' is needed at runtime in the container.
     import openai
-    client = openai.AsyncOpenAI(api_key="sk-...") # Your OpenAI key
+    client = openai.AsyncOpenAI(api_key="YOUR_OPENAI_API_KEY")
     model = "gpt-4o"
     response = await client.chat.completions.create(
         model=model,

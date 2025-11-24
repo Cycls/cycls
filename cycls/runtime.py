@@ -386,7 +386,7 @@ COPY {self.payload_file} {self.io_dir}/
                         data=data_payload,
                         files=files,
                         headers=headers,
-                        timeout=1800 # Set a long timeout for the entire process
+                        timeout=5*1800 # Set a long timeout for the entire process
                     )
 
                 # 4. Handle the server's response
