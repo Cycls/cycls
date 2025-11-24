@@ -116,6 +116,14 @@ async def cake_agent(context):
 # Deploy the agent to the cloud
 agent.deploy(prod=True)
 ```
+Run the deployment command from your terminal:
+
+```bash
+python main.py
+```
+
+After a few moments, your agent will be live and accessible at a public URL like https://cake.cycls.ai.
+
 
 ### Explanation
 
