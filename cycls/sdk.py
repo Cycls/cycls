@@ -4,25 +4,24 @@ from modal.runner import run_app
 from .web import web
 import importlib.resources
 
-theme_path = importlib.resources.files('cycls').joinpath('theme')
-cycls_path = importlib.resources.files('cycls')
+CYCLS_PATH = importlib.resources.files('cycls')
 
-def function(python_version=None, pip=None, apt=None, run_commands=None, copy=None, name=None, base_url=None, api_key=None):
+def function(python_version=None, pip=None, apt=None, run_commands=None, copy=None, name=None, base_url=None, key=None):
     # """
     # A decorator factory that transforms a Python function into a containerized,
     # remotely executable object.
     def decorator(func):
         Name = name or func.__name__
         copy_dict = {i:i for i in copy or []}
-        return Runtime(func, Name.replace('_', '-'), python_version, pip, apt, run_commands, copy_dict, base_url, api_key)
+        return Runtime(func, Name.replace('_', '-'), python_version, pip, apt, run_commands, copy_dict, base_url, key)
     return decorator
 
 class Agent:
-    def __init__(self, theme=theme_path, org=None, api_token=None, pip=[], apt=[], copy=[], copy_public=[], keys=["",""], api_key=None):
+    def __init__(self, theme=CYCLS_PATH.joinpath('theme'), org=None, api_token=None, pip=[], apt=[], copy=[], copy_public=[], modal_keys=["",""], key=None, base_url=None):
         self.org, self.api_token = org, api_token
         self.theme = theme
-        self.keys, self.pip, self.apt, self.copy, self.copy_public = keys, pip, apt, copy, copy_public
-        self.api_key = api_key
+        self.key, self.modal_keys, self.pip, self.apt, self.copy, self.copy_public = key, modal_keys, pip, apt, copy, copy_public
+        self.base_url = base_url
 
         self.registered_functions = []
 
@@ -55,7 +54,7 @@ class Agent:
         if not self.registered_functions:
             print("Error: No @agent decorated function found.")
             return
-        if (self.api_key is None) and prod:
+        if (self.key is None) and prod:
             print("🛑  Error: Please add your Cycls API key")
             return
 
@@ -65,36 +64,37 @@ class Agent:
 
         i["config"][1] = False
 
-        copy={str(self.theme):"theme", str(cycls_path)+"/web.py":"web.py"}
+        copy={str(self.theme):"theme", str(CYCLS_PATH)+"/web.py":"web.py"}
         copy.update({i:i for i in self.copy})
         copy.update({i:f"public/{i}" for i in self.copy_public})
 
-        def runner(port):
+        def server(port):
             import uvicorn, logging
             # This one-liner hides the confusing "0.0.0.0" message
             logging.getLogger("uvicorn.error").addFilter(type("F",(),{"filter": lambda s,r: "0.0.0.0" not in r.getMessage()})())
-            print(f"\n🚀 Local Link: http://localhost:{port}\n")
+            print(f"\n🔨 Visit {i["name"]} => http://localhost:{port}\n")
             uvicorn.run(__import__("web").web(i["func"], *i["config"]), host="0.0.0.0", port=port)
 
         new = Runtime(
             # func=lambda port: __import__("uvicorn").run(__import__("web").web(i["func"], *i["config"]), host="0.0.0.0", port=port),
-            func=runner,
+            func=server,
             name=i["name"],
             apt_packages=self.apt,
             pip_packages=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", *self.pip],
             copy=copy,
-            api_key=self.api_key
+            base_url=self.base_url,
+            api_key=self.key
         )
         new.deploy(port=port) if prod else new.run(port=port) 
         return
         
     def modal(self, prod=False):
-        self.client = modal.Client.from_credentials(*self.keys)
+        self.client = modal.Client.from_credentials(*self.modal_keys)
         image = (modal.Image.debian_slim()
                             .pip_install("fastapi[standard]", "pyjwt", "cryptography", *self.pip)
                             .apt_install(*self.apt)
                             .add_local_dir(self.theme, "/root/theme")
-                            .add_local_file(str(cycls_path)+"/web.py", "/root/web.py"))
+                            .add_local_file(str(CYCLS_PATH)+"/web.py", "/root/web.py"))
        
         for item in self.copy:
             image = image.add_local_file(item, f"/root/{item}") if "." in item else image.add_local_dir(item, f'/root/{item}')
