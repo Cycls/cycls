@@ -71,17 +71,20 @@ python main.py
 ```
 This will start a local server. Open your browser to http://localhost:8080 to interact with your agent.
 
-### 2. Cloud Deployment: An OpenAI-Powered Agent
-This example creates a more advanced agent that calls the OpenAI API. It will be deployed to the cloud with authentication enabled.
+## 2. Cloud Deployment: An OpenAI-Powered Agent
 
-```py
+This example creates a more advanced agent that calls the OpenAI API.  
+**Note:** When deploying to the Cycls Cloud, you must pass your Cycls deployment key using the `api_key` argument.
+
+```python
 # deploy.py
 import cycls
 
 # Initialize the agent with dependencies and API keys
 agent = cycls.Agent(
     pip=["openai"],
-    keys=["ak-<token_id>", "as-<token_secret>"]
+    keys=["ak-<token_id>", "as-<token_secret>"],
+    api_key="cs-<your-cycls-api-key>"
 )
 
 # A helper function to call the LLM
@@ -114,12 +117,10 @@ async def cake_agent(context):
 agent.deploy(prod=True)
 ```
 
-Run the deployment command from your terminal:
+### Explanation
 
-```bash
-python main.py
-```
-After a few moments, your agent will be live and accessible at a public URL like https://cake.cycls.ai.
+- `keys=[...]` secrets passed into the **agent container runtime**.
+- `api_key="..."` the **Cycls Cloud deployment key** required for `prod=True`.
 
 ### License
 This project is licensed under the MIT License.
