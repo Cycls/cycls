@@ -18,15 +18,7 @@ The Distribution SDK for AI Agents.
 
 # Cycls 🚲
 
-`cycls` is a zero-config framework for building and publishing AI agents. With a single decorator and one command, you can deploy your code as a web application complete with a front-end UI and an OpenAI-compatible API endpoint.
-
-### Design Philosophy
-`cycls` is an anti-framework. We treat the boilerplate, config files, and infrastructure that surround modern applications as a bug to be eliminated. A developer's focus is the most valuable resource, and context-switching is its greatest enemy.
-
-Our zero-config approach makes your Python script the single source of truth for the entire application. When your code is all you need, you stay focused, iterate faster, and ship with confidence.
-
-This philosophy has a powerful side-effect: it makes development genuinely iterative. The self-contained nature of an agent encourages you to 'build in cycles'—starting simple and adding complexity without penalty. This same simplicity also makes `cycls` an ideal target for code generation. Because the entire application can be expressed in one file, LLMs can write, modify, and reason about `cycls` agents far more effectively than with traditional frameworks. It's a seamless interface for both human and machine.
-
+`cycls` is an open-source SDK for building and publishing AI agents. With a single decorator and one command, you can deploy your code as a web application complete with a front-end UI and an OpenAI-compatible API endpoint.
 
 ## Key Features
 
@@ -45,6 +37,8 @@ This philosophy has a powerful side-effect: it makes development genuinely itera
 pip install cycls
 ```
 
+**Note:** You must have [Docker](https://www.docker.com/get-started) installed and running on your machine.
+
 ## How to Use
 ### 1. Local Development: "Hello, World!"
 
@@ -59,9 +53,9 @@ agent = cycls.Agent()
 # Decorate your function to register it as an agent
 @agent()
 async def hello(context):
-    yield "hi"
+    yield "Hello, World!"
 
-agent.local()
+agent.deploy(prod=False)
 ```
 
 Run it from your terminal:
@@ -81,12 +75,12 @@ import cycls
 # Initialize the agent with dependencies and API keys
 agent = cycls.Agent(
     pip=["openai"],
-    keys=["ak-<token_id>", "as-<token_secret>"]
+    key=["YOUR_CYCLS_KEY"] # Get yours from cycls.com
 )
 
 # A helper function to call the LLM
 async def llm(messages):
-    # Import inside the function: 'openai' is only needed at runtime in the container.
+    # Import inside the function: 'openai' is needed at runtime in the container.
     import openai
     client = openai.AsyncOpenAI(api_key="sk-...") # Your OpenAI key
     model = "gpt-4o"

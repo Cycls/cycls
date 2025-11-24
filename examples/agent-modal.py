@@ -1,6 +1,6 @@
 import cycls
 
-agent = cycls.Agent(pip=["openai"], keys=["ak-", "as-"])
+agent = cycls.Agent(pip=["openai"], modal_keys=["ak-", "as-"])
 
 async def llm(x):
     import openai
