@@ -62,7 +62,8 @@ class Agent:
         if len(self.registered_functions) > 1:
             print(f"⚠️  Warning: Multiple agents found. Running '{i['name']}'.")
 
-        i["config"][1] = False
+        # i["config"][1] = False
+        i["config"][1] = prod
 
         copy={str(self.theme):"theme", str(CYCLS_PATH)+"/web.py":"web.py"}
         copy.update({i:i for i in self.copy})
