@@ -72,7 +72,7 @@ class Agent:
             import uvicorn, logging
             # This one-liner hides the confusing "0.0.0.0" message
             logging.getLogger("uvicorn.error").addFilter(type("F",(),{"filter": lambda s,r: "0.0.0.0" not in r.getMessage()})())
-            print(f"\n🔨 Visit {i["name"]} => http://localhost:{port}\n")
+            print(f"\n🔨 Visit {i['name']} => http://localhost:{port}\n")
             uvicorn.run(__import__("web").web(i["func"], *i["config"]), host="0.0.0.0", port=port)
 
         new = Runtime(
