@@ -86,7 +86,7 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
         # if api_token and api_token==""
         try:
             public_key = live_auth_public_key if prod else test_auth_public_key
-            decoded = jwt.decode(bearer.credentials, public_key, algorithms=["RS256"],leeway=10)
+            decoded = jwt.decode(bearer.credentials, public_key, algorithms=["RS256"], leeway=10)
             # print(decoded)
             return {"type": "user", 
                     "user": {"id": decoded.get("id"), "name": decoded.get("name"), "email": decoded.get("email"), "org": decoded.get("org"),
