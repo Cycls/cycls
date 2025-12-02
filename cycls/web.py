@@ -60,7 +60,7 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
 
     class User(BaseModel):
         id: str
-        name: str
+        name: Optional[str] = None
         email: EmailStr
         org: Optional[str] = None
         plans: List[str] = []
