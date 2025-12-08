@@ -49,7 +49,7 @@ XwIDAQAB
 -----END PUBLIC KEY-----
 """
 
-def web(func, public_path="", prod=False, org=None, api_token=None, header="", intro="", title="", auth=True): # API auth
+def web(func, public_path="", prod=False, org=None, api_token=None, header="", intro="", title="", auth=True, tier=""): # API auth
     from fastapi import FastAPI, Request, HTTPException, status, Depends
     from fastapi.responses import StreamingResponse , HTMLResponse
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -71,6 +71,7 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
         title: str
         prod: bool
         auth: bool
+        tier: str
         org: Optional[str]
         pk_live: str
         pk_test: str
@@ -114,6 +115,7 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
             title=title,
             prod=prod,
             auth=auth,
+            tier=tier,
             org=org,
             pk_live="pk_live_Y2xlcmsuY3ljbHMuYWkk",
             pk_test="pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ"
