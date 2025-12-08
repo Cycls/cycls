@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cycls"
-version = "0.0.2.54"
+version = "0.0.2.55"
 
 packages = [{ include = "cycls" }]
 include = ["cycls/theme/**/*"]
