@@ -16,6 +16,12 @@ modal = "^1.1.0"
 jwt = "^1.4.0"
 docker = "^7.1.0"
 cloudpickle = "^3.1.1"
+openai = "^2.7.1"
+google-generativeai = "^0.8.5"
+pypdf = "^6.4.1"
+python-docx = "^1.2.0"
+pandas = "^2.3.3"
+openpyxl = "^3.1.5"
 
 [build-system]
 requires = ["poetry-core"]
