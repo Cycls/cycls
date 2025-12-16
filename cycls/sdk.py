@@ -25,11 +25,14 @@ class Agent:
 
         self.registered_functions = []
 
-    def __call__(self, name=None, header="", intro="", title="", domain=None, auth=False, tier="free"):
+    def __call__(self, name=None, header="", intro="", title="", domain=None, auth=False, tier="free", analytics=False):
+        if tier=="cycls_pass":
+            auth=True
+            analytics=True
         def decorator(f):
             self.registered_functions.append({
                 "func": f,
-                "config": ["theme", False, self.org, self.api_token, header, intro, title, auth, tier],
+                "config": ["theme", False, self.org, self.api_token, header, intro, title, auth, tier, analytics],
                 # "name": name,
                 "name": name or (f.__name__).replace('_', '-'),
                 "domain": domain or f"{name}.cycls.ai",
