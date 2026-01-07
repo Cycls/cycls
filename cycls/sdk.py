@@ -7,8 +7,8 @@ import importlib.resources
 CYCLS_PATH = importlib.resources.files('cycls')
 
 themes = {
-    "default": CYCLS_PATH.joinpath('theme'),
-    "spark": CYCLS_PATH.joinpath('spark'),
+    "default": CYCLS_PATH.joinpath('default-theme'),
+    "dev": CYCLS_PATH.joinpath('dev-theme'),
 }
 
 def resolve_theme(theme):
@@ -17,7 +17,7 @@ def resolve_theme(theme):
         if theme in themes:
             return themes[theme]
         raise ValueError(f"Unknown theme: {theme}. Available: {list(themes.keys())}")
-    return theme  # Assume it's a path
+    return theme
 
 def function(python_version=None, pip=None, apt=None, run_commands=None, copy=None, name=None, base_url=None, key=None):
     # """
