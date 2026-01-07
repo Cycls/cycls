@@ -2,7 +2,7 @@ import cycls
 from cycls import UI
 import asyncio
 
-agent = cycls.Agent(theme="spark")
+agent = cycls.Agent(theme="dev")
 
 @agent('native-demo')
 async def func(context):
