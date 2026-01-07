@@ -104,6 +104,8 @@
 
       // Native component renderers
       const components = {
+        text: (props) => marked.parse(props.content || '', { breaks: true }),
+
         thinking: (props) => `
           <div class="thinking-bubble rounded-lg p-4 my-3 italic text-[var(--text-secondary)]">
             <div class="flex items-center gap-2 mb-2 text-sm font-medium text-[var(--accent)]">
@@ -191,23 +193,18 @@
       }
 
       // Render a single message
-      function renderMessage(msg, isStreaming = false) {
+      function renderMessage(msg) {
         const wrapper = document.createElement('div');
         wrapper.className = `rounded-lg p-4 ${msg.role === 'user'
           ? 'bg-[var(--accent)] text-white ml-12'
-          : 'bg-[var(--bg-secondary)] mr-12 ' + (isStreaming ? 'streaming border-l-2' : '')}`;
+          : 'bg-[var(--bg-secondary)] mr-12'}`;
 
         if (msg.role === 'user') {
           wrapper.innerHTML = `<div>${msg.content}</div>`;
         } else {
           let html = '';
-          for (const part of msg.parts || [{ type: 'text', content: msg.content }]) {
-            if (part.type === 'component' && components[part.name]) {
-              html += components[part.name](part);
-            } else if (part.type === 'text') {
-              html += marked.parse(part.content || '', { breaks: true });
-            }
-          }
+          for (const part of msg.parts || [])
+            html += components[part.name]?.(part) || '';
           wrapper.innerHTML = `<div class="prose prose-invert max-w-none">${html}</div>`;
         }
         return wrapper;
@@ -217,17 +214,14 @@
       function render() {
         const container = document.getElementById('messages');
         container.innerHTML = '';
-        messages.forEach((msg, i) => {
-          const isLast = i === messages.length - 1;
-          container.appendChild(renderMessage(msg, isLast && msg.role === 'assistant' && msg.streaming));
-        });
+        messages.forEach(msg => container.appendChild(renderMessage(msg)));
         container.scrollTop = container.scrollHeight;
       }
 
       // Stream response from server
       async function streamResponse(userMessage) {
         messages.push({ role: 'user', content: userMessage });
-        messages.push({ role: 'assistant', content: '', parts: [], streaming: true });
+        messages.push({ role: 'assistant', parts: [] });
         render();
 
         const response = await fetch('/chat/completions', {
@@ -244,6 +238,24 @@
         let assistantMsg = messages[messages.length - 1];
         let currentPart = null;
 
+        const decode = {
+          '+': ([, name, props]) => {
+            currentPart = {name, ...props};
+            if (props.headers) currentPart.rows = [];
+            assistantMsg.parts.push(currentPart);
+          },
+          '~': ([, props]) => {
+            if (!currentPart) return;
+            for (const [k, v] of Object.entries(props)) {
+              if (k === 'content') currentPart.content = (currentPart.content || '') + v;
+              else if (k === 'row') currentPart.rows.push(v);
+              else currentPart[k] = v;
+            }
+          },
+          '-': () => { currentPart = null; },
+          '=': ([, props]) => { assistantMsg.parts.push(props); }
+        };
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -259,56 +271,18 @@
 
             try {
               const msg = JSON.parse(data);
-
-              switch (msg.type) {
-                case 'component-start':
-                  currentPart = { type: 'component', name: msg.name, streaming: true };
-                  // Copy initial props (headers for table, content for thinking)
-                  if (msg.headers) currentPart.headers = msg.headers, currentPart.rows = [];
-                  if (msg.content !== undefined) currentPart.content = msg.content;
-                  assistantMsg.parts.push(currentPart);
-                  break;
-
-                case 'component-delta':
-                  if (currentPart) {
-                    if (msg.row) currentPart.rows.push(msg.row);
-                    if (msg.content !== undefined) currentPart.content = (currentPart.content || '') + msg.content;
-                  }
-                  break;
-
-                case 'component-end':
-                  if (currentPart) currentPart.streaming = false;
-                  currentPart = null;
-                  break;
-
-                case 'component':
-                  // Complete component (non-streaming)
-                  assistantMsg.parts.push({ type: 'component', name: msg.name, ...msg });
-                  break;
-
-                case 'text':
-                  // Find or create text part
-                  let textPart = assistantMsg.parts.at(-1);
-                  if (!textPart || textPart.type !== 'text') {
-                    textPart = { type: 'text', content: '' };
-                    assistantMsg.parts.push(textPart);
-                  }
-                  textPart.content += msg.content;
-                  assistantMsg.content += msg.content;
-                  break;
-              }
+              decode[msg[0]]?.(msg);
               render();
             } catch (e) {
               console.error('Parse error:', e, data);
             }
           }
         }
-
         assistantMsg.parts = assistantMsg.parts.filter(p =>
-          p.type === 'component' || (p.type === 'text' && p.content.trim())
+          p.name !== 'text' || p.content?.trim()
         );
-        assistantMsg.streaming = false;
         render();
+        console.log(messages);
       }
 
       // Form submit
