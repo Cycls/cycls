@@ -224,7 +224,7 @@
         messages.push({ role: 'assistant', parts: [] });
         render();
 
-        const response = await fetch('/chat/completions', {
+        const response = await fetch('/chat/cycls', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

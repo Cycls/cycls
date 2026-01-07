@@ -1,6 +1,13 @@
 import json, inspect
 from pathlib import Path
 
+async def async_openai_encoder(stream):
+    async for message in stream:
+        payload = {"choices": [{"delta": {"content": message}}]}
+        if message:
+            yield f"data: {json.dumps(payload)}\n\n"
+    yield "data: [DONE]\n\n"
+
 class StreamEncoder:
     def __init__(self): self.cur = None
     def sse(self, d): return f"data: {json.dumps(d)}\n\n"
@@ -105,6 +112,7 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials", headers={"WWW-Authenticate": "Bearer"})
     
     @app.post("/")
+    @app.post("/chat/cycls")
     @app.post("/chat/completions")
     async def back(request: Request, jwt: Optional[dict] = Depends(validate) if auth else None):
         data = await request.json()
@@ -113,6 +121,8 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
         context = Context(messages = messages, user = User(**user_data) if user_data else None)
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
         if request.url.path == "/chat/completions":
+            stream = async_openai_encoder(stream)
+        elif request.url.path == "/chat/cycls":
             stream = encoder(stream)
         return StreamingResponse(stream, media_type="text/event-stream")
 

@@ -48,6 +48,4 @@ async def func(context):
 
     yield "\n\nDone!"
 
-
-if __name__ == "__main__":
-    agent.local(port=8080)
+agent.local(port=8080)
