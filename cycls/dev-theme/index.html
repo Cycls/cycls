@@ -228,7 +228,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            messages: messages.slice(0, -1).map(m => ({ role: m.role, content: m.content }))
+            messages: messages.slice(0, -1).map(m => ({ role: m.role, content: m.content, parts: m.parts }))
           })
         });
 
