@@ -1,28 +1,49 @@
 import json, inspect
 from pathlib import Path
 
-async def async_openai_encoder(stream): # clean up the meta data / new API?
-    async for message in stream:
-        payload = {"id": "chatcmpl-123",
-                   "object": "chat.completion.chunk",
-                   "created": 1728083325,
-                   "model": "model-1-2025-01-01",
-                   "system_fingerprint": "fp_123456",
-                   "choices": [{"delta": {"content": message}}]}
-        if message:
-            yield f"data: {json.dumps(payload)}\n\n"
-    yield "data: [DONE]\n\n"
+class StreamEncoder:
+    def __init__(self):
+        self.current = None
 
-def openai_encoder(stream):
-    for message in stream:
-        payload = {"id": "chatcmpl-123",
-                   "object": "chat.completion.chunk",
-                   "created": 1728083325,
-                   "model": "model-1-2025-01-01",
-                   "system_fingerprint": "fp_123456",
-                   "choices": [{"delta": {"content": message}}]}
-        if message:
-            yield f"data: {json.dumps(payload)}\n\n"
+    def sse(self, data):
+        return f"data: {json.dumps(data)}\n\n"
+
+    def close(self):
+        if self.current:
+            msg = self.sse({"type": "component-end", "name": self.current})
+            self.current = None
+            return msg
+
+    def process(self, item):
+        if not item:
+            return
+        if isinstance(item, dict) and "name" in item:
+            name = item["name"]
+            props = {k: v for k, v in item.items() if k not in ("name", "_complete")}
+
+            if item.get("_complete"):
+                if close := self.close(): yield close
+                yield self.sse({"type": "component", "name": name, **props})
+            else:
+                if name != self.current:
+                    if close := self.close(): yield close
+                    yield self.sse({"type": "component-start", "name": name, **props})
+                    self.current = name
+                else:
+                    yield self.sse({"type": "component-delta", "name": name, **props})
+        else:
+            if close := self.close(): yield close
+            yield self.sse({"type": "text", "content": item})
+
+async def encoder(stream):
+    enc = StreamEncoder()
+    if inspect.isasyncgen(stream):
+        async for item in stream:
+            for msg in enc.process(item): yield msg
+    else:
+        for item in stream:
+            for msg in enc.process(item): yield msg
+    if close := enc.close(): yield close
     yield "data: [DONE]\n\n"
 
 test_auth_public_key = """
@@ -105,7 +126,7 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
         context = Context(messages = messages, user = User(**user_data) if user_data else None)
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
         if request.url.path == "/chat/completions":
-            stream = async_openai_encoder(stream) if inspect.isasyncgen(stream) else openai_encoder(stream)
+            stream = encoder(stream)
         return StreamingResponse(stream, media_type="text/event-stream")
 
     @app.get("/metadata")
