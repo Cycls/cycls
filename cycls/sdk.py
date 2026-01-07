@@ -6,6 +6,20 @@ import importlib.resources
 
 CYCLS_PATH = importlib.resources.files('cycls')
 
+# Theme registry - maps theme names to paths
+themes = {
+    "default": CYCLS_PATH.joinpath('theme'),
+    "spark": CYCLS_PATH.joinpath('spark'),
+}
+
+def resolve_theme(theme):
+    """Resolve theme - accepts string name or path"""
+    if isinstance(theme, str):
+        if theme in themes:
+            return themes[theme]
+        raise ValueError(f"Unknown theme: {theme}. Available: {list(themes.keys())}")
+    return theme  # Assume it's a path
+
 def function(python_version=None, pip=None, apt=None, run_commands=None, copy=None, name=None, base_url=None, key=None):
     # """
     # A decorator factory that transforms a Python function into a containerized,
@@ -17,9 +31,9 @@ def function(python_version=None, pip=None, apt=None, run_commands=None, copy=No
     return decorator
 
 class Agent:
-    def __init__(self, theme=CYCLS_PATH.joinpath('theme'), org=None, api_token=None, pip=[], apt=[], copy=[], copy_public=[], modal_keys=["",""], key=None, base_url=None):
+    def __init__(self, theme="default", org=None, api_token=None, pip=[], apt=[], copy=[], copy_public=[], modal_keys=["",""], key=None, base_url=None):
         self.org, self.api_token = org, api_token
-        self.theme = theme
+        self.theme = resolve_theme(theme)
         self.key, self.modal_keys, self.pip, self.apt, self.copy, self.copy_public = key, modal_keys, pip, apt, copy, copy_public
         self.base_url = base_url
 
