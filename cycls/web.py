@@ -2,38 +2,25 @@ import json, inspect
 from pathlib import Path
 
 class StreamEncoder:
-    def __init__(self):
-        self.current = None
-
-    def sse(self, data):
-        return f"data: {json.dumps(data)}\n\n"
-
+    def __init__(self): self.cur = None
+    def sse(self, d): return f"data: {json.dumps(d)}\n\n"
     def close(self):
-        if self.current:
-            msg = self.sse({"type": "component-end", "name": self.current})
-            self.current = None
-            return msg
+        if self.cur: self.cur = None; return self.sse(["-"])
 
     def process(self, item):
-        if not item:
-            return
-        if isinstance(item, dict) and "name" in item:
-            name = item["name"]
-            props = {k: v for k, v in item.items() if k not in ("name", "_complete")}
-
-            if item.get("_complete"):
-                if close := self.close(): yield close
-                yield self.sse({"type": "component", "name": name, **props})
-            else:
-                if name != self.current:
-                    if close := self.close(): yield close
-                    yield self.sse({"type": "component-start", "name": name, **props})
-                    self.current = name
-                else:
-                    yield self.sse({"type": "component-delta", "name": name, **props})
+        if not item: return
+        if not isinstance(item, dict): item = {"name": "text", "content": item}
+        n, done = item.get("name"), item.get("_complete")
+        p = {k: v for k, v in item.items() if k not in ("name", "_complete")}
+        if done:
+            if c := self.close(): yield c
+            yield self.sse(["=", {"name": n, **p}])
+        elif n != self.cur:
+            if c := self.close(): yield c
+            self.cur = n
+            yield self.sse(["+", n, p])
         else:
-            if close := self.close(): yield close
-            yield self.sse({"type": "text", "content": item})
+            yield self.sse(["~", p])
 
 async def encoder(stream):
     enc = StreamEncoder()

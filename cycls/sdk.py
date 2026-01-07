@@ -6,7 +6,6 @@ import importlib.resources
 
 CYCLS_PATH = importlib.resources.files('cycls')
 
-# Theme registry - maps theme names to paths
 themes = {
     "default": CYCLS_PATH.joinpath('theme'),
     "spark": CYCLS_PATH.joinpath('spark'),
