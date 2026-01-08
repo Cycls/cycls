@@ -21,7 +21,11 @@ Distribute Intelligence
 
 The open-source SDK for distributing AI agents.
 
-Write a function. Deploy it as an API, a web interface, or both. Add authentication, analytics, and monetization with flags. Cycls handles containerization, streaming, and infrastructure.
+## Distribute Intelligence
+
+AI capabilities shouldn't be locked in notebooks or trapped behind months of infrastructure work. Cycls turns your Python functions into production services - complete with APIs, interfaces, auth, and analytics. You focus on the intelligence. Cycls handles the distribution.
+
+Write a function. Deploy it as an API, a web interface, or both. Add authentication, analytics, and monetization with flags.
 
 ```python
 import cycls
@@ -159,7 +163,7 @@ See [docs/streaming-protocol.md](docs/streaming-protocol.md) for frontend integr
 
 ## Declarative Infrastructure
 
-Your entire runtime is defined in Python. Dependencies, files, system packages - all declared where you use them:
+Your entire runtime is defined in Python. No YAML. No Dockerfiles. No infrastructure repo.
 
 ```python
 agent = cycls.Agent(
@@ -176,15 +180,54 @@ async def chat(context):
     ...
 ```
 
-When you deploy, Cycls:
+### What Happens When You Deploy
 
-1. Resolves your Python version and dependencies
-2. Generates a Dockerfile
-3. Serializes your function with cloudpickle
-4. Builds a container with the web server baked in
-5. Deploys to serverless infrastructure
+Cycls builds a self-contained artifact from your code:
 
-The result is a self-contained artifact. No external config files. No deployment scripts. No infrastructure drift. The code is the deployment.
+1. **Resolves your environment** - Python version, pip packages, apt packages, shell commands
+2. **Generates a multi-stage Dockerfile** - Optimized layers for fast rebuilds
+3. **Serializes your function** - Using cloudpickle to capture the function, its closures, and all references
+4. **Hashes everything** - Dependencies, file contents, function bytecode → deterministic image tag
+5. **Builds and caches** - Content-addressable images mean unchanged code = instant deploys
+6. **Bakes in the web server** - FastAPI, streaming, auth - all included in the final image
+
+The function *is* the deployment. Change a dependency, the hash changes, a new image builds. Change nothing, it deploys in seconds from cache.
+
+### The Power of Serialization
+
+Your function is serialized with [cloudpickle](https://github.com/cloudpipe/cloudpickle) - not just referenced, but captured entirely:
+
+```python
+# This works. The lambda, the closure, the dynamic import - all serialized.
+model_name = "gpt-4o"
+
+@agent()
+async def chat(context):
+    from openai import AsyncOpenAI  # Imported at runtime, inside the container
+    client = AsyncOpenAI()
+
+    process = lambda x: x.strip().lower()  # Closures work
+
+    response = await client.chat.completions.create(
+        model=model_name,  # Captured from outer scope
+        messages=context.messages,
+        stream=True
+    )
+    ...
+```
+
+The container doesn't import your module. It deserializes your function and runs it. This means:
+
+- No `if __name__ == "__main__"` guards needed
+- No module path issues
+- No import order problems
+- Your function runs exactly as written
+
+### No Infrastructure Drift
+
+Traditional deployment: code in one repo, infrastructure in another, configuration scattered across environment variables, secrets managers, and deploy scripts. They drift apart. Deploys break.
+
+Cycls: the code *is* the infrastructure. One file. One truth. `git diff` shows you exactly what changed in your entire system - dependencies, configuration, and logic together.
 
 ## License
 
