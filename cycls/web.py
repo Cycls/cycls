@@ -1,62 +1,82 @@
 import json, inspect
 from pathlib import Path
 
-async def async_openai_encoder(stream): # clean up the meta data / new API?
-    async for message in stream:
-        payload = {"id": "chatcmpl-123",
-                   "object": "chat.completion.chunk",
-                   "created": 1728083325,
-                   "model": "model-1-2025-01-01",
-                   "system_fingerprint": "fp_123456",
-                   "choices": [{"delta": {"content": message}}]}
-        if message:
-            yield f"data: {json.dumps(payload)}\n\n"
+JWKS_PROD = "https://clerk.cycls.ai/.well-known/jwks.json"
+PK_LIVE = "pk_live_Y2xlcmsuY3ljbHMuYWkk"
+JWKS_TEST = "https://select-sloth-58.clerk.accounts.dev/.well-known/jwks.json"
+PK_TEST = "pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ"
+
+async def openai_encoder(stream):
+    if inspect.isasyncgen(stream):
+        async for msg in stream:
+            if msg: yield f"data: {json.dumps({'choices': [{'delta': {'content': msg}}]})}\n\n"
+    else:
+        for msg in stream:
+            if msg: yield f"data: {json.dumps({'choices': [{'delta': {'content': msg}}]})}\n\n"
     yield "data: [DONE]\n\n"
 
-def openai_encoder(stream):
-    for message in stream:
-        payload = {"id": "chatcmpl-123",
-                   "object": "chat.completion.chunk",
-                   "created": 1728083325,
-                   "model": "model-1-2025-01-01",
-                   "system_fingerprint": "fp_123456",
-                   "choices": [{"delta": {"content": message}}]}
-        if message:
-            yield f"data: {json.dumps(payload)}\n\n"
+class Encoder:
+    def __init__(self): self.cur = None
+    def sse(self, d): return f"data: {json.dumps(d)}\n\n"
+    def close(self):
+        if self.cur: self.cur = None; return self.sse(["-"])
+
+    def process(self, item):
+        if not item: return
+        if not isinstance(item, dict): item = {"name": "text", "content": item}
+        n, done = item.get("name"), item.get("_complete")
+        p = {k: v for k, v in item.items() if k not in ("name", "_complete")}
+        if done:
+            if c := self.close(): yield c
+            yield self.sse(["=", {"name": n, **p}])
+        elif n != self.cur:
+            if c := self.close(): yield c
+            self.cur = n
+            yield self.sse(["+", n, p])
+        else:
+            yield self.sse(["~", p])
+
+async def encoder(stream):
+    enc = Encoder()
+    if inspect.isasyncgen(stream):
+        async for item in stream:
+            for msg in enc.process(item): yield msg
+    else:
+        for item in stream:
+            for msg in enc.process(item): yield msg
+    if close := enc.close(): yield close
     yield "data: [DONE]\n\n"
 
-test_auth_public_key = """
------BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyDudrDtQ5irw6hPWf2rw
-FvNAFWeOouOO3XNWVQrjXCZfegiLYkL4cJdm4eqIuMdFHGnXU+gWT5P0EkLIkbtE
-zpqDb5Wp27WpSRb5lqJehpU7FE+oQuovCwR9m5gYXP5rfM+CQ7ZPw/CcOQPtOB5G
-0UijBhmYqws3SFp1Rk1uFed1F/esspt6Ifq2uDSHESleylqTKUCQiBa++z4wllcV
-PbNiooLRpsF0kGljP2dXXy/ViF7q9Cblgl+FdrqtGfHD+DHJuOSYcPnRa0IHZYS4
-r5i9C2lejVrEDqgJk5IbmQgez0wmEG4ynAxiDLvfdtvrd27PyBI75FsyLER/ydBH
-WwIDAQAB
------END PUBLIC KEY-----
-"""
+class Messages(list):
+    """A list that provides text-only messages by default, with .raw for full data."""
+    def __init__(self, raw_messages):
+        self._raw = raw_messages
+        text_messages = []
+        for m in raw_messages:
+            text_content = "".join(
+                p.get("content", "") for p in m.get("parts", []) if p.get("name") == "text"
+            )
+            text_messages.append({
+                "role": m.get("role"),
+                "content": m.get("content") or text_content
+            })
+        super().__init__(text_messages)
 
-live_auth_public_key = """
------BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAorfL7XyxrLG/X+Kq9ImY
-oSQ+Y3PY5qi8t8R4urY9u4ADJ48j9LkmFz8ALbubQkl3IByDDuVbka49m8id9isy
-F9ZJErsZzzlYztrgI5Sg4R6OJXcNWLqh/tzutMWJFOrE3LnHXpeyQMo/6qAd59Dx
-sNqzGxBTGPV1BZvpfhp/TT/sjgbPQWHS4PMpKD4vZLKXeTNJ913fMTUoFAIaL0sT
-EhoeLUwvIuhLx4UYTmjO/sa+fS6mdghjddOkjSS/AWr/K8mN3IXDImGqh83L7/P0
-RCru4Hvarm0qPIhfwEFfWhKFXONMj3x2fT4MM1Uw1H7qKTER2MtOjmdchKNX7x9b
-XwIDAQAB
------END PUBLIC KEY-----
-"""
+    @property
+    def raw(self):
+        return self._raw
 
 def web(func, public_path="", prod=False, org=None, api_token=None, header="", intro="", title="", auth=False, tier="", analytics=False): # API auth
     from fastapi import FastAPI, Request, HTTPException, status, Depends
     from fastapi.responses import StreamingResponse , HTMLResponse
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
     import jwt
+    from jwt import PyJWKClient
     from pydantic import BaseModel, EmailStr
-    from typing import List, Optional
+    from typing import List, Optional, Any
     from fastapi.staticfiles import StaticFiles
+
+    jwks = PyJWKClient(JWKS_PROD if prod else JWKS_TEST)
 
     class User(BaseModel):
         id: str
@@ -78,34 +98,35 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
         pk_test: str
 
     class Context(BaseModel):
-        messages: List[dict]
+        messages: Any
         user: Optional[User] = None
 
     app = FastAPI()
     bearer_scheme = HTTPBearer()
 
     def validate(bearer: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
-        # if api_token and api_token==""
         try:
-            public_key = live_auth_public_key if prod else test_auth_public_key
-            decoded = jwt.decode(bearer.credentials, public_key, algorithms=["RS256"], leeway=10)
-            # print(decoded)
-            return {"type": "user", 
+            key = jwks.get_signing_key_from_jwt(bearer.credentials)
+            decoded = jwt.decode(bearer.credentials, key.key, algorithms=["RS256"], leeway=10)
+            return {"type": "user",
                     "user": {"id": decoded.get("id"), "name": decoded.get("name"), "email": decoded.get("email"), "org": decoded.get("org"),
-                             "plans": decoded.get("public").get("plans", [])}}
+                             "plans": decoded.get("public", {}).get("plans", [])}}
         except:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials", headers={"WWW-Authenticate": "Bearer"})
     
     @app.post("/")
+    @app.post("/chat/cycls")
     @app.post("/chat/completions")
     async def back(request: Request, jwt: Optional[dict] = Depends(validate) if auth else None):
         data = await request.json()
         messages = data.get("messages")
         user_data = jwt.get("user") if jwt else None
-        context = Context(messages = messages, user = User(**user_data) if user_data else None)
+        context = Context(messages = Messages(messages), user = User(**user_data) if user_data else None)
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
         if request.url.path == "/chat/completions":
-            stream = async_openai_encoder(stream) if inspect.isasyncgen(stream) else openai_encoder(stream)
+            stream = openai_encoder(stream)
+        elif request.url.path == "/chat/cycls":
+            stream = encoder(stream)
         return StreamingResponse(stream, media_type="text/event-stream")
 
     @app.get("/metadata")
@@ -119,8 +140,8 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
             tier=tier,
             analytics=analytics,
             org=org,
-            pk_live="pk_live_Y2xlcmsuY3ljbHMuYWkk",
-            pk_test="pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ"
+            pk_live=PK_LIVE,
+            pk_test=PK_TEST
         )
 
     if Path("public").is_dir():
@@ -128,3 +149,9 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
     app.mount("/", StaticFiles(directory=public_path, html=True))
 
     return app
+
+def serve(func, config, name, port):
+    import uvicorn, logging
+    logging.getLogger("uvicorn.error").addFilter(lambda r: "0.0.0.0" not in r.getMessage())
+    print(f"\n🔨 {name} => http://localhost:{port}\n")
+    uvicorn.run(web(func, *config), host="0.0.0.0", port=port)

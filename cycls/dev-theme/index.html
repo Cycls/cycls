@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Spark - Native Components</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+      tailwind.config = { darkMode: "class" };
+    </script>
+    <style>
+      :root {
+        --bg-primary: #ffffff;
+        --bg-secondary: #f9fafb;
+        --text-primary: #0d0d0d;
+        --text-secondary: #6b7280;
+        --border-color: #e5e7eb;
+        --accent: #10a37f;
+      }
+      .dark {
+        --bg-primary: #212121;
+        --bg-secondary: #171717;
+        --text-primary: #ececec;
+        --text-secondary: #9ca3af;
+        --border-color: #374151;
+        --accent: #10a37f;
+      }
+      body {
+        background: var(--bg-primary);
+        color: var(--text-primary);
+      }
+      .thinking-bubble {
+        background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+        border-left: 3px solid var(--accent);
+      }
+      .dark .thinking-bubble {
+        background: linear-gradient(135deg, #374151 0%, #1f2937 100%);
+      }
+      .callout-info { border-left-color: #3b82f6; background: #eff6ff; }
+      .callout-warning { border-left-color: #f59e0b; background: #fffbeb; }
+      .callout-error { border-left-color: #ef4444; background: #fef2f2; }
+      .callout-success { border-left-color: #10b981; background: #ecfdf5; }
+      .dark .callout-info { background: #1e3a5f; }
+      .dark .callout-warning { background: #422006; }
+      .dark .callout-error { background: #450a0a; }
+      .dark .callout-success { background: #064e3b; }
+      @keyframes pulse-border {
+        0%, 100% { border-color: var(--accent); }
+        50% { border-color: transparent; }
+      }
+      .streaming { animation: pulse-border 1s infinite; }
+    </style>
+  </head>
+  <body class="dark">
+    <div id="app" class="min-h-screen flex flex-col">
+      <!-- Header -->
+      <header class="border-b border-[var(--border-color)] p-4">
+        <div class="max-w-3xl mx-auto flex items-center justify-between">
+          <h1 class="text-xl font-semibold">Spark</h1>
+          <button onclick="toggleDark()" class="p-2 rounded hover:bg-[var(--bg-secondary)]">
+            <span id="theme-icon">🌙</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Messages -->
+      <main class="flex-1 overflow-y-auto p-4">
+        <div id="messages" class="max-w-3xl mx-auto space-y-4"></div>
+      </main>
+
+      <!-- Input -->
+      <footer class="border-t border-[var(--border-color)] p-4">
+        <form id="chat-form" class="max-w-3xl mx-auto flex gap-2">
+          <input
+            type="text"
+            id="input"
+            placeholder="Send a message..."
+            class="flex-1 rounded-lg border border-[var(--border-color)] bg-[var(--bg-secondary)] px-4 py-3 text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+          />
+          <button
+            type="submit"
+            class="rounded-lg bg-[var(--accent)] px-6 py-3 text-white font-medium hover:opacity-90"
+          >
+            Send
+          </button>
+        </form>
+      </footer>
+    </div>
+
+    <script>
+      // State
+      let messages = [];
+      let isDark = true;
+
+      // Toggle dark mode
+      function toggleDark() {
+        isDark = !isDark;
+        document.body.classList.toggle('dark', isDark);
+        document.getElementById('theme-icon').textContent = isDark ? '🌙' : '☀️';
+      }
+
+      // Native component renderers
+      const components = {
+        text: (props) => marked.parse(props.content || '', { breaks: true }),
+
+        thinking: (props) => `
+          <div class="thinking-bubble rounded-lg p-4 my-3 italic text-[var(--text-secondary)]">
+            <div class="flex items-center gap-2 mb-2 text-sm font-medium text-[var(--accent)]">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+              </svg>
+              Thinking
+            </div>
+            <div>${props.content}</div>
+          </div>
+        `,
+
+        table: (props) => `
+          <div class="overflow-x-auto my-3">
+            <table class="min-w-full border border-[var(--border-color)] rounded-lg overflow-hidden">
+              ${props.headers ? `
+                <thead class="bg-[var(--bg-secondary)]">
+                  <tr>
+                    ${props.headers.map(h => `<th class="px-4 py-2 text-left font-medium">${h}</th>`).join('')}
+                  </tr>
+                </thead>
+              ` : ''}
+              <tbody>
+                ${(props.rows || []).map((row, i) => `
+                  <tr class="${i % 2 ? 'bg-[var(--bg-secondary)]' : ''}">
+                    ${row.map(cell => `<td class="px-4 py-2 border-t border-[var(--border-color)]">${cell}</td>`).join('')}
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `,
+
+        code: (props) => {
+          const highlighted = props.language
+            ? hljs.highlight(props.content, { language: props.language }).value
+            : hljs.highlightAuto(props.content).value;
+          return `
+            <div class="my-3 rounded-lg overflow-hidden border border-[var(--border-color)]">
+              <div class="bg-[var(--bg-secondary)] px-4 py-2 text-xs text-[var(--text-secondary)] flex justify-between items-center">
+                <span>${props.language || 'code'}</span>
+                <button onclick="copyCode(this)" class="hover:text-[var(--accent)]">Copy</button>
+              </div>
+              <pre class="p-4 overflow-x-auto bg-[#0d1117]"><code class="text-sm">${highlighted}</code></pre>
+            </div>
+          `;
+        },
+
+        callout: (props) => `
+          <div class="callout-${props.type || 'info'} border-l-4 rounded-r-lg p-4 my-3">
+            ${props.title ? `<div class="font-semibold mb-1">${props.title}</div>` : ''}
+            <div class="text-sm">${props.content}</div>
+          </div>
+        `,
+
+        image: (props) => `
+          <div class="my-3">
+            <img src="${props.src}" alt="${props.alt || ''}" class="rounded-lg max-w-full" />
+            ${props.caption ? `<p class="text-sm text-[var(--text-secondary)] mt-2 text-center">${props.caption}</p>` : ''}
+          </div>
+        `,
+
+        button: (props) => `
+          <button
+            onclick="handleComponentAction('${props.action || ''}', ${JSON.stringify(props.payload || {})})"
+            class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white font-medium hover:opacity-90 my-2"
+          >
+            ${props.label}
+          </button>
+        `
+      };
+
+      // Copy code helper
+      function copyCode(btn) {
+        const code = btn.closest('.rounded-lg').querySelector('code').textContent;
+        navigator.clipboard.writeText(code);
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy', 2000);
+      }
+
+      // Component action handler (for interactive components)
+      function handleComponentAction(action, payload) {
+        console.log('Component action:', action, payload);
+        // Could send back to server or handle locally
+      }
+
+      // Render a single message
+      function renderMessage(msg) {
+        const wrapper = document.createElement('div');
+        wrapper.className = `rounded-lg p-4 ${msg.role === 'user'
+          ? 'bg-[var(--accent)] text-white ml-12'
+          : 'bg-[var(--bg-secondary)] mr-12'}`;
+
+        if (msg.role === 'user') {
+          wrapper.innerHTML = `<div>${msg.content}</div>`;
+        } else {
+          let html = '';
+          for (const part of msg.parts || [])
+            html += components[part.name]?.(part) || '';
+          wrapper.innerHTML = `<div class="prose prose-invert max-w-none">${html}</div>`;
+        }
+        return wrapper;
+      }
+
+      // Render all messages
+      function render() {
+        const container = document.getElementById('messages');
+        container.innerHTML = '';
+        messages.forEach(msg => container.appendChild(renderMessage(msg)));
+        container.scrollTop = container.scrollHeight;
+      }
+
+      // Stream response from server
+      async function streamResponse(userMessage) {
+        messages.push({ role: 'user', content: userMessage });
+        messages.push({ role: 'assistant', parts: [] });
+        render();
+
+        const response = await fetch('/chat/cycls', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: messages.slice(0, -1).map(m => ({ role: m.role, content: m.content, parts: m.parts }))
+          })
+        });
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let assistantMsg = messages[messages.length - 1];
+        let currentPart = null;
+
+        const decode = {
+          '+': ([, name, props]) => {
+            currentPart = {name, ...props};
+            if (props.headers) currentPart.rows = [];
+            assistantMsg.parts.push(currentPart);
+          },
+          '~': ([, props]) => {
+            if (!currentPart) return;
+            for (const [k, v] of Object.entries(props)) {
+              if (k === 'content') currentPart.content = (currentPart.content || '') + v;
+              else if (k === 'row') currentPart.rows.push(v);
+              else currentPart[k] = v;
+            }
+          },
+          '-': () => { currentPart = null; },
+          '=': ([, props]) => { assistantMsg.parts.push(props); }
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const data = line.slice(6);
+            if (data === '[DONE]') continue;
+
+            try {
+              const msg = JSON.parse(data);
+              decode[msg[0]]?.(msg);
+              render();
+            } catch (e) {
+              console.error('Parse error:', e, data);
+            }
+          }
+        }
+        assistantMsg.parts = assistantMsg.parts.filter(p =>
+          p.name !== 'text' || p.content?.trim()
+        );
+        render();
+        console.log(messages);
+      }
+
+      // Form submit
+      document.getElementById('chat-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const input = document.getElementById('input');
+        const message = input.value.trim();
+        if (!message) return;
+        input.value = '';
+        await streamResponse(message);
+      });
+
+      // Highlight code blocks after render
+      const observer = new MutationObserver(() => {
+        document.querySelectorAll('pre code:not(.hljs)').forEach(el => hljs.highlightElement(el));
+      });
+      observer.observe(document.getElementById('messages'), { childList: true, subtree: true });
+    </script>
+  </body>
+</html>
