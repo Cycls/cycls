@@ -6,6 +6,19 @@ import importlib.resources
 
 CYCLS_PATH = importlib.resources.files('cycls')
 
+themes = {
+    "default": CYCLS_PATH.joinpath('default-theme'),
+    "dev": CYCLS_PATH.joinpath('dev-theme'),
+}
+
+def resolve_theme(theme):
+    """Resolve theme - accepts string name or path"""
+    if isinstance(theme, str):
+        if theme in themes:
+            return themes[theme]
+        raise ValueError(f"Unknown theme: {theme}. Available: {list(themes.keys())}")
+    return theme
+
 def function(python_version=None, pip=None, apt=None, run_commands=None, copy=None, name=None, base_url=None, key=None):
     # """
     # A decorator factory that transforms a Python function into a containerized,
@@ -17,9 +30,9 @@ def function(python_version=None, pip=None, apt=None, run_commands=None, copy=No
     return decorator
 
 class Agent:
-    def __init__(self, theme=CYCLS_PATH.joinpath('theme'), org=None, api_token=None, pip=[], apt=[], copy=[], copy_public=[], modal_keys=["",""], key=None, base_url=None):
+    def __init__(self, theme="default", org=None, api_token=None, pip=[], apt=[], copy=[], copy_public=[], modal_keys=["",""], key=None, base_url=None):
         self.org, self.api_token = org, api_token
-        self.theme = theme
+        self.theme = resolve_theme(theme)
         self.key, self.modal_keys, self.pip, self.apt, self.copy, self.copy_public = key, modal_keys, pip, apt, copy, copy_public
         self.base_url = base_url
 
@@ -72,16 +85,8 @@ class Agent:
         copy.update({i:i for i in self.copy})
         copy.update({i:f"public/{i}" for i in self.copy_public})
 
-        def server(port):
-            import uvicorn, logging
-            # This one-liner hides the confusing "0.0.0.0" message
-            logging.getLogger("uvicorn.error").addFilter(type("F",(),{"filter": lambda s,r: "0.0.0.0" not in r.getMessage()})())
-            print(f"\n🔨 Visit {i['name']} => http://localhost:{port}\n")
-            uvicorn.run(__import__("web").web(i["func"], *i["config"]), host="0.0.0.0", port=port)
-
         new = Runtime(
-            # func=lambda port: __import__("uvicorn").run(__import__("web").web(i["func"], *i["config"]), host="0.0.0.0", port=port),
-            func=server,
+            func=lambda port: __import__("web").serve(i["func"], i["config"], i["name"], port),
             name=i["name"],
             apt_packages=self.apt,
             pip_packages=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", *self.pip],

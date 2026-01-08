@@ -3,7 +3,7 @@ from utils import u
 
 agent = cycls.Agent(pip=["openai"], copy=["utils.py"], key="...")
 
-@agent("cake", title="title")
+@agent("cake", title="title", auth=True)
 async def func(context):
     print(u(context))
     yield "cake"
