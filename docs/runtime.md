@@ -2,6 +2,8 @@
 
 Run any Python function in an isolated container with full dependency control.
 
+> **Source:** [`cycls/runtime.py`](../cycls/runtime.py) - The `Runtime` class handles Docker image generation, function serialization with cloudpickle, content-addressable caching, and container execution.
+
 ---
 
 ## Overview
