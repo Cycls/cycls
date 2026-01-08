@@ -1,5 +1,5 @@
 <h3 align="center">
-The Distribution SDK for AI Agents
+Distribute Intelligence
 </h3>
 
 <h4 align="center">
@@ -19,7 +19,7 @@ The Distribution SDK for AI Agents
 
 # Cycls
 
-A delivery framework for AI agents.
+The open-source SDK for distributing AI agents.
 
 Write a function. Deploy it as an API, a web interface, or both. Add authentication, analytics, and monetization with flags. Cycls handles containerization, streaming, and infrastructure.
 
