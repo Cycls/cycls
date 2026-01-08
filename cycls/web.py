@@ -45,6 +45,25 @@ async def encoder(stream):
 JWKS_PROD = "https://clerk.cycls.ai/.well-known/jwks.json"
 JWKS_DEV = "https://select-sloth-58.clerk.accounts.dev/.well-known/jwks.json"
 
+class Messages(list):
+    """A list that provides text-only messages by default, with .raw for full data."""
+    def __init__(self, raw_messages):
+        self._raw = raw_messages
+        text_messages = []
+        for m in raw_messages:
+            text_content = "".join(
+                p.get("content", "") for p in m.get("parts", []) if p.get("name") == "text"
+            )
+            text_messages.append({
+                "role": m.get("role"),
+                "content": m.get("content") or text_content
+            })
+        super().__init__(text_messages)
+
+    @property
+    def raw(self):
+        return self._raw
+
 def web(func, public_path="", prod=False, org=None, api_token=None, header="", intro="", title="", auth=False, tier="", analytics=False): # API auth
     from fastapi import FastAPI, Request, HTTPException, status, Depends
     from fastapi.responses import StreamingResponse , HTMLResponse
@@ -52,7 +71,7 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
     import jwt
     from jwt import PyJWKClient
     from pydantic import BaseModel, EmailStr
-    from typing import List, Optional
+    from typing import List, Optional, Any
     from fastapi.staticfiles import StaticFiles
 
     jwks = PyJWKClient(JWKS_PROD if prod else JWKS_DEV)
@@ -77,7 +96,7 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
         pk_test: str
 
     class Context(BaseModel):
-        messages: List[dict]
+        messages: Any
         user: Optional[User] = None
 
     app = FastAPI()
@@ -100,7 +119,7 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
         data = await request.json()
         messages = data.get("messages")
         user_data = jwt.get("user") if jwt else None
-        context = Context(messages = messages, user = User(**user_data) if user_data else None)
+        context = Context(messages = Messages(messages), user = User(**user_data) if user_data else None)
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
         if request.url.path == "/chat/completions":
             stream = openai_encoder(stream)

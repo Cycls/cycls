@@ -81,7 +81,7 @@ class Agent:
         # i["config"][1] = False
         i["config"][1] = prod
 
-        copy={str(self.theme):"theme", str(CYCLS_PATH)+"/web.py":"web.py"}
+        copy={str(self.theme):"theme", str(CYCLS_PATH)+"/web.py":"web.py", str(CYCLS_PATH)+"/ui.py":"ui.py"}
         copy.update({i:i for i in self.copy})
         copy.update({i:f"public/{i}" for i in self.copy_public})
 
