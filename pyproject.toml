@@ -4,7 +4,7 @@ version = "0.0.2.64"
 
 packages = [{ include = "cycls" }]
 include = ["cycls/theme/**/*"]
-description = "Cycls SDK"
+description = "Distribute Intelligence"
 authors = ["Mohammed J. AlRujayi <mj@cycls.com>"]
 readme = "README.md"
 

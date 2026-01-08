@@ -143,9 +143,8 @@ async def chat(context):
 
 | Endpoint | Format |
 |----------|--------|
-| `POST /` | Cycls streaming protocol |
-| `POST /chat/cycls` | Cycls streaming protocol |
-| `POST /chat/completions` | OpenAI-compatible |
+| `POST chat/cycls` | Cycls streaming protocol |
+| `POST chat/completions` | OpenAI-compatible |
 
 ## Streaming Protocol
 
@@ -163,71 +162,86 @@ See [docs/streaming-protocol.md](docs/streaming-protocol.md) for frontend integr
 
 ## Declarative Infrastructure
 
-Your entire runtime is defined in Python. No YAML. No Dockerfiles. No infrastructure repo.
+Define your entire runtime in Python:
 
 ```python
 agent = cycls.Agent(
     pip=["openai", "pandas", "numpy"],
     apt=["ffmpeg", "libmagic1"],
-    copy=["./models/classifier.pkl"],
-    copy_public=["./assets/logo.png"],
+    run_commands=["curl -sSL https://example.com/setup.sh | bash"],
+    copy=["./utils.py", "./models/", "/absolute/path/to/config.json"],
+    copy_public=["./assets/logo.png", "./static/"],
 )
-
-@agent("my-agent", auth=True, analytics=True, tier="cycls_pass")
-async def chat(context):
-    import pandas as pd
-    from classifier import predict
-    ...
 ```
 
-### What Happens When You Deploy
+### `pip` - Python Packages
 
-Cycls builds a self-contained artifact from your code:
-
-1. **Resolves your environment** - Python version, pip packages, apt packages, shell commands
-2. **Generates a multi-stage Dockerfile** - Optimized layers for fast rebuilds
-3. **Serializes your function** - Using cloudpickle to capture the function, its closures, and all references
-4. **Hashes everything** - Dependencies, file contents, function bytecode → deterministic image tag
-5. **Builds and caches** - Content-addressable images mean unchanged code = instant deploys
-6. **Bakes in the web server** - FastAPI, streaming, auth - all included in the final image
-
-The function *is* the deployment. Change a dependency, the hash changes, a new image builds. Change nothing, it deploys in seconds from cache.
-
-### The Power of Serialization
-
-Your function is serialized with [cloudpickle](https://github.com/cloudpipe/cloudpickle) - not just referenced, but captured entirely:
+Install any packages from PyPI. These are installed during the container build.
 
 ```python
-# This works. The lambda, the closure, the dynamic import - all serialized.
-model_name = "gpt-4o"
+pip=["openai", "pandas", "numpy", "transformers"]
+```
 
+### `apt` - System Packages
+
+Install system-level dependencies via apt-get. Need ffmpeg for audio processing? ImageMagick for images? Just declare it.
+
+```python
+apt=["ffmpeg", "imagemagick", "libpq-dev"]
+```
+
+### `run_commands` - Shell Commands
+
+Run arbitrary shell commands during the container build. Useful for custom setup scripts, downloading assets, or any build-time configuration.
+
+```python
+run_commands=[
+    "curl -sSL https://example.com/setup.sh | bash",
+    "chmod +x /app/scripts/*.sh"
+]
+```
+
+### `copy` - Bundle Files and Directories
+
+Include local files and directories in your container. Works with both relative and absolute paths. Copies files and entire directory trees.
+
+```python
+copy=[
+    "./utils.py",                    # Single file, relative path
+    "./models/",                     # Entire directory
+    "/home/user/configs/app.json",   # Absolute path
+]
+```
+
+Then import them in your function:
+
+```python
 @agent()
 async def chat(context):
-    from openai import AsyncOpenAI  # Imported at runtime, inside the container
-    client = AsyncOpenAI()
-
-    process = lambda x: x.strip().lower()  # Closures work
-
-    response = await client.chat.completions.create(
-        model=model_name,  # Captured from outer scope
-        messages=context.messages,
-        stream=True
-    )
+    from utils import helper_function  # Your bundled module
     ...
 ```
 
-The container doesn't import your module. It deserializes your function and runs it. This means:
+### `copy_public` - Static Files
 
-- No `if __name__ == "__main__"` guards needed
-- No module path issues
-- No import order problems
-- Your function runs exactly as written
+Files and directories served at the `/public` endpoint. Perfect for images, downloads, or any static assets your agent needs to reference.
 
-### No Infrastructure Drift
+```python
+copy_public=["./assets/logo.png", "./downloads/"]
+```
 
-Traditional deployment: code in one repo, infrastructure in another, configuration scattered across environment variables, secrets managers, and deploy scripts. They drift apart. Deploys break.
+Access them at `https://your-agent.cycls.ai/public/logo.png`.
 
-Cycls: the code *is* the infrastructure. One file. One truth. `git diff` shows you exactly what changed in your entire system - dependencies, configuration, and logic together.
+---
+
+### What You Get
+
+- **One file** - Code, dependencies, configuration, and infrastructure together
+- **Instant deploys** - Unchanged code deploys in seconds from cache
+- **No drift** - What you see is what runs. Always.
+- **Just works** - Closures, lambdas, dynamic imports - your function runs exactly as written
+
+No YAML. No Dockerfiles. No infrastructure repo. The code is the deployment.
 
 ## License
 
