@@ -1,6 +1,11 @@
 import json, inspect
 from pathlib import Path
 
+JWKS_PROD = "https://clerk.cycls.ai/.well-known/jwks.json"
+PK_LIVE = "pk_live_Y2xlcmsuY3ljbHMuYWkk"
+JWKS_TEST = "https://select-sloth-58.clerk.accounts.dev/.well-known/jwks.json"
+PK_TEST = "pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ"
+
 async def openai_encoder(stream):
     if inspect.isasyncgen(stream):
         async for msg in stream:
@@ -42,9 +47,6 @@ async def encoder(stream):
     if close := enc.close(): yield close
     yield "data: [DONE]\n\n"
 
-JWKS_PROD = "https://clerk.cycls.ai/.well-known/jwks.json"
-JWKS_DEV = "https://select-sloth-58.clerk.accounts.dev/.well-known/jwks.json"
-
 class Messages(list):
     """A list that provides text-only messages by default, with .raw for full data."""
     def __init__(self, raw_messages):
@@ -74,7 +76,7 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
     from typing import List, Optional, Any
     from fastapi.staticfiles import StaticFiles
 
-    jwks = PyJWKClient(JWKS_PROD if prod else JWKS_DEV)
+    jwks = PyJWKClient(JWKS_PROD if prod else JWKS_TEST)
 
     class User(BaseModel):
         id: str
@@ -138,8 +140,8 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
             tier=tier,
             analytics=analytics,
             org=org,
-            pk_live="pk_live_Y2xlcmsuY3ljbHMuYWkk",
-            pk_test="pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ"
+            pk_live=PK_LIVE,
+            pk_test=PK_TEST
         )
 
     if Path("public").is_dir():
@@ -147,3 +149,9 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
     app.mount("/", StaticFiles(directory=public_path, html=True))
 
     return app
+
+def serve(func, config, name, port):
+    import uvicorn, logging
+    logging.getLogger("uvicorn.error").addFilter(lambda r: "0.0.0.0" not in r.getMessage())
+    print(f"\n🔨 {name} => http://localhost:{port}\n")
+    uvicorn.run(web(func, *config), host="0.0.0.0", port=port)

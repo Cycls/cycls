@@ -81,20 +81,12 @@ class Agent:
         # i["config"][1] = False
         i["config"][1] = prod
 
-        copy={str(self.theme):"theme", str(CYCLS_PATH)+"/web.py":"web.py", str(CYCLS_PATH)+"/ui.py":"ui.py"}
+        copy={str(self.theme):"theme", str(CYCLS_PATH)+"/web.py":"web.py"}
         copy.update({i:i for i in self.copy})
         copy.update({i:f"public/{i}" for i in self.copy_public})
 
-        def server(port):
-            import uvicorn, logging
-            # This one-liner hides the confusing "0.0.0.0" message
-            logging.getLogger("uvicorn.error").addFilter(type("F",(),{"filter": lambda s,r: "0.0.0.0" not in r.getMessage()})())
-            print(f"\n🔨 Visit {i['name']} => http://localhost:{port}\n")
-            uvicorn.run(__import__("web").web(i["func"], *i["config"]), host="0.0.0.0", port=port)
-
         new = Runtime(
-            # func=lambda port: __import__("uvicorn").run(__import__("web").web(i["func"], *i["config"]), host="0.0.0.0", port=port),
-            func=server,
+            func=lambda port: __import__("web").serve(i["func"], i["config"], i["name"], port),
             name=i["name"],
             apt_packages=self.apt,
             pip_packages=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", *self.pip],
