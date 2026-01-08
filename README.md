@@ -1,5 +1,5 @@
 <h3 align="center">
-The Distribution SDK for AI Agents.
+The Distribution SDK for AI Agents
 </h3>
 
 <h4 align="center">
@@ -15,21 +15,36 @@ The Distribution SDK for AI Agents.
   </a>
 </h4>
 
+---
 
-# Cycls 🚲
+# Cycls
 
-`cycls` is an open-source SDK for building and publishing AI agents. With a single decorator and one command, you can deploy your code as a web application complete with a front-end UI and an OpenAI-compatible API endpoint.
+A delivery framework for AI agents.
 
-## Key Features
+Write a function. Deploy it as an API, a web interface, or both. Add authentication, analytics, and monetization with flags. Cycls handles containerization, streaming, and infrastructure.
 
-* ✨ **Zero-Config Deployment:** No YAML or Dockerfiles. `cycls` infers your dependencies, and APIs directly from your Python code.
-* 🚀 **One-Command Push to Cloud:** Go from local code to a globally scalable, serverless application with a single `agent.deploy()`.
-* 💻 **Instant Local Testing:** Run `agent.local()` to spin up a local server with hot-reloading for rapid iteration and debugging.
-* 🤖 **OpenAI-Compatible API:** Automatically serves a streaming `/chat/completions` endpoint.
-* 🌐 **Automatic Web UI:** Get a clean, interactive front-end for your agent out of the box, with no front-end code required.
-* 🔐 **Built-in Authentication:** Secure your agent for production with a simple `auth=True` flag that enables JWT-based authentication.
-* 📦 **Declarative Dependencies:** Define all your `pip`, `apt`, or local file dependencies directly in Python.
+```python
+import cycls
 
+agent = cycls.Agent(pip=["openai"])
+
+@agent("my-agent", auth=True, analytics=True)
+async def chat(context):
+    from openai import AsyncOpenAI
+    client = AsyncOpenAI()
+
+    response = await client.chat.completions.create(
+        model="gpt-4o",
+        messages=context.messages,
+        stream=True
+    )
+
+    async for chunk in response:
+        if chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
+
+agent.deploy(prod=True)  # Live at https://my-agent.cycls.ai
+```
 
 ## Installation
 
@@ -37,82 +52,140 @@ The Distribution SDK for AI Agents.
 pip install cycls
 ```
 
-**Note:** You must have [Docker](https://www.docker.com/get-started) installed and running on your machine.
+Requires Docker.
 
-## How to Use
-### 1. Local Development: "Hello, World!"
+## What You Get
 
-Create a file main.py. This simple example creates an agent that streams back the message "hi".
+- **Streaming API** - OpenAI-compatible `/chat/completions` endpoint
+- **Web Interface** - Chat UI served automatically
+- **Authentication** - `auth=True` enables JWT-based access control
+- **Analytics** - `analytics=True` tracks usage
+- **Monetization** - `tier="cycls_pass"` integrates with [Cycls Pass](https://cycls.ai) subscriptions
+- **Native UI Components** - Render thinking bubbles, tables, code blocks in responses
 
-```py
-import cycls
+## Deploying
 
-# Initialize the agent
-agent = cycls.Agent()
+```python
+agent.deploy(prod=False)  # Development: localhost:8080
+agent.deploy(prod=True)   # Production: https://agent-name.cycls.ai
+```
 
-# Decorate your function to register it as an agent
+Get an API key at [cycls.com](https://cycls.com).
+
+## Native UI Components
+
+Yield structured objects for rich streaming responses:
+
+```python
+from cycls import UI
+
 @agent()
-async def hello(context):
-    yield "Hello, World!"
+async def demo(context):
+    yield UI.thinking("Analyzing the request...")
+    yield "Here's what I found:\n\n"
 
-agent.deploy(prod=False)
+    yield UI.table(headers=["Name", "Status"])
+    yield UI.table(row=["Server 1", "Online"])
+    yield UI.table(row=["Server 2", "Offline"])
+
+    yield UI.code("result = analyze(data)", language="python")
+    yield UI.callout("Analysis complete!", type="success")
 ```
 
-Run it from your terminal:
+| Component | Streaming |
+|-----------|-----------|
+| `UI.thinking(content)` | Yes |
+| `UI.code(content, language)` | Yes |
+| `UI.table(headers=[], row=[])` | Yes |
+| `UI.status(content)` | Yes |
+| `UI.callout(content, type, title)` | No |
+| `UI.image(src, alt, caption)` | No |
 
-```bash
-python main.py
+### Reasoning Models
+
+```python
+from cycls import UI
+
+@agent()
+async def chat(context):
+    from openai import AsyncOpenAI
+    client = AsyncOpenAI()
+
+    stream = await client.responses.create(
+        model="o3-mini",
+        input=context.messages,
+        stream=True,
+        reasoning={"effort": "medium", "summary": "auto"},
+    )
+
+    async for event in stream:
+        if event.type == "response.reasoning_summary_text.delta":
+            yield UI.thinking(event.delta)
+        elif event.type == "response.output_text.delta":
+            yield event.delta
 ```
-This will start a local server. Open your browser to http://localhost:8080 to interact with your agent.
 
-### 2. Cloud Deployment: An OpenAI-Powered Agent
-This example creates a more advanced agent that calls the OpenAI API. It will be deployed to the cloud with authentication enabled.
+## Context Object
 
-```py
-import cycls
+```python
+@agent()
+async def chat(context):
+    context.messages      # [{"role": "user", "content": "..."}]
+    context.messages.raw  # Full data including UI component parts
+    context.user          # User(id, email, name, plans) when auth=True
+```
 
-# Initialize the agent with dependencies and API keys
+## API Endpoints
+
+| Endpoint | Format |
+|----------|--------|
+| `POST /` | Cycls streaming protocol |
+| `POST /chat/cycls` | Cycls streaming protocol |
+| `POST /chat/completions` | OpenAI-compatible |
+
+## Streaming Protocol
+
+Cycls streams structured components over SSE:
+
+```
+data: ["+", "thinking", {"content": "Let me "}]  # Start
+data: ["~", {"content": "analyze..."}]           # Delta
+data: ["-"]                                       # Close
+data: ["=", {"name": "callout", "content": "!"}] # Complete
+data: [DONE]
+```
+
+See [docs/streaming-protocol.md](docs/streaming-protocol.md) for frontend integration.
+
+## Declarative Infrastructure
+
+Your entire runtime is defined in Python. Dependencies, files, system packages - all declared where you use them:
+
+```python
 agent = cycls.Agent(
-    pip=["openai"],
-    key="YOUR_CYCLS_KEY" # Get yours from https://cycls.com
+    pip=["openai", "pandas", "numpy"],
+    apt=["ffmpeg", "libmagic1"],
+    copy=["./models/classifier.pkl"],
+    copy_public=["./assets/logo.png"],
 )
 
-# A helper function to call the LLM
-async def llm(messages):
-    # Import inside the function: 'openai' is needed at runtime in the container.
-    import openai
-    client = openai.AsyncOpenAI(api_key="YOUR_OPENAI_API_KEY")
-    model = "gpt-4o"
-    response = await client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=1.0,
-        stream=True
-    )
-    # Yield the content from the streaming response
-    async def event_stream():
-        async for chunk in response:
-            content = chunk.choices[0].delta.content
-            if content:
-                yield content
-    return event_stream()
-
-# Register the function as an agent named "cake" and enable auth
-@agent("cake", auth=True)
-async def cake_agent(context):
-    # The context object contains the message history
-    return await llm(context.messages)
-
-# Deploy the agent to the cloud
-agent.deploy(prod=True)
+@agent("my-agent", auth=True, analytics=True, tier="cycls_pass")
+async def chat(context):
+    import pandas as pd
+    from classifier import predict
+    ...
 ```
 
-Run the deployment command from your terminal:
+When you deploy, Cycls:
 
-```bash
-python main.py
-```
-After a few moments, your agent will be live and accessible at a public URL like https://cake.cycls.ai.
+1. Resolves your Python version and dependencies
+2. Generates a Dockerfile
+3. Serializes your function with cloudpickle
+4. Builds a container with the web server baked in
+5. Deploys to serverless infrastructure
 
-### License
-This project is licensed under the MIT License.
+The result is a self-contained artifact. No external config files. No deployment scripts. No infrastructure drift. The code is the deployment.
+
+## License
+
+MIT
