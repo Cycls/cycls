@@ -1,10 +1,22 @@
 import json, inspect
 from pathlib import Path
+from pydantic import BaseModel
+from typing import Optional
 
-JWKS_PROD = "https://clerk.cycls.ai/.well-known/jwks.json"
-PK_LIVE = "pk_live_Y2xlcmsuY3ljbHMuYWkk"
-JWKS_TEST = "https://select-sloth-58.clerk.accounts.dev/.well-known/jwks.json"
-PK_TEST = "pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ"
+class Metadata(BaseModel):
+    public_path: str = "theme"
+    header: str = ""
+    intro: str = ""
+    title: str = ""
+    prod: bool = False
+    auth: bool = False
+    tier: str = "free"
+    analytics: bool = False
+    org: Optional[str] = None
+    pk_live: str = ""
+    pk_test: str = ""
+    jwks_prod: str = ""
+    jwks_test: str = ""
 
 async def openai_encoder(stream):
     if inspect.isasyncgen(stream):
@@ -48,17 +60,20 @@ class Messages(list):
     def raw(self):
         return self._raw
 
-def web(func, public_path="", prod=False, org=None, api_token=None, header="", intro="", title="", auth=False, tier="", analytics=False): # API auth
+def web(func, metadata):
     from fastapi import FastAPI, Request, HTTPException, status, Depends
-    from fastapi.responses import StreamingResponse , HTMLResponse
+    from fastapi.responses import StreamingResponse
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
     import jwt
     from jwt import PyJWKClient
-    from pydantic import BaseModel, EmailStr
+    from pydantic import EmailStr
     from typing import List, Optional, Any
     from fastapi.staticfiles import StaticFiles
 
-    jwks = PyJWKClient(JWKS_PROD if prod else JWKS_TEST)
+    if isinstance(metadata, dict):
+        metadata = Metadata(**metadata)
+
+    jwks = PyJWKClient(metadata.jwks_prod if metadata.prod else metadata.jwks_test)
 
     class User(BaseModel):
         id: str
@@ -66,18 +81,6 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
         email: EmailStr
         org: Optional[str] = None
         plans: List[str] = []
-
-    class Metadata(BaseModel):
-        header: str
-        intro: str
-        title: str
-        prod: bool
-        auth: bool
-        tier: str
-        analytics: bool
-        org: Optional[str]
-        pk_live: str
-        pk_test: str
 
     class Context(BaseModel):
         messages: Any
@@ -99,7 +102,7 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
     @app.post("/")
     @app.post("/chat/cycls")
     @app.post("/chat/completions")
-    async def back(request: Request, jwt: Optional[dict] = Depends(validate) if auth else None):
+    async def back(request: Request, jwt: Optional[dict] = Depends(validate) if metadata.auth else None):
         data = await request.json()
         messages = data.get("messages")
         user_data = jwt.get("user") if jwt else None
@@ -112,28 +115,19 @@ def web(func, public_path="", prod=False, org=None, api_token=None, header="", i
         return StreamingResponse(stream, media_type="text/event-stream")
 
     @app.get("/metadata")
-    async def metadata():
-        return Metadata(
-            header=header,
-            intro=intro,
-            title=title,
-            prod=prod,
-            auth=auth,
-            tier=tier,
-            analytics=analytics,
-            org=org,
-            pk_live=PK_LIVE,
-            pk_test=PK_TEST
-        )
+    async def get_metadata():
+        return metadata
 
     if Path("public").is_dir():
         app.mount("/public", StaticFiles(directory="public", html=True))
-    app.mount("/", StaticFiles(directory=public_path, html=True))
+    app.mount("/", StaticFiles(directory=metadata.public_path, html=True))
 
     return app
 
-def serve(func, config, name, port):
+def serve(func, metadata, name, port):
     import uvicorn, logging
+    if isinstance(metadata, dict):
+        metadata = Metadata(**metadata)
     logging.getLogger("uvicorn.error").addFilter(lambda r: "0.0.0.0" not in r.getMessage())
     print(f"\n🔨 {name} => http://localhost:{port}\n")
-    uvicorn.run(web(func, *config), host="0.0.0.0", port=port)
+    uvicorn.run(web(func, metadata), host="0.0.0.0", port=port)

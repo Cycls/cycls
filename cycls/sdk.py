@@ -1,10 +1,19 @@
 import json, time, modal, inspect, uvicorn
 from .runtime import Runtime
 from modal.runner import run_app
-from .web import web
+from .web import web, Metadata
+from .auth import PK_LIVE, PK_TEST, JWKS_PROD, JWKS_TEST
 import importlib.resources
+from pydantic import BaseModel
+from typing import Callable
 
 CYCLS_PATH = importlib.resources.files('cycls')
+
+class RegisteredAgent(BaseModel):
+    func: Callable
+    name: str
+    domain: str
+    metadata: Metadata
 
 themes = {
     "default": CYCLS_PATH.joinpath('default-theme'),
@@ -43,13 +52,25 @@ class Agent:
             auth=True
             analytics=True
         def decorator(f):
-            self.registered_functions.append({
-                "func": f,
-                "config": ["theme", False, self.org, self.api_token, header, intro, title, auth, tier, analytics],
-                # "name": name,
-                "name": name or (f.__name__).replace('_', '-'),
-                "domain": domain or f"{name}.cycls.ai",
-            })
+            agent_name = name or f.__name__.replace('_', '-')
+            self.registered_functions.append(RegisteredAgent(
+                func=f,
+                name=agent_name,
+                domain=domain or f"{agent_name}.cycls.ai",
+                metadata=Metadata(
+                    header=header,
+                    intro=intro,
+                    title=title,
+                    auth=auth,
+                    tier=tier,
+                    analytics=analytics,
+                    org=self.org,
+                    pk_live=PK_LIVE,
+                    pk_test=PK_TEST,
+                    jwks_prod=JWKS_PROD,
+                    jwks_test=JWKS_TEST,
+                ),
+            ))
             return f
         return decorator
 
@@ -57,13 +78,13 @@ class Agent:
         if not self.registered_functions:
             print("Error: No @agent decorated function found.")
             return
-        
-        i = self.registered_functions[0]
+
+        agent = self.registered_functions[0]
         if len(self.registered_functions) > 1:
-            print(f"⚠️  Warning: Multiple agents found. Running '{i['name']}'.")
+            print(f"⚠️  Warning: Multiple agents found. Running '{agent.name}'.")
         print(f"🚀 Starting local server at localhost:{port}")
-        i["config"][0] = self.theme
-        uvicorn.run(web(i["func"], *i["config"]), host="0.0.0.0", port=port)
+        agent.metadata.public_path = self.theme
+        uvicorn.run(web(agent.func, agent.metadata), host="0.0.0.0", port=port)
         return
 
     def deploy(self, prod=False, port=8080):
@@ -74,27 +95,29 @@ class Agent:
             print("🛑  Error: Please add your Cycls API key")
             return
 
-        i = self.registered_functions[0]
+        agent = self.registered_functions[0]
         if len(self.registered_functions) > 1:
-            print(f"⚠️  Warning: Multiple agents found. Running '{i['name']}'.")
+            print(f"⚠️  Warning: Multiple agents found. Running '{agent.name}'.")
 
-        # i["config"][1] = False
-        i["config"][1] = prod
+        agent.metadata.prod = prod
+        func = agent.func
+        name = agent.name
+        metadata_dict = agent.metadata.model_dump()
 
-        copy={str(self.theme):"theme", str(CYCLS_PATH)+"/web.py":"web.py"}
-        copy.update({i:i for i in self.copy})
-        copy.update({i:f"public/{i}" for i in self.copy_public})
+        files = {str(self.theme): "theme", str(CYCLS_PATH)+"/web.py": "web.py"}
+        files.update({f: f for f in self.copy})
+        files.update({f: f"public/{f}" for f in self.copy_public})
 
         new = Runtime(
-            func=lambda port: __import__("web").serve(i["func"], i["config"], i["name"], port),
-            name=i["name"],
+            func=lambda port: __import__("web").serve(func, metadata_dict, name, port),
+            name=name,
             apt_packages=self.apt,
             pip_packages=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", *self.pip],
-            copy=copy,
+            copy=files,
             base_url=self.base_url,
             api_key=self.key
         )
-        new.deploy(port=port) if prod else new.run(port=port) 
+        new.deploy(port=port) if prod else new.run(port=port)
         return
         
     def modal(self, prod=False):
@@ -117,22 +140,26 @@ class Agent:
             print("Error: No @agent decorated function found.")
             return
 
-        for i in self.registered_functions:
-            i["config"][1] = True if prod else False
-            self.app.function(serialized=True, name=i["name"])(
-                modal.asgi_app(label=i["name"], custom_domains=[i["domain"]])
-                (lambda: __import__("web").web(i["func"], *i["config"]))
+        for agent in self.registered_functions:
+            agent.metadata.prod = prod
+            func = agent.func
+            name = agent.name
+            domain = agent.domain
+            metadata_dict = agent.metadata.model_dump()
+            self.app.function(serialized=True, name=name)(
+                modal.asgi_app(label=name, custom_domains=[domain])
+                (lambda: __import__("web").web(func, metadata_dict))
             )
         if prod:
-            for i in self.registered_functions:
-                print(f"✅ Deployed to ⇒ https://{i['domain']}")
-            self.app.deploy(client=self.client, name=self.registered_functions[0]["name"])
+            for agent in self.registered_functions:
+                print(f"✅ Deployed to ⇒ https://{agent.domain}")
+            self.app.deploy(client=self.client, name=self.registered_functions[0].name)
             return
         else:
             with modal.enable_output():
                 run_app(app=self.app, client=self.client)
                 print(" Modal development server is running. Press Ctrl+C to stop.")
-                with modal.enable_output(), run_app(app=self.app, client=self.client): 
+                with modal.enable_output(), run_app(app=self.app, client=self.client):
                     while True: time.sleep(10)
 
 # docker system prune -af
