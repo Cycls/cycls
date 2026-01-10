@@ -68,22 +68,33 @@ def _copy_path(src_path: Path, dest_path: Path):
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(src_path, dest_path)
 
+# Pre-built base image with common dependencies
+BASE_IMAGE = "ghcr.io/cycls/base:python3.12"
+BASE_PACKAGES = {
+    "cloudpickle", "cryptography", "fastapi", "fastapi[standard]",
+    "pydantic", "pyjwt", "uvicorn", "uvicorn[standard]", "httpx"
+}
+
 # --- Main Runtime Class ---
 
 class Runtime:
     """
     Handles building a Docker image and executing a function within a container.
     """
-    def __init__(self, func, name, python_version=None, pip_packages=None, apt_packages=None, run_commands=None, copy=None, base_url=None, api_key=None):
+    def __init__(self, func, name, python_version=None, pip_packages=None, apt_packages=None, run_commands=None, copy=None, base_url=None, api_key=None, base_image=None):
         self.func = func
         self.python_version = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
-        self.pip_packages = sorted(pip_packages or [])
         self.apt_packages = sorted(apt_packages or [])
         self.run_commands = sorted(run_commands or [])
         self.copy = copy or {}
         self.name = name
         self.base_url = base_url or "https://service-core-280879789566.me-central1.run.app"
         self.image_prefix = f"cycls/{name}"
+
+        # Use pre-built base image by default, filter out already-installed packages
+        self.base_image = base_image or BASE_IMAGE
+        all_pip = set(pip_packages or [])
+        self.pip_packages = sorted(all_pip - BASE_PACKAGES) if self.base_image == BASE_IMAGE else sorted(all_pip)
 
         # Standard paths and filenames used inside the container
         self.io_dir = "/app/io"
@@ -145,6 +156,7 @@ class Runtime:
     def _generate_base_tag(self) -> str:
         """Creates a unique tag for the base Docker image based on its dependencies."""
         signature_parts = [
+            self.base_image,
             "".join(self.python_version),
             "".join(self.pip_packages),
             "".join(self.apt_packages),
@@ -163,7 +175,11 @@ class Runtime:
 
     def _generate_dockerfile(self, port=None) -> str:
         """Generates a multi-stage Dockerfile string."""
-        run_pip_install = f"RUN pip install --no-cache-dir cloudpickle {' '.join(self.pip_packages)}"
+        # Only install extra packages not in base image
+        run_pip_install = (
+            f"RUN pip install --no-cache-dir {' '.join(self.pip_packages)}"
+            if self.pip_packages else ""
+        )
         run_apt_install = (
             f"RUN apt-get update && apt-get install -y --no-install-recommends {' '.join(self.apt_packages)}"
             if self.apt_packages else ""
@@ -174,14 +190,14 @@ class Runtime:
 
         return f"""
 # STAGE 1: Base image with all dependencies
-FROM python:{self.python_version}-slim as base
+FROM {self.base_image} as base
 ENV PIP_ROOT_USER_ACTION=ignore
 ENV PYTHONUNBUFFERED=1
 RUN mkdir -p {self.io_dir}
 {run_apt_install}
 {run_pip_install}
 {run_shell_commands}
-WORKDIR app
+WORKDIR /app
 {copy_lines}
 COPY {self.runner_filename} {self.runner_path}
 ENTRYPOINT ["python", "{self.runner_path}", "{self.io_dir}"]
