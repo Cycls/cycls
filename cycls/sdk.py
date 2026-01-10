@@ -1,7 +1,7 @@
 import json, time, modal, inspect, uvicorn
 from .runtime import Runtime
 from modal.runner import run_app
-from .web import web, Metadata
+from .web import web, Config
 from .auth import PK_LIVE, PK_TEST, JWKS_PROD, JWKS_TEST
 import importlib.resources
 from pydantic import BaseModel
@@ -13,7 +13,12 @@ class RegisteredAgent(BaseModel):
     func: Callable
     name: str
     domain: str
-    metadata: Metadata
+    config: Config
+
+def set_prod(config: Config, prod: bool):
+    config.prod = prod
+    config.pk = PK_LIVE if prod else PK_TEST
+    config.jwks = JWKS_PROD if prod else JWKS_TEST
 
 themes = {
     "default": CYCLS_PATH.joinpath('default-theme'),
@@ -57,7 +62,7 @@ class Agent:
                 func=f,
                 name=agent_name,
                 domain=domain or f"{agent_name}.cycls.ai",
-                metadata=Metadata(
+                config=Config(
                     header=header,
                     intro=intro,
                     title=title,
@@ -65,10 +70,6 @@ class Agent:
                     tier=tier,
                     analytics=analytics,
                     org=self.org,
-                    pk_live=PK_LIVE,
-                    pk_test=PK_TEST,
-                    jwks_prod=JWKS_PROD,
-                    jwks_test=JWKS_TEST,
                 ),
             ))
             return f
@@ -83,8 +84,9 @@ class Agent:
         if len(self.registered_functions) > 1:
             print(f"⚠️  Warning: Multiple agents found. Running '{agent.name}'.")
         print(f"🚀 Starting local server at localhost:{port}")
-        agent.metadata.public_path = self.theme
-        uvicorn.run(web(agent.func, agent.metadata), host="0.0.0.0", port=port)
+        agent.config.public_path = self.theme
+        set_prod(agent.config, False)
+        uvicorn.run(web(agent.func, agent.config), host="0.0.0.0", port=port)
         return
 
     def deploy(self, prod=False, port=8080):
@@ -99,17 +101,17 @@ class Agent:
         if len(self.registered_functions) > 1:
             print(f"⚠️  Warning: Multiple agents found. Running '{agent.name}'.")
 
-        agent.metadata.prod = prod
+        set_prod(agent.config, prod)
         func = agent.func
         name = agent.name
-        metadata_dict = agent.metadata.model_dump()
+        config_dict = agent.config.model_dump()
 
         files = {str(self.theme): "theme", str(CYCLS_PATH)+"/web.py": "web.py"}
         files.update({f: f for f in self.copy})
         files.update({f: f"public/{f}" for f in self.copy_public})
 
         new = Runtime(
-            func=lambda port: __import__("web").serve(func, metadata_dict, name, port),
+            func=lambda port: __import__("web").serve(func, config_dict, name, port),
             name=name,
             apt_packages=self.apt,
             pip_packages=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", *self.pip],
@@ -141,14 +143,14 @@ class Agent:
             return
 
         for agent in self.registered_functions:
-            agent.metadata.prod = prod
+            set_prod(agent.config, prod)
             func = agent.func
             name = agent.name
             domain = agent.domain
-            metadata_dict = agent.metadata.model_dump()
+            config_dict = agent.config.model_dump()
             self.app.function(serialized=True, name=name)(
                 modal.asgi_app(label=name, custom_domains=[domain])
-                (lambda: __import__("web").web(func, metadata_dict))
+                (lambda: __import__("web").web(func, config_dict))
             )
         if prod:
             for agent in self.registered_functions:
