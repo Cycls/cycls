@@ -281,6 +281,49 @@ Everything else is pruned.
 
 ---
 
+## Pre-built Base Images
+
+To further reduce build times, cycls uses pre-built base images with common dependencies already installed. This reduces agent build time from ~60s to <5s.
+
+### How It Works
+
+1. **Base Image**: `ghcr.io/cycls/base:python3.12` includes pre-installed packages:
+   - cloudpickle, cryptography, fastapi[standard], pydantic, pyjwt, uvicorn[standard], httpx
+
+2. **Automatic Package Filtering**: The runtime filters out packages already in the base image. Only additional dependencies trigger a pip install step.
+
+3. **Layer Caching**: Docker caches each layer. Since base dependencies rarely change, subsequent builds reuse cached layers instantly.
+
+### GitHub Container Registry
+
+Base images are hosted on GitHub Container Registry and automatically rebuilt when `images/` changes.
+
+**Workflow triggers:**
+- Push to `images/` directory on main branch
+- Manual trigger via GitHub Actions UI
+
+**Image tags:**
+- `ghcr.io/cycls/base:python3.12` - Python 3.12 base image
+
+### Custom Base Images
+
+To use a different base image, pass `base_image` to the Runtime:
+
+```python
+from cycls.runtime import Runtime
+
+runtime = Runtime(
+    func=my_func,
+    name="my-agent",
+    base_image="my-registry/my-base:tag",
+    pip_packages=["package"]  # All packages installed, no filtering
+)
+```
+
+When using a custom base image, package filtering is disabled.
+
+---
+
 ## Importing Local Modules
 
 Use the `copy` parameter to include local Python files:

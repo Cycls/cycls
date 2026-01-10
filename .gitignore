@@ -23,6 +23,7 @@ TestResults.xml
 dist/
 **/__pycache__/
 .*
+!.github
 examples/cake.py
 examples/humain.png
 mj/
