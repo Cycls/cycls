@@ -34,8 +34,8 @@ async def func(context):
     yield "\n\n"
 
     yield UI.callout(
-        content="Native components work alongside HTML passthrough!",
-        type="success",
+        callout="Native components work alongside HTML passthrough!",
+        style="success",
         title="It works!"
     )
 

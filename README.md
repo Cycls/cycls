@@ -151,10 +151,10 @@ async def chat(context):
 Cycls streams structured components over SSE:
 
 ```
-data: ["+", "thinking", {"content": "Let me "}]  # Start
-data: ["~", {"content": "analyze..."}]           # Delta
-data: ["-"]                                       # Close
-data: ["=", {"name": "callout", "content": "!"}] # Complete
+data: {"type": "thinking", "thinking": "Let me "}
+data: {"type": "thinking", "thinking": "analyze..."}
+data: {"type": "text", "text": "Here's the answer"}
+data: {"type": "callout", "callout": "Done!", "style": "success"}
 data: [DONE]
 ```
 

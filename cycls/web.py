@@ -15,36 +15,18 @@ async def openai_encoder(stream):
             if msg: yield f"data: {json.dumps({'choices': [{'delta': {'content': msg}}]})}\n\n"
     yield "data: [DONE]\n\n"
 
-class Encoder:
-    def __init__(self): self.cur = None
-    def sse(self, d): return f"data: {json.dumps(d)}\n\n"
-    def close(self):
-        if self.cur: self.cur = None; return self.sse(["-"])
-
-    def process(self, item):
-        if not item: return
-        if not isinstance(item, dict): item = {"name": "text", "content": item}
-        n, done = item.get("name"), item.get("_complete")
-        p = {k: v for k, v in item.items() if k not in ("name", "_complete")}
-        if done:
-            if c := self.close(): yield c
-            yield self.sse(["=", {"name": n, **p}])
-        elif n != self.cur:
-            if c := self.close(): yield c
-            self.cur = n
-            yield self.sse(["+", n, p])
-        else:
-            yield self.sse(["~", p])
+def sse(item):
+    if not item: return None
+    if not isinstance(item, dict): item = {"type": "text", "text": item}
+    return f"data: {json.dumps(item)}\n\n"
 
 async def encoder(stream):
-    enc = Encoder()
     if inspect.isasyncgen(stream):
         async for item in stream:
-            for msg in enc.process(item): yield msg
+            if msg := sse(item): yield msg
     else:
         for item in stream:
-            for msg in enc.process(item): yield msg
-    if close := enc.close(): yield close
+            if msg := sse(item): yield msg
     yield "data: [DONE]\n\n"
 
 class Messages(list):
@@ -54,7 +36,7 @@ class Messages(list):
         text_messages = []
         for m in raw_messages:
             text_content = "".join(
-                p.get("content", "") for p in m.get("parts", []) if p.get("name") == "text"
+                p.get("text", "") for p in m.get("parts", []) if p.get("type") == "text"
             )
             text_messages.append({
                 "role": m.get("role"),

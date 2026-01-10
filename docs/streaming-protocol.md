@@ -25,7 +25,7 @@ async def chat(context):
 
     async for event in stream:
         if event.type == "response.reasoning_summary_text.delta":
-            yield {"name": "thinking", "content": event.delta}
+            yield {"type": "thinking", "thinking": event.delta}
         elif event.type == "response.output_text.delta":
             yield event.delta
 
@@ -42,87 +42,41 @@ agent.deploy(prod=False)
 | Yield | Result |
 |-------|--------|
 | `"plain string"` | Text component (supports markdown) |
-| `{"name": "thinking", "content": "..."}` | Thinking bubble |
-| `{"name": "code", "content": "...", "language": "python"}` | Code block |
-| `{"name": "table", "headers": [...]}` then `{"name": "table", "row": [...]}` | Streaming table |
-| `{"name": "callout", "content": "...", "type": "info", "_complete": True}` | Complete callout |
-| `{"name": "image", "src": "...", "_complete": True}` | Complete image |
-
-**Note:** Use `_complete: True` for non-streaming components (sent all at once).
+| `{"type": "thinking", "thinking": "..."}` | Thinking bubble |
+| `{"type": "code", "code": "...", "language": "python"}` | Code block |
+| `{"type": "table", "headers": [...]}` then `{"type": "table", "row": [...]}` | Streaming table |
+| `{"type": "callout", "callout": "...", "style": "info", "title": "..."}` | Callout box |
+| `{"type": "image", "src": "...", "alt": "...", "caption": "..."}` | Image |
 
 ---
 
 ## Streaming Protocol (`/chat/cycls`)
 
-The backend encodes yielded items into SSE (Server-Sent Events) with a compact protocol.
+The backend sends each yielded item as an SSE event. Plain strings are converted to `{"type": "text", "text": "..."}`.
 
-### Protocol Messages
+### Wire Format
 
-| Code | Name | Purpose | Payload |
-|------|------|---------|---------|
-| `+` | Start | Begin new component | `["+", name, props]` |
-| `~` | Delta | Stream content to current component | `["~", props]` |
-| `-` | Close | End current component | `["-"]` |
-| `=` | Complete | Send complete component (non-streaming) | `["=", {name, ...props}]` |
-
-### Backend Encoder Logic
-
-```python
-class Encoder:
-    def __init__(self):
-        self.cur = None  # current component name
-
-    def process(self, item):
-        # Plain strings become text components
-        if not isinstance(item, dict):
-            item = {"name": "text", "content": item}
-
-        name = item.get("name")
-        done = item.get("_complete")
-        props = {k: v for k, v in item.items() if k not in ("name", "_complete")}
-
-        if done:
-            # Complete component - close current, send as "="
-            self.close()
-            yield ["=", {"name": name, **props}]
-        elif name != self.cur:
-            # New component - close previous, start new with "+"
-            self.close()
-            self.cur = name
-            yield ["+", name, props]
-        else:
-            # Same component - stream delta with "~"
-            yield ["~", props]
 ```
-
-### Example Stream
-
-Backend yields:
-```python
-yield {"name": "thinking", "content": "Let me "}
-yield {"name": "thinking", "content": "think..."}
-yield "Here is "
-yield "the answer."
-yield {"name": "callout", "content": "Done!", "type": "success", "_complete": True}
-```
-
-Wire format (SSE):
-```
-data: ["+", "thinking", {"content": "Let me "}]
-
-data: ["~", {"content": "think..."}]
-
-data: ["-"]
-
-data: ["+", "text", {"content": "Here is "}]
-
-data: ["~", {"content": "the answer."}]
-
-data: ["-"]
-
-data: ["=", {"name": "callout", "content": "Done!", "type": "success"}]
-
+data: {"type": "thinking", "thinking": "Let me "}
+data: {"type": "thinking", "thinking": "analyze..."}
+data: {"type": "text", "text": "Here is "}
+data: {"type": "text", "text": "the answer."}
+data: {"type": "callout", "callout": "Done!", "style": "success"}
 data: [DONE]
+```
+
+### Backend Encoder
+
+```python
+def sse(item):
+    if not item: return None
+    if not isinstance(item, dict): item = {"type": "text", "text": item}
+    return f"data: {json.dumps(item)}\n\n"
+
+async def encoder(stream):
+    async for item in stream:
+        if msg := sse(item): yield msg
+    yield "data: [DONE]\n\n"
 ```
 
 ---
@@ -137,46 +91,31 @@ data: [DONE]
 
 // Assistant message
 { role: 'assistant', parts: [
-    { name: 'thinking', content: '...' },
-    { name: 'text', content: '...' },
-    { name: 'code', content: '...', language: 'python' }
+    { type: 'thinking', thinking: '...' },
+    { type: 'text', text: '...' },
+    { type: 'code', code: '...', language: 'python' }
 ]}
 ```
 
 ### Decoder Implementation
 
 ```javascript
-const decode = {
-  // "+" Start new component
-  '+': ([, name, props]) => {
-    currentPart = { name, ...props };
-    if (props.headers) currentPart.rows = [];  // table support
+let currentPart = null;
+
+function handleItem(item) {
+  const type = item.type;
+
+  // Same type as current? Append content
+  if (currentPart && currentPart.type === type) {
+    if (item.row) currentPart.rows.push(item.row);
+    else if (item[type]) currentPart[type] = (currentPart[type] || '') + item[type];
+  } else {
+    // New component
+    currentPart = { ...item };
+    if (item.headers) currentPart.rows = [];
     assistantMsg.parts.push(currentPart);
-  },
-
-  // "~" Delta - append to current component
-  '~': ([, props]) => {
-    if (!currentPart) return;
-    for (const [k, v] of Object.entries(props)) {
-      if (k === 'content')
-        currentPart.content = (currentPart.content || '') + v;
-      else if (k === 'row')
-        currentPart.rows.push(v);
-      else
-        currentPart[k] = v;
-    }
-  },
-
-  // "-" Close current component
-  '-': () => {
-    currentPart = null;
-  },
-
-  // "=" Complete component (non-streaming)
-  '=': ([, props]) => {
-    assistantMsg.parts.push(props);
   }
-};
+}
 ```
 
 ### Full Streaming Example
@@ -218,9 +157,18 @@ async function streamResponse(userMessage) {
       if (data === '[DONE]') continue;
 
       try {
-        const msg = JSON.parse(data);
-        decode[msg[0]]?.(msg);
-        render();  // re-render UI
+        const item = JSON.parse(data);
+        const type = item.type;
+
+        if (currentPart && currentPart.type === type) {
+          if (item.row) currentPart.rows.push(item.row);
+          else if (item[type]) currentPart[type] = (currentPart[type] || '') + item[type];
+        } else {
+          currentPart = { ...item };
+          if (item.headers) currentPart.rows = [];
+          assistantMsg.parts.push(currentPart);
+        }
+        render();
       } catch (e) {
         console.error('Parse error:', e);
       }
@@ -235,17 +183,17 @@ async function streamResponse(userMessage) {
 
 ```javascript
 const components = {
-  text: (props) => marked.parse(props.content || ''),
+  text: (props) => marked.parse(props.text || ''),
 
   thinking: (props) => `
     <div class="thinking-bubble">
       <div class="label">Thinking</div>
-      <div>${props.content}</div>
+      <div>${props.thinking}</div>
     </div>
   `,
 
   code: (props) => `
-    <pre><code class="language-${props.language || ''}">${props.content}</code></pre>
+    <pre><code class="language-${props.language || ''}">${props.code}</code></pre>
   `,
 
   table: (props) => `
@@ -262,9 +210,9 @@ const components = {
   `,
 
   callout: (props) => `
-    <div class="callout callout-${props.type || 'info'}">
+    <div class="callout callout-${props.style || 'info'}">
       ${props.title ? `<strong>${props.title}</strong>` : ''}
-      <div>${props.content}</div>
+      <div>${props.callout}</div>
     </div>
   `,
 
@@ -277,7 +225,7 @@ const components = {
 // Render assistant message
 function renderAssistant(msg) {
   return msg.parts.map(part =>
-    components[part.name]?.(part) || ''
+    components[part.type]?.(part) || ''
   ).join('');
 }
 ```
@@ -288,7 +236,7 @@ function renderAssistant(msg) {
 
 | Layer | Responsibility |
 |-------|----------------|
-| **Backend** | Yield strings or `{name, content, ...}` dicts |
-| **Encoder** | Convert to `+`/`~`/`-`/`=` SSE messages |
-| **Decoder** | Parse SSE, build `parts` array |
+| **Backend** | Yield strings or `{type, <type>: value, ...}` dicts |
+| **Encoder** | Convert to SSE `data: {...}` messages |
+| **Decoder** | Parse SSE, track current type, build `parts` array |
 | **Renderer** | Convert `parts` to HTML components |

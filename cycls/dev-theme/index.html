@@ -104,7 +104,7 @@
 
       // Native component renderers
       const components = {
-        text: (props) => marked.parse(props.content || '', { breaks: true }),
+        text: (props) => marked.parse(props.text || '', { breaks: true }),
 
         thinking: (props) => `
           <div class="thinking-bubble rounded-lg p-4 my-3 italic text-[var(--text-secondary)]">
@@ -114,7 +114,7 @@
               </svg>
               Thinking
             </div>
-            <div>${props.content}</div>
+            <div>${props.thinking}</div>
           </div>
         `,
 
@@ -141,8 +141,8 @@
 
         code: (props) => {
           const highlighted = props.language
-            ? hljs.highlight(props.content, { language: props.language }).value
-            : hljs.highlightAuto(props.content).value;
+            ? hljs.highlight(props.code, { language: props.language }).value
+            : hljs.highlightAuto(props.code).value;
           return `
             <div class="my-3 rounded-lg overflow-hidden border border-[var(--border-color)]">
               <div class="bg-[var(--bg-secondary)] px-4 py-2 text-xs text-[var(--text-secondary)] flex justify-between items-center">
@@ -155,9 +155,9 @@
         },
 
         callout: (props) => `
-          <div class="callout-${props.type || 'info'} border-l-4 rounded-r-lg p-4 my-3">
+          <div class="callout-${props.style || 'info'} border-l-4 rounded-r-lg p-4 my-3">
             ${props.title ? `<div class="font-semibold mb-1">${props.title}</div>` : ''}
-            <div class="text-sm">${props.content}</div>
+            <div class="text-sm">${props.callout}</div>
           </div>
         `,
 
@@ -204,7 +204,7 @@
         } else {
           let html = '';
           for (const part of msg.parts || [])
-            html += components[part.name]?.(part) || '';
+            html += components[part.type]?.(part) || '';
           wrapper.innerHTML = `<div class="prose prose-invert max-w-none">${html}</div>`;
         }
         return wrapper;
@@ -238,24 +238,6 @@
         let assistantMsg = messages[messages.length - 1];
         let currentPart = null;
 
-        const decode = {
-          '+': ([, name, props]) => {
-            currentPart = {name, ...props};
-            if (props.headers) currentPart.rows = [];
-            assistantMsg.parts.push(currentPart);
-          },
-          '~': ([, props]) => {
-            if (!currentPart) return;
-            for (const [k, v] of Object.entries(props)) {
-              if (k === 'content') currentPart.content = (currentPart.content || '') + v;
-              else if (k === 'row') currentPart.rows.push(v);
-              else currentPart[k] = v;
-            }
-          },
-          '-': () => { currentPart = null; },
-          '=': ([, props]) => { assistantMsg.parts.push(props); }
-        };
-
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -270,8 +252,19 @@
             if (data === '[DONE]') continue;
 
             try {
-              const msg = JSON.parse(data);
-              decode[msg[0]]?.(msg);
+              const item = JSON.parse(data);
+              const type = item.type;
+
+              // Same type as current? Append content
+              if (currentPart && currentPart.type === type) {
+                if (item.row) currentPart.rows.push(item.row);
+                else if (item[type]) currentPart[type] = (currentPart[type] || '') + item[type];
+              } else {
+                // New component
+                currentPart = { ...item };
+                if (item.headers) currentPart.rows = [];
+                assistantMsg.parts.push(currentPart);
+              }
               render();
             } catch (e) {
               console.error('Parse error:', e, data);
@@ -279,7 +272,7 @@
           }
         }
         assistantMsg.parts = assistantMsg.parts.filter(p =>
-          p.name !== 'text' || p.content?.trim()
+          p.type !== 'text' || p.text?.trim()
         );
         render();
         console.log(messages);
