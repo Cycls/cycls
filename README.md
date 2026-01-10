@@ -81,35 +81,32 @@ Get an API key at [cycls.com](https://cycls.com).
 Yield structured objects for rich streaming responses:
 
 ```python
-from cycls import UI
-
 @agent()
 async def demo(context):
-    yield UI.thinking("Analyzing the request...")
+    yield {"type": "thinking", "thinking": "Analyzing the request..."}
     yield "Here's what I found:\n\n"
 
-    yield UI.table(headers=["Name", "Status"])
-    yield UI.table(row=["Server 1", "Online"])
-    yield UI.table(row=["Server 2", "Offline"])
+    yield {"type": "table", "headers": ["Name", "Status"]}
+    yield {"type": "table", "row": ["Server 1", "Online"]}
+    yield {"type": "table", "row": ["Server 2", "Offline"]}
 
-    yield UI.code("result = analyze(data)", language="python")
-    yield UI.callout("Analysis complete!", type="success")
+    yield {"type": "code", "code": "result = analyze(data)", "language": "python"}
+    yield {"type": "callout", "callout": "Analysis complete!", "style": "success"}
 ```
 
 | Component | Streaming |
 |-----------|-----------|
-| `UI.thinking(content)` | Yes |
-| `UI.code(content, language)` | Yes |
-| `UI.table(headers=[], row=[])` | Yes |
-| `UI.status(content)` | Yes |
-| `UI.callout(content, type, title)` | No |
-| `UI.image(src, alt, caption)` | No |
+| `{"type": "thinking", "thinking": "..."}` | Yes |
+| `{"type": "code", "code": "...", "language": "..."}` | Yes |
+| `{"type": "table", "headers": [...]}` | Yes |
+| `{"type": "table", "row": [...]}` | Yes |
+| `{"type": "status", "status": "..."}` | Yes |
+| `{"type": "callout", "callout": "...", "style": "..."}` | Yes |
+| `{"type": "image", "src": "..."}` | Yes |
 
 ### Reasoning Models
 
 ```python
-from cycls import UI
-
 @agent()
 async def chat(context):
     from openai import AsyncOpenAI
@@ -124,7 +121,7 @@ async def chat(context):
 
     async for event in stream:
         if event.type == "response.reasoning_summary_text.delta":
-            yield UI.thinking(event.delta)
+            yield {"type": "thinking", "thinking": event.delta}
         elif event.type == "response.output_text.delta":
             yield event.delta
 ```
