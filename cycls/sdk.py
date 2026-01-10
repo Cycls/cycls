@@ -1,6 +1,5 @@
-import json, time, modal, inspect, uvicorn
+import time, inspect, uvicorn
 from .runtime import Runtime
-from modal.runner import run_app
 from .web import web, Config
 from .auth import PK_LIVE, PK_TEST, JWKS_PROD, JWKS_TEST
 import importlib.resources
@@ -123,6 +122,8 @@ class Agent:
         return
         
     def modal(self, prod=False):
+        import modal
+        from modal.runner import run_app
         self.client = modal.Client.from_credentials(*self.modal_keys)
         image = (modal.Image.debian_slim()
                             .pip_install("fastapi[standard]", "pyjwt", "cryptography", *self.pip)
