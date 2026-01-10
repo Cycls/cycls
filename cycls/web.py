@@ -3,7 +3,7 @@ from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional
 
-class Metadata(BaseModel):
+class Config(BaseModel):
     public_path: str = "theme"
     header: str = ""
     intro: str = ""
@@ -13,10 +13,8 @@ class Metadata(BaseModel):
     tier: str = "free"
     analytics: bool = False
     org: Optional[str] = None
-    pk_live: str = ""
-    pk_test: str = ""
-    jwks_prod: str = ""
-    jwks_test: str = ""
+    pk: str = ""
+    jwks: str = ""
 
 async def openai_encoder(stream):
     if inspect.isasyncgen(stream):
@@ -60,7 +58,7 @@ class Messages(list):
     def raw(self):
         return self._raw
 
-def web(func, metadata):
+def web(func, config):
     from fastapi import FastAPI, Request, HTTPException, status, Depends
     from fastapi.responses import StreamingResponse
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -70,10 +68,10 @@ def web(func, metadata):
     from typing import List, Optional, Any
     from fastapi.staticfiles import StaticFiles
 
-    if isinstance(metadata, dict):
-        metadata = Metadata(**metadata)
+    if isinstance(config, dict):
+        config = Config(**config)
 
-    jwks = PyJWKClient(metadata.jwks_prod if metadata.prod else metadata.jwks_test)
+    jwks = PyJWKClient(config.jwks)
 
     class User(BaseModel):
         id: str
@@ -102,7 +100,7 @@ def web(func, metadata):
     @app.post("/")
     @app.post("/chat/cycls")
     @app.post("/chat/completions")
-    async def back(request: Request, jwt: Optional[dict] = Depends(validate) if metadata.auth else None):
+    async def back(request: Request, jwt: Optional[dict] = Depends(validate) if config.auth else None):
         data = await request.json()
         messages = data.get("messages")
         user_data = jwt.get("user") if jwt else None
@@ -114,20 +112,20 @@ def web(func, metadata):
             stream = encoder(stream)
         return StreamingResponse(stream, media_type="text/event-stream")
 
-    @app.get("/metadata")
-    async def get_metadata():
-        return metadata
+    @app.get("/config")
+    async def get_config():
+        return config
 
     if Path("public").is_dir():
         app.mount("/public", StaticFiles(directory="public", html=True))
-    app.mount("/", StaticFiles(directory=metadata.public_path, html=True))
+    app.mount("/", StaticFiles(directory=config.public_path, html=True))
 
     return app
 
-def serve(func, metadata, name, port):
+def serve(func, config, name, port):
     import uvicorn, logging
-    if isinstance(metadata, dict):
-        metadata = Metadata(**metadata)
+    if isinstance(config, dict):
+        config = Config(**config)
     logging.getLogger("uvicorn.error").addFilter(lambda r: "0.0.0.0" not in r.getMessage())
     print(f"\n🔨 {name} => http://localhost:{port}\n")
-    uvicorn.run(web(func, metadata), host="0.0.0.0", port=port)
+    uvicorn.run(web(func, config), host="0.0.0.0", port=port)
