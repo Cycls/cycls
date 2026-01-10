@@ -16,7 +16,7 @@ async def chat(context):
 
     async for event in stream:
         if event.type == "response.reasoning_summary_text.delta":
-            yield {"name": "thinking", "content": event.delta}
+            yield {"type": "thinking", "thinking": event.delta}
         elif event.type == "response.output_text.delta":
             yield event.delta
 
