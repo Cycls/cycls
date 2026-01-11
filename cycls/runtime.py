@@ -337,6 +337,7 @@ COPY {self.payload_file} {self.io_dir}/
             return
 
         import inspect
+        import subprocess
 
         # Get the main script (the outermost .py file in the stack)
         main_script = None
@@ -362,75 +363,37 @@ COPY {self.payload_file} {self.io_dir}/
         print()
 
         while True:
-            # Run the container in a subprocess-like manner
-            print(f"🚀 Running function '{self.name}' in container...")
-            self._perform_auto_cleanup()
-            self._build_image_if_needed()
+            # Run the script in a subprocess so we survive errors
+            print(f"🚀 Running {main_script.name}...")
+            proc = subprocess.Popen(
+                [sys.executable, str(main_script)],
+                env={**os.environ, '_CYCLS_WATCH_CHILD': '1'}
+            )
 
-            port = kwargs.get('port', None)
-            ports_mapping = {f'{port}/tcp': port} if port else None
+            try:
+                # Watch for changes
+                for changes in watchfiles_watch(*watch_paths):
+                    changed_files = [str(c[1]) for c in changes]
+                    print(f"\n🔄 Changes detected:")
+                    for f in changed_files:
+                        print(f"   {f}")
+                    break
 
-            with tempfile.TemporaryDirectory() as tmpdir_str:
-                tmpdir = Path(tmpdir_str)
-                payload_path = tmpdir / self.payload_file
-
-                with payload_path.open('wb') as f:
-                    cloudpickle.dump((self.func, args, kwargs), f)
-
-                container = self.docker_client.containers.create(
-                    image=self.tag,
-                    volumes={str(tmpdir): {'bind': self.io_dir, 'mode': 'rw'}},
-                    ports=ports_mapping,
-                    labels={self.managed_label: "true"}
-                )
-                container.start()
-                print(f"✅ Container running on port {port}")
-                print("👀 Waiting for file changes... (Ctrl+C to stop)\n")
-
+                print("\n🔄 Restarting...\n")
+                proc.terminate()
                 try:
-                    # Watch for changes in a separate thread
-                    import threading
-                    import time
-                    change_detected = threading.Event()
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
 
-                    def watch_thread():
-                        for changes in watchfiles_watch(*watch_paths):
-                            changed_files = [str(c[1]) for c in changes]
-                            print(f"\n🔄 Changes detected:")
-                            for f in changed_files:
-                                print(f"   {f}")
-                            change_detected.set()
-                            break
-
-                    watcher = threading.Thread(target=watch_thread, daemon=True)
-                    watcher.start()
-
-                    # Stream container logs in separate thread
-                    def log_thread():
-                        for chunk in container.logs(stream=True, follow=True):
-                            if change_detected.is_set():
-                                break
-                            print(chunk.decode('utf-8').strip())
-
-                    logger = threading.Thread(target=log_thread, daemon=True)
-                    logger.start()
-
-                    # Wait for change or interrupt
-                    while not change_detected.is_set():
-                        time.sleep(0.5)
-
-                    print("\n🔄 Restarting...")
-                    container.stop(timeout=2)
-                    container.remove()
-                    # Re-exec the main script
-                    print(f"🔄 Re-executing {main_script.name}...\n")
-                    os.execv(sys.executable, [sys.executable, str(main_script)])
-
-                except KeyboardInterrupt:
-                    print("\n🛑 Stopping...")
-                    container.stop(timeout=2)
-                    container.remove()
-                    return
+            except KeyboardInterrupt:
+                print("\n🛑 Stopping...")
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                return
 
     def build(self, *args, **kwargs):
         """Builds a self-contained, deployable Docker image locally."""
