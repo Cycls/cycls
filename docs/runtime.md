@@ -75,6 +75,70 @@ def server(port):
 server.run(port=8000)
 ```
 
+### Jupyter Notebook
+
+```python
+import cycls
+import os
+
+@cycls.function(pip=["jupyter"])
+def jupyter_notebook(port):
+    command = (
+        f"jupyter notebook --ip=0.0.0.0 --port={port} --allow-root "
+        "--NotebookApp.token='' --NotebookApp.password=''"
+    )
+    print(f"Starting Jupyter Notebook server at http://localhost:{port}")
+    os.system(command)
+
+jupyter_notebook.run(port=8888)
+```
+
+### Marimo Notebook
+
+```python
+import cycls
+import os
+
+@cycls.function(pip=["marimo"])
+def marimo_notebook(port):
+    command = f"marimo edit --host 0.0.0.0 --port {port} --no-token"
+    print(f"Starting Marimo notebook server at http://localhost:{port}")
+    os.system(command)
+
+marimo_notebook.run(port=8080)
+```
+
+> **More examples:** See [`examples/function/`](../examples/function/) for additional use cases including Monte Carlo simulations, ticker streams, and more.
+
+---
+
+## The Power of Arbitrary Functions
+
+The `@cycls.function` interface is intentionally unopinionated. Any Python function can become a containerized workload:
+
+- **Batch jobs** - Data processing, ML training, ETL pipelines
+- **Long-running services** - Web servers, notebooks, daemons
+- **System tasks** - Compile C code, run shell scripts, interact with hardware
+- **Hybrid workloads** - Mix Python with `os.system()` calls to orchestrate anything
+
+Because the function runs in a full Linux container with root access, you have complete control over the environment. Install system packages with `apt`, run arbitrary shell commands with `run_commands`, or execute processes at runtime with `os.system()`.
+
+```python
+# Compile and run C code
+@cycls.function(apt=["gcc", "libc6-dev"])
+def run_c_code():
+    import subprocess
+    with open("hello.c", "w") as f:
+        f.write('#include <stdio.h>\nint main() { printf("Hello\\n"); return 0; }')
+    subprocess.run(["gcc", "hello.c", "-o", "hello"], check=True)
+    result = subprocess.run(["./hello"], capture_output=True, text=True)
+    return result.stdout.strip()
+
+run_c_code.run()  # "Hello"
+```
+
+The only constraint is Python's ability to serialize your function with cloudpickle. Beyond that, the container is yours.
+
 ---
 
 ## Decorator Options
