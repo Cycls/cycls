@@ -8,8 +8,9 @@ ENV PIP_ROOT_USER_ACTION=ignore \
 
 WORKDIR /app
 
-# Install common web dependencies and create io directory
-RUN pip install --no-cache-dir \
+# Install uv for fast package installs, then install common web dependencies
+RUN pip install --no-cache-dir uv \
+    && uv pip install --system --no-cache \
     cloudpickle \
     cryptography \
     fastapi[standard] \
