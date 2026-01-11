@@ -34,7 +34,7 @@ import cycls
 cycls.api_key = "YOUR_CYCLS_API_KEY"
 
 @cycls.agent(pip=["openai"])
-async def chat(context):
+async def agent(context):
     from openai import AsyncOpenAI
     client = AsyncOpenAI()
 
@@ -51,7 +51,7 @@ async def chat(context):
         elif event.type == "response.output_text.delta":
             yield event.delta
 
-chat.deploy()  # Live at https://chat.cycls.ai
+agent.deploy()  # Live at https://agent.cycls.ai
 ```
 
 ## Installation
@@ -74,12 +74,28 @@ Requires Docker.
 ## Running
 
 ```python
-chat.local()             # Development with hot-reload (localhost:8080)
-chat.local(watch=False)  # Development without hot-reload
-chat.deploy()            # Production: https://chat.cycls.ai
+agent.local()             # Development with hot-reload (localhost:8080)
+agent.local(watch=False)  # Development without hot-reload
+agent.deploy()            # Production: https://agent.cycls.ai
 ```
 
 Get an API key at [cycls.com](https://cycls.com).
+
+## Authentication & Analytics
+
+```python
+@cycls.agent(pip=["openai"], auth=True, analytics=True)
+async def agent(context):
+    # context.user available when auth=True
+    user = context.user  # User(id, email, name, plans)
+    yield f"Hello {user.name}!"
+```
+
+| Flag | Description |
+|------|-------------|
+| `auth=True` | Universal user pool via Cycls Pass (Clerk-based). You can also use your own Clerk auth. |
+| `analytics=True` | Rich usage metrics available on the Cycls dashboard. |
+| `plan="cycls_pass"` | Monetization via Cycls Pass subscriptions. Enables both auth and analytics. |
 
 ## Native UI Components
 
