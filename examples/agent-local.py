@@ -2,8 +2,10 @@ import cycls
 
 agent = cycls.Agent()
 
-@agent()
-async def func(context):
-    yield "hi"
+@agent("hello")
+async def hello(context):
+    """A simple streaming agent."""
+    yield "Hello! "
+    yield "How can I help you today?"
 
-agent.local()
+agent.local() # agent._local()
