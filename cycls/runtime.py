@@ -290,23 +290,56 @@ CMD ["python", "-m", "grpc_runtime.server", "--port", "{self.grpc_port}"]
 
     def run(self, *args, **kwargs):
         """Execute the function in a container and return the result."""
-        service_port = kwargs.pop('port', None)
+        import threading
+        service_port = kwargs.get('port')
         print(f"Running '{self.name}'...")
         try:
             client = self._ensure_container(service_port=service_port)
-            return client.call(self.func, *args, **kwargs)
+
+            result_holder = [None]
+            error_holder = [None]
+            done = threading.Event()
+
+            def execute():
+                try:
+                    result_holder[0] = client.call(self.func, *args, **kwargs)
+                except Exception as e:
+                    error_holder[0] = e
+                finally:
+                    done.set()
+
+            thread = threading.Thread(target=execute, daemon=True)
+            thread.start()
+
+            print("--- 🪵 Container Logs ---")
+            try:
+                for chunk in self._container.logs(stream=True, follow=True):
+                    print(chunk.decode('utf-8'), end='')
+                    if done.is_set():
+                        break
+            except KeyboardInterrupt:
+                print("\nStopping...")
+                self._cleanup_container()
+                return None
+            print("-------------------------")
+
+            thread.join(timeout=1)
+            if error_holder[0]:
+                raise error_holder[0]
+            return result_holder[0]
+
         except Exception as e:
             print(f"Error: {e}")
             return None
 
     def stream(self, *args, **kwargs):
         """Execute the function and yield streamed results."""
-        service_port = kwargs.pop('port', None)
+        service_port = kwargs.get('port')
         client = self._ensure_container(service_port=service_port)
         yield from client.execute(self.func, *args, **kwargs)
 
     def watch(self, *args, **kwargs):
-        """Run with file watching - re-executes function on changes."""
+        """Run with file watching - restarts script on changes."""
         try:
             from watchfiles import watch as watchfiles_watch
         except ImportError:
@@ -316,56 +349,51 @@ CMD ["python", "-m", "grpc_runtime.server", "--port", "{self.grpc_port}"]
         import inspect
         import subprocess
 
+        # Find the user's script (outside cycls package)
+        cycls_pkg = Path(__file__).parent.resolve()
         main_script = None
         for frame_info in inspect.stack():
-            filename = frame_info.filename
-            if filename.endswith('.py') and not filename.startswith('<'):
-                main_script = Path(filename).resolve()
+            filepath = Path(frame_info.filename).resolve()
+            if filepath.suffix == '.py' and not str(filepath).startswith(str(cycls_pkg)):
+                main_script = filepath
+                break
 
-        watch_paths = []
-        if main_script and main_script.exists():
-            watch_paths.append(main_script)
-        watch_paths.extend([Path(src).resolve() for src in self.copy.keys() if Path(src).exists()])
-
-        if not watch_paths:
-            print("No files to watch.")
+        if not main_script:
+            print("Could not find script to watch.")
             return self.run(*args, **kwargs)
 
-        print(f"Watching for changes:")
+        # Build watch paths
+        watch_paths = [main_script]
+        watch_paths.extend([Path(src).resolve() for src in self.copy.keys() if Path(src).exists()])
+
+        print(f"👀 Watching:")
         for p in watch_paths:
             print(f"   {p}")
         print()
 
         while True:
-            print(f"Running {main_script.name}...")
+            print(f"🚀 Starting {main_script.name}...")
             proc = subprocess.Popen(
                 [sys.executable, str(main_script)],
-                env={**os.environ, '_CYCLS_WATCH_CHILD': '1'}
+                env={**os.environ, '_CYCLS_WATCH': '1'}
             )
 
             try:
                 for changes in watchfiles_watch(*watch_paths):
-                    changed_files = [str(c[1]) for c in changes]
-                    print(f"\nChanges detected:")
-                    for f in changed_files:
-                        print(f"   {f}")
+                    print(f"\n🔄 Changed: {[Path(c[1]).name for c in changes]}")
                     break
 
-                print("\nRestarting...\n")
                 proc.terminate()
-                try:
-                    proc.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
             except KeyboardInterrupt:
                 print("\nStopping...")
                 proc.terminate()
-                try:
-                    proc.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+                proc.wait(timeout=3)
                 return
+
+            print()
 
     def build(self, *args, **kwargs):
         """Build a deployable Docker image locally."""

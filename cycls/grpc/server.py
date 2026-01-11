@@ -49,7 +49,6 @@ def serve(port=50051):
     runtime_pb2_grpc.add_RuntimeServicer_to_server(RuntimeServicer(), server)
     server.add_insecure_port(f'[::]:{port}')
     server.start()
-    print(f"gRPC server listening on :{port}")
     server.wait_for_termination()
 
 
