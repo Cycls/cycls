@@ -159,3 +159,54 @@ def test_copy_local_directory():
     # 3. Assert that the result is correct.
     assert result == "Total revenue: $520"
     print("✅ Test passed.")
+
+
+# --- Test Case 5: Copy File Collision ---
+# This test verifies that copying multiple files with the same name
+# from different directories doesn't cause collisions.
+
+def test_copy_file_collision():
+    """
+    Tests that files with the same name in different directories are preserved.
+    """
+    print("\n--- Running test: test_copy_file_collision ---")
+    # 1. Copy two config.txt files from different directories.
+    #    Both should be preserved with their directory structure.
+    @cycls.function(copy=["tests/data/dev/config.txt", "tests/data/prod/config.txt"])
+    def check_for_collision():
+        with open("tests/data/dev/config.txt", "r") as f:
+            dev_content = f.read().strip()
+        with open("tests/data/prod/config.txt", "r") as f:
+            prod_content = f.read().strip()
+        return {"dev": dev_content, "prod": prod_content}
+
+    # 2. Execute the function.
+    result = check_for_collision.run()
+
+    # 3. Assert both files have distinct content (no collision).
+    assert result == {"dev": "dev", "prod": "prod"}
+    print("✅ Test passed.")
+
+
+# --- Test Case 6: Run Commands ---
+# This test verifies that custom shell commands can be executed
+# during the Docker image build process.
+
+def test_run_commands():
+    """
+    Tests that run_commands executes shell commands during build.
+    """
+    print("\n--- Running test: test_run_commands ---")
+    # 1. Define a function that uses run_commands to create a file during build.
+    #    The function then reads that file to verify it was created.
+    @cycls.function(run_commands=["echo 'hello from build' > /app/build_marker.txt"])
+    def check_build_marker():
+        with open("/app/build_marker.txt", "r") as f:
+            return f.read().strip()
+
+    # 2. Execute the function.
+    result = check_build_marker.run()
+
+    # 3. Assert that the file created during build contains the expected content.
+    assert result == "hello from build"
+    print("✅ Test passed.")
