@@ -178,9 +178,11 @@ class Runtime:
 
     def _generate_dockerfile(self, port=None) -> str:
         """Generates a multi-stage Dockerfile string."""
-        # Only install extra packages not in base image
+        using_base = self.base_image == BASE_IMAGE
+
+        # Only install extra packages not in base image (use uv if available in base)
         run_pip_install = (
-            f"RUN pip install --no-cache-dir {' '.join(self.pip_packages)}"
+            f"RUN uv pip install --system --no-cache {' '.join(self.pip_packages)}"
             if self.pip_packages else ""
         )
         run_apt_install = (
@@ -191,16 +193,19 @@ class Runtime:
         copy_lines = "\n".join([f"COPY context_files/{dst} {dst}" for dst in self.copy.values()])
         expose_line = f"EXPOSE {port}" if port else ""
 
+        # Skip env/mkdir/workdir if using pre-built base (already configured)
+        env_lines = "" if using_base else f"""ENV PIP_ROOT_USER_ACTION=ignore \\
+    PYTHONUNBUFFERED=1
+RUN mkdir -p {self.io_dir}
+WORKDIR /app"""
+
         return f"""
 # STAGE 1: Base image with all dependencies
 FROM {self.base_image} as base
-ENV PIP_ROOT_USER_ACTION=ignore
-ENV PYTHONUNBUFFERED=1
-RUN mkdir -p {self.io_dir}
+{env_lines}
 {run_apt_install}
 {run_pip_install}
 {run_shell_commands}
-WORKDIR /app
 {copy_lines}
 COPY {self.runner_filename} {self.runner_path}
 ENTRYPOINT ["python", "{self.runner_path}", "{self.io_dir}"]
