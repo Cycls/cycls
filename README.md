@@ -24,8 +24,6 @@ The open-source SDK for distributing AI agents.
 
 ## Distribute Intelligence
 
-AI capabilities shouldn't be locked in notebooks or trapped behind months of infrastructure work. Cycls turns your Python functions into production services - complete with APIs, interfaces, auth, and analytics. You focus on the intelligence. Cycls handles the distribution.
-
 Write a function. Deploy it as an API, a web interface, or both. Add authentication, analytics, and monetization with flags.
 
 ```python
