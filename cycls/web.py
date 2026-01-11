@@ -10,7 +10,7 @@ class Config(BaseModel):
     title: str = ""
     prod: bool = False
     auth: bool = False
-    tier: str = "free"
+    plan: str = "free"
     analytics: bool = False
     org: Optional[str] = None
     pk: str = ""

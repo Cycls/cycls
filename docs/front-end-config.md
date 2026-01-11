@@ -17,7 +17,7 @@ GET /config
   "title": "MyAgent",
   "prod": true,
   "auth": true,
-  "tier": "free",
+  "plan": "free",
   "analytics": false,
   "org": "acme-corp",
   "pk": "pk_live_..."
@@ -33,7 +33,7 @@ GET /config
 | `title` | string | Page title |
 | `prod` | boolean | Production mode flag |
 | `auth` | boolean | Whether authentication is required |
-| `tier` | string | Subscription tier (`"free"`, `"cycls_pass"`, etc.) |
+| `plan` | string | Subscription plan (`"free"`, `"cycls_pass"`, etc.) |
 | `analytics` | boolean | Whether analytics is enabled |
 | `org` | string? | Organization identifier (nullable) |
 | `pk` | string | Clerk publishable key for authentication |

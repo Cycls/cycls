@@ -1,9 +1,7 @@
 import cycls
 import asyncio
 
-agent = cycls.Agent(theme="dev")
-
-@agent()
+@cycls.agent(theme="dev")
 async def native_demo(context):
     yield "# Native Components Demo\n\n"
 
@@ -45,4 +43,4 @@ async def native_demo(context):
 
     yield "\n\nDone!"
 
-agent.local(port=8080)
+native_demo.local(port=8080)

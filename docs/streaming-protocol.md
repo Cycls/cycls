@@ -9,9 +9,7 @@ Documentation for backend and front-end teams on the `/chat/cycls` streaming pro
 ```python
 import cycls
 
-agent = cycls.Agent(pip=["openai"], theme="dev")
-
-@agent('openai-chat')
+@cycls.agent(pip=["openai"], theme="dev")
 async def chat(context):
     from openai import AsyncOpenAI
     client = AsyncOpenAI()
@@ -29,7 +27,7 @@ async def chat(context):
         elif event.type == "response.output_text.delta":
             yield event.delta
 
-agent.deploy(prod=False)
+chat.local()  # or chat.deploy()
 ```
 
 ### Context Object
