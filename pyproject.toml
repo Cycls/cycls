@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cycls"
-version = "0.0.2.70"
+version = "0.0.2.71"
 
 packages = [{ include = "cycls" }]
 include = ["cycls/theme/**/*"]
@@ -15,6 +15,9 @@ httpx = "^0.27.0"
 pyjwt = "^2.8.0"
 docker = "^7.1.0"
 cloudpickle = "^3.1.1"
+
+[tool.poetry.scripts]
+cycls = "cycls.cli:main"
 
 [tool.poetry.extras]
 modal = ["modal"]

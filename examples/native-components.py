@@ -32,11 +32,13 @@ async def func(context):
 
     yield "\n\n"
 
+    await asyncio.sleep(0.6)
     yield {"type": "callout", "callout": "Native components work alongside HTML passthrough!", "style": "success", "title": "It works!"}
 
     yield "\n\n"
 
     # HTML passthrough still works
+    await asyncio.sleep(0.6)
     yield '<div class="bg-gradient-to-r from-blue-500 to-purple-500 text-white p-4 rounded-lg">'
     yield '<strong>HTML passthrough</strong> still works too!'
     yield '</div>'

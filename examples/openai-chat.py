@@ -20,4 +20,4 @@ async def chat(context):
         elif event.type == "response.output_text.delta":
             yield event.delta
 
-agent.deploy(prod=False)
+agent.local()
