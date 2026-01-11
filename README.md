@@ -31,9 +31,9 @@ Write a function. Deploy it as an API, a web interface, or both. Add authenticat
 ```python
 import cycls
 
-agent = cycls.Agent(pip=["openai"])
+cycls.api_key = "YOUR_CYCLS_API_KEY"
 
-@agent("my-agent", auth=True, analytics=True)
+@cycls.agent(pip=["openai"], auth=True, analytics=True)
 async def chat(context):
     from openai import AsyncOpenAI
     client = AsyncOpenAI()
@@ -48,7 +48,7 @@ async def chat(context):
         if chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
 
-agent.deploy()  # Live at https://my-agent.cycls.ai
+chat.deploy()  # Live at https://chat.cycls.ai
 ```
 
 ## Installation
@@ -71,9 +71,9 @@ Requires Docker.
 ## Running
 
 ```python
-agent.local()             # Development with hot-reload (localhost:8080)
-agent.local(watch=False)  # Development without hot-reload
-agent.deploy()            # Production: https://agent-name.cycls.ai
+chat.local()             # Development with hot-reload (localhost:8080)
+chat.local(watch=False)  # Development without hot-reload
+chat.deploy()            # Production: https://chat.cycls.ai
 ```
 
 Get an API key at [cycls.com](https://cycls.com).
@@ -83,7 +83,7 @@ Get an API key at [cycls.com](https://cycls.com).
 Yield structured objects for rich streaming responses:
 
 ```python
-@agent()
+@cycls.agent()
 async def demo(context):
     yield {"type": "thinking", "thinking": "Analyzing the request..."}
     yield "Here's what I found:\n\n"
@@ -109,7 +109,7 @@ async def demo(context):
 ### Reasoning Models
 
 ```python
-@agent()
+@cycls.agent(pip=["openai"])
 async def chat(context):
     from openai import AsyncOpenAI
     client = AsyncOpenAI()
@@ -131,7 +131,7 @@ async def chat(context):
 ## Context Object
 
 ```python
-@agent()
+@cycls.agent()
 async def chat(context):
     context.messages      # [{"role": "user", "content": "..."}]
     context.messages.raw  # Full data including UI component parts
@@ -161,16 +161,17 @@ See [docs/streaming-protocol.md](docs/streaming-protocol.md) for frontend integr
 
 ## Declarative Infrastructure
 
-Define your entire runtime in Python:
+Define your entire runtime in the decorator:
 
 ```python
-agent = cycls.Agent(
+@cycls.agent(
     pip=["openai", "pandas", "numpy"],
     apt=["ffmpeg", "libmagic1"],
-    run_commands=["curl -sSL https://example.com/setup.sh | bash"],
     copy=["./utils.py", "./models/", "/absolute/path/to/config.json"],
     copy_public=["./assets/logo.png", "./static/"],
 )
+async def my_agent(context):
+    ...
 ```
 
 ### `pip` - Python Packages
@@ -189,17 +190,6 @@ Install system-level dependencies via apt-get. Need ffmpeg for audio processing?
 apt=["ffmpeg", "imagemagick", "libpq-dev"]
 ```
 
-### `run_commands` - Shell Commands
-
-Run arbitrary shell commands during the container build. Useful for custom setup scripts, downloading assets, or any build-time configuration.
-
-```python
-run_commands=[
-    "curl -sSL https://example.com/setup.sh | bash",
-    "chmod +x /app/scripts/*.sh"
-]
-```
-
 ### `copy` - Bundle Files and Directories
 
 Include local files and directories in your container. Works with both relative and absolute paths. Copies files and entire directory trees.
@@ -215,7 +205,7 @@ copy=[
 Then import them in your function:
 
 ```python
-@agent()
+@cycls.agent(copy=["./utils.py"])
 async def chat(context):
     from utils import helper_function  # Your bundled module
     ...
