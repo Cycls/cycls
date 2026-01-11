@@ -1,11 +1,6 @@
 import cycls
 
-agent = cycls.Agent(
-    pip=["openai"],
-    modal_keys=["YOUR_MODAL_AK", "YOUR_MODAL_AS"]
-)
-
-@agent("chat")
+@cycls.agent(pip=["openai"], modal_keys=["YOUR_MODAL_AK", "YOUR_MODAL_AS"])
 async def chat(context):
     """Run an agent on Modal."""
     import openai
@@ -21,4 +16,4 @@ async def chat(context):
         if chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
 
-agent.modal()
+chat.modal()
