@@ -40,16 +40,22 @@ class RuntimeClient:
         results = list(self.execute(func, *args, **kwargs))
         return results[0] if len(results) == 1 else results
 
-    def ping(self, timeout=2):
-        """Check if server is ready."""
+    def fire(self, func, *args, **kwargs):
+        """Fire off execution without waiting for response."""
+        stub = self._connect()
+        payload = cloudpickle.dumps((func, args, kwargs))
+        request = runtime_pb2.Request(payload=payload)
+        # Start the stream - gRPC sends request immediately
+        self._active_stream = stub.Execute(request)
+
+    def wait_ready(self, timeout=10):
+        """Wait for channel to be ready."""
+        if self._channel is None:
+            self._connect()
         try:
-            stub = self._connect()
-            payload = cloudpickle.dumps((lambda: "pong", [], {}))
-            request = runtime_pb2.Request(payload=payload)
-            for response in stub.Execute(request, timeout=timeout):
-                return True
-            return False
-        except grpc.RpcError:
+            grpc.channel_ready_future(self._channel).result(timeout=timeout)
+            return True
+        except grpc.FutureTimeoutError:
             return False
 
     def close(self):

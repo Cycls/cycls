@@ -1,3 +1,4 @@
+import contextlib
 import docker
 import cloudpickle
 import tempfile
@@ -264,15 +265,11 @@ CMD ["python", "-m", "grpc_runtime.server", "--port", "{self.grpc_port}"]
         self._host_port = int(self._container.ports[f'{self.grpc_port}/tcp'][0]['HostPort'])
 
         # Wait for gRPC server to be ready
-        print(f"Waiting for container...")
         self._client = RuntimeClient(port=self._host_port)
-        for _ in range(30):
-            if self._client.ping(timeout=1):
-                print(f"Container ready on port {self._host_port}")
-                return self._client
-            time.sleep(0.2)
-
-        raise RuntimeError("Container failed to start")
+        if not self._client.wait_ready(timeout=10):
+            raise RuntimeError("Container failed to start")
+        print(f"Container ready on port {self._host_port}")
+        return self._client
 
     def _cleanup_container(self):
         """Stop and remove the warm container."""
@@ -290,44 +287,34 @@ CMD ["python", "-m", "grpc_runtime.server", "--port", "{self.grpc_port}"]
 
     def run(self, *args, **kwargs):
         """Execute the function in a container and return the result."""
-        import threading
         service_port = kwargs.get('port')
         print(f"Running '{self.name}'...")
         try:
             client = self._ensure_container(service_port=service_port)
 
-            result_holder = [None]
-            error_holder = [None]
-            done = threading.Event()
-
-            def execute():
-                try:
-                    result_holder[0] = client.call(self.func, *args, **kwargs)
-                except Exception as e:
-                    error_holder[0] = e
-                finally:
-                    done.set()
-
-            thread = threading.Thread(target=execute, daemon=True)
-            thread.start()
-
-            print("--- 🪵 Container Logs ---")
-            try:
+            # Blocking service: fire gRPC, stream Docker logs
+            if service_port:
+                client.fire(self.func, *args, **kwargs)
+                print(f"Service running on port {service_port}")
+                print("--- 🪵 Container Logs ---")
                 for chunk in self._container.logs(stream=True, follow=True):
-                    print(chunk.decode('utf-8'), end='')
-                    if done.is_set():
-                        break
-            except KeyboardInterrupt:
-                print("\nStopping...")
-                self._cleanup_container()
+                    print(chunk.decode(), end='')
                 return None
-            print("-------------------------")
 
-            thread.join(timeout=1)
-            if error_holder[0]:
-                raise error_holder[0]
-            return result_holder[0]
+            # Regular function: execute, then print logs
+            result = client.call(self.func, *args, **kwargs)
+            logs = self._container.logs().decode()
+            if logs.strip():
+                print("--- 🪵 Container Logs ---")
+                print(logs, end='')
+                print("-------------------------")
+            return result
 
+        except KeyboardInterrupt:
+            print("\n-------------------------")
+            print("Stopping...")
+            self._cleanup_container()
+            return None
         except Exception as e:
             print(f"Error: {e}")
             return None
@@ -337,6 +324,17 @@ CMD ["python", "-m", "grpc_runtime.server", "--port", "{self.grpc_port}"]
         service_port = kwargs.get('port')
         client = self._ensure_container(service_port=service_port)
         yield from client.execute(self.func, *args, **kwargs)
+
+    @contextlib.contextmanager
+    def runner(self, *args, **kwargs):
+        """Context manager for running a service. Yields (container, client)."""
+        service_port = kwargs.get('port')
+        try:
+            client = self._ensure_container(service_port=service_port)
+            client.fire(self.func, *args, **kwargs)
+            yield self._container, client
+        finally:
+            self._cleanup_container()
 
     def watch(self, *args, **kwargs):
         """Run with file watching - restarts script on changes."""

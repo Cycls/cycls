@@ -13,4 +13,6 @@ message Request {
 message Response {
   bytes data = 1;
   bool error = 2;
+  bytes log = 3;
+  bool is_log = 4;
 }
