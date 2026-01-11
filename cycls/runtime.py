@@ -9,6 +9,9 @@ from pathlib import Path
 from contextlib import contextmanager
 import tarfile
 
+# Enable BuildKit for faster builds with better caching
+os.environ["DOCKER_BUILDKIT"] = "1"
+
 # --- Top-Level Helper Functions ---
 
 def _bootstrap_script(payload_file: str, result_file: str) -> str:
@@ -324,6 +327,110 @@ COPY {self.payload_file} {self.io_dir}/
         except (KeyboardInterrupt, docker.errors.DockerException) as e:
             print(f"\n🛑 Operation stopped: {e}")
             return None
+
+    def watch(self, *args, **kwargs):
+        """Runs the container with file watching - restarts script on changes."""
+        try:
+            from watchfiles import watch as watchfiles_watch
+        except ImportError:
+            print("❌ watchfiles not installed. Run: pip install watchfiles")
+            return
+
+        import inspect
+
+        # Get the main script (the outermost .py file in the stack)
+        main_script = None
+        for frame_info in inspect.stack():
+            filename = frame_info.filename
+            if filename.endswith('.py') and not filename.startswith('<'):
+                main_script = Path(filename).resolve()
+        # main_script is now the outermost/first script in the call chain
+
+        # Build watch paths: main script + copy sources
+        watch_paths = []
+        if main_script and main_script.exists():
+            watch_paths.append(main_script)
+        watch_paths.extend([Path(src).resolve() for src in self.copy.keys() if Path(src).exists()])
+
+        if not watch_paths:
+            print("⚠️  No files to watch. Running without watch mode.")
+            return self.run(*args, **kwargs)
+
+        print(f"👀 Watching for changes:")
+        for p in watch_paths:
+            print(f"   {p}")
+        print()
+
+        while True:
+            # Run the container in a subprocess-like manner
+            print(f"🚀 Running function '{self.name}' in container...")
+            self._perform_auto_cleanup()
+            self._build_image_if_needed()
+
+            port = kwargs.get('port', None)
+            ports_mapping = {f'{port}/tcp': port} if port else None
+
+            with tempfile.TemporaryDirectory() as tmpdir_str:
+                tmpdir = Path(tmpdir_str)
+                payload_path = tmpdir / self.payload_file
+
+                with payload_path.open('wb') as f:
+                    cloudpickle.dump((self.func, args, kwargs), f)
+
+                container = self.docker_client.containers.create(
+                    image=self.tag,
+                    volumes={str(tmpdir): {'bind': self.io_dir, 'mode': 'rw'}},
+                    ports=ports_mapping,
+                    labels={self.managed_label: "true"}
+                )
+                container.start()
+                print(f"✅ Container running on port {port}")
+                print("👀 Waiting for file changes... (Ctrl+C to stop)\n")
+
+                try:
+                    # Watch for changes in a separate thread
+                    import threading
+                    import time
+                    change_detected = threading.Event()
+
+                    def watch_thread():
+                        for changes in watchfiles_watch(*watch_paths):
+                            changed_files = [str(c[1]) for c in changes]
+                            print(f"\n🔄 Changes detected:")
+                            for f in changed_files:
+                                print(f"   {f}")
+                            change_detected.set()
+                            break
+
+                    watcher = threading.Thread(target=watch_thread, daemon=True)
+                    watcher.start()
+
+                    # Stream container logs in separate thread
+                    def log_thread():
+                        for chunk in container.logs(stream=True, follow=True):
+                            if change_detected.is_set():
+                                break
+                            print(chunk.decode('utf-8').strip())
+
+                    logger = threading.Thread(target=log_thread, daemon=True)
+                    logger.start()
+
+                    # Wait for change or interrupt
+                    while not change_detected.is_set():
+                        time.sleep(0.5)
+
+                    print("\n🔄 Restarting...")
+                    container.stop(timeout=2)
+                    container.remove()
+                    # Re-exec the main script
+                    print(f"🔄 Re-executing {main_script.name}...\n")
+                    os.execv(sys.executable, [sys.executable, str(main_script)])
+
+                except KeyboardInterrupt:
+                    print("\n🛑 Stopping...")
+                    container.stop(timeout=2)
+                    container.remove()
+                    return
 
     def build(self, *args, **kwargs):
         """Builds a self-contained, deployable Docker image locally."""

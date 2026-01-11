@@ -88,13 +88,16 @@ class Agent:
         uvicorn.run(web(agent.func, agent.config), host="0.0.0.0", port=port)
         return
 
-    def deploy(self, prod=False, port=8080):
+    def deploy(self, prod=False, port=8080, watch=False):
         if not self.registered_functions:
             print("Error: No @agent decorated function found.")
             return
         if (self.key is None) and prod:
             print("🛑  Error: Please add your Cycls API key")
             return
+        if prod and watch:
+            print("⚠️  Warning: watch=True ignored in production mode.")
+            watch = False
 
         agent = self.registered_functions[0]
         if len(self.registered_functions) > 1:
@@ -118,7 +121,12 @@ class Agent:
             base_url=self.base_url,
             api_key=self.key
         )
-        new.deploy(port=port) if prod else new.run(port=port)
+        if prod:
+            new.deploy(port=port)
+        elif watch:
+            new.watch(port=port)
+        else:
+            new.run(port=port)
         return
         
     def modal(self, prod=False):
