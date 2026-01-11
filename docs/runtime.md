@@ -387,9 +387,10 @@ The container's port is automatically mapped to your host.
 | Use case | General Python functions | Chat/streaming agents |
 | Input | Any arguments | `context.messages` |
 | Output | Return value | Yield streaming responses |
-| API | `.run()`, `.build()`, `.deploy()` | `.deploy(prod=True/False)` |
+| API | `.run()`, `.build()`, `.deploy()` | `.local()`, `.deploy()` |
 | Web UI | No | Yes |
 | Streaming | No | Yes (SSE) |
+| Hot-reload | No | Yes (`.local(watch=True)`) |
 
 Use `@cycls.function` for batch processing, data pipelines, or any non-interactive workload. Use `@agent()` for conversational AI with streaming responses.
 

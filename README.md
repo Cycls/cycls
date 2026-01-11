@@ -47,7 +47,7 @@ async def chat(context):
         if chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
 
-agent.deploy(prod=True)  # Live at https://my-agent.cycls.ai
+agent.deploy()  # Live at https://my-agent.cycls.ai
 ```
 
 ## Installation
@@ -67,11 +67,12 @@ Requires Docker.
 - **Monetization** - `tier="cycls_pass"` integrates with [Cycls Pass](https://cycls.ai) subscriptions
 - **Native UI Components** - Render thinking bubbles, tables, code blocks in responses
 
-## Deploying
+## Running
 
 ```python
-agent.deploy(prod=False)  # Development: localhost:8080
-agent.deploy(prod=True)   # Production: https://agent-name.cycls.ai
+agent.local()             # Development with hot-reload (localhost:8080)
+agent.local(watch=False)  # Development without hot-reload
+agent.deploy()            # Production: https://agent-name.cycls.ai
 ```
 
 Get an API key at [cycls.com](https://cycls.com).

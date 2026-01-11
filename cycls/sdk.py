@@ -1,4 +1,4 @@
-import time, inspect, uvicorn
+import os, time, inspect, uvicorn
 from .runtime import Runtime
 from .web import web, Config
 from .auth import PK_LIVE, PK_TEST, JWKS_PROD, JWKS_TEST
@@ -74,7 +74,8 @@ class Agent:
             return f
         return decorator
 
-    def local(self, port=8080):
+    def _local(self, port=8080, watch=True):
+        """Run directly with uvicorn (no Docker)."""
         if not self.registered_functions:
             print("Error: No @agent decorated function found.")
             return
@@ -85,19 +86,14 @@ class Agent:
         print(f"🚀 Starting local server at localhost:{port}")
         agent.config.public_path = self.theme
         set_prod(agent.config, False)
-        uvicorn.run(web(agent.func, agent.config), host="0.0.0.0", port=port)
+        uvicorn.run(web(agent.func, agent.config), host="0.0.0.0", port=port, reload=watch)
         return
 
-    def deploy(self, prod=False, port=8080, watch=False):
+    def _runtime(self, prod=False):
+        """Create a Runtime instance for the first registered agent."""
         if not self.registered_functions:
             print("Error: No @agent decorated function found.")
-            return
-        if (self.key is None) and prod:
-            print("🛑  Error: Please add your Cycls API key")
-            return
-        if prod and watch:
-            print("⚠️  Warning: watch=True ignored in production mode.")
-            watch = False
+            return None
 
         agent = self.registered_functions[0]
         if len(self.registered_functions) > 1:
@@ -112,7 +108,7 @@ class Agent:
         files.update({f: f for f in self.copy})
         files.update({f: f"public/{f}" for f in self.copy_public})
 
-        new = Runtime(
+        return Runtime(
             func=lambda port: __import__("web").serve(func, config_dict, name, port),
             name=name,
             apt_packages=self.apt,
@@ -121,13 +117,24 @@ class Agent:
             base_url=self.base_url,
             api_key=self.key
         )
-        if prod:
-            new.deploy(port=port)
-        elif watch:
-            new.watch(port=port)
-        else:
-            new.run(port=port)
-        return
+
+    def local(self, port=8080, watch=True):
+        """Run locally in Docker with file watching by default."""
+        # Child process spawned by watcher - run without watch
+        if os.environ.get('_CYCLS_WATCH_CHILD'):
+            watch = False
+        runtime = self._runtime(prod=False)
+        if runtime:
+            runtime.watch(port=port) if watch else runtime.run(port=port)
+
+    def deploy(self, port=8080):
+        """Deploy to production."""
+        if self.key is None:
+            print("🛑  Error: Please add your Cycls API key")
+            return
+        runtime = self._runtime(prod=True)
+        if runtime:
+            runtime.deploy(port=port)
         
     def modal(self, prod=False):
         import modal
