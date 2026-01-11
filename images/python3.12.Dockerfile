@@ -3,10 +3,12 @@
 
 FROM python:3.12-slim
 
-ENV PIP_ROOT_USER_ACTION=ignore
-ENV PYTHONUNBUFFERED=1
+ENV PIP_ROOT_USER_ACTION=ignore \
+    PYTHONUNBUFFERED=1
 
-# Install common web dependencies
+WORKDIR /app
+
+# Install common web dependencies and create io directory
 RUN pip install --no-cache-dir \
     cloudpickle \
     cryptography \
@@ -14,8 +16,5 @@ RUN pip install --no-cache-dir \
     pydantic \
     pyjwt \
     uvicorn[standard] \
-    httpx
-
-# Create app directories
-RUN mkdir -p /app/io
-WORKDIR /app
+    httpx \
+    && mkdir -p io
