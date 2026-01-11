@@ -1,20 +1,24 @@
 import cycls
 
-agent = cycls.Agent(pip=["openai"], modal_keys=["ak-", "as-"])
+agent = cycls.Agent(
+    pip=["openai"],
+    modal_keys=["YOUR_MODAL_AK", "YOUR_MODAL_AS"]
+)
 
-async def llm(x):
+@agent("chat")
+async def chat(context):
+    """Run an agent on Modal."""
     import openai
-    c, m = openai.AsyncOpenAI(api_key="sk-"), "gpt-4o"
-    response = await c.chat.completions.create(model=m, messages=x, temperature=1.0, stream=True)
-    async def event_stream():
-        async for chunk in response:
-            content = chunk.choices[0].delta.content
-            if content:
-                yield content
-    return event_stream()
 
-@agent("cake", auth=False)
-async def func(context):
-    return await llm(context.messages)
+    client = openai.AsyncOpenAI()
+    response = await client.chat.completions.create(
+        model="gpt-4o",
+        messages=context.messages,
+        stream=True
+    )
+
+    async for chunk in response:
+        if chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
 
 agent.modal()

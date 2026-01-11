@@ -3,8 +3,8 @@ import asyncio
 
 agent = cycls.Agent(theme="dev")
 
-@agent('native-demo')
-async def func(context):
+@agent()
+async def native_demo(context):
     yield "# Native Components Demo\n\n"
 
     # Streaming thinking bubble - each yield adds to the same bubble

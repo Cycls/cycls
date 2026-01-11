@@ -1,11 +1,13 @@
 import cycls
-from utils import u
 
-agent = cycls.Agent(pip=["openai"], copy=["utils.py"], key="...")
+agent = cycls.Agent(
+    pip=["openai"],
+    key="YOUR_CYCLS_API_KEY"
+)
 
-@agent("cake", title="title", auth=True)
-async def func(context):
-    print(u(context))
-    yield "cake"
+@agent("assistant", auth=True)
+async def assistant(context):
+    """Deploy an agent to Cycls cloud."""
+    yield f"You said: {context.messages[-1]['content']}"
 
-agent.deploy(prod=False)
+agent.deploy()
