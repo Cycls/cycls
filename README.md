@@ -31,24 +31,27 @@ Write a function. Deploy it as an API, a web interface, or both. Add authenticat
 ```python
 import cycls
 
-agent = cycls.Agent(pip=["openai"])
+cycls.api_key = "YOUR_CYCLS_API_KEY"
 
-@agent("my-agent", auth=True, analytics=True)
-async def chat(context):
+@cycls.agent(pip=["openai"])
+async def agent(context):
     from openai import AsyncOpenAI
     client = AsyncOpenAI()
 
-    response = await client.chat.completions.create(
-        model="gpt-4o",
-        messages=context.messages,
-        stream=True
+    stream = await client.responses.create(
+        model="o3-mini",
+        input=context.messages,
+        stream=True,
+        reasoning={"effort": "medium", "summary": "auto"},
     )
 
-    async for chunk in response:
-        if chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+    async for event in stream:
+        if event.type == "response.reasoning_summary_text.delta":
+            yield {"type": "thinking", "thinking": event.delta}  # Renders as thinking bubble
+        elif event.type == "response.output_text.delta":
+            yield event.delta
 
-agent.deploy()  # Live at https://my-agent.cycls.ai
+agent.deploy()  # Live at https://agent.cycls.ai
 ```
 
 ## Installation
@@ -65,7 +68,7 @@ Requires Docker.
 - **Web Interface** - Chat UI served automatically
 - **Authentication** - `auth=True` enables JWT-based access control
 - **Analytics** - `analytics=True` tracks usage
-- **Monetization** - `tier="cycls_pass"` integrates with [Cycls Pass](https://cycls.ai) subscriptions
+- **Monetization** - `plan="cycls_pass"` integrates with [Cycls Pass](https://cycls.ai) subscriptions
 - **Native UI Components** - Render thinking bubbles, tables, code blocks in responses
 
 ## Running
@@ -73,17 +76,33 @@ Requires Docker.
 ```python
 agent.local()             # Development with hot-reload (localhost:8080)
 agent.local(watch=False)  # Development without hot-reload
-agent.deploy()            # Production: https://agent-name.cycls.ai
+agent.deploy()            # Production: https://agent.cycls.ai
 ```
 
 Get an API key at [cycls.com](https://cycls.com).
+
+## Authentication & Analytics
+
+```python
+@cycls.agent(pip=["openai"], auth=True, analytics=True)
+async def agent(context):
+    # context.user available when auth=True
+    user = context.user  # User(id, email, name, plans)
+    yield f"Hello {user.name}!"
+```
+
+| Flag | Description |
+|------|-------------|
+| `auth=True` | Universal user pool via Cycls Pass (Clerk-based). You can also use your own Clerk auth. |
+| `analytics=True` | Rich usage metrics available on the Cycls dashboard. |
+| `plan="cycls_pass"` | Monetization via Cycls Pass subscriptions. Enables both auth and analytics. |
 
 ## Native UI Components
 
 Yield structured objects for rich streaming responses:
 
 ```python
-@agent()
+@cycls.agent()
 async def demo(context):
     yield {"type": "thinking", "thinking": "Analyzing the request..."}
     yield "Here's what I found:\n\n"
@@ -106,32 +125,26 @@ async def demo(context):
 | `{"type": "callout", "callout": "...", "style": "..."}` | Yes |
 | `{"type": "image", "src": "..."}` | Yes |
 
-### Reasoning Models
+### Thinking Bubbles
+
+The `{"type": "thinking", "thinking": "..."}` component renders as a collapsible thinking bubble in the UI. Each yield appends to the same bubble until a different component type is yielded:
 
 ```python
-@agent()
-async def chat(context):
-    from openai import AsyncOpenAI
-    client = AsyncOpenAI()
+# Multiple yields build one thinking bubble
+yield {"type": "thinking", "thinking": "Let me "}
+yield {"type": "thinking", "thinking": "analyze this..."}
+yield {"type": "thinking", "thinking": " Done thinking."}
 
-    stream = await client.responses.create(
-        model="o3-mini",
-        input=context.messages,
-        stream=True,
-        reasoning={"effort": "medium", "summary": "auto"},
-    )
-
-    async for event in stream:
-        if event.type == "response.reasoning_summary_text.delta":
-            yield {"type": "thinking", "thinking": event.delta}
-        elif event.type == "response.output_text.delta":
-            yield event.delta
+# Then output the response
+yield "Here's what I found..."
 ```
+
+This works seamlessly with OpenAI's reasoning models - just map reasoning summaries to the thinking component.
 
 ## Context Object
 
 ```python
-@agent()
+@cycls.agent()
 async def chat(context):
     context.messages      # [{"role": "user", "content": "..."}]
     context.messages.raw  # Full data including UI component parts
@@ -161,16 +174,17 @@ See [docs/streaming-protocol.md](docs/streaming-protocol.md) for frontend integr
 
 ## Declarative Infrastructure
 
-Define your entire runtime in Python:
+Define your entire runtime in the decorator:
 
 ```python
-agent = cycls.Agent(
+@cycls.agent(
     pip=["openai", "pandas", "numpy"],
     apt=["ffmpeg", "libmagic1"],
-    run_commands=["curl -sSL https://example.com/setup.sh | bash"],
     copy=["./utils.py", "./models/", "/absolute/path/to/config.json"],
     copy_public=["./assets/logo.png", "./static/"],
 )
+async def my_agent(context):
+    ...
 ```
 
 ### `pip` - Python Packages
@@ -189,17 +203,6 @@ Install system-level dependencies via apt-get. Need ffmpeg for audio processing?
 apt=["ffmpeg", "imagemagick", "libpq-dev"]
 ```
 
-### `run_commands` - Shell Commands
-
-Run arbitrary shell commands during the container build. Useful for custom setup scripts, downloading assets, or any build-time configuration.
-
-```python
-run_commands=[
-    "curl -sSL https://example.com/setup.sh | bash",
-    "chmod +x /app/scripts/*.sh"
-]
-```
-
 ### `copy` - Bundle Files and Directories
 
 Include local files and directories in your container. Works with both relative and absolute paths. Copies files and entire directory trees.
@@ -215,7 +218,7 @@ copy=[
 Then import them in your function:
 
 ```python
-@agent()
+@cycls.agent(copy=["./utils.py"])
 async def chat(context):
     from utils import helper_function  # Your bundled module
     ...

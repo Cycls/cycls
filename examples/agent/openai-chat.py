@@ -1,8 +1,6 @@
 import cycls
 
-agent = cycls.Agent(pip=["openai"], theme="dev")
-
-@agent()
+@cycls.agent(pip=["openai"], theme="dev")
 async def openai_chat(context):
     from openai import AsyncOpenAI
     client = AsyncOpenAI()
@@ -20,4 +18,4 @@ async def openai_chat(context):
         elif event.type == "response.output_text.delta":
             yield event.delta
 
-agent.local()
+openai_chat.local()
