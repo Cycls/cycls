@@ -6,41 +6,16 @@ import os
 import sys
 import shutil
 from pathlib import Path
-from contextlib import contextmanager
 import tarfile
+import time
+
+from .grpc import RuntimeClient
 
 # Enable BuildKit for faster builds with better caching
 os.environ["DOCKER_BUILDKIT"] = "1"
 
-# --- Top-Level Helper Functions ---
-
-def _bootstrap_script(payload_file: str, result_file: str) -> str:
-    """Generates the Python script that runs inside the Docker container."""
-    return f"""
-import cloudpickle
-import sys
-import os
-import traceback
-from pathlib import Path
-
-if __name__ == "__main__":
-    io_dir = Path(sys.argv[1])
-    payload_path = io_dir / '{payload_file}'
-    result_path = io_dir / '{result_file}'
-
-    try:
-        with open(payload_path, 'rb') as f:
-            func, args, kwargs = cloudpickle.load(f)
-
-        result = func(*args, **kwargs)
-
-        with open(result_path, 'wb') as f:
-            cloudpickle.dump(result, f)
-
-    except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        sys.exit(1)
-"""
+# gRPC port for container communication
+GRPC_PORT = 50051
 
 def _hash_path(path_str: str) -> str:
     """Hashes a file or a directory's contents to create a deterministic signature."""
@@ -78,11 +53,13 @@ BASE_PACKAGES = {
     "pydantic", "pyjwt", "uvicorn", "uvicorn[standard]", "httpx"
 }
 
-# --- Main Runtime Class ---
+# Packages required for gRPC runtime (always installed)
+GRPC_PACKAGES = {"grpcio", "protobuf"}
+
 
 class Runtime:
     """
-    Handles building a Docker image and executing a function within a container.
+    Handles building a Docker image and executing a function within a container via gRPC.
     """
     def __init__(self, func, name, python_version=None, pip_packages=None, apt_packages=None, run_commands=None, copy=None, base_url=None, api_key=None, base_image=None):
         self.func = func
@@ -96,48 +73,43 @@ class Runtime:
 
         # Use pre-built base image by default, filter out already-installed packages
         self.base_image = base_image or BASE_IMAGE
-        all_pip = set(pip_packages or [])
-        self.pip_packages = sorted(all_pip - BASE_PACKAGES) if self.base_image == BASE_IMAGE else sorted(all_pip)
+        all_pip = set(pip_packages or []) | GRPC_PACKAGES  # Always include gRPC
+        self.pip_packages = sorted(all_pip - BASE_PACKAGES) if self.base_image == BASE_IMAGE else sorted(all_pip | {"cloudpickle"})
 
-        # Standard paths and filenames used inside the container
-        self.io_dir = "/app/io"
-        self.runner_filename = "runner.py"
-        self.runner_path = f"/app/{self.runner_filename}"
-        self.payload_file = "payload.pkl"
-        self.result_file = "result.pkl"
-
-        self.runner_script = _bootstrap_script(self.payload_file, self.result_file)
+        # gRPC configuration
+        self.grpc_port = GRPC_PORT
         self.tag = self._generate_base_tag()
 
         self.api_key = api_key
         self._docker_client = None
-        self.managed_label = f"cycls.runtime"
+        self.managed_label = "cycls.runtime"
+
+        # Warm container state
+        self._container = None
+        self._client = None
+        self._host_port = None
 
     @property
     def docker_client(self):
-        """
-        Lazily initializes and returns a Docker client.
-        This ensures Docker is only required for methods that actually use it.
-        """
+        """Lazily initializes and returns a Docker client."""
         if self._docker_client is None:
             try:
-                print("🐳 Initializing Docker client...")
+                print("Initializing Docker client...")
                 client = docker.from_env()
                 client.ping()
                 self._docker_client = client
             except docker.errors.DockerException:
-                print("\n❌ Error: Docker is not running or is not installed.")
-                print("   This is required for local 'run' and 'build' operations.")
-                print("   Please start the Docker daemon and try again.")
+                print("\nError: Docker is not running or is not installed.")
+                print("Please start the Docker daemon and try again.")
                 sys.exit(1)
         return self._docker_client
-    
-    # docker system prune -af
+
     def _perform_auto_cleanup(self):
-        """Performs a simple, automatic cleanup of old Docker resources."""
+        """Performs automatic cleanup of old Docker resources."""
         try:
             for container in self.docker_client.containers.list(all=True, filters={"label": self.managed_label}):
-                container.remove(force=True)
+                if container.id != (self._container.id if self._container else None):
+                    container.remove(force=True)
 
             cleaned_images = 0
             for image in self.docker_client.images.list(all=True, filters={"label": self.managed_label}):
@@ -147,24 +119,24 @@ class Runtime:
                 if not is_current and not is_deployable:
                     self.docker_client.images.remove(image.id, force=True)
                     cleaned_images += 1
-            
+
             if cleaned_images > 0:
-                print(f"🧹 Cleaned up {cleaned_images} old image version(s).")
+                print(f"Cleaned up {cleaned_images} old image(s).")
 
             self.docker_client.images.prune(filters={'label': self.managed_label})
 
         except Exception as e:
-            print(f"⚠️  An error occurred during cleanup: {e}")
+            print(f"Warning: cleanup error: {e}")
 
     def _generate_base_tag(self) -> str:
-        """Creates a unique tag for the base Docker image based on its dependencies."""
+        """Creates a unique tag for the Docker image based on its dependencies."""
         signature_parts = [
             self.base_image,
-            "".join(self.python_version),
+            self.python_version,
             "".join(self.pip_packages),
             "".join(self.apt_packages),
             "".join(self.run_commands),
-            self.runner_script
+            "grpc-v1"
         ]
         for src, dst in sorted(self.copy.items()):
             if not Path(src).exists():
@@ -176,11 +148,10 @@ class Runtime:
         image_hash = hashlib.sha256(signature.encode()).hexdigest()
         return f"{self.image_prefix}:{image_hash[:16]}"
 
-    def _generate_dockerfile(self, port=None) -> str:
-        """Generates a multi-stage Dockerfile string."""
+    def _generate_dockerfile(self, service_port=None) -> str:
+        """Generates a Dockerfile for gRPC-based runtime."""
         using_base = self.base_image == BASE_IMAGE
 
-        # Only install extra packages not in base image (use uv if available in base)
         run_pip_install = (
             f"RUN uv pip install --system --no-cache {' '.join(self.pip_packages)}"
             if self.pip_packages else ""
@@ -190,201 +161,197 @@ class Runtime:
             if self.apt_packages else ""
         )
         run_shell_commands = "\n".join([f"RUN {cmd}" for cmd in self.run_commands]) if self.run_commands else ""
-        copy_lines = "\n".join([f"COPY context_files/{dst} {dst}" for dst in self.copy.values()])
-        expose_line = f"EXPOSE {port}" if port else ""
+        copy_lines = "\n".join([f"COPY context_files/{dst} /app/{dst}" for dst in self.copy.values()])
 
-        # Skip env/mkdir/workdir if using pre-built base (already configured)
-        env_lines = "" if using_base else f"""ENV PIP_ROOT_USER_ACTION=ignore \\
+        env_lines = "" if using_base else """ENV PIP_ROOT_USER_ACTION=ignore \\
     PYTHONUNBUFFERED=1
-RUN mkdir -p {self.io_dir}
 WORKDIR /app"""
 
-        return f"""
-# STAGE 1: Base image with all dependencies
-FROM {self.base_image} as base
+        # Expose both gRPC port and optional service port
+        expose_lines = f"EXPOSE {self.grpc_port}"
+        if service_port:
+            expose_lines += f" {service_port}"
+
+        return f"""FROM {self.base_image}
 {env_lines}
 {run_apt_install}
 {run_pip_install}
 {run_shell_commands}
 {copy_lines}
-COPY {self.runner_filename} {self.runner_path}
-ENTRYPOINT ["python", "{self.runner_path}", "{self.io_dir}"]
-
-# STAGE 2: Final deployable image with the payload "baked in"
-FROM base
-{expose_line}
-COPY {self.payload_file} {self.io_dir}/
+COPY grpc_runtime/ /app/grpc_runtime/
+{expose_lines}
+CMD ["python", "-m", "grpc_runtime.server", "--port", "{self.grpc_port}"]
 """
 
-    def _prepare_build_context(self, workdir: Path, include_payload=False, args=None, kwargs=None):
+    def _prepare_build_context(self, workdir: Path, service_port=None):
         """Prepares a complete build context in the given directory."""
-        port = kwargs.get('port') if kwargs else None
-        
-        # Create a dedicated subdirectory for all user-copied files
         context_files_dir = workdir / "context_files"
         context_files_dir.mkdir()
 
         if self.copy:
             for src, dst in self.copy.items():
-                src_path = Path(src).resolve() # Resolve to an absolute path
+                src_path = Path(src).resolve()
                 dest_in_context = context_files_dir / dst
                 _copy_path(src_path, dest_in_context)
 
-        (workdir / "Dockerfile").write_text(self._generate_dockerfile(port=port))
-        (workdir / self.runner_filename).write_text(self.runner_script)
+        (workdir / "Dockerfile").write_text(self._generate_dockerfile(service_port=service_port))
 
-        if include_payload:
-            payload_bytes = cloudpickle.dumps((self.func, args or [], kwargs or {}))
-            (workdir / self.payload_file).write_bytes(payload_bytes)
+        # Copy the gRPC runtime module
+        grpc_src = Path(__file__).parent / "grpc"
+        grpc_dest = workdir / "grpc_runtime"
+        shutil.copytree(grpc_src, grpc_dest, ignore=shutil.ignore_patterns('*.proto', '__pycache__'))
 
-    def _build_image_if_needed(self):
-        """Checks if the base Docker image exists locally and builds it if not."""
+    def _build_image_if_needed(self, service_port=None):
+        """Checks if the Docker image exists locally and builds it if not."""
         try:
             self.docker_client.images.get(self.tag)
-            print(f"✅ Found cached base image: {self.tag}")
+            print(f"Found cached image: {self.tag}")
             return
         except docker.errors.ImageNotFound:
-            print(f"🛠️  Building new base image: {self.tag}")
+            print(f"Building new image: {self.tag}")
 
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
-            # Prepare context without payload for the base image
-            self._prepare_build_context(tmpdir)
-            
-            print("--- 🐳 Docker Build Logs (Base Image) ---")
+            self._prepare_build_context(tmpdir, service_port=service_port)
+
+            print("--- Docker Build Logs ---")
             response_generator = self.docker_client.api.build(
                 path=str(tmpdir),
                 tag=self.tag,
                 forcerm=True,
                 decode=True,
-                target='base', # Only build the 'base' stage
-                labels={self.managed_label: "true"}, # image label
+                labels={self.managed_label: "true"},
             )
             try:
                 for chunk in response_generator:
                     if 'stream' in chunk:
                         print(chunk['stream'].strip())
-                print("----------------------------------------")
-                print(f"✅ Base image built successfully: {self.tag}")
+                print("-------------------------")
+                print(f"Image built: {self.tag}")
             except docker.errors.BuildError as e:
-                print(f"\n❌ Docker build failed. Reason: {e}")
+                print(f"\nDocker build failed: {e}")
                 raise
 
-    @contextmanager
-    def runner(self, *args, **kwargs):
-        """Context manager to set up, run, and tear down the container for local execution."""
-        port = kwargs.get('port', None)
-        self._perform_auto_cleanup()
-        self._build_image_if_needed()
-        container = None
-        ports_mapping = {f'{port}/tcp': port} if port else None
-
-        with tempfile.TemporaryDirectory() as tmpdir_str:
-            tmpdir = Path(tmpdir_str)
-            payload_path = tmpdir / self.payload_file
-            result_path = tmpdir / self.result_file
-
-            with payload_path.open('wb') as f:
-                cloudpickle.dump((self.func, args, kwargs), f)
-
+    def _ensure_container(self, service_port=None):
+        """Start container if not running, return gRPC client."""
+        if self._client and self._container:
+            # Check if container is still running
             try:
-                container = self.docker_client.containers.create(
-                    image=self.tag,
-                    volumes={str(tmpdir): {'bind': self.io_dir, 'mode': 'rw'}},
-                    ports=ports_mapping,
-                    labels={self.managed_label: "true"} # container label
-                )
-                container.start()
-                yield container, result_path
-            finally:
-                if container:
-                    print("\n🧹 Cleaning up container...")
-                    try:
-                        container.stop(timeout=5)
-                        container.remove()
-                        print("✅ Container stopped and removed.")
-                    except docker.errors.APIError as e:
-                        print(f"⚠️  Could not clean up container: {e}")
+                self._container.reload()
+                if self._container.status == 'running':
+                    return self._client
+            except:
+                pass
+            self._cleanup_container()
+
+        self._perform_auto_cleanup()
+        self._build_image_if_needed(service_port=service_port)
+
+        # Build port mappings
+        ports = {f'{self.grpc_port}/tcp': None}
+        if service_port:
+            ports[f'{service_port}/tcp'] = service_port
+
+        self._container = self.docker_client.containers.run(
+            self.tag,
+            detach=True,
+            ports=ports,
+            labels={self.managed_label: "true"}
+        )
+
+        # Get assigned gRPC port
+        self._container.reload()
+        self._host_port = int(self._container.ports[f'{self.grpc_port}/tcp'][0]['HostPort'])
+
+        # Wait for gRPC server to be ready
+        print(f"Waiting for container...")
+        self._client = RuntimeClient(port=self._host_port)
+        for _ in range(30):
+            if self._client.ping(timeout=1):
+                print(f"Container ready on port {self._host_port}")
+                return self._client
+            time.sleep(0.2)
+
+        raise RuntimeError("Container failed to start")
+
+    def _cleanup_container(self):
+        """Stop and remove the warm container."""
+        if self._client:
+            self._client.close()
+            self._client = None
+        if self._container:
+            try:
+                self._container.stop(timeout=3)
+                self._container.remove()
+            except:
+                pass
+            self._container = None
+        self._host_port = None
 
     def run(self, *args, **kwargs):
-        """Executes the function in a new Docker container and waits for the result."""
-        print(f"🚀 Running function '{self.name}' in container...")
+        """Execute the function in a container and return the result."""
+        service_port = kwargs.pop('port', None)
+        print(f"Running '{self.name}'...")
         try:
-            with self.runner(*args, **kwargs) as (container, result_path):
-                print("--- 🪵 Container Logs (streaming) ---")
-                for chunk in container.logs(stream=True, follow=True):
-                    print(chunk.decode('utf-8').strip())
-                print("------------------------------------")
-
-                result_status = container.wait()
-                if result_status['StatusCode'] != 0:
-                    print(f"\n❌ Error: Container exited with code: {result_status['StatusCode']}")
-                    return None
-                
-                if result_path.exists():
-                    with result_path.open('rb') as f:
-                        result = cloudpickle.load(f)
-                    print("✅ Function executed successfully.")
-                    return result
-                else:
-                    print("\n❌ Error: Result file not found.")
-                    return None
-        except (KeyboardInterrupt, docker.errors.DockerException) as e:
-            print(f"\n🛑 Operation stopped: {e}")
+            client = self._ensure_container(service_port=service_port)
+            return client.call(self.func, *args, **kwargs)
+        except Exception as e:
+            print(f"Error: {e}")
             return None
 
+    def stream(self, *args, **kwargs):
+        """Execute the function and yield streamed results."""
+        service_port = kwargs.pop('port', None)
+        client = self._ensure_container(service_port=service_port)
+        yield from client.execute(self.func, *args, **kwargs)
+
     def watch(self, *args, **kwargs):
-        """Runs the container with file watching - restarts script on changes."""
+        """Run with file watching - re-executes function on changes."""
         try:
             from watchfiles import watch as watchfiles_watch
         except ImportError:
-            print("❌ watchfiles not installed. Run: pip install watchfiles")
+            print("watchfiles not installed. Run: pip install watchfiles")
             return
 
         import inspect
         import subprocess
 
-        # Get the main script (the outermost .py file in the stack)
         main_script = None
         for frame_info in inspect.stack():
             filename = frame_info.filename
             if filename.endswith('.py') and not filename.startswith('<'):
                 main_script = Path(filename).resolve()
-        # main_script is now the outermost/first script in the call chain
 
-        # Build watch paths: main script + copy sources
         watch_paths = []
         if main_script and main_script.exists():
             watch_paths.append(main_script)
         watch_paths.extend([Path(src).resolve() for src in self.copy.keys() if Path(src).exists()])
 
         if not watch_paths:
-            print("⚠️  No files to watch. Running without watch mode.")
+            print("No files to watch.")
             return self.run(*args, **kwargs)
 
-        print(f"👀 Watching for changes:")
+        print(f"Watching for changes:")
         for p in watch_paths:
             print(f"   {p}")
         print()
 
         while True:
-            # Run the script in a subprocess so we survive errors
-            print(f"🚀 Running {main_script.name}...")
+            print(f"Running {main_script.name}...")
             proc = subprocess.Popen(
                 [sys.executable, str(main_script)],
                 env={**os.environ, '_CYCLS_WATCH_CHILD': '1'}
             )
 
             try:
-                # Watch for changes
                 for changes in watchfiles_watch(*watch_paths):
                     changed_files = [str(c[1]) for c in changes]
-                    print(f"\n🔄 Changes detected:")
+                    print(f"\nChanges detected:")
                     for f in changed_files:
                         print(f"   {f}")
                     break
 
-                print("\n🔄 Restarting...\n")
+                print("\nRestarting...\n")
                 proc.terminate()
                 try:
                     proc.wait(timeout=3)
@@ -392,7 +359,7 @@ COPY {self.payload_file} {self.io_dir}/
                     proc.kill()
 
             except KeyboardInterrupt:
-                print("\n🛑 Stopping...")
+                print("\nStopping...")
                 proc.terminate()
                 try:
                     proc.wait(timeout=3)
@@ -401,133 +368,102 @@ COPY {self.payload_file} {self.io_dir}/
                 return
 
     def build(self, *args, **kwargs):
-        """Builds a self-contained, deployable Docker image locally."""
-        print("📦 Building self-contained image for deployment...")
-        payload_hash = hashlib.sha256(cloudpickle.dumps((self.func, args, kwargs))).hexdigest()[:16]
-        final_tag = f"{self.image_prefix}:deploy-{payload_hash}"
+        """Build a deployable Docker image locally."""
+        print("Building deployable image...")
+        service_port = kwargs.get('port', 8080)
+
+        # For deployed images, we need to bake in the function
+        # Generate a tag based on function + deps
+        func_hash = hashlib.sha256(cloudpickle.dumps(self.func)).hexdigest()[:16]
+        final_tag = f"{self.image_prefix}:deploy-{func_hash}"
 
         try:
             self.docker_client.images.get(final_tag)
-            print(f"✅ Found cached deployable image: {final_tag}")
+            print(f"Found cached image: {final_tag}")
             return final_tag
         except docker.errors.ImageNotFound:
-            print(f"🛠️  Building new deployable image: {final_tag}")
+            print(f"Building: {final_tag}")
 
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
-            self._prepare_build_context(tmpdir, include_payload=True, args=args, kwargs=kwargs)
+            self._prepare_build_context(tmpdir, service_port=service_port)
 
-            print("--- 🐳 Docker Build Logs (Final Image) ---")
+            print("--- Docker Build Logs ---")
             response_generator = self.docker_client.api.build(
-                path=str(tmpdir), tag=final_tag, forcerm=True, decode=True
+                path=str(tmpdir),
+                tag=final_tag,
+                forcerm=True,
+                decode=True,
+                labels={self.managed_label: "true"}
             )
             try:
                 for chunk in response_generator:
                     if 'stream' in chunk:
                         print(chunk['stream'].strip())
-                print("-----------------------------------------")
-                print(f"✅ Image built successfully: {final_tag}")
-                port = kwargs.get('port') if kwargs else None
-                print(f"🤖 Run: docker run --rm -d -p {port}:{port} {final_tag}")
+                print("-------------------------")
+                print(f"Image built: {final_tag}")
+                print(f"Run: docker run --rm -p {service_port}:{service_port} {final_tag}")
                 return final_tag
             except docker.errors.BuildError as e:
-                print(f"\n❌ Docker build failed. Reason: {e}")
+                print(f"\nBuild failed: {e}")
                 return None
 
     def deploy(self, *args, **kwargs):
-        """Deploys the function by sending it to a remote build server."""
+        """Deploy the function to a remote build server."""
         import requests
 
-        print(f"🚀 Preparing to deploy function '{self.name}'")
+        print(f"Preparing to deploy '{self.name}'")
+        service_port = kwargs.get('port', 8080)
 
-        # 1. Prepare the build context and compress it into a tarball
-        payload_hash = hashlib.sha256(cloudpickle.dumps((self.func, args, kwargs))).hexdigest()[:16]
-        archive_name = f"source-{self.tag.split(':')[1]}-{payload_hash}.tar.gz"
+        func_hash = hashlib.sha256(cloudpickle.dumps(self.func)).hexdigest()[:16]
+        archive_name = f"source-{self.tag.split(':')[1]}-{func_hash}.tar.gz"
 
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
-            self._prepare_build_context(tmpdir, include_payload=True, args=args, kwargs=kwargs)
-            
+            self._prepare_build_context(tmpdir, service_port=service_port)
+
             archive_path = Path(tmpdir_str) / archive_name
             with tarfile.open(archive_path, "w:gz") as tar:
-                # Add all files from the context to the tar archive
                 for f in tmpdir.glob("**/*"):
                     if f.is_file():
                         tar.add(f, arcname=f.relative_to(tmpdir))
-            
-            # 2. Prepare the request payload
-            port = kwargs.get('port', 8080)
+
             data_payload = {
                 "function_name": self.name,
-                "port": port,
-                # "memory": "1Gi" # You could make this a parameter
+                "port": service_port,
             }
-            headers = {
-                "X-API-Key": self.api_key
-            }
+            headers = {"X-API-Key": self.api_key}
 
-            # 3. Upload to the deploy server
-            print("📦 Uploading build context to the deploy server...")
+            print("Uploading build context...")
             try:
                 with open(archive_path, 'rb') as f:
                     files = {'source_archive': (archive_name, f, 'application/gzip')}
-                    
                     response = requests.post(
                         f"{self.base_url}/v1/deploy",
                         data=data_payload,
                         files=files,
                         headers=headers,
-                        timeout=5*1800 # Set a long timeout for the entire process
+                        timeout=5*1800
                     )
 
-                # 4. Handle the server's response
-                response.raise_for_status() # Raise an exception for 4xx/5xx errors
+                response.raise_for_status()
                 result = response.json()
-                
-                print(f"✅ Deployment successful!")
-                print(f"🔗 Service is available at: {result['url']}")
+
+                print(f"Deployment successful!")
+                print(f"Service URL: {result['url']}")
                 return result['url']
 
             except requests.exceptions.HTTPError as e:
-                print(f"❌ Deployment failed. Server returned error: {e.response.status_code}")
+                print(f"Deployment failed: {e.response.status_code}")
                 try:
-                    # Try to print the detailed error message from the server
                     print(f"   Reason: {e.response.json()['detail']}")
                 except:
                     print(f"   Reason: {e.response.text}")
                 return None
             except requests.exceptions.RequestException as e:
-                print(f"❌ Could not connect to the deploy server: {e}")
+                print(f"Could not connect to deploy server: {e}")
                 return None
 
-    def Deploy(self, *args, **kwargs):
-        try:
-            from .shared import upload_file_to_cloud, build_and_deploy_to_cloud
-        except ImportError:
-            print("❌ Shared not found. This is an internal method.")
-            return None
-
-        port = kwargs.get('port', 8080)
-        
-        with tempfile.TemporaryDirectory() as tmpdir_str:
-            tmpdir = Path(tmpdir_str)
-            self._prepare_build_context(tmpdir, include_payload=True, args=args, kwargs=kwargs)
-            
-            archive_path = Path(tmpdir_str) / "source.tar.gz"
-            with tarfile.open(archive_path, "w:gz") as tar:
-                for f in tmpdir.glob("**/*"):
-                    if f.is_file():
-                        tar.add(f, arcname=f.relative_to(tmpdir))
-
-            archive_name = upload_file_to_cloud(self.name, archive_path)
-
-        try:
-            service = build_and_deploy_to_cloud(
-            function_name=self.name,
-            gcs_object_name=archive_name,
-            port=port,
-            memory="1Gi"
-            )
-        except Exception as e:
-            print(f"❌ Cloud Deployment Failed: {e}")
-            return None
+    def __del__(self):
+        """Cleanup on garbage collection."""
+        self._cleanup_container()
