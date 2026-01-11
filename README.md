@@ -65,7 +65,7 @@ Requires Docker.
 - **Web Interface** - Chat UI served automatically
 - **Authentication** - `auth=True` enables JWT-based access control
 - **Analytics** - `analytics=True` tracks usage
-- **Monetization** - `tier="cycls_pass"` integrates with [Cycls Pass](https://cycls.ai) subscriptions
+- **Monetization** - `plan="cycls_pass"` integrates with [Cycls Pass](https://cycls.ai) subscriptions
 - **Native UI Components** - Render thinking bubbles, tables, code blocks in responses
 
 ## Running
