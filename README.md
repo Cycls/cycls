@@ -33,20 +33,23 @@ import cycls
 
 cycls.api_key = "YOUR_CYCLS_API_KEY"
 
-@cycls.agent(pip=["openai"], auth=True, analytics=True)
+@cycls.agent(pip=["openai"])
 async def chat(context):
     from openai import AsyncOpenAI
     client = AsyncOpenAI()
 
-    response = await client.chat.completions.create(
-        model="gpt-4o",
-        messages=context.messages,
-        stream=True
+    stream = await client.responses.create(
+        model="o3-mini",
+        input=context.messages,
+        stream=True,
+        reasoning={"effort": "medium", "summary": "auto"},
     )
 
-    async for chunk in response:
-        if chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+    async for event in stream:
+        if event.type == "response.reasoning_summary_text.delta":
+            yield {"type": "thinking", "thinking": event.delta}  # Renders as thinking bubble
+        elif event.type == "response.output_text.delta":
+            yield event.delta
 
 chat.deploy()  # Live at https://chat.cycls.ai
 ```
@@ -106,27 +109,21 @@ async def demo(context):
 | `{"type": "callout", "callout": "...", "style": "..."}` | Yes |
 | `{"type": "image", "src": "..."}` | Yes |
 
-### Reasoning Models
+### Thinking Bubbles
+
+The `{"type": "thinking", "thinking": "..."}` component renders as a collapsible thinking bubble in the UI. Each yield appends to the same bubble until a different component type is yielded:
 
 ```python
-@cycls.agent(pip=["openai"])
-async def chat(context):
-    from openai import AsyncOpenAI
-    client = AsyncOpenAI()
+# Multiple yields build one thinking bubble
+yield {"type": "thinking", "thinking": "Let me "}
+yield {"type": "thinking", "thinking": "analyze this..."}
+yield {"type": "thinking", "thinking": " Done thinking."}
 
-    stream = await client.responses.create(
-        model="o3-mini",
-        input=context.messages,
-        stream=True,
-        reasoning={"effort": "medium", "summary": "auto"},
-    )
-
-    async for event in stream:
-        if event.type == "response.reasoning_summary_text.delta":
-            yield {"type": "thinking", "thinking": event.delta}
-        elif event.type == "response.output_text.delta":
-            yield event.delta
+# Then output the response
+yield "Here's what I found..."
 ```
+
+This works seamlessly with OpenAI's reasoning models - just map reasoning summaries to the thinking component.
 
 ## Context Object
 
