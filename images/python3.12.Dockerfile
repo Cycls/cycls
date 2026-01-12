@@ -1,5 +1,5 @@
-# Pre-built base image for Cycls web agents
-# Includes common dependencies to speed up builds from 60s to <5s
+# Pre-built base image for Cycls
+# Includes common dependencies to speed up builds
 
 FROM python:3.12-slim
 
@@ -8,7 +8,7 @@ ENV PIP_ROOT_USER_ACTION=ignore \
 
 WORKDIR /app
 
-# Install uv for fast package installs, then install common web dependencies
+# Install uv for fast package installs, then install common dependencies
 RUN pip install --no-cache-dir uv \
     && uv pip install --system --no-cache \
     cloudpickle \

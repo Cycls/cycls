@@ -172,10 +172,21 @@ def agent(name=None, pip=[], apt=[], copy=[], copy_public=[], theme="default", m
         )
     return decorator
 
-def function(python_version=None, pip=None, apt=None, run_commands=None, copy=None, name=None):
-    """Decorator that transforms a Python function into a containerized, remotely executable object."""
+def function(python_version=None, pip=None, apt=None, run_commands=None, copy=None, name=None, remote=None):
+    """Decorator that transforms a Python function into a containerized, remotely executable object.
+
+    Args:
+        python_version: Python version for the container (default: current version)
+        pip: List of pip packages to install
+        apt: List of apt packages to install
+        run_commands: Shell commands to run during build
+        copy: Files/directories to copy into container
+        name: Container name (default: function name)
+        remote: Remote gRPC server address ("host" or "host:port") for remote dev mode
+    """
     def decorator(func):
         func_name = name or func.__name__
         copy_dict = {i: i for i in copy or []}
-        return Runtime(func, func_name.replace('_', '-'), python_version, pip, apt, run_commands, copy_dict, base_url, api_key)
+        return Runtime(func, func_name.replace('_', '-'), python_version, pip, apt, run_commands,
+                       copy_dict, base_url, api_key, remote=remote)
     return decorator

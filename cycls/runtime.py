@@ -59,7 +59,8 @@ class Runtime:
     """Executes functions in Docker containers. Uses gRPC for local dev, pickle for deploy."""
 
     def __init__(self, func, name, python_version=None, pip_packages=None, apt_packages=None,
-                 run_commands=None, copy=None, base_url=None, api_key=None, base_image=None):
+                 run_commands=None, copy=None, base_url=None, api_key=None, base_image=None,
+                 remote=None):
         self.func = func
         self.name = name
         self.python_version = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
@@ -69,6 +70,10 @@ class Runtime:
         self.base_image = base_image or BASE_IMAGE
         self.base_url = base_url or "https://service-core-280879789566.me-central1.run.app"
         self.api_key = api_key
+
+        # Remote dev mode: "host:port" or "host" (uses default gRPC port)
+        self.remote = remote
+        self._remote_client = None
 
         # Compute pip packages (gRPC only needed for local dev, added dynamically)
         user_packages = set(pip_packages or [])
@@ -85,6 +90,25 @@ class Runtime:
         self._container = None
         self._client = None
         self._host_port = None
+
+    def _parse_remote(self):
+        """Parse remote string into (host, port)."""
+        if not self.remote:
+            return None, None
+        if ':' in self.remote:
+            host, port = self.remote.rsplit(':', 1)
+            return host, int(port)
+        return self.remote, GRPC_PORT
+
+    def _get_remote_client(self):
+        """Get or create a client for remote gRPC server."""
+        if self._remote_client is None:
+            host, port = self._parse_remote()
+            self._remote_client = RuntimeClient(host=host, port=port)
+            if not self._remote_client.wait_ready(timeout=5):
+                raise RuntimeError(f"Could not connect to remote server at {host}:{port}")
+            print(f"Connected to remote: {host}:{port}")
+        return self._remote_client
 
     @property
     def docker_client(self):
@@ -279,15 +303,29 @@ CMD ["python", "entrypoint.py"]
     def run(self, *args, **kwargs):
         """Execute the function in a container and return the result."""
         service_port = kwargs.get('port')
-        print(f"Running '{self.name}'...")
+        print(f"Running '{self.name}'{'(remote)' if self.remote else ''}...")
+
         try:
+            # Remote mode: connect directly to remote gRPC server
+            if self.remote:
+                client = self._get_remote_client()
+                if service_port:
+                    client.fire(self.func, *args, **kwargs)
+                    print(f"Service started on remote (port {service_port})")
+                    # Block until interrupted
+                    import time
+                    while True:
+                        time.sleep(1)
+                return client.call(self.func, *args, **kwargs)
+
+            # Local mode: manage Docker container
             client = self._ensure_container(service_port=service_port)
 
             # Blocking service: fire gRPC, stream Docker logs
             if service_port:
                 client.fire(self.func, *args, **kwargs)
                 print(f"Service running on port {service_port}")
-                print("--- 🪵 Container Logs ---")
+                print("--- Container Logs ---")
                 for chunk in self._container.logs(stream=True, follow=True):
                     print(chunk.decode(), end='')
                 return None
@@ -296,15 +334,15 @@ CMD ["python", "entrypoint.py"]
             result = client.call(self.func, *args, **kwargs)
             logs = self._container.logs().decode()
             if logs.strip():
-                print("--- 🪵 Container Logs ---")
+                print("--- Container Logs ---")
                 print(logs, end='')
-                print("-------------------------")
+                print("-----------------------")
             return result
 
         except KeyboardInterrupt:
-            print("\n-------------------------")
-            print("Stopping...")
-            self._cleanup_container()
+            print("\nStopping...")
+            if not self.remote:
+                self._cleanup_container()
             return None
         except Exception as e:
             print(f"Error: {e}")
@@ -312,6 +350,13 @@ CMD ["python", "entrypoint.py"]
 
     def stream(self, *args, **kwargs):
         """Execute the function and yield streamed results."""
+        # Remote mode: connect directly
+        if self.remote:
+            client = self._get_remote_client()
+            yield from client.execute(self.func, *args, **kwargs)
+            return
+
+        # Local mode: use Docker container
         service_port = kwargs.get('port')
         client = self._ensure_container(service_port=service_port)
         yield from client.execute(self.func, *args, **kwargs)
