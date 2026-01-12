@@ -235,27 +235,15 @@ CMD ["python", "entrypoint.py"]
         tag = self._ensure_grpc_image()
         self._perform_auto_cleanup(keep_tag=tag)
 
-        # Port mappings
-        ports = {f'{GRPC_PORT}/tcp': None}
+        # Port mappings (fixed ports avoid race conditions)
+        ports = {f'{GRPC_PORT}/tcp': GRPC_PORT}
         if service_port:
             ports[f'{service_port}/tcp'] = service_port
 
         self._container = self.docker_client.containers.run(
             tag, detach=True, ports=ports, labels={self.managed_label: "true"}
         )
-        self._container.reload()
-
-        port_info = self._container.ports.get(f'{GRPC_PORT}/tcp')
-        if not port_info:
-            logs = self._container.logs().decode()[-2000:] if self._container else "No container"
-            raise RuntimeError(
-                f"Container failed to bind gRPC port.\n"
-                f"Status: {self._container.status}\n"
-                f"Ports: {self._container.ports}\n"
-                f"Logs:\n{logs}"
-            )
-        self._host_port = int(port_info[0]['HostPort'])
-
+        self._host_port = GRPC_PORT
         self._client = RuntimeClient(port=self._host_port)
         if not self._client.wait_ready(timeout=10):
             raise RuntimeError("Container failed to start")
