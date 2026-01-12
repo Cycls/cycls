@@ -56,12 +56,12 @@ class AgentRuntime:
         """Make the runtime callable - delegates to the wrapped function."""
         return self.func(*args, **kwargs)
 
-    def _local(self, port=8080, watch=True):
+    def _local(self, port=8080):
         """Run directly with uvicorn (no Docker)."""
         print(f"Starting local server at localhost:{port}")
         self.config.public_path = self.theme
         _set_prod(self.config, False)
-        uvicorn.run(web(self.func, self.config), host="0.0.0.0", port=port, reload=watch)
+        uvicorn.run(web(self.func, self.config), host="0.0.0.0", port=port)
 
     def _runtime(self, prod=False):
         """Create a Runtime instance for deployment."""
