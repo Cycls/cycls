@@ -12,6 +12,8 @@ WORKDIR /app
 RUN pip install --no-cache-dir uv \
     && uv pip install --system --no-cache \
     cloudpickle \
+    grpcio \
+    protobuf \
     cryptography \
     fastapi[standard] \
     pydantic \
