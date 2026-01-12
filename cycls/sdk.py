@@ -88,7 +88,7 @@ class AgentRuntime:
 
     def local(self, port=8080, watch=True):
         """Run locally in Docker with file watching by default."""
-        if os.environ.get('_CYCLS_WATCH_CHILD'):
+        if os.environ.get('_CYCLS_WATCH'):
             watch = False
         runtime = self._runtime(prod=False)
         runtime.watch(port=port) if watch else runtime.run(port=port)
