@@ -169,7 +169,7 @@ def my_function():
 
 ## Methods
 
-The decorated function becomes a `Runtime` object with three methods:
+The decorated function becomes a `Runtime` object with these methods:
 
 ### `.run(*args, **kwargs)`
 
@@ -184,15 +184,43 @@ def add(a, b):
 result = add.run([1, 2], [3, 4])  # [4, 6]
 ```
 
-- Builds the container image if needed (cached for subsequent runs)
-- Serializes the function and arguments
-- Runs the container
+- Starts a gRPC server in the container (or reuses existing)
+- Sends the function and arguments over gRPC
 - Streams logs to stdout
 - Returns the deserialized result
 
+### `.stream(*args, **kwargs)`
+
+Execute and yield streaming results from a generator function.
+
+```python
+@cycls.function()
+def count(n):
+    for i in range(n):
+        yield i
+
+for value in count.stream(5):
+    print(value)  # 0, 1, 2, 3, 4
+```
+
+- Uses gRPC streaming for real-time results
+- Each `yield` in the function sends a response immediately
+
+### `.watch(*args, **kwargs)`
+
+Run with file watching - automatically restarts on code changes.
+
+```python
+@cycls.function(pip=["fastapi", "uvicorn"])
+def api(port):
+    ...
+
+api.watch(port=8000)  # Restarts when files change
+```
+
 ### `.build(*args, **kwargs)`
 
-Build a self-contained Docker image without running it.
+Build a self-contained Docker image with the function baked in.
 
 ```python
 @cycls.function(pip=["fastapi", "uvicorn"])
@@ -203,7 +231,7 @@ image_tag = api.build(port=8000)
 # Returns: "cycls/api:deploy-abc123"
 ```
 
-The resulting image can be run anywhere:
+The resulting image runs standalone (no gRPC, no external dependencies):
 
 ```bash
 docker run -p 8000:8000 cycls/api:deploy-abc123
@@ -214,7 +242,10 @@ docker run -p 8000:8000 cycls/api:deploy-abc123
 Deploy the function to the Cycls cloud.
 
 ```python
-@cycls.function(pip=["numpy"], key="YOUR_API_KEY")
+import cycls
+cycls.api_key = "YOUR_API_KEY"
+
+@cycls.function(pip=["numpy"])
 def compute(data):
     ...
 
@@ -225,6 +256,13 @@ url = compute.deploy(data=[1, 2, 3])
 ---
 
 ## How It Works
+
+Cycls uses two different execution modes optimized for their use cases:
+
+| Mode | Method | Communication | Use Case |
+|------|--------|---------------|----------|
+| **Local Dev** | `.run()`, `.stream()` | gRPC | Fast iteration, streaming support |
+| **Deploy** | `.build()`, `.deploy()` | Pickle + Entrypoint | Standalone images, no runtime deps |
 
 ### 1. Function Serialization
 
@@ -261,55 +299,62 @@ cycls/my-function:a1b2c3d4e5f6g7h8
 
 Same dependencies = same hash = cached image. Change a dependency, the hash changes, and a new image builds.
 
-### 3. Multi-Stage Docker Build
+### 3. Local Development (gRPC)
 
-Cycls generates a Dockerfile with two stages:
-
-**Stage 1: Base** - All dependencies installed
-```dockerfile
-FROM python:3.11-slim as base
-RUN apt-get install -y ffmpeg
-RUN pip install numpy pandas
-COPY utils.py /app/
-```
-
-**Stage 2: Final** - Function payload baked in
-```dockerfile
-FROM base
-COPY payload.pkl /app/io/
-```
-
-### 4. Execution Flow
+For `.run()` and `.stream()`, Cycls uses gRPC for fast container communication:
 
 ```
 ┌─────────────────┐
-│  Your Function  │
-└────────┬────────┘
-         │ cloudpickle.dumps()
-         ▼
-┌─────────────────┐
-│   payload.pkl   │
-└────────┬────────┘
-         │ mounted into container
-         ▼
-┌─────────────────┐
-│    Container    │
+│  Your Machine   │
 │  ┌───────────┐  │
-│  │ runner.py │  │──▶ cloudpickle.loads(payload)
-│  └───────────┘  │──▶ result = func(*args, **kwargs)
-│                 │──▶ cloudpickle.dumps(result)
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   result.pkl    │
-└────────┬────────┘
-         │ cloudpickle.loads()
-         ▼
-┌─────────────────┐
-│  Python Result  │
-└─────────────────┘
+│  │  Client   │  │──────── gRPC ────────┐
+│  └───────────┘  │                      │
+└─────────────────┘                      ▼
+                              ┌─────────────────┐
+                              │    Container    │
+                              │  ┌───────────┐  │
+                              │  │gRPC Server│  │
+                              │  └───────────┘  │
+                              │       │         │
+                              │       ▼         │
+                              │  func(*args)    │
+                              │       │         │
+                              │       ▼         │
+                              │    result       │
+                              └────────┬────────┘
+                                       │
+                         ◀── gRPC ─────┘
 ```
+
+**Benefits:**
+- Container stays warm between calls
+- Streaming results supported
+- Fast iteration during development
+
+### 4. Deploy Mode (Pickle + Entrypoint)
+
+For `.build()` and `.deploy()`, Cycls bakes the function into a standalone image:
+
+```dockerfile
+FROM ghcr.io/cycls/base:python3.12
+COPY function.pkl /app/function.pkl
+COPY entrypoint.py /app/entrypoint.py
+CMD ["python", "entrypoint.py"]
+```
+
+The entrypoint loads and executes the pickled function:
+
+```python
+import cloudpickle
+with open("/app/function.pkl", "rb") as f:
+    func, args, kwargs = cloudpickle.load(f)
+func(*args, **kwargs)
+```
+
+**Benefits:**
+- No gRPC dependencies (smaller images)
+- Function + args baked in
+- Runs anywhere Docker runs
 
 ---
 
@@ -450,10 +495,10 @@ The container's port is automatically mapped to your host.
 |---------|-------------------|----------------|
 | Use case | General Python functions | Chat/streaming agents |
 | Input | Any arguments | `context.messages` |
-| Output | Return value | Yield streaming responses |
-| API | `.run()`, `.build()`, `.deploy()` | `.local()`, `.deploy()`, `.modal()` |
+| Output | Return value or generator | Yield streaming responses |
+| API | `.run()`, `.stream()`, `.watch()`, `.build()`, `.deploy()` | `.local()`, `.deploy()`, `.modal()` |
 | Web UI | No | Yes |
-| Streaming | No | Yes (SSE) |
+| Streaming | Yes (via `.stream()` + gRPC) | Yes (SSE) |
 
 Use `@cycls.function` for batch processing, data pipelines, or any non-interactive workload. Use `@cycls.agent` for conversational AI with streaming responses.
 
