@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'images/**'
+      - 'cycls/grpc/**'
     branches:
       - main
   workflow_dispatch:  # Allow manual trigger

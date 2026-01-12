@@ -21,3 +21,6 @@ RUN pip install --no-cache-dir uv \
     uvicorn[standard] \
     httpx \
     && mkdir -p io
+
+# gRPC server for remote dev: python -m grpc_runtime.server
+COPY cycls/grpc/ /app/grpc_runtime/
