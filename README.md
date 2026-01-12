@@ -22,9 +22,7 @@ Distribute Intelligence
 
 The open-source SDK for distributing AI agents.
 
-One decorator. Auth, analytics, dependencies, deployment — all in one place.
-
-Zero-config. Just Python.
+The function is the unit of abstraction in cycls. Your agent logic lives in a plain Python function — the decorator layers on everything else: containerization, authentication, deployment, analytics. You write the function, the `@` handles the infrastructure.
 
 ## Distribute Intelligence
 
