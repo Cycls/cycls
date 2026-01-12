@@ -22,6 +22,10 @@ Distribute Intelligence
 
 The open-source SDK for distributing AI agents.
 
+One decorator. Auth, analytics, dependencies, deployment — all in one place.
+
+Zero-config. Just Python.
+
 ## Distribute Intelligence
 
 Write a function. Deploy it as an API, a web interface, or both. Add authentication, analytics, and monetization with flags.
