@@ -85,9 +85,18 @@ def chat(url):
 
 
 def main():
-    len(sys.argv) < 2 and (print("Usage: cycls chat <url|port>"), sys.exit(1))
+    if len(sys.argv) < 2:
+        print("Usage: cycls chat <url|port>")
+        sys.exit(1)
     arg = sys.argv[1]
-    url = f"http://localhost:{arg}" if arg.isdigit() else arg
+    if arg.isdigit():
+        port = int(arg)
+        if not (1 <= port <= 65535):
+            print(f"Error: Invalid port {port}. Must be between 1 and 65535.")
+            sys.exit(1)
+        url = f"http://localhost:{port}"
+    else:
+        url = arg
     chat(url)
 
 

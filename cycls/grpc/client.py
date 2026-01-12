@@ -32,7 +32,7 @@ class RuntimeClient:
         for response in stub.Execute(request, timeout=self.timeout):
             result = cloudpickle.loads(response.data)
             if response.error:
-                raise RuntimeError(result)
+                raise RuntimeError(f"Function execution failed: {result}")
             yield result
 
     def call(self, func, *args, **kwargs):

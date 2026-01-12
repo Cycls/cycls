@@ -3,6 +3,7 @@ import docker
 import cloudpickle
 import tempfile
 import hashlib
+import json
 import os
 import sys
 import shutil
@@ -228,8 +229,10 @@ CMD ["python", "entrypoint.py"]
                 self._container.reload()
                 if self._container.status == 'running':
                     return self._client
-            except:
-                pass
+            except docker.errors.NotFound:
+                pass  # Container was removed externally
+            except docker.errors.APIError:
+                pass  # Docker API issue, will recreate
             self._cleanup_container()
 
         tag = self._ensure_grpc_image()
@@ -259,8 +262,10 @@ CMD ["python", "entrypoint.py"]
             try:
                 self._container.stop(timeout=3)
                 self._container.remove()
-            except:
-                pass
+            except docker.errors.NotFound:
+                pass  # Already removed
+            except docker.errors.APIError:
+                pass  # Best effort cleanup
             self._container = None
         self._host_port = None
 
@@ -320,8 +325,10 @@ CMD ["python", "entrypoint.py"]
         try:
             from watchfiles import watch as watchfiles_watch
         except ImportError:
-            print("watchfiles not installed. Run: pip install watchfiles")
-            return
+            print("watchfiles not installed (enables auto-reload on file changes).")
+            print("Install with: pip install watchfiles")
+            print("Running without file watching...")
+            return self.run(*args, **kwargs)
 
         import inspect
         import subprocess
@@ -441,7 +448,7 @@ CMD ["python", "entrypoint.py"]
                 print(f"Deploy failed: {e.response.status_code}")
                 try:
                     print(f"  {e.response.json()['detail']}")
-                except:
+                except (json.JSONDecodeError, KeyError):
                     print(f"  {e.response.text}")
                 return None
             except requests.exceptions.RequestException as e:

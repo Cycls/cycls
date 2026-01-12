@@ -96,10 +96,9 @@ class AgentRuntime:
     def deploy(self, port=8080):
         """Deploy to production."""
         if api_key is None:
-            print("Error: Please set cycls.api_key")
-            return
+            raise RuntimeError("Missing API key. Set cycls.api_key before calling deploy().")
         runtime = self._runtime(prod=True)
-        runtime.deploy(port=port)
+        return runtime.deploy(port=port)
 
     def modal(self, prod=False):
         import modal
@@ -144,8 +143,14 @@ class AgentRuntime:
                     while True: time.sleep(10)
 
 
-def agent(name=None, pip=[], apt=[], copy=[], copy_public=[], theme="default", modal_keys=["", ""], auth=False, org=None, domain=None, header="", intro="", title="", plan="free", analytics=False):
+def agent(name=None, pip=None, apt=None, copy=None, copy_public=None, theme="default", modal_keys=None, auth=False, org=None, domain=None, header="", intro="", title="", plan="free", analytics=False):
     """Decorator that transforms a function into a deployable agent."""
+    pip = pip or []
+    apt = apt or []
+    copy = copy or []
+    copy_public = copy_public or []
+    modal_keys = modal_keys or ["", ""]
+
     if plan == "cycls_pass":
         auth = True
         analytics = True
