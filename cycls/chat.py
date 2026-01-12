@@ -85,8 +85,10 @@ def chat(url):
 
 
 def main():
-    len(sys.argv) < 2 and (print("Usage: cycls chat <url>"), sys.exit(1))
-    chat(sys.argv[1])
+    len(sys.argv) < 2 and (print("Usage: cycls chat <url|port>"), sys.exit(1))
+    arg = sys.argv[1]
+    url = f"http://localhost:{arg}" if arg.isdigit() else arg
+    chat(url)
 
 
 if __name__ == "__main__":
