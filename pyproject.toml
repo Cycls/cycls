@@ -19,7 +19,7 @@ grpcio = "^1.76.0"
 protobuf = "^6.0"
 
 [tool.poetry.scripts]
-cycls = "cycls.cli:main"
+cycls = "cycls.chat:main"
 
 [tool.poetry.group.test.dependencies]
 pytest = "^8.0.0"

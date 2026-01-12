@@ -15,7 +15,7 @@ async def native_demo(context):
     yield {"type": "thinking", "thinking": " Analyzing the request and formulating a response."}
 
     # Plain text closes the thinking bubble automatically
-    yield "\n\nHere's some data:\n\n"
+    yield "Here's some data:"
 
     # Streaming table - rows appear one by one!
     yield {"type": "table", "headers": ["Feature", "Status", "Type"]}
@@ -28,12 +28,8 @@ async def native_demo(context):
     await asyncio.sleep(0.3)
     yield {"type": "table", "row": ["Callouts", "✓", "Complete"]}
 
-    yield "\n\n"
-
     await asyncio.sleep(0.6)
     yield {"type": "callout", "callout": "Native components work alongside HTML passthrough!", "style": "success", "title": "It works!"}
-
-    yield "\n\n"
 
     # HTML passthrough still works
     await asyncio.sleep(0.6)
@@ -41,6 +37,6 @@ async def native_demo(context):
     yield '<strong>HTML passthrough</strong> still works too!'
     yield '</div>'
 
-    yield "\n\nDone!"
+    yield "Done!"
 
 native_demo.local(port=8080)

@@ -4,7 +4,7 @@ import cycls
 async def openai_chat(context):
     from openai import AsyncOpenAI
     client = AsyncOpenAI()
-
+    
     stream = await client.responses.create(
         model="o3-mini",
         input=context.messages,
