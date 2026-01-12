@@ -1381,7 +1381,6 @@ files = [
     {file = "protobuf-6.31.1-py3-none-any.whl", hash = "sha256:720a6c7e6b77288b85063569baae8536671b39f15cc22037ec7045658d80489e"},
     {file = "protobuf-6.31.1.tar.gz", hash = "sha256:d8cac4c982f0b957a4dc73a80e2ea24fab08e679c0de9deb835f4a12d69aca9a"},
 ]
-markers = {main = "extra == \"modal\""}
 
 [[package]]
 name = "pydantic"
@@ -2367,4 +2366,4 @@ modal = ["modal"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.9"
-content-hash = "2dd21d8e8ec48c2d4a410bf5c49f160414e283ed9b44c1fac6f0e8b7d16c9f0c"
+content-hash = "17ee83ff8a9e271476dd57bb9c59c6ba2827c932f425ea7ca9ff98f938bddde8"
