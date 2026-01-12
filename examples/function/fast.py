@@ -14,4 +14,3 @@ def fast(port):
     uvicorn.run(app, host="0.0.0.0", port=port)
 
 fast.run(port=8000)
-# fast.build(port=8000)

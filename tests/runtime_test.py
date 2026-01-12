@@ -210,3 +210,61 @@ def test_run_commands():
     # 3. Assert that the file created during build contains the expected content.
     assert result == "hello from build"
     print("✅ Test passed.")
+
+
+# --- Test Case 7: Build Deployable Image ---
+# This test verifies that .build() creates a standalone Docker image
+# that can run without gRPC, using a baked-in pickled function.
+
+def test_build_deployable_image():
+    """
+    Tests that .build() creates a working standalone Docker image.
+    """
+    import subprocess
+    print("\n--- Running test: test_build_deployable_image ---")
+
+    TEST_PORT = 8998
+    CONTAINER_NAME = "test-build-deploy"
+
+    # 1. Define a FastAPI service function.
+    @cycls.function()
+    def build_test_service(port):
+        from fastapi import FastAPI
+        import uvicorn
+
+        app = FastAPI()
+
+        @app.get("/")
+        def root():
+            return {"status": "ok", "source": "built-image"}
+
+        uvicorn.run(app, host="0.0.0.0", port=port)
+
+    # 2. Build the deployable image (bakes in port arg).
+    image_tag = build_test_service.build(port=TEST_PORT)
+    assert image_tag is not None
+    assert ":deploy-" in image_tag
+    print(f"✅ Built image: {image_tag}")
+
+    try:
+        # 3. Run the built image directly with docker (no gRPC).
+        subprocess.run(
+            ["docker", "run", "-d", "--rm", "-p", f"{TEST_PORT}:{TEST_PORT}",
+             "--name", CONTAINER_NAME, image_tag],
+            check=True, capture_output=True
+        )
+        print(f"✅ Started container: {CONTAINER_NAME}")
+
+        # 4. Wait for service to start and make request.
+        time.sleep(3)
+        response = requests.get(f"http://localhost:{TEST_PORT}", timeout=10)
+
+        # 5. Assert response is correct.
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok", "source": "built-image"}
+        print("✅ Test passed.")
+
+    finally:
+        # 6. Cleanup: stop container.
+        subprocess.run(["docker", "stop", CONTAINER_NAME], capture_output=True)
+        print(f"✅ Cleaned up container: {CONTAINER_NAME}")
