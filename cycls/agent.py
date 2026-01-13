@@ -239,7 +239,7 @@ class AgentRuntime:
             title=self.name,
             plan="free",
             org=None,
-            public_path=theme,
+            public_path=str(theme),
             prod=False,
             pk=PK_TEST,
             jwks=JWKS_TEST,

@@ -24,6 +24,6 @@ dist/
 **/__pycache__/
 .*
 !.github
-examples/agent/humain.png
+examples/app/humain.png
 mj/
-examples/agent/cake.py
+examples/app/cake.py

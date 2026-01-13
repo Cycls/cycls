@@ -59,6 +59,10 @@ class AnthropicClient(ModelClient):
         tools: list[dict],
         system: str = None,
     ) -> AsyncIterator[dict]:
+        if not self.api_key:
+            yield {"type": "error", "error": "ANTHROPIC_API_KEY not set. Set the environment variable or pass api_key."}
+            return
+
         headers = {
             "x-api-key": self.api_key,
             "anthropic-version": "2023-06-01",
@@ -201,6 +205,10 @@ class OpenAIClient(ModelClient):
         tools: list[dict],
         system: str = None,
     ) -> AsyncIterator[dict]:
+        if not self.api_key:
+            yield {"type": "error", "error": "OPENAI_API_KEY not set. Set the environment variable or pass api_key."}
+            return
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
