@@ -592,7 +592,7 @@ version = "1.76.0"
 description = "HTTP/2-based RPC framework"
 optional = false
 python-versions = ">=3.9"
-groups = ["main", "dev"]
+groups = ["dev"]
 files = [
     {file = "grpcio-1.76.0-cp310-cp310-linux_armv7l.whl", hash = "sha256:65a20de41e85648e00305c1bb09a3598f840422e522277641145a32d42dcefcc"},
     {file = "grpcio-1.76.0-cp310-cp310-macosx_11_0_universal2.whl", hash = "sha256:40ad3afe81676fd9ec6d9d406eda00933f218038433980aa19d401490e46ecde"},
@@ -1381,6 +1381,7 @@ files = [
     {file = "protobuf-6.31.1-py3-none-any.whl", hash = "sha256:720a6c7e6b77288b85063569baae8536671b39f15cc22037ec7045658d80489e"},
     {file = "protobuf-6.31.1.tar.gz", hash = "sha256:d8cac4c982f0b957a4dc73a80e2ea24fab08e679c0de9deb835f4a12d69aca9a"},
 ]
+markers = {main = "extra == \"modal\""}
 
 [[package]]
 name = "pydantic"
@@ -2366,4 +2367,4 @@ modal = ["modal"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.9"
-content-hash = "17ee83ff8a9e271476dd57bb9c59c6ba2827c932f425ea7ca9ff98f938bddde8"
+content-hash = "4ba716a58ef04ebcb090e26120f502052a1fe6734a693aa30a7d4ab945e5a918"
