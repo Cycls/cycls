@@ -10,6 +10,14 @@ CYCLS_PATH = importlib.resources.files('cycls')
 api_key = None
 base_url = None
 
+def _get_api_key():
+    """Get API key from module variable or environment variable (lazy)."""
+    return api_key or os.getenv("CYCLS_API_KEY")
+
+def _get_base_url():
+    """Get base URL from module variable or environment variable (lazy)."""
+    return base_url or os.getenv("CYCLS_BASE_URL")
+
 themes = {
     "default": CYCLS_PATH.joinpath('default-theme'),
     "dev": CYCLS_PATH.joinpath('dev-theme'),
@@ -82,8 +90,8 @@ class AgentRuntime:
             apt_packages=self.apt,
             pip_packages=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", *self.pip],
             copy=files,
-            base_url=base_url,
-            api_key=api_key
+            base_url=_get_base_url(),
+            api_key=_get_api_key()
         )
 
     def local(self, port=8080, watch=True):
@@ -95,8 +103,9 @@ class AgentRuntime:
 
     def deploy(self, port=8080):
         """Deploy to production."""
-        if api_key is None:
-            raise RuntimeError("Missing API key. Set cycls.api_key before calling deploy().")
+        key = _get_api_key()
+        if key is None:
+            raise RuntimeError("Missing API key. Set cycls.api_key or CYCLS_API_KEY environment variable.")
         runtime = self._runtime(prod=True)
         return runtime.deploy(port=port)
 
@@ -182,5 +191,5 @@ def function(python_version=None, pip=None, apt=None, run_commands=None, copy=No
     def decorator(func):
         func_name = name or func.__name__
         copy_dict = {i: i for i in copy or []}
-        return Runtime(func, func_name.replace('_', '-'), python_version, pip, apt, run_commands, copy_dict, base_url, api_key)
+        return Runtime(func, func_name.replace('_', '-'), python_version, pip, apt, run_commands, copy_dict, _get_base_url(), _get_api_key())
     return decorator
