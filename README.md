@@ -24,6 +24,8 @@ The open-source SDK for distributing AI agents.
 
 The function is the unit of abstraction in cycls. Your agent logic lives in a plain Python function — the decorator layers on everything else: containerization, authentication, deployment, analytics. You write the function, the `@` handles the infrastructure.
 
+Cycls is beautifully lean (~862 lines!) and focused on deployment infrastructure for any Python function, not agent logic itself.
+
 ## Distribute Intelligence
 
 Write a function. Deploy it as an API, a web interface, or both. Add authentication, analytics, and monetization with flags.
