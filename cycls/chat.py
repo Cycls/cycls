@@ -85,10 +85,10 @@ def chat(url):
 
 
 def main():
-    if len(sys.argv) < 2:
+    if len(sys.argv) < 3:
         print("Usage: cycls chat <url|port>")
         sys.exit(1)
-    arg = sys.argv[1]
+    arg = sys.argv[2]
     if arg.isdigit():
         port = int(arg)
         if not (1 <= port <= 65535):
