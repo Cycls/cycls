@@ -301,74 +301,38 @@ CMD ["python", "entrypoint.py"]
             print(f"Error: {e}")
             return None
 
-    def stream(self, *args, **kwargs):
-        """Execute the function and yield streamed results."""
-        with self.runner(*args, **kwargs) as (container, result_path):
-            container.wait()
-            if result_path.exists():
-                with open(result_path, 'rb') as f:
-                    result = cloudpickle.load(f)
-                if hasattr(result, '__iter__') and not isinstance(result, (str, bytes)):
-                    yield from result
-                else:
-                    yield result
-
     def watch(self, *args, **kwargs):
-        """Run with file watching - restarts script on changes."""
+        """Run with file watching - restarts on changes."""
+        if os.environ.get('_CYCLS_WATCH'):
+            return self.run(*args, **kwargs)
+
         try:
             from watchfiles import watch as watchfiles_watch
         except ImportError:
-            print("watchfiles not installed (enables auto-reload on file changes).")
-            print("Install with: pip install watchfiles")
-            print("Running without file watching...")
+            print("watchfiles not installed. pip install watchfiles")
             return self.run(*args, **kwargs)
 
-        import inspect
         import subprocess
 
-        cycls_pkg = Path(__file__).parent.resolve()
-        main_script = None
-        for frame_info in inspect.stack():
-            filepath = Path(frame_info.filename).resolve()
-            if filepath.suffix == '.py' and not str(filepath).startswith(str(cycls_pkg)):
-                main_script = filepath
-                break
+        script = Path(sys.argv[0]).resolve()
+        watch_paths = [script] + [Path(p).resolve() for p in self.copy if Path(p).exists()]
 
-        if not main_script:
-            print("Could not find script to watch.")
-            return self.run(*args, **kwargs)
-
-        watch_paths = [main_script]
-        watch_paths.extend([Path(src).resolve() for src in self.copy.keys() if Path(src).exists()])
-
-        print(f"Watching:")
-        for p in watch_paths:
-            print(f"   {p}")
-        print()
+        print(f"Watching: {[p.name for p in watch_paths]}\n")
 
         while True:
-            print(f"Starting {main_script.name}...")
-            proc = subprocess.Popen(
-                [sys.executable, str(main_script)],
-                env={**os.environ, '_CYCLS_WATCH': '1'}
-            )
-
+            proc = subprocess.Popen([sys.executable, str(script)], env={**os.environ, '_CYCLS_WATCH': '1'})
             try:
                 for changes in watchfiles_watch(*watch_paths):
                     print(f"\nChanged: {[Path(c[1]).name for c in changes]}")
                     break
-
                 proc.terminate()
                 proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 proc.kill()
             except KeyboardInterrupt:
-                print("\nStopping...")
                 proc.terminate()
                 proc.wait(timeout=3)
                 return
-
-            print()
 
     def _prepare_deploy_context(self, workdir: Path, port: int, args=(), kwargs=None):
         """Prepare build context for deploy: pickle function+args + entrypoint."""
