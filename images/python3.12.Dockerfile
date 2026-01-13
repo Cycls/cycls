@@ -11,10 +11,8 @@ WORKDIR /app
 # Install uv for fast package installs, then install common web dependencies
 RUN pip install --no-cache-dir uv \
     && uv pip install --system --no-cache \
-    cloudpickle \
-    grpcio \
-    protobuf \
-    cryptography \
+    cloudpickle \it
+    cryptography \a
     fastapi[standard] \
     pydantic \
     pyjwt \
