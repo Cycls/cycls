@@ -1,20 +1,21 @@
 import sys
 from types import ModuleType
-from .sdk import function, app
+from .app import app
+from .function import function
 from .agent import agent
 from .runtime import Runtime
 
 class _Module(ModuleType):
     def __getattr__(self, name):
-        from . import sdk
+        from . import app as app_module
         if name in ("api_key", "base_url"):
-            return getattr(sdk, name)
+            return getattr(app_module, name)
         raise AttributeError(f"module 'cycls' has no attribute '{name}'")
 
     def __setattr__(self, name, value):
-        from . import sdk
+        from . import app as app_module
         if name in ("api_key", "base_url"):
-            setattr(sdk, name, value)
+            setattr(app_module, name, value)
             return
         super().__setattr__(name, value)
 

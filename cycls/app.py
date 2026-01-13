@@ -1,8 +1,13 @@
-import os, time, uvicorn
+"""App module - streaming chat applications."""
+
+import os
+import time
+import uvicorn
+import importlib.resources
+
 from .runtime import Runtime
 from .web import web, Config
 from .auth import PK_LIVE, PK_TEST, JWKS_PROD, JWKS_TEST
-import importlib.resources
 
 CYCLS_PATH = importlib.resources.files('cycls')
 
@@ -35,6 +40,7 @@ def _set_prod(config: Config, prod: bool):
     config.prod = prod
     config.pk = PK_LIVE if prod else PK_TEST
     config.jwks = JWKS_PROD if prod else JWKS_TEST
+
 
 class AppRuntime:
     """Wraps an app function with local/deploy/modal capabilities."""
@@ -76,7 +82,6 @@ class AppRuntime:
         _set_prod(self.config, prod)
         config_dict = self.config.model_dump()
 
-        # Extract to local variables to avoid capturing self in lambda (cloudpickle issue)
         func = self.func
         name = self.name
 
@@ -113,7 +118,6 @@ class AppRuntime:
         import modal
         from modal.runner import run_app
 
-        # Extract to local variables to avoid capturing self in lambda
         func = self.func
         name = self.name
         domain = self.domain
@@ -184,12 +188,4 @@ def app(name=None, pip=None, apt=None, copy=None, copy_public=None, theme="defau
             plan=plan,
             analytics=analytics,
         )
-    return decorator
-
-def function(python_version=None, pip=None, apt=None, run_commands=None, copy=None, name=None):
-    """Decorator that transforms a Python function into a containerized, remotely executable object."""
-    def decorator(func):
-        func_name = name or func.__name__
-        copy_dict = {i: i for i in copy or []}
-        return Runtime(func, func_name.replace('_', '-'), python_version, pip, apt, run_commands, copy_dict, _get_base_url(), _get_api_key())
     return decorator

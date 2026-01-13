@@ -1,6 +1,6 @@
 import pytest
 import cycls
-from cycls.sdk import AppRuntime, _resolve_theme
+from cycls.app import AppRuntime, _resolve_theme
 import asyncio
 
 # To run these tests:

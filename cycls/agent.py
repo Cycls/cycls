@@ -226,7 +226,7 @@ class AgentRuntime:
 
     def local(self, port=8080):
         """Run locally for development."""
-        from .sdk import _resolve_theme, _set_prod, CYCLS_PATH
+        from .app import _resolve_theme, CYCLS_PATH
         from .web import web, Config
         from .auth import PK_TEST, JWKS_TEST
 
