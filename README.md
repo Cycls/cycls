@@ -22,21 +22,75 @@ Distribute Intelligence
 
 The open-source SDK for distributing AI agents.
 
-The function is the unit of abstraction in cycls. Your agent logic lives in a plain Python function — the decorator layers on everything else: containerization, authentication, deployment, analytics. You write the function, the `@` handles the infrastructure.
+The function is the unit of abstraction in cycls. Your logic lives in a plain Python function — the decorator layers on everything else: containerization, authentication, deployment, analytics. You write the function, the `@` handles the infrastructure.
 
-Cycls is beautifully lean (~862 lines!) and focused on deployment infrastructure for any Python function, not agent logic itself.
+## Three Primitives
 
-## Distribute Intelligence
+| Decorator | Purpose |
+|-----------|---------|
+| `@cycls.function()` | Containerized Python functions |
+| `@cycls.app()` | Streaming chat applications |
+| `@cycls.agent()` | **Agentic AI with tools and skills** |
 
-Write a function. Deploy it as an API, a web interface, or both. Add authentication, analytics, and monetization with flags.
+## @cycls.agent() - Agentic AI
+
+Build Claude Code-style agents with built-in tools and skills:
+
+```python
+import cycls
+
+@cycls.agent(model="anthropic/claude-sonnet-4")
+def coder():
+    pass
+
+coder.local()  # Full agent at localhost:8080
+```
+
+Out of the box you get:
+- **Built-in tools**: read, write, edit, bash, glob, grep
+- **Skills support**: Add capabilities via markdown files
+- **Multi-provider**: `anthropic/`, `openai/` model prefixes
+- **Streaming UI**: Tool calls and results rendered live
+
+### Skills
+
+Add Claude Code-style skills in `.cycls/skills/`:
+
+```
+.cycls/skills/
+  code-review/
+    SKILL.md
+```
+
+```yaml
+# .cycls/skills/code-review/SKILL.md
+---
+name: code-review
+description: Review code for bugs and best practices. Use when asked to review code.
+allowed-tools: read, grep, glob
+---
+
+# Code Review
+
+When reviewing code:
+1. Read the file(s) to understand context
+2. Check for bugs, security issues, performance problems
+3. Provide specific feedback with line numbers
+```
+
+Skills are auto-discovered and available to the agent.
+
+## @cycls.app() - Streaming Apps
+
+Build streaming chat applications with full control over the response:
 
 ```python
 import cycls
 
 cycls.api_key = "YOUR_CYCLS_API_KEY"
 
-@cycls.agent(pip=["openai"])
-async def agent(context):
+@cycls.app(pip=["openai"])
+async def chat(context):
     from openai import AsyncOpenAI
     client = AsyncOpenAI()
 
@@ -49,11 +103,11 @@ async def agent(context):
 
     async for event in stream:
         if event.type == "response.reasoning_summary_text.delta":
-            yield {"type": "thinking", "thinking": event.delta}  # Renders as thinking bubble
+            yield {"type": "thinking", "thinking": event.delta}
         elif event.type == "response.output_text.delta":
             yield event.delta
 
-agent.deploy()  # Live at https://agent.cycls.ai
+chat.deploy()  # Live at https://chat.cycls.ai
 ```
 
 ## Installation
@@ -76,9 +130,9 @@ Requires Docker.
 ## Running
 
 ```python
-agent.local()             # Development with hot-reload (localhost:8080)
-agent.local(watch=False)  # Development without hot-reload
-agent.deploy()            # Production: https://agent.cycls.ai
+my_app.local()             # Development with hot-reload (localhost:8080)
+my_app.local(watch=False)  # Development without hot-reload
+my_app.deploy()            # Production: https://my-app.cycls.ai
 ```
 
 Get an API key at [cycls.com](https://cycls.com).
@@ -86,25 +140,24 @@ Get an API key at [cycls.com](https://cycls.com).
 ## Authentication & Analytics
 
 ```python
-@cycls.agent(pip=["openai"], auth=True, analytics=True)
-async def agent(context):
-    # context.user available when auth=True
+@cycls.app(pip=["openai"], auth=True, analytics=True)
+async def chat(context):
     user = context.user  # User(id, email, name, plans)
     yield f"Hello {user.name}!"
 ```
 
 | Flag | Description |
 |------|-------------|
-| `auth=True` | Universal user pool via Cycls Pass (Clerk-based). You can also use your own Clerk auth. |
-| `analytics=True` | Rich usage metrics available on the Cycls dashboard. |
-| `plan="cycls_pass"` | Monetization via Cycls Pass subscriptions. Enables both auth and analytics. |
+| `auth=True` | Universal user pool via Cycls Pass (Clerk-based). |
+| `analytics=True` | Rich usage metrics on the Cycls dashboard. |
+| `plan="cycls_pass"` | Monetization via Cycls Pass subscriptions. |
 
 ## Native UI Components
 
 Yield structured objects for rich streaming responses:
 
 ```python
-@cycls.agent()
+@cycls.app()
 async def demo(context):
     yield {"type": "thinking", "thinking": "Analyzing the request..."}
     yield "Here's what I found:\n\n"
@@ -127,71 +180,22 @@ async def demo(context):
 | `{"type": "callout", "callout": "...", "style": "..."}` | Yes |
 | `{"type": "image", "src": "..."}` | Yes |
 
-### Thinking Bubbles
-
-The `{"type": "thinking", "thinking": "..."}` component renders as a collapsible thinking bubble in the UI. Each yield appends to the same bubble until a different component type is yielded:
-
-```python
-# Multiple yields build one thinking bubble
-yield {"type": "thinking", "thinking": "Let me "}
-yield {"type": "thinking", "thinking": "analyze this..."}
-yield {"type": "thinking", "thinking": " Done thinking."}
-
-# Then output the response
-yield "Here's what I found..."
-```
-
-This works seamlessly with OpenAI's reasoning models - just map reasoning summaries to the thinking component.
-
-## Context Object
-
-```python
-@cycls.agent()
-async def chat(context):
-    context.messages      # [{"role": "user", "content": "..."}]
-    context.messages.raw  # Full data including UI component parts
-    context.user          # User(id, email, name, plans) when auth=True
-```
-
-## API Endpoints
-
-| Endpoint | Format |
-|----------|--------|
-| `POST chat/cycls` | Cycls streaming protocol |
-| `POST chat/completions` | OpenAI-compatible |
-
-## Streaming Protocol
-
-Cycls streams structured components over SSE:
-
-```
-data: {"type": "thinking", "thinking": "Let me "}
-data: {"type": "thinking", "thinking": "analyze..."}
-data: {"type": "text", "text": "Here's the answer"}
-data: {"type": "callout", "callout": "Done!", "style": "success"}
-data: [DONE]
-```
-
-See [docs/streaming-protocol.md](docs/streaming-protocol.md) for frontend integration.
-
 ## Declarative Infrastructure
 
 Define your entire runtime in the decorator:
 
 ```python
-@cycls.agent(
+@cycls.app(
     pip=["openai", "pandas", "numpy"],
     apt=["ffmpeg", "libmagic1"],
-    copy=["./utils.py", "./models/", "/absolute/path/to/config.json"],
-    copy_public=["./assets/logo.png", "./static/"],
+    copy=["./utils.py", "./models/"],
+    copy_public=["./assets/logo.png"],
 )
-async def my_agent(context):
+async def my_app(context):
     ...
 ```
 
 ### `pip` - Python Packages
-
-Install any packages from PyPI. These are installed during the container build.
 
 ```python
 pip=["openai", "pandas", "numpy", "transformers"]
@@ -199,51 +203,25 @@ pip=["openai", "pandas", "numpy", "transformers"]
 
 ### `apt` - System Packages
 
-Install system-level dependencies via apt-get. Need ffmpeg for audio processing? ImageMagick for images? Just declare it.
-
 ```python
 apt=["ffmpeg", "imagemagick", "libpq-dev"]
 ```
 
-### `copy` - Bundle Files and Directories
-
-Include local files and directories in your container. Works with both relative and absolute paths. Copies files and entire directory trees.
+### `copy` - Bundle Files
 
 ```python
-copy=[
-    "./utils.py",                    # Single file, relative path
-    "./models/",                     # Entire directory
-    "/home/user/configs/app.json",   # Absolute path
-]
-```
-
-Then import them in your function:
-
-```python
-@cycls.agent(copy=["./utils.py"])
-async def chat(context):
-    from utils import helper_function  # Your bundled module
-    ...
+copy=["./utils.py", "./models/", "/absolute/path/to/config.json"]
 ```
 
 ### `copy_public` - Static Files
-
-Files and directories served at the `/public` endpoint. Perfect for images, downloads, or any static assets your agent needs to reference.
 
 ```python
 copy_public=["./assets/logo.png", "./downloads/"]
 ```
 
-Access them at `https://your-agent.cycls.ai/public/logo.png`.
+Access at `https://your-app.cycls.ai/public/logo.png`.
 
 ---
-
-### What You Get
-
-- **One file** - Code, dependencies, configuration, and infrastructure together
-- **Instant deploys** - Unchanged code deploys in seconds from cache
-- **No drift** - What you see is what runs. Always.
-- **Just works** - Closures, lambdas, dynamic imports - your function runs exactly as written
 
 No YAML. No Dockerfiles. No infrastructure repo. The code is the deployment.
 

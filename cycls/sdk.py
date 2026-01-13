@@ -36,8 +36,8 @@ def _set_prod(config: Config, prod: bool):
     config.pk = PK_LIVE if prod else PK_TEST
     config.jwks = JWKS_PROD if prod else JWKS_TEST
 
-class AgentRuntime:
-    """Wraps an agent function with local/deploy/modal capabilities."""
+class AppRuntime:
+    """Wraps an app function with local/deploy/modal capabilities."""
 
     def __init__(self, func, name, theme, pip, apt, copy, copy_public, modal_keys, auth, org, domain, header, intro, title, plan, analytics):
         self.func = func
@@ -152,8 +152,8 @@ class AgentRuntime:
                     while True: time.sleep(10)
 
 
-def agent(name=None, pip=None, apt=None, copy=None, copy_public=None, theme="default", modal_keys=None, auth=False, org=None, domain=None, header="", intro="", title="", plan="free", analytics=False):
-    """Decorator that transforms a function into a deployable agent."""
+def app(name=None, pip=None, apt=None, copy=None, copy_public=None, theme="default", modal_keys=None, auth=False, org=None, domain=None, header="", intro="", title="", plan="free", analytics=False):
+    """Decorator that transforms a function into a deployable app."""
     pip = pip or []
     apt = apt or []
     copy = copy or []
@@ -165,10 +165,10 @@ def agent(name=None, pip=None, apt=None, copy=None, copy_public=None, theme="def
         analytics = True
 
     def decorator(func):
-        agent_name = name or func.__name__.replace('_', '-')
-        return AgentRuntime(
+        app_name = name or func.__name__.replace('_', '-')
+        return AppRuntime(
             func=func,
-            name=agent_name,
+            name=app_name,
             theme=theme,
             pip=pip,
             apt=apt,

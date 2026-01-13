@@ -1,40 +1,40 @@
 import pytest
 import cycls
-from cycls.sdk import AgentRuntime, _resolve_theme
+from cycls.sdk import AppRuntime, _resolve_theme
 import asyncio
 
 # To run these tests:
-# poetry run pytest tests/agent_test.py -v -s
+# poetry run pytest tests/app_test.py -v -s
 
 
 # --- Test Case 1: Basic Decorator ---
-# Verifies that @cycls.agent returns an AgentRuntime instance
+# Verifies that @cycls.app returns an AppRuntime instance
 
-def test_agent_decorator_returns_runtime():
-    """Tests that @cycls.agent decorator returns an AgentRuntime."""
-    print("\n--- Running test: test_agent_decorator_returns_runtime ---")
+def test_app_decorator_returns_runtime():
+    """Tests that @cycls.app decorator returns an AppRuntime."""
+    print("\n--- Running test: test_app_decorator_returns_runtime ---")
 
-    @cycls.agent()
-    async def my_agent(context):
+    @cycls.app()
+    async def my_app(context):
         yield "hello"
 
-    assert isinstance(my_agent, AgentRuntime)
-    assert my_agent.name == "my-agent"  # underscores converted to dashes
+    assert isinstance(my_app, AppRuntime)
+    assert my_app.name == "my-app"  # underscores converted to dashes
     print("✅ Test passed.")
 
 
 # --- Test Case 2: Custom Name ---
 # Verifies that custom name parameter works
 
-def test_agent_custom_name():
+def test_app_custom_name():
     """Tests that custom name parameter is respected."""
-    print("\n--- Running test: test_agent_custom_name ---")
+    print("\n--- Running test: test_app_custom_name ---")
 
-    @cycls.agent(name="custom-name")
-    async def my_agent(context):
+    @cycls.app(name="custom-name")
+    async def my_app(context):
         yield "hello"
 
-    assert my_agent.name == "custom-name"
+    assert my_app.name == "custom-name"
     print("✅ Test passed.")
 
 
@@ -45,33 +45,33 @@ def test_plan_cycls_pass_enables_auth_analytics():
     """Tests that plan='cycls_pass' sets auth=True and analytics=True."""
     print("\n--- Running test: test_plan_cycls_pass_enables_auth_analytics ---")
 
-    @cycls.agent(plan="cycls_pass")
-    async def premium_agent(context):
+    @cycls.app(plan="cycls_pass")
+    async def premium_app(context):
         yield "premium"
 
-    assert premium_agent.config.auth == True
-    assert premium_agent.config.analytics == True
-    assert premium_agent.config.plan == "cycls_pass"
+    assert premium_app.config.auth == True
+    assert premium_app.config.analytics == True
+    assert premium_app.config.plan == "cycls_pass"
     print("✅ Test passed.")
 
 
 # --- Test Case 4: Default Config Values ---
 # Verifies default configuration values
 
-def test_agent_default_config():
+def test_app_default_config():
     """Tests default configuration values."""
-    print("\n--- Running test: test_agent_default_config ---")
+    print("\n--- Running test: test_app_default_config ---")
 
-    @cycls.agent()
-    async def default_agent(context):
+    @cycls.app()
+    async def default_app(context):
         yield "default"
 
-    assert default_agent.config.auth == False
-    assert default_agent.config.analytics == False
-    assert default_agent.config.plan == "free"
-    assert default_agent.config.header == ""
-    assert default_agent.config.intro == ""
-    assert default_agent.config.title == ""
+    assert default_app.config.auth == False
+    assert default_app.config.analytics == False
+    assert default_app.config.plan == "free"
+    assert default_app.config.header == ""
+    assert default_app.config.intro == ""
+    assert default_app.config.title == ""
     print("✅ Test passed.")
 
 
@@ -109,18 +109,18 @@ def test_module_level_base_url():
     print("✅ Test passed.")
 
 
-# --- Test Case 7: AgentRuntime is Callable ---
+# --- Test Case 7: appRuntime is Callable ---
 # Verifies that the decorated function can still be called
 
-def test_agent_runtime_is_callable():
-    """Tests that AgentRuntime delegates calls to the wrapped function."""
-    print("\n--- Running test: test_agent_runtime_is_callable ---")
+def test_app_runtime_is_callable():
+    """Tests that appRuntime delegates calls to the wrapped function."""
+    print("\n--- Running test: test_app_runtime_is_callable ---")
 
-    @cycls.agent()
-    def simple_agent(context):
+    @cycls.app()
+    def simple_app(context):
         yield f"received: {context}"
 
-    result = list(simple_agent("test-context"))
+    result = list(simple_app("test-context"))
     assert result == ["received: test-context"]
     print("✅ Test passed.")
 
@@ -128,18 +128,18 @@ def test_agent_runtime_is_callable():
 # --- Test Case 8: Async Function Support ---
 # Verifies that async functions work correctly
 
-def test_agent_async_function():
-    """Tests that async functions work with @cycls.agent."""
-    print("\n--- Running test: test_agent_async_function ---")
+def test_app_async_function():
+    """Tests that async functions work with @cycls.app."""
+    print("\n--- Running test: test_app_async_function ---")
 
-    @cycls.agent()
-    async def async_agent(context):
+    @cycls.app()
+    async def async_app(context):
         yield "async "
         yield "response"
 
     async def run_test():
         results = []
-        async for item in async_agent("ctx"):
+        async for item in async_app("ctx"):
             results.append(item)
         return results
 
@@ -151,16 +151,16 @@ def test_agent_async_function():
 # --- Test Case 9: Sync Function Support ---
 # Verifies that sync generator functions work
 
-def test_agent_sync_function():
-    """Tests that sync generator functions work with @cycls.agent."""
-    print("\n--- Running test: test_agent_sync_function ---")
+def test_app_sync_function():
+    """Tests that sync generator functions work with @cycls.app."""
+    print("\n--- Running test: test_app_sync_function ---")
 
-    @cycls.agent()
-    def sync_agent(context):
+    @cycls.app()
+    def sync_app(context):
         yield "sync "
         yield "response"
 
-    results = list(sync_agent("ctx"))
+    results = list(sync_app("ctx"))
     assert results == ["sync ", "response"]
     print("✅ Test passed.")
 
@@ -168,29 +168,29 @@ def test_agent_sync_function():
 # --- Test Case 10: Theme Resolution ---
 # Verifies that theme parameter works
 
-def test_agent_theme_resolution():
+def test_app_theme_resolution():
     """Tests that theme parameter is resolved correctly."""
-    print("\n--- Running test: test_agent_theme_resolution ---")
+    print("\n--- Running test: test_app_theme_resolution ---")
 
-    @cycls.agent(theme="dev")
-    async def dev_agent(context):
+    @cycls.app(theme="dev")
+    async def dev_app(context):
         yield "dev"
 
     # Theme should be resolved to a path
-    assert "dev-theme" in str(dev_agent.theme)
+    assert "dev-theme" in str(dev_app.theme)
     print("✅ Test passed.")
 
 
 # --- Test Case 11: Invalid Theme Raises Error ---
 # Verifies that invalid theme raises ValueError
 
-def test_agent_invalid_theme_raises():
+def test_app_invalid_theme_raises():
     """Tests that invalid theme raises ValueError."""
-    print("\n--- Running test: test_agent_invalid_theme_raises ---")
+    print("\n--- Running test: test_app_invalid_theme_raises ---")
 
     with pytest.raises(ValueError, match="Unknown theme"):
-        @cycls.agent(theme="nonexistent")
-        async def bad_agent(context):
+        @cycls.app(theme="nonexistent")
+        async def bad_app(context):
             yield "bad"
 
     print("✅ Test passed.")
@@ -199,42 +199,42 @@ def test_agent_invalid_theme_raises():
 # --- Test Case 12: Pip Packages Stored ---
 # Verifies that pip packages are stored in runtime
 
-def test_agent_pip_packages():
+def test_app_pip_packages():
     """Tests that pip packages are stored correctly."""
-    print("\n--- Running test: test_agent_pip_packages ---")
+    print("\n--- Running test: test_app_pip_packages ---")
 
-    @cycls.agent(pip=["numpy", "pandas"])
-    async def data_agent(context):
+    @cycls.app(pip=["numpy", "pandas"])
+    async def data_app(context):
         yield "data"
 
-    assert data_agent.pip == ["numpy", "pandas"]
+    assert data_app.pip == ["numpy", "pandas"]
     print("✅ Test passed.")
 
 
 # --- Test Case 13: Copy and Copy Public ---
 # Verifies that copy parameters are stored
 
-def test_agent_copy_params():
+def test_app_copy_params():
     """Tests that copy and copy_public are stored correctly."""
-    print("\n--- Running test: test_agent_copy_params ---")
+    print("\n--- Running test: test_app_copy_params ---")
 
-    @cycls.agent(copy=["utils.py"], copy_public=["logo.png"])
-    async def file_agent(context):
+    @cycls.app(copy=["utils.py"], copy_public=["logo.png"])
+    async def file_app(context):
         yield "files"
 
-    assert file_agent.copy == ["utils.py"]
-    assert file_agent.copy_public == ["logo.png"]
+    assert file_app.copy == ["utils.py"]
+    assert file_app.copy_public == ["logo.png"]
     print("✅ Test passed.")
 
 
 # --- Test Case 14: Domain Default ---
 # Verifies that domain defaults to {name}.cycls.ai
 
-def test_agent_domain_default():
+def test_app_domain_default():
     """Tests that domain defaults to {name}.cycls.ai."""
-    print("\n--- Running test: test_agent_domain_default ---")
+    print("\n--- Running test: test_app_domain_default ---")
 
-    @cycls.agent()
+    @cycls.app()
     async def my_service(context):
         yield "service"
 
@@ -245,40 +245,40 @@ def test_agent_domain_default():
 # --- Test Case 15: Custom Domain ---
 # Verifies that custom domain parameter works
 
-def test_agent_custom_domain():
+def test_app_custom_domain():
     """Tests that custom domain parameter is respected."""
-    print("\n--- Running test: test_agent_custom_domain ---")
+    print("\n--- Running test: test_app_custom_domain ---")
 
-    @cycls.agent(domain="custom.example.com")
-    async def custom_agent(context):
+    @cycls.app(domain="custom.example.com")
+    async def custom_app(context):
         yield "custom"
 
-    assert custom_agent.domain == "custom.example.com"
+    assert custom_app.domain == "custom.example.com"
     print("✅ Test passed.")
 
 
 # --- Test Case 16: All Config Options ---
 # Verifies that all config options are passed through
 
-def test_agent_all_config_options():
+def test_app_all_config_options():
     """Tests that all config options are passed through correctly."""
-    print("\n--- Running test: test_agent_all_config_options ---")
+    print("\n--- Running test: test_app_all_config_options ---")
 
-    @cycls.agent(
+    @cycls.app(
         header="Welcome",
         intro="How can I help?",
-        title="My Agent",
+        title="My app",
         auth=True,
         analytics=True,
         org="my-org"
     )
-    async def full_agent(context):
+    async def full_app(context):
         yield "full"
 
-    assert full_agent.config.header == "Welcome"
-    assert full_agent.config.intro == "How can I help?"
-    assert full_agent.config.title == "My Agent"
-    assert full_agent.config.auth == True
-    assert full_agent.config.analytics == True
-    assert full_agent.config.org == "my-org"
+    assert full_app.config.header == "Welcome"
+    assert full_app.config.intro == "How can I help?"
+    assert full_app.config.title == "My app"
+    assert full_app.config.auth == True
+    assert full_app.config.analytics == True
+    assert full_app.config.org == "my-org"
     print("✅ Test passed.")

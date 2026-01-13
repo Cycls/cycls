@@ -1,6 +1,6 @@
 import cycls
 
-@cycls.agent(pip=["openai"], theme="dev")
+@cycls.app(pip=["openai"], theme="dev")
 async def openai_chat(context):
     from openai import AsyncOpenAI
     client = AsyncOpenAI()

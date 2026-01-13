@@ -1,6 +1,7 @@
 import sys
 from types import ModuleType
-from .sdk import function, agent
+from .sdk import function, app
+from .agent import agent
 from .runtime import Runtime
 
 class _Module(ModuleType):
