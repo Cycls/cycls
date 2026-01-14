@@ -101,7 +101,7 @@ class Function:
         else:
             self.pip = sorted(user_packages | {"cloudpickle"})
 
-        self.image_prefix = f"cycls/{name}"
+        self.image_prefix = f"cycls/{self.name}"
         self.managed_label = "cycls.function"
         self._docker_client = None
         self._container = None
@@ -405,8 +405,8 @@ CMD ["python", "entrypoint.py"]
         self._cleanup_container()
 
 
-def function(python_version=None, pip=None, apt=None, run_commands=None, copy=None, name=None):
+def function(name=None, **kwargs):
     """Decorator that transforms a Python function into a containerized Function."""
     def decorator(func):
-        return Function(func, name or func.__name__, python_version, pip, apt, run_commands, copy, _get_base_url(), _get_api_key())
+        return Function(func, name or func.__name__, **kwargs, base_url=_get_base_url(), api_key=_get_api_key())
     return decorator
