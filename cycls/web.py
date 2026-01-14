@@ -90,6 +90,12 @@ def web(func, config):
         messages: Any
         user: Optional[User] = None
 
+        @property
+        def last_message(self) -> str:
+            if self.messages:
+                return self.messages[-1].get("content", "")
+            return ""
+
     app = FastAPI()
     bearer_scheme = HTTPBearer()
 
@@ -134,6 +140,8 @@ def web(func, config):
 
 def serve(func, config, name, port):
     import uvicorn, logging
+    from dotenv import load_dotenv
+    load_dotenv()
     if isinstance(config, dict):
         config = Config(**config)
     logging.getLogger("uvicorn.error").addFilter(lambda r: "0.0.0.0" not in r.getMessage())
