@@ -425,7 +425,7 @@ runtime = Runtime(
     func=my_func,
     name="my-agent",
     base_image="my-registry/my-base:tag",
-    pip_packages=["package"]  # All packages installed, no filtering
+    pip=["package"]  # All packages installed, no filtering
 )
 ```
 

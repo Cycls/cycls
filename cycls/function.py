@@ -83,23 +83,23 @@ def _copy_path(src_path: Path, dest_path: Path):
 class Function:
     """Executes functions in Docker containers."""
 
-    def __init__(self, func, name, python_version=None, pip_packages=None, apt_packages=None,
+    def __init__(self, func, name, python_version=None, pip=None, apt=None,
                  run_commands=None, copy=None, base_url=None, api_key=None, base_image=None):
         self.func = func
         self.name = name
         self.python_version = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
-        self.apt_packages = sorted(apt_packages or [])
+        self.apt = sorted(apt or [])
         self.run_commands = sorted(run_commands or [])
         self.copy = copy or {}
         self.base_image = base_image or BASE_IMAGE
         self.base_url = base_url or "https://service-core-280879789566.me-central1.run.app"
         self.api_key = api_key
 
-        user_packages = set(pip_packages or [])
+        user_packages = set(pip or [])
         if self.base_image == BASE_IMAGE:
-            self.pip_packages = sorted(user_packages - BASE_PACKAGES)
+            self.pip = sorted(user_packages - BASE_PACKAGES)
         else:
-            self.pip_packages = sorted(user_packages | {"cloudpickle"})
+            self.pip = sorted(user_packages | {"cloudpickle"})
 
         self.image_prefix = f"cycls/{name}"
         self.managed_label = "cycls.function"
@@ -140,8 +140,8 @@ class Function:
             print(f"Warning: cleanup error: {e}")
 
     def _image_tag(self, extra_parts=None) -> str:
-        parts = [self.base_image, self.python_version, "".join(self.pip_packages),
-                 "".join(self.apt_packages), "".join(self.run_commands)]
+        parts = [self.base_image, self.python_version, "".join(self.pip),
+                 "".join(self.apt), "".join(self.run_commands)]
         for src, dst in sorted(self.copy.items()):
             if not Path(src).exists():
                 raise FileNotFoundError(f"Path in 'copy' not found: {src}")
@@ -157,11 +157,11 @@ class Function:
             lines.append("ENV PIP_ROOT_USER_ACTION=ignore PYTHONUNBUFFERED=1")
             lines.append("WORKDIR /app")
 
-        if self.apt_packages:
-            lines.append(f"RUN apt-get update && apt-get install -y --no-install-recommends {' '.join(self.apt_packages)}")
+        if self.apt:
+            lines.append(f"RUN apt-get update && apt-get install -y --no-install-recommends {' '.join(self.apt)}")
 
-        if self.pip_packages:
-            lines.append(f"RUN uv pip install --system --no-cache {' '.join(self.pip_packages)}")
+        if self.pip:
+            lines.append(f"RUN uv pip install --system --no-cache {' '.join(self.pip)}")
 
         for cmd in self.run_commands:
             lines.append(f"RUN {cmd}")
