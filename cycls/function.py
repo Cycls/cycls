@@ -86,11 +86,11 @@ class Function:
     def __init__(self, func, name, python_version=None, pip=None, apt=None,
                  run_commands=None, copy=None, base_url=None, api_key=None, base_image=None):
         self.func = func
-        self.name = name
+        self.name = name.replace('_', '-')
         self.python_version = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
         self.apt = sorted(apt or [])
         self.run_commands = sorted(run_commands or [])
-        self.copy = copy or {}
+        self.copy = {f: f for f in copy} if isinstance(copy, list) else (copy or {})
         self.base_image = base_image or BASE_IMAGE
         self.base_url = base_url or "https://service-core-280879789566.me-central1.run.app"
         self.api_key = api_key
@@ -408,7 +408,5 @@ CMD ["python", "entrypoint.py"]
 def function(python_version=None, pip=None, apt=None, run_commands=None, copy=None, name=None):
     """Decorator that transforms a Python function into a containerized Function."""
     def decorator(func):
-        func_name = name or func.__name__
-        copy_dict = {i: i for i in copy or []}
-        return Function(func, func_name.replace('_', '-'), python_version, pip, apt, run_commands, copy_dict, _get_base_url(), _get_api_key())
+        return Function(func, name or func.__name__, python_version, pip, apt, run_commands, copy, _get_base_url(), _get_api_key())
     return decorator
