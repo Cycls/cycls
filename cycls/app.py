@@ -8,17 +8,7 @@ from .auth import PK_LIVE, PK_TEST, JWKS_PROD, JWKS_TEST
 
 CYCLS_PATH = importlib.resources.files('cycls')
 
-THEMES = {
-    "default": CYCLS_PATH.joinpath('default-theme'),
-    "dev": CYCLS_PATH.joinpath('dev-theme'),
-}
-
-def _resolve_theme(theme):
-    if isinstance(theme, str):
-        if theme in THEMES:
-            return THEMES[theme]
-        raise ValueError(f"Unknown theme: {theme}. Available: {list(THEMES.keys())}")
-    return theme
+THEMES = {"default", "dev"}
 
 def _set_prod(config: Config, prod: bool):
     config.prod = prod
@@ -31,8 +21,10 @@ class App(Function):
 
     def __init__(self, func, name, theme="default", pip=None, apt=None, copy=None, copy_public=None,
                  auth=False, org=None, header="", intro="", title="", plan="free", analytics=False):
+        if theme not in THEMES:
+            raise ValueError(f"Unknown theme: {theme}. Available: {THEMES}")
         self.user_func = func
-        self.theme = _resolve_theme(theme)
+        self.theme = theme
         self.copy_public = copy_public or []
 
         self.config = Config(
@@ -45,8 +37,8 @@ class App(Function):
             org=org,
         )
 
-        # Build files dict for Function
-        files = {str(CYCLS_PATH): "cycls", str(self.theme): "theme"}
+        # Build files dict for Function (theme is inside cycls/)
+        files = {str(CYCLS_PATH): "cycls"}
         files.update({f: f for f in copy or []})
         files.update({f: f"public/{f}" for f in self.copy_public})
 
@@ -65,6 +57,7 @@ class App(Function):
 
     def _prepare_func(self, prod):
         _set_prod(self.config, prod)
+        self.config.public_path = f"cycls/{self.theme}-theme"
         config_dict = self.config.model_dump()
         user_func = self.user_func
         name = self.name
@@ -73,7 +66,7 @@ class App(Function):
     def _local(self, port=8080):
         """Run directly with uvicorn (no Docker)."""
         print(f"Starting local server at localhost:{port}")
-        self.config.public_path = self.theme
+        self.config.public_path = str(CYCLS_PATH.joinpath(f"{self.theme}-theme"))
         _set_prod(self.config, False)
         uvicorn.run(web(self.user_func, self.config), host="0.0.0.0", port=port)
 

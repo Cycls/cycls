@@ -1,6 +1,6 @@
 import pytest
 import cycls
-from cycls.app import App, _resolve_theme
+from cycls.app import App
 import asyncio
 
 # To run these tests:
@@ -169,15 +169,14 @@ def test_app_sync_function():
 # Verifies that theme parameter works
 
 def test_app_theme_resolution():
-    """Tests that theme parameter is resolved correctly."""
+    """Tests that theme parameter is stored correctly."""
     print("\n--- Running test: test_app_theme_resolution ---")
 
     @cycls.app(theme="dev")
     async def dev_app(context):
         yield "dev"
 
-    # Theme should be resolved to a path
-    assert "dev-theme" in str(dev_app.theme)
+    assert dev_app.theme == "dev"
     print("✅ Test passed.")
 
 
