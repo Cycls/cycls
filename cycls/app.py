@@ -57,14 +57,14 @@ class App(Function):
 
     def _prepare_func(self, prod):
         _set_prod(self.config, prod)
-        self.config.public_path = f"cycls/{self.theme}-theme"
+        self.config.public_path = f"cycls/themes/{self.theme}"
         user_func, config, name = self.user_func, self.config, self.name
         self.func = lambda port: __import__("cycls.web", fromlist=["serve"]).serve(user_func, config, name, port)
 
     def _local(self, port=8080):
         """Run directly with uvicorn (no Docker)."""
         print(f"Starting local server at localhost:{port}")
-        self.config.public_path = str(CYCLS_PATH.joinpath(f"{self.theme}-theme"))
+        self.config.public_path = str(CYCLS_PATH.joinpath(f"themes/{self.theme}"))
         _set_prod(self.config, False)
         uvicorn.run(web(self.user_func, self.config), host="0.0.0.0", port=port)
 
