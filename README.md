@@ -22,9 +22,11 @@ Distribute Intelligence
 
 The open-source SDK for distributing AI agents.
 
-The function is the unit of abstraction in cycls. Your agent logic lives in a plain Python function — the decorator layers on everything else: containerization, authentication, deployment, analytics. You write the function, the `@` handles the infrastructure.
-
-D
+```
+  Agent extends App (prompts, skills)
+      └── App extends Function (web UI)
+          └── Function (containerization)
+```
 
 ## Distribute Intelligence
 
