@@ -26,8 +26,8 @@ def _set_prod(config: Config, prod: bool):
     config.jwks = JWKS_PROD if prod else JWKS_TEST
 
 
-class Agent(Function):
-    """Agent extends Function with web UI serving capabilities."""
+class App(Function):
+    """App extends Function with web UI serving capabilities."""
 
     def __init__(self, func, name, theme="default", pip=None, apt=None, copy=None, copy_public=None,
                  auth=False, org=None, header="", intro="", title="", plan="free", analytics=False):
@@ -92,15 +92,15 @@ class Agent(Function):
         return super().deploy(port=port)
 
 
-def agent(name=None, pip=None, apt=None, copy=None, copy_public=None, theme="default",
-          auth=False, org=None, header="", intro="", title="", plan="free", analytics=False):
-    """Decorator that transforms a function into a deployable Agent."""
+def app(name=None, pip=None, apt=None, copy=None, copy_public=None, theme="default",
+        auth=False, org=None, header="", intro="", title="", plan="free", analytics=False):
+    """Decorator that transforms a function into a deployable App."""
     if plan == "cycls_pass":
         auth = True
         analytics = True
 
     def decorator(func):
-        return Agent(
+        return App(
             func=func,
             name=name or func.__name__,
             theme=theme,
