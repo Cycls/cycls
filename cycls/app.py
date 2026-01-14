@@ -20,7 +20,7 @@ class App(Function):
     """App extends Function with web UI serving capabilities."""
 
     def __init__(self, func, name, theme="default", pip=None, apt=None, copy=None, copy_public=None,
-                 auth=False, org=None, header="", intro="", title="", plan="free", analytics=False):
+                 auth=False, org=None, header=None, intro=None, title=None, plan="free", analytics=False):
         if theme not in THEMES:
             raise ValueError(f"Unknown theme: {theme}. Available: {THEMES}")
         self.user_func = func
@@ -84,7 +84,7 @@ class App(Function):
 
 
 def app(name=None, pip=None, apt=None, copy=None, copy_public=None, theme="default",
-        auth=False, org=None, header="", intro="", title="", plan="free", analytics=False):
+        auth=False, org=None, header=None, intro=None, title=None, plan="free", analytics=False):
     """Decorator that transforms a function into a deployable App."""
     if plan == "cycls_pass":
         auth = True

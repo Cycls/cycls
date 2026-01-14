@@ -5,16 +5,16 @@ from typing import Optional
 
 class Config(BaseModel):
     public_path: str = "theme"
-    header: str = ""
-    intro: str = ""
-    title: str = ""
+    header: Optional[str] = None
+    intro: Optional[str] = None
+    title: Optional[str] = None
     prod: bool = False
     auth: bool = False
     plan: str = "free"
     analytics: bool = False
     org: Optional[str] = None
-    pk: str = ""
-    jwks: str = ""
+    pk: Optional[str] = None
+    jwks: Optional[str] = None
 
 async def openai_encoder(stream):
     if inspect.isasyncgen(stream):

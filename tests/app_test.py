@@ -69,9 +69,9 @@ def test_app_default_config():
     assert default_app.config.auth == False
     assert default_app.config.analytics == False
     assert default_app.config.plan == "free"
-    assert default_app.config.header == ""
-    assert default_app.config.intro == ""
-    assert default_app.config.title == ""
+    assert default_app.config.header is None
+    assert default_app.config.intro is None
+    assert default_app.config.title is None
     print("✅ Test passed.")
 
 
