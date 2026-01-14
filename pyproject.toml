@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cycls"
-version = "0.0.2.84"
+version = "0.0.2.85"
 
 packages = [{ include = "cycls" }]
 include = ["cycls/themes/**/*"]
@@ -22,10 +22,6 @@ cycls = "cycls.cli:main"
 [tool.poetry.group.test.dependencies]
 pytest = "^8.0.0"
 requests = "^2.31.0"
-
-
-[tool.poetry.group.dev.dependencies]
-grpcio-tools = "^1.76.0"
 
 [build-system]
 requires = ["poetry-core"]
