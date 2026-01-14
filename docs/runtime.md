@@ -496,7 +496,7 @@ The container's port is automatically mapped to your host.
 | Use case | General Python functions | Chat/streaming agents |
 | Input | Any arguments | `context.messages` |
 | Output | Return value or generator | Yield streaming responses |
-| API | `.run()`, `.stream()`, `.watch()`, `.build()`, `.deploy()` | `.local()`, `.deploy()`, `.modal()` |
+| API | `.run()`, `.stream()`, `.watch()`, `.build()`, `.deploy()` | `.local()`, `.deploy()` |
 | Web UI | No | Yes |
 | Streaming | Yes (via `.stream()` + gRPC) | Yes (SSE) |
 

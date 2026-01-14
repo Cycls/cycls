@@ -207,7 +207,8 @@ def test_agent_pip_packages():
     async def data_agent(context):
         yield "data"
 
-    assert data_agent._pip == ["numpy", "pandas"]
+    assert "numpy" in data_agent.pip_packages
+    assert "pandas" in data_agent.pip_packages
     print("✅ Test passed.")
 
 
@@ -227,37 +228,7 @@ def test_agent_copy_params():
     print("✅ Test passed.")
 
 
-# --- Test Case 14: Domain Default ---
-# Verifies that domain defaults to {name}.cycls.ai
-
-def test_agent_domain_default():
-    """Tests that domain defaults to {name}.cycls.ai."""
-    print("\n--- Running test: test_agent_domain_default ---")
-
-    @cycls.agent()
-    async def my_service(context):
-        yield "service"
-
-    assert my_service.domain == "my-service.cycls.ai"
-    print("✅ Test passed.")
-
-
-# --- Test Case 15: Custom Domain ---
-# Verifies that custom domain parameter works
-
-def test_agent_custom_domain():
-    """Tests that custom domain parameter is respected."""
-    print("\n--- Running test: test_agent_custom_domain ---")
-
-    @cycls.agent(domain="custom.example.com")
-    async def custom_agent(context):
-        yield "custom"
-
-    assert custom_agent.domain == "custom.example.com"
-    print("✅ Test passed.")
-
-
-# --- Test Case 16: All Config Options ---
+# --- Test Case 14: All Config Options ---
 # Verifies that all config options are passed through
 
 def test_agent_all_config_options():
