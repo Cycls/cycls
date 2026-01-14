@@ -46,7 +46,7 @@ class App(Function):
         )
 
         # Build files dict for Function
-        files = {str(self.theme): "theme", str(CYCLS_PATH)+"/web.py": "web.py"}
+        files = {str(CYCLS_PATH): "cycls", str(self.theme): "theme"}
         files.update({f: f for f in copy or []})
         files.update({f: f"public/{f}" for f in self.copy_public})
 
@@ -68,7 +68,7 @@ class App(Function):
         config_dict = self.config.model_dump()
         user_func = self.user_func
         name = self.name
-        self.func = lambda port: __import__("web").serve(user_func, config_dict, name, port)
+        self.func = lambda port: __import__("cycls.web", fromlist=["serve"]).serve(user_func, config_dict, name, port)
 
     def _local(self, port=8080):
         """Run directly with uvicorn (no Docker)."""
