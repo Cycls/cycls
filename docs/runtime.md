@@ -425,7 +425,7 @@ runtime = Runtime(
     func=my_func,
     name="my-agent",
     base_image="my-registry/my-base:tag",
-    pip_packages=["package"]  # All packages installed, no filtering
+    pip=["package"]  # All packages installed, no filtering
 )
 ```
 
@@ -489,18 +489,18 @@ The container's port is automatically mapped to your host.
 
 ---
 
-## Comparison with `@cycls.agent`
+## Comparison with `@cycls.app`
 
-| Feature | `@cycls.function` | `@cycls.agent` |
+| Feature | `@cycls.function` | `@cycls.app` |
 |---------|-------------------|----------------|
 | Use case | General Python functions | Chat/streaming agents |
 | Input | Any arguments | `context.messages` |
 | Output | Return value or generator | Yield streaming responses |
-| API | `.run()`, `.stream()`, `.watch()`, `.build()`, `.deploy()` | `.local()`, `.deploy()`, `.modal()` |
+| API | `.run()`, `.stream()`, `.watch()`, `.build()`, `.deploy()` | `.local()`, `.deploy()` |
 | Web UI | No | Yes |
 | Streaming | Yes (via `.stream()` + gRPC) | Yes (SSE) |
 
-Use `@cycls.function` for batch processing, data pipelines, or any non-interactive workload. Use `@cycls.agent` for conversational AI with streaming responses.
+Use `@cycls.function` for batch processing, data pipelines, or any non-interactive workload. Use `@cycls.app` for conversational AI with streaming responses.
 
 ---
 

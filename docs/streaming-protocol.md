@@ -9,7 +9,7 @@ Documentation for backend and front-end teams on the `/chat/cycls` streaming pro
 ```python
 import cycls
 
-@cycls.agent(pip=["openai"], theme="dev")
+@cycls.app(pip=["openai"], theme="dev")
 async def chat(context):
     from openai import AsyncOpenAI
     client = AsyncOpenAI()
