@@ -27,13 +27,6 @@ requests = "^2.31.0"
 [tool.poetry.group.dev.dependencies]
 grpcio-tools = "^1.76.0"
 
-[tool.poetry.extras]
-modal = ["modal"]
-
-[tool.poetry.dependencies.modal]
-version = "^1.1.0"
-optional = true
-
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
