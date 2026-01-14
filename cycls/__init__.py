@@ -2,7 +2,7 @@ import sys
 import importlib
 from types import ModuleType
 from .function import function, Function
-from .agent import agent, Agent
+from .app import app, App
 
 def _get_function_module():
     return importlib.import_module('cycls.function')

@@ -489,9 +489,9 @@ The container's port is automatically mapped to your host.
 
 ---
 
-## Comparison with `@cycls.agent`
+## Comparison with `@cycls.app`
 
-| Feature | `@cycls.function` | `@cycls.agent` |
+| Feature | `@cycls.function` | `@cycls.app` |
 |---------|-------------------|----------------|
 | Use case | General Python functions | Chat/streaming agents |
 | Input | Any arguments | `context.messages` |
@@ -500,7 +500,7 @@ The container's port is automatically mapped to your host.
 | Web UI | No | Yes |
 | Streaming | Yes (via `.stream()` + gRPC) | Yes (SSE) |
 
-Use `@cycls.function` for batch processing, data pipelines, or any non-interactive workload. Use `@cycls.agent` for conversational AI with streaming responses.
+Use `@cycls.function` for batch processing, data pipelines, or any non-interactive workload. Use `@cycls.app` for conversational AI with streaming responses.
 
 ---
 

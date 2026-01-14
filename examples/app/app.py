@@ -2,7 +2,7 @@ import cycls
 
 cycls.api_key = "YOUR_CYCLS_API_KEY"
 
-@cycls.agent()
+@cycls.app()
 async def hello(context): # or def hello(context):
     """A simple streaming agent."""
     yield "Hello! "
