@@ -16,14 +16,12 @@ BASE_IMAGE = "ghcr.io/cycls/base:python3.12"
 BASE_PACKAGES = {"cloudpickle", "cryptography", "fastapi", "fastapi[standard]",
                  "pydantic", "pyjwt", "uvicorn", "uvicorn[standard]", "httpx"}
 
-# Entrypoint for deployed services - loads pickled function+args and runs it
 ENTRYPOINT_PY = '''import cloudpickle
 with open("/app/function.pkl", "rb") as f:
     func, args, kwargs = cloudpickle.load(f)
 func(*args, **kwargs)
 '''
 
-# Runner script for local dev - reads pickle from volume, writes result back
 RUNNER_PY = '''import cloudpickle
 import sys
 import traceback
@@ -44,6 +42,15 @@ except Exception:
     sys.exit(1)
 '''
 
+# Module-level configuration
+api_key = None
+base_url = None
+
+def _get_api_key():
+    return api_key or os.getenv("CYCLS_API_KEY")
+
+def _get_base_url():
+    return base_url or os.getenv("CYCLS_BASE_URL")
 
 def _hash_path(path_str: str) -> str:
     h = hashlib.sha256()
@@ -73,35 +80,34 @@ def _copy_path(src_path: Path, dest_path: Path):
         shutil.copy(src_path, dest_path)
 
 
-class Runtime:
-    """Executes functions in Docker containers. Uses file-based pickle for communication."""
+class Function:
+    """Executes functions in Docker containers."""
 
-    def __init__(self, func, name, python_version=None, pip_packages=None, apt_packages=None,
+    def __init__(self, func, name, python_version=None, pip=None, apt=None,
                  run_commands=None, copy=None, base_url=None, api_key=None, base_image=None):
         self.func = func
-        self.name = name
+        self.name = name.replace('_', '-')
         self.python_version = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
-        self.apt_packages = sorted(apt_packages or [])
+        self.apt = sorted(apt or [])
         self.run_commands = sorted(run_commands or [])
-        self.copy = copy or {}
+        self.copy = {f: f for f in copy} if isinstance(copy, list) else (copy or {})
         self.base_image = base_image or BASE_IMAGE
         self.base_url = base_url or "https://service-core-280879789566.me-central1.run.app"
         self.api_key = api_key
 
-        user_packages = set(pip_packages or [])
+        user_packages = set(pip or [])
         if self.base_image == BASE_IMAGE:
-            self.pip_packages = sorted(user_packages - BASE_PACKAGES)
+            self.pip = sorted(user_packages - BASE_PACKAGES)
         else:
-            self.pip_packages = sorted(user_packages | {"cloudpickle"})
+            self.pip = sorted(user_packages | {"cloudpickle"})
 
-        self.image_prefix = f"cycls/{name}"
-        self.managed_label = "cycls.runtime"
+        self.image_prefix = f"cycls/{self.name}"
+        self.managed_label = "cycls.function"
         self._docker_client = None
         self._container = None
 
     @property
     def docker_client(self):
-        """Lazily initializes and returns a Docker client."""
         if self._docker_client is None:
             try:
                 print("Initializing Docker client...")
@@ -115,7 +121,6 @@ class Runtime:
         return self._docker_client
 
     def _perform_auto_cleanup(self, keep_tag=None):
-        """Clean up old containers and dev images (preserve deploy-* images)."""
         try:
             current_id = self._container.id if self._container else None
             for container in self.docker_client.containers.list(all=True, filters={"label": self.managed_label}):
@@ -135,9 +140,8 @@ class Runtime:
             print(f"Warning: cleanup error: {e}")
 
     def _image_tag(self, extra_parts=None) -> str:
-        """Creates a unique tag based on image configuration."""
-        parts = [self.base_image, self.python_version, "".join(self.pip_packages),
-                 "".join(self.apt_packages), "".join(self.run_commands)]
+        parts = [self.base_image, self.python_version, "".join(self.pip),
+                 "".join(self.apt), "".join(self.run_commands)]
         for src, dst in sorted(self.copy.items()):
             if not Path(src).exists():
                 raise FileNotFoundError(f"Path in 'copy' not found: {src}")
@@ -147,18 +151,17 @@ class Runtime:
         return f"{self.image_prefix}:{hashlib.sha256(''.join(parts).encode()).hexdigest()[:16]}"
 
     def _dockerfile_preamble(self) -> str:
-        """Common Dockerfile setup: base image, apt, pip, run commands, copy."""
         lines = [f"FROM {self.base_image}"]
 
         if self.base_image != BASE_IMAGE:
             lines.append("ENV PIP_ROOT_USER_ACTION=ignore PYTHONUNBUFFERED=1")
             lines.append("WORKDIR /app")
 
-        if self.apt_packages:
-            lines.append(f"RUN apt-get update && apt-get install -y --no-install-recommends {' '.join(self.apt_packages)}")
+        if self.apt:
+            lines.append(f"RUN apt-get update && apt-get install -y --no-install-recommends {' '.join(self.apt)}")
 
-        if self.pip_packages:
-            lines.append(f"RUN uv pip install --system --no-cache {' '.join(self.pip_packages)}")
+        if self.pip:
+            lines.append(f"RUN uv pip install --system --no-cache {' '.join(self.pip)}")
 
         for cmd in self.run_commands:
             lines.append(f"RUN {cmd}")
@@ -169,14 +172,12 @@ class Runtime:
         return "\n".join(lines)
 
     def _dockerfile_local(self) -> str:
-        """Dockerfile for local dev: runner script with volume mount."""
         return f"""{self._dockerfile_preamble()}
 COPY runner.py /app/runner.py
 ENTRYPOINT ["python", "/app/runner.py", "/io"]
 """
 
     def _dockerfile_deploy(self, port: int) -> str:
-        """Dockerfile for deploy: baked-in function via pickle."""
         return f"""{self._dockerfile_preamble()}
 COPY function.pkl /app/function.pkl
 COPY entrypoint.py /app/entrypoint.py
@@ -185,14 +186,12 @@ CMD ["python", "entrypoint.py"]
 """
 
     def _copy_user_files(self, workdir: Path):
-        """Copy user-specified files to build context."""
         context_files_dir = workdir / "context_files"
         context_files_dir.mkdir()
         for src, dst in self.copy.items():
             _copy_path(Path(src).resolve(), context_files_dir / dst)
 
     def _build_image(self, tag: str, workdir: Path) -> str:
-        """Build a Docker image from a prepared context."""
         print("--- Docker Build Logs ---")
         try:
             for chunk in self.docker_client.api.build(
@@ -209,7 +208,6 @@ CMD ["python", "entrypoint.py"]
             raise
 
     def _ensure_local_image(self) -> str:
-        """Build local dev image if needed."""
         tag = self._image_tag(extra_parts=["local-v1"])
         try:
             self.docker_client.images.get(tag)
@@ -226,8 +224,7 @@ CMD ["python", "entrypoint.py"]
             return self._build_image(tag, workdir)
 
     def _cleanup_container(self):
-        """Stop and remove the container."""
-        if self._container:
+        if getattr(self, '_container', None):
             try:
                 self._container.stop(timeout=3)
                 self._container.remove()
@@ -239,7 +236,6 @@ CMD ["python", "entrypoint.py"]
 
     @contextlib.contextmanager
     def runner(self, *args, **kwargs):
-        """Context manager for running a function in a container."""
         service_port = kwargs.get('port')
         tag = self._ensure_local_image()
         self._perform_auto_cleanup(keep_tag=tag)
@@ -267,7 +263,6 @@ CMD ["python", "entrypoint.py"]
                 self._cleanup_container()
 
     def run(self, *args, **kwargs):
-        """Execute the function in a container and return the result."""
         service_port = kwargs.get('port')
         print(f"Running '{self.name}'...")
 
@@ -284,7 +279,7 @@ CMD ["python", "entrypoint.py"]
                     return None
 
                 if service_port:
-                    return None  # Service mode, no result
+                    return None
 
                 if result_path.exists():
                     with open(result_path, 'rb') as f:
@@ -302,7 +297,6 @@ CMD ["python", "entrypoint.py"]
             return None
 
     def watch(self, *args, **kwargs):
-        """Run with file watching - restarts on changes."""
         if os.environ.get('_CYCLS_WATCH'):
             return self.run(*args, **kwargs)
 
@@ -335,7 +329,6 @@ CMD ["python", "entrypoint.py"]
                 return
 
     def _prepare_deploy_context(self, workdir: Path, port: int, args=(), kwargs=None):
-        """Prepare build context for deploy: pickle function+args + entrypoint."""
         kwargs = kwargs or {}
         kwargs['port'] = port
         self._copy_user_files(workdir)
@@ -345,7 +338,6 @@ CMD ["python", "entrypoint.py"]
             cloudpickle.dump((self.func, args, kwargs), f)
 
     def build(self, *args, **kwargs):
-        """Build a deployable Docker image locally."""
         port = kwargs.pop('port', 8080)
         payload = cloudpickle.dumps((self.func, args, {**kwargs, 'port': port}))
         tag = f"{self.image_prefix}:deploy-{hashlib.sha256(payload).hexdigest()[:16]}"
@@ -365,7 +357,6 @@ CMD ["python", "entrypoint.py"]
             return tag
 
     def deploy(self, *args, **kwargs):
-        """Deploy the function to a remote build server."""
         import requests
 
         port = kwargs.pop('port', 8080)
@@ -411,5 +402,11 @@ CMD ["python", "entrypoint.py"]
                 return None
 
     def __del__(self):
-        """Cleanup on garbage collection."""
         self._cleanup_container()
+
+
+def function(name=None, **kwargs):
+    """Decorator that transforms a Python function into a containerized Function."""
+    def decorator(func):
+        return Function(func, name or func.__name__, **kwargs, base_url=_get_base_url(), api_key=_get_api_key())
+    return decorator

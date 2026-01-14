@@ -35,8 +35,8 @@ import cycls
 
 cycls.api_key = "YOUR_CYCLS_API_KEY"
 
-@cycls.agent(pip=["openai"])
-async def agent(context):
+@cycls.app(pip=["openai"])
+async def app(context):
     from openai import AsyncOpenAI
     client = AsyncOpenAI()
 
@@ -53,7 +53,7 @@ async def agent(context):
         elif event.type == "response.output_text.delta":
             yield event.delta
 
-agent.deploy()  # Live at https://agent.cycls.ai
+app.deploy()  # Live at https://agent.cycls.ai
 ```
 
 ## Installation
@@ -76,9 +76,9 @@ Requires Docker.
 ## Running
 
 ```python
-agent.local()             # Development with hot-reload (localhost:8080)
-agent.local(watch=False)  # Development without hot-reload
-agent.deploy()            # Production: https://agent.cycls.ai
+app.local()             # Development with hot-reload (localhost:8080)
+app.local(watch=False)  # Development without hot-reload
+app.deploy()            # Production: https://agent.cycls.ai
 ```
 
 Get an API key at [cycls.com](https://cycls.com).
@@ -86,8 +86,8 @@ Get an API key at [cycls.com](https://cycls.com).
 ## Authentication & Analytics
 
 ```python
-@cycls.agent(pip=["openai"], auth=True, analytics=True)
-async def agent(context):
+@cycls.app(pip=["openai"], auth=True, analytics=True)
+async def app(context):
     # context.user available when auth=True
     user = context.user  # User(id, email, name, plans)
     yield f"Hello {user.name}!"
@@ -104,7 +104,7 @@ async def agent(context):
 Yield structured objects for rich streaming responses:
 
 ```python
-@cycls.agent()
+@cycls.app()
 async def demo(context):
     yield {"type": "thinking", "thinking": "Analyzing the request..."}
     yield "Here's what I found:\n\n"
@@ -146,7 +146,7 @@ This works seamlessly with OpenAI's reasoning models - just map reasoning summar
 ## Context Object
 
 ```python
-@cycls.agent()
+@cycls.app()
 async def chat(context):
     context.messages      # [{"role": "user", "content": "..."}]
     context.messages.raw  # Full data including UI component parts
@@ -179,13 +179,13 @@ See [docs/streaming-protocol.md](docs/streaming-protocol.md) for frontend integr
 Define your entire runtime in the decorator:
 
 ```python
-@cycls.agent(
+@cycls.app(
     pip=["openai", "pandas", "numpy"],
     apt=["ffmpeg", "libmagic1"],
     copy=["./utils.py", "./models/", "/absolute/path/to/config.json"],
     copy_public=["./assets/logo.png", "./static/"],
 )
-async def my_agent(context):
+async def my_app(context):
     ...
 ```
 
@@ -220,7 +220,7 @@ copy=[
 Then import them in your function:
 
 ```python
-@cycls.agent(copy=["./utils.py"])
+@cycls.app(copy=["./utils.py"])
 async def chat(context):
     from utils import helper_function  # Your bundled module
     ...
@@ -234,7 +234,7 @@ Files and directories served at the `/public` endpoint. Perfect for images, down
 copy_public=["./assets/logo.png", "./downloads/"]
 ```
 
-Access them at `https://your-agent.cycls.ai/public/logo.png`.
+Access them at `https://your-app.cycls.ai/public/logo.png`.
 
 ---
 
