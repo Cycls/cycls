@@ -53,8 +53,8 @@ class Agent(Function):
         super().__init__(
             func=func,
             name=name,
-            pip_packages=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", *(pip or [])],
-            apt_packages=apt,
+            pip=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", *(pip or [])],
+            apt=apt,
             copy=files,
             base_url=_get_base_url(),
             api_key=_get_api_key()

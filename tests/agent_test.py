@@ -199,16 +199,16 @@ def test_agent_invalid_theme_raises():
 # --- Test Case 12: Pip Packages Stored ---
 # Verifies that pip packages are stored in agent
 
-def test_agent_pip_packages():
+def test_agent_pip():
     """Tests that pip packages are stored correctly."""
-    print("\n--- Running test: test_agent_pip_packages ---")
+    print("\n--- Running test: test_agent_pip ---")
 
     @cycls.agent(pip=["numpy", "pandas"])
     async def data_agent(context):
         yield "data"
 
-    assert "numpy" in data_agent.pip_packages
-    assert "pandas" in data_agent.pip_packages
+    assert "numpy" in data_agent.pip
+    assert "pandas" in data_agent.pip
     print("✅ Test passed.")
 
 
