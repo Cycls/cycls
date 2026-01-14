@@ -8,7 +8,7 @@ from cycls.web import web, Config, Messages, sse, encoder, openai_encoder
 # poetry run pytest tests/web_test.py -v -s
 
 # Use actual default theme
-THEME_PATH = str(importlib.resources.files('cycls').joinpath('default-theme'))
+THEME_PATH = str(importlib.resources.files('cycls').joinpath('themes/default'))
 
 
 # =============================================================================

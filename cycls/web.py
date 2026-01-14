@@ -2,6 +2,7 @@ import json, inspect
 from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional
+from .auth import PK_LIVE, PK_TEST, JWKS_PROD, JWKS_TEST
 
 class Config(BaseModel):
     public_path: str = "theme"
@@ -15,6 +16,11 @@ class Config(BaseModel):
     org: Optional[str] = None
     pk: Optional[str] = None
     jwks: Optional[str] = None
+
+    def set_prod(self, prod: bool):
+        self.prod = prod
+        self.pk = PK_LIVE if prod else PK_TEST
+        self.jwks = JWKS_PROD if prod else JWKS_TEST
 
 async def openai_encoder(stream):
     if inspect.isasyncgen(stream):

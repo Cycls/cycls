@@ -4,16 +4,10 @@ import importlib.resources
 
 from .function import Function, _get_api_key, _get_base_url
 from .web import web, Config
-from .auth import PK_LIVE, PK_TEST, JWKS_PROD, JWKS_TEST
 
 CYCLS_PATH = importlib.resources.files('cycls')
 
-THEMES = {"default", "dev"}
-
-def _set_prod(config: Config, prod: bool):
-    config.prod = prod
-    config.pk = PK_LIVE if prod else PK_TEST
-    config.jwks = JWKS_PROD if prod else JWKS_TEST
+THEMES = ["default", "dev"]
 
 
 class App(Function):
@@ -56,7 +50,7 @@ class App(Function):
         return self.user_func(*args, **kwargs)
 
     def _prepare_func(self, prod):
-        _set_prod(self.config, prod)
+        self.config.set_prod(prod)
         self.config.public_path = f"cycls/themes/{self.theme}"
         user_func, config, name = self.user_func, self.config, self.name
         self.func = lambda port: __import__("cycls").web.serve(user_func, config, name, port)
@@ -65,7 +59,7 @@ class App(Function):
         """Run directly with uvicorn (no Docker)."""
         print(f"Starting local server at localhost:{port}")
         self.config.public_path = str(CYCLS_PATH.joinpath(f"themes/{self.theme}"))
-        _set_prod(self.config, False)
+        self.config.set_prod(False)
         uvicorn.run(web(self.user_func, self.config), host="0.0.0.0", port=port)
 
     def local(self, port=8080, watch=True):
@@ -83,28 +77,12 @@ class App(Function):
         return super().deploy(port=port)
 
 
-def app(name=None, pip=None, apt=None, copy=None, copy_public=None, theme="default",
-        auth=False, org=None, header=None, intro=None, title=None, plan="free", analytics=False):
+def app(name=None, **kwargs):
     """Decorator that transforms a function into a deployable App."""
-    if plan == "cycls_pass":
-        auth = True
-        analytics = True
+    if kwargs.get("plan") == "cycls_pass":
+        kwargs["auth"] = True
+        kwargs["analytics"] = True
 
     def decorator(func):
-        return App(
-            func=func,
-            name=name or func.__name__,
-            theme=theme,
-            pip=pip,
-            apt=apt,
-            copy=copy,
-            copy_public=copy_public,
-            auth=auth,
-            org=org,
-            header=header,
-            intro=intro,
-            title=title,
-            plan=plan,
-            analytics=analytics,
-        )
+        return App(func=func, name=name or func.__name__, **kwargs)
     return decorator
