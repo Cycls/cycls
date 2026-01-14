@@ -3,7 +3,7 @@ name = "cycls"
 version = "0.0.2.83"
 
 packages = [{ include = "cycls" }]
-include = ["cycls/theme/**/*"]
+include = ["cycls/themes/**/*"]
 description = "Distribute Intelligence"
 authors = ["Mohammed J. AlRujayi <mj@cycls.com>"]
 readme = "README.md"
@@ -17,7 +17,7 @@ docker = "^7.1.0"
 cloudpickle = "^3.1.1"
 
 [tool.poetry.scripts]
-cycls = "cycls.chat:main"
+cycls = "cycls.cli:main"
 
 [tool.poetry.group.test.dependencies]
 pytest = "^8.0.0"
