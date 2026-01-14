@@ -45,7 +45,7 @@ class App(Function):
         super().__init__(
             func=func,
             name=name,
-            pip=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", *(pip or [])],
+            pip=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", "docker", *(pip or [])],
             apt=apt,
             copy=files,
             base_url=_get_base_url(),
