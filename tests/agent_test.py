@@ -1,6 +1,6 @@
 import pytest
 import cycls
-from cycls.sdk import AgentRuntime, _resolve_theme
+from cycls.agent import Agent, _resolve_theme
 import asyncio
 
 # To run these tests:
@@ -8,17 +8,17 @@ import asyncio
 
 
 # --- Test Case 1: Basic Decorator ---
-# Verifies that @cycls.agent returns an AgentRuntime instance
+# Verifies that @cycls.agent returns an Agent instance
 
-def test_agent_decorator_returns_runtime():
-    """Tests that @cycls.agent decorator returns an AgentRuntime."""
-    print("\n--- Running test: test_agent_decorator_returns_runtime ---")
+def test_agent_decorator_returns_agent():
+    """Tests that @cycls.agent decorator returns an Agent."""
+    print("\n--- Running test: test_agent_decorator_returns_agent ---")
 
     @cycls.agent()
     async def my_agent(context):
         yield "hello"
 
-    assert isinstance(my_agent, AgentRuntime)
+    assert isinstance(my_agent, Agent)
     assert my_agent.name == "my-agent"  # underscores converted to dashes
     print("✅ Test passed.")
 
@@ -109,12 +109,12 @@ def test_module_level_base_url():
     print("✅ Test passed.")
 
 
-# --- Test Case 7: AgentRuntime is Callable ---
+# --- Test Case 7: Agent is Callable ---
 # Verifies that the decorated function can still be called
 
-def test_agent_runtime_is_callable():
-    """Tests that AgentRuntime delegates calls to the wrapped function."""
-    print("\n--- Running test: test_agent_runtime_is_callable ---")
+def test_agent_is_callable():
+    """Tests that Agent delegates calls to the wrapped function."""
+    print("\n--- Running test: test_agent_is_callable ---")
 
     @cycls.agent()
     def simple_agent(context):
@@ -197,7 +197,7 @@ def test_agent_invalid_theme_raises():
 
 
 # --- Test Case 12: Pip Packages Stored ---
-# Verifies that pip packages are stored in runtime
+# Verifies that pip packages are stored in agent
 
 def test_agent_pip_packages():
     """Tests that pip packages are stored correctly."""
@@ -207,7 +207,7 @@ def test_agent_pip_packages():
     async def data_agent(context):
         yield "data"
 
-    assert data_agent.pip == ["numpy", "pandas"]
+    assert data_agent._pip == ["numpy", "pandas"]
     print("✅ Test passed.")
 
 
@@ -222,7 +222,7 @@ def test_agent_copy_params():
     async def file_agent(context):
         yield "files"
 
-    assert file_agent.copy == ["utils.py"]
+    assert "utils.py" in file_agent.copy  # copy dict includes user files
     assert file_agent.copy_public == ["logo.png"]
     print("✅ Test passed.")
 

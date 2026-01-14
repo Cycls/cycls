@@ -1,19 +1,21 @@
 import sys
+import importlib
 from types import ModuleType
-from .sdk import function, agent
-from .runtime import Runtime
+from .function import function, Function
+from .agent import agent, Agent
+
+def _get_function_module():
+    return importlib.import_module('cycls.function')
 
 class _Module(ModuleType):
     def __getattr__(self, name):
-        from . import sdk
         if name in ("api_key", "base_url"):
-            return getattr(sdk, name)
+            return getattr(_get_function_module(), name)
         raise AttributeError(f"module 'cycls' has no attribute '{name}'")
 
     def __setattr__(self, name, value):
-        from . import sdk
         if name in ("api_key", "base_url"):
-            setattr(sdk, name, value)
+            setattr(_get_function_module(), name, value)
             return
         super().__setattr__(name, value)
 
