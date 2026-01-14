@@ -100,10 +100,9 @@ def agent(name=None, pip=None, apt=None, copy=None, copy_public=None, theme="def
         analytics = True
 
     def decorator(func):
-        agent_name = name or func.__name__.replace('_', '-')
         return Agent(
             func=func,
-            name=agent_name,
+            name=name or func.__name__,
             theme=theme,
             pip=pip,
             apt=apt,
