@@ -16,6 +16,7 @@ class Config(BaseModel):
     org: Optional[str] = None
     pk: Optional[str] = None
     jwks: Optional[str] = None
+    debug: bool = False
 
     def set_prod(self, prod: bool):
         self.prod = prod
@@ -36,13 +37,18 @@ def sse(item):
     if not isinstance(item, dict): item = {"type": "text", "text": item}
     return f"data: {json.dumps(item)}\n\n"
 
-async def encoder(stream):
-    if inspect.isasyncgen(stream):
-        async for item in stream:
-            if msg := sse(item): yield msg
-    else:
-        for item in stream:
-            if msg := sse(item): yield msg
+async def encoder(stream, debug=False):
+    import traceback
+    try:
+        if inspect.isasyncgen(stream):
+            async for item in stream:
+                if msg := sse(item): yield msg
+        else:
+            for item in stream:
+                if msg := sse(item): yield msg
+    except Exception as e:
+        error_msg = traceback.format_exc() if debug else str(e)
+        yield sse({"type": "thinking", "thinking": f"⚠️ Error\n```\n{error_msg}```"})
     yield "data: [DONE]\n\n"
 
 class Messages(list):
@@ -117,15 +123,23 @@ def web(func, config):
     @app.post("/chat/cycls")
     @app.post("/chat/completions")
     async def back(request: Request, jwt: Optional[dict] = Depends(validate) if config.auth else None):
+        import traceback
         data = await request.json()
         messages = data.get("messages")
         user_data = jwt.get("user") if jwt else None
         context = Context(messages = Messages(messages), user = User(**user_data) if user_data else None)
-        stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
+        try:
+            stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
+        except Exception as e:
+            error_msg = traceback.format_exc() if config.debug else str(e)
+            async def error_stream():
+                yield sse({"type": "thinking", "thinking": f"⚠️ Error\n```\n{error_msg}```"})
+                yield "data: [DONE]\n\n"
+            return StreamingResponse(error_stream(), media_type="text/event-stream")
         if request.url.path == "/chat/completions":
             stream = openai_encoder(stream)
         elif request.url.path == "/chat/cycls":
-            stream = encoder(stream)
+            stream = encoder(stream, debug=config.debug)
         return StreamingResponse(stream, media_type="text/event-stream")
 
     @app.get("/config")
