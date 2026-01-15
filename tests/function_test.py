@@ -227,7 +227,7 @@ def test_build_deployable_image():
     CONTAINER_NAME = "test-build-deploy"
 
     # 1. Define a FastAPI service function.
-    @cycls.function()
+    @cycls.function(pip=["fastapi", "uvicorn"])
     def build_test_service(port):
         from fastapi import FastAPI
         import uvicorn

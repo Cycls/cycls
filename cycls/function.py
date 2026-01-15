@@ -12,10 +12,6 @@ import tarfile
 
 os.environ["DOCKER_BUILDKIT"] = "1"
 
-BASE_IMAGE = "ghcr.io/cycls/base:python3.12"
-BASE_PACKAGES = {"cloudpickle", "cryptography", "fastapi", "fastapi[standard]",
-                 "pydantic", "pyjwt", "uvicorn", "uvicorn[standard]", "httpx"}
-
 ENTRYPOINT_PY = '''import cloudpickle
 with open("/app/function.pkl", "rb") as f:
     func, args, kwargs = cloudpickle.load(f)
@@ -84,22 +80,17 @@ class Function:
     """Executes functions in Docker containers."""
 
     def __init__(self, func, name, python_version=None, pip=None, apt=None,
-                 run_commands=None, copy=None, base_url=None, api_key=None, base_image=None):
+                 run_commands=None, copy=None, base_url=None, api_key=None):
         self.func = func
         self.name = name.replace('_', '-')
         self.python_version = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
+        self.base_image = f"python:{self.python_version}-slim"
         self.apt = sorted(apt or [])
         self.run_commands = sorted(run_commands or [])
         self.copy = {f: f for f in copy} if isinstance(copy, list) else (copy or {})
-        self.base_image = base_image or BASE_IMAGE
         self.base_url = base_url or "https://service-core-280879789566.me-central1.run.app"
         self.api_key = api_key
-
-        user_packages = set(pip or [])
-        if self.base_image == BASE_IMAGE:
-            self.pip = sorted(user_packages - BASE_PACKAGES)
-        else:
-            self.pip = sorted(user_packages | {"cloudpickle"})
+        self.pip = sorted(set(pip or []) | {"cloudpickle"})
 
         self.image_prefix = f"cycls/{self.name}"
         self.managed_label = "cycls.function"
@@ -151,11 +142,12 @@ class Function:
         return f"{self.image_prefix}:{hashlib.sha256(''.join(parts).encode()).hexdigest()[:16]}"
 
     def _dockerfile_preamble(self) -> str:
-        lines = [f"FROM {self.base_image}"]
-
-        if self.base_image != BASE_IMAGE:
-            lines.append("ENV PIP_ROOT_USER_ACTION=ignore PYTHONUNBUFFERED=1")
-            lines.append("WORKDIR /app")
+        lines = [
+            f"FROM {self.base_image}",
+            "ENV PIP_ROOT_USER_ACTION=ignore PYTHONUNBUFFERED=1",
+            "WORKDIR /app",
+            "RUN pip install uv",
+        ]
 
         if self.apt:
             lines.append(f"RUN apt-get update && apt-get install -y --no-install-recommends {' '.join(self.apt)}")
