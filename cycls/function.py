@@ -165,8 +165,8 @@ class Function:
 
     def _dockerfile_local(self) -> str:
         return f"""{self._dockerfile_preamble()}
-COPY runner.py /app/runner.py
-ENTRYPOINT ["python", "/app/runner.py", "/io"]
+COPY runner.py /runner.py
+ENTRYPOINT ["python", "/runner.py", "/io"]
 """
 
     def _dockerfile_deploy(self, port: int) -> str:
