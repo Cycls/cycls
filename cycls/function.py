@@ -12,14 +12,17 @@ import tarfile
 
 os.environ["DOCKER_BUILDKIT"] = "1"
 
-ENTRYPOINT_PY = '''import cloudpickle
+ENTRYPOINT_PY = '''import sys
+sys.path.insert(0, '/app')
+import cloudpickle
 with open("/app/function.pkl", "rb") as f:
     func, args, kwargs = cloudpickle.load(f)
 func(*args, **kwargs)
 '''
 
-RUNNER_PY = '''import cloudpickle
-import sys
+RUNNER_PY = '''import sys
+sys.path.insert(0, '/app')
+import cloudpickle
 import traceback
 from pathlib import Path
 

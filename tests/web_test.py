@@ -381,3 +381,91 @@ def test_streaming_multiple_yields():
     assert '"type": "callout"' in lines[3]
     assert "[DONE]" in lines[4]
     print("✅ Test passed.")
+
+
+# =============================================================================
+# Error Propagation Tests
+# =============================================================================
+
+def test_error_during_streaming_with_debug():
+    """Tests that errors during streaming are propagated to frontend with full traceback in debug mode."""
+    print("\n--- Running test: test_error_during_streaming_with_debug ---")
+    from fastapi.testclient import TestClient
+
+    async def failing_agent(context):
+        yield "starting"
+        raise ValueError("Something went wrong!")
+
+    config = Config(public_path=THEME_PATH, auth=False, debug=True)
+    app = web(failing_agent, config)
+    client = TestClient(app)
+
+    response = client.post(
+        "/chat/cycls",
+        json={"messages": [{"role": "user", "content": "test"}]}
+    )
+
+    lines = [l for l in response.text.split("\n\n") if l.startswith("data:")]
+
+    # Should have: text, error thinking, DONE
+    assert len(lines) == 3
+    assert '"type": "text"' in lines[0]
+    assert '"type": "thinking"' in lines[1]
+    assert "Error" in lines[1]
+    assert "ValueError" in lines[1]
+    assert "Traceback" in lines[1]  # Full traceback in debug mode
+    assert "[DONE]" in lines[2]
+    print("✅ Test passed.")
+
+
+def test_error_during_streaming_without_debug():
+    """Tests that errors show only message (not traceback) when debug=False."""
+    print("\n--- Running test: test_error_during_streaming_without_debug ---")
+    from fastapi.testclient import TestClient
+
+    async def failing_agent(context):
+        yield "starting"
+        raise ValueError("Something went wrong!")
+
+    config = Config(public_path=THEME_PATH, auth=False, debug=False)
+    app = web(failing_agent, config)
+    client = TestClient(app)
+
+    response = client.post(
+        "/chat/cycls",
+        json={"messages": [{"role": "user", "content": "test"}]}
+    )
+
+    lines = [l for l in response.text.split("\n\n") if l.startswith("data:")]
+
+    assert '"type": "thinking"' in lines[1]
+    assert "Something went wrong!" in lines[1]
+    assert "Traceback" not in lines[1]  # No traceback without debug
+    print("✅ Test passed.")
+
+
+def test_error_on_initial_call():
+    """Tests that errors on initial function call are also propagated."""
+    print("\n--- Running test: test_error_on_initial_call ---")
+    from fastapi.testclient import TestClient
+
+    async def immediate_fail(context):
+        raise RuntimeError("Failed immediately!")
+        yield "never reached"
+
+    config = Config(public_path=THEME_PATH, auth=False, debug=True)
+    app = web(immediate_fail, config)
+    client = TestClient(app)
+
+    response = client.post(
+        "/chat/cycls",
+        json={"messages": [{"role": "user", "content": "test"}]}
+    )
+
+    lines = [l for l in response.text.split("\n\n") if l.startswith("data:")]
+
+    # Should have: error thinking, DONE
+    assert '"type": "thinking"' in lines[0]
+    assert "RuntimeError" in lines[0]
+    assert "[DONE]" in lines[1]
+    print("✅ Test passed.")
