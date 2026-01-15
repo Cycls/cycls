@@ -1,28 +1,35 @@
-[tool.poetry]
+[project]
 name = "cycls"
-version = "0.0.2.87"
-
-packages = [{ include = "cycls" }]
-include = ["cycls/themes/**/*"]
+version = "0.0.2.88"
 description = "Distribute Intelligence"
-authors = ["Mohammed J. AlRujayi <mj@cycls.com>"]
+authors = [{ name = "Mohammed J. AlRujayi", email = "mj@cycls.com" }]
 readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi>=0.111.0",
+    "httpx>=0.27.0",
+    "pyjwt>=2.8.0",
+    "docker>=7.1.0",
+    "cloudpickle>=3.1.1",
+    "uvicorn>=0.30.0",
+    "email-validator>=2.0.0",
+]
 
-[tool.poetry.dependencies]
-python = "^3.9"
-fastapi = "^0.111.0"
-httpx = "^0.27.0"
-pyjwt = "^2.8.0"
-docker = "^7.1.0"
-cloudpickle = "^3.1.1"
-
-[tool.poetry.scripts]
+[project.scripts]
 cycls = "cycls.cli:main"
 
-[tool.poetry.group.test.dependencies]
-pytest = "^8.0.0"
-requests = "^2.31.0"
+[dependency-groups]
+test = [
+    "pytest>=8.0.0",
+    "requests>=2.31.0",
+]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cycls"]
+
+[tool.hatch.build.targets.sdist]
+include = ["cycls/**/*"]
