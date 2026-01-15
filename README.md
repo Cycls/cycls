@@ -4,7 +4,8 @@ Distribute Intelligence
 
 <h4 align="center">
   <a href="https://cycls.com">Website</a> |
-  <a href="https://docs.cycls.com">Docs</a>
+  <a href="https://docs.cycls.com">Docs</a> |
+  <a href="docs/tutorial.md">Tutorial</a>
 </h4>
 
 <h4 align="center">
@@ -64,7 +65,7 @@ app.deploy()  # Live at https://agent.cycls.ai
 pip install cycls
 ```
 
-Requires Docker.
+Requires Docker. See the [full tutorial](docs/tutorial.md) for a comprehensive guide.
 
 ## What You Get
 
@@ -87,6 +88,8 @@ Get an API key at [cycls.com](https://cycls.com).
 
 ## Authentication & Analytics
 
+See the [tutorial](docs/tutorial.md#authentication) for full auth and monetization examples.
+
 ```python
 @cycls.app(pip=["openai"], auth=True, analytics=True)
 async def app(context):
@@ -103,7 +106,7 @@ async def app(context):
 
 ## Native UI Components
 
-Yield structured objects for rich streaming responses:
+Yield structured objects for rich streaming responses. See the [tutorial](docs/tutorial.md#native-ui-components) for all component types and examples.
 
 ```python
 @cycls.app()
@@ -178,7 +181,7 @@ See [docs/streaming-protocol.md](docs/streaming-protocol.md) for frontend integr
 
 ## Declarative Infrastructure
 
-Define your entire runtime in the decorator:
+Define your entire runtime in the decorator. See the [tutorial](docs/tutorial.md#declarative-infrastructure) for more details.
 
 ```python
 @cycls.app(
@@ -248,6 +251,13 @@ Access them at `https://your-app.cycls.ai/public/logo.png`.
 - **Just works** - Closures, lambdas, dynamic imports - your function runs exactly as written
 
 No YAML. No Dockerfiles. No infrastructure repo. The code is the deployment.
+
+## Learn More
+
+- [Tutorial](docs/tutorial.md) - Comprehensive guide from basics to advanced
+- [Streaming Protocol](docs/streaming-protocol.md) - Frontend integration
+- [Runtime](docs/runtime.md) - Containerization details
+- [Examples](examples/) - Working code samples
 
 ## License
 
