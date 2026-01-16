@@ -99,3 +99,10 @@ Tests require Docker running. Test files:
 - `tests/app_test.py` - App decorator tests
 - `tests/function_test.py` - Function integration tests
 - `tests/web_test.py` - Web server tests
+
+## Publishing
+
+When asked to "publish":
+1. Bump the version in `pyproject.toml`
+2. Commit and push the changes to git (do not coauthor)
+2. Run: `rm -rf dist && export $(cat .env | xargs) && uv build && uv publish`
