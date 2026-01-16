@@ -14,12 +14,14 @@ class App(Function):
     """App extends Function with web UI serving capabilities."""
 
     def __init__(self, func, name, theme="default", pip=None, apt=None, copy=None, copy_public=None,
-                 auth=False, org=None, header=None, intro=None, title=None, plan="free", analytics=False):
+                 auth=False, org=None, header=None, intro=None, title=None, plan="free", analytics=False,
+                 state=False):
         if theme not in THEMES:
             raise ValueError(f"Unknown theme: {theme}. Available: {THEMES}")
         self.user_func = func
         self.theme = theme
         self.copy_public = copy_public or []
+        self.state = state
 
         self.config = Config(
             header=header,
@@ -29,7 +31,14 @@ class App(Function):
             plan=plan,
             analytics=analytics,
             org=org,
+            state=state,
+            app_name=name,
         )
+
+        # Add state dependencies if enabled
+        if state:
+            pip = list(pip or [])
+            pip.append("libsql-experimental")
 
         # Build files dict for Function (theme is inside cycls/)
         files = {str(CYCLS_PATH): "cycls"}
