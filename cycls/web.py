@@ -1,7 +1,7 @@
 import json, inspect
 from pathlib import Path
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Union, Any
 from .auth import PK_LIVE, PK_TEST, JWKS_PROD, JWKS_TEST
 
 class Config(BaseModel):
@@ -17,6 +17,8 @@ class Config(BaseModel):
     pk: Optional[str] = None
     jwks: Optional[str] = None
     debug: bool = False
+    state: Union[bool, str] = False
+    app_name: str = "app"
 
     def set_prod(self, prod: bool):
         self.prod = prod
@@ -95,6 +97,9 @@ def web(func, config):
     class Context(BaseModel):
         messages: Any
         user: Optional[User] = None
+        state: Optional[Any] = None
+
+        model_config = {"arbitrary_types_allowed": True}
 
         @property
         def last_message(self) -> str:
@@ -119,6 +124,12 @@ def web(func, config):
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Auth error: {e}", headers={"WWW-Authenticate": "Bearer"})
     
+    # Initialize state connection if enabled
+    _state_conn = None
+    if config.state:
+        from .state import connect
+        _state_conn = connect(config.state, app_name=config.app_name)
+
     @app.post("/")
     @app.post("/chat/cycls")
     @app.post("/chat/completions")
@@ -127,7 +138,16 @@ def web(func, config):
         data = await request.json()
         messages = data.get("messages")
         user_data = jwt.get("user") if jwt else None
-        context = Context(messages = Messages(messages), user = User(**user_data) if user_data else None)
+        user = User(**user_data) if user_data else None
+
+        # Initialize state for this request
+        state_instance = None
+        if config.state and _state_conn:
+            from .state import State
+            user_id = user.id if user else None
+            state_instance = State(_state_conn, user_id=user_id)
+
+        context = Context(messages=Messages(messages), user=user, state=state_instance)
         try:
             stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
         except Exception as e:
