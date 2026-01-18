@@ -4,7 +4,7 @@ version = "0.0.2.90"
 description = "Distribute Intelligence"
 authors = [{ name = "Mohammed J. AlRujayi", email = "mj@cycls.com" }]
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.111.0",
     "httpx>=0.27.0",
@@ -13,6 +13,8 @@ dependencies = [
     "cloudpickle>=3.1.1",
     "uvicorn>=0.30.0",
     "email-validator>=2.0.0",
+    "watchfiles>=1.0.0",
+    "agentfs-sdk==0.4.0",
 ]
 
 [project.scripts]

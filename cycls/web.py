@@ -16,9 +16,7 @@ class Config(BaseModel):
     org: Optional[str] = None
     pk: Optional[str] = None
     jwks: Optional[str] = None
-    debug: bool = False
     state: Union[bool, str] = False
-    app_name: str = "app"
 
     def set_prod(self, prod: bool):
         self.prod = prod
@@ -39,18 +37,13 @@ def sse(item):
     if not isinstance(item, dict): item = {"type": "text", "text": item}
     return f"data: {json.dumps(item)}\n\n"
 
-async def encoder(stream, debug=False):
-    import traceback
-    try:
-        if inspect.isasyncgen(stream):
-            async for item in stream:
-                if msg := sse(item): yield msg
-        else:
-            for item in stream:
-                if msg := sse(item): yield msg
-    except Exception as e:
-        error_msg = traceback.format_exc() if debug else str(e)
-        yield sse({"type": "thinking", "thinking": f"⚠️ Error\n```\n{error_msg}```"})
+async def encoder(stream):
+    if inspect.isasyncgen(stream):
+        async for item in stream:
+            if msg := sse(item): yield msg
+    else:
+        for item in stream:
+            if msg := sse(item): yield msg
     yield "data: [DONE]\n\n"
 
 class Messages(list):
@@ -107,6 +100,14 @@ def web(func, config):
                 return self.messages[-1].get("content", "")
             return ""
 
+        @property
+        def kv(self):
+            return self.state.kv if self.state else None
+
+        @property
+        def fs(self):
+            return self.state.fs if self.state else None
+
     app = FastAPI()
     bearer_scheme = HTTPBearer()
 
@@ -124,42 +125,29 @@ def web(func, config):
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Auth error: {e}", headers={"WWW-Authenticate": "Bearer"})
     
-    # Initialize state connection if enabled
-    _state_conn = None
-    if config.state:
-        from .state import connect
-        _state_conn = connect(config.state, app_name=config.app_name)
-
     @app.post("/")
     @app.post("/chat/cycls")
     @app.post("/chat/completions")
     async def back(request: Request, jwt: Optional[dict] = Depends(validate) if config.auth else None):
-        import traceback
         data = await request.json()
         messages = data.get("messages")
         user_data = jwt.get("user") if jwt else None
         user = User(**user_data) if user_data else None
 
-        # Initialize state for this request
+        # Initialize state scoped to user
         state_instance = None
-        if config.state and _state_conn:
-            from .state import State
-            user_id = user.id if user else None
-            state_instance = State(_state_conn, user_id=user_id)
+        if config.state:
+            from .state import create_state
+            user_id = user.id if user else "anonymous"
+            state_instance = await create_state(user_id)
 
         context = Context(messages=Messages(messages), user=user, state=state_instance)
-        try:
-            stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
-        except Exception as e:
-            error_msg = traceback.format_exc() if config.debug else str(e)
-            async def error_stream():
-                yield sse({"type": "thinking", "thinking": f"⚠️ Error\n```\n{error_msg}```"})
-                yield "data: [DONE]\n\n"
-            return StreamingResponse(error_stream(), media_type="text/event-stream")
+        stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
+
         if request.url.path == "/chat/completions":
             stream = openai_encoder(stream)
         elif request.url.path == "/chat/cycls":
-            stream = encoder(stream, debug=config.debug)
+            stream = encoder(stream)
         return StreamingResponse(stream, media_type="text/event-stream")
 
     @app.get("/config")
