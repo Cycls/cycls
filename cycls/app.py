@@ -32,13 +32,7 @@ class App(Function):
             analytics=analytics,
             org=org,
             state=state,
-            app_name=name,
         )
-
-        # Add state dependencies if enabled
-        if state:
-            pip = list(pip or [])
-            pip.append("libsql-experimental")
 
         # Build files dict for Function (theme is inside cycls/)
         files = {str(CYCLS_PATH): "cycls"}
@@ -48,7 +42,7 @@ class App(Function):
         super().__init__(
             func=func,
             name=name,
-            pip=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", "python-dotenv", "docker", *(pip or [])],
+            pip=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", "python-dotenv", "docker", "agentfs-sdk", "pyturso==0.4.0rc17", *(pip or [])],
             apt=apt,
             copy=files,
             base_url=_get_base_url(),
@@ -60,7 +54,6 @@ class App(Function):
 
     def _prepare_func(self, prod):
         self.config.set_prod(prod)
-        self.config.debug = not prod  # debug=True in local mode
         self.config.public_path = f"cycls/themes/{self.theme}"
         user_func, config, name = self.user_func, self.config, self.name
         self.func = lambda port: __import__("cycls").web.serve(user_func, config, name, port)
@@ -70,7 +63,6 @@ class App(Function):
         print(f"Starting local server at localhost:{port}")
         self.config.public_path = str(CYCLS_PATH.joinpath(f"themes/{self.theme}"))
         self.config.set_prod(False)
-        self.config.debug = True
         uvicorn.run(web(self.user_func, self.config), host="0.0.0.0", port=port)
 
     def local(self, port=8080, watch=True):
