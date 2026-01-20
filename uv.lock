@@ -176,7 +176,7 @@ wheels = [
 
 [[package]]
 name = "cycls"
-version = "0.0.2.90"
+version = "0.0.2.91"
 source = { editable = "." }
 dependencies = [
     { name = "agentfs-sdk" },
