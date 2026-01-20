@@ -1,6 +1,6 @@
 [project]
 name = "cycls"
-version = "0.0.2.91"
+version = "0.0.2.92"
 description = "Distribute Intelligence"
 authors = [{ name = "Mohammed J. AlRujayi", email = "mj@cycls.com" }]
 readme = "README.md"
@@ -14,8 +14,10 @@ dependencies = [
     "uvicorn>=0.30.0",
     "email-validator>=2.0.0",
     "watchfiles>=1.0.0",
-    "agentfs-sdk==0.4.0",
 ]
+
+[project.optional-dependencies]
+state = ["agentfs-sdk==0.4.0"]
 
 [project.scripts]
 cycls = "cycls.cli:main"
