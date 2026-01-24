@@ -15,13 +15,14 @@ class App(Function):
 
     def __init__(self, func, name, theme="default", pip=None, apt=None, copy=None, copy_public=None,
                  auth=False, org=None, header=None, intro=None, title=None, plan="free", analytics=False,
-                 state=False):
+                 state=False, memory="1Gi"):
         if theme not in THEMES:
             raise ValueError(f"Unknown theme: {theme}. Available: {THEMES}")
         self.user_func = func
         self.theme = theme
         self.copy_public = copy_public or []
         self.state = state
+        self.memory = memory
 
         self.config = Config(
             header=header,
@@ -79,12 +80,12 @@ class App(Function):
         self._prepare_func(prod=True)
         return super().deploy(port=port)
 
-    def _deploy(self, port=8080):
+    def _deploy(self, port=8080, memory=None):
         """Deploy to testing infrastructure."""
         if self.api_key is None:
             raise RuntimeError("Missing API key. Set cycls.api_key or CYCLS_API_KEY environment variable.")
         self._prepare_func(prod=True)
-        return super()._deploy(port=port)
+        return super()._deploy(port=port, memory=memory or self.memory)
 
 
 def app(name=None, **kwargs):

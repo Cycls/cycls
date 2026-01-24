@@ -46,10 +46,14 @@ api_key = None
 base_url = None
 
 def _get_api_key():
-    return api_key or os.getenv("CYCLS_API_KEY")
+    import sys
+    cycls_pkg = sys.modules.get('cycls')
+    return api_key or (cycls_pkg and cycls_pkg.__dict__.get('api_key')) or os.getenv("CYCLS_API_KEY")
 
 def _get_base_url():
-    return base_url or os.getenv("CYCLS_BASE_URL")
+    import sys
+    cycls_pkg = sys.modules.get('cycls')
+    return base_url or (cycls_pkg and cycls_pkg.__dict__.get('base_url')) or os.getenv("CYCLS_BASE_URL")
 
 def _hash_path(path_str: str) -> str:
     h = hashlib.sha256()
@@ -91,14 +95,22 @@ class Function:
         self.apt = sorted(apt or [])
         self.run_commands = sorted(run_commands or [])
         self.copy = {f: f for f in copy} if isinstance(copy, list) else (copy or {})
-        self.base_url = base_url or "https://service-core-280879789566.me-central1.run.app"
-        self.api_key = api_key
+        self._base_url = base_url
+        self._api_key = api_key
         self.pip = sorted(set(pip or []) | {"cloudpickle"})
 
         self.image_prefix = f"cycls/{self.name}"
         self.managed_label = "cycls.function"
         self._docker_client = None
         self._container = None
+
+    @property
+    def api_key(self):
+        return self._api_key or _get_api_key()
+
+    @property
+    def base_url(self):
+        return self._base_url or _get_base_url() or "https://service-core-280879789566.me-central1.run.app"
 
     @property
     def docker_client(self):
@@ -401,6 +413,7 @@ CMD ["python", "entrypoint.py"]
 
         base_url = self.base_url
         port = kwargs.pop('port', 8080)
+        memory = kwargs.pop('memory', '1Gi')
 
         # Check name availability before uploading
         print(f"Checking '{self.name}'...")
@@ -442,7 +455,7 @@ CMD ["python", "entrypoint.py"]
             with open(archive_path, 'rb') as f:
                 response = requests.post(
                     f"{base_url}/v1/deploy",
-                    data={"function_name": self.name, "port": port},
+                    data={"function_name": self.name, "port": port, "memory": memory},
                     files={'source_archive': (archive_name, f, 'application/gzip')},
                     headers={"X-API-Key": self.api_key},
                     timeout=9000,
