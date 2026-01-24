@@ -176,10 +176,9 @@ wheels = [
 
 [[package]]
 name = "cycls"
-version = "0.0.2.91"
+version = "0.0.2.93"
 source = { editable = "." }
 dependencies = [
-    { name = "agentfs-sdk" },
     { name = "cloudpickle" },
     { name = "docker" },
     { name = "email-validator" },
@@ -190,6 +189,11 @@ dependencies = [
     { name = "watchfiles" },
 ]
 
+[package.optional-dependencies]
+state = [
+    { name = "agentfs-sdk" },
+]
+
 [package.dev-dependencies]
 test = [
     { name = "pytest" },
@@ -198,7 +202,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentfs-sdk", specifier = "==0.4.0" },
+    { name = "agentfs-sdk", marker = "extra == 'state'", specifier = "==0.4.0" },
     { name = "cloudpickle", specifier = ">=3.1.1" },
     { name = "docker", specifier = ">=7.1.0" },
     { name = "email-validator", specifier = ">=2.0.0" },
@@ -208,6 +212,7 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.30.0" },
     { name = "watchfiles", specifier = ">=1.0.0" },
 ]
+provides-extras = ["state"]
 
 [package.metadata.requires-dev]
 test = [

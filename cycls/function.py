@@ -396,6 +396,50 @@ CMD ["python", "entrypoint.py"]
                 print(f"Connection error: {e}")
                 return None
 
+    def _deploy(self, *args, **kwargs):
+        import requests
+
+        port = kwargs.pop('port', 8080)
+        print(f"Deploying '{self.name}'...")
+
+        payload = cloudpickle.dumps((self.func, args, {**kwargs, 'port': port}))
+        archive_name = f"{self.name}-{hashlib.sha256(payload).hexdigest()[:16]}.tar.gz"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workdir = Path(tmpdir)
+            self._prepare_deploy_context(workdir, port, args, kwargs)
+
+            archive_path = workdir / archive_name
+            with tarfile.open(archive_path, "w:gz") as tar:
+                for f in workdir.glob("**/*"):
+                    if f.is_file() and f != archive_path:
+                        tar.add(f, arcname=f.relative_to(workdir))
+
+            print("Uploading...")
+            with open(archive_path, 'rb') as f:
+                response = requests.post(
+                    "https://api-572247013948.me-central1.run.app/v1/deploy",
+                    data={"function_name": self.name, "port": port},
+                    files={'source_archive': (archive_name, f, 'application/gzip')},
+                    headers={"X-API-Key": self.api_key},
+                    timeout=9000,
+                    stream=True,
+                )
+
+            # Parse NDJSON stream
+            url = None
+            for line in response.iter_lines(decode_unicode=True):
+                if line:
+                    event = json.loads(line)
+                    status = event.get("status", "")
+                    msg = event.get("message", "")
+                    print(f"  [{status}] {msg}")
+                    if status == "DONE":
+                        url = event.get("url")
+                    elif status == "ERROR":
+                        return None
+            return url
+
     def __del__(self):
         self._cleanup_container()
 

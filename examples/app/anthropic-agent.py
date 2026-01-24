@@ -1,3 +1,5 @@
+# export  CYCLS_API_KEY=
+# uv run examples/app/anthropic-agent.py
 import cycls
 
 @cycls.app(pip=["claude-agent-sdk"], copy=[".env"])
@@ -34,4 +36,5 @@ async def anthropic_agent(context):
                 yield {"type": "thinking", "thinking": f"Tool completed"}
 
 
-anthropic_agent.local()
+# anthropic_agent.local()
+anthropic_agent._deploy()

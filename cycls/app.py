@@ -79,6 +79,13 @@ class App(Function):
         self._prepare_func(prod=True)
         return super().deploy(port=port)
 
+    def _deploy(self, port=8080):
+        """Deploy to testing infrastructure."""
+        if self.api_key is None:
+            raise RuntimeError("Missing API key. Set cycls.api_key or CYCLS_API_KEY environment variable.")
+        self._prepare_func(prod=True)
+        return super()._deploy(port=port)
+
 
 def app(name=None, **kwargs):
     """Decorator that transforms a function into a deployable App."""
