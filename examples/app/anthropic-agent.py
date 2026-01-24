@@ -4,7 +4,7 @@ import cycls
 
 cycls.base_url = "https://api-572247013948.me-central1.run.app"
 
-@cycls.app(pip=["claude-agent-sdk"], copy=[".env"])
+@cycls.app(pip=["claude-agent-sdk"], copy=[".env"], memory="2Gi")
 async def anthropic_agent(context):
     from claude_agent_sdk import (
         ClaudeSDKClient,
