@@ -399,7 +399,30 @@ CMD ["python", "entrypoint.py"]
     def _deploy(self, *args, **kwargs):
         import requests
 
+        base_url = self.base_url
         port = kwargs.pop('port', 8080)
+
+        # Check name availability before uploading
+        print(f"Checking '{self.name}'...")
+        try:
+            check_resp = requests.get(
+                f"{base_url}/v1/deployment/check-name",
+                params={"name": self.name},
+                headers={"X-API-Key": self.api_key},
+                timeout=30,
+            )
+            if check_resp.status_code == 401:
+                print("Error: Invalid API key")
+                return None
+            check_resp.raise_for_status()
+            check_data = check_resp.json()
+            if not check_data.get("available"):
+                print(f"Error: {check_data.get('reason', 'Name unavailable')}")
+                return None
+        except requests.exceptions.RequestException as e:
+            print(f"Error checking name: {e}")
+            return None
+
         print(f"Deploying '{self.name}'...")
 
         payload = cloudpickle.dumps((self.func, args, {**kwargs, 'port': port}))
@@ -418,13 +441,21 @@ CMD ["python", "entrypoint.py"]
             print("Uploading...")
             with open(archive_path, 'rb') as f:
                 response = requests.post(
-                    "https://api-572247013948.me-central1.run.app/v1/deploy",
+                    f"{base_url}/v1/deploy",
                     data={"function_name": self.name, "port": port},
                     files={'source_archive': (archive_name, f, 'application/gzip')},
                     headers={"X-API-Key": self.api_key},
                     timeout=9000,
                     stream=True,
                 )
+
+            if not response.ok:
+                print(f"Deploy failed: {response.status_code}")
+                try:
+                    print(f"  {response.json()['detail']}")
+                except (json.JSONDecodeError, KeyError):
+                    print(f"  {response.text}")
+                return None
 
             # Parse NDJSON stream
             url = None
@@ -436,6 +467,7 @@ CMD ["python", "entrypoint.py"]
                     print(f"  [{status}] {msg}")
                     if status == "DONE":
                         url = event.get("url")
+                        print(f"Deployed: {url}")
                     elif status == "ERROR":
                         return None
             return url
