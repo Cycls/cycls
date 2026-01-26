@@ -1,6 +1,6 @@
 [project]
 name = "cycls"
-version = "0.0.2.98"
+version = "0.0.2.99"
 description = "Distribute Intelligence"
 authors = [{ name = "Mohammed J. AlRujayi", email = "mj@cycls.com" }]
 readme = "README.md"
