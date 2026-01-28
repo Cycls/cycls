@@ -73,19 +73,12 @@ class App(Function):
         self._prepare_func(prod=False)
         self.watch(port=port) if watch else self.run(port=port)
 
-    def deploy(self, port=8080):
+    def deploy(self, port=8080, memory=None):
         """Deploy to production."""
         if self.api_key is None:
             raise RuntimeError("Missing API key. Set cycls.api_key or CYCLS_API_KEY environment variable.")
         self._prepare_func(prod=True)
-        return super().deploy(port=port)
-
-    def _deploy(self, port=8080, memory=None):
-        """Deploy to testing infrastructure."""
-        if self.api_key is None:
-            raise RuntimeError("Missing API key. Set cycls.api_key or CYCLS_API_KEY environment variable.")
-        self._prepare_func(prod=True)
-        return super()._deploy(port=port, memory=memory or self.memory)
+        return super().deploy(port=port, memory=memory or self.memory)
 
 
 def app(name=None, **kwargs):

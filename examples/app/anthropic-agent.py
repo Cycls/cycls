@@ -2,7 +2,7 @@
 # uv run examples/app/anthropic-agent.py
 import cycls
 
-cycls.base_url = "https://api-572247013948.me-central1.run.app"
+# cycls.base_url = "https://api-572247013948.me-central1.run.app"
 
 @cycls.app(pip=["claude-agent-sdk"], copy=[".env"], memory="2Gi")
 async def anthropic_agent(context):
@@ -39,4 +39,4 @@ async def anthropic_agent(context):
 
 
 # anthropic_agent.local()
-anthropic_agent._deploy()
+anthropic_agent.deploy()
