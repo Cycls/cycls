@@ -110,7 +110,7 @@ class Function:
 
     @property
     def base_url(self):
-        return self._base_url or _get_base_url() or "https://service-core-280879789566.me-central1.run.app"
+        return self._base_url or _get_base_url() or "https://api.cycls.ai"
 
     @property
     def docker_client(self):
@@ -364,51 +364,6 @@ CMD ["python", "entrypoint.py"]
             return tag
 
     def deploy(self, *args, **kwargs):
-        import requests
-
-        port = kwargs.pop('port', 8080)
-        print(f"Deploying '{self.name}'...")
-
-        payload = cloudpickle.dumps((self.func, args, {**kwargs, 'port': port}))
-        archive_name = f"{self.name}-{hashlib.sha256(payload).hexdigest()[:16]}.tar.gz"
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workdir = Path(tmpdir)
-            self._prepare_deploy_context(workdir, port, args, kwargs)
-
-            archive_path = workdir / archive_name
-            with tarfile.open(archive_path, "w:gz") as tar:
-                for f in workdir.glob("**/*"):
-                    if f.is_file() and f != archive_path:
-                        tar.add(f, arcname=f.relative_to(workdir))
-
-            print("Uploading build context...")
-            try:
-                with open(archive_path, 'rb') as f:
-                    response = requests.post(
-                        f"{self.base_url}/v1/deploy",
-                        data={"function_name": self.name, "port": port},
-                        files={'source_archive': (archive_name, f, 'application/gzip')},
-                        headers={"X-API-Key": self.api_key},
-                        timeout=9000
-                    )
-                response.raise_for_status()
-                result = response.json()
-                print(f"Deployed: {result['url']}")
-                return result['url']
-
-            except requests.exceptions.HTTPError as e:
-                print(f"Deploy failed: {e.response.status_code}")
-                try:
-                    print(f"  {e.response.json()['detail']}")
-                except (json.JSONDecodeError, KeyError):
-                    print(f"  {e.response.text}")
-                return None
-            except requests.exceptions.RequestException as e:
-                print(f"Connection error: {e}")
-                return None
-
-    def _deploy(self, *args, **kwargs):
         import requests
 
         base_url = self.base_url
