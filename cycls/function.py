@@ -9,6 +9,9 @@ import sys
 import shutil
 from pathlib import Path
 import tarfile
+from dotenv import load_dotenv
+
+load_dotenv()
 
 os.environ["DOCKER_BUILDKIT"] = "1"
 
