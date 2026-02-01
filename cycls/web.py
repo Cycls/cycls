@@ -137,22 +137,22 @@ def web(func, config):
     async def get_config():
         return config
 
-    @app.post("/files")
-    async def upload_file(file: UploadFile = File(...), jwt: dict = Depends(validate)):
+    @app.post("/attachments")
+    async def upload_attachment(file: UploadFile = File(...), jwt: dict = Depends(validate)):
         user_id = jwt["user"]["id"]
-        user_dir = Path(f"/workspace/{user_id}/files")
+        user_dir = Path(f"/workspace/{user_id}/attachments")
         user_dir.mkdir(parents=True, exist_ok=True)
 
         file_path = user_dir / file.filename
         with open(file_path, "wb") as f:
             f.write(await file.read())
 
-        return {"url": f"/files/{file.filename}"}
+        return {"url": f"/attachments/{file.filename}"}
 
-    @app.get("/files/{filename}")
-    async def get_file(filename: str, jwt: dict = Depends(validate)):
+    @app.get("/attachments/{filename}")
+    async def get_attachment(filename: str, jwt: dict = Depends(validate)):
         user_id = jwt["user"]["id"]
-        file_path = Path(f"/workspace/{user_id}/files") / filename
+        file_path = Path(f"/workspace/{user_id}/attachments") / filename
 
         if not file_path.exists():
             raise HTTPException(status_code=404, detail="File not found")
