@@ -2,6 +2,9 @@ import pytest
 import cycls
 from cycls.app import App
 import asyncio
+import subprocess
+import tempfile
+import os
 
 # To run these tests:
 # poetry run pytest tests/app_test.py -v -s
@@ -251,4 +254,35 @@ def test_app_all_config_options():
     assert full_app.config.auth == True
     assert full_app.config.analytics == True
     assert full_app.config.org == "my-org"
+    print("✅ Test passed.")
+
+
+# --- Test Case 15: Auto-loads .env on Import ---
+# Verifies that importing cycls loads .env file
+
+def test_dotenv_loaded_on_import():
+    """Tests that .env is automatically loaded when cycls is imported."""
+    print("\n--- Running test: test_dotenv_loaded_on_import ---")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create a .env file with a test variable
+        env_path = os.path.join(tmpdir, ".env")
+        with open(env_path, "w") as f:
+            f.write("CYCLS_TEST_VAR=loaded_from_dotenv\n")
+
+        # Run a subprocess that imports cycls and checks the env var
+        code = """
+import os
+import cycls
+print(os.environ.get('CYCLS_TEST_VAR', 'NOT_FOUND'))
+"""
+        result = subprocess.run(
+            ["python", "-c", code],
+            cwd=tmpdir,
+            capture_output=True,
+            text=True
+        )
+
+        assert result.stdout.strip() == "loaded_from_dotenv", f"Expected 'loaded_from_dotenv', got '{result.stdout.strip()}'"
+
     print("✅ Test passed.")
