@@ -16,9 +16,6 @@ dependencies = [
     "watchfiles>=1.0.0",
 ]
 
-[project.optional-dependencies]
-state = ["agentfs-sdk==0.4.0"]
-
 [project.scripts]
 cycls = "cycls.cli:main"
 

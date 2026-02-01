@@ -15,13 +15,12 @@ class App(Function):
 
     def __init__(self, func, name, theme="default", pip=None, apt=None, copy=None, copy_public=None,
                  auth=False, org=None, header=None, intro=None, title=None, plan="free", analytics=False,
-                 state=False, memory="1Gi"):
+                 memory="1Gi"):
         if theme not in THEMES:
             raise ValueError(f"Unknown theme: {theme}. Available: {THEMES}")
         self.user_func = func
         self.theme = theme
         self.copy_public = copy_public or []
-        self.state = state
         self.memory = memory
 
         self.config = Config(
@@ -32,7 +31,6 @@ class App(Function):
             plan=plan,
             analytics=analytics,
             org=org,
-            state=state,
         )
 
         # Build files dict for Function (theme is inside cycls/)
@@ -43,7 +41,7 @@ class App(Function):
         super().__init__(
             func=func,
             name=name,
-            pip=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", "python-dotenv", "docker", "agentfs-sdk", "pyturso==0.4.0rc17", *(pip or [])],
+            pip=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", "python-dotenv", "docker", *(pip or [])],
             apt=apt,
             copy=files,
             base_url=_get_base_url(),
