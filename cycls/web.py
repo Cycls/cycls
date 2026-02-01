@@ -1,7 +1,7 @@
 import json, inspect
 from pathlib import Path
 from pydantic import BaseModel
-from typing import Optional, Union, Any
+from typing import Optional, Any
 from .auth import PK_LIVE, PK_TEST, JWKS_PROD, JWKS_TEST
 
 class Config(BaseModel):
@@ -16,7 +16,6 @@ class Config(BaseModel):
     org: Optional[str] = None
     pk: Optional[str] = None
     jwks: Optional[str] = None
-    state: Union[bool, str] = False
 
     def set_prod(self, prod: bool):
         self.prod = prod
@@ -90,7 +89,6 @@ def web(func, config):
     class Context(BaseModel):
         messages: Any
         user: Optional[User] = None
-        state: Optional[Any] = None
 
         model_config = {"arbitrary_types_allowed": True}
 
@@ -99,14 +97,6 @@ def web(func, config):
             if self.messages:
                 return self.messages[-1].get("content", "")
             return ""
-
-        @property
-        def kv(self):
-            return self.state.kv if self.state else None
-
-        @property
-        def fs(self):
-            return self.state.fs if self.state else None
 
     app = FastAPI()
     bearer_scheme = HTTPBearer()
@@ -134,14 +124,7 @@ def web(func, config):
         user_data = jwt.get("user") if jwt else None
         user = User(**user_data) if user_data else None
 
-        # Initialize state scoped to user
-        state_instance = None
-        if config.state:
-            from .state import create_state
-            user_id = user.id if user else "anonymous"
-            state_instance = await create_state(user_id)
-
-        context = Context(messages=Messages(messages), user=user, state=state_instance)
+        context = Context(messages=Messages(messages), user=user)
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
 
         if request.url.path == "/chat/completions":

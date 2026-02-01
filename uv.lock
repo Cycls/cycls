@@ -3,18 +3,6 @@ revision = 3
 requires-python = ">=3.10"
 
 [[package]]
-name = "agentfs-sdk"
-version = "0.4.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pyturso" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d5/16/3125d74919b16ff53fd1e58ad474d069690dd097b6f57269f0e65036be57/agentfs_sdk-0.4.0.tar.gz", hash = "sha256:5202dea855bf9806327392ead15f726dea28e0ffa050252ddb391e4c5fd0ffd4", size = 27565, upload-time = "2025-12-31T09:29:16.566Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/9d/e8443287e860598be742cbb0d747db6b1c99de981ffa00ff46f72f3623a6/agentfs_sdk-0.4.0-py3-none-any.whl", hash = "sha256:353e8e766a2cec351f8bda086de6d0ed4f712ba604ef7f48154723a1710a1132", size = 19031, upload-time = "2025-12-31T09:29:15.5Z" },
-]
-
-[[package]]
 name = "annotated-doc"
 version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -176,7 +164,7 @@ wheels = [
 
 [[package]]
 name = "cycls"
-version = "0.0.2.100"
+version = "0.0.2.102"
 source = { editable = "." }
 dependencies = [
     { name = "cloudpickle" },
@@ -189,11 +177,6 @@ dependencies = [
     { name = "watchfiles" },
 ]
 
-[package.optional-dependencies]
-state = [
-    { name = "agentfs-sdk" },
-]
-
 [package.dev-dependencies]
 test = [
     { name = "pytest" },
@@ -202,7 +185,6 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentfs-sdk", marker = "extra == 'state'", specifier = "==0.4.0" },
     { name = "cloudpickle", specifier = ">=3.1.1" },
     { name = "docker", specifier = ">=7.1.0" },
     { name = "email-validator", specifier = ">=2.0.0" },
@@ -212,7 +194,6 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.30.0" },
     { name = "watchfiles", specifier = ">=1.0.0" },
 ]
-provides-extras = ["state"]
 
 [package.metadata.requires-dev]
 test = [
@@ -523,28 +504,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d1/db/7ef3487e0fb0049ddb5ce41d3a49c235bf9ad299b6a25d5780a89f19230f/pytest-9.0.2.tar.gz", hash = "sha256:75186651a92bd89611d1d9fc20f0b4345fd827c41ccd5c299a868a05d70edf11", size = 1568901, upload-time = "2025-12-06T21:30:51.014Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3b/ab/b3226f0bd7cdcf710fbede2b3548584366da3b19b5021e74f5bde2a8fa3f/pytest-9.0.2-py3-none-any.whl", hash = "sha256:711ffd45bf766d5264d487b917733b453d917afd2b0ad65223959f59089f875b", size = 374801, upload-time = "2025-12-06T21:30:49.154Z" },
-]
-
-[[package]]
-name = "pyturso"
-version = "0.4.0rc17"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ec/cc/aada8d3bd2e67f8d38bad43cec1b72c9eafc6f9e79f5d6bc0b247eee33d9/pyturso-0.4.0rc17.tar.gz", hash = "sha256:3b9a5d39c425c085337f84b1c3e7cfd46ea8a4de439a59c9a04fc6d46538877d", size = 1423097, upload-time = "2025-12-17T08:34:41.596Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5b/83/7b746c9d2a95151ad2ce7c3dc614d8e431ea96e2430bdd6cb423b3c1c7b2/pyturso-0.4.0rc17-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:6dce27dde7abea0fd68d143e7a3658a9d49c4125e564e55b8e0910b6c2e9fcd5", size = 3902006, upload-time = "2025-12-17T08:34:04.722Z" },
-    { url = "https://files.pythonhosted.org/packages/58/6c/c9af43ded31c21e83acd9daf8f0164d96f980ff5513ed71f9f9c252c843c/pyturso-0.4.0rc17-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:f2517cfea87920baae879d6a63f3ebdbad00d8952c0a8ba02eb33c1dc3f07f04", size = 13015483, upload-time = "2025-12-17T08:34:08.117Z" },
-    { url = "https://files.pythonhosted.org/packages/be/03/acb7e9bf43f38fb59f1956b2bdacc5b8b9e197f179cabefac18425df31fa/pyturso-0.4.0rc17-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:e00b8eb77a2a372b99dbda7b445b374be235a70c37527260cea3e020fded842c", size = 3902415, upload-time = "2025-12-17T08:34:11.295Z" },
-    { url = "https://files.pythonhosted.org/packages/0d/f7/9ae6a015280ea37665b5f98b8ded8884f9e812de1ab16e93bde6c774cb26/pyturso-0.4.0rc17-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:810cd493b54d190cd2757d1efef1f516aabce9b2ffabe813030b8063dc06e7fd", size = 13014740, upload-time = "2025-12-17T08:34:14.005Z" },
-    { url = "https://files.pythonhosted.org/packages/ad/95/83fb263f9d94dc81764edcd0ae48ceceada3d1a3b53fd58cb7921b342245/pyturso-0.4.0rc17-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:277b47261efe19431047bfd5e2d043b45a0c66e42cc0329f9125ccf7dd86960a", size = 3898375, upload-time = "2025-12-17T08:34:16.801Z" },
-    { url = "https://files.pythonhosted.org/packages/5d/7d/f3b3da7b64236f2606599974e7a436a72ec77f3399b47b2c8584ce57fcd3/pyturso-0.4.0rc17-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ff91db467164feb038aea4f5bc82b801d39953645fccb748041774a3336bca7a", size = 13020246, upload-time = "2025-12-17T08:34:19.464Z" },
-    { url = "https://files.pythonhosted.org/packages/c1/86/cfcf1baf3d22f8d877e19ab0cb6cb859be808bb2c14fa4c4a48f2a3ecfbc/pyturso-0.4.0rc17-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:57a0fc0de045412d39e4012da4500b911360a32679c52660e2459ba683c3b909", size = 3898288, upload-time = "2025-12-17T08:34:22.36Z" },
-    { url = "https://files.pythonhosted.org/packages/a9/94/0a9ffdbf15c8041aad858839aa77b4237fee65e6a885ffd19776febd6037/pyturso-0.4.0rc17-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:4642698306a595b74eaaa954dfe2c184edb414988c6cbafe1066535205b711d1", size = 13018635, upload-time = "2025-12-17T08:34:25.283Z" },
-    { url = "https://files.pythonhosted.org/packages/df/5a/e5775a9953602090b366b8dce2c4ff07627c787732edb30106e72eeb10e0/pyturso-0.4.0rc17-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:1413c95e533bd4e0874da12c16f04f86bc395736a3da73b018f5d4e769779ce2", size = 3898142, upload-time = "2025-12-17T08:34:27.978Z" },
-    { url = "https://files.pythonhosted.org/packages/c4/aa/1a5a8297ee543051ed2d952e67b773bc653243f63ea4354008adca2e7691/pyturso-0.4.0rc17-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:0695a2f4b3a4df7f7e59d603dd5110bd7399c61ddc8437fd2111f8f339718561", size = 13013397, upload-time = "2025-12-17T08:34:32.006Z" },
-    { url = "https://files.pythonhosted.org/packages/ac/0b/894c6d09ee6efe84ec6604e5509e3acc012f206004f6fc027a4e64aa7127/pyturso-0.4.0rc17-pp311-pypy311_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:49c685b20e4b0028f9ef900de5e6d65b6b1199be7e458937130eb53967962986", size = 13011721, upload-time = "2025-12-17T08:34:38.315Z" },
 ]
 
 [[package]]
