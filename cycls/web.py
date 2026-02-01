@@ -65,8 +65,8 @@ class Messages(list):
         return self._raw
 
 def web(func, config):
-    from fastapi import FastAPI, Request, HTTPException, status, Depends
-    from fastapi.responses import StreamingResponse
+    from fastapi import FastAPI, Request, HTTPException, status, Depends, UploadFile, File
+    from fastapi.responses import StreamingResponse, FileResponse
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
     import jwt
     from jwt import PyJWKClient
@@ -136,6 +136,28 @@ def web(func, config):
     @app.get("/config")
     async def get_config():
         return config
+
+    @app.post("/files")
+    async def upload_file(file: UploadFile = File(...), jwt: dict = Depends(validate)):
+        user_id = jwt["user"]["id"]
+        user_dir = Path(f"/workspace/{user_id}/files")
+        user_dir.mkdir(parents=True, exist_ok=True)
+
+        file_path = user_dir / file.filename
+        with open(file_path, "wb") as f:
+            f.write(await file.read())
+
+        return {"url": f"/files/{file.filename}"}
+
+    @app.get("/files/{filename}")
+    async def get_file(filename: str, jwt: dict = Depends(validate)):
+        user_id = jwt["user"]["id"]
+        file_path = Path(f"/workspace/{user_id}/files") / filename
+
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+
+        return FileResponse(file_path)
 
     if Path("public").is_dir():
         app.mount("/public", StaticFiles(directory="public", html=True))
