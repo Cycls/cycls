@@ -2,6 +2,9 @@ import pytest
 import json
 import asyncio
 import importlib.resources
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 from cycls.web import web, Config, Messages, sse, encoder, openai_encoder
 
 # To run these tests:
@@ -380,4 +383,113 @@ def test_streaming_multiple_yields():
     assert '"type": "text"' in lines[2]
     assert '"type": "callout"' in lines[3]
     assert "[DONE]" in lines[4]
+    print("✅ Test passed.")
+
+
+# =============================================================================
+# File Upload/Download Tests
+# =============================================================================
+
+def test_file_upload_requires_auth():
+    """Tests that POST /files requires authentication."""
+    print("\n--- Running test: test_file_upload_requires_auth ---")
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = Config(public_path=THEME_PATH, auth=False)
+    app = web(dummy_agent, config)
+    client = TestClient(app)
+
+    response = client.post("/files", files={"file": ("test.txt", b"hello")})
+    assert response.status_code == 401  # Unauthorized without auth
+    print("✅ Test passed.")
+
+
+def test_file_download_requires_auth():
+    """Tests that GET /files/{filename} requires authentication."""
+    print("\n--- Running test: test_file_download_requires_auth ---")
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = Config(public_path=THEME_PATH, auth=False)
+    app = web(dummy_agent, config)
+    client = TestClient(app)
+
+    response = client.get("/files/test.txt")
+    assert response.status_code == 401  # Unauthorized without auth
+    print("✅ Test passed.")
+
+
+def test_file_upload_and_download():
+    """Tests file upload and download with mocked auth."""
+    print("\n--- Running test: test_file_upload_and_download ---")
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = Config(public_path=THEME_PATH, auth=False)
+    app = web(dummy_agent, config)
+
+    # Mock the validate dependency
+    mock_jwt = {"user": {"id": "user123", "name": "Test", "email": "test@test.com"}}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with patch("cycls.web.Path") as MockPath:
+            # Make Path return paths in our temp directory
+            def path_side_effect(p):
+                if p.startswith("/workspace"):
+                    return Path(tmpdir) / p.lstrip("/workspace/")
+                return Path(p)
+            MockPath.side_effect = path_side_effect
+
+            # Override the validate dependency
+            app.dependency_overrides = {}
+            for route in app.routes:
+                if hasattr(route, "dependant"):
+                    for dep in route.dependant.dependencies:
+                        if dep.call.__name__ == "validate":
+                            app.dependency_overrides[dep.call] = lambda: mock_jwt
+
+            client = TestClient(app)
+
+            # Upload a file
+            response = client.post(
+                "/files",
+                files={"file": ("test.txt", b"hello world")}
+            )
+            assert response.status_code == 200
+            assert response.json()["url"] == "/files/test.txt"
+
+    print("✅ Test passed.")
+
+
+def test_file_download_not_found():
+    """Tests that downloading non-existent file returns 404."""
+    print("\n--- Running test: test_file_download_not_found ---")
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = Config(public_path=THEME_PATH, auth=False)
+    app = web(dummy_agent, config)
+
+    mock_jwt = {"user": {"id": "user123", "name": "Test", "email": "test@test.com"}}
+
+    # Override validate dependency
+    for route in app.routes:
+        if hasattr(route, "dependant"):
+            for dep in route.dependant.dependencies:
+                if hasattr(dep.call, "__name__") and dep.call.__name__ == "validate":
+                    app.dependency_overrides[dep.call] = lambda: mock_jwt
+
+    client = TestClient(app)
+
+    response = client.get("/files/nonexistent.txt")
+    assert response.status_code == 404
     print("✅ Test passed.")
