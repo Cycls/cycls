@@ -387,12 +387,12 @@ def test_streaming_multiple_yields():
 
 
 # =============================================================================
-# File Upload/Download Tests
+# Attachments Upload/Download Tests
 # =============================================================================
 
-def test_file_upload_requires_auth():
-    """Tests that POST /files requires authentication."""
-    print("\n--- Running test: test_file_upload_requires_auth ---")
+def test_attachment_upload_requires_auth():
+    """Tests that POST /attachments requires authentication."""
+    print("\n--- Running test: test_attachment_upload_requires_auth ---")
     from fastapi.testclient import TestClient
 
     async def dummy_agent(context):
@@ -402,14 +402,14 @@ def test_file_upload_requires_auth():
     app = web(dummy_agent, config)
     client = TestClient(app)
 
-    response = client.post("/files", files={"file": ("test.txt", b"hello")})
+    response = client.post("/attachments", files={"file": ("test.txt", b"hello")})
     assert response.status_code == 401  # Unauthorized without auth
     print("✅ Test passed.")
 
 
-def test_file_download_requires_auth():
-    """Tests that GET /files/{filename} requires authentication."""
-    print("\n--- Running test: test_file_download_requires_auth ---")
+def test_attachment_download_requires_auth():
+    """Tests that GET /attachments/{filename} requires authentication."""
+    print("\n--- Running test: test_attachment_download_requires_auth ---")
     from fastapi.testclient import TestClient
 
     async def dummy_agent(context):
@@ -419,14 +419,14 @@ def test_file_download_requires_auth():
     app = web(dummy_agent, config)
     client = TestClient(app)
 
-    response = client.get("/files/test.txt")
+    response = client.get("/attachments/test.txt")
     assert response.status_code == 401  # Unauthorized without auth
     print("✅ Test passed.")
 
 
-def test_file_upload_and_download():
-    """Tests file upload and download with mocked auth."""
-    print("\n--- Running test: test_file_upload_and_download ---")
+def test_attachment_upload_and_download():
+    """Tests attachment upload and download with mocked auth."""
+    print("\n--- Running test: test_attachment_upload_and_download ---")
     from fastapi.testclient import TestClient
 
     async def dummy_agent(context):
@@ -459,18 +459,18 @@ def test_file_upload_and_download():
 
             # Upload a file
             response = client.post(
-                "/files",
+                "/attachments",
                 files={"file": ("test.txt", b"hello world")}
             )
             assert response.status_code == 200
-            assert response.json()["url"] == "/files/test.txt"
+            assert response.json()["url"] == "/attachments/test.txt"
 
     print("✅ Test passed.")
 
 
-def test_file_download_not_found():
-    """Tests that downloading non-existent file returns 404."""
-    print("\n--- Running test: test_file_download_not_found ---")
+def test_attachment_download_not_found():
+    """Tests that downloading non-existent attachment returns 404."""
+    print("\n--- Running test: test_attachment_download_not_found ---")
     from fastapi.testclient import TestClient
 
     async def dummy_agent(context):
@@ -490,6 +490,6 @@ def test_file_download_not_found():
 
     client = TestClient(app)
 
-    response = client.get("/files/nonexistent.txt")
+    response = client.get("/attachments/nonexistent.txt")
     assert response.status_code == 404
     print("✅ Test passed.")

@@ -1,11 +1,11 @@
-# Files API
+# Attachments API
 
-User-scoped file upload and download endpoints. Files are stored at `/workspace/{user_id}/files/` and only accessible by the authenticated user.
+User-scoped file upload and download endpoints. Files are stored at `/workspace/{user_id}/attachments/` and only accessible by the authenticated user.
 
 ## Upload
 
 ```
-POST /files
+POST /attachments
 Authorization: Bearer <jwt>
 Content-Type: multipart/form-data
 ```
@@ -16,7 +16,7 @@ Content-Type: multipart/form-data
 const formData = new FormData();
 formData.append('file', fileInput.files[0]);
 
-const res = await fetch('/files', {
+const res = await fetch('/attachments', {
   method: 'POST',
   headers: {
     'Authorization': `Bearer ${token}`
@@ -29,21 +29,21 @@ const res = await fetch('/files', {
 
 ```json
 {
-  "url": "/files/photo.png"
+  "url": "/attachments/photo.png"
 }
 ```
 
 ## Download
 
 ```
-GET /files/{filename}
+GET /attachments/{filename}
 Authorization: Bearer <jwt>
 ```
 
 ### Request
 
 ```javascript
-const res = await fetch('/files/photo.png', {
+const res = await fetch('/attachments/photo.png', {
   headers: {
     'Authorization': `Bearer ${token}`
   }
@@ -64,4 +64,4 @@ const url = URL.createObjectURL(blob);
 
 - Files are scoped to the authenticated user (extracted from JWT)
 - The returned URL requires the same JWT to access
-- Storage location: `/workspace/{user_id}/files/`
+- Storage location: `/workspace/{user_id}/attachments/`
