@@ -7,7 +7,7 @@ import cycls
 @cycls.app(pip=["claude-agent-sdk"], copy=[".env"], memory="2Gi")
 async def anthropic_agent(context):
     from claude_agent_sdk import (
-        ClaudeSDKClient,
+        ClaudeSDKClient,m
         ClaudeAgentOptions,
         AssistantMessage,
         TextBlock,
