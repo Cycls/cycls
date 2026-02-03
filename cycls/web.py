@@ -150,8 +150,7 @@ def web(func, config):
         with open(file_path, "wb") as f:
             f.write(await file.read())
 
-        base_url = str(request.base_url).rstrip("/")
-        return {"url": f"{base_url}/attachments/{token}/{quote(file.filename)}"}
+        return {"url": f"/attachments/{token}/{quote(file.filename)}"}
 
     @app.get("/attachments/{token}/{filename}")
     async def get_attachment(token: str, filename: str):
