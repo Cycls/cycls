@@ -1,4 +1,5 @@
-import json, inspect
+import json, inspect, secrets
+from urllib.parse import quote
 from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional, Any
@@ -114,11 +115,13 @@ def web(func, config):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid token: {e}", headers={"WWW-Authenticate": "Bearer"})
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Auth error: {e}", headers={"WWW-Authenticate": "Bearer"})
-    
+
+    auth = Depends(validate) if config.auth else None
+
     @app.post("/")
     @app.post("/chat/cycls")
     @app.post("/chat/completions")
-    async def back(request: Request, jwt: Optional[dict] = Depends(validate) if config.auth else None):
+    async def back(request: Request, jwt: Optional[dict] = auth):
         data = await request.json()
         messages = data.get("messages")
         user_data = jwt.get("user") if jwt else None
@@ -138,21 +141,21 @@ def web(func, config):
         return config
 
     @app.post("/attachments")
-    async def upload_attachment(file: UploadFile = File(...), jwt: dict = Depends(validate)):
-        user_id = jwt["user"]["id"]
-        user_dir = Path(f"/workspace/{user_id}/attachments")
-        user_dir.mkdir(parents=True, exist_ok=True)
+    async def upload_attachment(request: Request, file: UploadFile = File(...), jwt: Optional[dict] = auth):
+        token = secrets.token_urlsafe(32)
+        token_dir = Path(f"/workspace/attachments/{token}")
+        token_dir.mkdir(parents=True, exist_ok=True)
 
-        file_path = user_dir / file.filename
+        file_path = token_dir / file.filename
         with open(file_path, "wb") as f:
             f.write(await file.read())
 
-        return {"url": f"/attachments/{file.filename}"}
+        base_url = str(request.base_url).rstrip("/")
+        return {"url": f"{base_url}/attachments/{token}/{quote(file.filename)}"}
 
-    @app.get("/attachments/{filename}")
-    async def get_attachment(filename: str, jwt: dict = Depends(validate)):
-        user_id = jwt["user"]["id"]
-        file_path = Path(f"/workspace/{user_id}/attachments") / filename
+    @app.get("/attachments/{token}/{filename}")
+    async def get_attachment(token: str, filename: str):
+        file_path = Path(f"/workspace/attachments/{token}") / filename
 
         if not file_path.exists():
             raise HTTPException(status_code=404, detail="File not found")
