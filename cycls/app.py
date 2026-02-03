@@ -13,7 +13,7 @@ THEMES = ["default", "dev"]
 class App(Function):
     """App extends Function with web UI serving capabilities."""
 
-    def __init__(self, func, name, theme="default", pip=None, apt=None, copy=None, copy_public=None,
+    def __init__(self, func, name, theme="default", pip=None, apt=None, run_commands=None, copy=None, copy_public=None,
                  auth=False, org=None, header=None, intro=None, title=None, plan="free", analytics=False,
                  memory="1Gi"):
         if theme not in THEMES:
@@ -43,6 +43,7 @@ class App(Function):
             name=name,
             pip=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", "python-dotenv", "docker", *(pip or [])],
             apt=apt,
+            run_commands=run_commands,
             copy=files,
             base_url=_get_base_url(),
             api_key=_get_api_key()
