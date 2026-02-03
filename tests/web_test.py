@@ -391,41 +391,25 @@ def test_streaming_multiple_yields():
 # =============================================================================
 
 def test_attachment_upload_requires_auth():
-    """Tests that POST /attachments requires authentication."""
+    """Tests that POST /attachments requires authentication when auth=True."""
     print("\n--- Running test: test_attachment_upload_requires_auth ---")
     from fastapi.testclient import TestClient
 
     async def dummy_agent(context):
         yield "test"
 
-    config = Config(public_path=THEME_PATH, auth=False)
+    # With auth=True, upload should require JWT
+    config = Config(public_path=THEME_PATH, auth=True)
     app = web(dummy_agent, config)
     client = TestClient(app)
 
     response = client.post("/attachments", files={"file": ("test.txt", b"hello")})
-    assert response.status_code == 401  # Unauthorized without auth
-    print("✅ Test passed.")
-
-
-def test_attachment_download_requires_auth():
-    """Tests that GET /attachments/{filename} requires authentication."""
-    print("\n--- Running test: test_attachment_download_requires_auth ---")
-    from fastapi.testclient import TestClient
-
-    async def dummy_agent(context):
-        yield "test"
-
-    config = Config(public_path=THEME_PATH, auth=False)
-    app = web(dummy_agent, config)
-    client = TestClient(app)
-
-    response = client.get("/attachments/test.txt")
-    assert response.status_code == 401  # Unauthorized without auth
+    assert response.status_code == 401  # Unauthorized without auth header
     print("✅ Test passed.")
 
 
 def test_attachment_upload_and_download():
-    """Tests attachment upload and download with mocked auth."""
+    """Tests attachment upload and download with token-based URLs."""
     print("\n--- Running test: test_attachment_upload_and_download ---")
     from fastapi.testclient import TestClient
 
@@ -435,26 +419,15 @@ def test_attachment_upload_and_download():
     config = Config(public_path=THEME_PATH, auth=False)
     app = web(dummy_agent, config)
 
-    # Mock the validate dependency
-    mock_jwt = {"user": {"id": "user123", "name": "Test", "email": "test@test.com"}}
-
     with tempfile.TemporaryDirectory() as tmpdir:
-        with patch("cycls.web.Path") as MockPath:
-            # Make Path return paths in our temp directory
-            def path_side_effect(p):
-                if p.startswith("/workspace"):
-                    return Path(tmpdir) / p.lstrip("/workspace/")
-                return Path(p)
-            MockPath.side_effect = path_side_effect
+        # Patch Path to use temp directory instead of /workspace
+        original_path = Path
+        def patched_path(p):
+            if isinstance(p, str) and p.startswith("/workspace"):
+                return original_path(tmpdir) / p.lstrip("/workspace/")
+            return original_path(p)
 
-            # Override the validate dependency
-            app.dependency_overrides = {}
-            for route in app.routes:
-                if hasattr(route, "dependant"):
-                    for dep in route.dependant.dependencies:
-                        if dep.call.__name__ == "validate":
-                            app.dependency_overrides[dep.call] = lambda: mock_jwt
-
+        with patch("cycls.web.Path", side_effect=patched_path):
             client = TestClient(app)
 
             # Upload a file
@@ -463,7 +436,15 @@ def test_attachment_upload_and_download():
                 files={"file": ("test.txt", b"hello world")}
             )
             assert response.status_code == 200
-            assert response.json()["url"] == "/attachments/test.txt"
+
+            # URL should be full URL with token
+            url = response.json()["url"]
+            assert url.startswith("http://testserver/attachments/")
+            assert url.endswith("/test.txt")
+            # Token should be 43 chars (256 bits base64url)
+            parts = url.split("/")
+            token = parts[-2]
+            assert len(token) == 43
 
     print("✅ Test passed.")
 
@@ -478,18 +459,9 @@ def test_attachment_download_not_found():
 
     config = Config(public_path=THEME_PATH, auth=False)
     app = web(dummy_agent, config)
-
-    mock_jwt = {"user": {"id": "user123", "name": "Test", "email": "test@test.com"}}
-
-    # Override validate dependency
-    for route in app.routes:
-        if hasattr(route, "dependant"):
-            for dep in route.dependant.dependencies:
-                if hasattr(dep.call, "__name__") and dep.call.__name__ == "validate":
-                    app.dependency_overrides[dep.call] = lambda: mock_jwt
-
     client = TestClient(app)
 
-    response = client.get("/attachments/nonexistent.txt")
+    # Download requires token and filename now
+    response = client.get("/attachments/fake-token/nonexistent.txt")
     assert response.status_code == 404
     print("✅ Test passed.")
