@@ -1,5 +1,6 @@
 # export CYCLS_API_KEY=
 # uv run examples/agent/codex-agent.py
+# ref: https://github.com/cheolwanpark/codex-client/tree/main
 
 import re
 import cycls

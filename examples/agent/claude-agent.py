@@ -1,5 +1,5 @@
 # export CYCLS_API_KEY=
-# uv run examples/agent/anthropic-agent-client.py
+# uv run examples/agent/claude-agent.py
 import re
 import cycls
 
@@ -75,5 +75,5 @@ async def claude_agent(context):
         yield f"\u200B<!--s:{real_session_id}-->\u200B"
 
 
-# claude_agent.local()
-claude_agent.deploy()
+claude_agent.local()
+# claude_agent.deploy()
