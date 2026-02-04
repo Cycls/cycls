@@ -15,7 +15,7 @@ class App(Function):
 
     def __init__(self, func, name, theme="default", pip=None, apt=None, run_commands=None, copy=None, copy_public=None,
                  auth=False, org=None, header=None, intro=None, title=None, plan="free", analytics=False,
-                 memory="1Gi"):
+                 memory="1Gi", force_rebuild=False):
         if theme not in THEMES:
             raise ValueError(f"Unknown theme: {theme}. Available: {THEMES}")
         self.user_func = func
@@ -38,15 +38,20 @@ class App(Function):
         files.update({f: f for f in copy or []})
         files.update({f: f"public/{f}" for f in self.copy_public})
 
+        # Fetch theme from GitHub releases during container build
+        theme_cmd = "mkdir -p /app/cycls/themes/default && cd /app/cycls/themes/default && curl -fsSLO https://github.com/Cycls/agentUI/releases/download/latest/agentUI.zip && unzip -o agentUI.zip && rm agentUI.zip"
+        all_run_commands = [theme_cmd, *(run_commands or [])]
+
         super().__init__(
             func=func,
             name=name,
             pip=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", "python-dotenv", "docker", *(pip or [])],
-            apt=apt,
-            run_commands=run_commands,
+            apt=["curl", "unzip", *(apt or [])],
+            run_commands=all_run_commands,
             copy=files,
             base_url=_get_base_url(),
-            api_key=_get_api_key()
+            api_key=_get_api_key(),
+            force_rebuild=force_rebuild
         )
 
     def __call__(self, *args, **kwargs):

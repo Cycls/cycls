@@ -5,7 +5,8 @@
 # - [X] faster build times
 # - [X] attachments -> to cli process (codex-agent.py)
 # - [X] pin codex version
-# - [ ] @app curl -L theme at run_command time
+# - [X] @app curl -L theme at run_command time
+# - [ ] minimal file API to download files from the work space
 # - [ ] thinking in steps (annoying)
 
 # - [ ] better sandboxing (see /docs/sandbox.md)
@@ -92,6 +93,7 @@ async def handle_event(event, state):
         "npm i -g @openai/codex@0.94.0",
     ],
     auth=True,
+    force_rebuild=True
 )
 async def codex_agent(context):
     import json
@@ -154,5 +156,6 @@ async def codex_agent(context):
         yield {"type": "session_id", "session_id": state["session_id"]}
 
 
-# codex_agent.local()
-codex_agent.deploy()
+codex_agent.local()
+# codex_agent.deploy()
+
