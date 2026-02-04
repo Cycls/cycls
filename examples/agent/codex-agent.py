@@ -1,12 +1,15 @@
 # export CYCLS_API_KEY=
 # uv run examples/agent/codex-agent.py
 
+# https://github.com/Piebald-AI/claude-code-system-prompts/tree/main
+
 # TODO:
 # - [X] faster build times
 # - [X] attachments -> to cli process (codex-agent.py)
 # - [X] pin codex version
 # - [X] @app curl -L theme at run_command time
 # - [ ] minimal file API to download files from the work space
+# - [ ] Canvas API
 # - [ ] thinking in steps (annoying)
 
 # - [ ] better sandboxing (see /docs/sandbox.md)
@@ -93,7 +96,7 @@ async def handle_event(event, state):
         "npm i -g @openai/codex@0.94.0",
     ],
     auth=True,
-    force_rebuild=True
+    # force_rebuild=True
 )
 async def codex_agent(context):
     import json
