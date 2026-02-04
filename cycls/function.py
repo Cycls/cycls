@@ -90,7 +90,7 @@ class Function:
     """Executes functions in Docker containers."""
 
     def __init__(self, func, name, python_version=None, pip=None, apt=None,
-                 run_commands=None, copy=None, base_url=None, api_key=None):
+                 run_commands=None, copy=None, base_url=None, api_key=None, force_rebuild=False):
         self.func = func
         self.name = name.replace('_', '-')
         self.python_version = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
@@ -101,6 +101,7 @@ class Function:
         self._base_url = base_url
         self._api_key = api_key
         self.pip = sorted(set(pip or []) | {"cloudpickle"})
+        self.force_rebuild = force_rebuild
 
         self.image_prefix = f"cycls/{self.name}"
         self.managed_label = "cycls.function"
@@ -203,10 +204,11 @@ CMD ["python", "entrypoint.py"]
 
     def _build_image(self, tag: str, workdir: Path) -> str:
         print("--- Docker Build Logs ---")
+        force = os.environ.get('_CYCLS_FORCE_REBUILD') == '1' if os.environ.get('_CYCLS_WATCH') else self.force_rebuild
         try:
             for chunk in self.docker_client.api.build(
                 path=str(workdir), tag=tag, forcerm=True, decode=True,
-                labels={self.managed_label: "true"}
+                nocache=force, labels={self.managed_label: "true"}
             ):
                 if 'stream' in chunk:
                     print(chunk['stream'].strip())
@@ -219,12 +221,15 @@ CMD ["python", "entrypoint.py"]
 
     def _ensure_local_image(self) -> str:
         tag = self._image_tag(extra_parts=["local-v1"])
-        try:
-            self.docker_client.images.get(tag)
-            print(f"Found cached image: {tag}")
-            return tag
-        except docker.errors.ImageNotFound:
-            print(f"Building new image: {tag}")
+        force = os.environ.get('_CYCLS_FORCE_REBUILD') == '1' if os.environ.get('_CYCLS_WATCH') else self.force_rebuild
+        if not force:
+            try:
+                self.docker_client.images.get(tag)
+                print(f"Found cached image: {tag}")
+                return tag
+            except docker.errors.ImageNotFound:
+                pass
+        print(f"Building new image: {tag}")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             workdir = Path(tmpdir)
@@ -323,8 +328,14 @@ CMD ["python", "entrypoint.py"]
 
         print(f"Watching: {[p.name for p in watch_paths]}\n")
 
+        first_run = True
         while True:
-            proc = subprocess.Popen([sys.executable, str(script)], env={**os.environ, '_CYCLS_WATCH': '1'})
+            env = {**os.environ, '_CYCLS_WATCH': '1'}
+            # Force rebuild only on first run, then use cache for subsequent reloads
+            env['_CYCLS_FORCE_REBUILD'] = '1' if (self.force_rebuild and first_run) else '0'
+
+            proc = subprocess.Popen([sys.executable, str(script)], env=env)
+            first_run = False
             try:
                 for changes in watchfiles_watch(*watch_paths):
                     print(f"\nChanged: {[Path(c[1]).name for c in changes]}")
