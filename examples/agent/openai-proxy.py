@@ -1,34 +1,42 @@
 # uv run examples/agent/openai-proxy.py
-# Proxy that adds OpenAI API key server-side
+# OpenAI API proxy - deploy and use as OPENAI_BASE_URL for codex
 
 import cycls
 
 
-@cycls.function(pip=["httpx"])
-async def openai_proxy(request: dict) -> dict:
+@cycls.app(pip=["httpx"])
+async def openai_proxy(context):
+    yield "This is an API proxy, not a chat interface."
+
+
+@openai_proxy.server.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def proxy(path: str, request):
     import os
     import httpx
+    from fastapi.responses import StreamingResponse, JSONResponse
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        return {"error": "OPENAI_API_KEY not configured"}
+        return JSONResponse({"error": "OPENAI_API_KEY not configured"}, status_code=500)
 
-    path = request.get("path", "/v1/chat/completions")
-    method = request.get("method", "POST")
-    body = request.get("body")
+    body = await request.body()
 
     async with httpx.AsyncClient() as client:
         resp = await client.request(
-            method=method,
-            url=f"https://api.openai.com{path}",
+            method=request.method,
+            url=f"https://api.openai.com/v1/{path}",
             headers={
                 "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
+                "Content-Type": request.headers.get("Content-Type", "application/json"),
             },
-            json=body,
+            content=body,
             timeout=120,
         )
-        return {"status": resp.status_code, "body": resp.json()}
+
+        if "text/event-stream" in resp.headers.get("content-type", ""):
+            return StreamingResponse(resp.aiter_bytes(), media_type="text/event-stream")
+
+        return JSONResponse(resp.json(), status_code=resp.status_code)
 
 
 # openai_proxy.local()

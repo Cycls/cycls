@@ -1,6 +1,15 @@
 # export CYCLS_API_KEY=
 # uv run examples/agent/codex-agent.py
-# ref: https://github.com/cheolwanpark/codex-client/tree/main
+
+# TODO:
+# - [ ] faster build times
+# - [ ] @app curl -L theme at run_command time (copy_theme?)
+# - [ ] front-end session/settings api ---> Share
+# - [ ] org-buckets+org-switches
+# - [ ] `@app_name.server.api_route`
+# - [ ] better sandboxing (revisit codex<>cloud-run)
+# - [ ] attachments -> to cli process (codex-agent.py)
+# - [ ] codex: streams/exec/multi-choices (claude code prompts)
 
 import cycls
 
@@ -64,12 +73,25 @@ async def codex_agent(context):
     user_workspace = f"/workspace/{user_id}"
     os.makedirs(f"{user_workspace}/.codex", exist_ok=True)
 
+    # Build prompt with attachments
+    content = context.messages.raw[-1].get("content")
+    attachments = []
+    if isinstance(content, list):
+        prompt = "".join(p.get("text", "") for p in content if p.get("type") == "text")
+        for part in content:
+            if part.get("type") in ("image_url", "file"):
+                attachments.append(part.get("image_url", {}).get("url") or part.get("url"))
+        if attachments:
+            prompt += "\n\nAttachments:\n" + "\n".join(attachments)
+    else:
+        prompt = content or ""
+
     # Build command - use proot to isolate user to their workspace
     codex_cmd = ["codex", "--yolo", "exec"]
     if session_id:
-        codex_cmd += ["resume", "--json", "--skip-git-repo-check", session_id, context.last_message]
+        codex_cmd += ["resume", "--json", "--skip-git-repo-check", session_id, prompt]
     else:
-        codex_cmd += ["--json", "--skip-git-repo-check", context.last_message]
+        codex_cmd += ["--json", "--skip-git-repo-check", prompt]
 
     cmd = ["proot", "-b", f"{user_workspace}:/workspace", "-w", "/workspace"] + codex_cmd
 
