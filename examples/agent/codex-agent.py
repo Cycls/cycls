@@ -8,9 +8,9 @@
 # - [X] attachments -> to cli process (codex-agent.py)
 # - [X] pin codex version
 # - [X] @app curl -L theme at run_command time
+# - [X] thinking in steps (annoying)
 # - [ ] minimal file API to download files from the work space
 # - [ ] Canvas API
-# - [ ] thinking in steps (annoying)
 
 # - [ ] better sandboxing (see /docs/sandbox.md)
 # - [ ] Env mask (better-sandboxing)
@@ -20,6 +20,7 @@
 # - [ ] codex: streams/exec/multi-choices (claude code prompts)
 
 import os
+import shlex
 import shutil
 from urllib.parse import unquote
 import cycls
@@ -63,12 +64,22 @@ async def handle_event(event, state):
         item = event.get("item", {})
         item_type = item.get("type", "")
         if item_type == "command_execution":
-            yield {"type": "step", "step": f"Running: {item.get('command', '')[:50]}..."}
+            state["seen_step"] = True
+            cmd = item.get("command", "")
+            try:
+                args = shlex.split(cmd)
+                cmd = args[-1] if len(args) >= 3 else cmd
+            except ValueError:
+                pass
+            yield {"type": "step", "step": f"Bash({cmd[:60]})"}
         elif item_type == "file_change":
+            state["seen_step"] = True
             yield {"type": "step", "step": "Editing file..."}
         elif item_type == "web_search":
+            state["seen_step"] = True
             yield {"type": "step", "step": "Searching web..."}
         elif item_type == "tool_call":
+            state["seen_step"] = True
             yield {"type": "step", "step": f"Using tool: {item.get('tool', '')}..." if item.get("tool") else "Using tool..."}
         return
 
@@ -77,13 +88,15 @@ async def handle_event(event, state):
         item_type = item.get("type", "")
         if item_type == "agent_message" and item.get("text"):
             yield item["text"]
-        elif item_type == "reasoning" and item.get("text"):
+        elif item_type == "reasoning" and item.get("text") and not state["seen_step"]:
             yield {"type": "thinking", "thinking": item["text"]}
         return
 
     if event_type == "tool.call.started":
+        state["seen_step"] = True
         yield {"type": "step", "step": f"Using tool: {event.get('tool', '')}..." if event.get("tool") else "Using tool..."}
     elif event_type == "tool.call.completed":
+        state["seen_step"] = True
         yield {"type": "step", "step": "Tool finished"}
 
 
@@ -137,7 +150,7 @@ async def codex_agent(context):
         },
     )
 
-    state = {"session_id": None}
+    state = {"session_id": None, "seen_step": False}
 
     while line := await proc.stdout.readline():
         try:
