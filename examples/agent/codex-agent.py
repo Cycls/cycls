@@ -5,16 +5,19 @@
 # - [X] faster build times
 # - [X] attachments -> to cli process (codex-agent.py)
 # - [X] pin codex version
+# - [ ] @app curl -L theme at run_command time
+# - [ ] thinking in steps (annoying)
 
-# - [ ] @app curl -L theme at run_command time (copy_theme?)
+# - [ ] better sandboxing (see /docs/sandbox.md)
+# - [ ] Env mask (better-sandboxing)
 # - [ ] front-end session/settings api ---> Share
 # - [ ] org-buckets+org-switches
 # - [ ] `@app_name.server.api_route`
-# - [ ] better sandboxing (revisit codex<>cloud-run)
 # - [ ] codex: streams/exec/multi-choices (claude code prompts)
 
 import os
 import shutil
+from urllib.parse import unquote
 import cycls
 
 
@@ -24,10 +27,13 @@ def extract_prompt(messages, user_workspace):
     if isinstance(content, list):
         prompt = next((p["text"] for p in content if p.get("type") == "text"), "")
         for p in content:
-            if url := p.get("image_url", {}).get("url", ""):
-                filename = os.path.basename(url)
-                shutil.copy(f"/workspace{url}", f"{user_workspace}/{filename}")
-                prompt += f" [{filename}]"
+            if p.get("type") in ("image", "file"):
+                url = p.get("image") or p.get("file")
+                if url:
+                    url = unquote(url)
+                    filename = os.path.basename(url)
+                    shutil.copy(f"/workspace{url}", f"{user_workspace}/{filename}")
+                    prompt += f" [USER UPLOADED {filename}]"
         return prompt
     return content
 
@@ -109,8 +115,8 @@ async def codex_agent(context):
     else:
         codex_cmd += ["--json", "--skip-git-repo-check", prompt]
 
-    # cmd = ["proot", "-b", f"{user_workspace}:/workspace", "-w", "/workspace"] + codex_cmd
-    cmd = codex_cmd  # proot disabled for testing
+    cmd = ["proot", "-b", f"{user_workspace}:/workspace", "-w", "/workspace"] + codex_cmd
+    # cmd = codex_cmd  # proot disabled for testing
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -121,8 +127,8 @@ async def codex_agent(context):
             **os.environ,
             "NO_COLOR": "1",
             "CODEX_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
-            "CODEX_HOME": f"{user_workspace}/.codex",
-            # "CODEX_HOME": "/workspace/.codex",  # use this when proot is enabled
+            # "CODEX_HOME": f"{user_workspace}/.codex",
+            "CODEX_HOME": "/workspace/.codex",  # use this when proot is enabled
         },
     )
 
@@ -148,5 +154,5 @@ async def codex_agent(context):
         yield {"type": "session_id", "session_id": state["session_id"]}
 
 
-codex_agent.local()
-# codex_agent.deploy()
+# codex_agent.local()
+codex_agent.deploy()
