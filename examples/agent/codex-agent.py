@@ -2,16 +2,34 @@
 # uv run examples/agent/codex-agent.py
 
 # TODO:
-# - [ ] faster build times
+# - [X] faster build times
+# - [X] attachments -> to cli process (codex-agent.py)
+# - [X] pin codex version
+
 # - [ ] @app curl -L theme at run_command time (copy_theme?)
 # - [ ] front-end session/settings api ---> Share
 # - [ ] org-buckets+org-switches
 # - [ ] `@app_name.server.api_route`
 # - [ ] better sandboxing (revisit codex<>cloud-run)
-# - [ ] attachments -> to cli process (codex-agent.py)
 # - [ ] codex: streams/exec/multi-choices (claude code prompts)
 
+import os
+import shutil
 import cycls
+
+
+def extract_prompt(messages, user_workspace):
+    """Extract prompt text and copy attachments to user workspace."""
+    content = messages.raw[-1].get("content", "")
+    if isinstance(content, list):
+        prompt = next((p["text"] for p in content if p.get("type") == "text"), "")
+        for p in content:
+            if url := p.get("image_url", {}).get("url", ""):
+                filename = os.path.basename(url)
+                shutil.copy(f"/workspace{url}", f"{user_workspace}/{filename}")
+                prompt += f" [{filename}]"
+        return prompt
+    return content
 
 
 def extract_session_id(messages):
@@ -59,12 +77,21 @@ async def handle_event(event, state):
         yield {"type": "step", "step": "Tool finished"}
 
 
-@cycls.app(apt=["nodejs", "npm", "proot"], copy=[".env"], memory="512Mi", run_commands=["npm i -g @openai/codex"], auth=True)
+@cycls.app(
+    apt=["curl", "proot", "xz-utils"],
+    copy=[".env"],
+    memory="512Mi",
+    run_commands=[
+        "curl -fsSL https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1",
+        "npm i -g @openai/codex@0.94.0",
+    ],
+    auth=True,
+)
 async def codex_agent(context):
-    import os
     import json
     import asyncio
 
+    print(context.messages.raw)
     yield {"type": "thinking", "thinking": "Analyzing your request..."}
 
     # Per-user workspace and config
@@ -73,18 +100,7 @@ async def codex_agent(context):
     user_workspace = f"/workspace/{user_id}"
     os.makedirs(f"{user_workspace}/.codex", exist_ok=True)
 
-    # Build prompt with attachments
-    content = context.messages.raw[-1].get("content")
-    attachments = []
-    if isinstance(content, list):
-        prompt = "".join(p.get("text", "") for p in content if p.get("type") == "text")
-        for part in content:
-            if part.get("type") in ("image_url", "file"):
-                attachments.append(part.get("image_url", {}).get("url") or part.get("url"))
-        if attachments:
-            prompt += "\n\nAttachments:\n" + "\n".join(attachments)
-    else:
-        prompt = content or ""
+    prompt = extract_prompt(context.messages, user_workspace)
 
     # Build command - use proot to isolate user to their workspace
     codex_cmd = ["codex", "--yolo", "exec"]
@@ -93,7 +109,8 @@ async def codex_agent(context):
     else:
         codex_cmd += ["--json", "--skip-git-repo-check", prompt]
 
-    cmd = ["proot", "-b", f"{user_workspace}:/workspace", "-w", "/workspace"] + codex_cmd
+    # cmd = ["proot", "-b", f"{user_workspace}:/workspace", "-w", "/workspace"] + codex_cmd
+    cmd = codex_cmd  # proot disabled for testing
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -104,7 +121,8 @@ async def codex_agent(context):
             **os.environ,
             "NO_COLOR": "1",
             "CODEX_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
-            "CODEX_HOME": "/workspace/.codex",
+            "CODEX_HOME": f"{user_workspace}/.codex",
+            # "CODEX_HOME": "/workspace/.codex",  # use this when proot is enabled
         },
     )
 

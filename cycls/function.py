@@ -96,7 +96,7 @@ class Function:
         self.python_version = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
         self.base_image = f"python:{self.python_version}-slim"
         self.apt = sorted(apt or [])
-        self.run_commands = sorted(run_commands or [])
+        self.run_commands = list(run_commands or [])
         self.copy = {f: f for f in copy} if isinstance(copy, list) else (copy or {})
         self._base_url = base_url
         self._api_key = api_key
