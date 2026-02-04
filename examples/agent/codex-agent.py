@@ -10,7 +10,6 @@
 # - [X] @app curl -L theme at run_command time
 # - [X] thinking in steps (annoying)
 # - [X] only ship OPEN_AI_KEY
-# - [ ] Embed session_id for resume (why at then end not the begining)
 # - [ ] Canvas API (WIP)
 
 # - [ ] minimal file API to download files from the work space
