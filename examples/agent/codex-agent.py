@@ -1,17 +1,19 @@
-# export CYCLS_API_KEY=
 # uv run examples/agent/codex-agent.py
 
 # https://github.com/Piebald-AI/claude-code-system-prompts/tree/main
 
 # TODO:
+# - [ ] delta(cc, codex) is __high__ (codex->native, claude prompts, sonnet 4.5)
 # - [X] faster build times
-# - [X] attachments -> to cli process (codex-agent.py)
+# - [X] attachments -> to cli process (codex api -> agent.py api)
 # - [X] pin codex version
 # - [X] @app curl -L theme at run_command time
 # - [X] thinking in steps (annoying)
-# - [ ] minimal file API to download files from the work space
-# - [ ] Canvas API
+# - [X] only ship OPEN_AI_KEY
+# - [ ] Embed session_id for resume (why at then end not the begining)
+# - [ ] Canvas API (WIP)
 
+# - [ ] minimal file API to download files from the work space
 # - [ ] better sandboxing (see /docs/sandbox.md)
 # - [ ] Env mask (better-sandboxing)
 # - [ ] front-end session/settings api ---> Share
@@ -71,10 +73,11 @@ async def handle_event(event, state):
                 cmd = args[-1] if len(args) >= 3 else cmd
             except ValueError:
                 pass
-            yield {"type": "step", "step": f"Bash({cmd[:60]})"}
+            yield {"type": "step", "step": f"Bash({cmd[:60]}{'...' if len(cmd) > 60 else ''})"}
         elif item_type == "file_change":
             state["seen_step"] = True
-            yield {"type": "step", "step": "Editing file..."}
+            fname = item.get("filename", item.get("file", ""))
+            yield {"type": "step", "step": f"Editing {fname}" if fname else "Editing file..."}
         elif item_type == "web_search":
             state["seen_step"] = True
             yield {"type": "step", "step": "Searching web..."}
@@ -115,8 +118,16 @@ async def codex_agent(context):
     import json
     import asyncio
 
-    print(context.messages.raw)
+    # print(context.messages.raw)
     yield {"type": "thinking", "thinking": "Analyzing your request..."}
+
+    # 1. Open canvas
+    # yield {"type": "canvas", "canvas": "document", "open": True, "title": "Travel Guide"}
+    # yield {"type": "canvas", "canvas": "document", "content": "# Travel Guide\n"}
+    # yield {"type": "canvas", "canvas": "document", "content": "## Introduction\n"}
+    # yield {"type": "canvas", "canvas": "document", "content": "Welcome to..."}
+    # yield {"type": "canvas", "canvas": "document", "done": True}
+
 
     # Per-user workspace and config
     user_id = context.user.id if context.user else "default"
@@ -142,11 +153,11 @@ async def codex_agent(context):
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env={
-            **os.environ,
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": os.environ.get("HOME", ""),
             "NO_COLOR": "1",
             "CODEX_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
-            # "CODEX_HOME": f"{user_workspace}/.codex",
-            "CODEX_HOME": "/workspace/.codex",  # use this when proot is enabled
+            "CODEX_HOME": "/workspace/.codex",
         },
     )
 
@@ -167,7 +178,13 @@ async def codex_agent(context):
     if stderr:
         yield {"type": "callout", "callout": stderr.decode(), "style": "error"}
 
-    # Embed session_id for resume
+    # Yield canvas if it exists
+    # canvas_path = f"{user_workspace}/canvas.md"
+    # if os.path.exists(canvas_path):
+    #     with open(canvas_path) as f:
+    #         yield {"type": "canvas", "canvas": f.read()}
+
+    # Embed session_id for resume (why at then end not the begining)
     if state["session_id"]:
         yield {"type": "session_id", "session_id": state["session_id"]}
 
