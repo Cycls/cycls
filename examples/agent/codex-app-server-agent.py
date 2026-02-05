@@ -18,7 +18,10 @@ def extract_prompt(messages, user_workspace):
                 url = unquote(p.get("image") or p.get("file") or "")
                 if url:
                     fname = os.path.basename(url)
-                    shutil.copy(f"/workspace{url}", f"{user_workspace}/{fname}")
+                    src = os.path.realpath(f"/workspace{url}")
+                    if not src.startswith("/workspace/"):
+                        continue
+                    shutil.copy(src, f"{user_workspace}/{fname}")
                     prompt += f" [USER UPLOADED {fname}]"
         return prompt
     return content
@@ -190,7 +193,7 @@ async def codex_agent(context):
         if session_id:
             await rpc_send(proc, "thread/resume", {"threadId": session_id, "approvalPolicy": "never", "sandbox": "danger-full-access"}, msg_id=msg_id)
         else:
-            await rpc_send(proc, "thread/start", {"cwd": "/workspace", "approvalPolicy": "never", "sandbox": "danger-full-access"}, msg_id=msg_id)
+            await rpc_send(proc, "thread/start", {"cwd": user_workspace, "approvalPolicy": "never", "sandbox": "danger-full-access"}, msg_id=msg_id)
         res = {}
         async for notif in rpc_read(proc, msg_id, res):
             async for out in handle(notif, state):
@@ -241,5 +244,5 @@ async def codex_agent(context):
             yield {"type": "callout", "callout": stderr.decode(), "style": "error"}
 
 
-codex_agent.local()
-# codex_agent.deploy()
+# codex_agent.local()
+codex_agent.deploy()
