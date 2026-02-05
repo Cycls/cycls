@@ -149,6 +149,8 @@ async def handle(proc, notif, s):
             s["think"] = ""
     elif m == "turn/completed":
         s["done"] = True
+    elif m == "thread/tokenUsage/updated":
+        s["usage"] = p
     elif m == "thread/started":
         s["thread"] = p.get("thread", {}).get("id")
 
@@ -198,7 +200,7 @@ async def codex_agent(context):
             "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""), "CODEX_HOME": home,
         },
     )
-    s = {"thread": None, "stepped": False, "think": "", "done": False, "approval": False, "stderr": []}
+    s = {"thread": None, "stepped": False, "think": "", "done": False, "approval": False, "stderr": [], "usage": None}
     mid = 0
 
     async def drain_stderr():
@@ -254,6 +256,12 @@ async def codex_agent(context):
                 yield out
             if s["approval"]:
                 break
+
+        if s["usage"]:
+            u = s["usage"].get("tokenUsage", {}).get("total", {})
+            inp, cached, out = u.get("inputTokens", 0), u.get("cachedInputTokens", 0), u.get("outputTokens", 0)
+            cost = ((inp - cached) * 1.50 + cached * 0.375 + out * 6.00) / 1_000_000
+            yield f'\n\n*in: {inp:,} · out: {out:,} · cached: {cached:,} · total: ${cost:.4f}*'
 
     except Exception as e:
         yield {"type": "callout", "callout": str(e), "style": "error"}
