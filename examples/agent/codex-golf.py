@@ -48,7 +48,6 @@ You help with coding, research, writing, analysis, system administration, and an
 - State explicitly if no issues are found.
 """.strip()
 
-APPROVAL_HTML = '\n\n<div style="border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:8px 0;background:#f8fafc"><div style="font-weight:600;margin-bottom:8px">Approval Required</div>\n\n<code style="background:#e2e8f0;padding:2px 6px;border-radius:4px;font-size:13px">{cmd}</code>\n\n<div style="margin-top:10px;color:#64748b;font-size:13px">Reply <b>yes</b> to approve</div></div>\n\n'
 STEP_TYPES = {
     "commandexecution": lambda i: f"Bash({parse_cmd(i.get('command', ''))[:60]})",
     "filechange": lambda i: f"Editing {(i.get('changes') or [{}])[0].get('path', 'file')}",
@@ -117,10 +116,19 @@ async def rpc_read(proc, expected_id, res):
 async def handle(proc, notif, s):
     if "id" in notif:  # server request (approval)
         p = notif.get("params", {})
-        cmd = parse_cmd(p.get("command", "")) or json.dumps(p)
+        actions = p.get("commandActions") or [{}]
+        cmd = actions[0].get("command") or parse_cmd(p.get("command", "")) or json.dumps(p)
+        cwd = p.get("cwd", "")
+        reason = p.get("reason", "")
+        lines = [f"\n**Bash(** {cmd} **)**\n"]
+        if cwd:
+            lines.append(f"dir: `{cwd}`\n")
+        if reason:
+            lines.append(f"reason: {reason}\n")
+        lines.append("Reply **yes** to approve.")
         proc.stdin.write((json.dumps({"id": notif["id"], "result": {"decision": "decline"}}) + "\n").encode())
         await proc.stdin.drain()
-        yield APPROVAL_HTML.format(cmd=cmd)
+        yield {"type": "thinking", "thinking": "\n".join(lines)}
         yield {"type": "pending_approval", "action_type": notif.get("method", ""), "action_detail": cmd}
         s["approval"] = True
         return
