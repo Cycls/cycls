@@ -1,5 +1,6 @@
 # uv run examples/agent/codex-app-server-agent.py
 # Codex app-server agent — JSON-RPC over stdio, streams text deltas
+# https://github.com/openai/codex/blob/main/codex-rs/core/gpt_5_codex_prompt.md
 
 import json
 import os
@@ -9,7 +10,7 @@ from urllib.parse import unquote
 import cycls
 
 APPROVAL_POLICY = os.environ.get("CODEX_APPROVAL_POLICY", "untrusted")
-
+# APPROVAL_POLICY = "never"
 
 def extract_prompt(messages, user_workspace):
     content = messages.raw[-1].get("content", "")
@@ -38,6 +39,14 @@ def extract_session_id(messages):
     except Exception:
         pass
     return None
+
+
+def parse_command(cmd):
+    try:
+        args = shlex.split(cmd)
+        return args[-1] if len(args) >= 3 else cmd
+    except ValueError:
+        return cmd
 
 
 def extract_pending_approval(messages):
@@ -97,12 +106,7 @@ async def handle(notif, state):
         t = item.get("type", "").lower()
         if t == "commandexecution":
             state["seen_step"] = True
-            cmd = item.get("command", "")
-            try:
-                args = shlex.split(cmd)
-                cmd = args[-1] if len(args) >= 3 else cmd
-            except ValueError:
-                pass
+            cmd = parse_command(item.get("command", ""))
             yield {"type": "step", "step": f"Bash({cmd[:60]}{'...' if len(cmd) > 60 else ''})"}
         elif t == "filechange":
             state["seen_step"] = True
@@ -147,7 +151,7 @@ async def handle(notif, state):
         "npm i -g @openai/codex@0.94.0",
     ],
     auth=True,
-    # force_rebuild=True
+    force_rebuild=True
 )
 async def codex_agent(context):
     import asyncio
@@ -237,11 +241,11 @@ async def codex_agent(context):
             # Confirmation request (has both "id" and "method") — deny and ask user
             if "id" in notif:
                 params = notif.get("params", {})
-                command = params.get("command", "") or json.dumps(params)
+                command = parse_command(params.get("command", "")) or json.dumps(params)
                 reply = json.dumps({"id": notif["id"], "result": {"decision": "decline"}}) + "\n"
                 proc.stdin.write(reply.encode())
                 await proc.stdin.drain()
-                yield f'\n\n<div style="border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:8px 0;background:#f8fafc"><div style="font-weight:600;margin-bottom:8px">Approval Required</div><code style="background:#e2e8f0;padding:2px 6px;border-radius:4px;font-size:13px">{command}</code><div style="margin-top:10px;color:#64748b;font-size:13px">Reply <b>yes</b> to approve</div></div>\n\n'
+                yield f'\n\n<div style="border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:8px 0;background:#f8fafc"><div style="font-weight:600;margin-bottom:8px">Approval Required</div>\n\n<code style="background:#e2e8f0;padding:2px 6px;border-radius:4px;font-size:13px">{command}</code>\n\n<div style="margin-top:10px;color:#64748b;font-size:13px">Reply <b>yes</b> to approve</div></div>\n\n'
                 yield {"type": "pending_approval", "action_type": notif.get("method", ""), "action_detail": command}
                 approval_requested = True
                 continue
@@ -260,7 +264,7 @@ async def codex_agent(context):
                 continue
             if "id" in msg and "method" in msg:
                 params = msg.get("params", {})
-                command = params.get("command", "") or json.dumps(params)
+                command = parse_command(params.get("command", "")) or json.dumps(params)
                 reply = json.dumps({"id": msg["id"], "result": {"decision": "decline"}}) + "\n"
                 proc.stdin.write(reply.encode())
                 await proc.stdin.drain()
