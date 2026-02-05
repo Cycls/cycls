@@ -1,5 +1,6 @@
 # uv run examples/agent/codex-golf.py
 # Minimal Codex app-server agent
+# https://developers.openai.com/codex/config-reference/
 
 import json, os, shlex, shutil
 from urllib.parse import unquote
@@ -260,8 +261,7 @@ async def codex_agent(context):
         if s["usage"]:
             u = s["usage"].get("tokenUsage", {}).get("total", {})
             inp, cached, out = u.get("inputTokens", 0), u.get("cachedInputTokens", 0), u.get("outputTokens", 0)
-            cost = ((inp - cached) * 1.50 + cached * 0.375 + out * 6.00) / 1_000_000
-            yield f'\n\n*in: {inp:,} · out: {out:,} · cached: {cached:,} · total: ${cost:.4f}*'
+            yield f'\n\n*in: {inp:,} · out: {out:,} · cached: {cached:,}*'
 
     except Exception as e:
         yield {"type": "callout", "callout": str(e), "style": "error"}
