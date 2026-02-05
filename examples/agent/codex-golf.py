@@ -1,6 +1,8 @@
 # uv run examples/agent/codex-golf.py
 # Minimal Codex app-server agent
 # https://developers.openai.com/codex/config-reference/
+# https://github.com/openai/codex/blob/main/codex-rs/core/gpt_5_codex_prompt.md
+# https://github.com/Piebald-AI/claude-code-system-prompts/tree/main
 
 import json, os, shlex, shutil
 from urllib.parse import unquote
