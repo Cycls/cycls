@@ -1,25 +1,4 @@
 # uv run examples/agent/codex-agent.py
-
-# https://github.com/Piebald-AI/claude-code-system-prompts/tree/main
-
-# TODO:
-# - [ ] delta(cc, codex) is __high__ (codex->native, claude prompts, sonnet 4.5)
-# - [X] faster build times
-# - [X] attachments -> to cli process (codex api -> agent.py api)
-# - [X] pin codex version
-# - [X] @app curl -L theme at run_command time
-# - [X] thinking in steps (annoying)
-# - [X] only ship OPEN_AI_KEY
-# - [ ] Canvas API (WIP)
-
-# - [ ] minimal file API to download files from the work space
-# - [ ] better sandboxing (see /docs/sandbox.md)
-# - [ ] Env mask (better-sandboxing)
-# - [ ] front-end session/settings api ---> Share
-# - [ ] org-buckets+org-switches
-# - [ ] `@app_name.server.api_route`
-# - [ ] codex: streams/exec/multi-choices (claude code prompts)
-
 import os
 import shlex
 import shutil
@@ -100,6 +79,8 @@ async def handle_event(event, state):
     elif event_type == "tool.call.completed":
         state["seen_step"] = True
         yield {"type": "step", "step": "Tool finished"}
+    else:
+        print(f"[unhandled] {event}")
 
 
 @cycls.app(
