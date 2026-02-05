@@ -238,7 +238,7 @@ async def codex_agent(context):
             if "id" in notif:
                 params = notif.get("params", {})
                 command = params.get("command", "") or json.dumps(params)
-                reply = json.dumps({"id": notif["id"], "result": {"decision": "deny"}}) + "\n"
+                reply = json.dumps({"id": notif["id"], "result": {"decision": "decline"}}) + "\n"
                 proc.stdin.write(reply.encode())
                 await proc.stdin.drain()
                 yield f'\n\n<div style="border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:8px 0;background:#f8fafc"><div style="font-weight:600;margin-bottom:8px">Approval Required</div><code style="background:#e2e8f0;padding:2px 6px;border-radius:4px;font-size:13px">{command}</code><div style="margin-top:10px;color:#64748b;font-size:13px">Reply <b>yes</b> to approve</div></div>\n\n'
@@ -261,7 +261,7 @@ async def codex_agent(context):
             if "id" in msg and "method" in msg:
                 params = msg.get("params", {})
                 command = params.get("command", "") or json.dumps(params)
-                reply = json.dumps({"id": msg["id"], "result": {"decision": "deny"}}) + "\n"
+                reply = json.dumps({"id": msg["id"], "result": {"decision": "decline"}}) + "\n"
                 proc.stdin.write(reply.encode())
                 await proc.stdin.drain()
                 yield f'\n\n<div style="border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:8px 0;background:#f8fafc"><div style="font-weight:600;margin-bottom:8px">Approval Required</div><code style="background:#e2e8f0;padding:2px 6px;border-radius:4px;font-size:13px">{command}</code><div style="margin-top:10px;color:#64748b;font-size:13px">Reply <b>yes</b> to approve</div></div>\n\n'
