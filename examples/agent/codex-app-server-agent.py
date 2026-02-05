@@ -1,46 +1,41 @@
 # uv run examples/agent/codex-app-server-agent.py
+# Codex app-server agent — JSON-RPC over stdio, streams text deltas
 
-# Codex app-server agent — JSON-RPC over stdio
-# Streams text deltas token-by-token (unlike exec which dumps all at once)
-
+import json
 import os
+import shlex
 import shutil
 from urllib.parse import unquote
 import cycls
 
 
 def extract_prompt(messages, user_workspace):
-    """Extract prompt text and copy attachments to user workspace."""
     content = messages.raw[-1].get("content", "")
     if isinstance(content, list):
         prompt = next((p["text"] for p in content if p.get("type") == "text"), "")
         for p in content:
             if p.get("type") in ("image", "file"):
-                url = p.get("image") or p.get("file")
+                url = unquote(p.get("image") or p.get("file") or "")
                 if url:
-                    url = unquote(url)
-                    filename = os.path.basename(url)
-                    shutil.copy(f"/workspace{url}", f"{user_workspace}/{filename}")
-                    prompt += f" [USER UPLOADED {filename}]"
+                    fname = os.path.basename(url)
+                    shutil.copy(f"/workspace{url}", f"{user_workspace}/{fname}")
+                    prompt += f" [USER UPLOADED {fname}]"
         return prompt
     return content
 
 
 def extract_session_id(messages):
     try:
-        raw = getattr(messages, "raw", None) or messages
-        for msg in reversed(raw):
+        for msg in reversed(getattr(messages, "raw", None) or messages):
             for part in msg.get("parts", []) or []:
                 if part.get("type") == "session_id":
                     return part["session_id"]
-    except:
+    except Exception:
         pass
     return None
 
 
-async def send_jsonrpc(proc, method, params=None, msg_id=None):
-    """Send a JSON-RPC message to the app-server process."""
-    import json
+async def rpc_send(proc, method, params=None, msg_id=None):
     msg = {"method": method}
     if msg_id is not None:
         msg["id"] = msg_id
@@ -50,35 +45,31 @@ async def send_jsonrpc(proc, method, params=None, msg_id=None):
     await proc.stdin.drain()
 
 
-async def read_until_response(proc, expected_id, result_holder):
-    """Read lines until we get a response matching expected_id. Yield notifications along the way."""
-    import json
+async def rpc_read(proc, expected_id, result):
     while line := await proc.stdout.readline():
         try:
             msg = json.loads(line)
-        except:
+        except Exception:
             continue
         if "id" in msg and msg["id"] == expected_id:
-            result_holder["response"] = msg
+            result["response"] = msg
             return
         if "method" in msg:
             yield msg
 
 
-async def handle_notification(notif, state):
-    """Map app-server notifications to Cycls UI components."""
+
+async def handle(notif, state):
     method = notif.get("method", "")
     params = notif.get("params", {})
     msg = params.get("msg", {})
 
-    # Streaming text delta — the key win over exec
-    if method == "codex/event/agent_message_delta":
-        delta = msg.get("delta", "")
+    if method == "item/agentMessage/delta":
+        delta = params.get("delta", "")
         if delta:
             yield delta
         return
 
-    # Reasoning summary delta (both namespaces)
     if method in ("item/reasoning/summaryTextDelta", "codex/event/reasoning_summary_text_delta"):
         if not state["seen_step"]:
             delta = params.get("delta", "") or msg.get("delta", "")
@@ -86,74 +77,50 @@ async def handle_notification(notif, state):
                 state["thinking_buf"] += delta
         return
 
-    # Item started — show steps (both namespaces)
     if method in ("item/started", "codex/event/item_started"):
         item = params.get("item", {}) or msg.get("item", {})
-        item_type = item.get("type", "").lower()
-        if item_type == "commandexecution":
+        t = item.get("type", "").lower()
+        if t == "commandexecution":
             state["seen_step"] = True
             cmd = item.get("command", "")
-            import shlex
             try:
                 args = shlex.split(cmd)
                 cmd = args[-1] if len(args) >= 3 else cmd
             except ValueError:
                 pass
             yield {"type": "step", "step": f"Bash({cmd[:60]}{'...' if len(cmd) > 60 else ''})"}
-        elif item_type == "filechange":
+        elif t == "filechange":
             state["seen_step"] = True
             changes = item.get("changes", [])
             fname = changes[0].get("path", "") if changes else ""
             yield {"type": "step", "step": f"Editing {fname}" if fname else "Editing file..."}
-        elif item_type == "websearch":
+        elif t == "websearch":
             state["seen_step"] = True
             yield {"type": "step", "step": "Searching web..."}
-        elif item_type in ("mcptoolcall", "toolcall"):
+        elif t in ("mcptoolcall", "toolcall"):
             state["seen_step"] = True
             tool = item.get("tool", "")
             yield {"type": "step", "step": f"Using tool: {tool}..." if tool else "Using tool..."}
-        elif item_type == "reasoning":
+        elif t == "reasoning":
             state["thinking_buf"] = ""
         return
 
-    # Item completed (both namespaces)
     if method in ("item/completed", "codex/event/item_completed"):
         item = params.get("item", {}) or msg.get("item", {})
-        item_type = item.get("type", "").lower()
-        if item_type == "reasoning" and state["thinking_buf"] and not state["seen_step"]:
+        if item.get("type", "").lower() == "reasoning" and state["thinking_buf"] and not state["seen_step"]:
             yield {"type": "thinking", "thinking": state["thinking_buf"]}
             state["thinking_buf"] = ""
         return
 
-    # Task/turn completed
     if method in ("codex/event/task_complete", "turn/completed"):
         state["turn_done"] = True
         return
 
-    # Thread started
     if method == "thread/started":
-        thread = params.get("thread", {})
-        state["session_id"] = thread.get("id")
+        state["session_id"] = params.get("thread", {}).get("id")
         return
 
-    # Ignore known noise
-    if method in ("codex/event/agent_message_content_delta", "codex/event/agent_message",
-                   "codex/event/agent_reasoning_delta", "codex/event/agent_reasoning",
-                   "codex/event/agent_reasoning_section_break",
-                   "codex/event/reasoning_content_delta",
-                   "codex/event/user_message", "codex/event/token_count",
-                   "codex/event/task_started", "codex/event/mcp_startup_complete",
-                   "codex/event/exec_command_begin", "codex/event/exec_command_end",
-                   "codex/event/exec_command_output_delta",
-                   "item/reasoning/summaryPartAdded",
-                   "item/commandExecution/outputDelta",
-                   "turn/started", "turn/diff/updated",
-                   "thread/tokenUsage/updated", "thread/name/updated",
-                   "account/rateLimits/updated"):
-        return
-
-    # Log unhandled
-    print(f"[unhandled] {notif}")
+    return
 
 
 @cycls.app(
@@ -168,31 +135,22 @@ async def handle_notification(notif, state):
     # force_rebuild=True
 )
 async def codex_agent(context):
-    import json
     import asyncio
 
-    # yield {"type": "thinking", "thinking": "Analyzing your request..."}
-
-    # Per-user workspace and config
     user_id = context.user.id if context.user else "default"
     session_id = extract_session_id(context.messages)
-    print(f"[debug] session_id from messages: {session_id}")
-    print(f"[debug] raw messages: {context.messages.raw}")
     user_workspace = f"/workspace/{user_id}"
-    os.makedirs(f"{user_workspace}/.codex", exist_ok=True)
-
-    prompt = extract_prompt(context.messages, user_workspace)
-    print(f"[debug] prompt: {prompt}")
-
-    # Spawn app-server
     codex_home = f"{user_workspace}/.codex"
     os.makedirs(codex_home, exist_ok=True)
+
+    # Write auth.json if missing
     auth_path = f"{codex_home}/auth.json"
     if not os.path.exists(auth_path):
-        import json as _json
-        api_key = os.environ.get("OPENAI_API_KEY", "")
         with open(auth_path, "w") as f:
-            _json.dump({"auth_mode": "apikey", "OPENAI_API_KEY": api_key}, f)
+            json.dump({"auth_mode": "apikey", "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", "")}, f)
+
+    prompt = extract_prompt(context.messages, user_workspace)
+
     proc = await asyncio.create_subprocess_exec(
         "codex", "app-server",
         stdin=asyncio.subprocess.PIPE,
@@ -209,121 +167,75 @@ async def codex_agent(context):
         },
     )
 
-    state = {
-        "session_id": None,
-        "seen_step": False,
-        "thinking_buf": "",
-        "turn_done": False,
-        "pending_approvals": [],
-    }
-
+    state = {"session_id": None, "seen_step": False, "thinking_buf": "", "turn_done": False}
     msg_id = 0
 
     try:
-        # 1. Initialize
-        print("[debug] sending initialize")
-        await send_jsonrpc(proc, "initialize", {
+        # Initialize
+        await rpc_send(proc, "initialize", {
             "clientInfo": {"name": "cycls_agent", "title": "Cycls Codex Agent", "version": "0.1.0"},
             "capabilities": None,
         }, msg_id=msg_id)
-
-        # Read until we get the initialize response
         res = {}
-        async for notif in read_until_response(proc, msg_id, res):
-            pass  # ignore notifications during init
-        print(f"[debug] initialize response: {res}")
+        async for notif in rpc_read(proc, msg_id, res):
+            pass
         if not res:
             stderr = await proc.stderr.read()
-            print(f"[debug] stderr: {stderr.decode()}")
-            yield {"type": "callout", "callout": f"app-server died during init: {stderr.decode()}", "style": "error"}
+            yield {"type": "callout", "callout": f"app-server init failed: {stderr.decode()}", "style": "error"}
             return
         msg_id += 1
+        await rpc_send(proc, "initialized")
 
-        # Send initialized notification
-        print("[debug] sending initialized")
-        await send_jsonrpc(proc, "initialized")
-
-        # 2. Start or resume thread
+        # Start or resume thread
         if session_id:
-            print(f"[debug] resuming thread {session_id}")
-            await send_jsonrpc(proc, "thread/resume", {
-                "threadId": session_id,
-                "approvalPolicy": "never",
-                "sandbox": "danger-full-access",
-            }, msg_id=msg_id)
+            await rpc_send(proc, "thread/resume", {"threadId": session_id, "approvalPolicy": "never", "sandbox": "danger-full-access"}, msg_id=msg_id)
         else:
-            print("[debug] starting new thread")
-            await send_jsonrpc(proc, "thread/start", {
-                "cwd": "/workspace",
-                "approvalPolicy": "never",
-                "sandbox": "danger-full-access",
-            }, msg_id=msg_id)
-
-        thread_id = None
+            await rpc_send(proc, "thread/start", {"cwd": "/workspace", "approvalPolicy": "never", "sandbox": "danger-full-access"}, msg_id=msg_id)
         res = {}
-        async for notif in read_until_response(proc, msg_id, res):
-            async for output in handle_notification(notif, state):
-                yield output
-        print(f"[debug] thread response: {res}")
-
-        # Get thread_id from response, state, or prior session
+        async for notif in rpc_read(proc, msg_id, res):
+            async for out in handle(notif, state):
+                yield out
         try:
             thread_id = res["response"]["result"]["thread"]["id"]
         except (KeyError, TypeError):
             thread_id = state["session_id"] or session_id
-        print(f"[debug] thread_id: {thread_id}")
         msg_id += 1
 
-        # Emit session_id early
         if thread_id:
             yield {"type": "session_id", "session_id": thread_id}
 
-        # 3. Send user message
-        print(f"[debug] sending turn/start with prompt: {prompt[:50]}")
-        await send_jsonrpc(proc, "turn/start", {
-            "threadId": thread_id,
-            "input": [{"type": "text", "text": prompt}],
-        }, msg_id=msg_id)
-
-        # Read the turn/start response
+        # Send user message
+        await rpc_send(proc, "turn/start", {"threadId": thread_id, "input": [{"type": "text", "text": prompt}]}, msg_id=msg_id)
         res = {}
-        async for notif in read_until_response(proc, msg_id, res):
-            async for output in handle_notification(notif, state):
-                yield output
-        print(f"[debug] turn/start response: {res}")
+        async for notif in rpc_read(proc, msg_id, res):
+            async for out in handle(notif, state):
+                yield out
         msg_id += 1
 
-        # 4. Stream events until turn completes
+        # Stream until turn completes
         while not state["turn_done"]:
             line = await proc.stdout.readline()
             if not line:
                 break
             try:
                 msg = json.loads(line)
-            except:
+            except Exception:
                 continue
-
-            # Handle approval requests — auto-approve
             if "id" in msg and "method" in msg:
-                await send_jsonrpc(proc, None, None, msg_id=None)
-                # Respond to the server's request
                 response = json.dumps({"id": msg["id"], "result": {"decision": "accept"}}) + "\n"
                 proc.stdin.write(response.encode())
                 await proc.stdin.drain()
                 continue
-
             if "method" in msg:
-                async for output in handle_notification(msg, state):
-                    yield output
+                async for out in handle(msg, state):
+                    yield out
 
     except Exception as e:
         yield {"type": "callout", "callout": str(e), "style": "error"}
     finally:
-        # Clean up
         if proc.returncode is None:
             proc.terminate()
             await proc.wait()
-
         stderr = await proc.stderr.read()
         if stderr:
             yield {"type": "callout", "callout": stderr.decode(), "style": "error"}
