@@ -1,4 +1,5 @@
-import json, inspect, secrets
+import json, inspect, secrets, os
+from datetime import datetime, timezone
 from urllib.parse import quote
 from pathlib import Path
 from pydantic import BaseModel
@@ -160,6 +161,104 @@ def web(func, config):
             raise HTTPException(status_code=404, detail="File not found")
 
         return FileResponse(file_path)
+
+    # ---- Helper ----
+
+    def user_root(jwt):
+        return Path(f"/workspace/{jwt['user']['id']}")
+
+    # ---- Sessions API ----
+
+    @app.get("/sessions")
+    async def list_sessions(jwt: dict = auth):
+        sessions_dir = user_root(jwt) / ".sessions"
+        if not sessions_dir.is_dir():
+            return []
+        items = []
+        for f in sessions_dir.iterdir():
+            if f.suffix != ".json":
+                continue
+            try:
+                data = json.loads(f.read_text())
+                items.append({"id": data.get("id", f.stem), "title": data.get("title", ""), "updatedAt": data.get("updatedAt", "")})
+            except (json.JSONDecodeError, OSError):
+                continue
+        items.sort(key=lambda s: s.get("updatedAt", ""), reverse=True)
+        return items
+
+    @app.get("/sessions/{session_id}")
+    async def get_session(session_id: str, jwt: dict = auth):
+        session_file = user_root(jwt) / ".sessions" / f"{session_id}.json"
+        if not session_file.is_file():
+            raise HTTPException(status_code=404, detail="Session not found")
+        return json.loads(session_file.read_text())
+
+    @app.put("/sessions/{session_id}")
+    async def put_session(session_id: str, request: Request, jwt: dict = auth):
+        sessions_dir = user_root(jwt) / ".sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        data = await request.json()
+        data["id"] = session_id
+        data["updatedAt"] = datetime.now(timezone.utc).isoformat()
+        if "createdAt" not in data:
+            data["createdAt"] = data["updatedAt"]
+        session_file = sessions_dir / f"{session_id}.json"
+        session_file.write_text(json.dumps(data))
+        return data
+
+    @app.delete("/sessions/{session_id}")
+    async def delete_session(session_id: str, jwt: dict = auth):
+        session_file = user_root(jwt) / ".sessions" / f"{session_id}.json"
+        if not session_file.is_file():
+            raise HTTPException(status_code=404, detail="Session not found")
+        session_file.unlink()
+        return {"ok": True}
+
+    # ---- File API ----
+
+    def safe_path(jwt, rel: str) -> Path:
+        root = user_root(jwt)
+        resolved = (root / rel).resolve()
+        if not resolved.is_relative_to(root.resolve()):
+            raise HTTPException(status_code=403, detail="Path traversal denied")
+        return resolved
+
+    @app.get("/files")
+    async def list_files(request: Request, jwt: dict = auth):
+        subpath = request.query_params.get("path", "")
+        target = safe_path(jwt, subpath)
+        if not target.is_dir():
+            raise HTTPException(status_code=404, detail="Directory not found")
+        items = []
+        for entry in os.scandir(target):
+            if entry.name.startswith("."):
+                continue
+            stat = entry.stat()
+            items.append({
+                "name": entry.name,
+                "type": "directory" if entry.is_dir() else "file",
+                "size": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            })
+        items.sort(key=lambda f: f["name"])
+        return items
+
+    @app.get("/files/{path:path}")
+    async def get_file(path: str, jwt: dict = auth):
+        file_path = safe_path(jwt, path)
+        if not file_path.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        return FileResponse(file_path)
+
+    @app.delete("/files/{path:path}")
+    async def delete_file(path: str, jwt: dict = auth):
+        file_path = safe_path(jwt, path)
+        if not file_path.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        file_path.unlink()
+        return {"ok": True}
+
+    # ---- Static mounts (must be last) ----
 
     if Path("public").is_dir():
         app.mount("/public", StaticFiles(directory="public", html=True))
