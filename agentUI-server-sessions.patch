@@ -1,0 +1,988 @@
+From 9977bdb73e1edd48a2ca04f7100c2066dd405a13 Mon Sep 17 00:00:00 2001
+From: Mohammed Alrujayi <58256600+aburjg@users.noreply.github.com>
+Date: Fri, 6 Feb 2026 23:39:55 +0000
+Subject: [PATCH 1/2] Migrate chat history from localStorage to server-side
+ Sessions API
+
+Replace ChatHistoryManager (localStorage) with async /sessions API calls.
+Sessions are saved at turn boundaries only (not per streaming chunk).
+---
+ App.jsx              |  72 ++++++++++++----------
+ hooks/useChatSend.js |  26 +++++---
+ services/sessions.js |  43 ++++++++++++++
+ services/storage.js  | 138 +++++++++----------------------------------
+ vite.config.js       |  10 +++-
+ 5 files changed, 138 insertions(+), 151 deletions(-)
+ create mode 100644 services/sessions.js
+
+diff --git a/App.jsx b/App.jsx
+index 947f143..4b3bea4 100644
+--- a/App.jsx
++++ b/App.jsx
+@@ -37,11 +37,18 @@ import { useSidebarWidth } from "./hooks/useSidebarWidth";
+ import { usePostHogIdentify } from "./hooks/usePostHogIdentify";
+ 
+ import {
+-  ChatHistoryManager,
+   getMessageCount,
+   incrementMessageCount,
+   clearMessageCount,
++  setActiveChat,
++  generateTitle,
+ } from "./services/storage";
++import {
++  listSessions,
++  getSession,
++  saveSession,
++  deleteSession,
++} from "./services/sessions";
+ import { sendCyclsChatMessage } from "./services/api";
+ 
+ import {
+@@ -212,24 +219,17 @@ const AppContent = ({
+   }, [isOnPaidPlan]);
+ 
+   useEffect(() => {
+-    const chats = ChatHistoryManager.getAllChats();
+-    setChatHistory(chats);
+     setMessageCount(getMessageCount());
+-
+-    // Always start with a new chat (don't restore the last active chat)
+-    // Users can select from sidebar if they want to continue an old chat
++    // Load chat history from server
++    listSessions(authApi?.getToken).then((chats) => setChatHistory(chats));
+   }, []);
+ 
+   useEffect(() => {
+-    if (messages.length > 0 && activeChatId) {
+-      if (isLoadingChatRef.current) {
+-        isLoadingChatRef.current = false;
+-        return;
+-      }
+-      ChatHistoryManager.updateChat(activeChatId, messages);
+-      setChatHistory(ChatHistoryManager.getAllChats());
++    // Only used to reset the flag when loading a chat from sidebar
++    if (isLoadingChatRef.current) {
++      isLoadingChatRef.current = false;
+     }
+-  }, [messages, activeChatId]);
++  }, [messages]);
+ 
+   useEffect(() => {
+     document.title = TITLE;
+@@ -305,6 +305,7 @@ const AppContent = ({
+     setActive: clerkApi?.setActive,
+     activeChatId,
+     setActiveChatId,
++    setChatHistory,
+     onMessageSuccess: handleMessageSuccess,
+     analyticsEnabled,
+     onCanvasEvent: handleCanvasEvent,
+@@ -317,23 +318,23 @@ const AppContent = ({
+     setActiveChatId(null);
+     setHasBegun(false);
+     resetCanvas();
+-    ChatHistoryManager.setActiveChat("");
++    setActiveChat("");
+     window.scrollTo(0, 0);
+     if (analyticsEnabled) trackNewChatStarted();
+   }, [analyticsEnabled, resetCanvas, handleStop]);
+ 
+   const handleSelectChat = useCallback(
+-    (chatId) => {
++    async (chatId) => {
+       handleStop();
+       setIsLoading(false);
+-      const chat = ChatHistoryManager.getChat(chatId);
++      const chat = await getSession(chatId, authApi?.getToken);
+       if (chat) {
+         isLoadingChatRef.current = true;
+-        setMessages(chat.messages);
++        setMessages(chat.messages || []);
+         setActiveChatId(chatId);
+-        setHasBegun(chat.messages.length > 0);
++        setHasBegun((chat.messages || []).length > 0);
+         resetCanvas();
+-        ChatHistoryManager.setActiveChat(chatId);
++        setActiveChat(chatId);
+         if (window.innerWidth < 768) {
+           setIsSidebarOpen(false);
+         }
+@@ -341,19 +342,20 @@ const AppContent = ({
+         if (analyticsEnabled) trackChatSelected(chatId);
+       }
+     },
+-    [analyticsEnabled, resetCanvas, handleStop]
++    [analyticsEnabled, resetCanvas, handleStop, authApi?.getToken]
+   );
+ 
+   const handleDeleteChat = useCallback(
+-    (chatId) => {
+-      ChatHistoryManager.deleteChat(chatId);
+-      setChatHistory(ChatHistoryManager.getAllChats());
++    async (chatId) => {
++      await deleteSession(chatId, authApi?.getToken);
++      const chats = await listSessions(authApi?.getToken);
++      setChatHistory(chats);
+       if (analyticsEnabled) trackChatDeleted(chatId);
+       if (chatId === activeChatId) {
+         handleNewChat();
+       }
+     },
+-    [activeChatId, handleNewChat, analyticsEnabled]
++    [activeChatId, handleNewChat, analyticsEnabled, authApi?.getToken]
+   );
+ 
+   const handleSidebarToggle = useCallback(() => {
+@@ -517,8 +519,12 @@ const AppContent = ({
+ 
+         if (activeChatId) {
+           setMessages((prev) => {
+-            ChatHistoryManager.updateChat(activeChatId, prev);
+-            setChatHistory(ChatHistoryManager.getAllChats());
++            saveSession(
++              { id: activeChatId, title: generateTitle(prev), messages: prev },
++              authApi?.getToken
++            ).then(() =>
++              listSessions(authApi?.getToken).then((c) => setChatHistory(c))
++            );
+             return prev;
+           });
+         }
+@@ -538,7 +544,7 @@ const AppContent = ({
+               });
+             }
+             if (activeChatId)
+-              ChatHistoryManager.updateChat(activeChatId, updated);
++              saveSession({ id: activeChatId, title: generateTitle(updated), messages: updated }, authApi?.getToken);
+             return updated;
+           });
+           setIsLoading(false);
+@@ -719,8 +725,12 @@ const AppContent = ({
+ 
+         if (activeChatId) {
+           setMessages((prev) => {
+-            ChatHistoryManager.updateChat(activeChatId, prev);
+-            setChatHistory(ChatHistoryManager.getAllChats());
++            saveSession(
++              { id: activeChatId, title: generateTitle(prev), messages: prev },
++              authApi?.getToken
++            ).then(() =>
++              listSessions(authApi?.getToken).then((c) => setChatHistory(c))
++            );
+             return prev;
+           });
+         }
+@@ -741,7 +751,7 @@ const AppContent = ({
+               });
+             }
+             if (activeChatId)
+-              ChatHistoryManager.updateChat(activeChatId, updated);
++              saveSession({ id: activeChatId, title: generateTitle(updated), messages: updated }, authApi?.getToken);
+             return updated;
+           });
+           setIsLoading(false);
+diff --git a/hooks/useChatSend.js b/hooks/useChatSend.js
+index da933e4..d7a4ca1 100644
+--- a/hooks/useChatSend.js
++++ b/hooks/useChatSend.js
+@@ -1,6 +1,7 @@
+ import { useCallback, useRef } from "react";
+ import { sendCyclsChatMessage } from "../services/api";
+-import { ChatHistoryManager } from "../services/storage";
++import { setActiveChat, generateTitle } from "../services/storage";
++import { saveSession, listSessions } from "../services/sessions";
+ import {
+   trackMessageSent,
+   trackChatCreated,
+@@ -24,6 +25,7 @@ export const useChatSend = ({
+   setActive,
+   activeChatId,
+   setActiveChatId,
++  setChatHistory,
+   onMessageSuccess,
+   analyticsEnabled,
+   onCanvasEvent,
+@@ -45,7 +47,7 @@ export const useChatSend = ({
+       if (text === ":clear" && attachments.length === 0) {
+         setMessages([]);
+         setActiveChatId(null);
+-        ChatHistoryManager.setActiveChat("");
++        setActiveChat("");
+         window.scrollTo(0, 0);
+         return;
+       }
+@@ -74,13 +76,15 @@ export const useChatSend = ({
+       let chatId = activeChatId;
+       const isNewChat = !chatId;
+       if (!chatId) {
+-        const newChat = ChatHistoryManager.createChat(newMessages);
+-        chatId = newChat.id;
++        chatId = Date.now().toString();
+         setActiveChatId(chatId);
+         if (analyticsEnabled) trackChatCreated(chatId);
+-      } else {
+-        ChatHistoryManager.updateChat(chatId, newMessages);
+       }
++      // Create session on server (sidebar refreshes after turn completes)
++      saveSession(
++        { id: chatId, title: generateTitle(newMessages), messages: newMessages },
++        getToken
++      );
+ 
+       if (analyticsEnabled) {
+         trackMessageSent({
+@@ -284,7 +288,12 @@ export const useChatSend = ({
+         });
+ 
+         const finalMessages = [...newMessages, newAssistantMessage];
+-        ChatHistoryManager.updateChat(chatId, finalMessages);
++        saveSession(
++          { id: chatId, title: generateTitle(finalMessages), messages: finalMessages },
++          getToken
++        ).then(() =>
++          listSessions(getToken).then((c) => setChatHistory(c))
++        );
+ 
+         if (onMessageSuccess) {
+           onMessageSuccess();
+@@ -326,7 +335,7 @@ export const useChatSend = ({
+                   lastMsg,
+                 ]);
+                 if (chatId) {
+-                  ChatHistoryManager.updateChat(chatId, finalMessages);
++                  saveSession({ id: chatId, title: generateTitle(finalMessages), messages: finalMessages }, getToken);
+                 }
+               }
+               return updated;
+@@ -371,6 +380,7 @@ export const useChatSend = ({
+       setActive,
+       activeChatId,
+       setActiveChatId,
++      setChatHistory,
+       onMessageSuccess,
+       analyticsEnabled,
+       setMessages,
+diff --git a/services/sessions.js b/services/sessions.js
+new file mode 100644
+index 0000000..4bdce16
+--- /dev/null
++++ b/services/sessions.js
+@@ -0,0 +1,43 @@
++// ───────────────────────────────────────────────────────────────────────────────
++// Server-side Sessions API client
++// ───────────────────────────────────────────────────────────────────────────────
++
++async function authFetch(url, options = {}, getToken) {
++  const headers = { ...options.headers };
++  if (getToken) {
++    try {
++      const token = await getToken({ template: "template" });
++      if (token) headers["Authorization"] = "Bearer " + token;
++    } catch (_) {
++      // Auth not available — proceed without token
++    }
++  }
++  return fetch(url, { ...options, headers });
++}
++
++export async function listSessions(getToken) {
++  const res = await authFetch("/sessions", {}, getToken);
++  if (!res.ok) return [];
++  return res.json();
++}
++
++export async function getSession(id, getToken) {
++  const res = await authFetch(`/sessions/${id}`, {}, getToken);
++  if (!res.ok) return null;
++  return res.json();
++}
++
++export async function saveSession(session, getToken) {
++  const res = await authFetch(`/sessions/${session.id}`, {
++    method: "PUT",
++    headers: { "Content-Type": "application/json" },
++    body: JSON.stringify(session),
++  }, getToken);
++  if (!res.ok) return null;
++  return res.json();
++}
++
++export async function deleteSession(id, getToken) {
++  const res = await authFetch(`/sessions/${id}`, { method: "DELETE" }, getToken);
++  return res.ok;
++}
+diff --git a/services/storage.js b/services/storage.js
+index b2c5adf..fedabe2 100644
+--- a/services/storage.js
++++ b/services/storage.js
+@@ -1,10 +1,6 @@
+-import { extractAttachmentsFromContent } from "../utils/file";
+-import { CONFIG } from "../clientConfig";
+-
+ // ───────────────────────────────────────────────────────────────────────────────
+ // LocalStorage Keys
+ // ───────────────────────────────────────────────────────────────────────────────
+-const CHAT_HISTORY_KEY = "cycls_chat_history";
+ const ACTIVE_CHAT_KEY = "cycls_active_chat";
+ const MESSAGE_COUNT_KEY = "cycls_message_count";
+ 
+@@ -39,116 +35,36 @@ export function clearMessageCount() {
+ }
+ 
+ // ───────────────────────────────────────────────────────────────────────────────
+-// Chat History Manager
++// Active Chat Helpers (local-only concern)
+ // ───────────────────────────────────────────────────────────────────────────────
+-export class ChatHistoryManager {
+-  static getAllChats() {
+-    try {
+-      const stored = localStorage.getItem(CHAT_HISTORY_KEY);
+-      return stored ? JSON.parse(stored) : [];
+-    } catch (e) {
+-      console.error("Error loading chat history:", e);
+-      return [];
+-    }
+-  }
+-
+-  static saveAllChats(chats) {
+-    try {
+-      localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(chats));
+-    } catch (e) {
+-      console.error("Error saving chat history:", e);
+-    }
+-  }
+-
+-  static getActiveChat() {
+-    try {
+-      return localStorage.getItem(ACTIVE_CHAT_KEY);
+-    } catch (e) {
+-      return null;
+-    }
+-  }
+-
+-  static setActiveChat(chatId) {
+-    try {
+-      localStorage.setItem(ACTIVE_CHAT_KEY, chatId);
+-    } catch (e) {
+-      console.error("Error saving active chat:", e);
+-    }
+-  }
+-
+-  static createChat(messages = []) {
+-    const chats = this.getAllChats();
+-    const newChat = {
+-      id: Date.now().toString(),
+-      title: this.generateTitle(messages),
+-      messages: messages,
+-      createdAt: new Date().toISOString(),
+-      updatedAt: new Date().toISOString(),
+-    };
+-
+-    // If we have max chats, remove the oldest
+-    if (chats.length >= CONFIG.MAX_CHATS) {
+-      chats.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+-      chats.shift(); // Remove oldest
+-    }
+-
+-    chats.push(newChat);
+-    this.saveAllChats(chats);
+-    this.setActiveChat(newChat.id);
+-    return newChat;
+-  }
+-
+-  static updateChat(chatId, messages) {
+-    const chats = this.getAllChats();
+-    const chatIndex = chats.findIndex((c) => c.id === chatId);
+-
+-    if (chatIndex !== -1) {
+-      chats[chatIndex].messages = messages;
+-      chats[chatIndex].updatedAt = new Date().toISOString();
+-      chats[chatIndex].title = this.generateTitle(messages);
+-      this.saveAllChats(chats);
+-    }
+-  }
+-
+-  static deleteChat(chatId) {
+-    const chats = this.getAllChats();
+-    const filtered = chats.filter((c) => c.id !== chatId);
+-    this.saveAllChats(filtered);
+-
+-    // If we deleted the active chat, clear active chat
+-    if (this.getActiveChat() === chatId) {
+-      localStorage.removeItem(ACTIVE_CHAT_KEY);
+-    }
+-  }
+-
+-  static getChat(chatId) {
+-    const chats = this.getAllChats();
+-    return chats.find((c) => c.id === chatId);
++export function getActiveChat() {
++  try {
++    return localStorage.getItem(ACTIVE_CHAT_KEY);
++  } catch {
++    return null;
+   }
++}
+ 
+-  static generateTitle(messages) {
+-    if (!messages || messages.length === 0) {
+-      return "New Chat";
+-    }
+-
+-    // Find first user message (supports both old format with type and new format with role)
+-    const firstUserMsg = messages.find((m) => m.type === "request" || m.role === "user");
+-    if (!firstUserMsg) {
+-      return "New Chat";
+-    }
+-
+-    // Extract clean content (without attachments)
+-    const { clean } = extractAttachmentsFromContent(firstUserMsg.content);
+-    const title = clean.trim().slice(0, 50);
+-    return title || "New Chat";
++export function setActiveChat(chatId) {
++  try {
++    localStorage.setItem(ACTIVE_CHAT_KEY, chatId);
++  } catch (_) {
++    // Silently ignore
+   }
++}
+ 
+-  static clearAll() {
+-    try {
+-      localStorage.removeItem(CHAT_HISTORY_KEY);
+-      localStorage.removeItem(ACTIVE_CHAT_KEY);
+-    } catch (e) {
+-      console.error("Error clearing chat history:", e);
+-    }
+-  }
++// ───────────────────────────────────────────────────────────────────────────────
++// Title generation helper (moved from ChatHistoryManager)
++// ───────────────────────────────────────────────────────────────────────────────
++export function generateTitle(messages) {
++  if (!messages || messages.length === 0) return "New Chat";
++  const firstUserMsg = messages.find(
++    (m) => m.type === "request" || m.role === "user"
++  );
++  if (!firstUserMsg) return "New Chat";
++  // Extract clean content (strip attachment manifests)
++  const re = /<!--\s*cycls:attachments\s*[\s\S]*?\s*cycls:attachments\s*-->/m;
++  const clean = (firstUserMsg.content || "").replace(re, "").trim();
++  const title = clean.slice(0, 50);
++  return title || "New Chat";
+ }
+diff --git a/vite.config.js b/vite.config.js
+index ef1fbab..6007acf 100644
+--- a/vite.config.js
++++ b/vite.config.js
+@@ -15,7 +15,15 @@ export default defineConfig({
+         changeOrigin: true,
+       },
+       "/attachments": {
+-        target: "http://127.0.0.1:8080", // <-- use the host/port your agent prints
++        target: "http://127.0.0.1:8080",
++        changeOrigin: true,
++      },
++      "/sessions": {
++        target: "http://127.0.0.1:8080",
++        changeOrigin: true,
++      },
++      "/files": {
++        target: "http://127.0.0.1:8080",
+         changeOrigin: true,
+       },
+     },
+-- 
+2.50.1
+
+
+From b3324bbb513590d287628db0fe12d6f881fb2e28 Mon Sep 17 00:00:00 2001
+From: Mohammed Alrujayi <58256600+aburjg@users.noreply.github.com>
+Date: Fri, 6 Feb 2026 23:54:16 +0000
+Subject: [PATCH 2/2] Add file browser popup with Files API integration
+
+Add FileModal component with breadcrumb navigation, folder browsing,
+file download, and delete. Wire into Sidebar and App.
+---
+ App.jsx                  |  10 ++
+ components/FileModal.jsx | 261 +++++++++++++++++++++++++++++++++++++++
+ components/Sidebar.jsx   |  84 ++++++++++---
+ services/files.js        |  32 +++++
+ 4 files changed, 370 insertions(+), 17 deletions(-)
+ create mode 100644 components/FileModal.jsx
+ create mode 100644 services/files.js
+
+diff --git a/App.jsx b/App.jsx
+index 4b3bea4..9b30880 100644
+--- a/App.jsx
++++ b/App.jsx
+@@ -19,6 +19,7 @@ import { MessageList } from "./components/MessageList";
+ import { Composer } from "./components/Composer";
+ import { ChatHistorySidebar } from "./components/Sidebar";
+ import { TierModal } from "./components/TierModal";
++import { FileModal } from "./components/FileModal";
+ import { ThemeToggle } from "./components/ThemeContext";
+ import { AuthPage, RequireAuth } from "./components/AuthPage";
+ import { SEOHead } from "./components/SEOHead";
+@@ -178,6 +179,7 @@ const AppContent = ({
+   const sidebarWidth = useSidebarWidth(isSidebarOpen);
+ 
+   const [showTierModal, setShowTierModal] = useState(false);
++  const [isFileModalOpen, setIsFileModalOpen] = useState(false);
+   const [messageCount, setMessageCount] = useState(0);
+   const FREE_MESSAGE_LIMIT = 5;
+ 
+@@ -826,6 +828,7 @@ const AppContent = ({
+         onSelectChat={handleSelectChat}
+         onNewChat={handleNewChat}
+         onDeleteChat={handleDeleteChat}
++        onOpenFiles={() => setIsFileModalOpen(true)}
+         user={userApi?.user}
+         isOnPaidPlan={isOnPaidPlan}
+         tierName={tierName}
+@@ -840,6 +843,13 @@ const AppContent = ({
+         tier={TIER || "Pro"}
+       />
+ 
++      {/* File browser modal */}
++      <FileModal
++        open={isFileModalOpen}
++        onClose={() => setIsFileModalOpen(false)}
++        getToken={authApi?.getToken}
++      />
++
+       {/* Main content area - slides based on sidebar state and canvas */}
+       <main
+         className="min-h-screen transition-all duration-300 ease-in-out"
+diff --git a/components/FileModal.jsx b/components/FileModal.jsx
+new file mode 100644
+index 0000000..d566c9f
+--- /dev/null
++++ b/components/FileModal.jsx
+@@ -0,0 +1,261 @@
++import { useState, useEffect, useCallback } from "react";
++import { listFiles, getFileUrl, deleteFile } from "../services/files";
++
++const cx = (...classes) => classes.filter(Boolean).join(" ");
++
++// ── Icons ──
++const FolderIcon = () => (
++  <svg
++    aria-hidden="true"
++    viewBox="0 0 24 24"
++    className="w-5 h-5"
++    fill="none"
++    stroke="currentColor"
++    strokeWidth="1.7"
++    strokeLinecap="round"
++    strokeLinejoin="round"
++  >
++    <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
++  </svg>
++);
++
++const FileIcon = () => (
++  <svg
++    aria-hidden="true"
++    viewBox="0 0 24 24"
++    className="w-5 h-5"
++    fill="none"
++    stroke="currentColor"
++    strokeWidth="1.7"
++    strokeLinecap="round"
++    strokeLinejoin="round"
++  >
++    <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
++    <path d="M14 2v4a2 2 0 0 0 2 2h4" />
++  </svg>
++);
++
++const TrashIcon = () => (
++  <svg
++    aria-hidden="true"
++    viewBox="0 0 24 24"
++    className="w-4 h-4"
++    fill="none"
++    stroke="currentColor"
++    strokeWidth="1.5"
++    strokeLinecap="round"
++    strokeLinejoin="round"
++  >
++    <path d="M3 6h18" />
++    <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
++    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
++    <path d="M10 11v6" />
++    <path d="M14 11v6" />
++  </svg>
++);
++
++function formatSize(bytes) {
++  if (bytes === 0) return "0 B";
++  const units = ["B", "KB", "MB", "GB"];
++  const i = Math.floor(Math.log(bytes) / Math.log(1024));
++  return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + " " + units[i];
++}
++
++function formatDate(iso) {
++  const d = new Date(iso);
++  const now = new Date();
++  const diff = now - d;
++  if (diff < 60000) return "just now";
++  if (diff < 3600000) return Math.floor(diff / 60000) + "m ago";
++  if (diff < 86400000) return Math.floor(diff / 3600000) + "h ago";
++  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
++}
++
++export const FileModal = ({ open, onClose, getToken }) => {
++  const [path, setPath] = useState("");
++  const [files, setFiles] = useState([]);
++  const [loading, setLoading] = useState(false);
++
++  const load = useCallback(async (p) => {
++    setLoading(true);
++    const items = await listFiles(p, getToken);
++    setFiles(items);
++    setLoading(false);
++  }, [getToken]);
++
++  useEffect(() => {
++    if (open) load(path);
++  }, [open, path, load]);
++
++  const handleDelete = async (name, e) => {
++    e.stopPropagation();
++    const fullPath = path ? path + "/" + name : name;
++    const ok = await deleteFile(fullPath, getToken);
++    if (ok) load(path);
++  };
++
++  const handleClick = (item) => {
++    const fullPath = path ? path + "/" + item.name : item.name;
++    if (item.type === "directory") {
++      setPath(fullPath);
++    } else {
++      window.open(getFileUrl(fullPath), "_blank");
++    }
++  };
++
++  // Build breadcrumb segments
++  const segments = path ? path.split("/") : [];
++
++  if (!open) return null;
++
++  // Sort: directories first, then files, each alphabetical
++  const sorted = [...files].sort((a, b) => {
++    if (a.type === "directory" && b.type !== "directory") return -1;
++    if (a.type !== "directory" && b.type === "directory") return 1;
++    return a.name.localeCompare(b.name);
++  });
++
++  return (
++    <div
++      className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-md px-4"
++      style={{ backgroundColor: "var(--bg-overlay)" }}
++      onClick={onClose}
++    >
++      <div
++        className="relative w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden theme-transition flex flex-col"
++        style={{
++          background: "var(--bg-primary)",
++          border: "1px solid var(--border-primary)",
++          maxHeight: "min(600px, 80vh)",
++        }}
++        onClick={(e) => e.stopPropagation()}
++      >
++        {/* Header */}
++        <div
++          className="flex items-center justify-between px-5 py-3.5 shrink-0"
++          style={{ borderBottom: "1px solid var(--border-primary)" }}
++        >
++          {/* Breadcrumbs */}
++          <div className="flex items-center gap-1 min-w-0 flex-1 text-sm overflow-x-auto">
++            <button
++              onClick={() => setPath("")}
++              className={cx(
++                "shrink-0 px-1.5 py-0.5 rounded-lg font-semibold",
++                "hover:bg-[var(--bg-hover)] transition-colors"
++              )}
++              style={{ color: path ? "var(--text-secondary)" : "var(--text-primary)" }}
++            >
++              Files
++            </button>
++            {segments.map((seg, i) => {
++              const segPath = segments.slice(0, i + 1).join("/");
++              const isLast = i === segments.length - 1;
++              return (
++                <span key={segPath} className="flex items-center gap-1">
++                  <span style={{ color: "var(--text-tertiary)" }}>/</span>
++                  <button
++                    onClick={() => setPath(segPath)}
++                    className={cx(
++                      "shrink-0 px-1.5 py-0.5 rounded-lg truncate max-w-[120px]",
++                      "hover:bg-[var(--bg-hover)] transition-colors"
++                    )}
++                    style={{ color: isLast ? "var(--text-primary)" : "var(--text-secondary)" }}
++                  >
++                    {seg}
++                  </button>
++                </span>
++              );
++            })}
++          </div>
++
++          {/* Close */}
++          <button
++            onClick={onClose}
++            className="shrink-0 ml-2 inline-flex h-8 w-8 items-center justify-center rounded-lg hover:bg-[var(--bg-hover)] transition-colors theme-transition"
++            style={{ color: "var(--text-tertiary)" }}
++            aria-label="Close"
++          >
++            <span className="text-lg leading-none">&times;</span>
++          </button>
++        </div>
++
++        {/* Body */}
++        <div className="flex-1 overflow-y-auto">
++          {loading ? (
++            <div
++              className="flex items-center justify-center py-16 text-sm"
++              style={{ color: "var(--text-tertiary)" }}
++            >
++              Loading...
++            </div>
++          ) : sorted.length === 0 ? (
++            <div
++              className="flex items-center justify-center py-16 text-sm"
++              style={{ color: "var(--text-tertiary)" }}
++            >
++              Empty directory
++            </div>
++          ) : (
++            <div className="py-1">
++              {sorted.map((item) => (
++                <button
++                  key={item.name}
++                  onClick={() => handleClick(item)}
++                  className={cx(
++                    "group w-full flex items-center gap-3 px-5 py-2.5 text-left",
++                    "hover:bg-[var(--bg-hover)] transition-colors theme-transition"
++                  )}
++                >
++                  <span
++                    className="shrink-0"
++                    style={{ color: item.type === "directory" ? "var(--text-secondary)" : "var(--text-tertiary)" }}
++                  >
++                    {item.type === "directory" ? <FolderIcon /> : <FileIcon />}
++                  </span>
++
++                  <span
++                    className="flex-1 min-w-0 truncate text-sm"
++                    style={{ color: "var(--text-primary)" }}
++                  >
++                    {item.name}
++                  </span>
++
++                  {item.type !== "directory" && (
++                    <span
++                      className="shrink-0 text-xs tabular-nums"
++                      style={{ color: "var(--text-tertiary)" }}
++                    >
++                      {formatSize(item.size)}
++                    </span>
++                  )}
++
++                  <span
++                    className="shrink-0 text-xs w-16 text-right"
++                    style={{ color: "var(--text-tertiary)" }}
++                  >
++                    {formatDate(item.modified)}
++                  </span>
++
++                  {item.type !== "directory" && (
++                    <button
++                      onClick={(e) => handleDelete(item.name, e)}
++                      className={cx(
++                        "shrink-0 rounded-lg p-1.5",
++                        "opacity-0 group-hover:opacity-100",
++                        "hover:bg-red-500/10 text-red-500",
++                        "transition-all theme-transition"
++                      )}
++                      aria-label={`Delete ${item.name}`}
++                    >
++                      <TrashIcon />
++                    </button>
++                  )}
++                </button>
++              ))}
++            </div>
++          )}
++        </div>
++      </div>
++    </div>
++  );
++};
+diff --git a/components/Sidebar.jsx b/components/Sidebar.jsx
+index 9bbb481..4010f34 100644
+--- a/components/Sidebar.jsx
++++ b/components/Sidebar.jsx
+@@ -81,6 +81,21 @@ const TrashIcon = (props) => (
+   </svg>
+ );
+ 
++const FolderIcon = (props) => (
++  <svg
++    aria-hidden="true"
++    viewBox="0 0 24 24"
++    className={cx("w-5 h-5", props?.className)}
++    fill="none"
++    stroke="currentColor"
++    strokeWidth="1.7"
++    strokeLinecap="round"
++    strokeLinejoin="round"
++  >
++    <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
++  </svg>
++);
++
+ const DotsIcon = (props) => (
+   <svg
+     xmlns="http://www.w3.org/2000/svg"
+@@ -295,6 +310,7 @@ export const ChatHistorySidebar = ({
+   onSelectChat,
+   onNewChat,
+   onDeleteChat,
++  onOpenFiles,
+   user,
+   isOnPaidPlan,
+   tierName,
+@@ -396,23 +412,44 @@ export const ChatHistorySidebar = ({
+         >
+           {/* Header */}
+           <div className="flex h-14 items-center justify-between px-2">
+-            <button
+-              onClick={onNewChat}
+-              className={cx(
+-                "inline-flex items-center gap-2 rounded-xl px-2.5 py-2",
+-                "hover:bg-[var(--bg-hover)] active:bg-[var(--bg-active)]",
+-                "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-primary)]/20",
+-                "theme-transition"
++            <div className="flex items-center gap-1">
++              <button
++                onClick={onNewChat}
++                className={cx(
++                  "inline-flex items-center gap-2 rounded-xl px-2.5 py-2",
++                  "hover:bg-[var(--bg-hover)] active:bg-[var(--bg-active)]",
++                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-primary)]/20",
++                  "theme-transition"
++                )}
++                style={{ color: "var(--text-primary)" }}
++                aria-label="New chat"
++                title="New chat"
++              >
++                <IconWrap>
++                  <NewChatIcon />
++                </IconWrap>
++                <span className="text-sm font-semibold">New</span>
++              </button>
++
++              {onOpenFiles && (
++                <button
++                  onClick={onOpenFiles}
++                  className={cx(
++                    "inline-flex items-center gap-2 rounded-xl px-2.5 py-2",
++                    "hover:bg-[var(--bg-hover)] active:bg-[var(--bg-active)]",
++                    "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-primary)]/20",
++                    "theme-transition"
++                  )}
++                  style={{ color: "var(--text-primary)" }}
++                  aria-label="Files"
++                  title="Files"
++                >
++                  <IconWrap>
++                    <FolderIcon />
++                  </IconWrap>
++                </button>
+               )}
+-              style={{ color: "var(--text-primary)" }}
+-              aria-label="New chat"
+-              title="New chat"
+-            >
+-              <IconWrap>
+-                <NewChatIcon />
+-              </IconWrap>
+-              <span className="text-sm font-semibold">New</span>
+-            </button>
++            </div>
+ 
+             <button
+               onClick={onToggle}
+@@ -503,7 +540,7 @@ export const ChatHistorySidebar = ({
+             </button>
+           </div>
+ 
+-          <div className="px-1 py-2">
++          <div className="px-1 py-2 space-y-1">
+             <SidebarButton
+               onClick={onNewChat}
+               icon={
+@@ -515,6 +552,19 @@ export const ChatHistorySidebar = ({
+               aria-label="New chat"
+               title="New chat"
+             />
++            {onOpenFiles && (
++              <SidebarButton
++                onClick={onOpenFiles}
++                icon={
++                  <IconWrap>
++                    <FolderIcon />
++                  </IconWrap>
++                }
++                isCollapsed
++                aria-label="Files"
++                title="Files"
++              />
++            )}
+           </div>
+ 
+           <div className="flex-1" />
+diff --git a/services/files.js b/services/files.js
+new file mode 100644
+index 0000000..20a1446
+--- /dev/null
++++ b/services/files.js
+@@ -0,0 +1,32 @@
++// ───────────────────────────────────────────────────────────────────────────────
++// File API client
++// ───────────────────────────────────────────────────────────────────────────────
++
++async function authFetch(url, options = {}, getToken) {
++  const headers = { ...options.headers };
++  if (getToken) {
++    try {
++      const token = await getToken({ template: "template" });
++      if (token) headers["Authorization"] = "Bearer " + token;
++    } catch (_) {
++      // Auth not available — proceed without token
++    }
++  }
++  return fetch(url, { ...options, headers });
++}
++
++export async function listFiles(path, getToken) {
++  const params = path ? `?path=${encodeURIComponent(path)}` : "";
++  const res = await authFetch(`/files${params}`, {}, getToken);
++  if (!res.ok) return [];
++  return res.json();
++}
++
++export function getFileUrl(path) {
++  return `/files/${encodeURIComponent(path)}`;
++}
++
++export async function deleteFile(path, getToken) {
++  const res = await authFetch(`/files/${encodeURIComponent(path)}`, { method: "DELETE" }, getToken);
++  return res.ok;
++}
+-- 
+2.50.1
+

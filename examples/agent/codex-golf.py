@@ -199,6 +199,7 @@ async def handle(proc, notif, s):
 
 
 @cycls.app(
+    theme="codex",
     apt=["curl", "proot", "xz-utils"], copy=[".env"], memory="512Mi",
     run_commands=[
         "curl -fsSL https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1",
@@ -336,5 +337,5 @@ async def codex_agent(context):
             yield {"type": "callout", "callout": err.decode(), "style": "error"}
 
 
-# codex_agent.local()
-codex_agent.deploy()
+codex_agent.local()
+# codex_agent.deploy()
