@@ -8,7 +8,8 @@ import json, os, shlex, shutil
 from urllib.parse import unquote
 import cycls
 
-APPROVAL_POLICY = os.environ.get("CODEX_APPROVAL_POLICY", "untrusted")
+# APPROVAL_POLICY = os.environ.get("CODEX_APPROVAL_POLICY", "untrusted")
+APPROVAL_POLICY = "never"
 
 BASE_INSTRUCTIONS = """
 You are Cycls, a general-purpose AI agent built by cycls.com that runs in the user's workspace in Cycls cloud.
@@ -95,6 +96,29 @@ def find_part(messages, role, ptype):
         if role:
             return None
     return None
+
+
+def snap_files(ws):
+    files = {}
+    for root, _, names in os.walk(ws):
+        if "/." in root:
+            continue
+        for name in names:
+            fp = os.path.join(root, name)
+            try:
+                files[fp] = os.path.getmtime(fp)
+            except OSError:
+                pass
+    return files
+
+
+def diff_files(before, after):
+    changed = []
+    for fp, mtime in after.items():
+        if fp not in before or mtime > before[fp]:
+            changed.append((mtime, fp))
+    changed.sort(reverse=True)
+    return changed
 
 
 async def rpc_send(proc, method, params=None, msg_id=None):
@@ -248,6 +272,7 @@ async def codex_agent(context):
         if tid:
             yield {"type": "session_id", "session_id": tid}
 
+        before = snap_files(ws)
         await rpc_send(proc, "turn/start", {"threadId": tid, "input": [{"type": "text", "text": prompt}]}, msg_id=mid)
         res = {}
         async for notif in rpc_read(proc, mid, res):
@@ -267,6 +292,20 @@ async def codex_agent(context):
                 yield out
             if s["approval"]:
                 break
+
+        # Canvas: show most recently changed file
+        after = snap_files(ws)
+        changed = diff_files(before, after)
+        if changed:
+            fpath = changed[0][1]
+            try:
+                content = open(fpath).read()
+                title = os.path.relpath(fpath, ws)
+                yield {"type": "canvas", "canvas": "document", "open": True, "title": title}
+                yield {"type": "canvas", "canvas": "document", "content": content}
+                yield {"type": "canvas", "canvas": "document", "done": True}
+            except Exception:
+                pass
 
         if s["usage"]:
             u = s["usage"].get("tokenUsage", {}).get("total", {})
