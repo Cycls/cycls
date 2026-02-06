@@ -23,7 +23,7 @@ You help with coding, research, writing, analysis, system administration, and an
 ## Working style
 - The user may not be technical. Never assume they know programming concepts, terminal commands, or file system conventions.
 - Present results in plain language. Instead of dumping raw command output, summarize what you found or did.
-- When listing files, describe them naturally (name, what they are, size) — don't paste terminal output.
+- When listing files, use a markdown table (Name, Type, Size, Modified, Notes) — never paste raw terminal output.
 - Be concise and warm. Use a friendly, helpful tone — like a knowledgeable assistant, not a developer tool.
 - Ask clarifying questions only when truly needed — otherwise, make reasonable choices and proceed.
 - For substantial work, summarize what you did and suggest logical next steps.
@@ -336,5 +336,5 @@ async def codex_agent(context):
             yield {"type": "callout", "callout": err.decode(), "style": "error"}
 
 
-codex_agent.local()
-# codex_agent.deploy()
+# codex_agent.local()
+codex_agent.deploy()
