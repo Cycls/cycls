@@ -244,18 +244,48 @@ def web(func, config):
         return items
 
     @app.get("/files/{path:path}")
-    async def get_file(path: str, jwt: dict = auth):
+    async def get_file(path: str, request: Request, jwt: dict = auth):
         file_path = safe_path(jwt, path)
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
+        if request.query_params.get("download") is not None:
+            return FileResponse(file_path, filename=file_path.name)
         return FileResponse(file_path)
 
-    @app.delete("/files/{path:path}")
-    async def delete_file(path: str, jwt: dict = auth):
+    @app.put("/files/{path:path}")
+    async def put_file(path: str, request: Request, file: UploadFile = File(...), jwt: dict = auth):
         file_path = safe_path(jwt, path)
-        if not file_path.is_file():
-            raise HTTPException(status_code=404, detail="File not found")
-        file_path.unlink()
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_bytes(await file.read())
+        return {"ok": True}
+
+    @app.patch("/files/{path:path}")
+    async def rename(path: str, request: Request, jwt: dict = auth):
+        src = safe_path(jwt, path)
+        if not src.exists():
+            raise HTTPException(status_code=404, detail="Not found")
+        data = await request.json()
+        dest = safe_path(jwt, data["to"])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        src.rename(dest)
+        return {"ok": True}
+
+    @app.post("/files/{path:path}")
+    async def mkdir(path: str, jwt: dict = auth):
+        dir_path = safe_path(jwt, path)
+        dir_path.mkdir(parents=True, exist_ok=True)
+        return {"ok": True}
+
+    @app.delete("/files/{path:path}")
+    async def delete_path(path: str, jwt: dict = auth):
+        import shutil
+        target = safe_path(jwt, path)
+        if not target.exists():
+            raise HTTPException(status_code=404, detail="Not found")
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
         return {"ok": True}
 
     # ---- Static mounts (must be last) ----
