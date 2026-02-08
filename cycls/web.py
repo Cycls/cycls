@@ -147,15 +147,21 @@ def web(func, config):
         token_dir = Path(f"/workspace/attachments/{token}")
         token_dir.mkdir(parents=True, exist_ok=True)
 
-        file_path = token_dir / file.filename
+        filename = Path(file.filename).name
+        file_path = (token_dir / filename).resolve()
+        if not file_path.is_relative_to(token_dir.resolve()):
+            raise HTTPException(status_code=400, detail="Invalid filename")
         with open(file_path, "wb") as f:
             f.write(await file.read())
 
-        return {"url": f"/attachments/{token}/{quote(file.filename)}"}
+        return {"url": f"/attachments/{token}/{quote(filename)}"}
 
     @app.get("/attachments/{token}/{filename}")
     async def get_attachment(token: str, filename: str):
-        file_path = Path(f"/workspace/attachments/{token}") / filename
+        token_dir = Path(f"/workspace/attachments/{token}")
+        file_path = (token_dir / Path(filename).name).resolve()
+        if not file_path.is_relative_to(token_dir.resolve()):
+            raise HTTPException(status_code=404, detail="File not found")
 
         if not file_path.exists():
             raise HTTPException(status_code=404, detail="File not found")
