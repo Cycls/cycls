@@ -23,7 +23,7 @@ You help with coding, research, writing, analysis, system administration, and an
 ## Working style
 - The user may not be technical. Never assume they know programming concepts, terminal commands, or file system conventions.
 - Present results in plain language. Instead of dumping raw command output, summarize what you found or did.
-- When listing files, describe them naturally (name, what they are, size) — don't paste terminal output.
+- When listing files, use a markdown table (Name, Type, Size, Modified, Notes) — never paste raw terminal output.
 - Be concise and warm. Use a friendly, helpful tone — like a knowledgeable assistant, not a developer tool.
 - Ask clarifying questions only when truly needed — otherwise, make reasonable choices and proceed.
 - For substantial work, summarize what you did and suggest logical next steps.
@@ -57,7 +57,57 @@ You help with coding, research, writing, analysis, system administration, and an
 - Prioritize bugs, security risks, and missing tests.
 - Present findings by severity with file and line references.
 - State explicitly if no issues are found.
+
+## Renderable components
+To display a visual component, use a json code block with a "type" field.
+Supported types: chart, table, callout, image
+
+```json
+{"type": "chart", "data": [42, 67, 89], "labels": ["Q1", "Q2", "Q3"], "title": "Revenue"}
+```
+
+```json
+{"type": "table", "headers": ["Name", "Score"], "rows": [["Alice", 95], ["Bob", 87]]}
+```
+
+You can place multiple components throughout your response, interleaved with normal text.
 """.strip()
+
+COMPONENT_TYPES = {"chart", "table", "callout", "image"}
+
+
+def parse_ui(d, s):
+    buf = s.get("buf", "") + d
+    while "```" in buf:
+        idx = buf.find("```")
+        rest = buf[idx + 3:].lstrip("\n")
+        nl = rest.find("\n")
+        if nl == -1:
+            break
+        lang = rest[:nl].strip().lower()
+        close = rest.find("```", nl + 1)
+        if close == -1:
+            break
+        if idx > 0:
+            yield buf[:idx]
+        body = rest[nl + 1:close]
+        buf = rest[close + 3:].lstrip("\n")
+        if lang == "json":
+            try:
+                parsed = json.loads(body.strip())
+                if parsed.get("type") in COMPONENT_TYPES:
+                    yield {"type": "thinking", "thinking": json.dumps(parsed, indent=2)}
+                    continue
+            except Exception:
+                pass
+        yield f"```{lang}\n{body}```"
+    cut = buf.find("```")
+    if cut == -1:
+        trailing = len(buf) - len(buf.rstrip("`"))
+        cut = len(buf) - trailing if 0 < trailing < 3 else len(buf)
+    if buf[:cut]: yield buf[:cut]
+    s["buf"] = buf[cut:]
+
 
 STEP_TYPES = {
     "commandexecution": lambda i: f"Bash({parse_cmd(i.get('command', ''))[:60]})",
@@ -169,7 +219,8 @@ async def handle(proc, notif, s):
     m, p = notif.get("method", ""), notif.get("params", {})
     if m == "item/agentMessage/delta":
         if d := p.get("delta"):
-            yield d
+            for out in parse_ui(d, s):
+                yield out
     elif m == "item/reasoning/summaryTextDelta":
         if not s["stepped"] and (d := p.get("delta")):
             s["think"] += d
@@ -191,6 +242,10 @@ async def handle(proc, notif, s):
             yield {"type": "thinking", "thinking": s["think"]}
             s["think"] = ""
     elif m == "turn/completed":
+        # Flush any remaining buffered text
+        if s.get("buf"):
+            yield s["buf"]
+            s["buf"] = ""
         s["done"] = True
     elif m == "thread/tokenUsage/updated":
         s["usage"] = p
@@ -199,13 +254,14 @@ async def handle(proc, notif, s):
 
 
 @cycls.app(
+    # theme="codex",
     apt=["curl", "proot", "xz-utils"], copy=[".env"], memory="512Mi",
     run_commands=[
         "curl -fsSL https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1",
         "npm i -g @openai/codex@0.94.0",
     ],
     auth=True,
-    # force_rebuild=True,
+    force_rebuild=True,
 )
 async def codex_agent(context):
     import asyncio
