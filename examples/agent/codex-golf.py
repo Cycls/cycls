@@ -254,13 +254,13 @@ async def handle(proc, notif, s):
 
 
 @cycls.app(
-    apt=["curl", "proot", "xz-utils"], copy=[".env"], memory="512Mi",
+    apt=["curl", "proot", "xz-utils"], copy=[".env"], memory="512Mi", # TODO: proot remove
     run_commands=[
         "curl -fsSL https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1",
-        "npm i -g @openai/codex@0.94.0",
+        "npm i -g @openai/codex@0.98.0",
     ],
     auth=True,
-    # force_rebuild=True,
+    force_rebuild=True,
 )
 async def codex_agent(context):
     import asyncio
@@ -386,9 +386,10 @@ async def codex_agent(context):
                 proc.kill()
                 await proc.wait()
         stderr_task.cancel()
-        err = b"".join(s["stderr"])
+        err = b"".join(s["stderr"]).decode()
+        err = "\n".join(l for l in err.splitlines() if "state db missing rollout" not in l).strip()
         if err:
-            yield {"type": "callout", "callout": err.decode(), "style": "error"}
+            yield {"type": "callout", "callout": err, "style": "error"}
 
 
 codex_agent.local()
