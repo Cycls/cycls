@@ -87,7 +87,9 @@ def web(func, config):
         org_id: Optional[str] = None
         org_name: Optional[str] = None
         org_slug: Optional[str] = None
-        plans: List[str] = []
+        plan_name: Optional[str] = None
+        plan_id: Optional[str] = None
+        plan_slug: Optional[str] = None
 
     class Context(BaseModel):
         messages: Any
@@ -110,8 +112,7 @@ def web(func, config):
             decoded = jwt.decode(bearer.credentials, key.key, algorithms=["RS256"], leeway=10)
             return {"type": "user",
                     "user": {"id": decoded.get("id"), "name": decoded.get("name"), "email": decoded.get("email"),
-                             "org_id": decoded.get("org_id"), "org_name": decoded.get("org_name"), "org_slug": decoded.get("org_slug"),
-                             "plans": decoded.get("public", {}).get("plans", [])}}
+                             "org_id": decoded.get("org_id"), "org_name": decoded.get("org_name"), "org_slug": decoded.get("org_slug")}}
         except jwt.ExpiredSignatureError:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired", headers={"WWW-Authenticate": "Bearer"})
         except jwt.InvalidTokenError as e:
@@ -128,6 +129,8 @@ def web(func, config):
         data = await request.json()
         messages = data.get("messages")
         user_data = jwt.get("user") if jwt else None
+        if user_data and data.get("plan"):
+            user_data.update(data["plan"])
         user = User(**user_data) if user_data else None
 
         context = Context(messages=Messages(messages), user=user)
