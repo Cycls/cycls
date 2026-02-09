@@ -14,7 +14,7 @@ class App(Function):
     """App extends Function with web UI serving capabilities."""
 
     def __init__(self, func, name, theme="default", pip=None, apt=None, run_commands=None, copy=None, copy_public=None,
-                 auth=False, org=None, header=None, intro=None, title=None, plan="free", analytics=False,
+                 auth=False, header=None, intro=None, title=None, plan="free", analytics=False,
                  memory="1Gi", force_rebuild=False):
         if theme not in THEMES:
             raise ValueError(f"Unknown theme: {theme}. Available: {THEMES}")
@@ -30,7 +30,7 @@ class App(Function):
             auth=auth,
             plan=plan,
             analytics=analytics,
-            org=org,
+
         )
 
         # Build files dict for Function (theme is inside cycls/)

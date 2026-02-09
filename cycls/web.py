@@ -15,7 +15,6 @@ class Config(BaseModel):
     auth: bool = False
     plan: str = "free"
     analytics: bool = False
-    org: Optional[str] = None
     pk: Optional[str] = None
     jwks: Optional[str] = None
 
@@ -85,7 +84,9 @@ def web(func, config):
         id: str
         name: Optional[str] = None
         email: EmailStr
-        org: Optional[str] = None
+        org_id: Optional[str] = None
+        org_name: Optional[str] = None
+        org_slug: Optional[str] = None
         plans: List[str] = []
 
     class Context(BaseModel):
@@ -108,7 +109,8 @@ def web(func, config):
             key = jwks.get_signing_key_from_jwt(bearer.credentials)
             decoded = jwt.decode(bearer.credentials, key.key, algorithms=["RS256"], leeway=10)
             return {"type": "user",
-                    "user": {"id": decoded.get("id"), "name": decoded.get("name"), "email": decoded.get("email"), "org": decoded.get("org"),
+                    "user": {"id": decoded.get("id"), "name": decoded.get("name"), "email": decoded.get("email"),
+                             "org_id": decoded.get("org_id"), "org_name": decoded.get("org_name"), "org_slug": decoded.get("org_slug"),
                              "plans": decoded.get("public", {}).get("plans", [])}}
         except jwt.ExpiredSignatureError:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired", headers={"WWW-Authenticate": "Bearer"})
