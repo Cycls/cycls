@@ -290,7 +290,7 @@ async def codex_agent(context):
         prompt = f"The user approved the previous action. Please retry: {action}"
 
     proc = await asyncio.create_subprocess_exec(
-        "codex", "app-server",
+        "codex", "app-server", limit=1024 * 1024,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         cwd=ws, env={
             "PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""),
