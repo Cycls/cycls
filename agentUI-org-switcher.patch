@@ -1,5 +1,5 @@
 diff --git a/App.jsx b/App.jsx
-index a96909d..b879e89 100644
+index a96909d..27e2320 100644
 --- a/App.jsx
 +++ b/App.jsx
 @@ -9,6 +9,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router";
@@ -50,28 +50,43 @@ index a96909d..b879e89 100644
    TITLE,
    TIER,
    authApi,
-@@ -317,9 +315,7 @@ const AppContent = ({
+@@ -199,6 +197,12 @@ const AppContent = ({
+     return subscription?.subscriptionItems?.[0]?.plan?.name || null;
+   }, [subscription]);
+ 
++  const planInfo = useMemo(() => {
++    const plan = subscription?.subscriptionItems?.[0]?.plan;
++    if (!plan) return null;
++    return { plan_name: plan.name, plan_id: plan.id, plan_slug: plan.slug };
++  }, [subscription]);
++
+   // PostHog identify hook - safely receives user data as props
+   usePostHogIdentify(
+     AUTH && isOnPaidPlan,
+@@ -317,9 +321,8 @@ const AppContent = ({
      setIsUserScrolled,
      onFirstSend: () => setHasBegun(true),
      auth: AUTH,
 -    org: ORG,
      getToken: authApi?.getToken,
 -    setActive: clerkApi?.setActive,
++    plan: planInfo,
      activeChatId,
      setActiveChatId,
      setChatHistory,
-@@ -436,9 +432,7 @@ const AppContent = ({
+@@ -436,9 +439,8 @@ const AppContent = ({
            messages: contextMessages,
            auth: AUTH,
            getToken: authApi?.getToken,
 -          setActive: clerkApi?.setActive,
 -          org: ORG,
 -          onPart: (item) => {
++          plan: planInfo,
 +                      onPart: (item) => {
              resetTimeout();
  
              setMessages((prev) => {
-@@ -574,9 +568,7 @@ const AppContent = ({
+@@ -574,9 +576,7 @@ const AppContent = ({
      [
        messages,
        AUTH,
@@ -81,18 +96,19 @@ index a96909d..b879e89 100644
        activeChatId,
        analyticsEnabled,
        saveAndRefresh,
-@@ -634,9 +626,7 @@ const AppContent = ({
+@@ -634,9 +634,8 @@ const AppContent = ({
            messages: contextMessages,
            auth: AUTH,
            getToken: authApi?.getToken,
 -          setActive: clerkApi?.setActive,
 -          org: ORG,
 -          onPart: (item) => {
++          plan: planInfo,
 +                      onPart: (item) => {
              resetTimeout();
  
              setMessages((prev) => {
-@@ -775,9 +765,7 @@ const AppContent = ({
+@@ -775,9 +774,7 @@ const AppContent = ({
      [
        messages,
        AUTH,
@@ -102,7 +118,7 @@ index a96909d..b879e89 100644
        activeChatId,
        analyticsEnabled,
        saveAndRefresh,
-@@ -795,14 +783,26 @@ const AppContent = ({
+@@ -795,14 +792,26 @@ const AppContent = ({
    const empty = messages.length === 0;
  
    const userButtonComponent = AUTH ? (
@@ -116,7 +132,7 @@ index a96909d..b879e89 100644
 -    />
 +    <div className="flex flex-col items-center gap-2">
 +      <OrganizationSwitcher
-+        hidePersonal={true}
++        hidePersonal={false}
 +        appearance={{
 +          elements: {
 +            rootBox: "flex justify-center",
@@ -137,7 +153,7 @@ index a96909d..b879e89 100644
    ) : null;
  
    return (
-@@ -970,8 +970,6 @@ export const Shell = ({ meta }) => {
+@@ -970,8 +979,6 @@ export const Shell = ({ meta }) => {
    const TITLE = String(meta.title ?? "AI Agent");
    const TIER = meta.tier || null;
    const PUBLISHABLE_KEY = meta.pk;
@@ -146,7 +162,7 @@ index a96909d..b879e89 100644
    const AFTER_URL =
      typeof window !== "undefined" ? window.location.origin + "/" : "/";
  
-@@ -981,7 +979,6 @@ export const Shell = ({ meta }) => {
+@@ -981,7 +988,6 @@ export const Shell = ({ meta }) => {
          HEADER={HEADER}
          INTRO={INTRO}
          AUTH={AUTH}
@@ -154,7 +170,7 @@ index a96909d..b879e89 100644
          TITLE={TITLE}
          TIER={TIER}
        />
-@@ -1011,7 +1008,6 @@ export const Shell = ({ meta }) => {
+@@ -1011,7 +1017,6 @@ export const Shell = ({ meta }) => {
                      HEADER={HEADER}
                      INTRO={INTRO}
                      AUTH={AUTH}
@@ -162,41 +178,78 @@ index a96909d..b879e89 100644
                      TITLE={TITLE}
                      TIER={TIER}
                    />
+diff --git a/contexts/SubscriptionContext.jsx b/contexts/SubscriptionContext.jsx
+index 0ab6463..1bbee6a 100644
+--- a/contexts/SubscriptionContext.jsx
++++ b/contexts/SubscriptionContext.jsx
+@@ -1,5 +1,6 @@
+ import React, { createContext, useContext, useMemo } from "react";
+ import { useSubscription } from "@clerk/clerk-react/experimental";
++import { useOrganization } from "@clerk/clerk-react";
+ 
+ // ───────────────────────────────────────────────────────────────────────────────
+ // Subscription Context - to share subscription state from Clerk when AUTH enabled
+@@ -14,17 +15,17 @@ const SubscriptionContext = createContext({
+ export const useSubscriptionContext = () => useContext(SubscriptionContext);
+ 
+ // ───────────────────────────────────────────────────────────────────────────────
+-// Subscription Provider - only renders when inside ClerkProvider
++// Subscription Provider - checks org subscription when active, else personal
+ // ───────────────────────────────────────────────────────────────────────────────
+-export const SubscriptionProvider = ({ tier, children }) => {
++export const SubscriptionProvider = ({ children }) => {
++  const { organization } = useOrganization();
++
+   const {
+     data: subscription,
+     isLoading,
+     error,
+     revalidate,
+-  } = useSubscription({
+-    enabled: tier === "cycls_pass",
+-  });
++  } = useSubscription(organization ? { for: "organization" } : {});
+ 
+   const value = useMemo(
+     () => ({
 diff --git a/hooks/useChatSend.js b/hooks/useChatSend.js
-index d7a4ca1..0a0e83b 100644
+index d7a4ca1..26368c4 100644
 --- a/hooks/useChatSend.js
 +++ b/hooks/useChatSend.js
-@@ -20,9 +20,7 @@ export const useChatSend = ({
+@@ -20,9 +20,8 @@ export const useChatSend = ({
    setIsUserScrolled,
    onFirstSend,
    auth,
 -  org,
    getToken,
 -  setActive,
++  plan,
    activeChatId,
    setActiveChatId,
    setChatHistory,
-@@ -125,8 +123,6 @@ export const useChatSend = ({
+@@ -125,8 +124,7 @@ export const useChatSend = ({
            messages: newMessages,
            auth,
            getToken,
 -          setActive,
 -          org,
++          plan,
            onPart: (item) => {
              // Reset timeout on every chunk received
              resetTimeout();
-@@ -375,9 +371,7 @@ export const useChatSend = ({
+@@ -375,9 +373,8 @@ export const useChatSend = ({
      [
        messages,
        auth,
 -      org,
        getToken,
 -      setActive,
++      plan,
        activeChatId,
        setActiveChatId,
        setChatHistory,
 diff --git a/services/api.js b/services/api.js
-index bee5688..3625df6 100644
+index bee5688..2f845b9 100644
 --- a/services/api.js
 +++ b/services/api.js
 @@ -25,8 +25,6 @@ export async function sendChatMessage({
@@ -222,16 +275,17 @@ index bee5688..3625df6 100644
      } catch (_error) {
        // Silently ignore getToken errors
      }
-@@ -124,8 +115,6 @@ export async function sendCyclsChatMessage({
+@@ -124,8 +115,7 @@ export async function sendCyclsChatMessage({
    messages,
    auth,
    getToken,
 -  setActive,
 -  org,
++  plan,
    onPart,
    signal,
  }) {
-@@ -204,13 +193,6 @@ export async function sendCyclsChatMessage({
+@@ -204,13 +194,6 @@ export async function sendCyclsChatMessage({
      try {
        const sessionToken = await getToken({ template: "template" });
        if (sessionToken) headers["Authorization"] = "Bearer " + sessionToken;
@@ -245,3 +299,12 @@ index bee5688..3625df6 100644
      } catch (_error) {
        // Silently ignore getToken errors
      }
+@@ -219,7 +202,7 @@ export async function sendCyclsChatMessage({
+   const response = await fetch("/chat/cycls", {
+     method: "POST",
+     headers,
+-    body: JSON.stringify({ messages: context }),
++    body: JSON.stringify({ messages: context, ...(plan && { plan }) }),
+     signal,
+   });
+ 
