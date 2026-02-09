@@ -57,7 +57,57 @@ You help with coding, research, writing, analysis, system administration, and an
 - Prioritize bugs, security risks, and missing tests.
 - Present findings by severity with file and line references.
 - State explicitly if no issues are found.
+
+## Renderable components
+To display a visual component, use a json code block with a "type" field.
+Supported types: chart, table, callout, image
+
+```json
+{"type": "chart", "data": [42, 67, 89], "labels": ["Q1", "Q2", "Q3"], "title": "Revenue"}
+```
+
+```json
+{"type": "table", "headers": ["Name", "Score"], "rows": [["Alice", 95], ["Bob", 87]]}
+```
+
+You can place multiple components throughout your response, interleaved with normal text.
 """.strip()
+
+COMPONENT_TYPES = {"chart", "table", "callout", "image"}
+
+
+def parse_ui(d, s):
+    buf = s.get("buf", "") + d
+    while "```" in buf:
+        idx = buf.find("```")
+        rest = buf[idx + 3:].lstrip("\n")
+        nl = rest.find("\n")
+        if nl == -1:
+            break
+        lang = rest[:nl].strip().lower()
+        close = rest.find("```", nl + 1)
+        if close == -1:
+            break
+        if idx > 0:
+            yield buf[:idx]
+        body = rest[nl + 1:close]
+        buf = rest[close + 3:].lstrip("\n")
+        if lang == "json":
+            try:
+                parsed = json.loads(body.strip())
+                if parsed.get("type") in COMPONENT_TYPES:
+                    yield {"type": "thinking", "thinking": json.dumps(parsed, indent=2)}
+                    continue
+            except Exception:
+                pass
+        yield f"```{lang}\n{body}```"
+    cut = buf.find("```")
+    if cut == -1:
+        trailing = len(buf) - len(buf.rstrip("`"))
+        cut = len(buf) - trailing if 0 < trailing < 3 else len(buf)
+    if buf[:cut]: yield buf[:cut]
+    s["buf"] = buf[cut:]
+
 
 STEP_TYPES = {
     "commandexecution": lambda i: f"Bash({parse_cmd(i.get('command', ''))[:60]})",
@@ -169,7 +219,8 @@ async def handle(proc, notif, s):
     m, p = notif.get("method", ""), notif.get("params", {})
     if m == "item/agentMessage/delta":
         if d := p.get("delta"):
-            yield d
+            for out in parse_ui(d, s):
+                yield out
     elif m == "item/reasoning/summaryTextDelta":
         if not s["stepped"] and (d := p.get("delta")):
             s["think"] += d
@@ -191,6 +242,10 @@ async def handle(proc, notif, s):
             yield {"type": "thinking", "thinking": s["think"]}
             s["think"] = ""
     elif m == "turn/completed":
+        # Flush any remaining buffered text
+        if s.get("buf"):
+            yield s["buf"]
+            s["buf"] = ""
         s["done"] = True
     elif m == "thread/tokenUsage/updated":
         s["usage"] = p
