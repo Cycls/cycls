@@ -11,7 +11,7 @@ from cycls.web import web, Config, Messages, sse, encoder, openai_encoder
 # poetry run pytest tests/web_test.py -v -s
 
 # Use actual default theme
-THEME_PATH = str(importlib.resources.files('cycls').joinpath('themes/default'))
+THEME_PATH = str(importlib.resources.files('cycls').joinpath('themes/dev'))
 
 
 # =============================================================================
@@ -437,9 +437,9 @@ def test_attachment_upload_and_download():
             )
             assert response.status_code == 200
 
-            # URL should be full URL with token
+            # URL should be relative path with token
             url = response.json()["url"]
-            assert url.startswith("http://testserver/attachments/")
+            assert url.startswith("/attachments/")
             assert url.endswith("/test.txt")
             # Token should be 43 chars (256 bits base64url)
             parts = url.split("/")
