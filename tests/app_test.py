@@ -243,7 +243,6 @@ def test_app_all_config_options():
         title="My App",
         auth=True,
         analytics=True,
-        org="my-org"
     )
     async def full_app(context):
         yield "full"
@@ -253,7 +252,6 @@ def test_app_all_config_options():
     assert full_app.config.title == "My App"
     assert full_app.config.auth == True
     assert full_app.config.analytics == True
-    assert full_app.config.org == "my-org"
     print("✅ Test passed.")
 
 
