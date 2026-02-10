@@ -254,16 +254,18 @@ async def handle(proc, notif, s):
 
 
 @cycls.app(
+    theme="codex",
     apt=["curl", "proot", "xz-utils"], copy=[".env"], memory="512Mi", # TODO: proot remove
     run_commands=[
         "curl -fsSL https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1",
         "npm i -g @openai/codex@0.98.0",
     ],
     auth=True,
-    force_rebuild=True,
+    # force_rebuild=True,
 )
 async def codex_agent(context):
     import asyncio
+    yield f"{context.user}"
 
     user_id = context.user.id if context.user else "default"
     sid_part = find_part(context.messages, None, "session_id")
