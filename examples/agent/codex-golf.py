@@ -57,56 +57,49 @@ You help with coding, research, writing, analysis, system administration, and an
 - Prioritize bugs, security risks, and missing tests.
 - Present findings by severity with file and line references.
 - State explicitly if no issues are found.
-
-## Renderable components
-To display a visual component, use a json code block with a "type" field.
-Supported types: chart, table, callout, image
-
-```json
-{"type": "chart", "data": [42, 67, 89], "labels": ["Q1", "Q2", "Q3"], "title": "Revenue"}
-```
-
-```json
-{"type": "table", "headers": ["Name", "Score"], "rows": [["Alice", 95], ["Bob", 87]]}
-```
-
-You can place multiple components throughout your response, interleaved with normal text.
 """.strip()
 
-COMPONENT_TYPES = {"chart", "table", "callout", "image"}
-
-
-def parse_ui(d, s):
-    buf = s.get("buf", "") + d
-    while "```" in buf:
-        idx = buf.find("```")
-        rest = buf[idx + 3:].lstrip("\n")
-        nl = rest.find("\n")
-        if nl == -1:
-            break
-        lang = rest[:nl].strip().lower()
-        close = rest.find("```", nl + 1)
-        if close == -1:
-            break
-        if idx > 0:
-            yield buf[:idx]
-        body = rest[nl + 1:close]
-        buf = rest[close + 3:].lstrip("\n")
-        if lang == "json":
-            try:
-                parsed = json.loads(body.strip())
-                if parsed.get("type") in COMPONENT_TYPES:
-                    yield {"type": "thinking", "thinking": json.dumps(parsed, indent=2)}
-                    continue
-            except Exception:
-                pass
-        yield f"```{lang}\n{body}```"
-    cut = buf.find("```")
-    if cut == -1:
-        trailing = len(buf) - len(buf.rstrip("`"))
-        cut = len(buf) - trailing if 0 < trailing < 3 else len(buf)
-    if buf[:cut]: yield buf[:cut]
-    s["buf"] = buf[cut:]
+DYNAMIC_TOOLS = [
+    {
+        "name": "render_table",
+        "description": "Display a data table to the user. Use for structured data, comparisons, listings.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Optional table title"},
+                "headers": {"type": "array", "items": {"type": "string"}},
+                "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}}
+            },
+            "required": ["headers", "rows"]
+        }
+    },
+    {
+        "name": "render_callout",
+        "description": "Display a callout/alert box. Use for warnings, tips, success messages, errors.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "style": {"type": "string", "enum": ["info", "warning", "error", "success"]},
+                "title": {"type": "string"}
+            },
+            "required": ["message", "style"]
+        }
+    },
+    {
+        "name": "render_image",
+        "description": "Display an image to the user.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "src": {"type": "string", "description": "Image URL or path"},
+                "alt": {"type": "string"},
+                "caption": {"type": "string"}
+            },
+            "required": ["src"]
+        }
+    }
+]
 
 
 STEP_TYPES = {
@@ -156,29 +149,6 @@ def find_part(messages, role, ptype):
     return None
 
 
-def snap_files(ws):
-    files = {}
-    for root, _, names in os.walk(ws):
-        if "/." in root:
-            continue
-        for name in names:
-            fp = os.path.join(root, name)
-            try:
-                files[fp] = os.path.getmtime(fp)
-            except OSError:
-                pass
-    return files
-
-
-def diff_files(before, after):
-    changed = []
-    for fp, mtime in after.items():
-        if fp not in before or mtime > before[fp]:
-            changed.append((mtime, fp))
-    changed.sort(reverse=True)
-    return changed
-
-
 async def rpc_send(proc, method, params=None, msg_id=None):
     proc.stdin.write((json.dumps({k: v for k, v in {"id": msg_id, "method": method, "params": params}.items() if v is not None}) + "\n").encode())
     await proc.stdin.drain()
@@ -198,29 +168,62 @@ async def rpc_read(proc, expected_id, res):
 
 
 async def handle(proc, notif, s):
-    if "id" in notif:  # server request (approval)
-        p = notif.get("params", {})
-        actions = p.get("commandActions") or [{}]
-        cmd = actions[0].get("command") or parse_cmd(p.get("command", "")) or json.dumps(p)
-        cwd = p.get("cwd", "")
-        reason = p.get("reason", "")
-        lines = [f"\n**Bash(** {cmd} **)**\n"]
-        if cwd:
-            lines.append(f"dir: `{cwd}`\n")
-        if reason:
-            lines.append(f"reason: {reason}\n")
-        lines.append("Reply **yes** to approve.")
-        proc.stdin.write((json.dumps({"id": notif["id"], "result": {"decision": "decline"}}) + "\n").encode())
-        await proc.stdin.drain()
-        yield {"type": "thinking", "thinking": "\n".join(lines)}
-        yield {"type": "pending_approval", "action_type": notif.get("method", ""), "action_detail": cmd}
-        s["approval"] = True
-        return
+    if "id" in notif and "method" in notif:
+        method = notif["method"]
+        if method == "item/tool/call":
+            p = notif.get("params", {})
+            tool = p.get("tool", "")
+            args = p.get("arguments", {})
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except Exception:
+                    args = {}
+
+            if tool == "render_table":
+                if title := args.get("title"):
+                    yield f"\n**{title}**\n"
+                yield {"type": "table", "headers": args.get("headers", [])}
+                for row in args.get("rows", []):
+                    yield {"type": "table", "row": row}
+            elif tool == "render_callout":
+                yield {"type": "callout", "callout": args.get("message", ""), "style": args.get("style", "info"), "title": args.get("title", "")}
+            elif tool == "render_image":
+                yield {"type": "image", "src": args.get("src", ""), "alt": args.get("alt", ""), "caption": args.get("caption", "")}
+
+            proc.stdin.write((json.dumps({"id": notif["id"], "result": {"contentItems": [{"type": "inputText", "text": f"{tool} rendered successfully"}], "success": True}}) + "\n").encode())
+            await proc.stdin.drain()
+            return
+        elif method in ("item/commandExecution/requestApproval", "item/fileChange/requestApproval"):
+            p = notif.get("params", {})
+            actions = p.get("commandActions") or [{}]
+            cmd = actions[0].get("command") or parse_cmd(p.get("command", "")) or json.dumps(p)
+            cwd = p.get("cwd", "")
+            reason = p.get("reason", "")
+            lines = [f"\n**Bash(** {cmd} **)**\n"]
+            if cwd:
+                lines.append(f"dir: `{cwd}`\n")
+            if reason:
+                lines.append(f"reason: {reason}\n")
+            lines.append("Reply **yes** to approve.")
+            proc.stdin.write((json.dumps({"id": notif["id"], "result": {"decision": "decline"}}) + "\n").encode())
+            await proc.stdin.drain()
+            yield {"type": "thinking", "thinking": "\n".join(lines)}
+            yield {"type": "pending_approval", "action_type": method, "action_detail": cmd}
+            s["approval"] = True
+            return
+        else:
+            # Unknown server request — decline gracefully
+            proc.stdin.write((json.dumps({"id": notif["id"], "result": {"decision": "decline"}}) + "\n").encode())
+            await proc.stdin.drain()
+            return
     m, p = notif.get("method", ""), notif.get("params", {})
     if m == "item/agentMessage/delta":
         if d := p.get("delta"):
-            for out in parse_ui(d, s):
-                yield out
+            yield d
+    elif m == "item/commandExecution/outputDelta":
+        if d := p.get("delta"):
+            yield {"type": "step_data", "data": d}
     elif m == "item/reasoning/summaryTextDelta":
         if not s["stepped"] and (d := p.get("delta")):
             s["think"] += d
@@ -241,11 +244,16 @@ async def handle(proc, notif, s):
         if t == "reasoning" and s["think"] and not s["stepped"]:
             yield {"type": "thinking", "thinking": s["think"]}
             s["think"] = ""
+    elif m == "turn/diff/updated":
+        s["turn_diff"] = p.get("diff", "")
+    elif m == "turn/plan/updated":
+        steps = p.get("steps") or []
+        for step in steps:
+            label = step.get("label", step.get("title", ""))
+            done = step.get("status") == "completed"
+            if label:
+                yield {"type": "status", "status": f"{'[x]' if done else '[ ]'} {label}"}
     elif m == "turn/completed":
-        # Flush any remaining buffered text
-        if s.get("buf"):
-            yield s["buf"]
-            s["buf"] = ""
         s["done"] = True
     elif m == "thread/tokenUsage/updated":
         s["usage"] = p
@@ -300,7 +308,7 @@ async def codex_agent(context):
             "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""), "CODEX_HOME": home,
         },
     )
-    s = {"thread": None, "stepped": False, "think": "", "done": False, "approval": False, "stderr": [], "usage": None}
+    s = {"thread": None, "stepped": False, "think": "", "done": False, "approval": False, "stderr": [], "usage": None, "turn_diff": ""}
     mid = 0
 
     async def drain_stderr():
@@ -309,7 +317,7 @@ async def codex_agent(context):
 
     stderr_task = asyncio.create_task(drain_stderr())
     try:
-        await rpc_send(proc, "initialize", {"clientInfo": {"name": "cycls", "version": "0.1.0"}}, msg_id=mid)
+        await rpc_send(proc, "initialize", {"clientInfo": {"name": "cycls", "version": "0.1.0"}, "capabilities": {"experimentalApi": True}}, msg_id=mid)
         res = {}
         async for _ in rpc_read(proc, mid, res):
             pass
@@ -319,7 +327,7 @@ async def codex_agent(context):
         mid += 1
         await rpc_send(proc, "initialized")
 
-        thread_params = {"approvalPolicy": policy, "sandbox": "danger-full-access"}
+        thread_params = {"approvalPolicy": policy, "sandbox": "danger-full-access", "dynamicTools": DYNAMIC_TOOLS}
         thread_params["threadId" if session_id else "cwd"] = session_id or ws
         await rpc_send(proc, "thread/resume" if session_id else "thread/start", thread_params, msg_id=mid)
         res = {}
@@ -337,7 +345,6 @@ async def codex_agent(context):
         if tid:
             yield {"type": "session_id", "session_id": tid}
 
-        before = snap_files(ws)
         await rpc_send(proc, "turn/start", {"threadId": tid, "input": [{"type": "text", "text": prompt}]}, msg_id=mid)
         res = {}
         async for notif in rpc_read(proc, mid, res):
@@ -358,19 +365,11 @@ async def codex_agent(context):
             if s["approval"]:
                 break
 
-        # Canvas: show most recently changed file
-        after = snap_files(ws)
-        changed = diff_files(before, after)
-        if changed:
-            fpath = changed[0][1]
-            try:
-                content = open(fpath).read()
-                title = os.path.relpath(fpath, ws)
-                yield {"type": "canvas", "canvas": "document", "open": True, "title": title}
-                yield {"type": "canvas", "canvas": "document", "content": content}
-                yield {"type": "canvas", "canvas": "document", "done": True}
-            except Exception:
-                pass
+        # Canvas: show aggregated diff from turn
+        if s.get("turn_diff"):
+            yield {"type": "canvas", "canvas": "document", "open": True, "title": "Changes"}
+            yield {"type": "canvas", "canvas": "document", "content": s["turn_diff"]}
+            yield {"type": "canvas", "canvas": "document", "done": True}
 
         if s["usage"]:
             u = s["usage"].get("tokenUsage", {}).get("total", {})
