@@ -1,6 +1,6 @@
-import json, inspect, secrets, os
+import json, inspect, secrets, os, unicodedata
 from datetime import datetime, timezone
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional, Any
@@ -46,9 +46,17 @@ async def encoder(stream):
             if msg := sse(item): yield msg
     yield "data: [DONE]\n\n"
 
+def _normalize(path): return unicodedata.normalize("NFC", unquote(path)) if path else path
+
 class Messages(list):
     """A list that provides text-only messages by default, with .raw for full data."""
     def __init__(self, raw_messages):
+        for m in raw_messages:
+            content = m.get("content", [])
+            if isinstance(content, list):
+                for p in content:
+                    if p.get("file"): p["file"] = _normalize(p["file"])
+                    if p.get("image"): p["image"] = _normalize(p["image"])
         self._raw = raw_messages
         text_messages = []
         for m in raw_messages:
