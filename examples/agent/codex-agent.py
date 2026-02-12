@@ -1,4 +1,4 @@
-# uv run examples/agent/codex-golf.py
+# uv run examples/agent/codex-agent.py
 # Minimal Codex app-server agent
 # https://developers.openai.com/codex/config-reference/
 # https://github.com/openai/codex/blob/main/codex-rs/core/gpt_5_codex_prompt.md
@@ -262,23 +262,23 @@ async def handle(proc, notif, s):
 
 
 @cycls.app(
-    # theme="codex",
     apt=["curl", "proot", "xz-utils"], copy=[".env"], memory="512Mi", # TODO: proot remove
     run_commands=[
         "curl -fsSL https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1",
         "npm i -g @openai/codex@0.98.0",
     ],
     auth=True,
-    force_rebuild=True,
+    # force_rebuild=True,
 )
 async def codex_agent(context):
     import asyncio
     # yield f"{context.user}"
 
     user_id = context.user.id if context.user else "default"
+    org_id = context.user.org_id if context.user else None
     sid_part = find_part(context.messages, None, "session_id")
     session_id = sid_part["session_id"] if sid_part else None
-    ws = f"/workspace/{user_id}"
+    ws = f"/workspace/{org_id}" if org_id else f"/workspace/{user_id}"
     home = f"{ws}/.cycls"
     os.makedirs(home, exist_ok=True)
     instructions_path = f"{home}/instructions.md"

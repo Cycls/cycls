@@ -176,13 +176,14 @@ def web(func, config):
     # ---- Helper ----
 
     def user_root(jwt):
-        return Path(f"/workspace/{jwt['user']['id']}")
+        user = jwt["user"]
+        return Path(f"/workspace/{user['org_id']}") if user.get("org_id") else Path(f"/workspace/{user['id']}")
 
     # ---- Sessions API ----
 
     @app.get("/sessions")
     async def list_sessions(jwt: dict = auth):
-        sessions_dir = user_root(jwt) / ".sessions"
+        sessions_dir = user_root(jwt) / ".sessions" / jwt["user"]["id"]
         if not sessions_dir.is_dir():
             return []
         items = []
@@ -199,14 +200,14 @@ def web(func, config):
 
     @app.get("/sessions/{session_id}")
     async def get_session(session_id: str, jwt: dict = auth):
-        session_file = user_root(jwt) / ".sessions" / f"{session_id}.json"
+        session_file = user_root(jwt) / ".sessions" / jwt["user"]["id"] / f"{session_id}.json"
         if not session_file.is_file():
             raise HTTPException(status_code=404, detail="Session not found")
         return json.loads(session_file.read_text())
 
     @app.put("/sessions/{session_id}")
     async def put_session(session_id: str, request: Request, jwt: dict = auth):
-        sessions_dir = user_root(jwt) / ".sessions"
+        sessions_dir = user_root(jwt) / ".sessions" / jwt["user"]["id"]
         sessions_dir.mkdir(parents=True, exist_ok=True)
         data = await request.json()
         data["id"] = session_id
@@ -219,7 +220,7 @@ def web(func, config):
 
     @app.delete("/sessions/{session_id}")
     async def delete_session(session_id: str, jwt: dict = auth):
-        session_file = user_root(jwt) / ".sessions" / f"{session_id}.json"
+        session_file = user_root(jwt) / ".sessions" / jwt["user"]["id"] / f"{session_id}.json"
         if not session_file.is_file():
             raise HTTPException(status_code=404, detail="Session not found")
         session_file.unlink()
