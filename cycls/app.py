@@ -7,7 +7,7 @@ from .web import web, Config
 
 CYCLS_PATH = importlib.resources.files('cycls')
 
-THEMES = ["default", "dev", "codex"]
+THEMES = ["default", "dev"]
 
 
 class App(Function):
