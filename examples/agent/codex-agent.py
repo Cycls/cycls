@@ -59,48 +59,6 @@ You help with coding, research, writing, analysis, system administration, and an
 - State explicitly if no issues are found.
 """.strip()
 
-DYNAMIC_TOOLS = [
-    {
-        "name": "render_table",
-        "description": "Display a data table to the user. Use for structured data, comparisons, listings.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "title": {"type": "string", "description": "Optional table title"},
-                "headers": {"type": "array", "items": {"type": "string"}},
-                "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}}
-            },
-            "required": ["headers", "rows"]
-        }
-    },
-    {
-        "name": "render_callout",
-        "description": "Display a callout/alert box. Use for warnings, tips, success messages, errors.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "message": {"type": "string"},
-                "style": {"type": "string", "enum": ["info", "warning", "error", "success"]},
-                "title": {"type": "string"}
-            },
-            "required": ["message", "style"]
-        }
-    },
-    {
-        "name": "render_image",
-        "description": "Display an image to the user.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "src": {"type": "string", "description": "Image URL or path"},
-                "alt": {"type": "string"},
-                "caption": {"type": "string"}
-            },
-            "required": ["src"]
-        }
-    }
-]
-
 
 STEP_TYPES = {
     "commandexecution": lambda i: f"Bash({parse_cmd(i.get('command', ''))[:60]})",
@@ -276,34 +234,22 @@ def setup_workspace(context):
     return ws, home
 
 
-@cycls.app(
-    apt=["curl", "proot", "xz-utils"], copy=[".env"], memory="512Mi", # TODO: proot remove
-    run_commands=[
-        "curl -fsSL https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1",
-        "npm i -g @openai/codex@0.98.0",
-    ],
-    auth=True,
-    # force_rebuild=True,
-)
-async def codex_agent(context):
-    ws, home = setup_workspace(context)
-    sid_part = find_part(context.messages, None, "session_id")
-    session_id = sid_part["session_id"] if sid_part else None
-    prompt = extract_prompt(context.messages, ws)
-    policy = APPROVAL_POLICY
-    pending = find_part(context.messages, "assistant", "pending_approval")
+async def Agent(ws, home, prompt, policy="never", session_id=None, tools=None, model=None, effort=None, instructions=None, pending=None):
     if pending and prompt.strip().lower() in ("yes", "y", "approve"):
         policy = "never"
         action = pending.get("action_detail", pending.get("action_type", "the action"))
         prompt = f"The user approved the previous action. Please retry: {action}"
-
+    if instructions:
+        with open(f"{ws}/AGENTS.md", "w") as f:
+            f.write(instructions)
     proc = await asyncio.create_subprocess_exec(
         "codex", "app-server", limit=10 * 1024 * 1024,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         cwd=ws, env={
             "PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""),
-            "NO_COLOR": "1", "CODEX_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
-            "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""), "CODEX_HOME": home,
+            "NO_COLOR": "1", "CODEX_HOME": home,
+            "CODEX_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
+            "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
         },
     )
     s = {"thread": None, "stepped": False, "think": "", "done": False, "approval": False, "stderr": [], "usage": None, "turn_diff": ""}
@@ -325,7 +271,9 @@ async def codex_agent(context):
         mid += 1
         await rpc_send(proc, "initialized")
 
-        thread_params = {"approvalPolicy": policy, "sandbox": "danger-full-access", "dynamicTools": DYNAMIC_TOOLS}
+        thread_params = {"approvalPolicy": policy, "sandbox": "danger-full-access", "dynamicTools": tools or []}
+        if model:
+            thread_params["model"] = model
         thread_params["threadId" if session_id else "cwd"] = session_id or ws
         await rpc_send(proc, "thread/resume" if session_id else "thread/start", thread_params, msg_id=mid)
         res = {}
@@ -343,7 +291,10 @@ async def codex_agent(context):
         if tid:
             yield {"type": "session_id", "session_id": tid}
 
-        await rpc_send(proc, "turn/start", {"threadId": tid, "input": [{"type": "text", "text": prompt}]}, msg_id=mid)
+        turn_params = {"threadId": tid, "input": [{"type": "text", "text": prompt}]}
+        if effort:
+            turn_params["effort"] = effort
+        await rpc_send(proc, "turn/start", turn_params, msg_id=mid)
         res = {}
         async for notif in rpc_read(proc, mid, res):
             async for out in handle(proc, notif, s):
@@ -389,6 +340,78 @@ async def codex_agent(context):
         err = "\n".join(l for l in err.splitlines() if "state db missing rollout" not in l).strip()
         if err:
             yield {"type": "callout", "callout": err, "style": "error"}
+
+####
+
+AGENTS_MD = """
+you're a lawyer
+""".strip()
+
+DYNAMIC_TOOLS = [
+    {
+        "name": "render_table",
+        "description": "Display a data table to the user. Use for structured data, comparisons, listings.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Optional table title"},
+                "headers": {"type": "array", "items": {"type": "string"}},
+                "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}}
+            },
+            "required": ["headers", "rows"]
+        }
+    },
+    {
+        "name": "render_callout",
+        "description": "Display a callout/alert box. Use for warnings, tips, success messages, errors.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "style": {"type": "string", "enum": ["info", "warning", "error", "success"]},
+                "title": {"type": "string"}
+            },
+            "required": ["message", "style"]
+        }
+    },
+    {
+        "name": "render_image",
+        "description": "Display an image to the user.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "src": {"type": "string", "description": "Image URL or path"},
+                "alt": {"type": "string"},
+                "caption": {"type": "string"}
+            },
+            "required": ["src"]
+        }
+    }
+]
+
+@cycls.app(
+    apt=["curl", "xz-utils"], copy=[".env"], # TODO: proot?
+    run_commands=[
+        "curl -fsSL https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1",
+        "npm i -g @openai/codex@0.98.0",
+    ],
+    auth=True,
+    # force_rebuild=True,
+)
+async def codex_agent(context):
+    ws, home = setup_workspace(context)
+    prompt = extract_prompt(context.messages, ws)
+    async for out in Agent(ws,
+                           home,
+                           prompt,
+                           policy=APPROVAL_POLICY,
+                           session_id=(find_part(context.messages, None, "session_id") or {}).get("session_id"),
+                           tools=DYNAMIC_TOOLS,
+                           instructions=AGENTS_MD,
+                           model="gpt-5.2-codex",
+                           effort="high",
+                           pending=find_part(context.messages, "assistant", "pending_approval")):
+        yield out
 
 
 codex_agent.local()
