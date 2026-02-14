@@ -4,7 +4,7 @@
 # https://github.com/openai/codex/blob/main/codex-rs/core/gpt_5_codex_prompt.md
 # https://github.com/Piebald-AI/claude-code-system-prompts/tree/main
 
-import json, os, shlex, shutil
+import asyncio, json, os, shlex, shutil
 from urllib.parse import unquote
 import cycls
 
@@ -154,6 +154,11 @@ async def rpc_send(proc, method, params=None, msg_id=None):
     await proc.stdin.drain()
 
 
+async def rpc_respond(proc, msg_id, result):
+    proc.stdin.write((json.dumps({"id": msg_id, "result": result}) + "\n").encode())
+    await proc.stdin.drain()
+
+
 async def rpc_read(proc, expected_id, res):
     while line := await proc.stdout.readline():
         try:
@@ -179,7 +184,6 @@ async def handle(proc, notif, s):
                     args = json.loads(args)
                 except Exception:
                     args = {}
-
             if tool == "render_table":
                 if title := args.get("title"):
                     yield f"\n**{title}**\n"
@@ -190,10 +194,7 @@ async def handle(proc, notif, s):
                 yield {"type": "callout", "callout": args.get("message", ""), "style": args.get("style", "info"), "title": args.get("title", "")}
             elif tool == "render_image":
                 yield {"type": "image", "src": args.get("src", ""), "alt": args.get("alt", ""), "caption": args.get("caption", "")}
-
-            proc.stdin.write((json.dumps({"id": notif["id"], "result": {"contentItems": [{"type": "inputText", "text": f"{tool} rendered successfully"}], "success": True}}) + "\n").encode())
-            await proc.stdin.drain()
-            return
+            await rpc_respond(proc, notif["id"], {"contentItems": [{"type": "inputText", "text": f"{tool} rendered successfully"}], "success": True})
         elif method in ("item/commandExecution/requestApproval", "item/fileChange/requestApproval"):
             p = notif.get("params", {})
             actions = p.get("commandActions") or [{}]
@@ -206,17 +207,13 @@ async def handle(proc, notif, s):
             if reason:
                 lines.append(f"reason: {reason}\n")
             lines.append("Reply **yes** to approve.")
-            proc.stdin.write((json.dumps({"id": notif["id"], "result": {"decision": "decline"}}) + "\n").encode())
-            await proc.stdin.drain()
+            await rpc_respond(proc, notif["id"], {"decision": "decline"})
             yield {"type": "thinking", "thinking": "\n".join(lines)}
             yield {"type": "pending_approval", "action_type": method, "action_detail": cmd}
             s["approval"] = True
-            return
         else:
-            # Unknown server request — decline gracefully
-            proc.stdin.write((json.dumps({"id": notif["id"], "result": {"decision": "decline"}}) + "\n").encode())
-            await proc.stdin.drain()
-            return
+            await rpc_respond(proc, notif["id"], {"decision": "decline"})
+        return
     m, p = notif.get("method", ""), notif.get("params", {})
     if m == "item/agentMessage/delta":
         if d := p.get("delta"):
@@ -261,23 +258,9 @@ async def handle(proc, notif, s):
         s["thread"] = p.get("thread", {}).get("id")
 
 
-@cycls.app(
-    apt=["curl", "proot", "xz-utils"], copy=[".env"], memory="512Mi", # TODO: proot remove
-    run_commands=[
-        "curl -fsSL https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1",
-        "npm i -g @openai/codex@0.98.0",
-    ],
-    auth=True,
-    # force_rebuild=True,
-)
-async def codex_agent(context):
-    import asyncio
-    # yield f"{context.user}"
-
+def setup_workspace(context):
     user_id = context.user.id if context.user else "default"
     org_id = context.user.org_id if context.user else None
-    sid_part = find_part(context.messages, None, "session_id")
-    session_id = sid_part["session_id"] if sid_part else None
     ws = f"/workspace/{org_id}" if org_id else f"/workspace/{user_id}"
     home = f"{ws}/.cycls"
     os.makedirs(home, exist_ok=True)
@@ -290,7 +273,22 @@ async def codex_agent(context):
     if not os.path.exists(auth_path):
         with open(auth_path, "w") as f:
             json.dump({"auth_mode": "apikey", "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", "")}, f)
+    return ws, home
 
+
+@cycls.app(
+    apt=["curl", "proot", "xz-utils"], copy=[".env"], memory="512Mi", # TODO: proot remove
+    run_commands=[
+        "curl -fsSL https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1",
+        "npm i -g @openai/codex@0.98.0",
+    ],
+    auth=True,
+    # force_rebuild=True,
+)
+async def codex_agent(context):
+    ws, home = setup_workspace(context)
+    sid_part = find_part(context.messages, None, "session_id")
+    session_id = sid_part["session_id"] if sid_part else None
     prompt = extract_prompt(context.messages, ws)
     policy = APPROVAL_POLICY
     pending = find_part(context.messages, "assistant", "pending_approval")
@@ -300,7 +298,7 @@ async def codex_agent(context):
         prompt = f"The user approved the previous action. Please retry: {action}"
 
     proc = await asyncio.create_subprocess_exec(
-        "codex", "app-server", limit=1024 * 1024,
+        "codex", "app-server", limit=10 * 1024 * 1024,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         cwd=ws, env={
             "PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""),
@@ -393,5 +391,5 @@ async def codex_agent(context):
             yield {"type": "callout", "callout": err, "style": "error"}
 
 
-# codex_agent.local()
-codex_agent.deploy()
+codex_agent.local()
+# codex_agent.deploy()
