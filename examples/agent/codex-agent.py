@@ -125,25 +125,6 @@ def parse_cmd(cmd):
         return cmd
 
 
-def extract_prompt(messages, ws):
-    content = messages.raw[-1].get("content", "")
-    if not isinstance(content, list):
-        return content
-    prompt = next((p["text"] for p in content if p.get("type") == "text"), "")
-    for p in content:
-        if p.get("type") not in ("image", "file"):
-            continue
-        url = unquote(p.get("image") or p.get("file") or "")
-        if not url:
-            continue
-        fname = os.path.basename(url)
-        src = os.path.realpath(f"/workspace{url}")
-        if src.startswith("/workspace/"):
-            shutil.copy(src, f"{ws}/{fname}")
-            prompt += f" [USER UPLOADED {fname}]"
-    return prompt
-
-
 def find_part(messages, role, ptype):
     for msg in reversed(getattr(messages, "raw", None) or messages):
         if role and msg.get("role") != role:
@@ -171,7 +152,23 @@ def setup_workspace(context):
     if not os.path.exists(auth_path):
         with open(auth_path, "w") as f:
             json.dump({"auth_mode": "apikey", "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", "")}, f)
-    return ws, home
+    # Extract prompt and copy uploads
+    content = context.messages.raw[-1].get("content", "")
+    if not isinstance(content, list):
+        return ws, content
+    prompt = next((p["text"] for p in content if p.get("type") == "text"), "")
+    for p in content:
+        if p.get("type") not in ("image", "file"):
+            continue
+        url = unquote(p.get("image") or p.get("file") or "")
+        if not url:
+            continue
+        fname = os.path.basename(url)
+        src = os.path.realpath(f"/workspace{url}")
+        if src.startswith("/workspace/"):
+            shutil.copy(src, f"{ws}/{fname}")
+            prompt += f" [USER UPLOADED {fname}]"
+    return ws, prompt
 
 
 # --- JSON-RPC ---
@@ -290,7 +287,8 @@ async def handle(proc, notif, s):
 # --- Agent ---
 
 
-async def Agent(ws, home, prompt, policy="never", session_id=None, tools=None, model=None, effort=None, instructions=None, pending=None):
+async def Agent(ws, prompt, policy="never", session_id=None, tools=None, model=None, effort=None, instructions=None, pending=None):
+    home = f"{ws}/.cycls"
     if pending and prompt.strip().lower() in ("yes", "y", "approve"):
         policy = "never"
         prompt = f"The user approved the previous action. Please retry: {pending.get('action_detail', pending.get('action_type', 'the action'))}"
@@ -307,14 +305,8 @@ async def Agent(ws, home, prompt, policy="never", session_id=None, tools=None, m
             "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
         },
     )
-    s = {"thread": None, "stepped": False, "think": "", "done": False, "approval": False, "stderr": [], "usage": None, "turn_diff": ""}
+    s = {"thread": None, "stepped": False, "think": "", "done": False, "approval": False, "usage": None, "turn_diff": ""}
     mid = 0
-
-    async def drain_stderr():
-        async for line in proc.stderr:
-            s["stderr"].append(line)
-
-    stderr_task = asyncio.create_task(drain_stderr())
     try:
         async for _ in rpc_call(proc, s, mid, "initialize", {"clientInfo": {"name": "cycls", "version": "0.1.0"}, "capabilities": {"experimentalApi": True}}):
             pass
@@ -367,8 +359,7 @@ async def Agent(ws, home, prompt, policy="never", session_id=None, tools=None, m
             except asyncio.TimeoutError:
                 proc.kill()
                 await proc.wait()
-        stderr_task.cancel()
-        err = b"".join(s["stderr"]).decode()
+        err = (await proc.stderr.read()).decode()
         err = "\n".join(l for l in err.splitlines() if "state db missing rollout" not in l).strip()
         if err:
             yield {"type": "callout", "callout": err, "style": "error"}
@@ -383,17 +374,15 @@ async def Agent(ws, home, prompt, policy="never", session_id=None, tools=None, m
     auth=True,
 )
 async def codex_agent(context):
-    ws, home = setup_workspace(context)
-    prompt = extract_prompt(context.messages, ws)
-    async for out in Agent(ws, home, prompt,
-                           policy=APPROVAL_POLICY,
-                           session_id=(find_part(context.messages, None, "session_id") or {}).get("session_id"),
-                           tools=DYNAMIC_TOOLS,
-                           instructions=AGENTS_MD,
-                           model="gpt-5.2-codex",
-                           effort="high",
-                           pending=find_part(context.messages, "assistant", "pending_approval")):
-        yield out
+    workspace, prompt = setup_workspace(context)
+    return Agent(workspace, prompt,
+                 policy=APPROVAL_POLICY,
+                 session_id=(find_part(context.messages, None, "session_id") or {}).get("session_id"),
+                 tools=DYNAMIC_TOOLS,
+                 instructions=AGENTS_MD,
+                 model="gpt-5.2-codex",
+                 effort="high",
+                 pending=find_part(context.messages, "assistant", "pending_approval"))
 
 
 codex_agent.local()
