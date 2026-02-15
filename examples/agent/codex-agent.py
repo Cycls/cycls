@@ -5,7 +5,6 @@
 # https://github.com/Piebald-AI/claude-code-system-prompts/tree/main
 
 import cycls
-from cycls.agent import CodexAgent, CodexAgentOptions, setup_workspace, find_part
 
 # --- Config ---
 
@@ -107,6 +106,12 @@ you're a lawyer
 
 @cycls.agent(auth=True, analytics=True, copy=[".env"])
 async def codex_agent(context):
+    from cycls.agent import (
+        CodexAgent,
+        CodexAgentOptions,
+        setup_workspace,
+        find_part,
+    )
     ws, prompt = setup_workspace(context, instructions=BASE_INSTRUCTIONS, agent_instructions=AGENTS_MD)
     options = CodexAgentOptions(
         workspace=ws,
