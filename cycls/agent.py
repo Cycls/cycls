@@ -184,7 +184,7 @@ def setup_workspace(context, instructions=None, agent_instructions=None):
 
 
 @dataclass
-class CodexOptions:
+class CodexAgentOptions:
     """Configuration for a single Codex turn."""
     workspace: str
     prompt: str
@@ -197,7 +197,7 @@ class CodexOptions:
     pending: Optional[dict] = None
 
 
-async def Codex(*, options):
+async def CodexAgent(*, options):
     """Run one Codex turn. Async generator yielding streaming components."""
     ws = options.workspace
     prompt = options.prompt
