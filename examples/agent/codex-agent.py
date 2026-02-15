@@ -11,6 +11,7 @@ import cycls
 # APPROVAL_POLICY = os.environ.get("CODEX_APPROVAL_POLICY", "untrusted")
 APPROVAL_POLICY = "never"
 
+# https://developers.openai.com/cookbook/examples/gpt-5/codex_prompting_guide
 BASE_INSTRUCTIONS = """
 You are Cycls, a general-purpose AI agent built by cycls.com that runs in the user's workspace in Cycls cloud.
 You help with coding, research, writing, analysis, system administration, and any task the user brings.
@@ -405,10 +406,10 @@ async def codex_agent(context):
                            home,
                            prompt,
                            policy=APPROVAL_POLICY,
-                           session_id=(find_part(context.messages, None, "session_id") or {}).get("session_id"),
-                           tools=DYNAMIC_TOOLS,
-                           instructions=AGENTS_MD,
-                           model="gpt-5.2-codex",
+                           session_id=(find_part(context.messages, None, "session_id") or {}).get("session_id"), # we could read that from the session API!
+                           tools=DYNAMIC_TOOLS, # can we inline the function here?
+                           instructions=AGENTS_MD, # copy it as a file?
+                           model="gpt-5.2-codex", # minmax? opus...etc
                            effort="high",
                            pending=find_part(context.messages, "assistant", "pending_approval")):
         yield out
