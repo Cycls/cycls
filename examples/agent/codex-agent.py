@@ -5,7 +5,7 @@
 # https://github.com/Piebald-AI/claude-code-system-prompts/tree/main
 
 import cycls
-from cycls.agent import turn, setup_workspace, find_part
+from cycls.agent import Codex, CodexOptions, setup_workspace, find_part
 
 # --- Config ---
 
@@ -108,12 +108,17 @@ you're a lawyer
 @cycls.agent(auth=True, analytics=True, copy=[".env"])
 async def codex_agent(context):
     ws, prompt = setup_workspace(context, instructions=BASE_INSTRUCTIONS, agent_instructions=AGENTS_MD)
-    return turn(ws, prompt,
-                model="gpt-5.2-codex",
-                effort="high",
-                tools=DEFAULT_TOOLS,
-                session_id=(find_part(context.messages, None, "session_id") or {}).get("session_id"),
-                pending=find_part(context.messages, "assistant", "pending_approval"))
+    options = CodexOptions(
+        workspace=ws,
+        prompt=prompt,
+        model="gpt-5.2-codex",
+        effort="high",
+        tools=DEFAULT_TOOLS,
+        session_id=(find_part(context.messages, None, "session_id") or {}).get("session_id"),
+        pending=find_part(context.messages, "assistant", "pending_approval"),
+    )
+    async for message in Codex(options=options):
+        yield message
 
 
 codex_agent.local()
