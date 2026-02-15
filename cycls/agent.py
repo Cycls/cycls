@@ -211,9 +211,7 @@ async def CodexAgent(*, options):
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         cwd=ws, env={
             "PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""),
-            "NO_COLOR": "1", "CODEX_HOME": home,
-            "CODEX_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
-            "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
+            "NO_COLOR": "1", "CODEX_HOME": home
         },
     )
     s = {"thread": None, "stepped": False, "think": "", "done": False, "approval": False, "usage": None, "turn_diff": ""}
@@ -278,7 +276,7 @@ async def CodexAgent(*, options):
 class Agent(App):
     """App subclass that bundles Node.js and Codex CLI dependencies."""
 
-    def __init__(self, func, name, codex_version="0.101.0", node_version="v24.13.0",
+    def __init__(self, func, name, codex_version, node_version,
                  pip=None, apt=None, run_commands=None, copy=None, **kwargs):
         node_install = (
             f"curl -fsSL https://nodejs.org/dist/{node_version}/node-{node_version}-linux-x64.tar.xz"
@@ -296,7 +294,7 @@ class Agent(App):
         )
 
 
-def agent(name=None, codex_version="0.98.0", node_version="v24.13.0", **kwargs):
+def agent(name=None, codex_version="0.101.0", node_version="v24.13.0", **kwargs):
     """Decorator that transforms a function into a deployable Codex agent."""
     def decorator(func):
         return Agent(
