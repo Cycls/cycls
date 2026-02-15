@@ -9,7 +9,7 @@ from cycls.agent import Codex, CodexOptions, setup_workspace, find_part
 
 # --- Config ---
 
-DEFAULT_TOOLS = [
+UI_TOOLS = [
     {
         "name": "render_table",
         "description": "Display a data table to the user. Use for structured data, comparisons, listings.",
@@ -113,12 +113,47 @@ async def codex_agent(context):
         prompt=prompt,
         model="gpt-5.2-codex",
         effort="high",
-        tools=DEFAULT_TOOLS,
+        tools=UI_TOOLS,
+        policy="never",
+        sandbox="danger-full-access",
         session_id=(find_part(context.messages, None, "session_id") or {}).get("session_id"),
         pending=find_part(context.messages, "assistant", "pending_approval"),
     )
     async for message in Codex(options=options):
-        yield message
+        if not isinstance(message, dict):
+            yield message
+            continue
+        t = message.get("type")
+        if t == "tool_call":
+            tool, args = message["tool"], message["args"]
+            if tool == "render_table":
+                if title := args.get("title"):
+                    yield f"\n**{title}**\n"
+                yield {"type": "table", "headers": args.get("headers", [])}
+                for row in args.get("rows", []):
+                    yield {"type": "table", "row": row}
+            elif tool == "render_callout":
+                yield {"type": "callout", "callout": args.get("message", ""), "style": args.get("style", "info"), "title": args.get("title", "")}
+            elif tool == "render_image":
+                yield {"type": "image", "src": args.get("src", ""), "alt": args.get("alt", ""), "caption": args.get("caption", "")}
+        elif t == "approval":
+            desc = f"\n**Bash(** {message['command']} **)**\n"
+            if message.get("cwd"):
+                desc += f"dir: `{message['cwd']}`\n"
+            if message.get("reason"):
+                desc += f"reason: {message['reason']}\n"
+            yield {"type": "thinking", "thinking": desc + "Reply **yes** to approve."}
+            yield {"type": "pending_approval", "action_type": message["method"], "action_detail": message["command"]}
+        elif t == "diff":
+            yield {"type": "canvas", "canvas": "document", "open": True, "title": "Changes"}
+            yield {"type": "canvas", "canvas": "document", "content": message["diff"]}
+            yield {"type": "canvas", "canvas": "document", "done": True}
+        elif t == "usage":
+            u = message["usage"].get("tokenUsage", {}).get("total", {})
+            inp, cached, out = u.get("inputTokens", 0), u.get("cachedInputTokens", 0), u.get("outputTokens", 0)
+            yield f'\n\n*in: {inp:,} · out: {out:,} · cached: {cached:,}*'
+        else:
+            yield message
 
 
 codex_agent.local()

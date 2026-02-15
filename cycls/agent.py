@@ -72,28 +72,13 @@ async def _handle(proc, notif, s):
             if isinstance(args, str):
                 try: args = json.loads(args)
                 except Exception: args = {}
-            if tool == "render_table":
-                if title := args.get("title"):
-                    yield f"\n**{title}**\n"
-                yield {"type": "table", "headers": args.get("headers", [])}
-                for row in args.get("rows", []):
-                    yield {"type": "table", "row": row}
-            elif tool == "render_callout":
-                yield {"type": "callout", "callout": args.get("message", ""), "style": args.get("style", "info"), "title": args.get("title", "")}
-            elif tool == "render_image":
-                yield {"type": "image", "src": args.get("src", ""), "alt": args.get("alt", ""), "caption": args.get("caption", "")}
+            yield {"type": "tool_call", "tool": tool, "args": args}
             await _rpc_write(proc, id=notif["id"], result={"contentItems": [{"type": "inputText", "text": f"{tool} rendered successfully"}], "success": True})
         elif "requestApproval" in method:
             p = notif.get("params", {})
             cmd = (p.get("commandActions") or [{}])[0].get("command") or _parse_cmd(p.get("command", "")) or json.dumps(p)
-            desc = f"\n**Bash(** {cmd} **)**\n"
-            if cwd := p.get("cwd"):
-                desc += f"dir: `{cwd}`\n"
-            if reason := p.get("reason"):
-                desc += f"reason: {reason}\n"
             await _rpc_write(proc, id=notif["id"], result={"decision": "decline"})
-            yield {"type": "thinking", "thinking": desc + "Reply **yes** to approve."}
-            yield {"type": "pending_approval", "action_type": method, "action_detail": cmd}
+            yield {"type": "approval", "method": method, "command": cmd, "cwd": p.get("cwd"), "reason": p.get("reason")}
             s["approval"] = True
         else:
             await _rpc_write(proc, id=notif["id"], result={"decision": "decline"})
@@ -207,6 +192,7 @@ class CodexOptions:
     effort: Optional[str] = None
     tools: List[dict] = field(default_factory=list)
     policy: str = "never"
+    sandbox: str = "danger-full-access"
     session_id: Optional[str] = None
     pending: Optional[dict] = None
 
@@ -241,7 +227,7 @@ async def Codex(*, options):
         mid += 1
         await _rpc_write(proc, method="initialized")
 
-        thread_params = {"approvalPolicy": policy, "sandbox": "danger-full-access", "dynamicTools": options.tools or []}
+        thread_params = {"approvalPolicy": policy, "sandbox": options.sandbox, "dynamicTools": options.tools or []}
         if options.model:
             thread_params["model"] = options.model
         thread_params["threadId" if options.session_id else "cwd"] = options.session_id or ws
@@ -266,13 +252,9 @@ async def Codex(*, options):
         mid += 1
 
         if s.get("turn_diff"):
-            yield {"type": "canvas", "canvas": "document", "open": True, "title": "Changes"}
-            yield {"type": "canvas", "canvas": "document", "content": s["turn_diff"]}
-            yield {"type": "canvas", "canvas": "document", "done": True}
+            yield {"type": "diff", "diff": s["turn_diff"]}
         if s["usage"]:
-            u = s["usage"].get("tokenUsage", {}).get("total", {})
-            inp, cached, out = u.get("inputTokens", 0), u.get("cachedInputTokens", 0), u.get("outputTokens", 0)
-            yield f'\n\n*in: {inp:,} · out: {out:,} · cached: {cached:,}*'
+            yield {"type": "usage", "usage": s["usage"]}
 
     except Exception as e:
         yield {"type": "callout", "callout": str(e), "style": "error"}
