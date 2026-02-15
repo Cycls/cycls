@@ -3,6 +3,8 @@ import json
 import os
 import shlex
 import shutil
+from dataclasses import dataclass, field
+from typing import List, Optional
 from urllib.parse import unquote
 
 from .app import App
@@ -196,13 +198,28 @@ def setup_workspace(context, instructions=None, agent_instructions=None):
     return ws, prompt
 
 
-async def turn(ws, prompt, policy="never", session_id=None, tools=None,
-               model=None, effort=None, pending=None):
+@dataclass
+class CodexOptions:
+    """Configuration for a single Codex turn."""
+    workspace: str
+    prompt: str
+    model: Optional[str] = None
+    effort: Optional[str] = None
+    tools: List[dict] = field(default_factory=list)
+    policy: str = "never"
+    session_id: Optional[str] = None
+    pending: Optional[dict] = None
+
+
+async def Codex(*, options):
     """Run one Codex turn. Async generator yielding streaming components."""
+    ws = options.workspace
+    prompt = options.prompt
+    policy = options.policy
     home = f"{ws}/.cycls"
-    if pending and prompt.strip().lower() in ("yes", "y", "approve"):
+    if options.pending and prompt.strip().lower() in ("yes", "y", "approve"):
         policy = "never"
-        prompt = f"The user approved the previous action. Please retry: {pending.get('action_detail', pending.get('action_type', 'the action'))}"
+        prompt = f"The user approved the previous action. Please retry: {options.pending.get('action_detail', options.pending.get('action_type', 'the action'))}"
     proc = await asyncio.create_subprocess_exec(
         "codex", "app-server", limit=10 * 1024 * 1024,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -224,11 +241,11 @@ async def turn(ws, prompt, policy="never", session_id=None, tools=None,
         mid += 1
         await _rpc_write(proc, method="initialized")
 
-        thread_params = {"approvalPolicy": policy, "sandbox": "danger-full-access", "dynamicTools": tools or []}
-        if model:
-            thread_params["model"] = model
-        thread_params["threadId" if session_id else "cwd"] = session_id or ws
-        async for out in _rpc_call(proc, s, mid, "thread/resume" if session_id else "thread/start", thread_params):
+        thread_params = {"approvalPolicy": policy, "sandbox": "danger-full-access", "dynamicTools": options.tools or []}
+        if options.model:
+            thread_params["model"] = options.model
+        thread_params["threadId" if options.session_id else "cwd"] = options.session_id or ws
+        async for out in _rpc_call(proc, s, mid, "thread/resume" if options.session_id else "thread/start", thread_params):
             yield out
         if s["_res"].get("response", {}).get("error"):
             yield {"type": "callout", "callout": "Session expired. Please start a new conversation.", "style": "warning"}
@@ -236,14 +253,14 @@ async def turn(ws, prompt, policy="never", session_id=None, tools=None,
         try:
             tid = s["_res"]["response"]["result"]["thread"]["id"]
         except (KeyError, TypeError):
-            tid = s["thread"] or session_id
+            tid = s["thread"] or options.session_id
         mid += 1
         if tid:
             yield {"type": "session_id", "session_id": tid}
 
         turn_params = {"threadId": tid, "input": [{"type": "text", "text": prompt}]}
-        if effort:
-            turn_params["effort"] = effort
+        if options.effort:
+            turn_params["effort"] = options.effort
         async for out in _rpc_call(proc, s, mid, "turn/start", turn_params, stop=lambda: s["done"] or s["approval"]):
             yield out
         mid += 1
