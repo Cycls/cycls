@@ -270,6 +270,310 @@ async def CodexAgent(*, options):
             yield {"type": "callout", "callout": err, "style": "error"}
 
 
+# --- ClaudeAgent ---
+
+
+@dataclass
+class ClaudeAgentOptions:
+    """Configuration for a single Claude turn."""
+    workspace: str
+    prompt: str
+    model: str = "claude-sonnet-4-20250514"
+    tools: List[dict] = field(default_factory=list)
+    policy: str = "never"
+    pending: Optional[dict] = None
+    system: str = ""
+    max_tokens: int = 16384
+    thinking: bool = True
+    thinking_budget: int = 10000
+
+
+def _build_claude_tools(options):
+    tools = [
+        {"type": "bash_20250124", "name": "bash"},
+        {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"},
+        {"type": "web_search_20250305", "name": "web_search"},
+    ]
+    for t in options.tools or []:
+        schema = t.get("inputSchema", t.get("input_schema", {}))
+        tools.append({
+            "type": "custom",
+            "name": t["name"],
+            "description": t.get("description", ""),
+            "input_schema": schema,
+        })
+    return tools
+
+
+async def _exec_bash(command, cwd):
+    proc = await asyncio.create_subprocess_exec(
+        "bash", "-c", command,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        cwd=cwd,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+    output = stdout.decode(errors="replace")
+    if stderr:
+        output += stderr.decode(errors="replace")
+    if len(output) > 20000:
+        output = output[:10000] + "\n... (truncated) ...\n" + output[-10000:]
+    return output.strip() or "(no output)", proc.returncode
+
+
+def _exec_text_editor(inp, workspace):
+    import pathlib
+    command = inp["command"]
+    path = pathlib.Path(inp["path"])
+    if not path.is_absolute():
+        path = pathlib.Path(workspace) / path
+    path = path.resolve()
+    if not str(path).startswith(os.path.realpath(workspace)):
+        return f"Error: path {path} is outside workspace"
+
+    if command == "view":
+        if not path.exists():
+            return f"Error: {path} does not exist"
+        text = path.read_text()
+        lines = text.splitlines()
+        vr = inp.get("view_range")
+        if vr:
+            start, end = vr
+            lines = lines[start - 1:end]
+            start_num = start
+        else:
+            start_num = 1
+        numbered = [f"{i + start_num:6}\t{l}" for i, l in enumerate(lines)]
+        return "\n".join(numbered)
+
+    elif command == "str_replace":
+        if not path.exists():
+            return f"Error: {path} does not exist"
+        text = path.read_text()
+        old = inp["old_str"]
+        new = inp.get("new_str", "")
+        count = text.count(old)
+        if count == 0:
+            return f"Error: old_str not found in {path}"
+        if count > 1:
+            return f"Error: old_str found {count} times, must be unique"
+        path.write_text(text.replace(old, new, 1))
+        return f"Replaced in {path}"
+
+    elif command == "create":
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(inp["file_text"])
+        return f"Created {path}"
+
+    elif command == "insert":
+        if not path.exists():
+            return f"Error: {path} does not exist"
+        lines = path.read_text().splitlines(keepends=True)
+        pos = inp["insert_line"]
+        new_lines = inp["new_str"].splitlines(keepends=True)
+        if not new_lines[-1:] or not new_lines[-1].endswith("\n"):
+            new_lines.append("\n")
+        lines[pos:pos] = new_lines
+        path.write_text("".join(lines))
+        return f"Inserted at line {pos} in {path}"
+
+    return f"Error: unknown command {command}"
+
+
+def _snapshot_files(workspace):
+    import pathlib
+    snap = {}
+    ws = pathlib.Path(workspace)
+    for p in ws.rglob("*"):
+        if p.is_file() and ".cycls" not in p.parts:
+            try:
+                snap[str(p.relative_to(ws))] = p.read_text(errors="replace")
+            except Exception:
+                pass
+    return snap
+
+
+def _generate_diff(workspace, before):
+    import difflib
+    import pathlib
+    ws = pathlib.Path(workspace)
+    after = _snapshot_files(workspace)
+    all_files = sorted(set(before) | set(after))
+    parts = []
+    for f in all_files:
+        old = before.get(f, "").splitlines(keepends=True)
+        new = after.get(f, "").splitlines(keepends=True)
+        if old == new:
+            continue
+        diff = difflib.unified_diff(old, new, fromfile=f"a/{f}", tofile=f"b/{f}")
+        parts.append("".join(diff))
+    return "\n".join(parts)
+
+
+async def ClaudeAgent(*, options):
+    """Run one Claude turn. Async generator yielding streaming components."""
+    import anthropic
+
+    ws = options.workspace
+    prompt = options.prompt
+    policy = options.policy
+
+    if options.pending and prompt.strip().lower() in ("yes", "y", "approve"):
+        policy = "never"
+        prompt = f"The user approved the previous action. Please retry: {options.pending.get('action_detail', options.pending.get('action_type', 'the action'))}"
+
+    before = _snapshot_files(ws)
+    client = anthropic.AsyncAnthropic()
+    tools = _build_claude_tools(options)
+    messages = [{"role": "user", "content": prompt}]
+
+    model_kwargs = {
+        "model": options.model,
+        "max_tokens": options.max_tokens,
+        "tools": tools,
+        "messages": messages,
+    }
+    if options.system:
+        model_kwargs["system"] = options.system
+    if options.thinking:
+        model_kwargs["thinking"] = {
+            "type": "enabled",
+            "budget_tokens": options.thinking_budget,
+        }
+
+    total_input = 0
+    total_output = 0
+
+    try:
+        while True:
+            thinking_text = ""
+            text_parts = []
+            tool_use_blocks = []
+
+            async with client.messages.stream(**model_kwargs) as stream:
+                async for event in stream:
+                    if event.type == "content_block_start":
+                        block = event.content_block
+                        if block.type == "tool_use":
+                            name = block.name
+                            if name == "bash":
+                                pass  # step yielded after we have input
+                            elif name == "str_replace_based_edit_tool":
+                                pass  # step yielded after we have input
+                            elif name not in ("web_search",):
+                                yield {"type": "status", "status": f"Using {name}..."}
+                        elif block.type == "server_tool_use":
+                            if block.name == "web_search":
+                                yield {"type": "step", "step": 'Web Search'}
+                    elif event.type == "content_block_delta":
+                        delta = event.delta
+                        if delta.type == "thinking_delta":
+                            thinking_text += delta.thinking
+                        elif delta.type == "text_delta":
+                            yield delta.text
+                    elif event.type == "content_block_stop":
+                        if thinking_text:
+                            yield {"type": "thinking", "thinking": thinking_text}
+                            thinking_text = ""
+
+                response = await stream.get_final_message()
+
+            total_input += response.usage.input_tokens
+            total_output += response.usage.output_tokens
+            if hasattr(response.usage, "cache_read_input_tokens"):
+                cache_read = response.usage.cache_read_input_tokens or 0
+            else:
+                cache_read = 0
+
+            for block in response.content:
+                if block.type == "text":
+                    text_parts.append(block.text)
+                elif block.type == "tool_use":
+                    tool_use_blocks.append(block)
+                elif block.type == "server_tool_use" and block.name == "web_search":
+                    q = (block.input or {}).get("query", "")
+                    if q:
+                        yield {"type": "step", "step": f'Web Search("{q}")'}
+
+            if response.stop_reason != "tool_use":
+                break
+
+            # Execute tools
+            tool_results = []
+            approval_needed = False
+            for block in tool_use_blocks:
+                name = block.name
+                inp = block.input
+
+                if name == "bash":
+                    cmd = inp.get("command", "")
+                    yield {"type": "step", "step": f"Bash({cmd[:60]})"}
+                    if policy != "never":
+                        yield {"type": "approval", "method": "requestApproval", "command": cmd, "cwd": ws}
+                        approval_needed = True
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": "Command approval was denied by the user.",
+                        })
+                        break
+                    output, _ = await _exec_bash(cmd, ws)
+                    yield {"type": "step_data", "data": output}
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": output,
+                    })
+
+                elif name == "str_replace_based_edit_tool":
+                    cmd_type = inp.get("command", "")
+                    fpath = inp.get("path", "file")
+                    if cmd_type in ("str_replace", "create", "insert"):
+                        yield {"type": "step", "step": f"Editing {fpath}"}
+                    else:
+                        yield {"type": "step", "step": f"Viewing {fpath}"}
+                    result = _exec_text_editor(inp, ws)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    })
+
+                else:
+                    # UI dynamic tool
+                    args = inp
+                    yield {"type": "tool_call", "tool": name, "args": args}
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": f"{name} rendered successfully",
+                    })
+
+            if approval_needed:
+                break
+
+            # Append assistant response + tool results for next loop
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": tool_results})
+            model_kwargs["messages"] = messages
+
+        # Diff
+        diff = _generate_diff(ws, before)
+        if diff:
+            yield {"type": "diff", "diff": diff}
+
+        # Usage
+        yield {"type": "usage", "usage": {
+            "tokenUsage": {"total": {
+                "inputTokens": total_input,
+                "outputTokens": total_output,
+                "cachedInputTokens": cache_read,
+            }}
+        }}
+
+    except Exception as e:
+        yield {"type": "callout", "callout": str(e), "style": "error"}
+
+
 # --- Decorator ---
 
 
