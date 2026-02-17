@@ -8,6 +8,9 @@ import cycls
 
 # --- Config ---
 
+# USE_CLAUDE = False
+USE_CLAUDE = True
+
 UI_TOOLS = [
     {
         "name": "render_table",
@@ -47,6 +50,18 @@ UI_TOOLS = [
             },
             "required": ["src"]
         }
+    },
+    {
+        "name": "render_canvas",
+        "description": "Display a document canvas panel to the user. Use for long-form content like reports, articles, guides, code files, or any document the user may want to read, copy, or reference. The canvas opens as a side panel.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Title shown at the top of the canvas panel"},
+                "content": {"type": "string", "description": "Markdown content to display in the canvas"}
+            },
+            "required": ["title", "content"]
+        }
     }
 ]
 
@@ -70,8 +85,6 @@ You help with coding, research, writing, analysis, system administration, and an
 
 ## Workspace as memory
 - The user's workspace persists across conversations. Files you create are files the user keeps.
-- After substantial research, analysis, or writing, save the output as a file (e.g. `report.md`, `notes.txt`). Tell the user you saved it.
-- Organize naturally: create folders for topics when it makes sense (e.g. `research/`, `drafts/`).
 - When the user returns, check what's already in their workspace — reference and build on previous work.
 - If the user asks to see a file, read it and present the contents naturally.
 
@@ -97,34 +110,63 @@ You help with coding, research, writing, analysis, system administration, and an
 - Prioritize bugs, security risks, and missing tests.
 - Present findings by severity with file and line references.
 - State explicitly if no issues are found.
+
+## Output Formatting — CRITICAL
+- NEVER include raw citation markers, source annotations, or internal reference tokens in your responses. Specifically:
+  - Do NOT output any text like 【cite】, 【turn0search0】, 【turn1view0】, 【oaicite:0】, or any similar bracketed references.
+  - Do NOT append source URLs in parentheses after sentences unless the user explicitly asks for sources.
+  - Do NOT use footnote-style references like [1], (source), or inline citation tags.
+- Your response must read as clean, natural prose or structured content (tables, lists, callouts).
+- If you want to reference a source, integrate it naturally into the sentence as a markdown link.
+- The user sees your raw text output — any internal markup will appear as garbage characters.
 """.strip()
 
 AGENTS_MD = """
-you're a lawyer
 """.strip()
 
 
-@cycls.agent(auth=True, analytics=True, copy=[".env"])
+@cycls.agent(pip=["anthropic"],
+             auth=True, 
+             analytics=True, 
+             copy=[".env"], 
+            #  force_rebuild=True
+)
 async def codex_agent(context):
     from cycls.agent import (
         CodexAgent,
         CodexAgentOptions,
+        ClaudeAgent,
+        ClaudeAgentOptions,
         setup_workspace,
         find_part,
     )
     ws, prompt = setup_workspace(context, instructions=BASE_INSTRUCTIONS, agent_instructions=AGENTS_MD)
-    options = CodexAgentOptions(
-        workspace=ws,
-        prompt=prompt,
-        model="gpt-5.2-codex",
-        effort="high",
-        tools=UI_TOOLS,
-        policy="never",
-        sandbox="danger-full-access",
-        session_id=(find_part(context.messages, None, "session_id") or {}).get("session_id"),
-        pending=find_part(context.messages, "assistant", "pending_approval"),
-    )
-    async for message in CodexAgent(options=options):
+    pending = find_part(context.messages, "assistant", "pending_approval")
+    if USE_CLAUDE:
+        options = ClaudeAgentOptions(
+            workspace=ws,
+            prompt=prompt,
+            model="claude-opus-4-6",
+            tools=UI_TOOLS,
+            policy="never",
+            system=BASE_INSTRUCTIONS,
+            pending=pending,
+        )
+        agent_fn = ClaudeAgent
+    else:
+        options = CodexAgentOptions(
+            workspace=ws,
+            prompt=prompt,
+            model="gpt-5.2-codex",
+            effort="high",
+            tools=UI_TOOLS,
+            policy="never",
+            sandbox="danger-full-access",
+            session_id=(find_part(context.messages, None, "session_id") or {}).get("session_id"),
+            pending=pending,
+        )
+        agent_fn = CodexAgent
+    async for message in agent_fn(options=options):
         if not isinstance(message, dict):
             yield message
             continue
@@ -141,6 +183,10 @@ async def codex_agent(context):
                 yield {"type": "callout", "callout": args.get("message", ""), "style": args.get("style", "info"), "title": args.get("title", "")}
             elif tool == "render_image":
                 yield {"type": "image", "src": args.get("src", ""), "alt": args.get("alt", ""), "caption": args.get("caption", "")}
+            elif tool == "render_canvas":
+                yield {"type": "canvas", "canvas": "document", "open": True, "title": args.get("title", "Document")}
+                yield {"type": "canvas", "canvas": "document", "content": args.get("content", "")}
+                yield {"type": "canvas", "canvas": "document", "done": True}
         elif t == "approval":
             desc = f"\n**Bash(** {message['command']} **)**\n"
             if message.get("cwd"):
