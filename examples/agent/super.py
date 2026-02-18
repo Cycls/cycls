@@ -105,7 +105,7 @@ You help with coding, research, writing, analysis, system administration, and an
 
 @cycls.agent(auth=True, analytics=True, copy=[".env"], force_rebuild=False)
 async def super(context):
-    from cycls.claude import ClaudeAgent, ClaudeAgentOptions, setup_workspace, find_part
+    from cycls.agent import ClaudeAgent, ClaudeAgentOptions, setup_workspace, find_part
 
     ws, prompt = setup_workspace(context)
     options = ClaudeAgentOptions(
@@ -144,6 +144,6 @@ async def super(context):
             yield msg
 
 
-# super.local()
-super.deploy()
+super.local()
+# super.deploy()
 
