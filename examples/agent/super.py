@@ -106,10 +106,10 @@ You help with coding, research, writing, analysis, system administration, and an
 @cycls.agent(auth=True, analytics=True, copy=[".env"], force_rebuild=False)
 async def super(context):
     from cycls.agent import ClaudeAgent, ClaudeAgentOptions, setup_workspace, find_part
-
-    ws, prompt = setup_workspace(context)
+    
+    workspace, prompt = setup_workspace(context)
     options = ClaudeAgentOptions(
-        workspace=ws,
+        workspace=workspace,
         prompt=prompt,
         model="claude-opus-4-6",
         tools=UI_TOOLS,
@@ -132,14 +132,17 @@ async def super(context):
             elif tool == "render_callout":
                 yield {"type": "callout", "callout": args.get("message", ""), "style": args.get("style", "info"), "title": args.get("title", "")}
             elif tool == "render_image":
-                yield {"type": "image", "src": args.get("src", ""), "alt": args.get("alt", ""), "caption": args.get("caption", "")}
+                src = args.get("src", "")
+                if src.startswith(workspace + "/"):
+                    src = "/files/" + src[len(workspace) + 1:]
+                yield {"type": "image", "src": src, "alt": args.get("alt", ""), "caption": args.get("caption", "")}
             elif tool == "render_canvas":
                 yield {"type": "canvas", "canvas": "document", "open": True, "title": args.get("title", "Document")}
                 yield {"type": "canvas", "canvas": "document", "content": args.get("content", "")}
                 yield {"type": "canvas", "canvas": "document", "done": True}
         elif t == "usage":
             u = msg["usage"].get("tokenUsage", {}).get("total", {})
-            yield f'\n\n*in: {u.get("inputTokens", 0):,} · out: {u.get("outputTokens", 0):,} · cached: {u.get("cachedInputTokens", 0):,}*'
+            yield f'\n\n*in: {u.get("inputTokens", 0):,} · out: {u.get("outputTokens", 0):,} · cached: {u.get("cachedInputTokens", 0):,} · cache-create: {u.get("cacheCreationTokens", 0):,}*'
         else:
             yield msg
 
