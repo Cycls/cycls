@@ -5,6 +5,8 @@ from urllib.parse import unquote
 
 from .app import App
 
+COMPACT_THRESHOLD = 100_000
+
 
 def find_part(messages, role, ptype):
     for msg in reversed(getattr(messages, "raw", None) or messages):
@@ -55,11 +57,18 @@ class ClaudeAgentOptions:
 
 
 def _load_history(path):
+    messages = []
     try:
         with open(path) as f:
-            messages = json.load(f)
+            for i, line in enumerate(f):
+                line = line.strip()
+                if line:
+                    messages.append(json.loads(line))
     except (FileNotFoundError, json.JSONDecodeError):
         return []
+    except UnicodeDecodeError as e:
+        print(f"[DEBUG] UnicodeDecodeError in {path} at line {i}: {e}")
+        return messages
     for msg in messages:
         c = msg.get("content")
         if isinstance(c, list):
@@ -73,6 +82,38 @@ def _load_history(path):
         elif isinstance(c, list) and c:
             c[-1]["cache_control"] = {"type": "ephemeral"}
     return messages
+
+def _append_history(path, messages):
+    with open(path, "a") as f:
+        for msg in messages:
+            f.write(json.dumps(msg) + "\n")
+
+def _rewrite_history(path, messages):
+    with open(path, "w") as f:
+        for msg in messages:
+            f.write(json.dumps(msg) + "\n")
+
+async def _compact(client, model, messages):
+    """Summarize conversation into a compact continuation message."""
+    response = await client.messages.create(
+        model=model, max_tokens=8192,
+        system=[{"type": "text", "text": (
+            "Summarize this conversation concisely but thoroughly. Include: "
+            "key decisions made, code changes with file paths, current state "
+            "of work, and any pending tasks. This summary replaces the full "
+            "conversation history."
+        )}],
+        messages=messages + [{"role": "user", "content": "Summarize our conversation so far for continuity."}],
+    )
+    summary = response.content[0].text
+    return [
+        {"role": "user", "content": (
+            "This session is being continued from a previous conversation "
+            "that ran out of context. The conversation is summarized below:\n\n"
+            + summary
+        )},
+        {"role": "assistant", "content": "Understood. I have the full context from our previous conversation. How can I help?"},
+    ]
 
 def _build_tools(custom):
     tools = [
@@ -108,7 +149,10 @@ def _exec_editor(inp, workspace):
     if cmd != "create" and not path.exists():
         return f"Error: {path} does not exist"
     if cmd == "view":
-        lines = path.read_text().splitlines()
+        try:
+            lines = path.read_text().splitlines()
+        except UnicodeDecodeError:
+            return f"Error: {path} is a binary file"
         vr = inp.get("view_range")
         start = vr[0] if vr else 1
         if vr: lines = lines[vr[0] - 1:vr[1]]
@@ -146,9 +190,10 @@ async def ClaudeAgent(*, options):
     if not options.session_id:
         yield {"type": "session_id", "session_id": sid}
 
-    history_path = os.path.join(ws, ".cycls", f"history_{sid}.json")
+    history_path = os.path.join(ws, ".cycls", f"{sid}.jsonl")
     os.makedirs(os.path.dirname(history_path), exist_ok=True)
     messages = _load_history(history_path)
+    loaded_count = len(messages)
     messages.append({"role": "user", "content": options.prompt})
 
     kwargs = {
@@ -158,9 +203,9 @@ async def ClaudeAgent(*, options):
     if options.system:
         kwargs["system"] = [{"type": "text", "text": options.system, "cache_control": {"type": "ephemeral"}}]
     if options.thinking:
-        kwargs["thinking"] = {"type": "enabled", "budget_tokens": options.thinking_budget}
+        kwargs["thinking"] = {"type": "adaptive"}
 
-    total_in = total_out = cache_read = 0
+    total_in = total_out = cache_read = cache_create = 0
 
     try:
         while True:
@@ -194,6 +239,7 @@ async def ClaudeAgent(*, options):
             total_in += response.usage.input_tokens
             total_out += response.usage.output_tokens
             cache_read += getattr(response.usage, "cache_read_input_tokens", 0) or 0
+            cache_create += getattr(response.usage, "cache_creation_input_tokens", 0) or 0
 
             content = [b.model_dump(exclude_none=True) for b in response.content]
             messages.append({"role": "assistant", "content": content})
@@ -221,14 +267,25 @@ async def ClaudeAgent(*, options):
             messages.append({"role": "user", "content": results})
 
     except Exception as e:
+        import traceback
+        print(f"[DEBUG] ClaudeAgent error: {e}\n{traceback.format_exc()}")
         yield {"type": "callout", "callout": str(e), "style": "error"}
 
-    if messages and messages[-1].get("role") == "assistant":
-        with open(history_path, "w") as f:
-            json.dump(messages, f)
+    new_messages = messages[loaded_count:]
+    if total_in > COMPACT_THRESHOLD and messages:
+        try:
+            yield {"type": "step", "step": "Compacting context..."}
+            messages = await _compact(client, options.model, messages)
+            _rewrite_history(history_path, messages)
+        except Exception:
+            if new_messages and new_messages[-1].get("role") == "assistant":
+                _append_history(history_path, new_messages)
+    elif new_messages and new_messages[-1].get("role") == "assistant":
+        _append_history(history_path, new_messages)
     if total_in:
         yield {"type": "usage", "usage": {"tokenUsage": {"total": {
-            "inputTokens": total_in, "outputTokens": total_out, "cachedInputTokens": cache_read,
+            "inputTokens": total_in, "outputTokens": total_out,
+            "cachedInputTokens": cache_read, "cacheCreationTokens": cache_create,
         }}}}
 
 
