@@ -1,15 +1,6 @@
-# uv run examples/agent/codex-agent.py
-# Minimal Codex app-server agent
-# https://developers.openai.com/codex/config-reference/
-# https://github.com/openai/codex/blob/main/codex-rs/core/gpt_5_codex_prompt.md
-# https://github.com/Piebald-AI/claude-code-system-prompts/tree/main
+# uv run examples/agent/super.py
 
 import cycls
-
-# --- Config ---
-
-# USE_CLAUDE = False
-USE_CLAUDE = True
 
 UI_TOOLS = [
     {
@@ -65,8 +56,7 @@ UI_TOOLS = [
     }
 ]
 
-# https://developers.openai.com/cookbook/examples/gpt-5/codex_prompting_guide
-BASE_INSTRUCTIONS = """
+SYSTEM = """
 You are Cycls, a general-purpose AI agent built by cycls.com that runs in the user's workspace in Cycls cloud.
 You help with coding, research, writing, analysis, system administration, and any task the user brings.
 
@@ -110,69 +100,29 @@ You help with coding, research, writing, analysis, system administration, and an
 - Prioritize bugs, security risks, and missing tests.
 - Present findings by severity with file and line references.
 - State explicitly if no issues are found.
-
-## Output Formatting — CRITICAL
-- NEVER include raw citation markers, source annotations, or internal reference tokens in your responses. Specifically:
-  - Do NOT output any text like 【cite】, 【turn0search0】, 【turn1view0】, 【oaicite:0】, or any similar bracketed references.
-  - Do NOT append source URLs in parentheses after sentences unless the user explicitly asks for sources.
-  - Do NOT use footnote-style references like [1], (source), or inline citation tags.
-- Your response must read as clean, natural prose or structured content (tables, lists, callouts).
-- If you want to reference a source, integrate it naturally into the sentence as a markdown link.
-- The user sees your raw text output — any internal markup will appear as garbage characters.
-""".strip()
-
-AGENTS_MD = """
 """.strip()
 
 
-@cycls.agent(pip=["anthropic"],
-             auth=True, 
-             analytics=True, 
-             copy=[".env"], 
-            #  force_rebuild=True
-)
-async def codex_agent(context):
-    from cycls.agent import (
-        CodexAgent,
-        CodexAgentOptions,
-        ClaudeAgent,
-        ClaudeAgentOptions,
-        setup_workspace,
-        find_part,
+@cycls.agent(auth=True, analytics=True, copy=[".env"], force_rebuild=False)
+async def super(context):
+    from cycls.agent import ClaudeAgent, ClaudeAgentOptions, setup_workspace, find_part
+    
+    workspace, prompt = setup_workspace(context)
+    options = ClaudeAgentOptions(
+        workspace=workspace,
+        prompt=prompt,
+        model="claude-opus-4-6",
+        tools=UI_TOOLS,
+        system=SYSTEM,
+        session_id=(find_part(context.messages, None, "session_id") or {}).get("session_id"),
     )
-    ws, prompt = setup_workspace(context, instructions=BASE_INSTRUCTIONS, agent_instructions=AGENTS_MD)
-    pending = find_part(context.messages, "assistant", "pending_approval")
-    if USE_CLAUDE:
-        options = ClaudeAgentOptions(
-            workspace=ws,
-            prompt=prompt,
-            model="claude-opus-4-6",
-            tools=UI_TOOLS,
-            policy="never",
-            system=BASE_INSTRUCTIONS,
-            pending=pending,
-        )
-        agent_fn = ClaudeAgent
-    else:
-        options = CodexAgentOptions(
-            workspace=ws,
-            prompt=prompt,
-            model="gpt-5.2-codex",
-            effort="high",
-            tools=UI_TOOLS,
-            policy="never",
-            sandbox="danger-full-access",
-            session_id=(find_part(context.messages, None, "session_id") or {}).get("session_id"),
-            pending=pending,
-        )
-        agent_fn = CodexAgent
-    async for message in agent_fn(options=options):
-        if not isinstance(message, dict):
-            yield message
+    async for msg in ClaudeAgent(options=options):
+        if not isinstance(msg, dict):
+            yield msg
             continue
-        t = message.get("type")
+        t = msg.get("type")
         if t == "tool_call":
-            tool, args = message["tool"], message["args"]
+            tool, args = msg["tool"], msg["args"]
             if tool == "render_table":
                 if title := args.get("title"):
                     yield f"\n**{title}**\n"
@@ -182,30 +132,21 @@ async def codex_agent(context):
             elif tool == "render_callout":
                 yield {"type": "callout", "callout": args.get("message", ""), "style": args.get("style", "info"), "title": args.get("title", "")}
             elif tool == "render_image":
-                yield {"type": "image", "src": args.get("src", ""), "alt": args.get("alt", ""), "caption": args.get("caption", "")}
+                src = args.get("src", "")
+                if src.startswith(workspace + "/"):
+                    src = "/files/" + src[len(workspace) + 1:]
+                yield {"type": "image", "src": src, "alt": args.get("alt", ""), "caption": args.get("caption", "")}
             elif tool == "render_canvas":
                 yield {"type": "canvas", "canvas": "document", "open": True, "title": args.get("title", "Document")}
                 yield {"type": "canvas", "canvas": "document", "content": args.get("content", "")}
                 yield {"type": "canvas", "canvas": "document", "done": True}
-        elif t == "approval":
-            desc = f"\n**Bash(** {message['command']} **)**\n"
-            if message.get("cwd"):
-                desc += f"dir: `{message['cwd']}`\n"
-            if message.get("reason"):
-                desc += f"reason: {message['reason']}\n"
-            yield {"type": "thinking", "thinking": desc + "Reply **yes** to approve."}
-            yield {"type": "pending_approval", "action_type": message["method"], "action_detail": message["command"]}
-        elif t == "diff":
-            yield {"type": "canvas", "canvas": "document", "open": True, "title": "Changes"}
-            yield {"type": "canvas", "canvas": "document", "content": message["diff"]}
-            yield {"type": "canvas", "canvas": "document", "done": True}
         elif t == "usage":
-            u = message["usage"].get("tokenUsage", {}).get("total", {})
-            inp, cached, out = u.get("inputTokens", 0), u.get("cachedInputTokens", 0), u.get("outputTokens", 0)
-            yield f'\n\n*in: {inp:,} · out: {out:,} · cached: {cached:,}*'
+            u = msg["usage"].get("tokenUsage", {}).get("total", {})
+            yield f'\n\n*in: {u.get("inputTokens", 0):,} · out: {u.get("outputTokens", 0):,} · cached: {u.get("cachedInputTokens", 0):,} · cache-create: {u.get("cacheCreationTokens", 0):,}*'
         else:
-            yield message
+            yield msg
 
 
-codex_agent.local()
-# codex_agent.deploy()
+super.local()
+# super.deploy()
+
