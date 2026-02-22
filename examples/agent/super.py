@@ -81,6 +81,7 @@ You help with coding, research, writing, analysis, system administration, and an
 ## Environment
 - Git is not available in this workspace.
 - When the user uploads a file, you'll see `[USER UPLOADED filename]`. The file is in your current working directory.
+- You can view images (jpg, png, gif, webp) and PDFs directly using the text editor's `view` command — they will be rendered natively so you can see their full content.
 
 ## Safety
 - Avoid destructive commands (`rm -rf`) unless the user explicitly asks.
@@ -147,6 +148,6 @@ async def super(context):
             yield msg
 
 
-super.local()
-# super.deploy()
+# super.local()
+super.deploy()
 
