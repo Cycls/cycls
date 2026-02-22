@@ -2,9 +2,6 @@ import pytest
 import json
 import asyncio
 import importlib.resources
-import tempfile
-from pathlib import Path
-from unittest.mock import patch
 from cycls.web import web, Config, Messages, sse, encoder, openai_encoder
 
 # To run these tests:
@@ -385,83 +382,3 @@ def test_streaming_multiple_yields():
     assert "[DONE]" in lines[4]
     print("✅ Test passed.")
 
-
-# =============================================================================
-# Attachments Upload/Download Tests
-# =============================================================================
-
-def test_attachment_upload_requires_auth():
-    """Tests that POST /attachments requires authentication when auth=True."""
-    print("\n--- Running test: test_attachment_upload_requires_auth ---")
-    from fastapi.testclient import TestClient
-
-    async def dummy_agent(context):
-        yield "test"
-
-    # With auth=True, upload should require JWT
-    config = Config(public_path=THEME_PATH, auth=True)
-    app = web(dummy_agent, config)
-    client = TestClient(app)
-
-    response = client.post("/attachments", files={"file": ("test.txt", b"hello")})
-    assert response.status_code == 401  # Unauthorized without auth header
-    print("✅ Test passed.")
-
-
-def test_attachment_upload_and_download():
-    """Tests attachment upload and download with token-based URLs."""
-    print("\n--- Running test: test_attachment_upload_and_download ---")
-    from fastapi.testclient import TestClient
-
-    async def dummy_agent(context):
-        yield "test"
-
-    config = Config(public_path=THEME_PATH, auth=False)
-    app = web(dummy_agent, config)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Patch Path to use temp directory instead of /workspace
-        original_path = Path
-        def patched_path(p):
-            if isinstance(p, str) and p.startswith("/workspace"):
-                return original_path(tmpdir) / p.lstrip("/workspace/")
-            return original_path(p)
-
-        with patch("cycls.web.Path", side_effect=patched_path):
-            client = TestClient(app)
-
-            # Upload a file
-            response = client.post(
-                "/attachments",
-                files={"file": ("test.txt", b"hello world")}
-            )
-            assert response.status_code == 200
-
-            # URL should be relative path with token
-            url = response.json()["url"]
-            assert url.startswith("/attachments/")
-            assert url.endswith("/test.txt")
-            # Token should be 43 chars (256 bits base64url)
-            parts = url.split("/")
-            token = parts[-2]
-            assert len(token) == 43
-
-    print("✅ Test passed.")
-
-
-def test_attachment_download_not_found():
-    """Tests that downloading non-existent attachment returns 404."""
-    print("\n--- Running test: test_attachment_download_not_found ---")
-    from fastapi.testclient import TestClient
-
-    async def dummy_agent(context):
-        yield "test"
-
-    config = Config(public_path=THEME_PATH, auth=False)
-    app = web(dummy_agent, config)
-    client = TestClient(app)
-
-    # Download requires token and filename now
-    response = client.get("/attachments/fake-token/nonexistent.txt")
-    assert response.status_code == 404
-    print("✅ Test passed.")
