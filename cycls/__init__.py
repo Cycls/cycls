@@ -1,6 +1,6 @@
 from .function import function, Function
 from .app import app, App
-from .agent import agent, Agent, CodexAgent, CodexAgentOptions
+from .agent import agent, Agent, ClaudeAgent, ClaudeAgentOptions
 
 # Module-level config
 api_key = None
