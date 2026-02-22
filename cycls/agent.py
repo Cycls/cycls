@@ -1,11 +1,20 @@
-import asyncio, json, os, shutil
+# The tension for @cycls.agent is that we need both: send images/PDFs as content blocks to the model AND copy
+# files to the workspace so bash/editor can operate on them. This app only needs the former.
+
+import asyncio, base64, json, os, shutil
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Union
 from urllib.parse import unquote
 
 from .app import App
 
 COMPACT_THRESHOLD = 100_000
+
+_MEDIA_TYPES = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp",
+    ".pdf": "application/pdf",
+}
 
 
 def find_part(messages, role, ptype):
@@ -28,8 +37,12 @@ def setup_workspace(context):
     content = context.messages.raw[-1].get("content", "")
     if not isinstance(content, list):
         return ws, content
-    prompt = next((p["text"] for p in content if p.get("type") == "text"), "")
+    blocks = []
+    has_media = False
     for p in content:
+        if p.get("type") == "text":
+            blocks.append({"type": "text", "text": p["text"]})
+            continue
         if p.get("type") not in ("image", "file"):
             continue
         url = unquote(p.get("image") or p.get("file") or "")
@@ -37,22 +50,43 @@ def setup_workspace(context):
             continue
         fname = os.path.basename(url)
         src = os.path.realpath(f"/workspace{url}")
-        if src.startswith("/workspace/"):
-            shutil.copy(src, f"{ws}/{fname}")
-            prompt += f" [USER UPLOADED {fname}]"
-    return ws, prompt
+        if not src.startswith("/workspace/"):
+            continue
+        shutil.copy(src, f"{ws}/{fname}")
+        ext = os.path.splitext(fname)[1].lower()
+        media_type = _MEDIA_TYPES.get(ext)
+        if ext == ".pdf" and media_type:
+            has_media = True
+            with open(src, "rb") as f:
+                data = base64.b64encode(f.read()).decode()
+            blocks.append({"type": "document", "source": {"type": "base64", "media_type": media_type, "data": data}})
+        elif media_type and media_type.startswith("image/"):
+            has_media = True
+            with open(src, "rb") as f:
+                data = base64.b64encode(f.read()).decode()
+            blocks.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
+        else:
+            try:
+                text = open(src, "r").read()
+                if len(text) > 400_000:
+                    text = text[:400_000] + "\n\n[... truncated ...]"
+                blocks.append({"type": "text", "text": f"[File: {fname}]\n{text}\n[End of file]"})
+            except (UnicodeDecodeError, ValueError):
+                blocks.append({"type": "text", "text": f"[USER UPLOADED {fname}]"})
+    if not has_media:
+        return ws, " ".join(b["text"] for b in blocks if b.get("type") == "text")
+    return ws, blocks
 
 
 @dataclass
 class ClaudeAgentOptions:
     workspace: str
-    prompt: str
+    prompt: Union[str, list]
     model: str = "claude-sonnet-4-20250514"
     tools: List[dict] = field(default_factory=list)
     system: str = ""
     max_tokens: int = 16384
     thinking: bool = True
-    thinking_budget: int = 10000
     session_id: Optional[str] = None
 
 
@@ -149,6 +183,12 @@ def _exec_editor(inp, workspace):
     if cmd != "create" and not path.exists():
         return f"Error: {path} does not exist"
     if cmd == "view":
+        ext = path.suffix.lower()
+        media_type = _MEDIA_TYPES.get(ext)
+        if media_type:
+            data = base64.b64encode(path.read_bytes()).decode()
+            kind = "document" if not media_type.startswith("image/") else "image"
+            return [{"type": kind, "source": {"type": "base64", "media_type": media_type, "data": data}}]
         try:
             lines = path.read_text().splitlines()
         except UnicodeDecodeError:
@@ -238,8 +278,8 @@ async def ClaudeAgent(*, options):
 
             total_in += response.usage.input_tokens
             total_out += response.usage.output_tokens
-            cache_read += getattr(response.usage, "cache_read_input_tokens", 0) or 0
-            cache_create += getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+            cache_read += response.usage.cache_read_input_tokens or 0
+            cache_create += response.usage.cache_creation_input_tokens or 0
 
             content = [b.model_dump(exclude_none=True) for b in response.content]
             messages.append({"role": "assistant", "content": content})
@@ -248,22 +288,33 @@ async def ClaudeAgent(*, options):
             if response.stop_reason != "tool_use":
                 break
 
-            results = []
+            # Yield step indicators, then execute tools in parallel
             for block in tool_blocks:
                 name, inp = block.name, block.input
                 if name == "bash":
                     yield {"type": "step", "step": f"Bash({inp.get('command', '')[:60]})"}
-                    out = await _exec_bash(inp.get("command", ""), ws)
-                    yield {"type": "step_data", "data": out}
-                    results.append(_tool_result(block.id, out))
                 elif name == "str_replace_based_edit_tool":
-                    fpath = inp.get("path", "file")
                     verb = "Editing" if inp.get("command") in ("str_replace", "create", "insert") else "Viewing"
-                    yield {"type": "step", "step": f"{verb} {fpath}"}
-                    results.append(_tool_result(block.id, _exec_editor(inp, ws)))
+                    yield {"type": "step", "step": f"{verb} {inp.get('path', 'file')}"}
                 else:
                     yield {"type": "tool_call", "tool": name, "args": inp}
-                    results.append(_tool_result(block.id, f"{name} rendered successfully"))
+
+            async def _run_tool(block):
+                name, inp = block.name, block.input
+                if name == "bash":
+                    return await _exec_bash(inp.get("command", ""), ws)
+                elif name == "str_replace_based_edit_tool":
+                    return _exec_editor(inp, ws)
+                return f"{name} rendered successfully"
+
+            if len(tool_blocks) > 1:
+                print(f"[PARALLEL] Running {len(tool_blocks)} tools concurrently")
+            outputs = await asyncio.gather(*[_run_tool(b) for b in tool_blocks])
+            results = []
+            for block, out in zip(tool_blocks, outputs):
+                if block.name == "bash":
+                    yield {"type": "step_data", "data": out}
+                results.append(_tool_result(block.id, out))
             messages.append({"role": "user", "content": results})
 
     except Exception as e:
