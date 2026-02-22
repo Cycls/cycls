@@ -1,6 +1,5 @@
-import json, inspect, secrets, os
+import json, inspect, os
 from datetime import datetime, timezone
-from urllib.parse import quote
 from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional, Any
@@ -145,33 +144,6 @@ def web(func, config):
     @app.get("/config")
     async def get_config():
         return config
-
-    @app.post("/attachments")
-    async def upload_attachment(request: Request, file: UploadFile = File(...), jwt: Optional[dict] = auth):
-        token = secrets.token_urlsafe(32)
-        token_dir = Path(f"/workspace/attachments/{token}")
-        token_dir.mkdir(parents=True, exist_ok=True)
-
-        filename = Path(file.filename).name
-        file_path = (token_dir / filename).resolve()
-        if not file_path.is_relative_to(token_dir.resolve()):
-            raise HTTPException(status_code=400, detail="Invalid filename")
-        with open(file_path, "wb") as f:
-            f.write(await file.read())
-
-        return {"url": f"/attachments/{token}/{quote(filename)}"}
-
-    @app.get("/attachments/{token}/{filename}")
-    async def get_attachment(token: str, filename: str):
-        token_dir = Path(f"/workspace/attachments/{token}")
-        file_path = (token_dir / Path(filename).name).resolve()
-        if not file_path.is_relative_to(token_dir.resolve()):
-            raise HTTPException(status_code=404, detail="File not found")
-
-        if not file_path.exists():
-            raise HTTPException(status_code=404, detail="File not found")
-
-        return FileResponse(file_path)
 
     # ---- Helper ----
 

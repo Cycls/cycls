@@ -1,10 +1,6 @@
-# The tension for @cycls.agent is that we need both: send images/PDFs as content blocks to the model AND copy
-# files to the workspace so bash/editor can operate on them. This app only needs the former.
-
-import asyncio, base64, json, os, shutil
+import asyncio, base64, json, os
 from dataclasses import dataclass, field
 from typing import List, Optional, Union
-from urllib.parse import unquote
 
 from .app import App
 
@@ -45,29 +41,27 @@ def setup_workspace(context):
             continue
         if p.get("type") not in ("image", "file"):
             continue
-        url = unquote(p.get("image") or p.get("file") or "")
-        if not url:
+        fname = p.get("image") or p.get("file") or ""
+        if not fname:
             continue
-        fname = os.path.basename(url)
-        src = os.path.realpath(f"/workspace{url}")
-        if not src.startswith("/workspace/"):
+        fpath = os.path.join(ws, fname)
+        if not os.path.isfile(fpath):
             continue
-        shutil.copy(src, f"{ws}/{fname}")
         ext = os.path.splitext(fname)[1].lower()
         media_type = _MEDIA_TYPES.get(ext)
         if ext == ".pdf" and media_type:
             has_media = True
-            with open(src, "rb") as f:
+            with open(fpath, "rb") as f:
                 data = base64.b64encode(f.read()).decode()
             blocks.append({"type": "document", "source": {"type": "base64", "media_type": media_type, "data": data}})
         elif media_type and media_type.startswith("image/"):
             has_media = True
-            with open(src, "rb") as f:
+            with open(fpath, "rb") as f:
                 data = base64.b64encode(f.read()).decode()
             blocks.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
         else:
             try:
-                text = open(src, "r").read()
+                text = open(fpath, "r").read()
                 if len(text) > 400_000:
                     text = text[:400_000] + "\n\n[... truncated ...]"
                 blocks.append({"type": "text", "text": f"[File: {fname}]\n{text}\n[End of file]"})
