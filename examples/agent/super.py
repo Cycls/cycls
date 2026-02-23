@@ -104,12 +104,12 @@ You help with coding, research, writing, analysis, system administration, and an
 """.strip()
 
 
-@cycls.agent(auth=True, analytics=True, copy=[".env"], force_rebuild=False)
+@cycls.app(auth=True, analytics=True, copy=[".env"], force_rebuild=False)
 async def super(context):
-    from cycls.agent import ClaudeAgent, ClaudeAgentOptions, setup_workspace, find_part
+    from cycls import Agent, AgentOptions, setup_workspace, find_part
     
     workspace, prompt = setup_workspace(context)
-    options = ClaudeAgentOptions(
+    options = AgentOptions(
         workspace=workspace,
         prompt=prompt,
         model="claude-opus-4-6",
@@ -117,7 +117,7 @@ async def super(context):
         system=SYSTEM,
         session_id=(find_part(context.messages, None, "session_id") or {}).get("session_id"),
     )
-    async for msg in ClaudeAgent(options=options):
+    async for msg in Agent(options=options):
         if not isinstance(msg, dict):
             yield msg
             continue
@@ -148,6 +148,6 @@ async def super(context):
             yield msg
 
 
-# super.local()
-super.deploy()
+super.local()
+# super.deploy()
 
