@@ -73,7 +73,7 @@ def setup_workspace(context):
 
 
 @dataclass
-class ClaudeAgentOptions:
+class AgentOptions:
     workspace: str
     prompt: Union[str, list]
     model: str = "claude-sonnet-4-20250514"
@@ -213,7 +213,7 @@ def _exec_editor(inp, workspace):
     return f"Error: unknown command {cmd}"
 
 
-async def ClaudeAgent(*, options):
+async def Agent(*, options):
     """Run one Claude turn. Async generator yielding streaming components."""
     import anthropic, uuid
 
@@ -332,13 +332,3 @@ async def ClaudeAgent(*, options):
             "inputTokens": total_in, "outputTokens": total_out,
             "cachedInputTokens": cache_read, "cacheCreationTokens": cache_create,
         }}}}
-
-
-class Agent(App):
-    def __init__(self, func, name, pip=None, **kwargs):
-        super().__init__(func=func, name=name, pip=["anthropic", *(pip or [])], **kwargs)
-
-def agent(name=None, **kwargs):
-    def decorator(func):
-        return Agent(func=func, name=name or func.__name__, **kwargs)
-    return decorator
