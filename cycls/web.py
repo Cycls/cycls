@@ -102,6 +102,12 @@ def web(func, config):
                 return self.messages[-1].get("content", "")
             return ""
 
+        @property
+        def workspace(self) -> str:
+            if not self.user:
+                return "/workspace/default"
+            return f"/workspace/{self.user.org_id}" if self.user.org_id else f"/workspace/{self.user.id}"
+
     app = FastAPI()
     bearer_scheme = HTTPBearer()
 

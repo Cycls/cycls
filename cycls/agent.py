@@ -1,8 +1,4 @@
 import asyncio, base64, json, os
-from dataclasses import dataclass, field
-from typing import List, Optional, Union
-
-from .app import App
 
 COMPACT_THRESHOLD = 100_000
 
@@ -12,23 +8,77 @@ _MEDIA_TYPES = {
     ".pdf": "application/pdf",
 }
 
+_DEFAULT_SYSTEM = """## Tools
+- Use `rg` or `rg --files` for searching text and files — it's faster than grep.
+- Prefer `apply_patch` for single-file edits; use scripting when more efficient.
+- Default to ASCII in file edits; only use Unicode when clearly justified.
+- You can view images (jpg, png, gif, webp) and PDFs directly using the text editor's `view` command.
 
-def find_part(messages, role, ptype):
-    for msg in reversed(getattr(messages, "raw", None) or messages):
-        if role and msg.get("role") != role:
-            continue
-        for part in msg.get("parts", []) or []:
-            if part.get("type") == ptype:
-                return part
-        if role:
-            return None
-    return None
+## Workspace
+- The user's workspace persists across conversations. Files you create are files the user keeps.
+- When the user returns, check what's already in their workspace — reference and build on previous work.
+- Git is not available in this workspace.
+- Avoid destructive commands (`rm -rf`) unless the user explicitly asks.
+"""
 
+_UI_TOOLS = [
+    {
+        "name": "render_table",
+        "description": "Display a data table to the user. Use for structured data, comparisons, listings.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Optional table title"},
+                "headers": {"type": "array", "items": {"type": "string"}},
+                "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}}
+            },
+            "required": ["headers", "rows"]
+        }
+    },
+    {
+        "name": "render_callout",
+        "description": "Display a callout/alert box. Use for warnings, tips, success messages, errors.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "style": {"type": "string", "enum": ["info", "warning", "error", "success"]},
+                "title": {"type": "string"}
+            },
+            "required": ["message", "style"]
+        }
+    },
+    {
+        "name": "render_image",
+        "description": "Display an image to the user.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "src": {"type": "string", "description": "Image URL or path"},
+                "alt": {"type": "string"},
+                "caption": {"type": "string"}
+            },
+            "required": ["src"]
+        }
+    },
+    {
+        "name": "render_canvas",
+        "description": "Display a document canvas panel to the user. Use for long-form content like reports, articles, guides, code files, or any document the user may want to read, copy, or reference. The canvas opens as a side panel.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Title shown at the top of the canvas panel"},
+                "content": {"type": "string", "description": "Markdown content to display in the canvas"}
+            },
+            "required": ["title", "content"]
+        }
+    }
+]
 
-def setup_workspace(context):
-    user_id = context.user.id if context.user else "default"
-    org_id = context.user.org_id if context.user else None
-    ws = f"/workspace/{org_id}" if org_id else f"/workspace/{user_id}"
+# ---- Internal helpers ----
+
+def _setup_workspace(context):
+    ws = context.workspace
     os.makedirs(ws, exist_ok=True)
     content = context.messages.raw[-1].get("content", "")
     if not isinstance(content, list):
@@ -49,16 +99,11 @@ def setup_workspace(context):
             continue
         ext = os.path.splitext(fname)[1].lower()
         media_type = _MEDIA_TYPES.get(ext)
-        if ext == ".pdf" and media_type:
+        if media_type:
             has_media = True
-            with open(fpath, "rb") as f:
-                data = base64.b64encode(f.read()).decode()
-            blocks.append({"type": "document", "source": {"type": "base64", "media_type": media_type, "data": data}})
-        elif media_type and media_type.startswith("image/"):
-            has_media = True
-            with open(fpath, "rb") as f:
-                data = base64.b64encode(f.read()).decode()
-            blocks.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
+            data = base64.b64encode(open(fpath, "rb").read()).decode()
+            kind = "document" if ext == ".pdf" else "image"
+            blocks.append({"type": kind, "source": {"type": "base64", "media_type": media_type, "data": data}})
         else:
             try:
                 text = open(fpath, "r").read()
@@ -70,18 +115,6 @@ def setup_workspace(context):
     if not has_media:
         return ws, " ".join(b["text"] for b in blocks if b.get("type") == "text")
     return ws, blocks
-
-
-@dataclass
-class AgentOptions:
-    workspace: str
-    prompt: Union[str, list]
-    model: str = "claude-sonnet-4-20250514"
-    tools: List[dict] = field(default_factory=list)
-    system: str = ""
-    max_tokens: int = 16384
-    thinking: bool = True
-    session_id: Optional[str] = None
 
 
 def _load_history(path):
@@ -111,18 +144,12 @@ def _load_history(path):
             c[-1]["cache_control"] = {"type": "ephemeral"}
     return messages
 
-def _append_history(path, messages):
-    with open(path, "a") as f:
-        for msg in messages:
-            f.write(json.dumps(msg) + "\n")
-
-def _rewrite_history(path, messages):
-    with open(path, "w") as f:
+def _save_history(path, messages, mode="a"):
+    with open(path, mode) as f:
         for msg in messages:
             f.write(json.dumps(msg) + "\n")
 
 async def _compact(client, model, messages):
-    """Summarize conversation into a compact continuation message."""
     response = await client.messages.create(
         model=model, max_tokens=8192,
         system=[{"type": "text", "text": (
@@ -165,6 +192,14 @@ async def _exec_bash(command, cwd):
     if len(out) > 20000:
         out = out[:10000] + "\n... (truncated) ...\n" + out[-10000:]
     return out.strip() or "(no output)"
+
+async def _run_tool(block, ws):
+    name, inp = block.name, block.input
+    if name == "bash":
+        return await _exec_bash(inp.get("command", ""), ws)
+    elif name == "str_replace_based_edit_tool":
+        return _exec_editor(inp, ws)
+    return f"{name} rendered successfully"
 
 def _exec_editor(inp, workspace):
     import pathlib
@@ -212,31 +247,43 @@ def _exec_editor(inp, workspace):
         return f"Inserted at line {pos} in {path}"
     return f"Error: unknown command {cmd}"
 
+# ---- Public API ----
 
-async def Agent(*, options):
-    """Run one Claude turn. Async generator yielding streaming components."""
+async def Agent(context, *, system="", tools=None, model="claude-sonnet-4-20250514",
+                max_tokens=16384, thinking=True):
+    """Run one Claude agent turn. Async generator yielding streaming UI components."""
     import anthropic, uuid
 
-    ws = options.workspace
+    ws, prompt = _setup_workspace(context)
     client = anthropic.AsyncAnthropic()
 
-    sid = options.session_id or str(uuid.uuid4())
-    if not options.session_id:
+    sid = None
+    for msg in reversed(context.messages.raw):
+        for part in msg.get("parts", []) or []:
+            if part.get("type") == "session_id":
+                sid = part.get("session_id")
+                break
+        if sid:
+            break
+    if not sid:
+        sid = str(uuid.uuid4())
         yield {"type": "session_id", "session_id": sid}
 
     history_path = os.path.join(ws, ".cycls", f"{sid}.jsonl")
     os.makedirs(os.path.dirname(history_path), exist_ok=True)
     messages = _load_history(history_path)
     loaded_count = len(messages)
-    messages.append({"role": "user", "content": options.prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    all_tools = _UI_TOOLS + (tools or [])
+    full_system = _DEFAULT_SYSTEM + ("\n\n" + system if system else "")
 
     kwargs = {
-        "model": options.model, "max_tokens": options.max_tokens,
-        "tools": _build_tools(options.tools), "messages": messages,
+        "model": model, "max_tokens": max_tokens,
+        "tools": _build_tools(all_tools), "messages": messages,
+        "system": [{"type": "text", "text": full_system, "cache_control": {"type": "ephemeral"}}],
     }
-    if options.system:
-        kwargs["system"] = [{"type": "text", "text": options.system, "cache_control": {"type": "ephemeral"}}]
-    if options.thinking:
+    if thinking:
         kwargs["thinking"] = {"type": "adaptive"}
 
     total_in = total_out = cache_read = cache_create = 0
@@ -293,17 +340,9 @@ async def Agent(*, options):
                 else:
                     yield {"type": "tool_call", "tool": name, "args": inp}
 
-            async def _run_tool(block):
-                name, inp = block.name, block.input
-                if name == "bash":
-                    return await _exec_bash(inp.get("command", ""), ws)
-                elif name == "str_replace_based_edit_tool":
-                    return _exec_editor(inp, ws)
-                return f"{name} rendered successfully"
-
             if len(tool_blocks) > 1:
                 print(f"[PARALLEL] Running {len(tool_blocks)} tools concurrently")
-            outputs = await asyncio.gather(*[_run_tool(b) for b in tool_blocks])
+            outputs = await asyncio.gather(*[_run_tool(b, ws) for b in tool_blocks])
             results = []
             for block, out in zip(tool_blocks, outputs):
                 if block.name == "bash":
@@ -313,20 +352,20 @@ async def Agent(*, options):
 
     except Exception as e:
         import traceback
-        print(f"[DEBUG] ClaudeAgent error: {e}\n{traceback.format_exc()}")
+        print(f"[DEBUG] Agent error: {e}\n{traceback.format_exc()}")
         yield {"type": "callout", "callout": str(e), "style": "error"}
 
     new_messages = messages[loaded_count:]
     if total_in > COMPACT_THRESHOLD and messages:
         try:
             yield {"type": "step", "step": "Compacting context..."}
-            messages = await _compact(client, options.model, messages)
-            _rewrite_history(history_path, messages)
+            messages = await _compact(client, model, messages)
+            _save_history(history_path, messages, mode="w")
         except Exception:
             if new_messages and new_messages[-1].get("role") == "assistant":
-                _append_history(history_path, new_messages)
+                _save_history(history_path, new_messages)
     elif new_messages and new_messages[-1].get("role") == "assistant":
-        _append_history(history_path, new_messages)
+        _save_history(history_path, new_messages)
     if total_in:
         yield {"type": "usage", "usage": {"tokenUsage": {"total": {
             "inputTokens": total_in, "outputTokens": total_out,
