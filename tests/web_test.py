@@ -223,7 +223,7 @@ def test_chat_cycls_endpoint_streams():
     client = TestClient(app)
 
     response = client.post(
-        "/chat/cycls",
+        "/",
         json={"messages": [{"role": "user", "content": "hello"}]}
     )
 
@@ -283,7 +283,7 @@ def test_sync_agent_function():
     client = TestClient(app)
 
     response = client.post(
-        "/chat/cycls",
+        "/",
         json={"messages": [{"role": "user", "content": "test"}]}
     )
 
@@ -307,7 +307,7 @@ def test_async_agent_function():
     client = TestClient(app)
 
     response = client.post(
-        "/chat/cycls",
+        "/",
         json={"messages": [{"role": "user", "content": "test"}]}
     )
 
@@ -334,7 +334,7 @@ def test_context_has_messages():
     client = TestClient(app)
 
     client.post(
-        "/chat/cycls",
+        "/",
         json={"messages": [
             {"role": "user", "content": "first"},
             {"role": "assistant", "content": "response"},
@@ -365,7 +365,7 @@ def test_streaming_multiple_yields():
     client = TestClient(app)
 
     response = client.post(
-        "/chat/cycls",
+        "/",
         json={"messages": [{"role": "user", "content": "test"}]}
     )
 
