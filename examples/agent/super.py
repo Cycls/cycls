@@ -38,9 +38,9 @@ TOOLS = [
 ]
 
 
-@cycls.app(auth=True, analytics=True, copy=[".env"], force_rebuild=False)
+@cycls.app(auth=True, analytics=True, copy=[".env"], force_rebuild=False) # .env here is bad
 async def super(context):
-    yield f"{context.user}"
+    # yield f"{context.user}"
     async for msg in cycls.Agent(context, 
                                 system=SYSTEM, 
                                 tools=TOOLS, 
@@ -68,9 +68,9 @@ async def super(context):
                 yield {"type": "canvas", "canvas": "document", "done": True}
             elif tool == "render_chart":
                 yield {"type": "chart", "title": args.get("title", ""), "chart_type": args.get("chart_type", "bar"), "data": args.get("data", {})}
-        elif t == "usage":
-            u = msg["usage"].get("tokenUsage", {}).get("total", {})
-            yield f'\n\n*in: {u.get("inputTokens", 0):,} · out: {u.get("outputTokens", 0):,} · cached: {u.get("cachedInputTokens", 0):,} · cache-create: {u.get("cacheCreationTokens", 0):,}*'
+        # elif t == "usage":
+        #     u = msg["usage"].get("tokenUsage", {}).get("total", {})
+        #     yield f'\n\n*in: {u.get("inputTokens", 0):,} · out: {u.get("outputTokens", 0):,} · cached: {u.get("cachedInputTokens", 0):,} · cache-create: {u.get("cacheCreationTokens", 0):,}*'
         else:
             yield msg
 

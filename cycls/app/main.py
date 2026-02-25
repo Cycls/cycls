@@ -2,7 +2,7 @@ import os
 import uvicorn
 import importlib.resources
 
-from .function import Function, _get_api_key, _get_base_url
+from cycls.function import Function, _get_api_key, _get_base_url
 from .web import web, Config
 
 CYCLS_PATH = importlib.resources.files('cycls')
@@ -61,7 +61,7 @@ class App(Function):
         self.config.set_prod(prod)
         self.config.public_path = f"cycls/themes/{self.theme}"
         user_func, config, name = self.user_func, self.config, self.name
-        self.func = lambda port: __import__("cycls").web.serve(user_func, config, name, port)
+        self.func = lambda port: __import__("cycls.app.web", fromlist=["serve"]).serve(user_func, config, name, port)
 
     def _local(self, port=8080):
         """Run directly with uvicorn (no Docker)."""
