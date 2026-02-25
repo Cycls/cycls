@@ -39,7 +39,7 @@ class App(Function):
         files.update({f: f"public/{f}" for f in self.copy_public})
 
         # Fetch theme from GitHub releases during container build
-        theme_cmd = "mkdir -p /app/cycls/themes/default && cd /app/cycls/themes/default && curl -fsSLO https://github.com/Cycls/agentUI/releases/download/latest/agentUI.zip && unzip -o agentUI.zip && rm agentUI.zip"
+        theme_cmd = "mkdir -p /app/cycls/app/themes/default && cd /app/cycls/app/themes/default && curl -fsSLO https://github.com/Cycls/agentUI/releases/download/latest/agentUI.zip && unzip -o agentUI.zip && rm agentUI.zip"
         all_run_commands = [theme_cmd, *(run_commands or [])]
 
         super().__init__(
@@ -59,14 +59,14 @@ class App(Function):
 
     def _prepare_func(self, prod):
         self.config.set_prod(prod)
-        self.config.public_path = f"cycls/themes/{self.theme}"
+        self.config.public_path = f"cycls/app/themes/{self.theme}"
         user_func, config, name = self.user_func, self.config, self.name
         self.func = lambda port: __import__("cycls.app.web", fromlist=["serve"]).serve(user_func, config, name, port)
 
     def _local(self, port=8080):
         """Run directly with uvicorn (no Docker)."""
         print(f"Starting local server at localhost:{port}")
-        self.config.public_path = str(CYCLS_PATH.joinpath(f"themes/{self.theme}"))
+        self.config.public_path = str(CYCLS_PATH.joinpath(f"app/themes/{self.theme}"))
         self.config.set_prod(False)
         uvicorn.run(web(self.user_func, self.config), host="0.0.0.0", port=port)
 
