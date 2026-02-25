@@ -1,4 +1,4 @@
-import json, inspect, os
+import json, inspect, os, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from pydantic import BaseModel
@@ -91,9 +91,14 @@ def web(func, config):
         def workspace(self) -> Path:
             return Path(f"/workspace/{self.org_id}") if self.org_id else Path(f"/workspace/{self.id}")
 
+        @property
+        def sessions(self) -> Path:
+            return self.workspace / ".sessions" / self.id if self.org_id else self.workspace / ".sessions"
+
     class Context(BaseModel):
         messages: Any
         user: Optional[User] = None
+        session_id: Optional[str] = None
 
         model_config = {"arbitrary_types_allowed": True}
 
@@ -125,10 +130,7 @@ def web(func, config):
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Auth error: {e}", headers={"WWW-Authenticate": "Bearer"})
 
-    def no_auth():
-        return None
-
-    auth = Depends(validate) if config.auth else Depends(no_auth)
+    auth = Depends(validate) if config.auth else Depends(lambda: None)
     required_auth = Depends(validate)
 
     @app.post("/")
@@ -136,14 +138,24 @@ def web(func, config):
     async def back(request: Request, user: Optional[User] = auth):
         data = await request.json()
         messages = data.get("messages")
+        session_id = data.get("session_id") or str(uuid.uuid4())
 
-        context = Context(messages=Messages(messages), user=user)
+        context = Context(messages=Messages(messages), user=user, session_id=session_id)
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
 
         if request.url.path == "/chat/completions":
             stream = openai_encoder(stream)
         elif request.url.path == "/":
-            stream = encoder(stream)
+            async def with_session_id(inner):
+                yield sse({"type": "session_id", "session_id": session_id})
+                if inspect.isasyncgen(inner):
+                    async for item in inner:
+                        if msg := sse(item): yield msg
+                else:
+                    for item in inner:
+                        if msg := sse(item): yield msg
+                yield "data: [DONE]\n\n"
+            stream = with_session_id(stream)
         return StreamingResponse(stream, media_type="text/event-stream")
 
     @app.get("/config")
@@ -154,7 +166,7 @@ def web(func, config):
 
     @app.get("/sessions")
     async def list_sessions(user: User = required_auth):
-        sessions_dir = user.workspace / ".sessions" / user.id
+        sessions_dir = user.sessions
         if not sessions_dir.is_dir():
             return []
         items = []
@@ -171,14 +183,14 @@ def web(func, config):
 
     @app.get("/sessions/{session_id}")
     async def get_session(session_id: str, user: User = required_auth):
-        session_file = user.workspace / ".sessions" / user.id / f"{session_id}.json"
+        session_file = user.sessions / f"{session_id}.json"
         if not session_file.is_file():
             raise HTTPException(status_code=404, detail="Session not found")
         return json.loads(session_file.read_text())
 
     @app.put("/sessions/{session_id}")
     async def put_session(session_id: str, request: Request, user: User = required_auth):
-        sessions_dir = user.workspace / ".sessions" / user.id
+        sessions_dir = user.sessions
         sessions_dir.mkdir(parents=True, exist_ok=True)
         data = await request.json()
         data["id"] = session_id
@@ -191,7 +203,7 @@ def web(func, config):
 
     @app.delete("/sessions/{session_id}")
     async def delete_session(session_id: str, user: User = required_auth):
-        session_file = user.workspace / ".sessions" / user.id / f"{session_id}.json"
+        session_file = user.sessions / f"{session_id}.json"
         if not session_file.is_file():
             raise HTTPException(status_code=404, detail="Session not found")
         session_file.unlink()

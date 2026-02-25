@@ -252,26 +252,19 @@ def _exec_editor(inp, workspace):
 async def Agent(context, *, system="", tools=None, model="claude-sonnet-4-20250514",
                 max_tokens=16384, thinking=True):
     """Run one Claude agent turn. Async generator yielding streaming UI components."""
-    import anthropic, uuid
+    import anthropic
 
     ws, prompt = _setup_workspace(context)
     client = anthropic.AsyncAnthropic()
 
-    sid = None
-    for msg in reversed(context.messages.raw):
-        for part in msg.get("parts", []) or []:
-            if part.get("type") == "session_id":
-                sid = part.get("session_id")
-                break
-        if sid:
-            break
-    if not sid:
-        sid = str(uuid.uuid4())
-        yield {"type": "session_id", "session_id": sid}
+    sid = context.session_id
+    user = context.user
+    history_path = None
+    if sid and user:
+        history_path = str(user.sessions / f"{sid}.history.jsonl")
+        os.makedirs(os.path.dirname(history_path), exist_ok=True)
 
-    history_path = os.path.join(ws, ".cycls", f"{sid}.jsonl")
-    os.makedirs(os.path.dirname(history_path), exist_ok=True)
-    messages = _load_history(history_path)
+    messages = _load_history(history_path) if history_path else []
     loaded_count = len(messages)
     messages.append({"role": "user", "content": prompt})
 
@@ -356,16 +349,17 @@ async def Agent(context, *, system="", tools=None, model="claude-sonnet-4-202505
         yield {"type": "callout", "callout": str(e), "style": "error"}
 
     new_messages = messages[loaded_count:]
-    if total_in > COMPACT_THRESHOLD and messages:
-        try:
-            yield {"type": "step", "step": "Compacting context..."}
-            messages = await _compact(client, model, messages)
-            _save_history(history_path, messages, mode="w")
-        except Exception:
-            if new_messages and new_messages[-1].get("role") == "assistant":
-                _save_history(history_path, new_messages)
-    elif new_messages and new_messages[-1].get("role") == "assistant":
-        _save_history(history_path, new_messages)
+    if history_path:
+        if total_in > COMPACT_THRESHOLD and messages:
+            try:
+                yield {"type": "step", "step": "Compacting context..."}
+                messages = await _compact(client, model, messages)
+                _save_history(history_path, messages, mode="w")
+            except Exception:
+                if new_messages and new_messages[-1].get("role") == "assistant":
+                    _save_history(history_path, new_messages)
+        elif new_messages and new_messages[-1].get("role") == "assistant":
+            _save_history(history_path, new_messages)
     if total_in:
         yield {"type": "usage", "usage": {"tokenUsage": {"total": {
             "inputTokens": total_in, "outputTokens": total_out,
