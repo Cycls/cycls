@@ -232,10 +232,13 @@ def test_chat_cycls_endpoint_streams():
 
     # Parse SSE response
     lines = response.text.strip().split("\n\n")
-    data_line = lines[0]
-    assert data_line.startswith("data: ")
+    # First event is session_id
+    first = json.loads(lines[0].replace("data: ", ""))
+    assert first["type"] == "session_id"
+    assert "session_id" in first
 
-    parsed = json.loads(data_line.replace("data: ", ""))
+    # Second event is the actual text
+    parsed = json.loads(lines[1].replace("data: ", ""))
     assert parsed["type"] == "text"
     assert "You said: hello" in parsed["text"]
     print("✅ Test passed.")
@@ -371,14 +374,15 @@ def test_streaming_multiple_yields():
 
     lines = [l for l in response.text.split("\n\n") if l.startswith("data:")]
 
-    # Should have 4 data items + DONE
-    assert len(lines) == 5
+    # Should have session_id + 4 data items + DONE
+    assert len(lines) == 6
 
     # Check each type
-    assert '"type": "text"' in lines[0]
-    assert '"type": "thinking"' in lines[1]
-    assert '"type": "text"' in lines[2]
-    assert '"type": "callout"' in lines[3]
-    assert "[DONE]" in lines[4]
+    assert '"type": "session_id"' in lines[0]
+    assert '"type": "text"' in lines[1]
+    assert '"type": "thinking"' in lines[2]
+    assert '"type": "text"' in lines[3]
+    assert '"type": "callout"' in lines[4]
+    assert "[DONE]" in lines[5]
     print("✅ Test passed.")
 
