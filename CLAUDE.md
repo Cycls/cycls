@@ -32,9 +32,13 @@ uv run examples/function/add.py
 ```
 cycls/                  # Main package
 ├── function.py         # Base Function class - Docker containerization
-├── app.py              # App class - Web UI wrapper
-├── web.py              # FastAPI server, streaming, auth
+├── agent.py            # Agent class
 ├── cli.py              # Terminal chat interface
+├── app/                # Web application layer
+│   ├── main.py         # App class - Web UI wrapper
+│   ├── web.py          # FastAPI server, streaming, auth
+│   ├── state.py        # Sessions + files API router
+│   └── auth.py         # Clerk JWT constants
 └── themes/             # UI themes (default, dev)
 examples/               # Working code samples
 ├── app/                # @cycls.app examples
@@ -48,7 +52,10 @@ docs/                   # Documentation
 ```
 App extends Function
 ├── Function (cycls/function.py) - Docker containerization, image building
-└── App (cycls/app.py) - Web UI, local/deploy methods
+└── App (cycls/app/main.py) - Web UI, local/deploy methods
+    ├── web.py - FastAPI server, streaming, encoders
+    ├── state.py - Sessions + files REST endpoints
+    └── auth.py - Clerk JWT keys
 ```
 
 ## Key Patterns

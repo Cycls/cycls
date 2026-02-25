@@ -1,4 +1,4 @@
-import json, inspect, os, uuid
+import json, inspect, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from pydantic import BaseModel
@@ -36,7 +36,9 @@ def sse(item):
     if not isinstance(item, dict): item = {"type": "text", "text": item}
     return f"data: {json.dumps(item)}\n\n"
 
-async def encoder(stream):
+async def encoder(stream, session_id=None):
+    if session_id:
+        yield sse({"type": "session_id", "session_id": session_id})
     if inspect.isasyncgen(stream):
         async for item in stream:
             if msg := sse(item): yield msg
@@ -65,12 +67,12 @@ class Messages(list):
         return self._raw
 
 def web(func, config):
-    from fastapi import FastAPI, Request, HTTPException, status, Depends, UploadFile, File
-    from fastapi.responses import StreamingResponse, FileResponse
+    from fastapi import FastAPI, Request, HTTPException, status, Depends
+    from fastapi.responses import StreamingResponse
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
     import jwt
     from jwt import PyJWKClient
-    from typing import List, Optional, Any
+    from typing import Optional, Any
     from fastapi.staticfiles import StaticFiles
 
     if isinstance(config, dict):
@@ -138,7 +140,8 @@ def web(func, config):
     async def back(request: Request, user: Optional[User] = auth):
         data = await request.json()
         messages = data.get("messages")
-        session_id = data.get("session_id") or str(uuid.uuid4())
+        parts = messages[1].get("parts") or [] if len(messages) > 1 else []
+        session_id = parts[0]["session_id"] if parts and parts[0].get("type") == "session_id" else str(uuid.uuid4())
 
         context = Context(messages=Messages(messages), user=user, session_id=session_id)
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
@@ -146,141 +149,15 @@ def web(func, config):
         if request.url.path == "/chat/completions":
             stream = openai_encoder(stream)
         elif request.url.path == "/":
-            async def with_session_id(inner):
-                yield sse({"type": "session_id", "session_id": session_id})
-                if inspect.isasyncgen(inner):
-                    async for item in inner:
-                        if msg := sse(item): yield msg
-                else:
-                    for item in inner:
-                        if msg := sse(item): yield msg
-                yield "data: [DONE]\n\n"
-            stream = with_session_id(stream)
+            stream = encoder(stream, session_id=session_id)
         return StreamingResponse(stream, media_type="text/event-stream")
 
     @app.get("/config")
     async def get_config():
         return config
 
-    # ---- Sessions API ----
-
-    @app.get("/sessions")
-    async def list_sessions(user: User = required_auth):
-        sessions_dir = user.sessions
-        if not sessions_dir.is_dir():
-            return []
-        items = []
-        for f in sessions_dir.iterdir():
-            if f.suffix != ".json":
-                continue
-            try:
-                data = json.loads(f.read_text())
-                items.append({"id": data.get("id", f.stem), "title": data.get("title", ""), "updatedAt": data.get("updatedAt", "")})
-            except (json.JSONDecodeError, OSError):
-                continue
-        items.sort(key=lambda s: s.get("updatedAt", ""), reverse=True)
-        return items
-
-    @app.get("/sessions/{session_id}")
-    async def get_session(session_id: str, user: User = required_auth):
-        session_file = user.sessions / f"{session_id}.json"
-        if not session_file.is_file():
-            raise HTTPException(status_code=404, detail="Session not found")
-        return json.loads(session_file.read_text())
-
-    @app.put("/sessions/{session_id}")
-    async def put_session(session_id: str, request: Request, user: User = required_auth):
-        sessions_dir = user.sessions
-        sessions_dir.mkdir(parents=True, exist_ok=True)
-        data = await request.json()
-        data["id"] = session_id
-        data["updatedAt"] = datetime.now(timezone.utc).isoformat()
-        if "createdAt" not in data:
-            data["createdAt"] = data["updatedAt"]
-        session_file = sessions_dir / f"{session_id}.json"
-        session_file.write_text(json.dumps(data))
-        return data
-
-    @app.delete("/sessions/{session_id}")
-    async def delete_session(session_id: str, user: User = required_auth):
-        session_file = user.sessions / f"{session_id}.json"
-        if not session_file.is_file():
-            raise HTTPException(status_code=404, detail="Session not found")
-        session_file.unlink()
-        return {"ok": True}
-
-    # ---- File API ----
-
-    def safe_path(workspace: Path, rel: str) -> Path:
-        resolved = (workspace / rel).resolve()
-        if not resolved.is_relative_to(workspace.resolve()):
-            raise HTTPException(status_code=403, detail="Path traversal denied")
-        return resolved
-
-    @app.get("/files")
-    async def list_files(request: Request, user: User = required_auth):
-        subpath = request.query_params.get("path", "")
-        target = safe_path(user.workspace, subpath)
-        if not target.is_dir():
-            raise HTTPException(status_code=404, detail="Directory not found")
-        items = []
-        for entry in os.scandir(target):
-            if entry.name.startswith("."):
-                continue
-            stat = entry.stat()
-            items.append({
-                "name": entry.name,
-                "type": "directory" if entry.is_dir() else "file",
-                "size": stat.st_size,
-                "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-            })
-        items.sort(key=lambda f: f["name"])
-        return items
-
-    @app.get("/files/{path:path}")
-    async def get_file(path: str, request: Request, user: User = required_auth):
-        file_path = safe_path(user.workspace, path)
-        if not file_path.is_file():
-            raise HTTPException(status_code=404, detail="File not found")
-        if request.query_params.get("download") is not None:
-            return FileResponse(file_path, filename=file_path.name)
-        return FileResponse(file_path)
-
-    @app.put("/files/{path:path}")
-    async def put_file(path: str, request: Request, file: UploadFile = File(...), user: User = required_auth):
-        file_path = safe_path(user.workspace, path)
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_bytes(await file.read())
-        return {"ok": True}
-
-    @app.patch("/files/{path:path}")
-    async def rename(path: str, request: Request, user: User = required_auth):
-        src = safe_path(user.workspace, path)
-        if not src.exists():
-            raise HTTPException(status_code=404, detail="Not found")
-        data = await request.json()
-        dest = safe_path(user.workspace, data["to"])
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        src.rename(dest)
-        return {"ok": True}
-
-    @app.post("/files/{path:path}")
-    async def mkdir(path: str, user: User = required_auth):
-        dir_path = safe_path(user.workspace, path)
-        dir_path.mkdir(parents=True, exist_ok=True)
-        return {"ok": True}
-
-    @app.delete("/files/{path:path}")
-    async def delete_path(path: str, user: User = required_auth):
-        import shutil
-        target = safe_path(user.workspace, path)
-        if not target.exists():
-            raise HTTPException(status_code=404, detail="Not found")
-        if target.is_dir():
-            shutil.rmtree(target)
-        else:
-            target.unlink()
-        return {"ok": True}
+    from cycls.app.state import router as state_router
+    app.include_router(state_router(required_auth))
 
     # ---- Static mounts (must be last) ----
 

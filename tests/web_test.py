@@ -2,7 +2,7 @@ import pytest
 import json
 import asyncio
 import importlib.resources
-from cycls.web import web, Config, Messages, sse, encoder, openai_encoder
+from cycls.app.web import web, Config, Messages, sse, encoder, openai_encoder
 
 # To run these tests:
 # poetry run pytest tests/web_test.py -v -s
