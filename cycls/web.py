@@ -116,10 +116,8 @@ def web(func, config):
             key = jwks.get_signing_key_from_jwt(bearer.credentials)
             decoded = jwt.decode(bearer.credentials, key.key, algorithms=["RS256"], leeway=10)
             org = decoded.get("o") or {}
-            return {"type": "user",
-                    "user": {"id": decoded.get("sub"),
-                             "org_id": org.get("id"), "org_slug": org.get("slg"), "org_role": org.get("rol"), "org_permissions": org.get("per"),
-                             "plan": decoded.get("pla"), "features": decoded.get("fea")}}
+            return User(id=decoded.get("sub"), org_id=org.get("id"), org_slug=org.get("slg"), org_role=org.get("rol"), org_permissions=org.get("per"),
+                        plan=decoded.get("pla"), features=decoded.get("fea"))
         except jwt.ExpiredSignatureError:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired", headers={"WWW-Authenticate": "Bearer"})
         except jwt.InvalidTokenError as e:
@@ -127,17 +125,17 @@ def web(func, config):
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Auth error: {e}", headers={"WWW-Authenticate": "Bearer"})
 
-    auth = Depends(validate) if config.auth else None
+    def no_auth():
+        return None
+
+    auth = Depends(validate) if config.auth else Depends(no_auth)
     required_auth = Depends(validate)
 
     @app.post("/")
-    # @app.post("/chat/cycls")
     @app.post("/chat/completions")
-    async def back(request: Request, jwt: Optional[dict] = auth):
+    async def back(request: Request, user: Optional[User] = auth):
         data = await request.json()
         messages = data.get("messages")
-        user_data = jwt.get("user") if jwt else None
-        user = User(**user_data) if user_data else None
 
         context = Context(messages=Messages(messages), user=user)
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
@@ -152,16 +150,11 @@ def web(func, config):
     async def get_config():
         return config
 
-    # ---- Helper ----
-
-    def user_root(jwt):
-        return User(**jwt["user"]).workspace
-
     # ---- Sessions API ----
 
     @app.get("/sessions")
-    async def list_sessions(jwt: dict = required_auth):
-        sessions_dir = user_root(jwt) / ".sessions" / jwt["user"]["id"]
+    async def list_sessions(user: User = required_auth):
+        sessions_dir = user.workspace / ".sessions" / user.id
         if not sessions_dir.is_dir():
             return []
         items = []
@@ -177,15 +170,15 @@ def web(func, config):
         return items
 
     @app.get("/sessions/{session_id}")
-    async def get_session(session_id: str, jwt: dict = required_auth):
-        session_file = user_root(jwt) / ".sessions" / jwt["user"]["id"] / f"{session_id}.json"
+    async def get_session(session_id: str, user: User = required_auth):
+        session_file = user.workspace / ".sessions" / user.id / f"{session_id}.json"
         if not session_file.is_file():
             raise HTTPException(status_code=404, detail="Session not found")
         return json.loads(session_file.read_text())
 
     @app.put("/sessions/{session_id}")
-    async def put_session(session_id: str, request: Request, jwt: dict = required_auth):
-        sessions_dir = user_root(jwt) / ".sessions" / jwt["user"]["id"]
+    async def put_session(session_id: str, request: Request, user: User = required_auth):
+        sessions_dir = user.workspace / ".sessions" / user.id
         sessions_dir.mkdir(parents=True, exist_ok=True)
         data = await request.json()
         data["id"] = session_id
@@ -197,8 +190,8 @@ def web(func, config):
         return data
 
     @app.delete("/sessions/{session_id}")
-    async def delete_session(session_id: str, jwt: dict = required_auth):
-        session_file = user_root(jwt) / ".sessions" / jwt["user"]["id"] / f"{session_id}.json"
+    async def delete_session(session_id: str, user: User = required_auth):
+        session_file = user.workspace / ".sessions" / user.id / f"{session_id}.json"
         if not session_file.is_file():
             raise HTTPException(status_code=404, detail="Session not found")
         session_file.unlink()
@@ -206,17 +199,16 @@ def web(func, config):
 
     # ---- File API ----
 
-    def safe_path(jwt, rel: str) -> Path:
-        root = user_root(jwt)
-        resolved = (root / rel).resolve()
-        if not resolved.is_relative_to(root.resolve()):
+    def safe_path(workspace: Path, rel: str) -> Path:
+        resolved = (workspace / rel).resolve()
+        if not resolved.is_relative_to(workspace.resolve()):
             raise HTTPException(status_code=403, detail="Path traversal denied")
         return resolved
 
     @app.get("/files")
-    async def list_files(request: Request, jwt: dict = required_auth):
+    async def list_files(request: Request, user: User = required_auth):
         subpath = request.query_params.get("path", "")
-        target = safe_path(jwt, subpath)
+        target = safe_path(user.workspace, subpath)
         if not target.is_dir():
             raise HTTPException(status_code=404, detail="Directory not found")
         items = []
@@ -234,8 +226,8 @@ def web(func, config):
         return items
 
     @app.get("/files/{path:path}")
-    async def get_file(path: str, request: Request, jwt: dict = required_auth):
-        file_path = safe_path(jwt, path)
+    async def get_file(path: str, request: Request, user: User = required_auth):
+        file_path = safe_path(user.workspace, path)
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
         if request.query_params.get("download") is not None:
@@ -243,33 +235,33 @@ def web(func, config):
         return FileResponse(file_path)
 
     @app.put("/files/{path:path}")
-    async def put_file(path: str, request: Request, file: UploadFile = File(...), jwt: dict = required_auth):
-        file_path = safe_path(jwt, path)
+    async def put_file(path: str, request: Request, file: UploadFile = File(...), user: User = required_auth):
+        file_path = safe_path(user.workspace, path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_bytes(await file.read())
         return {"ok": True}
 
     @app.patch("/files/{path:path}")
-    async def rename(path: str, request: Request, jwt: dict = required_auth):
-        src = safe_path(jwt, path)
+    async def rename(path: str, request: Request, user: User = required_auth):
+        src = safe_path(user.workspace, path)
         if not src.exists():
             raise HTTPException(status_code=404, detail="Not found")
         data = await request.json()
-        dest = safe_path(jwt, data["to"])
+        dest = safe_path(user.workspace, data["to"])
         dest.parent.mkdir(parents=True, exist_ok=True)
         src.rename(dest)
         return {"ok": True}
 
     @app.post("/files/{path:path}")
-    async def mkdir(path: str, jwt: dict = required_auth):
-        dir_path = safe_path(jwt, path)
+    async def mkdir(path: str, user: User = required_auth):
+        dir_path = safe_path(user.workspace, path)
         dir_path.mkdir(parents=True, exist_ok=True)
         return {"ok": True}
 
     @app.delete("/files/{path:path}")
-    async def delete_path(path: str, jwt: dict = required_auth):
+    async def delete_path(path: str, user: User = required_auth):
         import shutil
-        target = safe_path(jwt, path)
+        target = safe_path(user.workspace, path)
         if not target.exists():
             raise HTTPException(status_code=404, detail="Not found")
         if target.is_dir():
