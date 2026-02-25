@@ -40,6 +40,7 @@ TOOLS = [
 
 @cycls.app(auth=True, analytics=True, copy=[".env"], force_rebuild=False)
 async def super(context):
+    yield f"{context.user}"
     async for msg in cycls.Agent(context, 
                                 system=SYSTEM, 
                                 tools=TOOLS, 

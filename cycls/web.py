@@ -70,7 +70,6 @@ def web(func, config):
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
     import jwt
     from jwt import PyJWKClient
-    from pydantic import EmailStr
     from typing import List, Optional, Any
     from fastapi.staticfiles import StaticFiles
 
@@ -81,14 +80,16 @@ def web(func, config):
 
     class User(BaseModel):
         id: str
-        name: Optional[str] = None
-        email: EmailStr
         org_id: Optional[str] = None
-        org_name: Optional[str] = None
         org_slug: Optional[str] = None
-        plan_name: Optional[str] = None
-        plan_id: Optional[str] = None
-        plan_slug: Optional[str] = None
+        org_role: Optional[str] = None
+        org_permissions: Optional[list] = None
+        plan: Optional[str] = None
+        features: Optional[list] = None
+
+        @property
+        def workspace(self) -> Path:
+            return Path(f"/workspace/{self.org_id}") if self.org_id else Path(f"/workspace/{self.id}")
 
     class Context(BaseModel):
         messages: Any
@@ -103,21 +104,22 @@ def web(func, config):
             return ""
 
         @property
-        def workspace(self) -> str:
-            if not self.user:
-                return "/workspace/default"
-            return f"/workspace/{self.user.org_id}" if self.user.org_id else f"/workspace/{self.user.id}"
+        def workspace(self) -> Path:
+            return self.user.workspace
 
     app = FastAPI()
+    
     bearer_scheme = HTTPBearer()
 
     def validate(bearer: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
         try:
             key = jwks.get_signing_key_from_jwt(bearer.credentials)
             decoded = jwt.decode(bearer.credentials, key.key, algorithms=["RS256"], leeway=10)
+            org = decoded.get("o") or {}
             return {"type": "user",
-                    "user": {"id": decoded.get("id"), "name": decoded.get("name"), "email": decoded.get("email"),
-                             "org_id": decoded.get("org_id"), "org_name": decoded.get("org_name"), "org_slug": decoded.get("org_slug")}}
+                    "user": {"id": decoded.get("sub"),
+                             "org_id": org.get("id"), "org_slug": org.get("slg"), "org_role": org.get("rol"), "org_permissions": org.get("per"),
+                             "plan": decoded.get("pla"), "features": decoded.get("fea")}}
         except jwt.ExpiredSignatureError:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired", headers={"WWW-Authenticate": "Bearer"})
         except jwt.InvalidTokenError as e:
@@ -126,16 +128,15 @@ def web(func, config):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Auth error: {e}", headers={"WWW-Authenticate": "Bearer"})
 
     auth = Depends(validate) if config.auth else None
+    required_auth = Depends(validate)
 
     @app.post("/")
-    @app.post("/chat/cycls")
+    # @app.post("/chat/cycls")
     @app.post("/chat/completions")
     async def back(request: Request, jwt: Optional[dict] = auth):
         data = await request.json()
         messages = data.get("messages")
         user_data = jwt.get("user") if jwt else None
-        if user_data and data.get("plan"):
-            user_data.update(data["plan"])
         user = User(**user_data) if user_data else None
 
         context = Context(messages=Messages(messages), user=user)
@@ -143,7 +144,7 @@ def web(func, config):
 
         if request.url.path == "/chat/completions":
             stream = openai_encoder(stream)
-        elif request.url.path == "/chat/cycls":
+        elif request.url.path == "/":
             stream = encoder(stream)
         return StreamingResponse(stream, media_type="text/event-stream")
 
@@ -154,13 +155,12 @@ def web(func, config):
     # ---- Helper ----
 
     def user_root(jwt):
-        user = jwt["user"]
-        return Path(f"/workspace/{user['org_id']}") if user.get("org_id") else Path(f"/workspace/{user['id']}")
+        return User(**jwt["user"]).workspace
 
     # ---- Sessions API ----
 
     @app.get("/sessions")
-    async def list_sessions(jwt: dict = auth):
+    async def list_sessions(jwt: dict = required_auth):
         sessions_dir = user_root(jwt) / ".sessions" / jwt["user"]["id"]
         if not sessions_dir.is_dir():
             return []
@@ -177,14 +177,14 @@ def web(func, config):
         return items
 
     @app.get("/sessions/{session_id}")
-    async def get_session(session_id: str, jwt: dict = auth):
+    async def get_session(session_id: str, jwt: dict = required_auth):
         session_file = user_root(jwt) / ".sessions" / jwt["user"]["id"] / f"{session_id}.json"
         if not session_file.is_file():
             raise HTTPException(status_code=404, detail="Session not found")
         return json.loads(session_file.read_text())
 
     @app.put("/sessions/{session_id}")
-    async def put_session(session_id: str, request: Request, jwt: dict = auth):
+    async def put_session(session_id: str, request: Request, jwt: dict = required_auth):
         sessions_dir = user_root(jwt) / ".sessions" / jwt["user"]["id"]
         sessions_dir.mkdir(parents=True, exist_ok=True)
         data = await request.json()
@@ -197,7 +197,7 @@ def web(func, config):
         return data
 
     @app.delete("/sessions/{session_id}")
-    async def delete_session(session_id: str, jwt: dict = auth):
+    async def delete_session(session_id: str, jwt: dict = required_auth):
         session_file = user_root(jwt) / ".sessions" / jwt["user"]["id"] / f"{session_id}.json"
         if not session_file.is_file():
             raise HTTPException(status_code=404, detail="Session not found")
@@ -214,7 +214,7 @@ def web(func, config):
         return resolved
 
     @app.get("/files")
-    async def list_files(request: Request, jwt: dict = auth):
+    async def list_files(request: Request, jwt: dict = required_auth):
         subpath = request.query_params.get("path", "")
         target = safe_path(jwt, subpath)
         if not target.is_dir():
@@ -234,7 +234,7 @@ def web(func, config):
         return items
 
     @app.get("/files/{path:path}")
-    async def get_file(path: str, request: Request, jwt: dict = auth):
+    async def get_file(path: str, request: Request, jwt: dict = required_auth):
         file_path = safe_path(jwt, path)
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
@@ -243,14 +243,14 @@ def web(func, config):
         return FileResponse(file_path)
 
     @app.put("/files/{path:path}")
-    async def put_file(path: str, request: Request, file: UploadFile = File(...), jwt: dict = auth):
+    async def put_file(path: str, request: Request, file: UploadFile = File(...), jwt: dict = required_auth):
         file_path = safe_path(jwt, path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_bytes(await file.read())
         return {"ok": True}
 
     @app.patch("/files/{path:path}")
-    async def rename(path: str, request: Request, jwt: dict = auth):
+    async def rename(path: str, request: Request, jwt: dict = required_auth):
         src = safe_path(jwt, path)
         if not src.exists():
             raise HTTPException(status_code=404, detail="Not found")
@@ -261,13 +261,13 @@ def web(func, config):
         return {"ok": True}
 
     @app.post("/files/{path:path}")
-    async def mkdir(path: str, jwt: dict = auth):
+    async def mkdir(path: str, jwt: dict = required_auth):
         dir_path = safe_path(jwt, path)
         dir_path.mkdir(parents=True, exist_ok=True)
         return {"ok": True}
 
     @app.delete("/files/{path:path}")
-    async def delete_path(path: str, jwt: dict = auth):
+    async def delete_path(path: str, jwt: dict = required_auth):
         import shutil
         target = safe_path(jwt, path)
         if not target.exists():
