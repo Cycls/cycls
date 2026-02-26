@@ -1,4 +1,6 @@
 # uv run examples/agent/super.py
+# echo '+\!10' | k 🤯
+# uploading unknown file (k) misses with LLM
 import cycls
 
 SYSTEM = """
@@ -66,7 +68,7 @@ TOOLS = [
 @cycls.app(auth=True, analytics=True, copy=[".env"], force_rebuild=False)
 async def super(context):
     # yield f"{context.user}"
-    async for msg in cycls.Agent(context, 
+    async for msg in cycls.Agent(context, # explicit session pass like anthropic SDK
                                 system=SYSTEM, 
                                 tools=TOOLS, 
                                 model="claude-opus-4-6"):
@@ -98,5 +100,5 @@ async def super(context):
             yield msg
 
 
-# super.local()
-super.deploy()
+super.local()
+# super.deploy()
