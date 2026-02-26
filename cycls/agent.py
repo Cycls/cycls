@@ -142,8 +142,16 @@ async def _run_tool(block, ws):
 def _exec_editor(inp, workspace):
     import pathlib
     cmd = inp["command"]
-    raw = pathlib.Path(inp["path"])
-    path = raw if raw.is_absolute() else (pathlib.Path(workspace) / raw).resolve()
+    ws = pathlib.Path(workspace).resolve()
+    raw = pathlib.PurePosixPath(inp["path"])
+    # Strip /workspace prefix (bwrap mount point) or leading / so all paths resolve under ws
+    try:
+        rel = raw.relative_to("/workspace")
+    except ValueError:
+        rel = pathlib.PurePosixPath(raw.as_posix().lstrip("/"))
+    path = (ws / rel).resolve()
+    if not path.is_relative_to(ws):
+        return f"Error: path escapes workspace"
     if cmd != "create" and not path.exists():
         return f"Error: {path} does not exist"
     if path.is_dir():
