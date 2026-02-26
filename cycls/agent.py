@@ -9,8 +9,10 @@ _DEFAULT_SYSTEM = """## Tools
 - Prefer `apply_patch` for single-file edits; use scripting when more efficient.
 - Default to ASCII in file edits; only use Unicode when clearly justified.
 - You can view images (jpg, png, gif, webp) and PDFs directly using the text editor's `view` command.
+- Always use relative paths (e.g. `foo.py`, `src/bar.py`) with the text editor — never absolute paths.
 
 ## Workspace
+- Your working directory is `/workspace`. All commands run here and all file paths are relative to it.
 - The user's workspace persists across conversations. Files you create are files the user keeps.
 - When the user returns, check what's already in their workspace — reference and build on previous work.
 - Git is not available in this workspace.
