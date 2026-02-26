@@ -1,6 +1,6 @@
 import asyncio, base64, json, os
 
-from cycls.app.state import resolve_path, read_file, _MEDIA_TYPES, ensure_workspace, history_path, load_history, save_history
+from cycls.app.state import read_file, _MEDIA_TYPES, ensure_workspace, history_path, load_history, save_history
 
 COMPACT_THRESHOLD = 100_000
 
@@ -126,11 +126,7 @@ def _exec_editor(inp, workspace):
     import pathlib
     cmd = inp["command"]
     raw = pathlib.Path(inp["path"])
-    rel = raw if not raw.is_absolute() else raw.relative_to(pathlib.Path(workspace).resolve())
-    try:
-        path = resolve_path(workspace, str(rel))
-    except ValueError:
-        return f"Error: path {inp['path']} is outside workspace"
+    path = raw if raw.is_absolute() else (pathlib.Path(workspace) / raw).resolve()
     if cmd != "create" and not path.exists():
         return f"Error: {path} does not exist"
     if cmd == "view":
