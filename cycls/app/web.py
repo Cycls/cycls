@@ -156,8 +156,10 @@ def web(func, config):
     async def get_config():
         return config
 
-    from cycls.app.state import router as state_router
-    app.include_router(state_router(required_auth))
+    from cycls.app.state import sessions_router, files_router, share_router
+    app.include_router(sessions_router(required_auth))
+    app.include_router(files_router(required_auth))
+    app.include_router(share_router(required_auth))
 
     # ---- Static mounts (must be last) ----
 
