@@ -1,6 +1,7 @@
 import base64, json, os, shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 from typing import Any
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
@@ -82,16 +83,9 @@ def save_history(path, messages, mode="a"):
         for msg in messages:
             f.write(json.dumps(msg) + "\n")
 
-def router(required_auth):
+
+def sessions_router(required_auth):
     r = APIRouter()
-
-    def _safe_path(workspace, rel):
-        try:
-            return resolve_path(workspace, rel)
-        except ValueError:
-            raise HTTPException(status_code=403, detail="Path traversal denied")
-
-    # ---- Sessions ----
 
     @r.get("/sessions")
     async def list_sessions(user: Any = required_auth):
@@ -135,7 +129,17 @@ def router(required_auth):
         session_file.unlink()
         return {"ok": True}
 
-    # ---- Files ----
+    return r
+
+
+def files_router(required_auth):
+    r = APIRouter()
+
+    def _safe_path(workspace, rel):
+        try:
+            return resolve_path(workspace, rel)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Path traversal denied")
 
     @r.get("/files")
     async def list_files(request: Request, user: Any = required_auth):
@@ -198,6 +202,91 @@ def router(required_auth):
             shutil.rmtree(target)
         else:
             target.unlink()
+        return {"ok": True}
+
+    return r
+
+
+def share_router(required_auth):
+    r = APIRouter()
+
+    @r.post("/share")
+    async def create_share(request: Request, user: Any = required_auth):
+        data = await request.json()
+        session_id = data.get("session_id")
+        if not session_id:
+            raise HTTPException(status_code=400, detail="session_id required")
+
+        session_file = user.sessions / f"{session_id}.json"
+        if not session_file.is_file():
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        session_data = json.loads(session_file.read_text())
+        history_file = user.sessions / f"{session_id}.history.jsonl"
+        messages = load_history(str(history_file)) if history_file.is_file() else []
+
+        share_id = uuid4().hex[:12]
+        snapshot = {
+            "id": share_id,
+            "title": session_data.get("title", ""),
+            "sharedAt": datetime.now(timezone.utc).isoformat(),
+            "session": session_data,
+            "messages": messages,
+        }
+
+        public_dir = user.sessions / "public"
+        public_dir.mkdir(parents=True, exist_ok=True)
+        (public_dir / f"{share_id}.json").write_text(json.dumps(snapshot))
+
+        if user.org_id:
+            path = f"{user.org_id}/{user.id}/{share_id}"
+        else:
+            path = f"{user.id}/{share_id}"
+
+        return {"id": share_id, "path": path}
+
+    @r.get("/share")
+    async def list_shares(user: Any = required_auth):
+        public_dir = user.sessions / "public"
+        if not public_dir.is_dir():
+            return []
+        items = []
+        for f in public_dir.iterdir():
+            if f.suffix != ".json":
+                continue
+            try:
+                data = json.loads(f.read_text())
+                items.append({"id": data.get("id", f.stem), "title": data.get("title", ""), "sharedAt": data.get("sharedAt", "")})
+            except (json.JSONDecodeError, OSError):
+                continue
+        items.sort(key=lambda s: s.get("sharedAt", ""), reverse=True)
+        return items
+
+    @r.get("/shared/{path:path}")
+    async def get_share(path: str):
+        segments = path.strip("/").split("/")
+        workspace = Path("/workspace")
+        if len(segments) == 2:
+            file_path = workspace / segments[0] / ".sessions" / "public" / f"{segments[1]}.json"
+        elif len(segments) == 3:
+            file_path = workspace / segments[0] / ".sessions" / segments[1] / "public" / f"{segments[2]}.json"
+        else:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        resolved = file_path.resolve()
+        if not resolved.is_relative_to(workspace.resolve()):
+            raise HTTPException(status_code=403, detail="Path traversal denied")
+
+        if not resolved.is_file():
+            raise HTTPException(status_code=404, detail="Not found")
+        return json.loads(resolved.read_text())
+
+    @r.delete("/share/{share_id}")
+    async def delete_share(share_id: str, user: Any = required_auth):
+        file_path = user.sessions / "public" / f"{share_id}.json"
+        if not file_path.is_file():
+            raise HTTPException(status_code=404, detail="Not found")
+        file_path.unlink()
         return {"ok": True}
 
     return r
