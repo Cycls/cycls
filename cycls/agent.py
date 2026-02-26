@@ -1,5 +1,4 @@
-import asyncio, base64, json, os
-
+import asyncio, base64, json, os, pathlib
 from cycls.app.state import read_file, _MEDIA_TYPES, ensure_workspace, history_path, load_history, save_history
 
 COMPACT_THRESHOLD = 100_000
@@ -16,6 +15,7 @@ _DEFAULT_SYSTEM = """## Tools
 - The user's workspace persists across conversations. Files you create are files the user keeps.
 - When the user returns, check what's already in their workspace — reference and build on previous work.
 - Git is not available in this workspace.
+- You are already in `/workspace` — never prefix commands with `cd /workspace`.
 - Avoid destructive commands (`rm -rf`) unless the user explicitly asks.
 """
 
@@ -103,9 +103,6 @@ def _build_tools(custom):
     tools[-1]["cache_control"] = {"type": "ephemeral"}
     return tools
 
-def _tool_result(bid, content):
-    return {"type": "tool_result", "tool_use_id": bid, "content": content}
-
 async def _exec_bash(command, cwd):
     proc = await asyncio.create_subprocess_exec(
         "bwrap",
@@ -131,16 +128,7 @@ async def _exec_bash(command, cwd):
         out = out[:10000] + "\n... (truncated) ...\n" + out[-10000:]
     return out.strip() or "(no output)"
 
-async def _run_tool(block, ws):
-    name, inp = block.name, block.input
-    if name == "bash":
-        return await _exec_bash(inp.get("command", ""), ws)
-    elif name == "str_replace_based_edit_tool":
-        return _exec_editor(inp, ws)
-    return f"{name} rendered successfully"
-
 def _exec_editor(inp, workspace):
-    import pathlib
     cmd = inp["command"]
     ws = pathlib.Path(workspace).resolve()
     raw = pathlib.PurePosixPath(inp["path"])
@@ -264,25 +252,29 @@ async def Agent(context, *, system="", tools=None, model="claude-sonnet-4-202505
             if response.stop_reason != "tool_use":
                 break
 
-            # Yield step indicators, then execute tools in parallel
+            # Build step indicators + dispatch tasks, then execute in parallel
+            coros = []
             for block in tool_blocks:
                 name, inp = block.name, block.input
                 if name == "bash":
                     yield {"type": "step", "step": f"Bash({inp.get('command', '')[:60]})"}
+                    coros.append(_exec_bash(inp.get("command", ""), ws))
                 elif name == "str_replace_based_edit_tool":
                     verb = "Editing" if inp.get("command") in ("str_replace", "create", "insert") else "Viewing"
                     yield {"type": "step", "step": f"{verb} {inp.get('path', 'file')}"}
+                    coros.append(asyncio.sleep(0, result=_exec_editor(inp, ws)))
                 else:
                     yield {"type": "tool_call", "tool": name, "args": inp}
+                    coros.append(asyncio.sleep(0, result=f"{name} rendered successfully"))
 
             if len(tool_blocks) > 1:
                 print(f"[PARALLEL] Running {len(tool_blocks)} tools concurrently")
-            outputs = await asyncio.gather(*[_run_tool(b, ws) for b in tool_blocks])
+            outputs = await asyncio.gather(*coros)
             results = []
             for block, out in zip(tool_blocks, outputs):
                 if block.name == "bash":
                     yield {"type": "step_data", "data": out}
-                results.append(_tool_result(block.id, out))
+                results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
             messages.append({"role": "user", "content": results})
 
     except Exception as e:
@@ -292,15 +284,16 @@ async def Agent(context, *, system="", tools=None, model="claude-sonnet-4-202505
 
     new_messages = messages[loaded_count:]
     if hp:
+        saved = False
         if total_in > COMPACT_THRESHOLD and messages:
             try:
                 yield {"type": "step", "step": "Compacting context..."}
                 messages = await _compact(client, model, messages)
                 save_history(hp, messages, mode="w")
+                saved = True
             except Exception:
-                if new_messages and new_messages[-1].get("role") == "assistant":
-                    save_history(hp, new_messages)
-        elif new_messages and new_messages[-1].get("role") == "assistant":
+                pass
+        if not saved and new_messages and new_messages[-1].get("role") == "assistant":
             save_history(hp, new_messages)
     if total_in:
         yield {"type": "usage", "usage": {"tokenUsage": {"total": {
