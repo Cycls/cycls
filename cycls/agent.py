@@ -182,7 +182,7 @@ def _exec_editor(inp, workspace):
 
 # ---- Public API ----
 
-async def Agent(context, *, system="", tools=None, model="claude-sonnet-4-20250514",
+async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-20250514",
                 max_tokens=16384, thinking=True):
     """Run one Claude agent turn. Async generator yielding streaming UI components."""
     import anthropic
