@@ -23,22 +23,48 @@ You help with coding, research, writing, analysis, system administration, and an
 
 TOOLS = [
     {
-        "name": "render_chart",
-        "description": "Display a chart to the user. Use for visualizing data trends, distributions, comparisons.",
+        "name": "render_table",
+        "description": "Display a data table to the user. Use for structured data, comparisons, listings.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "title": {"type": "string"},
-                "chart_type": {"type": "string", "enum": ["bar", "line", "pie"]},
-                "data": {"type": "object"}
+                "title": {"type": "string", "description": "Optional table title"},
+                "headers": {"type": "array", "items": {"type": "string"}},
+                "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}}
             },
-            "required": ["title", "chart_type", "data"]
+            "required": ["headers", "rows"]
+        }
+    },
+    {
+        "name": "render_callout",
+        "description": "Display a callout/alert box. Use for warnings, tips, success messages, errors.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "style": {"type": "string", "enum": ["info", "warning", "error", "success"]},
+                "title": {"type": "string"}
+            },
+            "required": ["message", "style"]
+        }
+    },
+    {
+        "name": "render_image",
+        "description": "Display an image to the user.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "src": {"type": "string", "description": "Image URL or path"},
+                "alt": {"type": "string"},
+                "caption": {"type": "string"}
+            },
+            "required": ["src"]
         }
     }
 ]
 
 
-@cycls.app(auth=True, analytics=True, copy=[".env"], force_rebuild=False) # .env here is bad
+@cycls.app(auth=True, analytics=True, copy=[".env"], force_rebuild=True) # .env here is bad
 async def super(context):
     # yield f"{context.user}"
     async for msg in cycls.Agent(context, 
@@ -66,8 +92,6 @@ async def super(context):
                 yield {"type": "canvas", "canvas": "document", "open": True, "title": args.get("title", "Document")}
                 yield {"type": "canvas", "canvas": "document", "content": args.get("content", "")}
                 yield {"type": "canvas", "canvas": "document", "done": True}
-            elif tool == "render_chart":
-                yield {"type": "chart", "title": args.get("title", ""), "chart_type": args.get("chart_type", "bar"), "data": args.get("data", {})}
         # elif t == "usage":
         #     u = msg["usage"].get("tokenUsage", {}).get("total", {})
         #     yield f'\n\n*in: {u.get("inputTokens", 0):,} · out: {u.get("outputTokens", 0):,} · cached: {u.get("cachedInputTokens", 0):,} · cache-create: {u.get("cacheCreationTokens", 0):,}*'
