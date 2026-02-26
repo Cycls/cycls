@@ -19,45 +19,6 @@ _DEFAULT_SYSTEM = """## Tools
 
 _UI_TOOLS = [
     {
-        "name": "render_table",
-        "description": "Display a data table to the user. Use for structured data, comparisons, listings.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "title": {"type": "string", "description": "Optional table title"},
-                "headers": {"type": "array", "items": {"type": "string"}},
-                "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}}
-            },
-            "required": ["headers", "rows"]
-        }
-    },
-    {
-        "name": "render_callout",
-        "description": "Display a callout/alert box. Use for warnings, tips, success messages, errors.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "message": {"type": "string"},
-                "style": {"type": "string", "enum": ["info", "warning", "error", "success"]},
-                "title": {"type": "string"}
-            },
-            "required": ["message", "style"]
-        }
-    },
-    {
-        "name": "render_image",
-        "description": "Display an image to the user.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "src": {"type": "string", "description": "Image URL or path"},
-                "alt": {"type": "string"},
-                "caption": {"type": "string"}
-            },
-            "required": ["src"]
-        }
-    },
-    {
         "name": "render_canvas",
         "description": "Display a document canvas panel to the user. Use for long-form content like reports, articles, guides, code files, or any document the user may want to read, copy, or reference. The canvas opens as a side panel.",
         "inputSchema": {
