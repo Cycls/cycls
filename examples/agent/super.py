@@ -1,7 +1,4 @@
 # uv run examples/agent/super.py
-
-# [ ] editor is not scoped
-
 import cycls
 
 SYSTEM = """
@@ -101,5 +98,5 @@ async def super(context):
             yield msg
 
 
-super.local()
-# super.deploy()
+# super.local()
+super.deploy()
