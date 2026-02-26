@@ -64,7 +64,7 @@ TOOLS = [
 ]
 
 
-@cycls.app(auth=True, analytics=True, copy=[".env"], force_rebuild=True) # .env here is bad
+@cycls.app(auth=True, analytics=True, copy=[".env"], force_rebuild=False) # .env here is bad
 async def super(context):
     # yield f"{context.user}"
     async for msg in cycls.Agent(context, 
