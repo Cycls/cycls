@@ -106,8 +106,23 @@ def _tool_result(bid, content):
 
 async def _exec_bash(command, cwd):
     proc = await asyncio.create_subprocess_exec(
+        "bwrap",
+        "--ro-bind", "/", "/",
+        "--bind", cwd, "/workspace",
+        "--tmpfs", "/app",
+        "--tmpfs", "/tmp",
+        "--dev", "/dev",
+        "--proc", "/proc",
+        "--chdir", "/workspace",
+        "--die-with-parent",
+        "--clearenv",
+        "--setenv", "PATH", os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "--setenv", "HOME", "/workspace",
+        "--setenv", "TERM", "xterm",
+        "--setenv", "LANG", os.environ.get("LANG", "C.UTF-8"),
+        "--",
         "bash", "-c", command,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=cwd)
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
     out = stdout.decode(errors="replace") + (stderr.decode(errors="replace") if stderr else "")
     if len(out) > 20000:
@@ -129,6 +144,8 @@ def _exec_editor(inp, workspace):
     path = raw if raw.is_absolute() else (pathlib.Path(workspace) / raw).resolve()
     if cmd != "create" and not path.exists():
         return f"Error: {path} does not exist"
+    if path.is_dir():
+        return f"Error: {path} is a directory, not a file"
     if cmd == "view":
         ext = path.suffix.lower()
         media_type = _MEDIA_TYPES.get(ext)

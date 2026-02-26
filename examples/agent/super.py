@@ -1,5 +1,7 @@
 # uv run examples/agent/super.py
 
+# [ ] editor is not scoped
+
 import cycls
 
 SYSTEM = """
@@ -64,7 +66,7 @@ TOOLS = [
 ]
 
 
-@cycls.app(auth=True, analytics=True, copy=[".env"], force_rebuild=False) # .env here is bad
+@cycls.app(apt=["bubblewrap"], auth=True, analytics=True, copy=[".env"], force_rebuild=False)
 async def super(context):
     # yield f"{context.user}"
     async for msg in cycls.Agent(context, 
