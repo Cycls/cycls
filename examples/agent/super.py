@@ -71,7 +71,7 @@ async def super(context):
     async for msg in cycls.Agent(context, # explicit session pass like anthropic SDK
                                 system=SYSTEM, 
                                 tools=TOOLS, 
-                                model="claude-opus-4-6"):
+                                model="claude-sonnet-4-6"): # claude-opus-4-6
         if not isinstance(msg, dict):
             yield msg
             continue
