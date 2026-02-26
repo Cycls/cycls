@@ -1,12 +1,8 @@
 import asyncio, base64, json, os
 
-COMPACT_THRESHOLD = 100_000
+from cycls.app.state import resolve_path, read_file, _MEDIA_TYPES, ensure_workspace, history_path, load_history, save_history
 
-_MEDIA_TYPES = {
-    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-    ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp",
-    ".pdf": "application/pdf",
-}
+COMPACT_THRESHOLD = 100_000
 
 _DEFAULT_SYSTEM = """## Tools
 - Use `rg` or `rg --files` for searching text and files — it's faster than grep.
@@ -77,9 +73,9 @@ _UI_TOOLS = [
 
 # ---- Internal helpers ----
 
-def _setup_workspace(context):
+def _prepare_prompt(context):
     ws = context.workspace
-    os.makedirs(ws, exist_ok=True)
+    ensure_workspace(ws)
     content = context.messages.raw[-1].get("content", "")
     if not isinstance(content, list):
         return ws, content
@@ -94,60 +90,24 @@ def _setup_workspace(context):
         fname = p.get("image") or p.get("file") or ""
         if not fname:
             continue
-        fpath = os.path.join(ws, fname)
-        if not os.path.isfile(fpath):
+        try:
+            media_type, data = read_file(ws, fname)
+        except (ValueError, FileNotFoundError):
             continue
-        ext = os.path.splitext(fname)[1].lower()
-        media_type = _MEDIA_TYPES.get(ext)
         if media_type:
             has_media = True
-            data = base64.b64encode(open(fpath, "rb").read()).decode()
-            kind = "document" if ext == ".pdf" else "image"
-            blocks.append({"type": kind, "source": {"type": "base64", "media_type": media_type, "data": data}})
+            encoded = base64.b64encode(data).decode()
+            kind = "document" if media_type == "application/pdf" else "image"
+            blocks.append({"type": kind, "source": {"type": "base64", "media_type": media_type, "data": encoded}})
         else:
-            try:
-                text = open(fpath, "r").read()
-                if len(text) > 400_000:
-                    text = text[:400_000] + "\n\n[... truncated ...]"
-                blocks.append({"type": "text", "text": f"[File: {fname}]\n{text}\n[End of file]"})
-            except (UnicodeDecodeError, ValueError):
-                blocks.append({"type": "text", "text": f"[USER UPLOADED {fname}]"})
+            text = data
+            if len(text) > 400_000:
+                text = text[:400_000] + "\n\n[... truncated ...]"
+            blocks.append({"type": "text", "text": f"[File: {fname}]\n{text}\n[End of file]"})
     if not has_media:
         return ws, " ".join(b["text"] for b in blocks if b.get("type") == "text")
     return ws, blocks
 
-
-def _load_history(path):
-    messages = []
-    try:
-        with open(path) as f:
-            for i, line in enumerate(f):
-                line = line.strip()
-                if line:
-                    messages.append(json.loads(line))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-    except UnicodeDecodeError as e:
-        print(f"[DEBUG] UnicodeDecodeError in {path} at line {i}: {e}")
-        return messages
-    for msg in messages:
-        c = msg.get("content")
-        if isinstance(c, list):
-            for b in c:
-                if isinstance(b, dict):
-                    b.pop("cache_control", None)
-    if messages:
-        c = messages[-1].get("content")
-        if isinstance(c, str):
-            messages[-1]["content"] = [{"type": "text", "text": c, "cache_control": {"type": "ephemeral"}}]
-        elif isinstance(c, list) and c:
-            c[-1]["cache_control"] = {"type": "ephemeral"}
-    return messages
-
-def _save_history(path, messages, mode="a"):
-    with open(path, mode) as f:
-        for msg in messages:
-            f.write(json.dumps(msg) + "\n")
 
 async def _compact(client, model, messages):
     response = await client.messages.create(
@@ -203,12 +163,13 @@ async def _run_tool(block, ws):
 
 def _exec_editor(inp, workspace):
     import pathlib
-    cmd, path = inp["command"], pathlib.Path(inp["path"])
-    if not path.is_absolute():
-        path = pathlib.Path(workspace) / path
-    path = path.resolve()
-    if not str(path).startswith(os.path.realpath(workspace)):
-        return f"Error: path {path} is outside workspace"
+    cmd = inp["command"]
+    raw = pathlib.Path(inp["path"])
+    rel = raw if not raw.is_absolute() else raw.relative_to(pathlib.Path(workspace).resolve())
+    try:
+        path = resolve_path(workspace, str(rel))
+    except ValueError:
+        return f"Error: path {inp['path']} is outside workspace"
     if cmd != "create" and not path.exists():
         return f"Error: {path} does not exist"
     if cmd == "view":
@@ -254,17 +215,14 @@ async def Agent(context, *, system="", tools=None, model="claude-sonnet-4-202505
     """Run one Claude agent turn. Async generator yielding streaming UI components."""
     import anthropic
 
-    ws, prompt = _setup_workspace(context)
+    ws, prompt = _prepare_prompt(context)
     client = anthropic.AsyncAnthropic()
 
     sid = context.session_id
     user = context.user
-    history_path = None
-    if sid and user:
-        history_path = str(user.sessions / f"{sid}.history.jsonl")
-        os.makedirs(os.path.dirname(history_path), exist_ok=True)
+    hp = history_path(user, sid) if sid and user else None
 
-    messages = _load_history(history_path) if history_path else []
+    messages = load_history(hp) if hp else []
     loaded_count = len(messages)
     messages.append({"role": "user", "content": prompt})
 
@@ -349,17 +307,17 @@ async def Agent(context, *, system="", tools=None, model="claude-sonnet-4-202505
         yield {"type": "callout", "callout": str(e), "style": "error"}
 
     new_messages = messages[loaded_count:]
-    if history_path:
+    if hp:
         if total_in > COMPACT_THRESHOLD and messages:
             try:
                 yield {"type": "step", "step": "Compacting context..."}
                 messages = await _compact(client, model, messages)
-                _save_history(history_path, messages, mode="w")
+                save_history(hp, messages, mode="w")
             except Exception:
                 if new_messages and new_messages[-1].get("role") == "assistant":
-                    _save_history(history_path, new_messages)
+                    save_history(hp, new_messages)
         elif new_messages and new_messages[-1].get("role") == "assistant":
-            _save_history(history_path, new_messages)
+            save_history(hp, new_messages)
     if total_in:
         yield {"type": "usage", "usage": {"tokenUsage": {"total": {
             "inputTokens": total_in, "outputTokens": total_out,
