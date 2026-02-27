@@ -1,5 +1,5 @@
 import asyncio, base64, json, os, pathlib
-from cycls.app.state import read_file, _MEDIA_TYPES, ensure_workspace, history_path, load_history, save_history
+from cycls.app.state import _MEDIA_TYPES, ensure_workspace, history_path, load_history, save_history
 
 COMPACT_THRESHOLD = 100_000
 
@@ -7,7 +7,7 @@ _DEFAULT_SYSTEM = """## Tools
 - Use `rg` or `rg --files` for searching text and files — it's faster than grep.
 - Prefer `apply_patch` for single-file edits; use scripting when more efficient.
 - Default to ASCII in file edits; only use Unicode when clearly justified.
-- You can view images (jpg, png, gif, webp) and PDFs directly using the text editor's `view` command.
+- Use the text editor `view` command to read files, including images (jpg, png, gif, webp) and PDFs.
 - Always use relative paths (e.g. `foo.py`, `src/bar.py`) with the text editor — never absolute paths.
 
 ## Workspace
@@ -42,34 +42,19 @@ def _prepare_prompt(context):
     content = context.messages.raw[-1].get("content", "")
     if not isinstance(content, list):
         return ws, content
-    blocks = []
-    has_media = False
+    texts = []
+    files = []
     for p in content:
         if p.get("type") == "text":
-            blocks.append({"type": "text", "text": p["text"]})
-            continue
-        if p.get("type") not in ("image", "file"):
-            continue
-        fname = p.get("image") or p.get("file") or ""
-        if not fname:
-            continue
-        try:
-            media_type, data = read_file(ws, fname)
-        except (ValueError, FileNotFoundError):
-            continue
-        if media_type:
-            has_media = True
-            encoded = base64.b64encode(data).decode()
-            kind = "document" if media_type == "application/pdf" else "image"
-            blocks.append({"type": kind, "source": {"type": "base64", "media_type": media_type, "data": encoded}})
-        else:
-            text = data
-            if len(text) > 400_000:
-                text = text[:400_000] + "\n\n[... truncated ...]"
-            blocks.append({"type": "text", "text": f"[File: {fname}]\n{text}\n[End of file]"})
-    if not has_media:
-        return ws, " ".join(b["text"] for b in blocks if b.get("type") == "text")
-    return ws, blocks
+            texts.append(p["text"])
+        elif p.get("type") in ("image", "file"):
+            fname = p.get("image") or p.get("file")
+            if fname:
+                files.append(fname)
+    prompt = " ".join(texts)
+    if files:
+        prompt += "\n\nAttached files: " + ", ".join(files)
+    return ws, prompt
 
 
 async def _compact(client, model, messages):
