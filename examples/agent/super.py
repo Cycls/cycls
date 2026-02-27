@@ -1,6 +1,5 @@
 # uv run examples/agent/super.py
 # echo '+\!10' | k 🤯
-# uploading unknown file (k) misses with LLM
 import cycls
 
 SYSTEM = """
@@ -68,9 +67,9 @@ TOOLS = [
 @cycls.app(auth=True, analytics=True, copy=[".env"], force_rebuild=False)
 async def super(context):
     async for msg in cycls.Agent(context=context,
-                                system=SYSTEM, 
-                                tools=TOOLS, 
-                                model="claude-sonnet-4-6"): # claude-opus-4-6
+                                system=SYSTEM,
+                                tools=TOOLS,
+                                model="claude-sonnet-4-6"):
         if not isinstance(msg, dict):
             yield msg
             continue
