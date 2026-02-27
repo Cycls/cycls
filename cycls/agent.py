@@ -196,8 +196,8 @@ async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-202505
 
     total_in = total_out = cache_read = cache_create = 0
 
-    try:
-        while True:
+    while True:
+        try:
             thinking_text = ""
             search_idx, search_query = None, ""
 
@@ -264,15 +264,15 @@ async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-202505
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
             messages.append({"role": "user", "content": results})
 
-    except Exception as e:
-        # import traceback
-        # print(f"[DEBUG] Agent error: {e}\n{traceback.format_exc()}")
-        yield {"type": "callout", "callout": str(e), "style": "error"}
-        if (messages and messages[-1].get("role") == "assistant"
-                and any(b.get("type") == "tool_use" for b in messages[-1].get("content", []))):
-            results = [{"type": "tool_result", "tool_use_id": b["id"], "content": f"Error: {e}"}
-                       for b in messages[-1]["content"] if b.get("type") == "tool_use"]
-            messages.append({"role": "user", "content": results})
+        except Exception as e:
+            if (messages and messages[-1].get("role") == "assistant"
+                    and any(b.get("type") == "tool_use" for b in messages[-1].get("content", []))):
+                results = [{"type": "tool_result", "tool_use_id": b["id"], "content": f"Error: {e}"}
+                           for b in messages[-1]["content"] if b.get("type") == "tool_use"]
+                messages.append({"role": "user", "content": results})
+                continue
+            yield {"type": "callout", "callout": str(e), "style": "error"}
+            break
 
     new_messages = messages[loaded_count:]
     if hp:
