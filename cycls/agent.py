@@ -107,7 +107,12 @@ async def _exec_bash(command, cwd, timeout=300):
         "--",
         "bash", "-c", command,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return f"Error: Command timed out after {timeout}s"
     out = stdout.decode(errors="replace") + (stderr.decode(errors="replace") if stderr else "")
     if len(out) > 20000:
         out = out[:10000] + "\n... (truncated) ...\n" + out[-10000:]
