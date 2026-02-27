@@ -88,7 +88,7 @@ def _build_tools(custom):
     tools[-1]["cache_control"] = {"type": "ephemeral"}
     return tools
 
-async def _exec_bash(command, cwd):
+async def _exec_bash(command, cwd, timeout=300):
     proc = await asyncio.create_subprocess_exec(
         "bwrap",
         "--ro-bind", "/", "/",
@@ -107,7 +107,7 @@ async def _exec_bash(command, cwd):
         "--",
         "bash", "-c", command,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     out = stdout.decode(errors="replace") + (stderr.decode(errors="replace") if stderr else "")
     if len(out) > 20000:
         out = out[:10000] + "\n... (truncated) ...\n" + out[-10000:]
@@ -168,7 +168,7 @@ def _exec_editor(inp, workspace):
 # ---- Public API ----
 
 async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-20250514",
-                max_tokens=16384, thinking=True):
+                max_tokens=16384, thinking=True, bash_timeout=300):
     """Run one Claude agent turn. Async generator yielding streaming UI components."""
     import anthropic
 
@@ -243,7 +243,7 @@ async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-202505
                 name, inp = block.name, block.input
                 if name == "bash":
                     yield {"type": "step", "step": f"Bash({inp.get('command', '')[:60]})"}
-                    coros.append(_exec_bash(inp.get("command", ""), ws))
+                    coros.append(_exec_bash(inp.get("command", ""), ws, timeout=bash_timeout))
                 elif name == "str_replace_based_edit_tool":
                     verb = "Editing" if inp.get("command") in ("str_replace", "create", "insert") else "Viewing"
                     yield {"type": "step", "step": f"{verb} {inp.get('path', 'file')}"}
@@ -254,18 +254,25 @@ async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-202505
 
             if len(tool_blocks) > 1:
                 print(f"[PARALLEL] Running {len(tool_blocks)} tools concurrently")
-            outputs = await asyncio.gather(*coros)
+            outputs = await asyncio.gather(*coros, return_exceptions=True)
             results = []
             for block, out in zip(tool_blocks, outputs):
+                if isinstance(out, BaseException):
+                    out = f"Error: {out}"
                 if block.name == "bash":
                     yield {"type": "step_data", "data": out}
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
             messages.append({"role": "user", "content": results})
 
     except Exception as e:
-        import traceback
-        print(f"[DEBUG] Agent error: {e}\n{traceback.format_exc()}")
+        # import traceback
+        # print(f"[DEBUG] Agent error: {e}\n{traceback.format_exc()}")
         yield {"type": "callout", "callout": str(e), "style": "error"}
+        if (messages and messages[-1].get("role") == "assistant"
+                and any(b.get("type") == "tool_use" for b in messages[-1].get("content", []))):
+            results = [{"type": "tool_result", "tool_use_id": b["id"], "content": f"Error: {e}"}
+                       for b in messages[-1]["content"] if b.get("type") == "tool_use"]
+            messages.append({"role": "user", "content": results})
 
     new_messages = messages[loaded_count:]
     if hp:
