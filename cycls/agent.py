@@ -8,7 +8,7 @@ _DEFAULT_SYSTEM = """## Tools
 - Use `rg` or `rg --files` for searching text and files — it's faster than grep.
 - Prefer `apply_patch` for single-file edits; use scripting when more efficient.
 - Default to ASCII in file edits; only use Unicode when clearly justified.
-- Use the text editor `view` command to read files, including images (jpg, png, gif, webp) and PDFs.
+- Always use the text editor `view` command to read files, including images (jpg, png, gif, webp) and PDFs. Never write Python scripts to extract or parse file content — `view` handles all formats natively.
 - Always use relative paths (e.g. `foo.py`, `src/bar.py`) with the text editor — never absolute paths.
 
 ## Workspace
