@@ -1,128 +1,80 @@
-import asyncio, base64, json, os
-from dataclasses import dataclass, field
-from typing import List, Optional, Union
+import asyncio, base64, json, os, pathlib
+from cycls.app.state import _MEDIA_TYPES, ensure_workspace, history_path, load_history, save_history
 
-from .app import App
+COMPACT_THRESHOLD = 300_000
+MAX_ATTACHMENTS = 5
 
-COMPACT_THRESHOLD = 100_000
+_DEFAULT_SYSTEM = """## Tools
+- Use `rg` or `rg --files` for searching text and files — it's faster than grep.
+- Prefer `apply_patch` for single-file edits; use scripting when more efficient.
+- Default to ASCII in file edits; only use Unicode when clearly justified.
+- Always use the text editor `view` command to read files, including images (jpg, png, gif, webp) and PDFs. Never write Python scripts to extract or parse file content — `view` handles all formats natively.
+- Always use relative paths (e.g. `foo.py`, `src/bar.py`) with the text editor — never absolute paths.
 
-_MEDIA_TYPES = {
-    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-    ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp",
-    ".pdf": "application/pdf",
-}
+## Workspace
+- Your working directory is `/workspace`. All commands run here and all file paths are relative to it.
+- The user's workspace persists across conversations. Files you create are files the user keeps.
+- When the user returns, check what's already in their workspace — reference and build on previous work.
+- Git is not available in this workspace.
+- You are already in `/workspace` — never prefix commands with `cd /workspace`.
+- Avoid destructive commands (`rm -rf`) unless the user explicitly asks.
+"""
 
+_UI_TOOLS = [
+    {
+        "name": "render_canvas",
+        "description": "Display a document canvas panel to the user. Use for long-form content like reports, articles, guides, code files, or any document the user may want to read, copy, or reference. The canvas opens as a side panel.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Title shown at the top of the canvas panel"},
+                "content": {"type": "string", "description": "Markdown content to display in the canvas"}
+            },
+            "required": ["title", "content"]
+        }
+    }
+]
 
-def find_part(messages, role, ptype):
-    for msg in reversed(getattr(messages, "raw", None) or messages):
-        if role and msg.get("role") != role:
-            continue
-        for part in msg.get("parts", []) or []:
-            if part.get("type") == ptype:
-                return part
-        if role:
-            return None
+def _sniff_media_type(data: bytes) -> str | None:
+    """Detect media type from file magic bytes. Returns None if unrecognized."""
+    head = data[:12]
+    if head[:3] == b"\xff\xd8\xff":          return "image/jpeg"
+    if head[:8] == b"\x89PNG\r\n\x1a\n":    return "image/png"
+    if head[:6] in (b"GIF87a", b"GIF89a"):  return "image/gif"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP": return "image/webp"
+    if head[:4] == b"%PDF":                  return "application/pdf"
     return None
 
+# ---- Internal helpers ----
 
-def setup_workspace(context):
-    user_id = context.user.id if context.user else "default"
-    org_id = context.user.org_id if context.user else None
-    ws = f"/workspace/{org_id}" if org_id else f"/workspace/{user_id}"
-    os.makedirs(ws, exist_ok=True)
+def _prepare_prompt(context):
+    ws = context.workspace
+    ensure_workspace(ws)
     content = context.messages.raw[-1].get("content", "")
     if not isinstance(content, list):
         return ws, content
-    blocks = []
-    has_media = False
+    texts = []
+    files = []
     for p in content:
         if p.get("type") == "text":
-            blocks.append({"type": "text", "text": p["text"]})
-            continue
-        if p.get("type") not in ("image", "file"):
-            continue
-        fname = p.get("image") or p.get("file") or ""
-        if not fname:
-            continue
-        fpath = os.path.join(ws, fname)
-        if not os.path.isfile(fpath):
-            continue
-        ext = os.path.splitext(fname)[1].lower()
-        media_type = _MEDIA_TYPES.get(ext)
-        if ext == ".pdf" and media_type:
-            has_media = True
-            with open(fpath, "rb") as f:
-                data = base64.b64encode(f.read()).decode()
-            blocks.append({"type": "document", "source": {"type": "base64", "media_type": media_type, "data": data}})
-        elif media_type and media_type.startswith("image/"):
-            has_media = True
-            with open(fpath, "rb") as f:
-                data = base64.b64encode(f.read()).decode()
-            blocks.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
-        else:
-            try:
-                text = open(fpath, "r").read()
-                if len(text) > 400_000:
-                    text = text[:400_000] + "\n\n[... truncated ...]"
-                blocks.append({"type": "text", "text": f"[File: {fname}]\n{text}\n[End of file]"})
-            except (UnicodeDecodeError, ValueError):
-                blocks.append({"type": "text", "text": f"[USER UPLOADED {fname}]"})
-    if not has_media:
-        return ws, " ".join(b["text"] for b in blocks if b.get("type") == "text")
-    return ws, blocks
+            texts.append(p["text"])
+        elif p.get("type") in ("image", "file"):
+            fname = p.get("image") or p.get("file")
+            if fname:
+                files.append(fname)
+    if len(files) > MAX_ATTACHMENTS:
+        extra = files[MAX_ATTACHMENTS:]
+        files = files[:MAX_ATTACHMENTS]
+        texts.append(f"(Only the first {MAX_ATTACHMENTS} files are in context. "
+                     f"These {len(extra)} files are also in the workspace but not loaded: "
+                     + ", ".join(extra) + ". Use the text editor view command to read them.)")
+    prompt = " ".join(texts)
+    if files:
+        prompt += "\n\nAttached files: " + ", ".join(files)
+    return ws, prompt
 
-
-@dataclass
-class AgentOptions:
-    workspace: str
-    prompt: Union[str, list]
-    model: str = "claude-sonnet-4-20250514"
-    tools: List[dict] = field(default_factory=list)
-    system: str = ""
-    max_tokens: int = 16384
-    thinking: bool = True
-    session_id: Optional[str] = None
-
-
-def _load_history(path):
-    messages = []
-    try:
-        with open(path) as f:
-            for i, line in enumerate(f):
-                line = line.strip()
-                if line:
-                    messages.append(json.loads(line))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-    except UnicodeDecodeError as e:
-        print(f"[DEBUG] UnicodeDecodeError in {path} at line {i}: {e}")
-        return messages
-    for msg in messages:
-        c = msg.get("content")
-        if isinstance(c, list):
-            for b in c:
-                if isinstance(b, dict):
-                    b.pop("cache_control", None)
-    if messages:
-        c = messages[-1].get("content")
-        if isinstance(c, str):
-            messages[-1]["content"] = [{"type": "text", "text": c, "cache_control": {"type": "ephemeral"}}]
-        elif isinstance(c, list) and c:
-            c[-1]["cache_control"] = {"type": "ephemeral"}
-    return messages
-
-def _append_history(path, messages):
-    with open(path, "a") as f:
-        for msg in messages:
-            f.write(json.dumps(msg) + "\n")
-
-def _rewrite_history(path, messages):
-    with open(path, "w") as f:
-        for msg in messages:
-            f.write(json.dumps(msg) + "\n")
 
 async def _compact(client, model, messages):
-    """Summarize conversation into a compact continuation message."""
     response = await client.messages.create(
         model=model, max_tokens=8192,
         system=[{"type": "text", "text": (
@@ -153,34 +105,59 @@ def _build_tools(custom):
     tools[-1]["cache_control"] = {"type": "ephemeral"}
     return tools
 
-def _tool_result(bid, content):
-    return {"type": "tool_result", "tool_use_id": bid, "content": content}
-
-async def _exec_bash(command, cwd):
+async def _exec_bash(command, cwd, timeout=300):
     proc = await asyncio.create_subprocess_exec(
+        "bwrap",
+        "--ro-bind", "/", "/",
+        "--bind", cwd, "/workspace",
+        "--tmpfs", "/app",
+        "--tmpfs", "/tmp",
+        "--dev", "/dev",
+        "--proc", "/proc",
+        "--chdir", "/workspace",
+        "--die-with-parent",
+        "--clearenv",
+        "--setenv", "PATH", os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "--setenv", "HOME", "/workspace",
+        "--setenv", "TERM", "xterm",
+        "--setenv", "LANG", os.environ.get("LANG", "C.UTF-8"),
+        "--",
         "bash", "-c", command,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=cwd)
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return f"Error: Command timed out after {timeout}s"
     out = stdout.decode(errors="replace") + (stderr.decode(errors="replace") if stderr else "")
     if len(out) > 20000:
         out = out[:10000] + "\n... (truncated) ...\n" + out[-10000:]
     return out.strip() or "(no output)"
 
 def _exec_editor(inp, workspace):
-    import pathlib
-    cmd, path = inp["command"], pathlib.Path(inp["path"])
-    if not path.is_absolute():
-        path = pathlib.Path(workspace) / path
-    path = path.resolve()
-    if not str(path).startswith(os.path.realpath(workspace)):
-        return f"Error: path {path} is outside workspace"
+    cmd = inp["command"]
+    ws = pathlib.Path(workspace).resolve()
+    raw = pathlib.PurePosixPath(inp["path"])
+    # Strip /workspace prefix (bwrap mount point) or leading / so all paths resolve under ws
+    try:
+        rel = raw.relative_to("/workspace")
+    except ValueError:
+        rel = pathlib.PurePosixPath(raw.as_posix().lstrip("/"))
+    path = (ws / rel).resolve()
+    if not path.is_relative_to(ws):
+        return f"Error: path escapes workspace"
     if cmd != "create" and not path.exists():
         return f"Error: {path} does not exist"
+    if path.is_dir():
+        return f"Error: {path} is a directory, not a file"
     if cmd == "view":
         ext = path.suffix.lower()
         media_type = _MEDIA_TYPES.get(ext)
         if media_type:
-            data = base64.b64encode(path.read_bytes()).decode()
+            raw = path.read_bytes()
+            media_type = _sniff_media_type(raw) or media_type
+            data = base64.b64encode(raw).decode()
             kind = "document" if not media_type.startswith("image/") else "image"
             return [{"type": kind, "source": {"type": "base64", "media_type": media_type, "data": data}}]
         try:
@@ -212,37 +189,40 @@ def _exec_editor(inp, workspace):
         return f"Inserted at line {pos} in {path}"
     return f"Error: unknown command {cmd}"
 
+# ---- Public API ----
 
-async def Agent(*, options):
-    """Run one Claude turn. Async generator yielding streaming components."""
-    import anthropic, uuid
+async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-20250514",
+                max_tokens=16384, thinking=True, bash_timeout=300):
+    """Run one Claude agent turn. Async generator yielding streaming UI components."""
+    import anthropic
 
-    ws = options.workspace
+    ws, prompt = _prepare_prompt(context)
     client = anthropic.AsyncAnthropic()
 
-    sid = options.session_id or str(uuid.uuid4())
-    if not options.session_id:
-        yield {"type": "session_id", "session_id": sid}
+    sid = context.session_id
+    user = context.user
+    hp = history_path(user, sid) if sid and user else None
 
-    history_path = os.path.join(ws, ".cycls", f"{sid}.jsonl")
-    os.makedirs(os.path.dirname(history_path), exist_ok=True)
-    messages = _load_history(history_path)
+    messages = load_history(hp) if hp else []
     loaded_count = len(messages)
-    messages.append({"role": "user", "content": options.prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    all_tools = _UI_TOOLS + (tools or [])
+    full_system = _DEFAULT_SYSTEM + ("\n\n" + system if system else "")
 
     kwargs = {
-        "model": options.model, "max_tokens": options.max_tokens,
-        "tools": _build_tools(options.tools), "messages": messages,
+        "model": model, "max_tokens": max_tokens,
+        "tools": _build_tools(all_tools), "messages": messages,
+        "system": [{"type": "text", "text": full_system, "cache_control": {"type": "ephemeral"}}],
     }
-    if options.system:
-        kwargs["system"] = [{"type": "text", "text": options.system, "cache_control": {"type": "ephemeral"}}]
-    if options.thinking:
+    if thinking:
         kwargs["thinking"] = {"type": "adaptive"}
 
     total_in = total_out = cache_read = cache_create = 0
+    saved_count = loaded_count
 
-    try:
-        while True:
+    while True:
+        try:
             thinking_text = ""
             search_idx, search_query = None, ""
 
@@ -282,51 +262,75 @@ async def Agent(*, options):
             if response.stop_reason != "tool_use":
                 break
 
-            # Yield step indicators, then execute tools in parallel
+            # Build step indicators + dispatch tasks, then execute in parallel
+            coros = []
             for block in tool_blocks:
                 name, inp = block.name, block.input
                 if name == "bash":
                     yield {"type": "step", "step": f"Bash({inp.get('command', '')[:60]})"}
+                    coros.append(_exec_bash(inp.get("command", ""), ws, timeout=bash_timeout))
                 elif name == "str_replace_based_edit_tool":
                     verb = "Editing" if inp.get("command") in ("str_replace", "create", "insert") else "Viewing"
                     yield {"type": "step", "step": f"{verb} {inp.get('path', 'file')}"}
+                    coros.append(asyncio.sleep(0, result=_exec_editor(inp, ws)))
                 else:
                     yield {"type": "tool_call", "tool": name, "args": inp}
-
-            async def _run_tool(block):
-                name, inp = block.name, block.input
-                if name == "bash":
-                    return await _exec_bash(inp.get("command", ""), ws)
-                elif name == "str_replace_based_edit_tool":
-                    return _exec_editor(inp, ws)
-                return f"{name} rendered successfully"
+                    coros.append(asyncio.sleep(0, result=f"{name} rendered successfully"))
 
             if len(tool_blocks) > 1:
                 print(f"[PARALLEL] Running {len(tool_blocks)} tools concurrently")
-            outputs = await asyncio.gather(*[_run_tool(b) for b in tool_blocks])
+            outputs = await asyncio.gather(*coros, return_exceptions=True)
             results = []
             for block, out in zip(tool_blocks, outputs):
+                if isinstance(out, BaseException):
+                    out = f"Error: {out}"
                 if block.name == "bash":
                     yield {"type": "step_data", "data": out}
-                results.append(_tool_result(block.id, out))
+                results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
             messages.append({"role": "user", "content": results})
+            if hp:
+                save_history(hp, messages[saved_count:])
+                saved_count = len(messages)
 
-    except Exception as e:
-        import traceback
-        print(f"[DEBUG] ClaudeAgent error: {e}\n{traceback.format_exc()}")
-        yield {"type": "callout", "callout": str(e), "style": "error"}
+        except Exception as e:
+            last = messages[-1] if messages else {}
+            content = last.get("content", [])
+            if not isinstance(content, list):
+                yield {"type": "callout", "callout": str(e), "style": "error"}
+                break
+            if last.get("role") == "assistant" and any(b.get("type") == "tool_use" for b in content):
+                results = [{"type": "tool_result", "tool_use_id": b["id"], "content": f"Error: {e}"}
+                           for b in content if b.get("type") == "tool_use"]
+                messages.append({"role": "user", "content": results})
+                if hp:
+                    save_history(hp, messages[saved_count:])
+                    saved_count = len(messages)
+                continue
+            if any(b.get("type") == "tool_result" and not str(b.get("content", "")).startswith("Error:")
+                   for b in content):
+                for b in content:
+                    if b.get("type") == "tool_result":
+                        b["content"] = f"Error: {e}"
+                if hp:
+                    save_history(hp, messages, mode="w")
+                    saved_count = len(messages)
+                continue
+            yield {"type": "callout", "callout": str(e), "style": "error"}
+            break
 
-    new_messages = messages[loaded_count:]
-    if total_in > COMPACT_THRESHOLD and messages:
-        try:
-            yield {"type": "step", "step": "Compacting context..."}
-            messages = await _compact(client, options.model, messages)
-            _rewrite_history(history_path, messages)
-        except Exception:
-            if new_messages and new_messages[-1].get("role") == "assistant":
-                _append_history(history_path, new_messages)
-    elif new_messages and new_messages[-1].get("role") == "assistant":
-        _append_history(history_path, new_messages)
+    new_messages = messages[saved_count:]
+    if hp:
+        saved = False
+        if total_in > COMPACT_THRESHOLD and messages:
+            try:
+                yield {"type": "step", "step": "Compacting context..."}
+                messages = await _compact(client, model, messages)
+                save_history(hp, messages, mode="w")
+                saved = True
+            except Exception:
+                pass
+        if not saved and new_messages and new_messages[-1].get("role") == "assistant":
+            save_history(hp, new_messages)
     if total_in:
         yield {"type": "usage", "usage": {"tokenUsage": {"total": {
             "inputTokens": total_in, "outputTokens": total_out,
