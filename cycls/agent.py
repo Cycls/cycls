@@ -2,6 +2,7 @@ import asyncio, base64, json, os, pathlib
 from cycls.app.state import _MEDIA_TYPES, ensure_workspace, history_path, load_history, save_history
 
 COMPACT_THRESHOLD = 300_000
+MAX_ATTACHMENTS = 5
 
 _DEFAULT_SYSTEM = """## Tools
 - Use `rg` or `rg --files` for searching text and files — it's faster than grep.
@@ -61,6 +62,12 @@ def _prepare_prompt(context):
             fname = p.get("image") or p.get("file")
             if fname:
                 files.append(fname)
+    if len(files) > MAX_ATTACHMENTS:
+        extra = files[MAX_ATTACHMENTS:]
+        files = files[:MAX_ATTACHMENTS]
+        texts.append(f"(Only the first {MAX_ATTACHMENTS} files are in context. "
+                     f"These {len(extra)} files are also in the workspace but not loaded: "
+                     + ", ".join(extra) + ". Use the text editor view command to read them.)")
     prompt = " ".join(texts)
     if files:
         prompt += "\n\nAttached files: " + ", ".join(files)

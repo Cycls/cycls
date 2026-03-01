@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cycls.agent import Agent, _exec_bash, _exec_editor, _sniff_media_type
+from cycls.agent import Agent, COMPACT_THRESHOLD, MAX_ATTACHMENTS, _exec_bash, _exec_editor, _prepare_prompt, _sniff_media_type
 from cycls.app.state import load_history
 
 
@@ -448,3 +448,176 @@ def test_api_400_from_tool_result_lets_llm_recover(agent_env):
     # All tool_use ids still have matching results
     use_ids, result_ids = _history_tool_ids(history)
     assert use_ids == result_ids
+
+
+# ---------------------------------------------------------------------------
+# File attachment limit tests
+# ---------------------------------------------------------------------------
+
+def test_prepare_prompt_under_limit(tmp_path):
+    """Attachments under MAX_ATTACHMENTS all appear in prompt."""
+    ws = str(tmp_path / "workspace")
+    Path(ws).mkdir()
+    parts = [{"type": "text", "text": "check these"}]
+    parts += [{"type": "file", "file": f"doc{i}.pdf"} for i in range(MAX_ATTACHMENTS)]
+    ctx = types.SimpleNamespace()
+    ctx.workspace = ws
+    ctx.messages = types.SimpleNamespace()
+    ctx.messages.raw = [{"role": "user", "content": parts}]
+
+    _, prompt = _prepare_prompt(ctx)
+    for i in range(MAX_ATTACHMENTS):
+        assert f"doc{i}.pdf" in prompt
+    assert "not loaded" not in prompt
+
+
+def test_prepare_prompt_over_limit(tmp_path):
+    """Attachments over MAX_ATTACHMENTS are excluded and noted as on-disk."""
+    ws = str(tmp_path / "workspace")
+    Path(ws).mkdir()
+    n = MAX_ATTACHMENTS + 5
+    parts = [{"type": "text", "text": "check these"}]
+    parts += [{"type": "image", "image": f"img{i}.png"} for i in range(n)]
+    ctx = types.SimpleNamespace()
+    ctx.workspace = ws
+    ctx.messages = types.SimpleNamespace()
+    ctx.messages.raw = [{"role": "user", "content": parts}]
+
+    _, prompt = _prepare_prompt(ctx)
+    # First MAX_ATTACHMENTS are in the attached files list
+    for i in range(MAX_ATTACHMENTS):
+        assert f"img{i}.png" in prompt
+    # Extras are mentioned as on-disk, not in attached files
+    for i in range(MAX_ATTACHMENTS, n):
+        assert f"img{i}.png" in prompt
+    assert "not loaded" in prompt
+    assert "text editor view" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Context compaction tests
+# ---------------------------------------------------------------------------
+
+def test_compaction_triggers_above_threshold(agent_env):
+    """When input tokens exceed COMPACT_THRESHOLD, history is rewritten with summary."""
+    ws, hp, ctx = agent_env
+
+    over = _usage(inp=COMPACT_THRESHOLD + 1)
+    final = _make_response([_text_block("Done")], usage=over)
+
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(final)
+
+    # Mock _compact to return a known summary
+    summary_messages = [
+        {"role": "user", "content": "Summary of previous work."},
+        {"role": "assistant", "content": "Understood."},
+    ]
+
+    with _mock_anthropic(mock_client), \
+         patch("cycls.agent._compact", new_callable=lambda: AsyncMock(return_value=summary_messages)):
+        asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+
+    history = load_history(hp)
+    assert len(history) == 2
+    assert history[0]["content"] == "Summary of previous work."
+    # load_history wraps the last message's content with cache_control
+    assert history[1]["content"][0]["text"] == "Understood."
+
+
+def test_no_compaction_below_threshold(agent_env):
+    """When input tokens are under COMPACT_THRESHOLD, history is appended normally."""
+    ws, hp, ctx = agent_env
+
+    under = _usage(inp=COMPACT_THRESHOLD - 1)
+    final = _make_response([_text_block("Done")], usage=under)
+
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(final)
+
+    with _mock_anthropic(mock_client):
+        asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+
+    history = load_history(hp)
+    roles = [m["role"] for m in history]
+    assert roles == ["user", "assistant"]
+
+
+def test_compaction_failure_still_saves_history(agent_env):
+    """If _compact raises, the final assistant message must still be saved."""
+    ws, hp, ctx = agent_env
+
+    over = _usage(inp=COMPACT_THRESHOLD + 1)
+    final = _make_response([_text_block("Important answer")], usage=over)
+
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(final)
+
+    with _mock_anthropic(mock_client), \
+         patch("cycls.agent._compact", new_callable=lambda: AsyncMock(side_effect=Exception("API down"))):
+        asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+
+    history = load_history(hp)
+    roles = [m["role"] for m in history]
+    assert roles == ["user", "assistant"]
+    # The actual answer must not be lost
+    last = history[-1]["content"]
+    text = last[0]["text"] if isinstance(last, list) else last
+    assert "Important answer" in text
+
+
+# ---------------------------------------------------------------------------
+# Editor path traversal tests
+# ---------------------------------------------------------------------------
+
+def test_exec_editor_blocks_path_traversal(tmp_path):
+    """Paths escaping the workspace must be rejected."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "legit.txt").write_text("ok")
+
+    result = _exec_editor({"command": "view", "path": "../../etc/passwd"}, str(ws))
+    assert "Error" in result
+
+    result = _exec_editor({"command": "view", "path": "/etc/passwd"}, str(ws))
+    assert "Error" in result
+
+
+def test_exec_editor_allows_valid_paths(tmp_path):
+    """Normal relative paths within workspace must work."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "hello.txt").write_text("world")
+
+    result = _exec_editor({"command": "view", "path": "hello.txt"}, str(ws))
+    assert "world" in result
+
+
+# ---------------------------------------------------------------------------
+# Bash output truncation tests
+# ---------------------------------------------------------------------------
+
+def test_exec_bash_truncates_large_output(tmp_path):
+    """Output exceeding 20K chars must be truncated with marker."""
+    ws = str(tmp_path / "workspace")
+    Path(ws).mkdir()
+
+    big_output = ("x" * 30000).encode()
+    mock_proc = MagicMock()
+    mock_proc.communicate = AsyncMock(return_value=(big_output, b""))
+    mock_proc.kill = MagicMock()
+    mock_proc.wait = AsyncMock()
+
+    async def run():
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_proc)):
+            return await _exec_bash("echo big", ws)
+
+    result = asyncio.run(run())
+    assert len(result) < 25000
+    assert "truncated" in result
+
+
+# ---------------------------------------------------------------------------
+# bwrap sandbox configuration tests
+# ---------------------------------------------------------------------------
+
