@@ -1,7 +1,7 @@
 import asyncio, base64, json, os, pathlib
 from cycls.app.state import _MEDIA_TYPES, ensure_workspace, history_path, load_history, save_history
 
-COMPACT_THRESHOLD = 100_000
+COMPACT_THRESHOLD = 300_000
 
 _DEFAULT_SYSTEM = """## Tools
 - Use `rg` or `rg --files` for searching text and files — it's faster than grep.
@@ -33,6 +33,16 @@ _UI_TOOLS = [
         }
     }
 ]
+
+def _sniff_media_type(data: bytes) -> str | None:
+    """Detect media type from file magic bytes. Returns None if unrecognized."""
+    head = data[:12]
+    if head[:3] == b"\xff\xd8\xff":          return "image/jpeg"
+    if head[:8] == b"\x89PNG\r\n\x1a\n":    return "image/png"
+    if head[:6] in (b"GIF87a", b"GIF89a"):  return "image/gif"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP": return "image/webp"
+    if head[:4] == b"%PDF":                  return "application/pdf"
+    return None
 
 # ---- Internal helpers ----
 
@@ -138,7 +148,9 @@ def _exec_editor(inp, workspace):
         ext = path.suffix.lower()
         media_type = _MEDIA_TYPES.get(ext)
         if media_type:
-            data = base64.b64encode(path.read_bytes()).decode()
+            raw = path.read_bytes()
+            media_type = _sniff_media_type(raw) or media_type
+            data = base64.b64encode(raw).decode()
             kind = "document" if not media_type.startswith("image/") else "image"
             return [{"type": kind, "source": {"type": "base64", "media_type": media_type, "data": data}}]
         try:
@@ -200,6 +212,7 @@ async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-202505
         kwargs["thinking"] = {"type": "adaptive"}
 
     total_in = total_out = cache_read = cache_create = 0
+    saved_count = loaded_count
 
     while True:
         try:
@@ -268,18 +281,37 @@ async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-202505
                     yield {"type": "step_data", "data": out}
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
             messages.append({"role": "user", "content": results})
+            if hp:
+                save_history(hp, messages[saved_count:])
+                saved_count = len(messages)
 
         except Exception as e:
-            if (messages and messages[-1].get("role") == "assistant"
-                    and any(b.get("type") == "tool_use" for b in messages[-1].get("content", []))):
+            last = messages[-1] if messages else {}
+            content = last.get("content", [])
+            if not isinstance(content, list):
+                yield {"type": "callout", "callout": str(e), "style": "error"}
+                break
+            if last.get("role") == "assistant" and any(b.get("type") == "tool_use" for b in content):
                 results = [{"type": "tool_result", "tool_use_id": b["id"], "content": f"Error: {e}"}
-                           for b in messages[-1]["content"] if b.get("type") == "tool_use"]
+                           for b in content if b.get("type") == "tool_use"]
                 messages.append({"role": "user", "content": results})
+                if hp:
+                    save_history(hp, messages[saved_count:])
+                    saved_count = len(messages)
+                continue
+            if any(b.get("type") == "tool_result" and not str(b.get("content", "")).startswith("Error:")
+                   for b in content):
+                for b in content:
+                    if b.get("type") == "tool_result":
+                        b["content"] = f"Error: {e}"
+                if hp:
+                    save_history(hp, messages, mode="w")
+                    saved_count = len(messages)
                 continue
             yield {"type": "callout", "callout": str(e), "style": "error"}
             break
 
-    new_messages = messages[loaded_count:]
+    new_messages = messages[saved_count:]
     if hp:
         saved = False
         if total_in > COMPACT_THRESHOLD and messages:
