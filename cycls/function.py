@@ -422,15 +422,44 @@ CMD ["python", "entrypoint.py"]
                         tar.add(f, arcname=f.relative_to(workdir))
 
             print("Uploading...")
+            upload_resp = requests.post(
+                f"{base_url}/v1/deploy/upload",
+                data={"function_name": self.name},
+                headers={"X-API-Key": self.api_key},
+                timeout=30,
+            )
+            if not upload_resp.ok:
+                print(f"Upload request failed: {upload_resp.status_code}")
+                try:
+                    print(f"  {upload_resp.json()['detail']}")
+                except (json.JSONDecodeError, KeyError):
+                    print(f"  {upload_resp.text}")
+                return None
+            upload_data = upload_resp.json()
+
             with open(archive_path, 'rb') as f:
-                response = requests.post(
-                    f"{base_url}/v1/deploy",
-                    data={"function_name": self.name, "port": port, "memory": memory},
-                    files={'source_archive': (archive_name, f, 'application/gzip')},
-                    headers={"X-API-Key": self.api_key},
+                gcs_resp = requests.put(
+                    upload_data["upload_url"],
+                    data=f,
+                    headers={"Content-Type": "application/gzip"},
                     timeout=9000,
-                    stream=True,
                 )
+            if not gcs_resp.ok:
+                print(f"Archive upload failed: {gcs_resp.status_code}")
+                return None
+
+            response = requests.post(
+                f"{base_url}/v1/deploy",
+                data={
+                    "function_name": self.name,
+                    "source_object": upload_data["object_name"],
+                    "port": port,
+                    "memory": memory,
+                },
+                headers={"X-API-Key": self.api_key},
+                timeout=9000,
+                stream=True,
+            )
 
             if not response.ok:
                 print(f"Deploy failed: {response.status_code}")
