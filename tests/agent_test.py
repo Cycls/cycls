@@ -4,11 +4,12 @@ Mocks the Anthropic streaming API to test incremental history saving
 and crash recovery without hitting a real LLM.
 """
 import asyncio
-import json
 import sys
 import types
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from cycls.agent import Agent, _exec_bash, _exec_editor, _sniff_media_type
 from cycls.app.state import load_history
@@ -99,17 +100,39 @@ def _mock_anthropic(client):
     return patch.dict(sys.modules, {"anthropic": mod})
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
+def _history_tool_ids(history):
+    """Extract (tool_use_ids, tool_result_ids) from a history list."""
+    use_ids, result_ids = [], []
+    for msg in history:
+        content = msg.get("content", [])
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if block.get("type") == "tool_use":
+                use_ids.append(block["id"])
+            elif block.get("type") == "tool_result":
+                result_ids.append(block["tool_use_id"])
+    return use_ids, result_ids
 
-def test_history_saved_after_each_tool_round(tmp_path):
-    """Two tool rounds then final text — all six messages should be on disk."""
+
+@pytest.fixture
+def agent_env(tmp_path):
+    """Create workspace + session dir + context for agent tests."""
     ws = str(tmp_path / "workspace")
     Path(ws).mkdir()
     hp_dir = tmp_path / "sessions"
     hp_dir.mkdir()
-    ctx = _make_context(ws, str(hp_dir / "test-session.history.jsonl"))
+    hp = str(hp_dir / "test-session.history.jsonl")
+    return ws, hp, _make_context(ws, hp)
+
+
+# ---------------------------------------------------------------------------
+# Incremental save tests
+# ---------------------------------------------------------------------------
+
+def test_history_saved_after_each_tool_round(agent_env):
+    """Two tool rounds then final text — all six messages should be on disk."""
+    ws, hp, ctx = agent_env
 
     round1 = _make_response([_tool_use_block("t1")], stop_reason="tool_use")
     round2 = _make_response([_tool_use_block("t2")], stop_reason="tool_use")
@@ -123,19 +146,14 @@ def test_history_saved_after_each_tool_round(tmp_path):
          patch("cycls.agent._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
-    history = load_history(str(hp_dir / "test-session.history.jsonl"))
+    history = load_history(hp)
     roles = [m["role"] for m in history]
     assert roles == ["user", "assistant", "user", "assistant", "user", "assistant"]
 
 
-def test_history_survives_crash_after_first_tool_round(tmp_path):
+def test_history_survives_crash_after_first_tool_round(agent_env):
     """Crash during round 2 streaming — round 1 history should already be on disk."""
-    ws = str(tmp_path / "workspace")
-    Path(ws).mkdir()
-    hp_dir = tmp_path / "sessions"
-    hp_dir.mkdir()
-    hp = str(hp_dir / "test-session.history.jsonl")
-    ctx = _make_context(ws, hp)
+    ws, hp, ctx = agent_env
 
     round1 = _make_response([_tool_use_block("t1")], stop_reason="tool_use")
     call_count = 0
@@ -167,16 +185,11 @@ def test_history_survives_crash_after_first_tool_round(tmp_path):
     assert history[2]["role"] == "user"
 
 
-def test_error_recovery_saves_incrementally(tmp_path):
+def test_error_recovery_saves_incrementally(agent_env):
     """When _exec_editor raises during coro building (after the assistant
     tool_use message is already appended), the except handler patches
     error tool_results. Those should be saved incrementally."""
-    ws = str(tmp_path / "workspace")
-    Path(ws).mkdir()
-    hp_dir = tmp_path / "sessions"
-    hp_dir.mkdir()
-    hp = str(hp_dir / "test-session.history.jsonl")
-    ctx = _make_context(ws, hp)
+    ws, hp, ctx = agent_env
 
     # Round 1: editor tool with missing "command" key → _exec_editor raises KeyError
     # synchronously during coro building, AFTER the assistant message is appended.
@@ -190,7 +203,7 @@ def test_error_recovery_saves_incrementally(tmp_path):
     mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
 
     with _mock_anthropic(mock_client):
-        items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+        asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
     history = load_history(hp)
     # Should have: user + assistant(bad tool_use) + user(error result) + assistant(final)
@@ -249,7 +262,6 @@ def test_exec_editor_view_uses_content_sniffing_over_extension(tmp_path):
     """A .png file containing JPEG data should return media_type image/jpeg."""
     ws = tmp_path / "workspace"
     ws.mkdir()
-    # Write JPEG bytes to a file with .png extension
     (ws / "fake.png").write_bytes(_JPEG_HEADER)
 
     result = _exec_editor({"command": "view", "path": "fake.png"}, str(ws))
@@ -274,34 +286,11 @@ def test_exec_editor_view_correct_extension_unchanged(tmp_path):
 # Tool history corruption tests
 # ---------------------------------------------------------------------------
 
-def _history_tool_ids(history):
-    """Extract (tool_use_ids, tool_result_ids) from a history list."""
-    use_ids, result_ids = [], []
-    for msg in history:
-        content = msg.get("content", [])
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if block.get("type") == "tool_use":
-                use_ids.append(block["id"])
-            elif block.get("type") == "tool_result":
-                result_ids.append(block["tool_use_id"])
-    return use_ids, result_ids
-
-
-def test_tool_result_always_follows_tool_use_on_crash(tmp_path):
+def test_tool_result_always_follows_tool_use_on_crash(agent_env):
     """Every tool_use id in history must have a matching tool_result,
     even when tool execution crashes mid-way."""
-    ws = str(tmp_path / "workspace")
-    Path(ws).mkdir()
-    hp_dir = tmp_path / "sessions"
-    hp_dir.mkdir()
-    hp = str(hp_dir / "test-session.history.jsonl")
-    ctx = _make_context(ws, hp)
+    ws, hp, ctx = agent_env
 
-    # Editor tool with missing "command" key → raises KeyError after
-    # assistant message (with tool_use) is already appended to messages.
-    # The except handler must inject a matching error tool_result.
     bad_editor = _tool_use_block("crash-1", name="str_replace_based_edit_tool", inp={})
     round1 = _make_response([bad_editor], stop_reason="tool_use")
     final = _make_response([_text_block("Recovered")])
@@ -318,15 +307,10 @@ def test_tool_result_always_follows_tool_use_on_crash(tmp_path):
     assert use_ids == result_ids
 
 
-def test_tool_result_present_after_bash_timeout(tmp_path):
+def test_tool_result_present_after_bash_timeout(agent_env):
     """Simulates a bash timeout. The tool_result with the timeout error
     must be saved so follow-up messages don't trigger 400 errors."""
-    ws = str(tmp_path / "workspace")
-    Path(ws).mkdir()
-    hp_dir = tmp_path / "sessions"
-    hp_dir.mkdir()
-    hp = str(hp_dir / "test-session.history.jsonl")
-    ctx = _make_context(ws, hp)
+    ws, hp, ctx = agent_env
 
     bash_block = _tool_use_block("timeout-1", name="bash",
                                   inp={"command": "pip install heavy-package"})
@@ -337,7 +321,6 @@ def test_tool_result_present_after_bash_timeout(tmp_path):
     mock_client = MagicMock()
     mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
 
-    # _exec_bash returns a timeout error string (not an exception)
     with _mock_anthropic(mock_client), \
          patch("cycls.agent._exec_bash",
                new_callable=lambda: AsyncMock(return_value="Error: Command timed out after 300s")):
@@ -346,26 +329,18 @@ def test_tool_result_present_after_bash_timeout(tmp_path):
     history = load_history(hp)
     use_ids, result_ids = _history_tool_ids(history)
     assert use_ids == result_ids
-    # Verify the timeout error made it into the result
-    for msg in history:
-        content = msg.get("content", [])
-        if isinstance(content, list):
-            for block in content:
-                if block.get("type") == "tool_result" and block["tool_use_id"] == "timeout-1":
-                    assert "timed out" in block["content"]
+    # Verify the timeout error made it into the correct tool_result
+    timeout_result = [b for m in history for b in (m.get("content") or [])
+                      if isinstance(b, dict) and b.get("tool_use_id") == "timeout-1"]
+    assert len(timeout_result) == 1, "Expected exactly one tool_result for timeout-1"
+    assert "timed out" in timeout_result[0]["content"]
 
 
-def test_multiple_tool_calls_all_get_results(tmp_path):
+def test_multiple_tool_calls_all_get_results(agent_env):
     """When the LLM issues multiple parallel tool calls and one fails,
     ALL tool_use ids must still have matching tool_results."""
-    ws = str(tmp_path / "workspace")
-    Path(ws).mkdir()
-    hp_dir = tmp_path / "sessions"
-    hp_dir.mkdir()
-    hp = str(hp_dir / "test-session.history.jsonl")
-    ctx = _make_context(ws, hp)
+    ws, hp, ctx = agent_env
 
-    # Two bash tools in one response — one succeeds, one "times out"
     block_ok = _tool_use_block("ok-1", inp={"command": "echo ok"})
     block_fail = _tool_use_block("fail-1", inp={"command": "pip install heavy"})
     round1 = _make_response([block_ok, block_fail], stop_reason="tool_use")
@@ -375,11 +350,7 @@ def test_multiple_tool_calls_all_get_results(tmp_path):
     mock_client = MagicMock()
     mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
 
-    call_count = 0
-
     async def mock_bash(cmd, cwd, **kw):
-        nonlocal call_count
-        call_count += 1
         if "heavy" in cmd:
             return "Error: Command timed out after 300s"
         return "ok"
@@ -423,15 +394,10 @@ def test_exec_bash_returns_error_on_timeout(tmp_path):
 # API error recovery tests (e.g. oversized PDF in tool_results → 400)
 # ---------------------------------------------------------------------------
 
-def test_api_400_from_tool_result_lets_llm_recover(tmp_path):
+def test_api_400_from_tool_result_lets_llm_recover(agent_env):
     """When the API rejects tool_results (e.g. oversized PDF), the agent loop
     should recover and let the LLM respond, not show a raw error."""
-    ws = str(tmp_path / "workspace")
-    Path(ws).mkdir()
-    hp_dir = tmp_path / "sessions"
-    hp_dir.mkdir()
-    hp = str(hp_dir / "test-session.history.jsonl")
-    ctx = _make_context(ws, hp)
+    ws, hp, ctx = agent_env
 
     # Round 1: LLM asks to view a file
     view_block = _tool_use_block("v1", name="str_replace_based_edit_tool",
