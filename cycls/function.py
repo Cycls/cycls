@@ -270,7 +270,8 @@ CMD ["python", "entrypoint.py"]
                     image=tag,
                     volumes={str(io_path): {'bind': '/io', 'mode': 'rw'}},
                     ports=ports,
-                    labels={self.managed_label: "true"}
+                    labels={self.managed_label: "true"}, 
+                    cap_add=["SYS_ADMIN"], security_opt=["apparmor=unconfined", "seccomp=unconfined"]  # local bubblewrap
                 )
                 self._container.start()
                 yield self._container, result_path
