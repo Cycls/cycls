@@ -69,7 +69,7 @@ async def super(context):
     async for msg in cycls.Agent(context=context,
                                 system=SYSTEM,
                                 tools=TOOLS,
-                                model="claude-sonnet-4-6"):
+                                model="claude-sonnet-4-6", bash_timeout=10):
         if not isinstance(msg, dict):
             yield msg
             continue
@@ -98,5 +98,5 @@ async def super(context):
             yield msg
 
 
-super.local()
-# super.deploy()
+# super.local()
+super.deploy()
