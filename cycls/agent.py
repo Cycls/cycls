@@ -8,7 +8,8 @@ _DEFAULT_SYSTEM = """## Tools
 - Use `rg` or `rg --files` for searching text and files — it's faster than grep.
 - Prefer `apply_patch` for single-file edits; use scripting when more efficient.
 - Default to ASCII in file edits; only use Unicode when clearly justified.
-- Always use the text editor `view` command to read files, including images (jpg, png, gif, webp) and PDFs. Never write Python scripts to extract or parse file content — `view` handles all formats natively.
+- Always use the text editor `view` command to read files, including images (jpg, png, gif, webp) and PDFs.
+- If a file format is not supported by `view` (e.g. docx, xlsx, pptx, mp4, mp3), tell the user what the file is and propose a way to extract its content. Do not run any code until the user approves. MS Office files (docx, xlsx, pptx) are ZIP archives containing XML — `unzip` is the simplest way to extract their text.
 - Always use relative paths (e.g. `foo.py`, `src/bar.py`) with the text editor — never absolute paths.
 
 ## Workspace
@@ -192,7 +193,7 @@ def _exec_editor(inp, workspace):
 # ---- Public API ----
 
 async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-20250514",
-                max_tokens=16384, thinking=True, bash_timeout=300):
+                max_tokens=16384, thinking=True, bash_timeout=600):
     """Run one Claude agent turn. Async generator yielding streaming UI components."""
     import anthropic
 
@@ -286,6 +287,8 @@ async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-202505
                     out = f"Error: {out}"
                 if block.name == "bash":
                     yield {"type": "step_data", "data": out}
+                    if isinstance(out, str) and out.startswith("Error: Command timed out"):
+                        yield {"type": "callout", "callout": out, "style": "warning"}
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
             messages.append({"role": "user", "content": results})
             if hp:
