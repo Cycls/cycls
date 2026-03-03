@@ -1,8 +1,14 @@
+"""Agent loop — streams Claude tool-use turns with sandboxed execution."""
+
 import asyncio, base64, json, os, pathlib
 from cycls.app.state import _MEDIA_TYPES, ensure_workspace, history_path, load_history, save_history
 
+# ---- Configuration ----
+
 COMPACT_THRESHOLD = 300_000
 MAX_ATTACHMENTS = 5
+MAX_RETRIES = 3
+_RETRYABLE = ("overloaded", "rate limit", "too many requests", "429", "502", "503", "504")
 
 _DEFAULT_SYSTEM = """## Tools
 - Use `rg` or `rg --files` for searching text and files — it's faster than grep.
@@ -36,8 +42,10 @@ _UI_TOOLS = [
     }
 ]
 
+# ---- Utilities ----
+
 def _sniff_media_type(data: bytes) -> str | None:
-    """Detect media type from file magic bytes. Returns None if unrecognized."""
+    """Detect media type from magic bytes."""
     head = data[:12]
     if head[:3] == b"\xff\xd8\xff":          return "image/jpeg"
     if head[:8] == b"\x89PNG\r\n\x1a\n":    return "image/png"
@@ -46,9 +54,13 @@ def _sniff_media_type(data: bytes) -> str | None:
     if head[:4] == b"%PDF":                  return "application/pdf"
     return None
 
-# ---- Internal helpers ----
+def _is_retryable(e):
+    """Check if an exception is a transient API error worth retrying."""
+    msg = str(e).lower()
+    return any(s in msg for s in _RETRYABLE)
 
 def _prepare_prompt(context):
+    """Extract user prompt and file attachments from context."""
     ws = context.workspace
     ensure_workspace(ws)
     content = context.messages.raw[-1].get("content", "")
@@ -74,8 +86,10 @@ def _prepare_prompt(context):
         prompt += "\n\nAttached files: " + ", ".join(files)
     return ws, prompt
 
+# ---- Context management ----
 
 async def _compact(client, model, messages):
+    """Summarize conversation history to free context space."""
     response = await client.messages.create(
         model=model, max_tokens=8192,
         system=[{"type": "text", "text": (
@@ -96,7 +110,10 @@ async def _compact(client, model, messages):
         {"role": "assistant", "content": "Understood. I have the full context from our previous conversation. How can I help?"},
     ]
 
+# ---- API helpers ----
+
 def _build_tools(custom):
+    """Build the tools list for the API call."""
     tools = [
         {"type": "bash_20250124", "name": "bash"},
         {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"},
@@ -106,7 +123,10 @@ def _build_tools(custom):
     tools[-1]["cache_control"] = {"type": "ephemeral"}
     return tools
 
-async def _exec_bash(command, cwd, timeout=300):
+# ---- Tool execution ----
+
+async def _exec_bash(command, cwd, timeout=600):
+    """Run a bash command in a bwrap sandbox."""
     proc = await asyncio.create_subprocess_exec(
         "bwrap",
         "--ro-bind", "/", "/",
@@ -137,6 +157,7 @@ async def _exec_bash(command, cwd, timeout=300):
     return out.strip() or "(no output)"
 
 def _exec_editor(inp, workspace):
+    """Execute a text editor command (view, str_replace, create, insert)."""
     cmd = inp["command"]
     ws = pathlib.Path(workspace).resolve()
     raw = pathlib.PurePosixPath(inp["path"])
@@ -190,6 +211,21 @@ def _exec_editor(inp, workspace):
         return f"Inserted at line {pos} in {path}"
     return f"Error: unknown command {cmd}"
 
+def _prepare_tool(block, ws, timeout):
+    """Map a tool_use block to a UI step event and execution coroutine."""
+    name, inp = block.name, block.input
+    if name == "bash":
+        step = {"type": "step", "step": f"Bash({inp.get('command', '')[:60]})"}
+        coro = _exec_bash(inp.get("command", ""), ws, timeout=timeout)
+    elif name == "str_replace_based_edit_tool":
+        verb = "Editing" if inp.get("command") in ("str_replace", "create", "insert") else "Viewing"
+        step = {"type": "step", "step": f"{verb} {inp.get('path', 'file')}"}
+        coro = asyncio.sleep(0, result=_exec_editor(inp, ws))
+    else:
+        step = {"type": "tool_call", "tool": name, "args": inp}
+        coro = asyncio.sleep(0, result=f"{name} rendered successfully")
+    return step, coro
+
 # ---- Public API ----
 
 async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-20250514",
@@ -221,9 +257,11 @@ async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-202505
 
     total_in = total_out = cache_read = cache_create = 0
     saved_count = loaded_count
+    retries = 0
 
     while True:
         try:
+            # ---- Stream response ----
             thinking_text = ""
             search_idx, search_query = None, ""
 
@@ -251,6 +289,8 @@ async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-202505
                             search_idx = None
                 response = await stream.get_final_message()
 
+            # ---- Process response ----
+            retries = 0
             total_in += response.usage.input_tokens
             total_out += response.usage.output_tokens
             cache_read += response.usage.cache_read_input_tokens or 0
@@ -263,44 +303,44 @@ async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-202505
             if response.stop_reason != "tool_use":
                 break
 
-            # Build step indicators + dispatch tasks, then execute in parallel
-            coros = []
-            for block in tool_blocks:
-                name, inp = block.name, block.input
-                if name == "bash":
-                    yield {"type": "step", "step": f"Bash({inp.get('command', '')[:60]})"}
-                    coros.append(_exec_bash(inp.get("command", ""), ws, timeout=bash_timeout))
-                elif name == "str_replace_based_edit_tool":
-                    verb = "Editing" if inp.get("command") in ("str_replace", "create", "insert") else "Viewing"
-                    yield {"type": "step", "step": f"{verb} {inp.get('path', 'file')}"}
-                    coros.append(asyncio.sleep(0, result=_exec_editor(inp, ws)))
-                else:
-                    yield {"type": "tool_call", "tool": name, "args": inp}
-                    coros.append(asyncio.sleep(0, result=f"{name} rendered successfully"))
+            # ---- Execute tools ----
+            prepared = [_prepare_tool(b, ws, bash_timeout) for b in tool_blocks]
+            for step, _ in prepared:
+                yield step
 
-            if len(tool_blocks) > 1:
-                print(f"[PARALLEL] Running {len(tool_blocks)} tools concurrently")
-            outputs = await asyncio.gather(*coros, return_exceptions=True)
+            outputs = await asyncio.gather(*[coro for _, coro in prepared], return_exceptions=True)
+
             results = []
             for block, out in zip(tool_blocks, outputs):
                 if isinstance(out, BaseException):
                     out = f"Error: {out}"
-                if block.name == "bash":
-                    yield {"type": "step_data", "data": out}
-                    if isinstance(out, str) and out.startswith("Error: Command timed out"):
-                        yield {"type": "callout", "callout": out, "style": "warning"}
+                if isinstance(out, str) and out.startswith("Error: Command timed out"):
+                    yield {"type": "callout", "callout": out, "style": "warning"}
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
             messages.append({"role": "user", "content": results})
+
+            # ---- Save incrementally ----
             if hp:
                 save_history(hp, messages[saved_count:])
                 saved_count = len(messages)
 
         except Exception as e:
+            # Retry transient API errors with exponential backoff
+            if _is_retryable(e) and retries < MAX_RETRIES:
+                retries += 1
+                delay = 2 ** retries
+                yield {"type": "step", "step": f"Rate limited, retrying in {delay}s..."}
+                await asyncio.sleep(delay)
+                continue
+
+            # Recover from errors during tool execution
             last = messages[-1] if messages else {}
             content = last.get("content", [])
             if not isinstance(content, list):
                 yield {"type": "callout", "callout": str(e), "style": "error"}
                 break
+
+            # Assistant sent tool_use but execution failed — inject error results
             if last.get("role") == "assistant" and any(b.get("type") == "tool_use" for b in content):
                 results = [{"type": "tool_result", "tool_use_id": b["id"], "content": f"Error: {e}"}
                            for b in content if b.get("type") == "tool_use"]
@@ -309,6 +349,8 @@ async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-202505
                     save_history(hp, messages[saved_count:])
                     saved_count = len(messages)
                 continue
+
+            # API rejected tool_results (e.g. oversized PDF) — replace content with error
             if any(b.get("type") == "tool_result" and not str(b.get("content", "")).startswith("Error:")
                    for b in content):
                 for b in content:
@@ -318,9 +360,11 @@ async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-202505
                     save_history(hp, messages, mode="w")
                     saved_count = len(messages)
                 continue
+
             yield {"type": "callout", "callout": str(e), "style": "error"}
             break
 
+    # ---- Final save ----
     new_messages = messages[saved_count:]
     if hp:
         saved = False

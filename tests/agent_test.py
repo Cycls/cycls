@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cycls.agent import Agent, COMPACT_THRESHOLD, MAX_ATTACHMENTS, _exec_bash, _exec_editor, _prepare_prompt, _sniff_media_type
+from cycls.agent import Agent, COMPACT_THRESHOLD, MAX_ATTACHMENTS, MAX_RETRIES, _exec_bash, _exec_editor, _is_retryable, _prepare_prompt, _prepare_tool, _sniff_media_type
 from cycls.app.state import load_history
 
 
@@ -615,6 +615,63 @@ def test_exec_bash_truncates_large_output(tmp_path):
     result = asyncio.run(run())
     assert len(result) < 25000
     assert "truncated" in result
+
+
+# ---------------------------------------------------------------------------
+# Auto-retry tests
+# ---------------------------------------------------------------------------
+
+def test_is_retryable_detects_transient_errors():
+    assert _is_retryable(Exception("overloaded"))
+    assert _is_retryable(Exception("rate limit exceeded"))
+    assert _is_retryable(Exception("429 Too Many Requests"))
+    assert _is_retryable(Exception("502 Bad Gateway"))
+    assert not _is_retryable(Exception("invalid api key"))
+    assert not _is_retryable(Exception("context too long"))
+
+
+def test_auto_retry_on_overloaded(agent_env):
+    """Transient API errors should be retried, not shown as errors."""
+    ws, hp, ctx = agent_env
+
+    call_count = 0
+    final = _make_response([_text_block("Done")])
+
+    def stream_side_effect(**kw):
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            raise Exception("overloaded")
+        return FakeStream(final)
+
+    mock_client = MagicMock()
+    mock_client.messages.stream = stream_side_effect
+
+    with _mock_anthropic(mock_client), \
+         patch("asyncio.sleep", new_callable=lambda: AsyncMock(return_value=None)):
+        items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+
+    # No error callouts — retries handled it
+    callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
+    assert not callouts
+    # Should have retried and succeeded
+    assert call_count == 3
+
+
+def test_auto_retry_exhausted_shows_error(agent_env):
+    """After MAX_RETRIES, the error should surface to the user."""
+    ws, hp, ctx = agent_env
+
+    mock_client = MagicMock()
+    mock_client.messages.stream = MagicMock(side_effect=Exception("overloaded"))
+
+    with _mock_anthropic(mock_client), \
+         patch("asyncio.sleep", new_callable=lambda: AsyncMock(return_value=None)):
+        items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+
+    callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
+    assert len(callouts) == 1
+    assert "overloaded" in callouts[0]["callout"]
 
 
 # ---------------------------------------------------------------------------
