@@ -25,9 +25,9 @@ TOOLS = [
 
 @cycls.app(
     auth=True, 
-    analytics=True, 
+    analytics=True, # web=["Auth", "Analytics"]
     copy=[".env"], 
-    force_rebuild=False # app_options ["Auth", "Analytics"]
+    force_rebuild=False
 ) 
 async def super(context):
     async for msg in cycls.Agent(
