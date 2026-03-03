@@ -23,17 +23,23 @@ TOOLS = [
 ]
 
 
-@cycls.app(auth=True, analytics=True, copy=[".env"], force_rebuild=False)
+@cycls.app(
+    auth=True, 
+    analytics=True, 
+    copy=[".env"], 
+    force_rebuild=False # app_options ["Auth", "Analytics"]
+) 
 async def super(context):
-    print("context.messages.raw:", context.messages.raw)
-    async for msg in cycls.Agent(context=context,
-                                 system=SYSTEM, 
-                                 tools=TOOLS, 
-                                 builtin_tools=["Bash", "Editor", "WebSearch"],
-                                 model="claude-sonnet-4-6",
-                                 show_usage=True):
+    async for msg in cycls.Agent(
+                                context=context,
+                                system=SYSTEM, 
+                                tools=TOOLS, # skills+safe_keys
+                                builtin_tools=["Bash", "Editor", "WebSearch"],
+                                model="claude-sonnet-4-6",
+                                show_usage=False
+                            ):
         yield msg
 
 
-super.local()
-# super.deploy()
+# super.local()
+super.deploy()
