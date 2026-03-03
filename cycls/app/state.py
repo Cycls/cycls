@@ -6,12 +6,6 @@ from typing import Any
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 
-_MEDIA_TYPES = {
-    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-    ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp",
-    ".pdf": "application/pdf",
-}
-
 def resolve_path(workspace, rel):
     """Resolve *rel* inside *workspace*, raising ValueError on traversal."""
     workspace = Path(workspace)
@@ -19,23 +13,6 @@ def resolve_path(workspace, rel):
     if not resolved.is_relative_to(workspace.resolve()):
         raise ValueError("Path traversal denied")
     return resolved
-
-def read_file(workspace, filename):
-    """Read a workspace file safely. Returns (media_type, bytes) for binary
-    media files, or (None, str) for text files. Raises ValueError on
-    traversal and FileNotFoundError when the file doesn't exist."""
-    path = resolve_path(workspace, filename)
-    if not path.is_file():
-        raise FileNotFoundError(f"{filename} not found")
-    ext = path.suffix.lower()
-    media_type = _MEDIA_TYPES.get(ext)
-    if media_type:
-        return media_type, path.read_bytes()
-    try:
-        text = path.read_text()
-    except UnicodeDecodeError:
-        raise UnicodeDecodeError("utf-8", b"", 0, 1, f"{filename} is a binary file")
-    return None, text
 
 def ensure_workspace(workspace):
     """Create the workspace directory tree if it doesn't exist."""
