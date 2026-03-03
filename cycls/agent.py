@@ -3,8 +3,6 @@
 import asyncio, base64, json, os, pathlib
 from cycls.app.state import _MEDIA_TYPES, ensure_workspace, history_path, load_history, save_history
 
-# ---- Configuration ----
-
 COMPACT_THRESHOLD = 300_000
 MAX_ATTACHMENTS = 5
 MAX_RETRIES = 3
@@ -42,10 +40,7 @@ _UI_TOOLS = [
     }
 ]
 
-# ---- Utilities ----
-
 def _sniff_media_type(data: bytes) -> str | None:
-    """Detect media type from magic bytes."""
     head = data[:12]
     if head[:3] == b"\xff\xd8\xff":          return "image/jpeg"
     if head[:8] == b"\x89PNG\r\n\x1a\n":    return "image/png"
@@ -55,17 +50,13 @@ def _sniff_media_type(data: bytes) -> str | None:
     return None
 
 def _is_retryable(e):
-    """Check if an exception is a transient API error worth retrying."""
     msg = str(e).lower()
     return any(s in msg for s in _RETRYABLE)
 
 def _prepare_prompt(context):
-    """Extract user prompt and file attachments from context."""
-    ws = context.workspace
-    ensure_workspace(ws)
     content = context.messages.raw[-1].get("content", "")
     if not isinstance(content, list):
-        return ws, content
+        return content
     texts = []
     files = []
     for p in content:
@@ -84,12 +75,9 @@ def _prepare_prompt(context):
     prompt = " ".join(texts)
     if files:
         prompt += "\n\nAttached files: " + ", ".join(files)
-    return ws, prompt
-
-# ---- Context management ----
+    return prompt
 
 async def _compact(client, model, messages):
-    """Summarize conversation history to free context space."""
     response = await client.messages.create(
         model=model, max_tokens=8192,
         system=[{"type": "text", "text": (
@@ -100,33 +88,24 @@ async def _compact(client, model, messages):
         )}],
         messages=messages + [{"role": "user", "content": "Summarize our conversation so far for continuity."}],
     )
-    summary = response.content[0].text
     return [
-        {"role": "user", "content": (
-            "This session is being continued from a previous conversation "
-            "that ran out of context. The conversation is summarized below:\n\n"
-            + summary
-        )},
+        {"role": "user", "content": "This session is being continued from a previous conversation that ran out of context. The conversation is summarized below:\n\n" + response.content[0].text},
         {"role": "assistant", "content": "Understood. I have the full context from our previous conversation. How can I help?"},
     ]
 
-# ---- API helpers ----
-
 def _build_tools(custom):
-    """Build the tools list for the API call."""
     tools = [
         {"type": "bash_20250124", "name": "bash"},
         {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"},
         {"type": "web_search_20250305", "name": "web_search"},
     ] + [{"type": "custom", "name": t["name"], "description": t.get("description", ""),
           "input_schema": t.get("inputSchema", t.get("input_schema", {}))} for t in custom or []]
-    tools[-1]["cache_control"] = {"type": "ephemeral"}
+    tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
     return tools
 
 # ---- Tool execution ----
 
 async def _exec_bash(command, cwd, timeout=600):
-    """Run a bash command in a bwrap sandbox."""
     proc = await asyncio.create_subprocess_exec(
         "bwrap",
         "--ro-bind", "/", "/",
@@ -157,35 +136,30 @@ async def _exec_bash(command, cwd, timeout=600):
     return out.strip() or "(no output)"
 
 def _exec_editor(inp, workspace):
-    """Execute a text editor command (view, str_replace, create, insert)."""
     cmd = inp["command"]
     ws = pathlib.Path(workspace).resolve()
     raw = pathlib.PurePosixPath(inp["path"])
-    # Strip /workspace prefix (bwrap mount point) or leading / so all paths resolve under ws
     try:
         rel = raw.relative_to("/workspace")
     except ValueError:
         rel = pathlib.PurePosixPath(raw.as_posix().lstrip("/"))
     path = (ws / rel).resolve()
     if not path.is_relative_to(ws):
-        return f"Error: path escapes workspace"
+        return "Error: path escapes workspace"
     if cmd != "create" and not path.exists():
         return f"Error: {path} does not exist"
     if path.is_dir():
         return f"Error: {path} is a directory, not a file"
     if cmd == "view":
-        ext = path.suffix.lower()
-        media_type = _MEDIA_TYPES.get(ext)
+        media_type = _MEDIA_TYPES.get(path.suffix.lower())
         if media_type:
-            raw = path.read_bytes()
-            media_type = _sniff_media_type(raw) or media_type
-            data = base64.b64encode(raw).decode()
+            blob = path.read_bytes()
+            media_type = _sniff_media_type(blob) or media_type
+            data = base64.b64encode(blob).decode()
             kind = "document" if not media_type.startswith("image/") else "image"
             return [{"type": kind, "source": {"type": "base64", "media_type": media_type, "data": data}}]
-        try:
-            lines = path.read_text().splitlines()
-        except UnicodeDecodeError:
-            return f"Error: {path} is a binary file"
+        try: lines = path.read_text().splitlines()
+        except UnicodeDecodeError: return f"Error: {path} is a binary file"
         vr = inp.get("view_range")
         start = vr[0] if vr else 1
         if vr: lines = lines[vr[0] - 1:vr[1]]
@@ -211,8 +185,9 @@ def _exec_editor(inp, workspace):
         return f"Inserted at line {pos} in {path}"
     return f"Error: unknown command {cmd}"
 
+async def _defer(fn, *args): return fn(*args)
+
 def _prepare_tool(block, ws, timeout):
-    """Map a tool_use block to a UI step event and execution coroutine."""
     name, inp = block.name, block.input
     if name == "bash":
         step = {"type": "step", "step": f"Bash({inp.get('command', '')[:60]})"}
@@ -220,51 +195,81 @@ def _prepare_tool(block, ws, timeout):
     elif name == "str_replace_based_edit_tool":
         verb = "Editing" if inp.get("command") in ("str_replace", "create", "insert") else "Viewing"
         step = {"type": "step", "step": f"{verb} {inp.get('path', 'file')}"}
-        coro = asyncio.sleep(0, result=_exec_editor(inp, ws))
+        coro = _defer(_exec_editor, inp, ws)
     else:
         step = {"type": "tool_call", "tool": name, "args": inp}
         coro = asyncio.sleep(0, result=f"{name} rendered successfully")
     return step, coro
 
-# ---- Public API ----
+# ---- Agent ----
+
+def _recover(e, messages):
+    """Try to patch messages for recovery. Returns save mode ("a"/"w") or None."""
+    last = messages[-1] if messages else {}
+    content = last.get("content", [])
+    if not isinstance(content, list):
+        return None
+    if last.get("role") == "assistant" and any(b.get("type") == "tool_use" for b in content):
+        results = [{"type": "tool_result", "tool_use_id": b["id"], "content": f"Error: {e}"}
+                   for b in content if b.get("type") == "tool_use"]
+        messages.append({"role": "user", "content": results})
+        return "a"
+    if any(b.get("type") == "tool_result" and not str(b.get("content", "")).startswith("Error:")
+           for b in content):
+        for b in content:
+            if b.get("type") == "tool_result":
+                b["content"] = f"Error: {e}"
+        return "w"
+    return None
+
+async def _finalize(client, model, hp, messages, saved, usage):
+    """Compact if needed, save remaining history, emit usage."""
+    new = messages[saved:]
+    if hp:
+        did_compact = False
+        if usage["inputTokens"] > COMPACT_THRESHOLD and messages:
+            try:
+                yield {"type": "step", "step": "Compacting context..."}
+                summary = await _compact(client, model, messages)
+                save_history(hp, summary, mode="w")
+                did_compact = True
+            except Exception:
+                pass
+        if not did_compact and new and new[-1].get("role") == "assistant":
+            save_history(hp, new)
+    if usage["inputTokens"]:
+        yield {"type": "usage", "usage": {"tokenUsage": {"total": usage}}}
 
 async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-20250514",
                 max_tokens=16384, thinking=True, bash_timeout=600):
     """Run one Claude agent turn. Async generator yielding streaming UI components."""
     import anthropic
 
-    ws, prompt = _prepare_prompt(context)
+    ws = context.workspace
+    ensure_workspace(ws)
+    prompt = _prepare_prompt(context)
     client = anthropic.AsyncAnthropic()
-
-    sid = context.session_id
-    user = context.user
-    hp = history_path(user, sid) if sid and user else None
-
+    hp = history_path(context.user, context.session_id) if context.session_id and context.user else None
     messages = load_history(hp) if hp else []
-    loaded_count = len(messages)
+    saved = len(messages)
     messages.append({"role": "user", "content": prompt})
-
-    all_tools = _UI_TOOLS + (tools or [])
-    full_system = _DEFAULT_SYSTEM + ("\n\n" + system if system else "")
 
     kwargs = {
         "model": model, "max_tokens": max_tokens,
-        "tools": _build_tools(all_tools), "messages": messages,
-        "system": [{"type": "text", "text": full_system, "cache_control": {"type": "ephemeral"}}],
+        "tools": _build_tools(_UI_TOOLS + (tools or [])),
+        "messages": messages,
+        "system": [{"type": "text", "text": _DEFAULT_SYSTEM + ("\n\n" + system if system else ""),
+                     "cache_control": {"type": "ephemeral"}}],
+        **({"thinking": {"type": "adaptive"}} if thinking else {}),
     }
-    if thinking:
-        kwargs["thinking"] = {"type": "adaptive"}
 
-    total_in = total_out = cache_read = cache_create = 0
-    saved_count = loaded_count
+    usage = {"inputTokens": 0, "outputTokens": 0, "cachedInputTokens": 0, "cacheCreationTokens": 0}
     retries = 0
 
     while True:
         try:
-            # ---- Stream response ----
-            thinking_text = ""
-            search_idx, search_query = None, ""
-
+            # ---- Stream ----
+            thinking_text, search_idx, search_query = "", None, ""
             async with client.messages.stream(**kwargs) as stream:
                 async for ev in stream:
                     if ev.type == "content_block_start":
@@ -289,97 +294,53 @@ async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-202505
                             search_idx = None
                 response = await stream.get_final_message()
 
-            # ---- Process response ----
+            # ---- Process ----
             retries = 0
-            total_in += response.usage.input_tokens
-            total_out += response.usage.output_tokens
-            cache_read += response.usage.cache_read_input_tokens or 0
-            cache_create += response.usage.cache_creation_input_tokens or 0
+            u = response.usage
+            usage["inputTokens"] += u.input_tokens
+            usage["outputTokens"] += u.output_tokens
+            usage["cachedInputTokens"] += u.cache_read_input_tokens or 0
+            usage["cacheCreationTokens"] += u.cache_creation_input_tokens or 0
 
-            content = [b.model_dump(exclude_none=True) for b in response.content]
-            messages.append({"role": "assistant", "content": content})
-            tool_blocks = [b for b in response.content if b.type == "tool_use"]
+            messages.append({"role": "assistant",
+                            "content": [b.model_dump(exclude_none=True) for b in response.content]})
 
             if response.stop_reason != "tool_use":
                 break
 
             # ---- Execute tools ----
-            prepared = [_prepare_tool(b, ws, bash_timeout) for b in tool_blocks]
-            for step, _ in prepared:
-                yield step
-
-            outputs = await asyncio.gather(*[coro for _, coro in prepared], return_exceptions=True)
+            tool_blocks = [b for b in response.content if b.type == "tool_use"]
+            steps, coros = zip(*(_prepare_tool(b, ws, bash_timeout) for b in tool_blocks))
+            for s in steps: yield s
+            outputs = await asyncio.gather(*coros, return_exceptions=True)
 
             results = []
             for block, out in zip(tool_blocks, outputs):
-                if isinstance(out, BaseException):
-                    out = f"Error: {out}"
+                if isinstance(out, BaseException): out = f"Error: {out}"
                 if isinstance(out, str) and out.startswith("Error: Command timed out"):
                     yield {"type": "callout", "callout": out, "style": "warning"}
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
             messages.append({"role": "user", "content": results})
 
-            # ---- Save incrementally ----
             if hp:
-                save_history(hp, messages[saved_count:])
-                saved_count = len(messages)
+                save_history(hp, messages[saved:])
+                saved = len(messages)
 
         except Exception as e:
-            # Retry transient API errors with exponential backoff
             if _is_retryable(e) and retries < MAX_RETRIES:
                 retries += 1
                 delay = 2 ** retries
                 yield {"type": "step", "step": f"Rate limited, retrying in {delay}s..."}
                 await asyncio.sleep(delay)
                 continue
-
-            # Recover from errors during tool execution
-            last = messages[-1] if messages else {}
-            content = last.get("content", [])
-            if not isinstance(content, list):
+            mode = _recover(e, messages)
+            if mode is None:
                 yield {"type": "callout", "callout": str(e), "style": "error"}
                 break
+            if hp:
+                save_history(hp, messages if mode == "w" else messages[saved:], mode=mode)
+                saved = len(messages)
+            continue
 
-            # Assistant sent tool_use but execution failed — inject error results
-            if last.get("role") == "assistant" and any(b.get("type") == "tool_use" for b in content):
-                results = [{"type": "tool_result", "tool_use_id": b["id"], "content": f"Error: {e}"}
-                           for b in content if b.get("type") == "tool_use"]
-                messages.append({"role": "user", "content": results})
-                if hp:
-                    save_history(hp, messages[saved_count:])
-                    saved_count = len(messages)
-                continue
-
-            # API rejected tool_results (e.g. oversized PDF) — replace content with error
-            if any(b.get("type") == "tool_result" and not str(b.get("content", "")).startswith("Error:")
-                   for b in content):
-                for b in content:
-                    if b.get("type") == "tool_result":
-                        b["content"] = f"Error: {e}"
-                if hp:
-                    save_history(hp, messages, mode="w")
-                    saved_count = len(messages)
-                continue
-
-            yield {"type": "callout", "callout": str(e), "style": "error"}
-            break
-
-    # ---- Final save ----
-    new_messages = messages[saved_count:]
-    if hp:
-        saved = False
-        if total_in > COMPACT_THRESHOLD and messages:
-            try:
-                yield {"type": "step", "step": "Compacting context..."}
-                messages = await _compact(client, model, messages)
-                save_history(hp, messages, mode="w")
-                saved = True
-            except Exception:
-                pass
-        if not saved and new_messages and new_messages[-1].get("role") == "assistant":
-            save_history(hp, new_messages)
-    if total_in:
-        yield {"type": "usage", "usage": {"tokenUsage": {"total": {
-            "inputTokens": total_in, "outputTokens": total_out,
-            "cachedInputTokens": cache_read, "cacheCreationTokens": cache_create,
-        }}}}
+    async for event in _finalize(client, model, hp, messages, saved, usage):
+        yield event
