@@ -1,14 +1,23 @@
 """Agent loop — streams Claude tool-use turns with sandboxed execution."""
 
 import asyncio, base64, json, os, pathlib
-from cycls.app.state import _MEDIA_TYPES, ensure_workspace, history_path, load_history, save_history
+from cycls.app.state import ensure_workspace, history_path, load_history, save_history
 
 COMPACT_THRESHOLD = 300_000
 MAX_ATTACHMENTS = 5
 MAX_RETRIES = 3
 _RETRYABLE = ("overloaded", "rate limit", "too many requests", "429", "502", "503", "504")
 
-_DEFAULT_SYSTEM = """## Tools
+_MEDIA_TYPES = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp",
+    ".pdf": "application/pdf",
+}
+
+_DEFAULT_SYSTEM = """You are Cycls, a general-purpose AI agent built by cycls.com that runs in the user's workspace in Cycls cloud.
+You help with coding, research, writing, analysis, system administration, and any task the user brings.
+
+## Tools
 - Use `rg` or `rg --files` for searching text and files — it's faster than grep.
 - Prefer `apply_patch` for single-file edits; use scripting when more efficient.
 - Default to ASCII in file edits; only use Unicode when clearly justified.
@@ -23,6 +32,20 @@ _DEFAULT_SYSTEM = """## Tools
 - Git is not available in this workspace.
 - You are already in `/workspace` — never prefix commands with `cd /workspace`.
 - Avoid destructive commands (`rm -rf`) unless the user explicitly asks.
+
+## Working style
+- The user may not be technical. Never assume they know programming concepts, terminal commands, or file system conventions.
+- Present results in plain language. Instead of dumping raw command output, summarize what you found or did.
+
+## Research and analysis
+- When asked to research a topic, search the web and synthesize findings.
+- Present findings organized by relevance, with sources.
+- Distinguish facts from opinions and flag uncertainty.
+
+## Code review
+- Prioritize bugs, security risks, and missing tests.
+- Present findings by severity with file and line references.
+- State explicitly if no issues are found.
 """
 
 _UI_TOOLS = [
@@ -93,13 +116,16 @@ async def _compact(client, model, messages):
         {"role": "assistant", "content": "Understood. I have the full context from our previous conversation. How can I help?"},
     ]
 
-def _build_tools(custom):
-    tools = [
-        {"type": "bash_20250124", "name": "bash"},
-        {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"},
-        {"type": "web_search_20250305", "name": "web_search"},
-    ] + [{"type": "custom", "name": t["name"], "description": t.get("description", ""),
-          "input_schema": t.get("inputSchema", t.get("input_schema", {}))} for t in custom or []]
+_BUILTINS = {
+    "Bash": {"type": "bash_20250124", "name": "bash"},
+    "Editor": {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"},
+    "WebSearch": {"type": "web_search_20250305", "name": "web_search"},
+}
+
+def _build_tools(builtin_tools, custom):
+    tools = [_BUILTINS[b] for b in builtin_tools]
+    tools += [{"type": "custom", "name": t["name"], "description": t.get("description", ""),
+               "input_schema": t.get("inputSchema", t.get("input_schema", {}))} for t in custom or []]
     tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
     return tools
 
@@ -187,15 +213,43 @@ def _exec_editor(inp, workspace):
 
 async def _defer(fn, *args): return fn(*args)
 
+_UI_TOOL_NAMES = {t["name"] for t in _UI_TOOLS}
+
+def _render_ui_tool(name, args):
+    if name == "render_table":
+        events = []
+        if title := args.get("title"):
+            events.append(f"\n**{title}**\n")
+        events.append({"type": "table", "headers": args.get("headers", [])})
+        for row in args.get("rows", []):
+            events.append({"type": "table", "row": row})
+        return events
+    if name == "render_callout":
+        return [{"type": "callout", "callout": args.get("message", ""), "style": args.get("style", "info"), "title": args.get("title", "")}]
+    if name == "render_image":
+        return [{"type": "image", "src": args.get("src", ""), "alt": args.get("alt", ""), "caption": args.get("caption", "")}]
+    if name == "render_canvas":
+        return [
+            {"type": "canvas", "canvas": "document", "open": True, "title": args.get("title", "Document")},
+            {"type": "canvas", "canvas": "document", "content": args.get("content", "")},
+            {"type": "canvas", "canvas": "document", "done": True},
+        ]
+    return None
+
 def _prepare_tool(block, ws, timeout):
     name, inp = block.name, block.input
     if name == "bash":
-        step = {"type": "step", "step": f"Bash({inp.get('command', '')[:60]})"}
+        cmd = inp.get('command', '')
+        label = cmd if len(cmd) <= 80 else cmd[:60] + ' … ' + cmd[-17:]
+        step = {"type": "step", "step": f"Bash({label})"}
         coro = _exec_bash(inp.get("command", ""), ws, timeout=timeout)
     elif name == "str_replace_based_edit_tool":
         verb = "Editing" if inp.get("command") in ("str_replace", "create", "insert") else "Viewing"
         step = {"type": "step", "step": f"{verb} {inp.get('path', 'file')}"}
         coro = _defer(_exec_editor, inp, ws)
+    elif name in _UI_TOOL_NAMES:
+        step = _render_ui_tool(name, inp) or []
+        coro = asyncio.sleep(0, result=f"{name} rendered successfully")
     else:
         step = {"type": "tool_call", "tool": name, "args": inp}
         coro = asyncio.sleep(0, result=f"{name} rendered successfully")
@@ -222,8 +276,7 @@ def _recover(e, messages):
         return "w"
     return None
 
-async def _finalize(client, model, hp, messages, saved, usage):
-    """Compact if needed, save remaining history, emit usage."""
+async def _finalize(client, model, hp, messages, saved, usage, show_usage=False):
     new = messages[saved:]
     if hp:
         did_compact = False
@@ -237,11 +290,12 @@ async def _finalize(client, model, hp, messages, saved, usage):
                 pass
         if not did_compact and new and new[-1].get("role") == "assistant":
             save_history(hp, new)
-    if usage["inputTokens"]:
-        yield {"type": "usage", "usage": {"tokenUsage": {"total": usage}}}
+    if show_usage and usage["inputTokens"]:
+        yield f'\n\n*in: {usage["inputTokens"]:,} · out: {usage["outputTokens"]:,} · cached: {usage["cachedInputTokens"]:,} · cache-create: {usage["cacheCreationTokens"]:,}*'
 
-async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-20250514",
-                max_tokens=16384, thinking=True, bash_timeout=600):
+async def Agent(*, context, system="", tools=None, builtin_tools=[],
+                model="claude-sonnet-4-20250514", max_tokens=16384, thinking=True,
+                bash_timeout=600, show_usage=False):
     """Run one Claude agent turn. Async generator yielding streaming UI components."""
     import anthropic
 
@@ -256,7 +310,7 @@ async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-202505
 
     kwargs = {
         "model": model, "max_tokens": max_tokens,
-        "tools": _build_tools(_UI_TOOLS + (tools or [])),
+        "tools": _build_tools(builtin_tools, _UI_TOOLS + (tools or [])),
         "messages": messages,
         "system": [{"type": "text", "text": _DEFAULT_SYSTEM + ("\n\n" + system if system else ""),
                      "cache_control": {"type": "ephemeral"}}],
@@ -311,7 +365,11 @@ async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-202505
             # ---- Execute tools ----
             tool_blocks = [b for b in response.content if b.type == "tool_use"]
             steps, coros = zip(*(_prepare_tool(b, ws, bash_timeout) for b in tool_blocks))
-            for s in steps: yield s
+            for s in steps:
+                if isinstance(s, list):
+                    for e in s: yield e
+                else:
+                    yield s
             outputs = await asyncio.gather(*coros, return_exceptions=True)
 
             results = []
@@ -342,5 +400,5 @@ async def Agent(*, context, system="", tools=None, model="claude-sonnet-4-202505
                 saved = len(messages)
             continue
 
-    async for event in _finalize(client, model, hp, messages, saved, usage):
+    async for event in _finalize(client, model, hp, messages, saved, usage, show_usage):
         yield event
