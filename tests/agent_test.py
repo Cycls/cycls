@@ -465,7 +465,7 @@ def test_prepare_prompt_under_limit(tmp_path):
     ctx.messages = types.SimpleNamespace()
     ctx.messages.raw = [{"role": "user", "content": parts}]
 
-    _, prompt = _prepare_prompt(ctx)
+    prompt = _prepare_prompt(ctx)
     for i in range(MAX_ATTACHMENTS):
         assert f"doc{i}.pdf" in prompt
     assert "not loaded" not in prompt
@@ -483,7 +483,7 @@ def test_prepare_prompt_over_limit(tmp_path):
     ctx.messages = types.SimpleNamespace()
     ctx.messages.raw = [{"role": "user", "content": parts}]
 
-    _, prompt = _prepare_prompt(ctx)
+    prompt = _prepare_prompt(ctx)
     # First MAX_ATTACHMENTS are in the attached files list
     for i in range(MAX_ATTACHMENTS):
         assert f"img{i}.png" in prompt

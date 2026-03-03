@@ -98,5 +98,5 @@ async def super(context):
             yield msg
 
 
-# super.local()
-super.deploy()
+super.local()
+# super.deploy()
