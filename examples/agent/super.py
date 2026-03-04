@@ -34,7 +34,7 @@ async def super(context):
                                 context=context,
                                 system=SYSTEM, 
                                 tools=TOOLS, # skills+safe_keys
-                                builtin_tools=["Bash", "Editor", "WebSearch"],
+                                builtin_tools=["Bash", "Editor", "WebSearch"], # "Canvas"
                                 model="claude-sonnet-4-6",
                                 show_usage=False
                             ):
