@@ -158,29 +158,29 @@ export function MessageBubble({
   );
 }
 
-const loaderDotAnim = {
-  y: ["0%", "-60%", "0%"],
-  opacity: [1, 0.7, 1],
-};
-
-const loaderTransition = {
-  duration: 0.6,
-  ease: "easeInOut" as const,
-  repeat: Infinity,
-  repeatType: "loop" as const,
-};
+function Star({ size, className }: { size: number; className?: string }) {
+  return (
+    <svg viewBox="0 0 10.5 10.5" width={size} height={size} className={className} fill="currentColor">
+      <path d="M 5.248 0 L 5.734 1.654 C 6.164 3.153 7.345 4.33 8.844 4.765 L 10.496 5.241 L 8.844 5.718 C 7.345 6.152 6.164 7.329 5.734 8.829 L 5.248 10.496 L 4.762 8.843 C 4.332 7.343 3.152 6.166 1.652 5.732 L 0 5.255 L 1.652 4.779 C 3.152 4.344 4.332 3.167 4.762 1.668 L 5.248 0 Z" />
+    </svg>
+  );
+}
 
 function Loader() {
   return (
-    <div className="flex items-center gap-1 py-3">
-      {[0, 0.1, 0.2].map((delay) => (
-        <motion.div
-          key={delay}
-          className="size-2 rounded-full bg-foreground/60"
-          animate={loaderDotAnim}
-          transition={{ ...loaderTransition, delay }}
-        />
-      ))}
+    <div className="flex items-center gap-1.5 py-3">
+      <motion.div
+        animate={{ scale: [1, 0.6, 1], opacity: [0.7, 0.3, 0.7] }}
+        transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
+      >
+        <Star size={12} className="text-foreground/60" />
+      </motion.div>
+      <motion.div
+        animate={{ scale: [0.6, 1, 0.6], opacity: [0.3, 0.7, 0.3] }}
+        transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
+      >
+        <Star size={8} className="text-foreground/60" />
+      </motion.div>
     </div>
   );
 }
