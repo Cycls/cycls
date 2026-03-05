@@ -50,6 +50,7 @@ function renderPart(part: Part, index: number, isStreaming?: boolean) {
         <StepPart
           key={index}
           step={part.step || ""}
+          toolName={part.tool_name}
           isStreaming={isStreaming}
         />
       );

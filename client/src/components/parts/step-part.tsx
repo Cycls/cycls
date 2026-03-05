@@ -2,9 +2,11 @@ import { cn } from "../../lib/utils";
 
 export function StepPart({
   step,
+  toolName,
   isStreaming,
 }: {
   step: string;
+  toolName?: string;
   isStreaming?: boolean;
 }) {
   return (
@@ -35,7 +37,18 @@ export function StepPart({
           </svg>
         )}
       </div>
-      <span className="font-mono text-xs truncate">{step}</span>
+      <span className="font-mono text-xs truncate">
+        {toolName ? (
+          <>
+            <span className="font-semibold text-foreground">{toolName}</span>
+            <span className="text-foreground">(</span>
+            {step}
+            <span className="text-foreground">)</span>
+          </>
+        ) : (
+          step
+        )}
+      </span>
     </div>
   );
 }
