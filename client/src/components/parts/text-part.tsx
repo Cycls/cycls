@@ -54,7 +54,7 @@ function MarkdownCodeBlock({
   };
 
   return (
-    <CodeBlock className="my-3">
+    <CodeBlock className="my-3 bg-background">
       <CodeBlockGroup className="flex h-9 items-center justify-between px-4">
         <span className="font-mono text-xs text-muted-foreground">
           {language}
