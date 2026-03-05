@@ -158,29 +158,31 @@ export function MessageBubble({
   );
 }
 
-function Star({ size, className }: { size: number; className?: string }) {
-  return (
-    <svg viewBox="0 0 10.5 10.5" width={size} height={size} className={className} fill="currentColor">
-      <path d="M 5.248 0 L 5.734 1.654 C 6.164 3.153 7.345 4.33 8.844 4.765 L 10.496 5.241 L 8.844 5.718 C 7.345 6.152 6.164 7.329 5.734 8.829 L 5.248 10.496 L 4.762 8.843 C 4.332 7.343 3.152 6.166 1.652 5.732 L 0 5.255 L 1.652 4.779 C 3.152 4.344 4.332 3.167 4.762 1.668 L 5.248 0 Z" />
-    </svg>
-  );
-}
+const STAR_PATH = "M 5.248 0 L 5.734 1.654 C 6.164 3.153 7.345 4.33 8.844 4.765 L 10.496 5.241 L 8.844 5.718 C 7.345 6.152 6.164 7.329 5.734 8.829 L 5.248 10.496 L 4.762 8.843 C 4.332 7.343 3.152 6.166 1.652 5.732 L 0 5.255 L 1.652 4.779 C 3.152 4.344 4.332 3.167 4.762 1.668 L 5.248 0 Z";
+const SMALL_STAR_PATH = "M 17.359 13.159 C 17.493 13.671 18.909 15.02 19.38 15.192 C 18.909 15.31 17.516 16.704 17.359 17.226 C 17.225 16.714 15.89 15.308 15.338 15.192 C 15.89 14.962 17.211 13.671 17.359 13.159 Z";
 
 function Loader() {
   return (
-    <div className="flex items-center gap-1.5 py-3">
-      <motion.div
-        animate={{ scale: [1, 0.6, 1], opacity: [0.7, 0.3, 0.7] }}
-        transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
-      >
-        <Star size={12} className="text-foreground/60" />
-      </motion.div>
-      <motion.div
-        animate={{ scale: [0.6, 1, 0.6], opacity: [0.3, 0.7, 0.3] }}
-        transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
-      >
-        <Star size={8} className="text-foreground/60" />
-      </motion.div>
+    <div className="flex items-center py-3">
+      <svg viewBox="-1 -1 22 19" className="h-7 text-foreground/60">
+        <motion.path
+          d={STAR_PATH}
+          fill="currentColor"
+          animate={{ scale: [1, 0.5, 1], opacity: [1, 0.2, 1] }}
+          transition={{ duration: 0.9, repeat: Infinity, ease: "easeInOut" }}
+          style={{ transformOrigin: "5.248px 5.248px" }}
+        />
+        <motion.path
+          d={SMALL_STAR_PATH}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={0.6}
+          animate={{ scale: [0.5, 1, 0.5], opacity: [0.2, 1, 0.2] }}
+          transition={{ duration: 0.9, repeat: Infinity, ease: "easeInOut" }}
+          style={{ transformOrigin: "17.359px 15.192px" }}
+          transform="translate(-3 -3)"
+        />
+      </svg>
     </div>
   );
 }
