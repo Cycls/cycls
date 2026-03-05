@@ -1,6 +1,7 @@
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useState } from "react";
+import { useDarkMode } from "../../hooks/use-dark-mode";
 
 export function CodePart({
   code,
@@ -9,6 +10,7 @@ export function CodePart({
   code: string;
   language?: string;
 }) {
+  const isDark = useDarkMode();
   const [copied, setCopied] = useState(false);
 
   const copy = () => {
@@ -31,13 +33,13 @@ export function CodePart({
         </button>
       </div>
       <SyntaxHighlighter
-        style={oneDark}
+        style={isDark ? oneDark : oneLight}
         language={language || "text"}
         PreTag="div"
         customStyle={{
           margin: 0,
           borderRadius: 0,
-          fontSize: "13px",
+          fontSize: "14px",
           padding: "1rem",
         }}
       >
