@@ -18,12 +18,14 @@ export function CodePart({
   };
 
   return (
-    <div className="my-3 rounded-lg overflow-hidden border border-[var(--border-color)]">
-      <div className="bg-[var(--bg-secondary)] px-4 py-2 text-xs text-[var(--text-secondary)] flex justify-between items-center">
-        <span>{language || "code"}</span>
+    <div className="my-3 overflow-clip rounded-xl border border-border bg-card">
+      <div className="flex h-9 items-center justify-between px-4">
+        <span className="font-mono text-xs text-muted-foreground">
+          {language || "code"}
+        </span>
         <button
           onClick={copy}
-          className="hover:text-[var(--accent)] cursor-pointer"
+          className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
         >
           {copied ? "Copied!" : "Copy"}
         </button>
@@ -32,7 +34,12 @@ export function CodePart({
         style={oneDark}
         language={language || "text"}
         PreTag="div"
-        customStyle={{ margin: 0, borderRadius: 0 }}
+        customStyle={{
+          margin: 0,
+          borderRadius: 0,
+          fontSize: "13px",
+          padding: "1rem",
+        }}
       >
         {code}
       </SyntaxHighlighter>

@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import type { Message } from "../hooks/use-chat";
 
@@ -18,48 +19,60 @@ export function Chat({
   title?: string;
 }) {
   const [input, setInput] = useState("");
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { scrollRef, contentRef } = useStickToBottom();
 
-  // Auto-scroll
+  // Auto-resize textarea
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (!textareaRef.current) return;
+    textareaRef.current.style.height = "auto";
+    textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+  }, [input]);
 
-  // Focus input on mount
+  // Focus on mount
   useEffect(() => {
-    inputRef.current?.focus();
+    textareaRef.current?.focus();
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = useCallback(() => {
     const text = input.trim();
     if (!text || isStreaming) return;
     setInput("");
     onSend(text);
+  }, [input, isStreaming, onSend]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  };
+
+  const toggleDark = () => {
+    document.body.classList.toggle("dark");
   };
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="h-screen flex flex-col">
       {/* Header */}
-      <header className="border-b border-[var(--border-color)] p-4">
+      <header className="shrink-0 border-b border-border px-6 py-3">
         <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <h1 className="text-lg font-semibold">{title || "Cycls"}</h1>
-          <div className="flex items-center gap-2">
+          <h1 className="text-base font-semibold">{title || "Cycls"}</h1>
+          <div className="flex items-center gap-1">
             {messages.length > 0 && (
               <button
                 onClick={onClear}
-                className="text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] px-3 py-1.5 rounded-lg hover:bg-[var(--bg-secondary)] cursor-pointer"
+                className="text-sm text-muted-foreground hover:text-foreground px-2.5 py-1.5 rounded-lg hover:bg-secondary transition-colors cursor-pointer"
               >
                 Clear
               </button>
             )}
             <button
-              onClick={() => document.body.classList.toggle("dark")}
-              className="p-2 rounded-lg hover:bg-[var(--bg-secondary)] cursor-pointer"
+              onClick={toggleDark}
+              className="text-muted-foreground hover:text-foreground p-2 rounded-lg hover:bg-secondary transition-colors cursor-pointer"
             >
               <svg
-                className="w-5 h-5"
+                className="w-4 h-4"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -77,11 +90,13 @@ export function Chat({
       </header>
 
       {/* Messages */}
-      <main className="flex-1 overflow-y-auto p-4">
-        <div className="max-w-3xl mx-auto space-y-4">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+        <div ref={contentRef} className="flex w-full flex-col items-center py-4">
           {messages.length === 0 && (
-            <div className="text-center text-[var(--text-secondary)] mt-20">
-              <p className="text-lg">Send a message to get started</p>
+            <div className="flex-1 flex items-center justify-center pt-32">
+              <p className="text-muted-foreground">
+                Send a message to get started
+              </p>
             </div>
           )}
           {messages.map((msg, i) => (
@@ -95,43 +110,66 @@ export function Chat({
               }
             />
           ))}
-          <div ref={messagesEndRef} />
         </div>
-      </main>
+      </div>
 
       {/* Input */}
-      <footer className="border-t border-[var(--border-color)] p-4">
-        <form
-          onSubmit={handleSubmit}
-          className="max-w-3xl mx-auto flex gap-2"
-        >
-          <input
-            ref={inputRef}
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Send a message..."
-            className="flex-1 rounded-lg border border-[var(--border-color)] bg-[var(--bg-secondary)] px-4 py-3 text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-          />
-          {isStreaming ? (
-            <button
-              type="button"
-              onClick={onStop}
-              className="rounded-lg border border-[var(--border-color)] px-6 py-3 font-medium hover:bg-[var(--bg-secondary)] cursor-pointer"
-            >
-              Stop
-            </button>
-          ) : (
-            <button
-              type="submit"
-              disabled={!input.trim()}
-              className="rounded-lg bg-[var(--accent)] px-6 py-3 text-white font-medium hover:opacity-90 disabled:opacity-50 cursor-pointer"
-            >
-              Send
-            </button>
-          )}
-        </form>
-      </footer>
+      <div className="shrink-0 px-6 pb-4 pt-2">
+        <div className="max-w-3xl mx-auto">
+          <div
+            className="border border-border bg-background rounded-3xl p-2 shadow-sm cursor-text"
+            onClick={() => textareaRef.current?.focus()}
+          >
+            <div className="flex items-end gap-2">
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Send a message..."
+                rows={1}
+                className="flex-1 min-h-[44px] max-h-[240px] resize-none bg-transparent px-3 py-2.5 text-foreground placeholder:text-muted-foreground focus:outline-none overflow-y-auto"
+              />
+              <div className="flex items-center pb-1 pr-1">
+                {isStreaming ? (
+                  <button
+                    type="button"
+                    onClick={onStop}
+                    className="flex size-9 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 transition cursor-pointer"
+                    aria-label="Stop"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="6" y="6" width="12" height="12" rx="2" />
+                    </svg>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleSubmit}
+                    disabled={!input.trim()}
+                    className="flex size-9 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 disabled:opacity-30 transition cursor-pointer"
+                    aria-label="Send"
+                  >
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M5 12h14M12 5l7 7-7 7"
+                      />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

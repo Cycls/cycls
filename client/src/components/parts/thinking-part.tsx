@@ -1,39 +1,28 @@
 import { useState } from "react";
 import { cn } from "../../lib/utils";
+import { AnimatePresence, motion } from "framer-motion";
 
-export function ThinkingPart({ thinking }: { thinking: string }) {
-  const [expanded, setExpanded] = useState(false);
+export function ThinkingPart({
+  thinking,
+  isStreaming,
+}: {
+  thinking: string;
+  isStreaming?: boolean;
+}) {
+  const [isExpanded, setIsExpanded] = useState(isStreaming ?? true);
 
   return (
-    <div
-      className={cn(
-        "rounded-lg p-4 my-3 italic text-[var(--text-secondary)]",
-        "bg-linear-to-br from-gray-100 to-gray-200 dark:from-gray-700 dark:to-gray-800",
-        "border-l-3 border-[var(--accent)]",
-      )}
-    >
+    <div className="mb-2">
       <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 text-sm font-medium text-[var(--accent)] cursor-pointer w-full text-left"
+        className="text-muted-foreground hover:text-foreground flex items-center gap-1.5 transition-colors cursor-pointer text-sm"
+        onClick={() => setIsExpanded(!isExpanded)}
+        type="button"
       >
-        <svg
-          className="w-4 h-4"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
-          />
-        </svg>
-        Thinking
+        <span>Thinking</span>
         <svg
           className={cn(
-            "w-3 h-3 transition-transform ml-auto",
-            expanded && "rotate-180",
+            "w-3 h-3 transition-transform",
+            isExpanded ? "rotate-180" : "",
           )}
           fill="none"
           stroke="currentColor"
@@ -47,9 +36,22 @@ export function ThinkingPart({ thinking }: { thinking: string }) {
           />
         </svg>
       </button>
-      {expanded && (
-        <div className="mt-2 text-sm whitespace-pre-wrap">{thinking}</div>
-      )}
+
+      <AnimatePresence>
+        {isExpanded && (
+          <motion.div
+            className="mt-2 overflow-hidden"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ type: "spring", duration: 0.2, bounce: 0 }}
+          >
+            <div className="text-muted-foreground border-l border-muted-foreground/20 pl-4 text-sm whitespace-pre-wrap">
+              {thinking}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
