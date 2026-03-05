@@ -30,6 +30,7 @@ TOOLS = [
     force_rebuild=False
 ) 
 async def super(context):
+    yield f"{context.user}"
     async for msg in cycls.Agent(
                                 context=context,
                                 system=SYSTEM, 
