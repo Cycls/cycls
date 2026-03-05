@@ -10,7 +10,7 @@ import { useDarkMode } from "../../hooks/use-dark-mode";
 
 export function TextPart({ text }: { text: string }) {
   return (
-    <div className="prose dark:prose-invert min-w-full">
+    <div dir="auto" className="prose dark:prose-invert min-w-full">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}

@@ -4,12 +4,10 @@ import { AnimatePresence, motion } from "framer-motion";
 
 export function ThinkingPart({
   thinking,
-  isStreaming,
 }: {
   thinking: string;
-  isStreaming?: boolean;
 }) {
-  const [isExpanded, setIsExpanded] = useState(isStreaming ?? true);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   return (
     <div className="mb-2">
