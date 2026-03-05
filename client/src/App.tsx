@@ -5,9 +5,11 @@ import {
   SignedIn,
   SignedOut,
   useAuth,
+  useClerk,
   useSignIn,
   useUser,
 } from "@clerk/clerk-react";
+import { dark } from "@clerk/themes";
 import { Chat } from "./components/chat";
 import { useChat } from "./hooks/use-chat";
 
@@ -18,6 +20,7 @@ function ChatWithAuth() {
     useChat("/api");
   const { getToken, signOut } = useAuth();
   const { user } = useUser();
+  const clerk = useClerk();
 
   useEffect(() => {
     setGetToken(() => getToken());
@@ -35,6 +38,7 @@ function ChatWithAuth() {
       onStop={stop}
       onClear={clear}
       onSignOut={() => signOut()}
+      onManageAccount={() => clerk.openUserProfile()}
       title={config?.header}
       user={user ? {
         name: user.fullName || user.firstName || "",
@@ -126,7 +130,21 @@ function CustomSignIn() {
   );
 }
 
+function useDarkMode() {
+  const [isDark, setIsDark] = useState(document.body.classList.contains("dark"));
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setIsDark(document.body.classList.contains("dark"));
+    });
+    observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
+  return isDark;
+}
+
 export default function App() {
+  const isDark = useDarkMode();
+
   // If no Clerk key, skip auth entirely
   if (!CLERK_KEY) {
     return <ChatNoAuth />;
@@ -141,7 +159,7 @@ export default function App() {
   }
 
   return (
-    <ClerkProvider publishableKey={CLERK_KEY}>
+    <ClerkProvider publishableKey={CLERK_KEY} appearance={{ baseTheme: isDark ? dark : undefined }}>
       <SignedIn>
         <ChatWithAuth />
       </SignedIn>
