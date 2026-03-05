@@ -1,8 +1,9 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useState } from "react";
+import { useDarkMode } from "../../hooks/use-dark-mode";
 
 export function TextPart({ text }: { text: string }) {
   return (
@@ -42,6 +43,7 @@ function InlineCodeBlock({
   code: string;
   language: string;
 }) {
+  const isDark = useDarkMode();
   const [copied, setCopied] = useState(false);
 
   const copy = () => {
@@ -64,13 +66,13 @@ function InlineCodeBlock({
         </button>
       </div>
       <SyntaxHighlighter
-        style={oneDark}
+        style={isDark ? oneDark : oneLight}
         language={language}
         PreTag="div"
         customStyle={{
           margin: 0,
           borderRadius: 0,
-          fontSize: "13px",
+          fontSize: "14px",
           padding: "1rem",
         }}
       >
