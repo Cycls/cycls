@@ -24,7 +24,7 @@ TOOLS = [
 
 
 @cycls.app(
-    auth=True, 
+    auth=False, 
     analytics=True, # web=["Auth", "Analytics"]
     copy=[".env"], 
     force_rebuild=False
@@ -41,5 +41,5 @@ async def super(context):
         yield msg
 
 
-# super.local()
-super.deploy()
+super.local()
+# super.deploy()

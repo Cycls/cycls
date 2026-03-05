@@ -21,6 +21,7 @@ rad.json
 #Test results file
 TestResults.xml
 dist/
+node_modules/
 **/__pycache__/
 .*
 !.github
