@@ -42,7 +42,8 @@ export function Chat({
   }, [input, isStreaming, onSend]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    const isMobile = window.matchMedia("(pointer: coarse)").matches;
+    if (e.key === "Enter" && !e.shiftKey && !isMobile) {
       e.preventDefault();
       handleSubmit();
     }
@@ -150,7 +151,7 @@ export function Chat({
                 ) : (
                   <button
                     type="button"
-                    onClick={handleSubmit}
+                    onClick={(e) => { e.stopPropagation(); handleSubmit(); }}
                     disabled={!input.trim()}
                     className="flex size-9 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 disabled:opacity-30 transition cursor-pointer"
                     aria-label="Send"
