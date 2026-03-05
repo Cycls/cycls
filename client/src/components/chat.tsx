@@ -16,6 +16,7 @@ export function Chat({
   onStop,
   onClear,
   onSignOut,
+  onManageAccount,
   title,
   user,
 }: {
@@ -25,6 +26,7 @@ export function Chat({
   onStop: () => void;
   onClear: () => void;
   onSignOut?: () => void;
+  onManageAccount?: () => void;
   title?: string;
   user?: UserInfo;
 }) {
@@ -97,7 +99,7 @@ export function Chat({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
               </svg>
             </button>
-            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} /></div>}
+            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} /></div>}
           </div>
         </div>
       </header>
@@ -191,23 +193,22 @@ export function Chat({
   );
 }
 
-function UserMenu({ user, onSignOut }: { user: UserInfo; onSignOut?: () => void }) {
+function UserMenu({ user, onSignOut, onManageAccount }: { user: UserInfo; onSignOut?: () => void; onManageAccount?: () => void }) {
   const [open, setOpen] = useState(false);
 
   return (
     <div className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="flex size-6 items-center justify-center rounded-full overflow-hidden hover:opacity-80 transition-opacity cursor-pointer"
+        className="flex size-8 items-center justify-center rounded-lg hover:opacity-80 transition-opacity cursor-pointer"
         aria-label="Profile"
       >
-        {user.imageUrl ? (
-          <img src={user.imageUrl} alt="" className="size-6 rounded-full" />
-        ) : (
-          <div className="size-6 rounded-full bg-secondary text-foreground flex items-center justify-center text-xs font-medium">
-            {user.name?.charAt(0) || user.email?.charAt(0) || "?"}
-          </div>
-        )}
+        <div
+          className="size-6 rounded-full bg-secondary text-foreground flex items-center justify-center text-xs font-medium select-none"
+          style={user.imageUrl ? { backgroundImage: `url(${user.imageUrl})`, backgroundSize: "cover" } : undefined}
+        >
+          {!user.imageUrl && (user.name?.charAt(0) || user.email?.charAt(0) || "?")}
+        </div>
       </button>
       {open && (
         <>
@@ -217,16 +218,22 @@ function UserMenu({ user, onSignOut }: { user: UserInfo; onSignOut?: () => void 
               <p className="text-sm font-medium text-foreground truncate">{user.name}</p>
               <p className="text-xs text-muted-foreground truncate">{user.email}</p>
             </div>
+            <div className="border-t border-border" />
+            {onManageAccount && (
+              <button
+                onClick={() => { setOpen(false); onManageAccount(); }}
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+              >
+                Manage account
+              </button>
+            )}
             {onSignOut && (
-              <>
-                <div className="border-t border-border" />
-                <button
-                  onClick={() => { setOpen(false); onSignOut(); }}
-                  className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                >
-                  Sign out
-                </button>
-              </>
+              <button
+                onClick={() => { setOpen(false); onSignOut(); }}
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+              >
+                Sign out
+              </button>
             )}
           </div>
         </>
