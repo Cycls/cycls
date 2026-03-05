@@ -90,28 +90,51 @@ function CustomSignIn() {
     }
   };
 
+  const toggleDark = () => document.body.classList.toggle("dark");
+
   return (
-    <div className="flex h-dvh w-full flex-col">
+    <div className="flex h-dvh w-full flex-col bg-background">
+      <div className="fixed top-0 right-0 p-4">
+        <button
+          onClick={toggleDark}
+          className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
+          aria-label="Toggle theme"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+          </svg>
+        </button>
+      </div>
       <main className="flex flex-1 flex-col items-center justify-center px-4">
-        <div className="w-full max-w-md space-y-8">
-          <div className="text-center">
-            <h1 className="text-foreground text-3xl font-medium tracking-tight">
-              Welcome to Cycls
-            </h1>
-            <p className="text-muted-foreground mt-3">
-              Sign in to get started.
-            </p>
+        <div className="w-full max-w-sm">
+          {/* Logo */}
+          <div className="flex justify-center mb-8">
+            <svg viewBox="0 0 10.5 10.5" className="size-10 text-foreground" fill="currentColor">
+              <path d="M 5.248 0 L 5.734 1.654 C 6.164 3.153 7.345 4.33 8.844 4.765 L 10.496 5.241 L 8.844 5.718 C 7.345 6.152 6.164 7.329 5.734 8.829 L 5.248 10.496 L 4.762 8.843 C 4.332 7.343 3.152 6.166 1.652 5.732 L 0 5.255 L 1.652 4.779 C 3.152 4.344 4.332 3.167 4.762 1.668 L 5.248 0 Z" />
+            </svg>
           </div>
-          {error && (
-            <div className="rounded-md bg-red-500/10 p-3 text-sm text-red-500">
-              {error}
+
+          {/* Card */}
+          <div className="rounded-2xl border border-border bg-card p-8 shadow-sm">
+            <div className="text-center mb-6">
+              <h1 className="text-foreground text-xl font-semibold tracking-tight">
+                Welcome to Cycls
+              </h1>
+              <p className="text-muted-foreground text-sm mt-1.5">
+                Sign in to continue
+              </p>
             </div>
-          )}
-          <div>
+
+            {error && (
+              <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-500 mb-4">
+                {error}
+              </div>
+            )}
+
             <button
               onClick={handleGoogle}
               disabled={isLoading}
-              className="flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-secondary px-4 py-3 text-foreground font-medium hover:bg-secondary/80 transition-colors disabled:opacity-50 cursor-pointer"
+              className="flex w-full items-center justify-center gap-3 rounded-xl border border-border bg-background px-4 py-3 text-sm font-medium text-foreground shadow-sm hover:bg-secondary transition-colors disabled:opacity-50 cursor-pointer"
             >
               <svg className="size-4" viewBox="0 0 24 24">
                 <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
@@ -121,7 +144,21 @@ function CustomSignIn() {
               </svg>
               {isLoading ? "Connecting..." : "Continue with Google"}
             </button>
+
+            <div className="mt-6 flex items-center gap-3">
+              <div className="h-px flex-1 bg-border" />
+              <span className="text-xs text-muted-foreground">or</span>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+
+            <p className="mt-4 text-center text-xs text-muted-foreground">
+              More sign-in options coming soon
+            </p>
           </div>
+
+          <p className="mt-6 text-center text-xs text-muted-foreground">
+            By continuing, you agree to our Terms of Service
+          </p>
         </div>
       </main>
     </div>
