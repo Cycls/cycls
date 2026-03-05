@@ -54,7 +54,7 @@ export function Chat({
   };
 
   return (
-    <div className="h-screen flex flex-col">
+    <div className="h-dvh flex flex-col">
       {/* Header */}
       <header className="pointer-events-none fixed top-0 right-0 left-0 z-50 h-12">
         <div className="pointer-events-auto mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
