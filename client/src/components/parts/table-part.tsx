@@ -6,13 +6,16 @@ export function TablePart({
   rows?: string[][];
 }) {
   return (
-    <div className="overflow-x-auto my-3">
-      <table className="min-w-full border border-[var(--border-color)] rounded-lg overflow-hidden">
+    <div className="overflow-x-auto my-3 rounded-xl border border-border">
+      <table className="min-w-full text-sm">
         {headers && (
-          <thead className="bg-[var(--bg-secondary)]">
-            <tr>
+          <thead>
+            <tr className="bg-secondary">
               {headers.map((h, i) => (
-                <th key={i} className="px-4 py-2 text-left font-medium">
+                <th
+                  key={i}
+                  className="px-4 py-2.5 text-left font-semibold text-foreground"
+                >
                   {h}
                 </th>
               ))}
@@ -21,12 +24,12 @@ export function TablePart({
         )}
         <tbody>
           {(rows || []).map((row, i) => (
-            <tr key={i} className={i % 2 ? "bg-[var(--bg-secondary)]" : ""}>
+            <tr
+              key={i}
+              className="border-t border-border hover:bg-secondary/50 transition-colors"
+            >
               {row.map((cell, j) => (
-                <td
-                  key={j}
-                  className="px-4 py-2 border-t border-[var(--border-color)]"
-                >
+                <td key={j} className="px-4 py-2.5">
                   {cell}
                 </td>
               ))}

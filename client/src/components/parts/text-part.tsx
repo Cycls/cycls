@@ -6,7 +6,7 @@ import { useState } from "react";
 
 export function TextPart({ text }: { text: string }) {
   return (
-    <div className="prose">
+    <div className="prose dark:prose-invert min-w-full">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -15,7 +15,7 @@ export function TextPart({ text }: { text: string }) {
             const code = String(children).replace(/\n$/, "");
 
             if (match) {
-              return <CodeBlock code={code} language={match[1]} />;
+              return <InlineCodeBlock code={code} language={match[1]} />;
             }
 
             return (
@@ -23,6 +23,9 @@ export function TextPart({ text }: { text: string }) {
                 {children}
               </code>
             );
+          },
+          pre({ children }) {
+            return <>{children}</>;
           },
         }}
       >
@@ -32,7 +35,13 @@ export function TextPart({ text }: { text: string }) {
   );
 }
 
-function CodeBlock({ code, language }: { code: string; language: string }) {
+function InlineCodeBlock({
+  code,
+  language,
+}: {
+  code: string;
+  language: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   const copy = () => {
@@ -42,12 +51,14 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   };
 
   return (
-    <div className="rounded-lg overflow-hidden border border-[var(--border-color)] my-3">
-      <div className="bg-[var(--bg-secondary)] px-4 py-2 text-xs text-[var(--text-secondary)] flex justify-between items-center">
-        <span>{language}</span>
+    <div className="not-prose my-3 overflow-clip rounded-xl border border-border bg-card">
+      <div className="flex h-9 items-center justify-between px-4">
+        <span className="font-mono text-xs text-muted-foreground">
+          {language}
+        </span>
         <button
           onClick={copy}
-          className="hover:text-[var(--accent)] cursor-pointer"
+          className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
         >
           {copied ? "Copied!" : "Copy"}
         </button>
@@ -56,7 +67,12 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
         style={oneDark}
         language={language}
         PreTag="div"
-        customStyle={{ margin: 0, borderRadius: 0 }}
+        customStyle={{
+          margin: 0,
+          borderRadius: 0,
+          fontSize: "13px",
+          padding: "1rem",
+        }}
       >
         {code}
       </SyntaxHighlighter>
