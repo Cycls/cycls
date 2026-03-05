@@ -1,4 +1,5 @@
 # uv run examples/agent/super.py
+# cd client && npm run dev
 import cycls
 
 SYSTEM = """
@@ -24,13 +25,13 @@ TOOLS = [
 
 
 @cycls.app(
-    auth=False, 
+    auth=True,      # web/config
     analytics=True, # web=["Auth", "Analytics"]
     copy=[".env"], 
     force_rebuild=False
 ) 
 async def super(context):
-    yield f"{context.user}"
+    yield f"{context.user}\n\n"
     async for msg in cycls.Agent(
                                 context=context,
                                 system=SYSTEM, 
