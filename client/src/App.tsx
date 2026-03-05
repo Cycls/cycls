@@ -11,9 +11,7 @@ import {
 } from "@clerk/clerk-react";
 import { dark } from "@clerk/themes";
 import { Chat } from "./components/chat";
-import { useChat } from "./hooks/use-chat";
-
-const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
+import { useChat, AppConfig } from "./hooks/use-chat";
 
 function ChatWithAuth() {
   const { messages, isStreaming, config, send, stop, clear, fetchConfig, setGetToken } =
@@ -144,22 +142,35 @@ function useDarkMode() {
 
 export default function App() {
   const isDark = useDarkMode();
+  const [config, setConfig] = useState<AppConfig | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // If no Clerk key, skip auth entirely
-  if (!CLERK_KEY) {
+  useEffect(() => {
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((c) => setConfig(c))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return null;
+
+  const clerkKey = config?.auth ? (import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || config?.pk) : null;
+
+  if (!clerkKey) {
     return <ChatNoAuth />;
   }
 
   if (window.location.pathname === "/sso-callback") {
     return (
-      <ClerkProvider publishableKey={CLERK_KEY}>
+      <ClerkProvider publishableKey={clerkKey}>
         <AuthenticateWithRedirectCallback />
       </ClerkProvider>
     );
   }
 
   return (
-    <ClerkProvider publishableKey={CLERK_KEY} appearance={{ baseTheme: isDark ? dark : undefined }}>
+    <ClerkProvider publishableKey={clerkKey} appearance={{ baseTheme: isDark ? dark : undefined }}>
       <SignedIn>
         <ChatWithAuth />
       </SignedIn>
