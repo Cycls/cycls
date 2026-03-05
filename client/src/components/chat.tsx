@@ -55,39 +55,38 @@ export function Chat({
   return (
     <div className="h-screen flex flex-col">
       {/* Header */}
-      <header className="shrink-0 border-b border-border px-6 py-3">
-        <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <h1 className="text-base font-semibold">{title || "Cycls"}</h1>
+      <header className="pointer-events-none fixed top-0 right-0 left-0 z-50 h-12">
+        <div className="pointer-events-auto mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
+          <a href="/" className="flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity">
+            <span className="text-sm font-semibold">{title || "Cycls"}</span>
+          </a>
           <div className="flex items-center gap-1">
             {messages.length > 0 && (
               <button
                 onClick={onClear}
-                className="text-sm text-muted-foreground hover:text-foreground px-2.5 py-1.5 rounded-lg hover:bg-secondary transition-colors cursor-pointer"
+                className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
+                aria-label="New chat"
               >
-                Clear
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
               </button>
             )}
             <button
               onClick={toggleDark}
-              className="text-muted-foreground hover:text-foreground p-2 rounded-lg hover:bg-secondary transition-colors cursor-pointer"
+              className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
+              aria-label="Toggle theme"
             >
-              <svg
-                className="w-4 h-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"
-                />
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
               </svg>
             </button>
           </div>
         </div>
       </header>
+
+      {/* Spacer for fixed header */}
+      <div className="shrink-0 h-12" />
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
