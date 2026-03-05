@@ -17,8 +17,8 @@ export function TextPart({ text }: { text: string }) {
             const match = /language-(\w+)/.exec(className || "");
             const code = String(children).replace(/\n$/, "");
 
-            if (match) {
-              return <MarkdownCodeBlock code={code} language={match[1]} />;
+            if (match || code.includes("\n")) {
+              return <MarkdownCodeBlock code={code} language={match?.[1] || "text"} />;
             }
 
             return (
