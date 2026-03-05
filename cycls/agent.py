@@ -49,18 +49,18 @@ You help with coding, research, writing, analysis, system administration, and an
 """
 
 _UI_TOOLS = [
-    {
-        "name": "render_canvas",
-        "description": "Display a document canvas panel to the user. Use for long-form content like reports, articles, guides, code files, or any document the user may want to read, copy, or reference. The canvas opens as a side panel.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "title": {"type": "string", "description": "Title shown at the top of the canvas panel"},
-                "content": {"type": "string", "description": "Markdown content to display in the canvas"}
-            },
-            "required": ["title", "content"]
-        }
-    }
+    # {
+    #     "name": "render_canvas",
+    #     "description": "Display a document canvas panel to the user. Use for long-form content like reports, articles, guides, code files, or any document the user may want to read, copy, or reference. The canvas opens as a side panel.",
+    #     "inputSchema": {
+    #         "type": "object",
+    #         "properties": {
+    #             "title": {"type": "string", "description": "Title shown at the top of the canvas panel"},
+    #             "content": {"type": "string", "description": "Markdown content to display in the canvas"}
+    #         },
+    #         "required": ["title", "content"]
+    #     }
+    # }
 ]
 
 def _sniff_media_type(data: bytes) -> str | None:
