@@ -3,10 +3,8 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useState } from "react";
-import { useDarkMode } from "../../hooks/use-dark-mode";
+import { CodeBlock, CodeBlockCode, CodeBlockGroup } from "./code-block";
 
 export function TextPart({ text }: { text: string }) {
   return (
@@ -15,16 +13,16 @@ export function TextPart({ text }: { text: string }) {
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
         components={{
-          code({ className, children, ...props }) {
+          code({ className, children }) {
             const match = /language-(\w+)/.exec(className || "");
             const code = String(children).replace(/\n$/, "");
 
             if (match) {
-              return <InlineCodeBlock code={code} language={match[1]} />;
+              return <MarkdownCodeBlock code={code} language={match[1]} />;
             }
 
             return (
-              <code className={className} {...props}>
+              <code className={className}>
                 {children}
               </code>
             );
@@ -40,14 +38,13 @@ export function TextPart({ text }: { text: string }) {
   );
 }
 
-function InlineCodeBlock({
+function MarkdownCodeBlock({
   code,
   language,
 }: {
   code: string;
   language: string;
 }) {
-  const isDark = useDarkMode();
   const [copied, setCopied] = useState(false);
 
   const copy = () => {
@@ -57,8 +54,8 @@ function InlineCodeBlock({
   };
 
   return (
-    <div className="not-prose my-3 overflow-clip rounded-xl border border-border bg-card">
-      <div className="flex h-9 items-center justify-between px-4">
+    <CodeBlock className="my-3">
+      <CodeBlockGroup className="flex h-9 items-center justify-between px-4">
         <span className="font-mono text-xs text-muted-foreground">
           {language}
         </span>
@@ -68,20 +65,8 @@ function InlineCodeBlock({
         >
           {copied ? "Copied!" : "Copy"}
         </button>
-      </div>
-      <SyntaxHighlighter
-        style={isDark ? oneDark : oneLight}
-        language={language}
-        PreTag="div"
-        customStyle={{
-          margin: 0,
-          borderRadius: 0,
-          fontSize: "14px",
-          padding: "1rem",
-        }}
-      >
-        {code}
-      </SyntaxHighlighter>
-    </div>
+      </CodeBlockGroup>
+      <CodeBlockCode code={code} language={language} />
+    </CodeBlock>
   );
 }

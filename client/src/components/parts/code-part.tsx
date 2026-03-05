@@ -1,7 +1,5 @@
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useState } from "react";
-import { useDarkMode } from "../../hooks/use-dark-mode";
+import { CodeBlock, CodeBlockCode, CodeBlockGroup } from "./code-block";
 
 export function CodePart({
   code,
@@ -10,7 +8,6 @@ export function CodePart({
   code: string;
   language?: string;
 }) {
-  const isDark = useDarkMode();
   const [copied, setCopied] = useState(false);
 
   const copy = () => {
@@ -20,8 +17,8 @@ export function CodePart({
   };
 
   return (
-    <div className="my-3 overflow-clip rounded-xl border border-border bg-card">
-      <div className="flex h-9 items-center justify-between px-4">
+    <CodeBlock className="my-3">
+      <CodeBlockGroup className="flex h-9 items-center justify-between px-4">
         <span className="font-mono text-xs text-muted-foreground">
           {language || "code"}
         </span>
@@ -31,20 +28,8 @@ export function CodePart({
         >
           {copied ? "Copied!" : "Copy"}
         </button>
-      </div>
-      <SyntaxHighlighter
-        style={isDark ? oneDark : oneLight}
-        language={language || "text"}
-        PreTag="div"
-        customStyle={{
-          margin: 0,
-          borderRadius: 0,
-          fontSize: "14px",
-          padding: "1rem",
-        }}
-      >
-        {code}
-      </SyntaxHighlighter>
-    </div>
+      </CodeBlockGroup>
+      <CodeBlockCode code={code} language={language} />
+    </CodeBlock>
   );
 }
