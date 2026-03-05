@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { motion } from "framer-motion";
 import type { Part, Message } from "../hooks/use-chat";
 import { TextPart } from "./parts/text-part";
 import { ThinkingPart } from "./parts/thinking-part";
@@ -18,7 +19,6 @@ function renderPart(part: Part, index: number, isStreaming?: boolean) {
         <ThinkingPart
           key={index}
           thinking={part.thinking || ""}
-          isStreaming={isStreaming}
         />
       );
     case "code":
@@ -80,7 +80,7 @@ export function MessageBubble({
   if (message.role === "user") {
     return (
       <div className="flex w-full max-w-3xl items-start gap-4 px-6 pb-2 justify-end">
-        <div className="rounded-3xl bg-accent text-accent-foreground px-4 py-2.5 max-w-[80%]">
+        <div dir="auto" className="rounded-3xl bg-secondary text-secondary-foreground px-4 py-2.5 max-w-[80%]">
           {message.content}
         </div>
       </div>
@@ -103,19 +103,7 @@ export function MessageBubble({
   return (
     <div className="group flex w-full max-w-3xl items-start gap-4 px-6 pb-2">
       <div className="relative flex min-w-0 flex-1 flex-col gap-1">
-        {isEmpty && isStreaming && (
-          <div className="flex gap-1.5 py-3">
-            <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" />
-            <span
-              className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce"
-              style={{ animationDelay: "0.15s" }}
-            />
-            <span
-              className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce"
-              style={{ animationDelay: "0.3s" }}
-            />
-          </div>
-        )}
+        {isEmpty && isStreaming && <Loader />}
 
         {parts.map((part, i) => renderPart(part, i, isStreaming))}
 
@@ -165,6 +153,33 @@ export function MessageBubble({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+const loaderDotAnim = {
+  y: ["0%", "-60%", "0%"],
+  opacity: [1, 0.7, 1],
+};
+
+const loaderTransition = {
+  duration: 0.6,
+  ease: "easeInOut" as const,
+  repeat: Infinity,
+  repeatType: "loop" as const,
+};
+
+function Loader() {
+  return (
+    <div className="flex items-center gap-1 py-3">
+      {[0, 0.1, 0.2].map((delay) => (
+        <motion.div
+          key={delay}
+          className="size-2 rounded-full bg-foreground/60"
+          animate={loaderDotAnim}
+          transition={{ ...loaderTransition, delay }}
+        />
+      ))}
     </div>
   );
 }

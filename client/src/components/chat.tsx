@@ -123,6 +123,7 @@ export function Chat({
             <div className="flex items-end gap-2">
               <textarea
                 ref={textareaRef}
+                dir="auto"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}

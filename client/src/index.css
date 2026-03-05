@@ -54,8 +54,10 @@ body {
 .prose p:first-child { margin-top: 0; }
 .prose p:last-child { margin-bottom: 0; }
 
-.prose ul, .prose ol { margin: 0.75em 0; padding-left: 1.5em; }
+.prose ul { margin: 0.75em 0; padding-inline-start: 1.5em; list-style-type: disc; }
+.prose ol { margin: 0.75em 0; padding-inline-start: 1.5em; list-style-type: decimal; }
 .prose li { margin: 0.25em 0; }
+.prose li::marker { color: var(--color-muted-foreground); }
 
 .prose strong { font-weight: 600; }
 
@@ -101,8 +103,8 @@ body {
 }
 
 .prose blockquote {
-  border-left: 3px solid var(--color-border);
-  padding-left: 1em;
+  border-inline-start: 3px solid var(--color-border);
+  padding-inline-start: 1em;
   color: var(--color-muted-foreground);
   margin: 1em 0;
 }
