@@ -10,6 +10,7 @@ export interface Part {
   rows?: string[][];
   row?: string[];
   step?: string;
+  tool_name?: string;
   status?: string;
   callout?: string;
   style?: string;
@@ -139,10 +140,15 @@ export function useChat(baseUrl: string = "/api") {
                   item[type as keyof Part] !== undefined
                 ) {
                   const key = type as keyof Part;
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  (currentPart as any)[key] =
-                    ((currentPart[key] as string) || "") +
-                    (item[key] as string);
+                  if (type === "step") {
+                    currentPart = { ...item };
+                    parts.push(currentPart);
+                  } else {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    (currentPart as any)[key] =
+                      ((currentPart[key] as string) || "") +
+                      (item[key] as string);
+                  }
                 }
               } else {
                 // New part

@@ -241,11 +241,11 @@ def _prepare_tool(block, ws, timeout):
     if name == "bash":
         cmd = inp.get('command', '')
         label = cmd if len(cmd) <= 80 else cmd[:60] + ' … ' + cmd[-17:]
-        step = {"type": "step", "step": f"Bash({label})"}
+        step = {"type": "step", "step": label, "tool_name": "Bash"}
         coro = _exec_bash(inp.get("command", ""), ws, timeout=timeout)
     elif name == "str_replace_based_edit_tool":
         verb = "Editing" if inp.get("command") in ("str_replace", "create", "insert") else "Viewing"
-        step = {"type": "step", "step": f"{verb} {inp.get('path', 'file')}"}
+        step = {"type": "step", "step": inp.get('path', 'file'), "tool_name": verb}
         coro = _defer(_exec_editor, inp, ws)
     elif name in _UI_TOOL_NAMES:
         step = _render_ui_tool(name, inp) or []
@@ -344,7 +344,7 @@ async def Agent(*, context, system="", tools=None, builtin_tools=[],
                         if ev.index == search_idx:
                             try: q = json.loads(search_query).get("query", "")
                             except Exception: q = ""
-                            yield {"type": "step", "step": f'Web Search("{q}")' if q else "Web Search"}
+                            yield {"type": "step", "step": q, "tool_name": "Web Search"}
                             search_idx = None
                 response = await stream.get_final_message()
 
