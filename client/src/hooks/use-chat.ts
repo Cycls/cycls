@@ -9,6 +9,7 @@ export interface Part {
   headers?: string[];
   rows?: string[][];
   row?: string[];
+  step?: string;
   status?: string;
   callout?: string;
   style?: string;

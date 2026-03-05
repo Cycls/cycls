@@ -6,6 +6,7 @@ import { CodePart } from "./parts/code-part";
 import { TablePart } from "./parts/table-part";
 import { CalloutPart } from "./parts/callout-part";
 import { ImagePart } from "./parts/image-part";
+import { StepPart } from "./parts/step-part";
 import { cn } from "../lib/utils";
 
 function renderPart(part: Part, index: number, isStreaming?: boolean) {
@@ -42,6 +43,14 @@ function renderPart(part: Part, index: number, isStreaming?: boolean) {
           src={part.src || ""}
           alt={part.alt}
           caption={part.caption}
+        />
+      );
+    case "step":
+      return (
+        <StepPart
+          key={index}
+          step={part.step || ""}
+          isStreaming={isStreaming}
         />
       );
     case "status":
