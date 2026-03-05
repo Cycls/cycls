@@ -112,7 +112,7 @@ def web(func, config):
 
         @property
         def workspace(self) -> Path:
-            return self.user.workspace
+            return self.user.workspace if self.user else Path("/workspace/local")
 
     app = FastAPI()
     
