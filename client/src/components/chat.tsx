@@ -1,7 +1,17 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useStickToBottom } from "use-stick-to-bottom";
+import { PricingTable } from "@clerk/clerk-react";
 import { MessageBubble } from "./message";
 import type { Message } from "../hooks/use-chat";
+
+interface PlanInfo {
+  name: string;
+  status: string;
+  periodEnd: Date | null;
+  canceledAt: Date | null;
+  amount?: { amountFormatted: string; currencySymbol: string };
+  planPeriod: string;
+}
 
 interface UserInfo {
   name: string;
@@ -38,7 +48,7 @@ export function Chat({
   onSwitchOrg?: (orgId: string | null) => void;
   activeOrg?: { id: string; name: string; imageUrl?: string };
   orgs?: { id: string; name: string; imageUrl: string }[];
-  plan?: string;
+  plan?: PlanInfo;
   title?: string;
   user?: UserInfo;
 }) {
@@ -214,10 +224,11 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
   onSwitchOrg?: (orgId: string | null) => void;
   activeOrg?: { id: string; name: string; imageUrl?: string };
   orgs?: { id: string; name: string; imageUrl: string }[];
-  plan?: string;
+  plan?: PlanInfo;
 }) {
   const [open, setOpen] = useState(false);
   const [showOrgs, setShowOrgs] = useState(false);
+  const [showPricing, setShowPricing] = useState(false);
 
   return (
     <div className="relative">
@@ -283,12 +294,27 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                 <div className="px-3 py-2.5">
                   <p className="text-sm font-medium text-foreground truncate">{user.name}</p>
                   <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-                  {plan && (
-                    <span className="inline-block mt-1.5 rounded-full bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">{plan}</span>
-                  )}
                 </div>
                 <div className="border-t border-border" />
+                {plan && (
+                  <button
+                    onClick={() => { setOpen(false); setShowPricing(true); }}
+                    className="flex w-full items-center px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                  >
+                    <span>{plan.name}<span className="text-muted-foreground font-normal">{" — plan"}</span></span>
+                  </button>
+                )}
+                {onManageAccount && (
+                  <button
+                    onClick={() => { setOpen(false); onManageAccount(); }}
+                    className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                  >
+                    Manage account
+                  </button>
+                )}
                 {onSwitchOrg && (
+                  <>
+                  <div className="border-t border-border" />
                   <button
                     onClick={() => setShowOrgs(true)}
                     className="flex w-full items-center justify-between px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
@@ -297,20 +323,13 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                       {activeOrg?.imageUrl && (
                         <div className="size-4 rounded-full shrink-0" style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }} />
                       )}
-                      {activeOrg ? activeOrg.name : "Personal"}<span className="text-muted-foreground font-normal"> · org</span>
+                      {activeOrg ? activeOrg.name : "Personal"}
                     </span>
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
                   </button>
-                )}
-                {onManageAccount && (
-                  <button
-                    onClick={() => { setOpen(false); onManageAccount(); }}
-                    className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                  >
-                    Account
-                  </button>
+                  </>
                 )}
                 {onManageOrg && activeOrg && (
                   <button
@@ -333,6 +352,37 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                 )}
               </>
             )}
+          </div>
+        </>
+      )}
+      {showPricing && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => setShowPricing(false)} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
+            <div className="relative w-full max-w-lg rounded-2xl border border-border bg-background shadow-xl pointer-events-auto overflow-hidden">
+              <div className="flex items-center justify-between px-6 pt-5 pb-3">
+                <h2 className="text-base font-semibold text-foreground">Plans</h2>
+                <button
+                  onClick={() => setShowPricing(false)}
+                  className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="px-6 pb-5">
+                <PricingTable />
+              </div>
+              <div className="border-t border-border px-6 py-3">
+                <button
+                  onClick={() => { setShowPricing(false); onManageAccount?.(); }}
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                >
+                  Manage account <span className="text-muted-foreground/60">→ Billing</span>
+                </button>
+              </div>
+            </div>
           </div>
         </>
       )}
