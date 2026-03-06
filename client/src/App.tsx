@@ -16,10 +16,13 @@ import { useSubscription } from "@clerk/clerk-react/experimental";
 import { dark } from "@clerk/themes";
 import { Chat } from "./components/chat";
 import { useChat, AppConfig } from "./hooks/use-chat";
+import { useFiles } from "./hooks/use-files";
 
 function ChatWithAuth() {
   const { messages, isStreaming, config, send, stop, clear, fetchConfig, setGetToken, uploadFile } =
     useChat("/api");
+  const { entries, path, loading, list, upload, mkdir, rename, remove, openFile, setGetToken: setFilesToken } =
+    useFiles("/api");
   const { getToken, signOut } = useAuth();
   const { user } = useUser();
   const clerk = useClerk();
@@ -29,7 +32,8 @@ function ChatWithAuth() {
 
   useEffect(() => {
     setGetToken(() => getToken());
-  }, [getToken, setGetToken]);
+    setFilesToken(() => getToken());
+  }, [getToken, setGetToken, setFilesToken]);
 
   useEffect(() => {
     fetchConfig();
@@ -70,6 +74,15 @@ function ChatWithAuth() {
         imageUrl: user.imageUrl,
       } : undefined}
       uploadFile={uploadFile}
+      files={{
+        entries, path, loading,
+        onNavigate: list,
+        onUpload: upload,
+        onMkdir: mkdir,
+        onRename: rename,
+        onDelete: remove,
+        onOpenFile: openFile,
+      }}
     />
   );
 }
@@ -77,6 +90,8 @@ function ChatWithAuth() {
 function ChatNoAuth() {
   const { messages, isStreaming, config, send, stop, clear, fetchConfig, uploadFile } =
     useChat("/api");
+  const { entries, path, loading, list, upload, mkdir, rename, remove, openFile } =
+    useFiles("/api");
 
   useEffect(() => {
     fetchConfig();
@@ -91,6 +106,15 @@ function ChatNoAuth() {
       onClear={clear}
       title={config?.header}
       uploadFile={uploadFile}
+      files={{
+        entries, path, loading,
+        onNavigate: list,
+        onUpload: upload,
+        onMkdir: mkdir,
+        onRename: rename,
+        onDelete: remove,
+        onOpenFile: openFile,
+      }}
     />
   );
 }

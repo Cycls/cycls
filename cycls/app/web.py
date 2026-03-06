@@ -118,10 +118,13 @@ def web(func, config):
     
     bearer_scheme = HTTPBearer()
 
-    def validate(bearer: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
+    def validate(request: Request, bearer: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))):
+        token = bearer.credentials if bearer else request.query_params.get("token")
+        if not token:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated", headers={"WWW-Authenticate": "Bearer"})
         try:
-            key = jwks.get_signing_key_from_jwt(bearer.credentials)
-            decoded = jwt.decode(bearer.credentials, key.key, algorithms=["RS256"], leeway=10)
+            key = jwks.get_signing_key_from_jwt(token)
+            decoded = jwt.decode(token, key.key, algorithms=["RS256"], leeway=10)
             org = decoded.get("o") or {}
             return User(id=decoded.get("sub"), org_id=org.get("id"), org_slug=org.get("slg"), org_role=org.get("rol"), org_permissions=org.get("per"),
                         plan=decoded.get("pla"), features=decoded.get("fea"))

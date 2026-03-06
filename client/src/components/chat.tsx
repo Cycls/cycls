@@ -3,7 +3,9 @@ import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { PricingTable } from "@clerk/clerk-react";
 import { MessageBubble } from "./message";
+import { Files } from "./files";
 import type { Message, Attachment } from "../hooks/use-chat";
+import type { FileEntry } from "../hooks/use-files";
 
 interface PlanInfo {
   name: string;
@@ -37,6 +39,7 @@ export function Chat({
   title,
   user,
   uploadFile,
+  files,
 }: {
   messages: Message[];
   isStreaming: boolean;
@@ -54,9 +57,21 @@ export function Chat({
   title?: string;
   user?: UserInfo;
   uploadFile?: (file: File) => Promise<Attachment>;
+  files?: {
+    entries: FileEntry[];
+    path: string;
+    loading: boolean;
+    onNavigate: (dir: string) => void;
+    onUpload: (dir: string, file: File) => Promise<void>;
+    onMkdir: (dir: string, name: string) => Promise<void>;
+    onRename: (from: string, to: string) => Promise<void>;
+    onDelete: (path: string) => Promise<void>;
+    onOpenFile: (path: string) => Promise<string>;
+  };
 }) {
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [filesOpen, setFilesOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { scrollRef, contentRef } = useStickToBottom();
@@ -164,6 +179,17 @@ export function Chat({
                 </svg>
               </button>
             )}
+            {files && (
+              <button
+                onClick={() => { setFilesOpen(!filesOpen); if (!filesOpen) files.onNavigate(files.path); }}
+                className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
+                aria-label="Files"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.06-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                </svg>
+              </button>
+            )}
             <button
               onClick={toggleDark}
               className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
@@ -251,6 +277,31 @@ export function Chat({
           </>
         )}
       </LayoutGroup>
+
+      {/* Files panel */}
+      <AnimatePresence>
+        {filesOpen && files && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="fixed inset-0 z-50 bg-black/30 backdrop-blur-[2px]"
+              onClick={() => setFilesOpen(false)}
+            />
+            <motion.div
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="fixed top-0 right-0 bottom-0 z-50 w-full sm:w-96 border-l border-border bg-background flex flex-col"
+            >
+              <Files {...files} onClose={() => setFilesOpen(false)} />
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
