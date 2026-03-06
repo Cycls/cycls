@@ -18,9 +18,6 @@ export interface Part {
   src?: string;
   alt?: string;
   caption?: string;
-  label?: string;
-  action?: string;
-  payload?: Record<string, unknown>;
   session_id?: string;
 }
 
@@ -40,8 +37,6 @@ export interface Message {
 
 export interface AppConfig {
   header?: string;
-  intro?: string;
-  title?: string;
   auth?: boolean;
   pk?: string;
 }

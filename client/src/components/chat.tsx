@@ -36,7 +36,6 @@ export function Chat({
   plan,
   title,
   user,
-  onFilesAdded,
   uploadFile,
 }: {
   messages: Message[];
@@ -54,7 +53,6 @@ export function Chat({
   plan?: PlanInfo;
   title?: string;
   user?: UserInfo;
-  onFilesAdded?: (files: File[]) => void;
   uploadFile?: (file: File) => Promise<Attachment>;
 }) {
   const [input, setInput] = useState("");
@@ -64,12 +62,10 @@ export function Chat({
   const { scrollRef, contentRef } = useStickToBottom();
 
   const handleFilesAdded = useCallback(async (newFiles: File[]) => {
-    onFilesAdded?.(newFiles);
     if (uploadFile) {
       const newAttachments = await Promise.all(newFiles.map((f) => uploadFile(f)));
       setAttachments((prev) => [...prev, ...newAttachments]);
     } else {
-      // No upload function — use blob URLs
       const newAttachments = newFiles.map((f) => ({
         name: f.name,
         size: f.size,
@@ -78,7 +74,7 @@ export function Chat({
       }));
       setAttachments((prev) => [...prev, ...newAttachments]);
     }
-  }, [onFilesAdded, uploadFile]);
+  }, [uploadFile]);
 
   const removeFile = useCallback((index: number) => {
     setAttachments((prev) => prev.filter((_, i) => i !== index));
@@ -166,7 +162,7 @@ export function Chat({
       <div className="shrink-0 h-12" />
 
       {/* Stable file input — lives outside LayoutGroup so it survives remounts */}
-      {(onFilesAdded || uploadFile) && (
+      {uploadFile && (
         <input
           ref={fileInputRef}
           type="file"
@@ -193,7 +189,7 @@ export function Chat({
                 handleSubmit={handleSubmit}
                 isStreaming={isStreaming}
                 onStop={onStop}
-                onOpenFilePicker={(onFilesAdded || uploadFile) ? openFilePicker : undefined}
+                onOpenFilePicker={uploadFile ? openFilePicker : undefined}
                 attachments={attachments}
                 onRemoveFile={removeFile}
               />
@@ -226,7 +222,7 @@ export function Chat({
                   handleSubmit={handleSubmit}
                   isStreaming={isStreaming}
                   onStop={onStop}
-                  onOpenFilePicker={(onFilesAdded || uploadFile) ? openFilePicker : undefined}
+                  onOpenFilePicker={uploadFile ? openFilePicker : undefined}
                   attachments={attachments}
                   onRemoveFile={removeFile}
                 />

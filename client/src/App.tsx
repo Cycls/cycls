@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useDarkMode } from "./hooks/use-dark-mode";
 import {
   AuthenticateWithRedirectCallback,
   ClerkProvider,
@@ -193,18 +194,6 @@ function CustomSignIn() {
       </main>
     </div>
   );
-}
-
-function useDarkMode() {
-  const [isDark, setIsDark] = useState(document.body.classList.contains("dark"));
-  useEffect(() => {
-    const observer = new MutationObserver(() => {
-      setIsDark(document.body.classList.contains("dark"));
-    });
-    observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
-    return () => observer.disconnect();
-  }, []);
-  return isDark;
 }
 
 export default function App() {
