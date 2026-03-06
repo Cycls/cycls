@@ -33,7 +33,7 @@ export function Chat({
   onManageAccount?: () => void;
   onCreateOrg?: () => void;
   onSwitchOrg?: (orgId: string | null) => void;
-  activeOrg?: { id: string; name: string };
+  activeOrg?: { id: string; name: string; imageUrl?: string };
   orgs?: { id: string; name: string; imageUrl: string }[];
   title?: string;
   user?: UserInfo;
@@ -207,7 +207,7 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onSwitchOrg, 
   onManageAccount?: () => void;
   onCreateOrg?: () => void;
   onSwitchOrg?: (orgId: string | null) => void;
-  activeOrg?: { id: string; name: string };
+  activeOrg?: { id: string; name: string; imageUrl?: string };
   orgs?: { id: string; name: string; imageUrl: string }[];
 }) {
   const [open, setOpen] = useState(false);
@@ -245,7 +245,7 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onSwitchOrg, 
                 <div className="border-t border-border" />
                 <div className="py-1">
                   <button
-                    onClick={() => { onSwitchOrg?.(null); setOpen(false); setShowOrgs(false); }}
+                    onClick={() => { onSwitchOrg?.(null); setShowOrgs(false); }}
                     className={`flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors cursor-pointer ${!activeOrg ? "text-foreground bg-secondary/60" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80"}`}
                   >
                     Personal
@@ -253,7 +253,7 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onSwitchOrg, 
                   {(orgs || []).map((org) => (
                     <button
                       key={org.id}
-                      onClick={() => { onSwitchOrg?.(org.id); setOpen(false); setShowOrgs(false); }}
+                      onClick={() => { onSwitchOrg?.(org.id); setShowOrgs(false); }}
                       className={`flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors cursor-pointer ${activeOrg?.id === org.id ? "text-foreground bg-secondary/60" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80"}`}
                     >
                       {org.name}
@@ -284,7 +284,12 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onSwitchOrg, 
                     onClick={() => setShowOrgs(true)}
                     className="flex w-full items-center justify-between px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                   >
-                    <span className="truncate">{activeOrg ? activeOrg.name : "Personal"}<span className="text-muted-foreground font-normal"> · org</span></span>
+                    <span className="flex items-center gap-2 truncate">
+                      {activeOrg?.imageUrl && (
+                        <div className="size-4 rounded-full shrink-0" style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }} />
+                      )}
+                      {activeOrg ? activeOrg.name : "Personal"}<span className="text-muted-foreground font-normal"> · org</span>
+                    </span>
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
@@ -295,16 +300,19 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onSwitchOrg, 
                     onClick={() => { setOpen(false); onManageAccount(); }}
                     className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                   >
-                    Manage account
+                    Settings
                   </button>
                 )}
                 {onSignOut && (
-                  <button
-                    onClick={() => { setOpen(false); onSignOut(); }}
-                    className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                  >
-                    Sign out
-                  </button>
+                  <>
+                    <div className="border-t border-border" />
+                    <button
+                      onClick={() => { setOpen(false); onSignOut(); }}
+                      className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                    >
+                      Sign out
+                    </button>
+                  </>
                 )}
               </>
             )}

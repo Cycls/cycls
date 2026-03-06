@@ -49,7 +49,7 @@ function ChatWithAuth() {
       onManageAccount={() => clerk.openUserProfile()}
       onCreateOrg={() => clerk.openCreateOrganization()}
       onSwitchOrg={(orgId) => setActive?.({ organization: orgId || null })}
-      activeOrg={organization ? { id: organization.id, name: organization.name } : undefined}
+      activeOrg={organization ? { id: organization.id, name: organization.name, imageUrl: organization.imageUrl } : undefined}
       orgs={orgs}
       title={config?.header}
       user={user ? {
