@@ -6,6 +6,8 @@ import {
   SignedOut,
   useAuth,
   useClerk,
+  useOrganization,
+  useOrganizationList,
   useSignIn,
   useUser,
 } from "@clerk/clerk-react";
@@ -19,6 +21,8 @@ function ChatWithAuth() {
   const { getToken, signOut } = useAuth();
   const { user } = useUser();
   const clerk = useClerk();
+  const { organization } = useOrganization();
+  const { userMemberships, setActive } = useOrganizationList({ userMemberships: true });
 
   useEffect(() => {
     setGetToken(() => getToken());
@@ -27,6 +31,12 @@ function ChatWithAuth() {
   useEffect(() => {
     fetchConfig();
   }, [fetchConfig]);
+
+  const orgs = (userMemberships?.data || []).map((m) => ({
+    id: m.organization.id,
+    name: m.organization.name,
+    imageUrl: m.organization.imageUrl,
+  }));
 
   return (
     <Chat
@@ -37,6 +47,10 @@ function ChatWithAuth() {
       onClear={clear}
       onSignOut={() => signOut()}
       onManageAccount={() => clerk.openUserProfile()}
+      onCreateOrg={() => clerk.openCreateOrganization()}
+      onSwitchOrg={(orgId) => setActive?.({ organization: orgId || null })}
+      activeOrg={organization ? { id: organization.id, name: organization.name } : undefined}
+      orgs={orgs}
       title={config?.header}
       user={user ? {
         name: user.fullName || user.firstName || "",

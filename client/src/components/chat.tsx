@@ -17,6 +17,10 @@ export function Chat({
   onClear,
   onSignOut,
   onManageAccount,
+  onCreateOrg,
+  onSwitchOrg,
+  activeOrg,
+  orgs,
   title,
   user,
 }: {
@@ -27,6 +31,10 @@ export function Chat({
   onClear: () => void;
   onSignOut?: () => void;
   onManageAccount?: () => void;
+  onCreateOrg?: () => void;
+  onSwitchOrg?: (orgId: string | null) => void;
+  activeOrg?: { id: string; name: string };
+  orgs?: { id: string; name: string; imageUrl: string }[];
   title?: string;
   user?: UserInfo;
 }) {
@@ -99,7 +107,7 @@ export function Chat({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
               </svg>
             </button>
-            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} /></div>}
+            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onCreateOrg={onCreateOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} /></div>}
           </div>
         </div>
       </header>
@@ -193,13 +201,22 @@ export function Chat({
   );
 }
 
-function UserMenu({ user, onSignOut, onManageAccount }: { user: UserInfo; onSignOut?: () => void; onManageAccount?: () => void }) {
+function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onSwitchOrg, activeOrg, orgs }: {
+  user: UserInfo;
+  onSignOut?: () => void;
+  onManageAccount?: () => void;
+  onCreateOrg?: () => void;
+  onSwitchOrg?: (orgId: string | null) => void;
+  activeOrg?: { id: string; name: string };
+  orgs?: { id: string; name: string; imageUrl: string }[];
+}) {
   const [open, setOpen] = useState(false);
+  const [showOrgs, setShowOrgs] = useState(false);
 
   return (
     <div className="relative">
       <button
-        onClick={() => setOpen(!open)}
+        onClick={() => { setOpen(!open); setShowOrgs(false); }}
         className="flex size-8 items-center justify-center rounded-lg hover:opacity-80 transition-opacity cursor-pointer"
         aria-label="Profile"
       >
@@ -212,28 +229,84 @@ function UserMenu({ user, onSignOut, onManageAccount }: { user: UserInfo; onSign
       </button>
       {open && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="fixed inset-0 z-40" onClick={() => { setOpen(false); setShowOrgs(false); }} />
           <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-lg border border-border bg-background shadow-lg">
-            <div className="px-3 py-2.5">
-              <p className="text-sm font-medium text-foreground truncate">{user.name}</p>
-              <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-            </div>
-            <div className="border-t border-border" />
-            {onManageAccount && (
-              <button
-                onClick={() => { setOpen(false); onManageAccount(); }}
-                className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-              >
-                Manage account
-              </button>
-            )}
-            {onSignOut && (
-              <button
-                onClick={() => { setOpen(false); onSignOut(); }}
-                className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-              >
-                Sign out
-              </button>
+            {showOrgs ? (
+              <>
+                <button
+                  onClick={() => setShowOrgs(false)}
+                  className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                  Back
+                </button>
+                <div className="border-t border-border" />
+                <div className="py-1">
+                  <button
+                    onClick={() => { onSwitchOrg?.(null); setOpen(false); setShowOrgs(false); }}
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors cursor-pointer ${!activeOrg ? "text-foreground bg-secondary/60" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80"}`}
+                  >
+                    Personal
+                  </button>
+                  {(orgs || []).map((org) => (
+                    <button
+                      key={org.id}
+                      onClick={() => { onSwitchOrg?.(org.id); setOpen(false); setShowOrgs(false); }}
+                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors cursor-pointer ${activeOrg?.id === org.id ? "text-foreground bg-secondary/60" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80"}`}
+                    >
+                      {org.name}
+                    </button>
+                  ))}
+                </div>
+                {onCreateOrg && (
+                  <>
+                    <div className="border-t border-border" />
+                    <button
+                      onClick={() => { setOpen(false); setShowOrgs(false); onCreateOrg(); }}
+                      className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                    >
+                      + Create organization
+                    </button>
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="px-3 py-2.5">
+                  <p className="text-sm font-medium text-foreground truncate">{user.name}</p>
+                  <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+                </div>
+                <div className="border-t border-border" />
+                {onSwitchOrg && (
+                  <button
+                    onClick={() => setShowOrgs(true)}
+                    className="flex w-full items-center justify-between px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                  >
+                    <span className="truncate">{activeOrg ? activeOrg.name : "Personal"}<span className="text-muted-foreground font-normal"> · org</span></span>
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                )}
+                {onManageAccount && (
+                  <button
+                    onClick={() => { setOpen(false); onManageAccount(); }}
+                    className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                  >
+                    Manage account
+                  </button>
+                )}
+                {onSignOut && (
+                  <button
+                    onClick={() => { setOpen(false); onSignOut(); }}
+                    className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                  >
+                    Sign out
+                  </button>
+                )}
+              </>
             )}
           </div>
         </>
