@@ -17,7 +17,7 @@ import { Chat } from "./components/chat";
 import { useChat, AppConfig } from "./hooks/use-chat";
 
 function ChatWithAuth() {
-  const { messages, isStreaming, config, send, stop, clear, fetchConfig, setGetToken } =
+  const { messages, isStreaming, config, send, stop, clear, fetchConfig, setGetToken, uploadFile } =
     useChat("/api");
   const { getToken, signOut } = useAuth();
   const { user } = useUser();
@@ -68,13 +68,13 @@ function ChatWithAuth() {
         email: user.primaryEmailAddress?.emailAddress || "",
         imageUrl: user.imageUrl,
       } : undefined}
-      onFilesAdded={(files) => console.log("files", files)}
+      uploadFile={uploadFile}
     />
   );
 }
 
 function ChatNoAuth() {
-  const { messages, isStreaming, config, send, stop, clear, fetchConfig } =
+  const { messages, isStreaming, config, send, stop, clear, fetchConfig, uploadFile } =
     useChat("/api");
 
   useEffect(() => {
@@ -89,7 +89,7 @@ function ChatNoAuth() {
       onStop={stop}
       onClear={clear}
       title={config?.header}
-      onFilesAdded={(files) => console.log("files", files)}
+      uploadFile={uploadFile}
     />
   );
 }

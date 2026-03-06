@@ -37,6 +37,7 @@ export function Chat({
   title,
   user,
   onFilesAdded,
+  uploadFile,
 }: {
   messages: Message[];
   isStreaming: boolean;
@@ -54,20 +55,33 @@ export function Chat({
   title?: string;
   user?: UserInfo;
   onFilesAdded?: (files: File[]) => void;
+  uploadFile?: (file: File) => Promise<Attachment>;
 }) {
   const [input, setInput] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { scrollRef, contentRef } = useStickToBottom();
 
-  const handleFilesAdded = useCallback((newFiles: File[]) => {
-    setFiles((prev) => [...prev, ...newFiles]);
+  const handleFilesAdded = useCallback(async (newFiles: File[]) => {
     onFilesAdded?.(newFiles);
-  }, [onFilesAdded]);
+    if (uploadFile) {
+      const newAttachments = await Promise.all(newFiles.map((f) => uploadFile(f)));
+      setAttachments((prev) => [...prev, ...newAttachments]);
+    } else {
+      // No upload function — use blob URLs
+      const newAttachments = newFiles.map((f) => ({
+        name: f.name,
+        size: f.size,
+        type: f.type,
+        url: URL.createObjectURL(f),
+      }));
+      setAttachments((prev) => [...prev, ...newAttachments]);
+    }
+  }, [onFilesAdded, uploadFile]);
 
   const removeFile = useCallback((index: number) => {
-    setFiles((prev) => prev.filter((_, i) => i !== index));
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
   const openFilePicker = useCallback(() => {
@@ -89,16 +103,11 @@ export function Chat({
   const handleSubmit = useCallback(() => {
     const text = input.trim();
     if (!text || isStreaming) return;
-    const attachments: Attachment[] = files.map((f) => ({
-      name: f.name,
-      size: f.size,
-      type: f.type,
-      url: URL.createObjectURL(f),
-    }));
+    const sendAttachments = attachments.length > 0 ? [...attachments] : undefined;
     setInput("");
-    setFiles([]);
-    onSend(text, attachments.length > 0 ? attachments : undefined);
-  }, [input, isStreaming, onSend, files]);
+    setAttachments([]);
+    onSend(text, sendAttachments);
+  }, [input, isStreaming, onSend, attachments]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const isMobile = window.matchMedia("(pointer: coarse)").matches;
@@ -157,7 +166,7 @@ export function Chat({
       <div className="shrink-0 h-12" />
 
       {/* Stable file input — lives outside LayoutGroup so it survives remounts */}
-      {onFilesAdded && (
+      {(onFilesAdded || uploadFile) && (
         <input
           ref={fileInputRef}
           type="file"
@@ -184,8 +193,8 @@ export function Chat({
                 handleSubmit={handleSubmit}
                 isStreaming={isStreaming}
                 onStop={onStop}
-                onOpenFilePicker={onFilesAdded ? openFilePicker : undefined}
-                files={files}
+                onOpenFilePicker={(onFilesAdded || uploadFile) ? openFilePicker : undefined}
+                attachments={attachments}
                 onRemoveFile={removeFile}
               />
             </div>
@@ -217,8 +226,8 @@ export function Chat({
                   handleSubmit={handleSubmit}
                   isStreaming={isStreaming}
                   onStop={onStop}
-                  onOpenFilePicker={onFilesAdded ? openFilePicker : undefined}
-                  files={files}
+                  onOpenFilePicker={(onFilesAdded || uploadFile) ? openFilePicker : undefined}
+                  attachments={attachments}
                   onRemoveFile={removeFile}
                 />
               </div>
@@ -424,7 +433,7 @@ function InputBox({
   isStreaming,
   onStop,
   onOpenFilePicker,
-  files,
+  attachments,
   onRemoveFile,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -435,7 +444,7 @@ function InputBox({
   isStreaming: boolean;
   onStop: () => void;
   onOpenFilePicker?: () => void;
-  files?: File[];
+  attachments?: Attachment[];
   onRemoveFile?: (index: number) => void;
 }) {
   return (
@@ -447,7 +456,7 @@ function InputBox({
     >
       {/* File previews */}
       <AnimatePresence initial={false}>
-        {files && files.length > 0 && (
+        {attachments && attachments.length > 0 && (
           <motion.div
             key="files-list"
             initial={{ height: 0 }}
@@ -458,7 +467,7 @@ function InputBox({
           >
             <div className="flex flex-row overflow-x-auto px-2 pt-3 pb-2 gap-2">
               <AnimatePresence initial={false}>
-                {files.map((file, index) => (
+                {attachments.map((file, index) => (
                   <motion.div
                     key={file.name + index}
                     initial={{ width: 0, opacity: 0 }}
@@ -472,7 +481,7 @@ function InputBox({
                       <div className="bg-secondary flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg">
                         {file.type.startsWith("image/") ? (
                           <img
-                            src={URL.createObjectURL(file)}
+                            src={file.url}
                             alt={file.name}
                             className="size-full object-cover"
                           />
