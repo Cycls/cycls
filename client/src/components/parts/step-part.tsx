@@ -37,7 +37,7 @@ export function StepPart({
           </svg>
         )}
       </div>
-      <span className="font-mono text-xs truncate">
+      <span className="font-mono text-[13px] truncate">
         {toolName ? (
           <>
             <span className="font-semibold text-foreground">{toolName}</span>
