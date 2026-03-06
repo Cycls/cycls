@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { motion, LayoutGroup } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { PricingTable } from "@clerk/clerk-react";
 import { MessageBubble } from "./message";
@@ -83,6 +84,8 @@ export function Chat({
     }
   };
 
+  const isEmpty = messages.length === 0;
+
   const toggleDark = () => {
     document.body.classList.toggle("dark");
   };
@@ -129,88 +132,54 @@ export function Chat({
       {/* Spacer for fixed header */}
       <div className="shrink-0 h-12" />
 
-      {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
-        <div ref={contentRef} className="flex w-full flex-col items-center py-4">
-          {messages.length === 0 && (
-            <div className="flex-1 flex items-center justify-center pt-32">
-              <p className="text-muted-foreground">
-                Send a message to get started
-              </p>
-            </div>
-          )}
-          {messages.map((msg, i) => (
-            <MessageBubble
-              key={i}
-              message={msg}
-              isStreaming={
-                isStreaming &&
-                i === messages.length - 1 &&
-                msg.role === "assistant"
-              }
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* Input */}
-      <div className="shrink-0 px-6 pb-4 pt-2">
-        <div className="max-w-3xl mx-auto">
-          <div
-            className="border border-border bg-background rounded-3xl p-2 shadow-sm cursor-text"
-            onClick={() => textareaRef.current?.focus()}
-          >
-            <div className="flex items-end gap-2">
-              <textarea
-                ref={textareaRef}
-                dir="auto"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Send a message..."
-                rows={1}
-                className="flex-1 min-h-[44px] max-h-[240px] resize-none bg-transparent px-3 py-2.5 text-foreground placeholder:text-muted-foreground focus:outline-none overflow-y-auto"
+      <LayoutGroup>
+        {isEmpty ? (
+          <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16">
+            <div className="max-w-3xl w-full">
+              <InputBox
+                textareaRef={textareaRef}
+                input={input}
+                setInput={setInput}
+                handleKeyDown={handleKeyDown}
+                handleSubmit={handleSubmit}
+                isStreaming={isStreaming}
+                onStop={onStop}
               />
-              <div className="flex items-center pb-1 pr-1">
-                {isStreaming ? (
-                  <button
-                    type="button"
-                    onClick={onStop}
-                    className="flex size-9 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 transition cursor-pointer"
-                    aria-label="Stop"
-                  >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                      <rect x="6" y="6" width="12" height="12" rx="2" />
-                    </svg>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); handleSubmit(); }}
-                    disabled={!input.trim()}
-                    className="flex size-9 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 disabled:opacity-30 transition cursor-pointer"
-                    aria-label="Send"
-                  >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M5 12h14M12 5l7 7-7 7"
-                      />
-                    </svg>
-                  </button>
-                )}
-              </div>
             </div>
           </div>
-        </div>
-      </div>
+        ) : (
+          <>
+            <div ref={scrollRef} className="flex-1 overflow-y-auto">
+              <div ref={contentRef} className="flex w-full flex-col items-center py-4">
+                {messages.map((msg, i) => (
+                  <MessageBubble
+                    key={i}
+                    message={msg}
+                    isStreaming={
+                      isStreaming &&
+                      i === messages.length - 1 &&
+                      msg.role === "assistant"
+                    }
+                  />
+                ))}
+              </div>
+            </div>
+            <div className="shrink-0 px-6 pb-4 pt-2">
+              <div className="max-w-3xl mx-auto">
+                <InputBox
+                  textareaRef={textareaRef}
+                  input={input}
+                  setInput={setInput}
+                  handleKeyDown={handleKeyDown}
+                  handleSubmit={handleSubmit}
+                  isStreaming={isStreaming}
+                  onStop={onStop}
+                />
+              </div>
+            </div>
+          </>
+        )}
+      </LayoutGroup>
     </div>
   );
 }
@@ -397,5 +366,81 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
         </>
       )}
     </div>
+  );
+}
+
+function InputBox({
+  textareaRef,
+  input,
+  setInput,
+  handleKeyDown,
+  handleSubmit,
+  isStreaming,
+  onStop,
+}: {
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  input: string;
+  setInput: (v: string) => void;
+  handleKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  handleSubmit: () => void;
+  isStreaming: boolean;
+  onStop: () => void;
+}) {
+  return (
+    <motion.div
+      layoutId="chat-input"
+      className="border border-border bg-background rounded-3xl p-2 shadow-sm cursor-text"
+      onClick={() => textareaRef.current?.focus()}
+      transition={{ type: "spring", stiffness: 200, damping: 25 }}
+    >
+      <div className="flex items-end gap-2">
+        <textarea
+          ref={textareaRef}
+          dir="auto"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Send a message..."
+          rows={1}
+          className="flex-1 min-h-[44px] max-h-[240px] resize-none bg-transparent px-3 py-2.5 text-foreground placeholder:text-muted-foreground focus:outline-none overflow-y-auto"
+        />
+        <div className="flex items-center pb-1 pr-1">
+          {isStreaming ? (
+            <button
+              type="button"
+              onClick={onStop}
+              className="flex size-9 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 transition cursor-pointer"
+              aria-label="Stop"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              </svg>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); handleSubmit(); }}
+              disabled={!input.trim()}
+              className="flex size-9 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 disabled:opacity-30 transition cursor-pointer"
+              aria-label="Send"
+            >
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M5 12h14M12 5l7 7-7 7"
+                />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+    </motion.div>
   );
 }
