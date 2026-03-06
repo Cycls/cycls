@@ -22,6 +22,7 @@ export function Chat({
   onSwitchOrg,
   activeOrg,
   orgs,
+  plan,
   title,
   user,
 }: {
@@ -37,6 +38,7 @@ export function Chat({
   onSwitchOrg?: (orgId: string | null) => void;
   activeOrg?: { id: string; name: string; imageUrl?: string };
   orgs?: { id: string; name: string; imageUrl: string }[];
+  plan?: string;
   title?: string;
   user?: UserInfo;
 }) {
@@ -109,7 +111,7 @@ export function Chat({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
               </svg>
             </button>
-            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} /></div>}
+            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} /></div>}
           </div>
         </div>
       </header>
@@ -203,7 +205,7 @@ export function Chat({
   );
 }
 
-function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, activeOrg, orgs }: {
+function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, activeOrg, orgs, plan }: {
   user: UserInfo;
   onSignOut?: () => void;
   onManageAccount?: () => void;
@@ -212,6 +214,7 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
   onSwitchOrg?: (orgId: string | null) => void;
   activeOrg?: { id: string; name: string; imageUrl?: string };
   orgs?: { id: string; name: string; imageUrl: string }[];
+  plan?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [showOrgs, setShowOrgs] = useState(false);
@@ -280,6 +283,9 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                 <div className="px-3 py-2.5">
                   <p className="text-sm font-medium text-foreground truncate">{user.name}</p>
                   <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+                  {plan && (
+                    <span className="inline-block mt-1.5 rounded-full bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">{plan}</span>
+                  )}
                 </div>
                 <div className="border-t border-border" />
                 {onSwitchOrg && (
