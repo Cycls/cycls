@@ -48,6 +48,7 @@ function ChatWithAuth() {
       onSignOut={() => signOut()}
       onManageAccount={() => clerk.openUserProfile()}
       onCreateOrg={() => clerk.openCreateOrganization()}
+      onManageOrg={() => clerk.openOrganizationProfile()}
       onSwitchOrg={(orgId) => setActive?.({ organization: orgId || null })}
       activeOrg={organization ? { id: organization.id, name: organization.name, imageUrl: organization.imageUrl } : undefined}
       orgs={orgs}
