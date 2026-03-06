@@ -291,9 +291,17 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
               </>
             ) : (
               <>
-                <div className="px-3 py-2.5">
-                  <p className="text-sm font-medium text-foreground truncate">{user.name}</p>
-                  <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+                <div className="flex items-center gap-2.5 px-3 py-2.5">
+                  <div
+                    className="size-8 rounded-full bg-secondary text-foreground flex items-center justify-center text-sm font-medium select-none shrink-0"
+                    style={user.imageUrl ? { backgroundImage: `url(${user.imageUrl})`, backgroundSize: "cover" } : undefined}
+                  >
+                    {!user.imageUrl && (user.name?.charAt(0) || user.email?.charAt(0) || "?")}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{user.name}</p>
+                    <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+                  </div>
                 </div>
                 <div className="border-t border-border" />
                 <p className="px-3 pt-2 pb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">Account</p>
