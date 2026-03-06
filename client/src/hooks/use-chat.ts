@@ -71,6 +71,32 @@ export function useChat(baseUrl: string = "/api") {
     }
   }, [baseUrl]);
 
+  const uploadFile = useCallback(
+    async (file: File): Promise<Attachment> => {
+      const blobUrl = URL.createObjectURL(file);
+      const attachment: Attachment = { name: file.name, size: file.size, type: file.type, url: blobUrl };
+
+      // Upload to server in background — blob URL is always used for display
+      const authHeaders: Record<string, string> = {};
+      if (getTokenRef.current) {
+        const token = await getTokenRef.current();
+        if (token) authHeaders["Authorization"] = `Bearer ${token}`;
+      }
+      const id = crypto.randomUUID().slice(0, 8);
+      const uploadPath = `attachments/${id}-${file.name}`;
+      const form = new FormData();
+      form.append("file", file);
+      fetch(`${baseUrl}/files/${uploadPath}`, {
+        method: "PUT",
+        headers: authHeaders,
+        body: form,
+      }).catch(() => {});
+
+      return attachment;
+    },
+    [baseUrl],
+  );
+
   const send = useCallback(
     async (text: string, attachments?: Attachment[]) => {
       if (isStreaming) return;
@@ -92,7 +118,6 @@ export function useChat(baseUrl: string = "/api") {
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
         };
-
         if (getTokenRef.current) {
           const token = await getTokenRef.current();
           if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -250,5 +275,6 @@ export function useChat(baseUrl: string = "/api") {
     clear,
     fetchConfig,
     setGetToken,
+    uploadFile,
   };
 }
