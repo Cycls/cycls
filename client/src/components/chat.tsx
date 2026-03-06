@@ -295,7 +295,7 @@ export function Chat({
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="fixed top-0 right-0 bottom-0 z-50 w-full sm:w-96 border-l border-border bg-background flex flex-col"
+              className="fixed top-0 right-0 bottom-0 z-50 w-full sm:w-[480px] border-l border-border bg-background flex flex-col"
             >
               <Files {...files} onClose={() => setFilesOpen(false)} />
             </motion.div>

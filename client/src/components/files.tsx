@@ -11,13 +11,6 @@ function FolderIcon({ className = "size-5" }: { className?: string }) {
   );
 }
 
-function FileIcon({ className = "size-5" }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-    </svg>
-  );
-}
 
 const IMAGE_EXT = new Set(["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "avif"]);
 function isImage(name: string) {
@@ -324,7 +317,9 @@ export function Files({
             {/* Uploading indicators */}
             {uploading.map((name) => (
               <div key={name} className="flex items-center gap-3 px-4 py-2.5 sm:px-6 opacity-50">
-                <FileIcon className="size-5 text-muted-foreground shrink-0" />
+                <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
+                  <span className="text-[10px] font-medium text-muted-foreground uppercase">{name.split(".").pop()}</span>
+                </div>
                 <span className="text-sm text-foreground truncate flex-1">{name}</span>
                 <svg className="size-4 animate-spin text-muted-foreground shrink-0" viewBox="0 0 24 24" fill="none">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
@@ -341,7 +336,7 @@ export function Files({
               return (
                 <div
                   key={entry.name}
-                  className="group flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer"
+                  className="group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer"
                   onClick={() => isDir ? navigate(entryPath) : onOpenFile(entryPath).then((url) => window.open(url, "_blank"))}
                 >
                   {isDir ? (
@@ -349,7 +344,11 @@ export function Files({
                   ) : thumbUrls[entry.name] ? (
                     <img src={thumbUrls[entry.name]} alt={entry.name} className="size-8 rounded object-cover shrink-0" />
                   ) : (
-                    <FileIcon className="size-5 text-muted-foreground shrink-0" />
+                    <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
+                      <span className="text-[10px] font-medium text-muted-foreground uppercase">
+                        {entry.name.split(".").pop()}
+                      </span>
+                    </div>
                   )}
 
                   <div className="flex-1 min-w-0">
@@ -423,6 +422,17 @@ export function Files({
                         ]}
                       />
                     )}
+                  </div>
+
+                  {/* Tooltip */}
+                  <div className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity delay-300 z-50">
+                    <div className="rounded-lg border border-border bg-background px-3 py-2 shadow-lg text-xs whitespace-nowrap">
+                      <p className="font-medium text-foreground">{entry.name}</p>
+                      <p className="text-muted-foreground mt-0.5">
+                        {!isDir && <>{formatSize(entry.size)} · </>}
+                        {new Date(entry.modified).toLocaleString()}
+                      </p>
+                    </div>
                   </div>
                 </div>
               );
