@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { motion, LayoutGroup } from "framer-motion";
+import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { PricingTable } from "@clerk/clerk-react";
 import { MessageBubble } from "./message";
-import type { Message } from "../hooks/use-chat";
+import type { Message, Attachment } from "../hooks/use-chat";
 
 interface PlanInfo {
   name: string;
@@ -36,10 +36,11 @@ export function Chat({
   plan,
   title,
   user,
+  onFilesAdded,
 }: {
   messages: Message[];
   isStreaming: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string, attachments?: Attachment[]) => void;
   onStop: () => void;
   onClear: () => void;
   onSignOut?: () => void;
@@ -52,10 +53,26 @@ export function Chat({
   plan?: PlanInfo;
   title?: string;
   user?: UserInfo;
+  onFilesAdded?: (files: File[]) => void;
 }) {
   const [input, setInput] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { scrollRef, contentRef } = useStickToBottom();
+
+  const handleFilesAdded = useCallback((newFiles: File[]) => {
+    setFiles((prev) => [...prev, ...newFiles]);
+    onFilesAdded?.(newFiles);
+  }, [onFilesAdded]);
+
+  const removeFile = useCallback((index: number) => {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const openFilePicker = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -72,9 +89,16 @@ export function Chat({
   const handleSubmit = useCallback(() => {
     const text = input.trim();
     if (!text || isStreaming) return;
+    const attachments: Attachment[] = files.map((f) => ({
+      name: f.name,
+      size: f.size,
+      type: f.type,
+      url: URL.createObjectURL(f),
+    }));
     setInput("");
-    onSend(text);
-  }, [input, isStreaming, onSend]);
+    setFiles([]);
+    onSend(text, attachments.length > 0 ? attachments : undefined);
+  }, [input, isStreaming, onSend, files]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const isMobile = window.matchMedia("(pointer: coarse)").matches;
@@ -132,6 +156,22 @@ export function Chat({
       {/* Spacer for fixed header */}
       <div className="shrink-0 h-12" />
 
+      {/* Stable file input — lives outside LayoutGroup so it survives remounts */}
+      {onFilesAdded && (
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            if (e.target.files?.length) {
+              handleFilesAdded(Array.from(e.target.files));
+              e.target.value = "";
+            }
+          }}
+        />
+      )}
+
       <LayoutGroup>
         {isEmpty ? (
           <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16">
@@ -144,6 +184,9 @@ export function Chat({
                 handleSubmit={handleSubmit}
                 isStreaming={isStreaming}
                 onStop={onStop}
+                onOpenFilePicker={onFilesAdded ? openFilePicker : undefined}
+                files={files}
+                onRemoveFile={removeFile}
               />
             </div>
           </div>
@@ -174,6 +217,9 @@ export function Chat({
                   handleSubmit={handleSubmit}
                   isStreaming={isStreaming}
                   onStop={onStop}
+                  onOpenFilePicker={onFilesAdded ? openFilePicker : undefined}
+                  files={files}
+                  onRemoveFile={removeFile}
                 />
               </div>
             </div>
@@ -377,6 +423,9 @@ function InputBox({
   handleSubmit,
   isStreaming,
   onStop,
+  onOpenFilePicker,
+  files,
+  onRemoveFile,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   input: string;
@@ -385,6 +434,9 @@ function InputBox({
   handleSubmit: () => void;
   isStreaming: boolean;
   onStop: () => void;
+  onOpenFilePicker?: () => void;
+  files?: File[];
+  onRemoveFile?: (index: number) => void;
 }) {
   return (
     <motion.div
@@ -393,26 +445,108 @@ function InputBox({
       onClick={() => textareaRef.current?.focus()}
       transition={{ type: "spring", stiffness: 200, damping: 25 }}
     >
-      <div className="flex items-end gap-2">
-        <textarea
-          ref={textareaRef}
-          dir="auto"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Send a message..."
-          rows={1}
-          className="flex-1 min-h-[44px] max-h-[240px] resize-none bg-transparent px-3 py-2.5 text-foreground placeholder:text-muted-foreground focus:outline-none overflow-y-auto"
-        />
-        <div className="flex items-center pb-1 pr-1">
+      {/* File previews */}
+      <AnimatePresence initial={false}>
+        {files && files.length > 0 && (
+          <motion.div
+            key="files-list"
+            initial={{ height: 0 }}
+            animate={{ height: "auto" }}
+            exit={{ height: 0 }}
+            transition={{ type: "spring", duration: 0.2, bounce: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="flex flex-row overflow-x-auto px-2 pt-3 pb-2 gap-2">
+              <AnimatePresence initial={false}>
+                {files.map((file, index) => (
+                  <motion.div
+                    key={file.name + index}
+                    initial={{ width: 0, opacity: 0 }}
+                    animate={{ width: 180, opacity: 1 }}
+                    exit={{ width: 0, opacity: 0 }}
+                    transition={{ type: "spring", duration: 0.2, bounce: 0 }}
+                    className="relative shrink-0"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="border border-border bg-background hover:bg-secondary/50 flex w-full items-center gap-3 rounded-2xl p-2 pr-3 transition-colors">
+                      <div className="bg-secondary flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg">
+                        {file.type.startsWith("image/") ? (
+                          <img
+                            src={URL.createObjectURL(file)}
+                            alt={file.name}
+                            className="size-full object-cover"
+                          />
+                        ) : (
+                          <span className="text-[10px] font-medium text-muted-foreground uppercase">
+                            {file.name.split(".").pop()}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-col overflow-hidden min-w-0">
+                        <span className="truncate text-xs font-medium text-foreground">{file.name}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {(file.size / 1024).toFixed(1)} kB
+                        </span>
+                      </div>
+                    </div>
+                    {onRemoveFile && (
+                      <button
+                        type="button"
+                        onClick={() => onRemoveFile(index)}
+                        className="absolute top-0 right-0 z-10 flex size-5 translate-x-1/4 -translate-y-1/4 items-center justify-center rounded-full border-2 border-background bg-foreground text-background transition cursor-pointer"
+                        aria-label="Remove file"
+                      >
+                        <svg className="size-3" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    )}
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Textarea */}
+      <textarea
+        ref={textareaRef}
+        dir="auto"
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={handleKeyDown}
+        placeholder="Send a message..."
+        rows={1}
+        className="w-full min-h-[44px] max-h-[240px] resize-none bg-transparent px-3 py-2.5 text-foreground placeholder:text-muted-foreground focus:outline-none overflow-y-auto"
+      />
+
+      {/* Actions row: paperclip left, send right */}
+      <div className="flex items-center justify-between px-1 pt-1">
+        <div>
+          {onOpenFilePicker && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onOpenFilePicker(); }}
+              className="flex size-8 items-center justify-center rounded-2xl text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition cursor-pointer"
+              aria-label="Attach file"
+            >
+              {/* Paperclip */}
+              <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+              </svg>
+            </button>
+          )}
+        </div>
+        <div>
           {isStreaming ? (
             <button
               type="button"
               onClick={onStop}
-              className="flex size-9 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 transition cursor-pointer"
+              className="flex size-8 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 transition cursor-pointer"
               aria-label="Stop"
             >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+              <svg className="size-5" viewBox="0 0 24 24" fill="currentColor">
                 <rect x="6" y="6" width="12" height="12" rx="2" />
               </svg>
             </button>
@@ -421,21 +555,12 @@ function InputBox({
               type="button"
               onClick={(e) => { e.stopPropagation(); handleSubmit(); }}
               disabled={!input.trim()}
-              className="flex size-9 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 disabled:opacity-30 transition cursor-pointer"
+              className="flex size-8 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 disabled:opacity-30 transition cursor-pointer"
               aria-label="Send"
             >
-              <svg
-                className="w-4 h-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M5 12h14M12 5l7 7-7 7"
-                />
+              {/* ArrowUp */}
+              <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 12l7-7 7 7M12 5v14" />
               </svg>
             </button>
           )}
