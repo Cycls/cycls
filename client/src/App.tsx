@@ -11,6 +11,7 @@ import {
   useSignIn,
   useUser,
 } from "@clerk/clerk-react";
+import { __experimental_useSubscription as useSubscription } from "@clerk/shared/react";
 import { dark } from "@clerk/themes";
 import { Chat } from "./components/chat";
 import { useChat, AppConfig } from "./hooks/use-chat";
@@ -23,6 +24,7 @@ function ChatWithAuth() {
   const clerk = useClerk();
   const { organization } = useOrganization();
   const { userMemberships, setActive } = useOrganizationList({ userMemberships: true });
+  const { data: subscription } = useSubscription();
 
   useEffect(() => {
     setGetToken(() => getToken());
@@ -52,6 +54,7 @@ function ChatWithAuth() {
       onSwitchOrg={(orgId) => setActive?.({ organization: orgId || null })}
       activeOrg={organization ? { id: organization.id, name: organization.name, imageUrl: organization.imageUrl } : undefined}
       orgs={orgs}
+      plan={subscription?.subscriptionItems?.[0]?.plan?.name}
       title={config?.header}
       user={user ? {
         name: user.fullName || user.firstName || "",
