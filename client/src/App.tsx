@@ -68,6 +68,7 @@ function ChatWithAuth() {
         email: user.primaryEmailAddress?.emailAddress || "",
         imageUrl: user.imageUrl,
       } : undefined}
+      onFilesAdded={(files) => console.log("files", files)}
     />
   );
 }
@@ -88,6 +89,7 @@ function ChatNoAuth() {
       onStop={stop}
       onClear={clear}
       title={config?.header}
+      onFilesAdded={(files) => console.log("files", files)}
     />
   );
 }

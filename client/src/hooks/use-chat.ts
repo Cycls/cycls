@@ -24,10 +24,18 @@ export interface Part {
   session_id?: string;
 }
 
+export interface Attachment {
+  name: string;
+  size: number;
+  type: string;
+  url: string;
+}
+
 export interface Message {
   role: "user" | "assistant";
   content: string;
   parts?: Part[];
+  attachments?: Attachment[];
 }
 
 export interface AppConfig {
@@ -64,10 +72,10 @@ export function useChat(baseUrl: string = "/api") {
   }, [baseUrl]);
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, attachments?: Attachment[]) => {
       if (isStreaming) return;
 
-      const userMessage: Message = { role: "user", content: text };
+      const userMessage: Message = { role: "user", content: text, attachments };
       const assistantMessage: Message = {
         role: "assistant",
         content: "",

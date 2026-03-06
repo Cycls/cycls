@@ -79,10 +79,46 @@ export function MessageBubble({
   const [copied, setCopied] = useState(false);
 
   if (message.role === "user") {
+    const attachments = message.attachments;
     return (
       <div className="flex w-full max-w-3xl items-start gap-4 px-6 pb-2 justify-end">
-        <div dir="auto" className="rounded-3xl bg-secondary text-secondary-foreground px-4 py-2.5 max-w-[80%]">
-          {message.content}
+        <div className="flex flex-col items-end gap-2 max-w-[80%]">
+          {attachments && attachments.length > 0 && (
+            <div className="flex flex-row gap-2 flex-wrap justify-end">
+              {attachments.map((att, i) => (
+                <a
+                  key={att.name + i}
+                  href={att.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="border border-border bg-background hover:bg-secondary/50 flex items-center gap-3 rounded-2xl p-2 pr-3 transition-colors cursor-pointer"
+                >
+                  <div className="bg-secondary flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg">
+                    {att.type.startsWith("image/") ? (
+                      <img
+                        src={att.url}
+                        alt={att.name}
+                        className="size-full object-cover"
+                      />
+                    ) : (
+                      <span className="text-[10px] font-medium text-muted-foreground uppercase">
+                        {att.name.split(".").pop()}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex flex-col overflow-hidden min-w-0">
+                    <span className="truncate text-xs font-medium text-foreground max-w-[120px]">{att.name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {(att.size / 1024).toFixed(1)} kB
+                    </span>
+                  </div>
+                </a>
+              ))}
+            </div>
+          )}
+          <div dir="auto" className="rounded-3xl bg-secondary text-secondary-foreground px-4 py-2.5">
+            {message.content}
+          </div>
         </div>
       </div>
     );
