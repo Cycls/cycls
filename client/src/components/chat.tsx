@@ -18,6 +18,7 @@ export function Chat({
   onSignOut,
   onManageAccount,
   onCreateOrg,
+  onManageOrg,
   onSwitchOrg,
   activeOrg,
   orgs,
@@ -32,6 +33,7 @@ export function Chat({
   onSignOut?: () => void;
   onManageAccount?: () => void;
   onCreateOrg?: () => void;
+  onManageOrg?: () => void;
   onSwitchOrg?: (orgId: string | null) => void;
   activeOrg?: { id: string; name: string; imageUrl?: string };
   orgs?: { id: string; name: string; imageUrl: string }[];
@@ -107,7 +109,7 @@ export function Chat({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
               </svg>
             </button>
-            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onCreateOrg={onCreateOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} /></div>}
+            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} /></div>}
           </div>
         </div>
       </header>
@@ -201,11 +203,12 @@ export function Chat({
   );
 }
 
-function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onSwitchOrg, activeOrg, orgs }: {
+function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, activeOrg, orgs }: {
   user: UserInfo;
   onSignOut?: () => void;
   onManageAccount?: () => void;
   onCreateOrg?: () => void;
+  onManageOrg?: () => void;
   onSwitchOrg?: (orgId: string | null) => void;
   activeOrg?: { id: string; name: string; imageUrl?: string };
   orgs?: { id: string; name: string; imageUrl: string }[];
@@ -260,15 +263,25 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onSwitchOrg, 
                     </button>
                   ))}
                 </div>
-                {onCreateOrg && (
+                {(onManageOrg || onCreateOrg) && (
                   <>
                     <div className="border-t border-border" />
-                    <button
-                      onClick={() => { setOpen(false); setShowOrgs(false); onCreateOrg(); }}
-                      className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                    >
-                      + Create organization
-                    </button>
+                    {onManageOrg && activeOrg && (
+                      <button
+                        onClick={() => { setOpen(false); setShowOrgs(false); onManageOrg(); }}
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                      >
+                        Manage organization
+                      </button>
+                    )}
+                    {onCreateOrg && (
+                      <button
+                        onClick={() => { setOpen(false); setShowOrgs(false); onCreateOrg(); }}
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                      >
+                        Create organization
+                      </button>
+                    )}
                   </>
                 )}
               </>
