@@ -26,6 +26,8 @@ export interface Attachment {
   size: number;
   type: string;
   url: string;
+  path?: string;
+  status?: "uploading" | "error";
 }
 
 export interface Message {
@@ -68,10 +70,6 @@ export function useChat(baseUrl: string = "/api") {
 
   const uploadFile = useCallback(
     async (file: File): Promise<Attachment> => {
-      const blobUrl = URL.createObjectURL(file);
-      const attachment: Attachment = { name: file.name, size: file.size, type: file.type, url: blobUrl };
-
-      // Upload to server in background — blob URL is always used for display
       const authHeaders: Record<string, string> = {};
       if (getTokenRef.current) {
         const token = await getTokenRef.current();
@@ -81,13 +79,13 @@ export function useChat(baseUrl: string = "/api") {
       const uploadPath = `attachments/${id}-${file.name}`;
       const form = new FormData();
       form.append("file", file);
-      fetch(`${baseUrl}/files/${uploadPath}`, {
+      const res = await fetch(`${baseUrl}/files/${uploadPath}`, {
         method: "PUT",
         headers: authHeaders,
         body: form,
-      }).catch(() => {});
-
-      return attachment;
+      });
+      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+      return { name: file.name, size: file.size, type: file.type, url: "", path: uploadPath };
     },
     [baseUrl],
   );
@@ -119,11 +117,22 @@ export function useChat(baseUrl: string = "/api") {
         }
 
         // Build request messages (all except the empty assistant we just added)
-        const requestMessages = [...messages, userMessage].map((m) => ({
-          role: m.role,
-          content: m.content,
-          parts: m.parts,
-        }));
+        const requestMessages = [...messages, userMessage].map((m) => {
+          const withPaths = m.attachments?.filter((a) => a.path);
+          let content: string | Record<string, string>[] = m.content;
+          if (withPaths && withPaths.length > 0) {
+            const parts: Record<string, string>[] = [{ type: "text", text: m.content }];
+            for (const att of withPaths) {
+              if (att.type.startsWith("image/")) {
+                parts.push({ type: "image", image: att.path! });
+              } else {
+                parts.push({ type: "file", file: att.path! });
+              }
+            }
+            content = parts;
+          }
+          return { role: m.role, content, parts: m.parts };
+        });
 
         const response = await fetch(`${baseUrl}/`, {
           method: "POST",
