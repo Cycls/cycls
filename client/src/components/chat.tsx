@@ -296,12 +296,13 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                   <p className="text-xs text-muted-foreground truncate">{user.email}</p>
                 </div>
                 <div className="border-t border-border" />
+                <p className="px-3 pt-2 pb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">Account</p>
                 {plan && (
                   <button
                     onClick={() => { setOpen(false); setShowPricing(true); }}
                     className="flex w-full items-center px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                   >
-                    <span>{plan.name}<span className="text-muted-foreground font-normal">{" — plan"}</span></span>
+                    <span>{plan.name}<span className="text-muted-foreground font-normal">{" · plan"}</span></span>
                   </button>
                 )}
                 {onManageAccount && (
@@ -315,6 +316,7 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                 {onSwitchOrg && (
                   <>
                   <div className="border-t border-border" />
+                  <p className="px-3 pt-2 pb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">Organization</p>
                   <button
                     onClick={() => setShowOrgs(true)}
                     className="flex w-full items-center justify-between px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
