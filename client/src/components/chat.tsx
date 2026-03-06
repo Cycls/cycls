@@ -63,8 +63,28 @@ export function Chat({
 
   const handleFilesAdded = useCallback(async (newFiles: File[]) => {
     if (uploadFile) {
-      const newAttachments = await Promise.all(newFiles.map((f) => uploadFile(f)));
-      setAttachments((prev) => [...prev, ...newAttachments]);
+      // Add placeholders immediately — blob URL is a stable key per file
+      const placeholders: Attachment[] = newFiles.map((f) => ({
+        name: f.name,
+        size: f.size,
+        type: f.type,
+        url: URL.createObjectURL(f),
+        status: "uploading" as const,
+      }));
+      setAttachments((prev) => [...prev, ...placeholders]);
+
+      // Upload each file and update in place by matching blob URL
+      placeholders.forEach((placeholder, i) => {
+        uploadFile(newFiles[i]).then((result) => {
+          setAttachments((prev) => prev.map((att) =>
+            att.url === placeholder.url ? { ...att, path: result.path, status: undefined } : att
+          ));
+        }).catch(() => {
+          setAttachments((prev) => prev.map((att) =>
+            att.url === placeholder.url ? { ...att, status: "error" as const } : att
+          ));
+        });
+      });
     } else {
       const newAttachments = newFiles.map((f) => ({
         name: f.name,
@@ -98,7 +118,7 @@ export function Chat({
 
   const handleSubmit = useCallback(() => {
     const text = input.trim();
-    if (!text || isStreaming) return;
+    if (!text || isStreaming || attachments.some((a) => a.status === "uploading")) return;
     const sendAttachments = attachments.length > 0 ? [...attachments] : undefined;
     setInput("");
     setAttachments([]);
@@ -473,24 +493,32 @@ function InputBox({
                     className="relative shrink-0"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <div className="border border-border bg-background hover:bg-secondary/50 flex w-full items-center gap-3 rounded-2xl p-2 pr-3 transition-colors">
-                      <div className="bg-secondary flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg">
+                    <div className={`flex w-full items-center gap-3 rounded-2xl p-2 pr-3 transition-colors border ${file.status === "error" ? "border-red-400/60 bg-red-50 dark:bg-red-950/20" : "border-border bg-background hover:bg-secondary/50"}`}>
+                      <div className="bg-secondary flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg relative">
                         {file.type.startsWith("image/") ? (
                           <img
                             src={file.url}
                             alt={file.name}
-                            className="size-full object-cover"
+                            className={`size-full object-cover ${file.status === "uploading" ? "opacity-40" : ""}`}
                           />
                         ) : (
-                          <span className="text-[10px] font-medium text-muted-foreground uppercase">
+                          <span className={`text-[10px] font-medium uppercase ${file.status === "error" ? "text-red-500" : "text-muted-foreground"}`}>
                             {file.name.split(".").pop()}
                           </span>
                         )}
+                        {file.status === "uploading" && (
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <svg className="size-5 animate-spin text-muted-foreground" viewBox="0 0 24 24" fill="none">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                            </svg>
+                          </div>
+                        )}
                       </div>
                       <div className="flex flex-col overflow-hidden min-w-0">
-                        <span className="truncate text-xs font-medium text-foreground">{file.name}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {(file.size / 1024).toFixed(1)} kB
+                        <span className={`truncate text-xs font-medium ${file.status === "error" ? "text-red-600 dark:text-red-400" : "text-foreground"}`}>{file.name}</span>
+                        <span className={`text-xs ${file.status === "error" ? "text-red-500 dark:text-red-400" : "text-muted-foreground"}`}>
+                          {file.status === "error" ? "Upload failed" : (file.size / 1024).toFixed(1) + " kB"}
                         </span>
                       </div>
                     </div>
@@ -559,7 +587,7 @@ function InputBox({
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); handleSubmit(); }}
-              disabled={!input.trim()}
+              disabled={!input.trim() || attachments?.some((a) => a.status === "uploading")}
               className="flex size-8 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 disabled:opacity-30 transition cursor-pointer"
               aria-label="Send"
             >
