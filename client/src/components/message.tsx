@@ -69,6 +69,19 @@ function renderPart(part: Part, index: number, isStreaming?: boolean) {
   }
 }
 
+function groupParts(parts: Part[]) {
+  const groups: { type: string; items: Part[]; startIndex: number }[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const last = groups[groups.length - 1];
+    if (parts[i].type === "step" && last?.type === "step") {
+      last.items.push(parts[i]);
+    } else {
+      groups.push({ type: parts[i].type, items: [parts[i]], startIndex: i });
+    }
+  }
+  return groups;
+}
+
 export function MessageBubble({
   message,
   isStreaming,
@@ -142,7 +155,15 @@ export function MessageBubble({
       <div className="relative flex min-w-0 flex-1 flex-col gap-1">
         {isEmpty && isStreaming && <Loader />}
 
-        {parts.map((part, i) => renderPart(part, i, isStreaming))}
+        {groupParts(parts).map((group, gi) =>
+          group.type === "step" ? (
+            <div key={gi} className="my-3 flex flex-col">
+              {group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming))}
+            </div>
+          ) : (
+            group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming))
+          )
+        )}
 
         {/* Actions */}
         {!isEmpty && !isStreaming && (
