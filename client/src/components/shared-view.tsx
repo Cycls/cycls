@@ -74,8 +74,8 @@ export function SharedView({ path }: { path: string }) {
       <div className="flex-1 overflow-y-auto scrollbar-none">
         <div className="flex w-full flex-col items-center py-4">
           {(data.title || data.author) && (
-            <div className="w-full max-w-3xl px-6 pb-10 text-center">
-              {data.title && <h1 className="text-2xl font-bold tracking-tight text-foreground">{data.title}</h1>}
+            <div className="w-full max-w-3xl px-6 py-10 text-center">
+              {data.title && <h1 className="text-3xl font-medium tracking-tight text-foreground">{data.title}</h1>}
               {data.author && (
                 <div className="flex items-center justify-center gap-2 mt-2">
                   <div className="flex items-center -space-x-3">
