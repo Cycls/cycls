@@ -22,7 +22,10 @@ export function SharedView({ path }: { path: string }) {
         if (!res.ok) throw new Error("Share not found");
         return res.json();
       })
-      .then(setData)
+      .then((d) => {
+        setData(d);
+        document.title = d.title ? `Cycls | ${d.title}` : "Cycls";
+      })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, [path]);
