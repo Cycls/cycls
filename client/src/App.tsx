@@ -15,11 +15,12 @@ import {
 import { useSubscription } from "@clerk/clerk-react/experimental";
 import { dark } from "@clerk/themes";
 import { Chat } from "./components/chat";
+import { SharedView } from "./components/shared-view";
 import { useChat, AppConfig } from "./hooks/use-chat";
 import { useFiles } from "./hooks/use-files";
 
 function ChatWithAuth() {
-  const { messages, isStreaming, config, send, stop, clear, fetchConfig, setGetToken, uploadFile } =
+  const { messages, isStreaming, config, send, stop, clear, share, listShares, deleteShare, fetchConfig, setGetToken, uploadFile } =
     useChat("/api");
   const { entries, path, loading, list, upload, mkdir, rename, remove, openFile, setGetToken: setFilesToken } =
     useFiles("/api");
@@ -39,6 +40,10 @@ function ChatWithAuth() {
     fetchConfig();
   }, [fetchConfig]);
 
+  const handleShare = async (visibility: "public" | "org" = "public") => {
+    return await share(visibility);
+  };
+
   const orgs = (userMemberships?.data || []).map((m) => ({
     id: m.organization.id,
     name: m.organization.name,
@@ -52,6 +57,9 @@ function ChatWithAuth() {
       onSend={send}
       onStop={stop}
       onClear={clear}
+      onShare={handleShare}
+      onListShares={listShares}
+      onDeleteShare={deleteShare}
       onSignOut={() => signOut()}
       onManageAccount={() => clerk.openUserProfile()}
       onCreateOrg={() => clerk.openCreateOrganization()}
@@ -232,6 +240,11 @@ export default function App() {
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  const sharedMatch = window.location.pathname.match(/^\/shared\/(.+)/);
+  if (sharedMatch) {
+    return <SharedView path={sharedMatch[1]} />;
+  }
 
   if (loading) return null;
 

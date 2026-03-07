@@ -270,6 +270,40 @@ export function useChat(baseUrl: string = "/api") {
     setMessages([]);
   }, []);
 
+  const authHeaders = useCallback(async () => {
+    const h: Record<string, string> = {};
+    if (getTokenRef.current) {
+      const token = await getTokenRef.current();
+      if (token) h["Authorization"] = `Bearer ${token}`;
+    }
+    return h;
+  }, []);
+
+  const share = useCallback(async (visibility: "public" | "org" = "public") => {
+    const headers = { "Content-Type": "application/json", ...(await authHeaders()) };
+    const res = await fetch(`${baseUrl}/share`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ messages, visibility }),
+    });
+    if (!res.ok) throw new Error(`Share failed: ${res.status}`);
+    const { path } = await res.json();
+    return `${window.location.origin}/shared/${path}`;
+  }, [messages, baseUrl, authHeaders]);
+
+  const listShares = useCallback(async () => {
+    const headers = await authHeaders();
+    const res = await fetch(`${baseUrl}/share`, { headers });
+    if (!res.ok) return [];
+    return res.json();
+  }, [baseUrl, authHeaders]);
+
+  const deleteShare = useCallback(async (id: string) => {
+    const headers = await authHeaders();
+    const res = await fetch(`${baseUrl}/share/${id}`, { method: "DELETE", headers });
+    if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+  }, [baseUrl, authHeaders]);
+
   return {
     messages,
     isStreaming,
@@ -277,6 +311,9 @@ export function useChat(baseUrl: string = "/api") {
     send,
     stop,
     clear,
+    share,
+    listShares,
+    deleteShare,
     fetchConfig,
     setGetToken,
     uploadFile,

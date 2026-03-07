@@ -184,30 +184,37 @@ def files_router(required_auth):
     return r
 
 
-def share_router(required_auth):
+def share_router(required_auth, optional_auth=None):
     r = APIRouter()
 
     @r.post("/share")
     async def create_share(request: Request, user: Any = required_auth):
         data = await request.json()
+        messages = data.get("messages")
         session_id = data.get("session_id")
-        if not session_id:
-            raise HTTPException(status_code=400, detail="session_id required")
+        title = data.get("title", "")
+        visibility = data.get("visibility", "public")
 
-        session_file = user.sessions / f"{session_id}.json"
-        if not session_file.is_file():
-            raise HTTPException(status_code=404, detail="Session not found")
-
-        session_data = json.loads(session_file.read_text())
-        history_file = user.sessions / f"{session_id}.history.jsonl"
-        messages = load_history(str(history_file)) if history_file.is_file() else []
+        if messages is not None:
+            pass
+        elif session_id:
+            session_file = user.sessions / f"{session_id}.json"
+            if not session_file.is_file():
+                raise HTTPException(status_code=404, detail="Session not found")
+            session_data = json.loads(session_file.read_text())
+            title = title or session_data.get("title", "")
+            history_file = user.sessions / f"{session_id}.history.jsonl"
+            messages = load_history(str(history_file)) if history_file.is_file() else []
+        else:
+            raise HTTPException(status_code=400, detail="messages or session_id required")
 
         share_id = uuid4().hex[:12]
         snapshot = {
             "id": share_id,
-            "title": session_data.get("title", ""),
+            "title": title,
             "sharedAt": datetime.now(timezone.utc).isoformat(),
-            "session": session_data,
+            "visibility": visibility,
+            "org_id": user.org_id if visibility == "org" else None,
             "messages": messages,
         }
 
@@ -233,14 +240,19 @@ def share_router(required_auth):
                 continue
             try:
                 data = json.loads(f.read_text())
-                items.append({"id": data.get("id", f.stem), "title": data.get("title", ""), "sharedAt": data.get("sharedAt", "")})
+                sid = data.get("id", f.stem)
+                if user.org_id:
+                    spath = f"{user.org_id}/{user.id}/{sid}"
+                else:
+                    spath = f"{user.id}/{sid}"
+                items.append({"id": sid, "title": data.get("title", ""), "sharedAt": data.get("sharedAt", ""), "visibility": data.get("visibility", "public"), "path": spath})
             except (json.JSONDecodeError, OSError):
                 continue
         items.sort(key=lambda s: s.get("sharedAt", ""), reverse=True)
         return items
 
     @r.get("/shared/{path:path}")
-    async def get_share(path: str):
+    async def get_share(path: str, request: Request):
         segments = path.strip("/").split("/")
         workspace = Path("/workspace")
         if len(segments) == 2:
@@ -256,7 +268,20 @@ def share_router(required_auth):
 
         if not resolved.is_file():
             raise HTTPException(status_code=404, detail="Not found")
-        return json.loads(resolved.read_text())
+
+        snapshot = json.loads(resolved.read_text())
+
+        if snapshot.get("visibility") == "org":
+            viewer = None
+            if optional_auth:
+                try:
+                    viewer = optional_auth(request)
+                except Exception:
+                    pass
+            if not viewer or getattr(viewer, "org_id", None) != snapshot.get("org_id"):
+                raise HTTPException(status_code=403, detail="This share is private to an organization")
+
+        return snapshot
 
     @r.delete("/share/{share_id}")
     async def delete_share(share_id: str, user: Any = required_auth):
