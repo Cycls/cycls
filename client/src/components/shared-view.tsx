@@ -75,7 +75,7 @@ export function SharedView({ path }: { path: string }) {
           {/* Footer */}
           <div className="w-full max-w-3xl px-6 pt-8 pb-10">
             <div className="flex justify-center">
-              <a href="/" className="flex flex-col items-center gap-3 text-muted-foreground/40 hover:text-muted-foreground transition-colors">
+              <a href="/" className="flex flex-col items-center gap-3 text-muted-foreground hover:text-foreground transition-colors">
                 <svg viewBox="-1 -1 25 23" className="h-5 text-current">
                   <path fill="currentColor" d="M 5.248 0 L 5.734 1.654 C 6.164 3.153 7.345 4.33 8.844 4.765 L 10.496 5.241 L 8.844 5.718 C 7.345 6.152 6.164 7.329 5.734 8.829 L 5.248 10.496 L 4.762 8.843 C 4.332 7.343 3.152 6.166 1.652 5.732 L 0 5.255 L 1.652 4.779 C 3.152 4.344 4.332 3.167 4.762 1.668 L 5.248 0 Z" />
                   <path fill="none" stroke="currentColor" strokeWidth={0.6} d="M 17.359 13.159 C 17.493 13.671 18.909 15.02 19.38 15.192 C 18.909 15.31 17.516 16.704 17.359 17.226 C 17.225 16.714 15.89 15.308 15.338 15.192 C 15.89 14.962 17.211 13.671 17.359 13.159 Z" />
