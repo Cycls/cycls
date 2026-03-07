@@ -75,31 +75,45 @@ export function SharedView({ path }: { path: string }) {
         <div className="flex w-full flex-col items-center py-4">
           {(data.title || data.author) && (
             <div className="w-full max-w-3xl px-6 py-10 text-center">
-              {data.title && <h1 className="text-3xl font-medium tracking-tight text-foreground">{data.title}</h1>}
-              {data.author && (
-                <div className="flex items-center justify-center gap-2 mt-2">
+              {data.title && <h1 className="text-xl font-medium tracking-tight text-foreground">{data.title}</h1>}
+              <div className="flex items-center justify-center gap-2 mt-3">
+                {data.author && (
                   <div className="flex items-center -space-x-3">
                     {data.author.org?.imageUrl && (
-                      <div
-                        className="size-7 rounded-full bg-secondary shrink-0 ring-2 ring-background"
-                        style={{ backgroundImage: `url(${data.author.org.imageUrl})`, backgroundSize: "cover" }}
-                      />
+                      <div className="relative group">
+                        <div
+                          className="size-6 rounded-full bg-secondary shrink-0 ring-2 ring-background"
+                          style={{ backgroundImage: `url(${data.author.org.imageUrl})`, backgroundSize: "cover" }}
+                        />
+                        <div className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity delay-300 z-50">
+                          <div className="rounded-lg border border-border bg-background px-3 py-2 shadow-lg text-xs whitespace-nowrap">
+                            <p className="font-medium text-foreground">{data.author.org.name}</p>
+                          </div>
+                        </div>
+                      </div>
                     )}
                     {data.author.imageUrl && (
-                      <div
-                        className="size-7 rounded-full bg-secondary shrink-0 ring-2 ring-background"
-                        style={{ backgroundImage: `url(${data.author.imageUrl})`, backgroundSize: "cover" }}
-                      />
+                      <div className="relative group">
+                        <div
+                          className="size-6 rounded-full bg-secondary shrink-0 ring-2 ring-background"
+                          style={{ backgroundImage: `url(${data.author.imageUrl})`, backgroundSize: "cover" }}
+                        />
+                        <div className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity delay-300 z-50">
+                          <div className="rounded-lg border border-border bg-background px-3 py-2 shadow-lg text-xs whitespace-nowrap">
+                            <p className="font-medium text-foreground">{data.author.name}</p>
+                          </div>
+                        </div>
+                      </div>
                     )}
                   </div>
-                  <span className="text-sm text-muted-foreground">
-                    {data.author.org ? `${data.author.name} · ${data.author.org.name}` : data.author.name}
-                  </span>
-                </div>
-              )}
-              <p className="text-sm text-muted-foreground mt-1">
-                {new Date(data.sharedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-              </p>
+                )}
+                {data.author && (
+                  <span className="text-xs text-muted-foreground">·</span>
+                )}
+                <span className="text-xs text-muted-foreground">
+                  {new Date(data.sharedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                </span>
+              </div>
             </div>
           )}
           {data.messages.map((msg, i) => (
