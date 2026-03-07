@@ -40,9 +40,9 @@ function ChatWithAuth() {
     fetchConfig();
   }, [fetchConfig]);
 
-  const handleShare = async (visibility: "public" | "org" = "public", title: string = "") => {
+  const handleShare = async (title: string = "") => {
     const author = user ? { name: user.fullName || user.firstName || "", imageUrl: user.imageUrl } : undefined;
-    return await share(visibility, title, author);
+    return await share(title, author);
   };
 
   const orgs = (userMemberships?.data || []).map((m) => ({
