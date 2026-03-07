@@ -209,6 +209,24 @@ def share_router(required_auth, optional_auth=None):
             raise HTTPException(status_code=400, detail="messages or session_id required")
 
         share_id = uuid4().hex[:12]
+
+        # Copy attachments to public assets
+        assets_dir = user.sessions / "public" / "assets" / share_id
+        for msg in messages:
+            for att in msg.get("attachments") or []:
+                att_path = att.get("path")
+                if not att_path:
+                    continue
+                src = user.workspace / att_path
+                if src.is_file():
+                    assets_dir.mkdir(parents=True, exist_ok=True)
+                    dest = assets_dir / src.name
+                    shutil.copy2(src, dest)
+                    if user.org_id:
+                        att["url"] = f"/api/shared-assets/{user.org_id}/{user.id}/{share_id}/{src.name}"
+                    else:
+                        att["url"] = f"/api/shared-assets/{user.id}/{share_id}/{src.name}"
+
         snapshot = {
             "id": share_id,
             "title": title,
@@ -283,12 +301,35 @@ def share_router(required_auth, optional_auth=None):
 
         return snapshot
 
+    @r.get("/shared-assets/{path:path}")
+    async def get_shared_asset(path: str):
+        segments = path.strip("/").split("/")
+        workspace = Path("/workspace")
+        # user_id/share_id/filename or org_id/user_id/share_id/filename
+        if len(segments) == 3:
+            file_path = workspace / segments[0] / ".sessions" / "public" / "assets" / segments[1] / segments[2]
+        elif len(segments) == 4:
+            file_path = workspace / segments[0] / ".sessions" / segments[1] / "public" / "assets" / segments[2] / segments[3]
+        else:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        resolved = file_path.resolve()
+        if not resolved.is_relative_to(workspace.resolve()):
+            raise HTTPException(status_code=403, detail="Path traversal denied")
+        if not resolved.is_file():
+            raise HTTPException(status_code=404, detail="Not found")
+        return FileResponse(resolved)
+
     @r.delete("/share/{share_id}")
     async def delete_share(share_id: str, user: Any = required_auth):
         file_path = user.sessions / "public" / f"{share_id}.json"
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="Not found")
         file_path.unlink()
+        # Clean up assets
+        assets_dir = user.sessions / "public" / "assets" / share_id
+        if assets_dir.is_dir():
+            shutil.rmtree(assets_dir)
         return {"ok": True}
 
     return r
