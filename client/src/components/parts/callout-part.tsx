@@ -7,7 +7,9 @@ const styles: Record<string, string> = {
   success: "border-l-emerald-500 bg-emerald-500/10",
 };
 
-export function CalloutPart({
+import { memo } from "react";
+
+export const CalloutPart = memo(function CalloutPart({
   callout,
   style = "info",
   title,
@@ -27,4 +29,4 @@ export function CalloutPart({
       <div>{callout}</div>
     </div>
   );
-}
+});

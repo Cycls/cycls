@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { cn } from "../../lib/utils";
 import { AnimatePresence, motion } from "framer-motion";
 
-export function ThinkingPart({
+export const ThinkingPart = memo(function ThinkingPart({
   thinking,
 }: {
   thinking: string;
@@ -52,4 +52,4 @@ export function ThinkingPart({
       </AnimatePresence>
     </div>
   );
-}
+});
