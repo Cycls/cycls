@@ -41,7 +41,11 @@ function ChatWithAuth() {
   }, [fetchConfig]);
 
   const handleShare = async (title: string = "") => {
-    const author = user ? { name: user.fullName || user.firstName || "", imageUrl: user.imageUrl } : undefined;
+    const author = user ? {
+      name: user.fullName || user.firstName || "",
+      imageUrl: user.imageUrl,
+      org: organization ? { name: organization.name, imageUrl: organization.imageUrl } : undefined,
+    } : undefined;
     return await share(title, author);
   };
 
