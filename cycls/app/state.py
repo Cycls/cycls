@@ -186,20 +186,17 @@ def files_router(required_auth):
 
 def share_router(required_auth):
     r = APIRouter()
+    shared_index = Path("/workspace/shared")
 
-    def _resolve(path):
-        segments = path.strip("/").split("/")
-        workspace = Path("/workspace")
-        if len(segments) == 2:
-            d = workspace / segments[0] / ".sessions" / "public" / segments[1]
-        elif len(segments) == 3:
-            d = workspace / segments[0] / ".sessions" / segments[1] / "public" / segments[2]
-        else:
+    def _resolve(share_id):
+        pointer = shared_index / f"{share_id}.json"
+        if not pointer.is_file():
             raise HTTPException(status_code=404, detail="Not found")
-        resolved = d.resolve()
-        if not resolved.is_relative_to(workspace.resolve()):
-            raise HTTPException(status_code=403, detail="Path traversal denied")
-        return resolved
+        data = json.loads(pointer.read_text())
+        share_dir = Path(data["path"])
+        if not share_dir.is_dir():
+            raise HTTPException(status_code=404, detail="Not found")
+        return share_dir
 
     @r.post("/share")
     async def create_share(request: Request, user: Any = required_auth):
@@ -220,10 +217,7 @@ def share_router(required_auth):
                 src = user.workspace / att_path
                 if src.is_file():
                     shutil.copy2(src, share_dir / src.name)
-                    if user.org_id:
-                        att["url"] = f"/api/shared-assets/{user.org_id}/{user.id}/{share_id}/{src.name}"
-                    else:
-                        att["url"] = f"/api/shared-assets/{user.id}/{share_id}/{src.name}"
+                    att["url"] = f"/api/shared-assets/{share_id}/{src.name}"
 
         snapshot = {
             "id": share_id,
@@ -234,8 +228,11 @@ def share_router(required_auth):
         }
         (share_dir / "share.json").write_text(json.dumps(snapshot))
 
-        path = f"{user.org_id}/{user.id}/{share_id}" if user.org_id else f"{user.id}/{share_id}"
-        return {"id": share_id, "path": path}
+        # Write global pointer
+        shared_index.mkdir(parents=True, exist_ok=True)
+        (shared_index / f"{share_id}.json").write_text(json.dumps({"path": str(share_dir)}))
+
+        return {"id": share_id, "path": share_id}
 
     @r.get("/share")
     async def list_shares(user: Any = required_auth):
@@ -249,30 +246,21 @@ def share_router(required_auth):
                 continue
             try:
                 data = json.loads(f.read_text())
-                sid = data.get("id", d.name)
-                spath = f"{user.org_id}/{user.id}/{sid}" if user.org_id else f"{user.id}/{sid}"
-                items.append({"id": sid, "title": data.get("title", ""), "sharedAt": data.get("sharedAt", ""), "path": spath})
+                items.append({"id": data.get("id", d.name), "title": data.get("title", ""), "sharedAt": data.get("sharedAt", ""), "path": data.get("id", d.name)})
             except (json.JSONDecodeError, OSError):
                 continue
         items.sort(key=lambda s: s.get("sharedAt", ""), reverse=True)
         return items
 
-    @r.get("/shared/{path:path}")
-    async def get_share(path: str):
-        share_dir = _resolve(path)
-        json_path = share_dir / "share.json"
-        if not json_path.is_file():
-            raise HTTPException(status_code=404, detail="Not found")
-        return json.loads(json_path.read_text())
+    @r.get("/shared/{share_id}")
+    async def get_share(share_id: str):
+        share_dir = _resolve(share_id)
+        return json.loads((share_dir / "share.json").read_text())
 
-    @r.get("/shared-assets/{path:path}")
-    async def get_shared_asset(path: str):
-        segments = path.strip("/").split("/")
-        if len(segments) < 3:
-            raise HTTPException(status_code=404, detail="Not found")
-        share_path = "/".join(segments[:-1])
-        share_dir = _resolve(share_path)
-        file_path = share_dir / segments[-1]
+    @r.get("/shared-assets/{share_id}/{filename}")
+    async def get_shared_asset(share_id: str, filename: str):
+        share_dir = _resolve(share_id)
+        file_path = share_dir / filename
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="Not found")
         return FileResponse(file_path)
@@ -283,6 +271,10 @@ def share_router(required_auth):
         if not share_dir.is_dir():
             raise HTTPException(status_code=404, detail="Not found")
         shutil.rmtree(share_dir)
+        # Remove pointer
+        pointer = shared_index / f"{share_id}.json"
+        if pointer.is_file():
+            pointer.unlink()
         return {"ok": True}
 
     return r
