@@ -49,8 +49,8 @@ export function Chat({
   onSend: (text: string, attachments?: Attachment[]) => void;
   onStop: () => void;
   onClear: () => void;
-  onShare?: (visibility: "public" | "org", title: string) => Promise<string>;
-  onListShares?: () => Promise<{ id: string; title: string; sharedAt: string; visibility: string; path: string }[]>;
+  onShare?: (title: string) => Promise<string>;
+  onListShares?: () => Promise<{ id: string; title: string; sharedAt: string; path: string }[]>;
   onDeleteShare?: (id: string) => Promise<void>;
   onSignOut?: () => void;
   onManageAccount?: () => void;
@@ -80,12 +80,11 @@ export function Chat({
   const [filesOpen, setFilesOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareView, setShareView] = useState<"create" | "list">("create");
-  const [shareVisibility, setShareVisibility] = useState<"public" | "org">("public");
   const [shareTitle, setShareTitle] = useState("");
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
-  const [shares, setShares] = useState<{ id: string; title: string; sharedAt: string; visibility: string; path: string }[]>([]);
+  const [shares, setShares] = useState<{ id: string; title: string; sharedAt: string; path: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -230,7 +229,7 @@ export function Chat({
                                   <h3 className="text-sm font-medium text-foreground">Share conversation</h3>
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                  {shareVisibility === "org" ? "Only members of your organization can view." : "Anyone with the link can view."}
+                                  Anyone with the link can view.
                                 </p>
                                 <p className="mt-3 mb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">Title</p>
                                 <input
@@ -241,39 +240,6 @@ export function Chat({
                                   className="w-full rounded-md border border-border bg-secondary/50 px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
                                 />
                               </div>
-
-                              {activeOrg && (
-                                <div className="border-t border-border px-4 py-2.5">
-                                  <div className="flex items-center gap-2 rounded-md bg-secondary/50 p-0.5">
-                                    <button
-                                      onClick={() => setShareVisibility("public")}
-                                      className={`flex-1 rounded px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer ${shareVisibility === "public" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-                                    >
-                                      {/* Globe icon */}
-                                      <span className="flex items-center justify-center gap-1.5">
-                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                                          <circle cx="12" cy="12" r="10" />
-                                          <path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" />
-                                        </svg>
-                                        Public
-                                      </span>
-                                    </button>
-                                    <button
-                                      onClick={() => setShareVisibility("org")}
-                                      className={`flex-1 rounded px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer ${shareVisibility === "org" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-                                    >
-                                      {/* Lock icon */}
-                                      <span className="flex items-center justify-center gap-1.5">
-                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                                          <path d="M7 11V7a5 5 0 0110 0v4" />
-                                        </svg>
-                                        {activeOrg.name}
-                                      </span>
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
 
                               <div className="border-t border-border px-4 py-3">
                                 {shareLoading ? (
@@ -309,12 +275,12 @@ export function Chat({
                                     onClick={() => {
                                       setShareLoading(true);
                                       setShareCopied(false);
-                                      onShare(shareVisibility, shareTitle).then((url) => {
+                                      onShare(shareTitle).then((url) => {
                                         setShareUrl(url);
                                         setShareLoading(false);
                                       }).catch(() => setShareLoading(false));
                                     }}
-                                    className="w-full rounded-md bg-foreground text-background py-2 text-xs font-medium hover:opacity-80 transition-colors cursor-pointer"
+                                    className="w-full rounded-md border border-border bg-secondary hover:bg-secondary/80 text-foreground py-2 text-xs font-medium transition-colors cursor-pointer"
                                   >
                                     Create link
                                   </button>
@@ -378,17 +344,6 @@ export function Chat({
                                           {s.title || "Untitled"}
                                         </a>
                                         <div className="flex items-center gap-1.5 mt-0.5">
-                                          {s.visibility === "org" ? (
-                                            <svg className="w-2.5 h-2.5 text-muted-foreground shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                                              <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                                              <path d="M7 11V7a5 5 0 0110 0v4" />
-                                            </svg>
-                                          ) : (
-                                            <svg className="w-2.5 h-2.5 text-muted-foreground shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                                              <circle cx="12" cy="12" r="10" />
-                                              <path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" />
-                                            </svg>
-                                          )}
                                           <span className="text-[10px] text-muted-foreground">
                                             {new Date(s.sharedAt).toLocaleDateString()}
                                           </span>

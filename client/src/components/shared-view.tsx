@@ -7,7 +7,6 @@ interface ShareData {
   title: string;
   author?: { name: string; imageUrl?: string };
   sharedAt: string;
-  visibility: string;
   messages: Message[];
 }
 
