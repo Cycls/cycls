@@ -40,8 +40,9 @@ function ChatWithAuth() {
     fetchConfig();
   }, [fetchConfig]);
 
-  const handleShare = async (visibility: "public" | "org" = "public") => {
-    return await share(visibility);
+  const handleShare = async (visibility: "public" | "org" = "public", title: string = "") => {
+    const author = user ? { name: user.fullName || user.firstName || "", imageUrl: user.imageUrl } : undefined;
+    return await share(visibility, title, author);
   };
 
   const orgs = (userMemberships?.data || []).map((m) => ({
@@ -64,7 +65,7 @@ function ChatWithAuth() {
       onManageAccount={() => clerk.openUserProfile()}
       onCreateOrg={() => clerk.openCreateOrganization()}
       onManageOrg={() => clerk.openOrganizationProfile()}
-      onSwitchOrg={(orgId) => setActive?.({ organization: orgId || null })}
+      onSwitchOrg={(orgId) => { setActive?.({ organization: orgId || null }); clear(); }}
       activeOrg={organization ? { id: organization.id, name: organization.name, imageUrl: organization.imageUrl } : undefined}
       orgs={orgs}
       plan={subscription?.subscriptionItems?.[0] ? {

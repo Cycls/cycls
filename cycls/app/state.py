@@ -210,15 +210,15 @@ def share_router(required_auth, optional_auth=None):
 
         share_id = uuid4().hex[:12]
 
-        # Copy attachments to public assets
-        assets_dir = user.sessions / "public" / "assets" / share_id
+        # Rewrite attachment URLs for the share
         for msg in messages:
             for att in msg.get("attachments") or []:
                 att_path = att.get("path")
                 if not att_path:
                     continue
                 src = user.workspace / att_path
-                if src.is_file():
+                if visibility == "public" and src.is_file():
+                    assets_dir = user.sessions / "public" / "assets" / share_id
                     assets_dir.mkdir(parents=True, exist_ok=True)
                     dest = assets_dir / src.name
                     shutil.copy2(src, dest)
@@ -226,10 +226,13 @@ def share_router(required_auth, optional_auth=None):
                         att["url"] = f"/api/shared-assets/{user.org_id}/{user.id}/{share_id}/{src.name}"
                     else:
                         att["url"] = f"/api/shared-assets/{user.id}/{share_id}/{src.name}"
+                else:
+                    att["url"] = f"/api/files/{att_path}"
 
         snapshot = {
             "id": share_id,
             "title": title,
+            "author": data.get("author"),
             "sharedAt": datetime.now(timezone.utc).isoformat(),
             "visibility": visibility,
             "org_id": user.org_id if visibility == "org" else None,
