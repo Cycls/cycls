@@ -49,7 +49,7 @@ export function Chat({
   onSend: (text: string, attachments?: Attachment[]) => void;
   onStop: () => void;
   onClear: () => void;
-  onShare?: (visibility: "public" | "org") => Promise<string>;
+  onShare?: (visibility: "public" | "org", title: string) => Promise<string>;
   onListShares?: () => Promise<{ id: string; title: string; sharedAt: string; visibility: string; path: string }[]>;
   onDeleteShare?: (id: string) => Promise<void>;
   onSignOut?: () => void;
@@ -81,6 +81,7 @@ export function Chat({
   const [shareOpen, setShareOpen] = useState(false);
   const [shareView, setShareView] = useState<"create" | "list">("create");
   const [shareVisibility, setShareVisibility] = useState<"public" | "org">("public");
+  const [shareTitle, setShareTitle] = useState("");
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
@@ -200,6 +201,7 @@ export function Chat({
                         if (!shareOpen) {
                           setShareOpen(true);
                           setShareView("create");
+                          setShareTitle(messages.find((m) => m.role === "user")?.content?.slice(0, 100) || "");
                           setShareUrl(null);
                           setShareLoading(false);
                           setShareCopied(false);
@@ -230,6 +232,14 @@ export function Chat({
                                 <p className="text-xs text-muted-foreground">
                                   {shareVisibility === "org" ? "Only members of your organization can view." : "Anyone with the link can view."}
                                 </p>
+                                <p className="mt-3 mb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">Title</p>
+                                <input
+                                  type="text"
+                                  value={shareTitle}
+                                  onChange={(e) => setShareTitle(e.target.value)}
+                                  placeholder="Untitled"
+                                  className="w-full rounded-md border border-border bg-secondary/50 px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
+                                />
                               </div>
 
                               {activeOrg && (
@@ -299,7 +309,7 @@ export function Chat({
                                     onClick={() => {
                                       setShareLoading(true);
                                       setShareCopied(false);
-                                      onShare(shareVisibility).then((url) => {
+                                      onShare(shareVisibility, shareTitle).then((url) => {
                                         setShareUrl(url);
                                         setShareLoading(false);
                                       }).catch(() => setShareLoading(false));

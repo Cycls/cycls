@@ -279,12 +279,12 @@ export function useChat(baseUrl: string = "/api") {
     return h;
   }, []);
 
-  const share = useCallback(async (visibility: "public" | "org" = "public") => {
+  const share = useCallback(async (visibility: "public" | "org" = "public", title: string = "", author?: { name: string; imageUrl?: string }) => {
     const headers = { "Content-Type": "application/json", ...(await authHeaders()) };
     const res = await fetch(`${baseUrl}/share`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ messages, visibility }),
+      body: JSON.stringify({ messages, visibility, title, author }),
     });
     if (!res.ok) throw new Error(`Share failed: ${res.status}`);
     const { path } = await res.json();
