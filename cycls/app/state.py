@@ -195,6 +195,7 @@ def share_router(required_auth):
         data = json.loads(pointer.read_text())
         share_dir = Path(data["path"])
         if not share_dir.is_dir():
+            pointer.unlink(missing_ok=True)
             raise HTTPException(status_code=404, detail="Not found")
         return share_dir
 
