@@ -3,10 +3,10 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { useState } from "react";
+import { memo, useState } from "react";
 import { CodeBlock, CodeBlockCode, CodeBlockGroup } from "./code-block";
 
-export function TextPart({ text }: { text: string }) {
+export const TextPart = memo(function TextPart({ text }: { text: string }) {
   return (
     <div dir="auto" className="prose dark:prose-invert min-w-full">
       <ReactMarkdown
@@ -36,7 +36,7 @@ export function TextPart({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 function MarkdownCodeBlock({
   code,

@@ -1,4 +1,6 @@
-export function TablePart({
+import { memo } from "react";
+
+export const TablePart = memo(function TablePart({
   headers,
   rows,
 }: {
@@ -39,4 +41,4 @@ export function TablePart({
       </table>
     </div>
   );
-}
+});

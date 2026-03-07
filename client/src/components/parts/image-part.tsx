@@ -1,4 +1,6 @@
-export function ImagePart({
+import { memo } from "react";
+
+export const ImagePart = memo(function ImagePart({
   src,
   alt,
   caption,
@@ -21,4 +23,4 @@ export function ImagePart({
       )}
     </div>
   );
-}
+});

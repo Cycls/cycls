@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { CodeBlock, CodeBlockCode, CodeBlockGroup } from "./code-block";
 
-export function CodePart({
+export const CodePart = memo(function CodePart({
   code,
   language,
 }: {
@@ -32,4 +32,4 @@ export function CodePart({
       <CodeBlockCode code={code} language={language} />
     </CodeBlock>
   );
-}
+});
