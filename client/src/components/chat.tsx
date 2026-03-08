@@ -337,14 +337,26 @@ export function Chat({
                 )}
               </>
             )}
-            {files && (
+            {(files || onListSessions) && (
               <button
-                onClick={() => { setFilesOpen(!filesOpen); if (!filesOpen) { setFilesTab("files"); files.onNavigate(files.path); } }}
+                onClick={() => {
+                  setFilesOpen(!filesOpen);
+                  if (!filesOpen) {
+                    if (onListSessions) {
+                      setFilesTab("sessions");
+                      setSessionsLoading(true);
+                      onListSessions().then((items) => { setSessions(items); setSessionsLoading(false); }).catch(() => setSessionsLoading(false));
+                    } else if (files) {
+                      setFilesTab("files");
+                      files.onNavigate(files.path);
+                    }
+                  }
+                }}
                 className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
-                aria-label="Files"
+                aria-label="Menu"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.06-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v16.5M3.75 3.75h16.5v16.5H3.75M9.75 3.75v16.5" />
                 </svg>
               </button>
             )}
@@ -458,6 +470,18 @@ export function Chat({
               {/* Tab bar */}
               {(files || onListShares || onListSessions) && (
                 <div className="flex items-center border-b border-border px-4 sm:px-6">
+                  {onListSessions && (
+                    <button
+                      onClick={() => {
+                        setFilesTab("sessions");
+                        setSessionsLoading(true);
+                        onListSessions().then((items) => { setSessions(items); setSessionsLoading(false); }).catch(() => setSessionsLoading(false));
+                      }}
+                      className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "sessions" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                    >
+                      Sessions
+                    </button>
+                  )}
                   {files && (
                     <button
                       onClick={() => { setFilesTab("files"); files.onNavigate(files.path); }}
@@ -478,18 +502,6 @@ export function Chat({
                       className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                     >
                       Shares
-                    </button>
-                  )}
-                  {onListSessions && (
-                    <button
-                      onClick={() => {
-                        setFilesTab("sessions");
-                        setSessionsLoading(true);
-                        onListSessions().then((items) => { setSessions(items); setSessionsLoading(false); }).catch(() => setSessionsLoading(false));
-                      }}
-                      className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "sessions" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                    >
-                      Sessions
                     </button>
                   )}
                   <div className="flex-1" />
