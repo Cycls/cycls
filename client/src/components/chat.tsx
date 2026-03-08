@@ -344,10 +344,23 @@ export function Chat({
                 )}
               </>
             )}
+            {!user && (
+              <button
+                onClick={toggleDark}
+                className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
+                aria-label="Toggle theme"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                </svg>
+              </button>
+            )}
             {(files || onListSessions) && (
               <button
                 onClick={() => {
                   setFilesOpen(!filesOpen);
+                  setSessionMenu(null);
+                  setRenamingSession(null);
                   if (!filesOpen) {
                     if (onListSessions) {
                       setFilesTab("sessions");
@@ -367,15 +380,6 @@ export function Chat({
                 </svg>
               </button>
             )}
-            <button
-              onClick={toggleDark}
-              className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
-              aria-label="Toggle theme"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-              </svg>
-            </button>
             {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} /></div>}
           </div>
         </div>
@@ -413,6 +417,7 @@ export function Chat({
                 isStreaming={isStreaming}
                 onStop={onStop}
                 onOpenFilePicker={uploadFile ? openFilePicker : undefined}
+                onOpenFiles={files ? () => { setFilesOpen(true); setFilesTab("files"); files.onNavigate(files.path); } : undefined}
                 attachments={attachments}
                 onRemoveFile={removeFile}
               />
@@ -465,7 +470,7 @@ export function Chat({
               exit={{ opacity: 0 }}
               transition={{ duration: 0.15 }}
               className="fixed inset-0 z-50 bg-black/30 backdrop-blur-[2px]"
-              onClick={() => setFilesOpen(false)}
+              onClick={() => { setFilesOpen(false); setSessionMenu(null); setRenamingSession(null); }}
             />
             <motion.div
               initial={{ x: "100%" }}
@@ -829,6 +834,16 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                   </div>
                 </div>
                 <div className="border-t border-border" />
+                <button
+                  onClick={() => document.body.classList.toggle("dark")}
+                  className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                  </svg>
+                  {document.body.classList.contains("dark") ? "Light mode" : "Dark mode"}
+                </button>
+                <div className="border-t border-border" />
                 <p className="px-3 pt-2 pb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">Account</p>
                 {plan && (
                   <button
@@ -934,6 +949,7 @@ function InputBox({
   isStreaming,
   onStop,
   onOpenFilePicker,
+  onOpenFiles,
   attachments,
   onRemoveFile,
 }: {
@@ -945,6 +961,7 @@ function InputBox({
   isStreaming: boolean;
   onStop: () => void;
   onOpenFilePicker?: () => void;
+  onOpenFiles?: () => void;
   attachments?: Attachment[];
   onRemoveFile?: (index: number) => void;
 }) {
@@ -1041,7 +1058,7 @@ function InputBox({
 
       {/* Actions row: paperclip left, send right */}
       <div className="flex items-center justify-between px-1 pt-1">
-        <div>
+        <div className="flex items-center">
           {onOpenFilePicker && (
             <button
               type="button"
@@ -1052,6 +1069,18 @@ function InputBox({
               {/* Paperclip */}
               <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+              </svg>
+            </button>
+          )}
+          {onOpenFiles && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onOpenFiles(); }}
+              className="flex size-8 items-center justify-center rounded-2xl text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition cursor-pointer"
+              aria-label="Browse files"
+            >
+              <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.06-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
               </svg>
             </button>
           )}
