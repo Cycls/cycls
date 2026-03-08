@@ -243,19 +243,6 @@ export function useChat(baseUrl: string = "/api") {
           return updated;
         });
 
-        // Auto-save session metadata
-        if (sessionIdRef.current) {
-          const sid = sessionIdRef.current;
-          const firstUserMsg = [...messages, userMessage].find((m) => m.role === "user");
-          const title = (firstUserMsg?.content || "").slice(0, 100);
-          const authH = { "Content-Type": "application/json", ...(await authHeaders()) };
-          fetch(`${baseUrl}/sessions/${sid}`, {
-            method: "PUT",
-            headers: authH,
-            body: JSON.stringify({ title }),
-          }).then((r) => { if (!r.ok) console.error("Session save failed:", r.status); })
-            .catch((e) => console.error("Session save error:", e));
-        }
       } catch (err) {
         if ((err as Error).name !== "AbortError") {
           // Add error as callout
@@ -280,6 +267,20 @@ export function useChat(baseUrl: string = "/api") {
       } finally {
         setIsStreaming(false);
         abortRef.current = null;
+
+        // Auto-save session metadata (runs on complete, abort, or error)
+        if (sessionIdRef.current) {
+          const sid = sessionIdRef.current;
+          const firstUserMsg = [...messages, userMessage].find((m) => m.role === "user");
+          const title = (firstUserMsg?.content || "").slice(0, 100);
+          const authH = { "Content-Type": "application/json", ...(await authHeaders()) };
+          fetch(`${baseUrl}/sessions/${sid}`, {
+            method: "PUT",
+            headers: authH,
+            body: JSON.stringify({ title }),
+          }).then((r) => { if (!r.ok) console.error("Session save failed:", r.status); })
+            .catch((e) => console.error("Session save error:", e));
+        }
       }
     },
     [messages, isStreaming, baseUrl],
