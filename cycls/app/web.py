@@ -68,7 +68,7 @@ class Messages(list):
 
 def web(func, config):
     from fastapi import FastAPI, Request, HTTPException, status, Depends
-    from fastapi.responses import StreamingResponse
+    from fastapi.responses import StreamingResponse, FileResponse
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
     import jwt
     from jwt import PyJWKClient
@@ -139,6 +139,7 @@ def web(func, config):
     required_auth = Depends(validate)
 
     @app.post("/")
+    @app.post("/chat")
     @app.post("/chat/completions")
     async def back(request: Request, user: Optional[User] = auth):
         data = await request.json()
@@ -150,7 +151,7 @@ def web(func, config):
 
         if request.url.path == "/chat/completions":
             stream = openai_encoder(stream)
-        elif request.url.path == "/":
+        else:
             stream = encoder(stream, session_id=session_id)
         return StreamingResponse(stream, media_type="text/event-stream")
 
@@ -162,6 +163,12 @@ def web(func, config):
     app.include_router(sessions_router(required_auth))
     app.include_router(files_router(required_auth))
     app.include_router(share_router(required_auth))
+
+    # ---- SPA fallback for /shared/ (before static mounts) ----
+
+    @app.get("/shared/{path:path}")
+    async def shared_spa(path: str):
+        return FileResponse(Path(config.public_path) / "index.html")
 
     # ---- Static mounts (must be last) ----
 
