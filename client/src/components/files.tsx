@@ -354,7 +354,7 @@ export function Files({
                 <div
                   key={entry.name}
                   className="group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer"
-                  onClick={() => { if (renaming) return; isDir ? navigate(entryPath) : onOpenFile(entryPath).then((url) => window.open(url, "_blank")); }}
+                  onClick={() => { if (renaming || menuOpen) return; isDir ? navigate(entryPath) : onOpenFile(entryPath).then((url) => window.open(url, "_blank")); }}
                 >
                   {isDir ? (
                     <FolderIcon className="size-5 text-muted-foreground shrink-0" />

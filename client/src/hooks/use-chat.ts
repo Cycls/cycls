@@ -385,16 +385,6 @@ export function useChat(baseUrl: string = "/api") {
     }
   }, [baseUrl, authHeaders]);
 
-  const renameSession = useCallback(async (id: string, title: string) => {
-    const headers = { "Content-Type": "application/json", ...(await authHeaders()) };
-    const res = await fetch(`${baseUrl}/sessions/${id}`, {
-      method: "PATCH",
-      headers,
-      body: JSON.stringify({ title }),
-    });
-    if (!res.ok) throw new Error(`Rename failed: ${res.status}`);
-  }, [baseUrl, authHeaders]);
-
   return {
     messages,
     isStreaming,
@@ -409,7 +399,6 @@ export function useChat(baseUrl: string = "/api") {
     listSessions,
     loadSession,
     deleteSession,
-    renameSession,
     fetchConfig,
     setGetToken,
     uploadFile,
