@@ -31,7 +31,8 @@ TOOLS = [
     force_rebuild=False
 ) 
 async def super(context):
-    yield f"{context.user}\n\n"
+    # yield f"{context.user}\n\n"
+    print(context.messages.raw)
     async for msg in cycls.Agent(
                                 context=context,
                                 system=SYSTEM, 
