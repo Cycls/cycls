@@ -49,18 +49,23 @@ You help with coding, research, writing, analysis, system administration, and an
 """
 
 _UI_TOOLS = [
-    # {
-    #     "name": "render_canvas",
-    #     "description": "Display a document canvas panel to the user. Use for long-form content like reports, articles, guides, code files, or any document the user may want to read, copy, or reference. The canvas opens as a side panel.",
-    #     "inputSchema": {
-    #         "type": "object",
-    #         "properties": {
-    #             "title": {"type": "string", "description": "Title shown at the top of the canvas panel"},
-    #             "content": {"type": "string", "description": "Markdown content to display in the canvas"}
-    #         },
-    #         "required": ["title", "content"]
-    #     }
-    # }
+    {
+        "name": "render_canvas",
+        "description": "Display a document canvas panel to the user. Use for long-form content like reports, articles, guides, code files, or any document the user may want to read, copy, or reference. The canvas opens as a side panel alongside the chat.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Title shown at the top of the canvas panel"},
+                "content": {"type": "string", "description": "The content to display — markdown text, HTML, code, etc."},
+                "content_type": {
+                    "type": "string",
+                    "description": "Content format: markdown, html, python, javascript, typescript, json, diff, etc.",
+                    "default": "markdown"
+                }
+            },
+            "required": ["title", "content"]
+        }
+    }
 ]
 
 def _sniff_media_type(data: bytes) -> str | None:
@@ -229,11 +234,9 @@ def _render_ui_tool(name, args):
     if name == "render_image":
         return [{"type": "image", "src": args.get("src", ""), "alt": args.get("alt", ""), "caption": args.get("caption", "")}]
     if name == "render_canvas":
-        return [
-            {"type": "canvas", "canvas": "document", "open": True, "title": args.get("title", "Document")},
-            {"type": "canvas", "canvas": "document", "content": args.get("content", "")},
-            {"type": "canvas", "canvas": "document", "done": True},
-        ]
+        return [{"type": "canvas", "canvas": args.get("content", ""),
+                 "title": args.get("title", "Document"),
+                 "content_type": args.get("content_type", "markdown")}]
     return None
 
 def _prepare_tool(block, ws, timeout):

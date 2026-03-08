@@ -19,6 +19,8 @@ export interface Part {
   alt?: string;
   caption?: string;
   session_id?: string;
+  canvas?: string;
+  content_type?: string;
 }
 
 export interface Attachment {

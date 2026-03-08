@@ -3,6 +3,8 @@ import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { PricingTable } from "@clerk/clerk-react";
 import { MessageBubble } from "./message";
+import { Canvas } from "./canvas";
+import type { CanvasData } from "./canvas";
 import { Files } from "./files";
 import type { Message, Attachment } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
@@ -98,6 +100,8 @@ export function Chat({
   const [sharesLoading, setSharesLoading] = useState(false);
   const [sessions, setSessions] = useState<{ id: string; title: string; updatedAt: string }[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [canvasOpen, setCanvasOpen] = useState(false);
+  const [canvasData, setCanvasData] = useState<CanvasData | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { scrollRef, contentRef } = useStickToBottom();
@@ -182,6 +186,28 @@ export function Chat({
   };
 
   const isEmpty = messages.length === 0;
+
+  const handleCanvas = useCallback((data: CanvasData) => {
+    setCanvasData(data);
+    setCanvasOpen(true);
+  }, []);
+
+  // Auto-open canvas when a canvas part appears (streaming or final)
+  useEffect(() => {
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg?.role !== "assistant") return;
+    const parts = lastMsg.parts || [];
+    const canvasPart = [...parts].reverse().find((p: { type: string }) => p.type === "canvas");
+    if (canvasPart) {
+      setCanvasData({
+        title: canvasPart.title || "Canvas",
+        content: canvasPart.canvas || "",
+        contentType: canvasPart.content_type || "markdown",
+        src: canvasPart.src,
+      });
+      setCanvasOpen(true);
+    }
+  }, [messages]);
 
   const toggleDark = () => {
     document.body.classList.toggle("dark");
@@ -399,65 +425,77 @@ export function Chat({
         />
       )}
 
-      <LayoutGroup>
-        <div className="h-0.5 overflow-hidden">
-          {sessionLoading && <div className="h-full w-1/3 bg-muted-foreground/30 rounded-full animate-[slide_1s_ease-in-out_infinite]" />}
-        </div>
-        {isEmpty ? (
-          <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16">
-            <div className="max-w-3xl w-full">
-              <InputBox
-                textareaRef={textareaRef}
-                input={input}
-                setInput={setInput}
-                handleKeyDown={handleKeyDown}
-                handleSubmit={handleSubmit}
-                isStreaming={isStreaming}
-                onStop={onStop}
-                onOpenFilePicker={uploadFile ? openFilePicker : undefined}
-                onOpenFiles={files ? () => { setFilesOpen(true); setFilesTab("files"); files.onNavigate(files.path); } : undefined}
-                attachments={attachments}
-                onRemoveFile={removeFile}
-              />
+      <div className="flex flex-1 min-h-0">
+        <div className={`flex flex-col transition-all duration-300 ${canvasOpen ? "w-1/2 max-sm:hidden" : "w-full"}`}>
+          <LayoutGroup>
+            <div className="h-0.5 overflow-hidden">
+              {sessionLoading && <div className="h-full w-1/3 bg-muted-foreground/30 rounded-full animate-[slide_1s_ease-in-out_infinite]" />}
             </div>
-          </div>
-        ) : (
-          <>
-            <div ref={scrollRef} className="flex-1 overflow-y-auto">
-              <div ref={contentRef} className="flex w-full flex-col items-center py-4">
-                {messages.map((msg, i) => (
-                  <MessageBubble
-                    key={i}
-                    message={msg}
-                    isStreaming={
-                      isStreaming &&
-                      i === messages.length - 1 &&
-                      msg.role === "assistant"
-                    }
+            {isEmpty ? (
+              <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16">
+                <div className="max-w-3xl w-full">
+                  <InputBox
+                    textareaRef={textareaRef}
+                    input={input}
+                    setInput={setInput}
+                    handleKeyDown={handleKeyDown}
+                    handleSubmit={handleSubmit}
+                    isStreaming={isStreaming}
+                    onStop={onStop}
+                    onOpenFilePicker={uploadFile ? openFilePicker : undefined}
+                    onOpenFiles={files ? () => { setFilesOpen(true); setFilesTab("files"); files.onNavigate(files.path); } : undefined}
+                    attachments={attachments}
+                    onRemoveFile={removeFile}
                   />
-                ))}
+                </div>
               </div>
-            </div>
-            <div className="shrink-0 px-6 pb-4 pt-2">
-              <div className="max-w-3xl mx-auto">
-                <InputBox
-                  textareaRef={textareaRef}
-                  input={input}
-                  setInput={setInput}
-                  handleKeyDown={handleKeyDown}
-                  handleSubmit={handleSubmit}
-                  isStreaming={isStreaming}
-                  onStop={onStop}
-                  onOpenFilePicker={uploadFile ? openFilePicker : undefined}
-                  onOpenFiles={files ? () => { setFilesOpen(true); setFilesTab("files"); files.onNavigate(files.path); } : undefined}
-                  attachments={attachments}
-                  onRemoveFile={removeFile}
-                />
-              </div>
-            </div>
-          </>
+            ) : (
+              <>
+                <div ref={scrollRef} className="flex-1 overflow-y-auto">
+                  <div ref={contentRef} className="flex w-full flex-col items-center py-4">
+                    {messages.map((msg, i) => (
+                      <MessageBubble
+                        key={i}
+                        message={msg}
+                        isStreaming={
+                          isStreaming &&
+                          i === messages.length - 1 &&
+                          msg.role === "assistant"
+                        }
+                        onCanvas={handleCanvas}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div className="shrink-0 px-6 pb-4 pt-2">
+                  <div className="max-w-3xl mx-auto">
+                    <InputBox
+                      textareaRef={textareaRef}
+                      input={input}
+                      setInput={setInput}
+                      handleKeyDown={handleKeyDown}
+                      handleSubmit={handleSubmit}
+                      isStreaming={isStreaming}
+                      onStop={onStop}
+                      onOpenFilePicker={uploadFile ? openFilePicker : undefined}
+                      onOpenFiles={files ? () => { setFilesOpen(true); setFilesTab("files"); files.onNavigate(files.path); } : undefined}
+                      attachments={attachments}
+                      onRemoveFile={removeFile}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+          </LayoutGroup>
+        </div>
+
+        {/* Canvas panel */}
+        {canvasOpen && canvasData && (
+          <div className="max-sm:fixed max-sm:inset-0 max-sm:z-50 max-sm:bg-background sm:w-1/2 sm:py-1 sm:pr-1 flex flex-col">
+            <Canvas {...canvasData} onClose={() => setCanvasOpen(false)} />
+          </div>
         )}
-      </LayoutGroup>
+      </div>
 
       {/* Files / Shares / Sessions panel */}
       <AnimatePresence>

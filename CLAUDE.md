@@ -85,6 +85,7 @@ Yield these from app functions:
 - `{"type": "status", "status": "..."}` - Status indicator
 - `{"type": "callout", "callout": "...", "style": "info|warning|error|success"}`
 - `{"type": "image", "src": "...", "alt": "...", "caption": "..."}`
+- `{"type": "canvas", "canvas": "...", "title": "...", "content_type": "markdown|html|python|..."}` - Side panel
 
 ## Environment Variables
 

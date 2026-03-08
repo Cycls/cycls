@@ -115,7 +115,12 @@ body {
   100% { transform: translateX(400%); }
 }
 
-/* Scrollbar */
+/* Scrollbar — auto-hide */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; transition: background 0.2s; }
+*:hover::-webkit-scrollbar-thumb { background: var(--color-border); }
+
+/* Firefox */
+* { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+*:hover { scrollbar-color: var(--color-border) transparent; }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import type { Part, Message } from "../hooks/use-chat";
+import type { CanvasData } from "./canvas";
 import { TextPart } from "./parts/text-part";
 import { ThinkingPart } from "./parts/thinking-part";
 import { CodePart } from "./parts/code-part";
@@ -10,7 +11,7 @@ import { ImagePart } from "./parts/image-part";
 import { StepPart } from "./parts/step-part";
 import { cn } from "../lib/utils";
 
-function renderPart(part: Part, index: number, isStreaming?: boolean) {
+function renderPart(part: Part, index: number, isStreaming?: boolean, onCanvas?: (data: CanvasData) => void) {
   switch (part.type) {
     case "text":
       return <TextPart key={index} text={part.text || ""} />;
@@ -64,6 +65,24 @@ function renderPart(part: Part, index: number, isStreaming?: boolean) {
           {part.status}
         </div>
       );
+    case "canvas":
+      return (
+        <button
+          key={index}
+          onClick={() => onCanvas?.({
+            title: part.title || "Canvas",
+            content: part.canvas || "",
+            contentType: part.content_type || "markdown",
+            src: part.src,
+          })}
+          className="flex items-center gap-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer group/canvas"
+        >
+          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 3.75v16.5M3.75 3.75h16.5v16.5H3.75M9.75 3.75v16.5" />
+          </svg>
+          <span className="group-hover/canvas:underline">{part.title || "Canvas"}</span>
+        </button>
+      );
     default:
       return null;
   }
@@ -85,9 +104,11 @@ function groupParts(parts: Part[]) {
 export function MessageBubble({
   message,
   isStreaming,
+  onCanvas,
 }: {
   message: Message;
   isStreaming?: boolean;
+  onCanvas?: (data: CanvasData) => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -158,10 +179,10 @@ export function MessageBubble({
         {groupParts(parts).map((group, gi) =>
           group.type === "step" ? (
             <div key={gi} className="my-3 flex flex-col">
-              {group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming))}
+              {group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming, onCanvas))}
             </div>
           ) : (
-            group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming))
+            group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming, onCanvas))
           )
         )}
 
