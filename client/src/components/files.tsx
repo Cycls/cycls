@@ -47,7 +47,7 @@ function DropdownMenu({ items, onClose }: {
         {items.map((item) => (
           <button
             key={item.label}
-            onClick={() => { item.onClick(); onClose(); }}
+            onClick={(e) => { e.stopPropagation(); item.onClick(); onClose(); }}
             className={`flex w-full items-center px-3 py-1.5 text-sm transition-colors cursor-pointer ${
               item.danger
                 ? "text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20"
@@ -337,7 +337,7 @@ export function Files({
                 <div
                   key={entry.name}
                   className="group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer"
-                  onClick={() => isDir ? navigate(entryPath) : onOpenFile(entryPath).then((url) => window.open(url, "_blank"))}
+                  onClick={() => { if (renaming) return; isDir ? navigate(entryPath) : onOpenFile(entryPath).then((url) => window.open(url, "_blank")); }}
                 >
                   {isDir ? (
                     <FolderIcon className="size-5 text-muted-foreground shrink-0" />
@@ -424,16 +424,6 @@ export function Files({
                     )}
                   </div>
 
-                  {/* Tooltip */}
-                  <div className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity delay-300 z-50">
-                    <div className="rounded-lg border border-border bg-background px-3 py-2 shadow-lg text-xs whitespace-nowrap">
-                      <p className="font-medium text-foreground">{entry.name}</p>
-                      <p className="text-muted-foreground mt-0.5">
-                        {!isDir && <>{formatSize(entry.size)} · </>}
-                        {new Date(entry.modified).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
                 </div>
               );
             })}
