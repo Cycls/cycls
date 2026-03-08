@@ -31,6 +31,11 @@ export function Chat({
   onShare,
   onListShares,
   onDeleteShare,
+  onListSessions,
+  onLoadSession,
+  onDeleteSession,
+  onRenameSession,
+  sessionId,
   onSignOut,
   onManageAccount,
   onCreateOrg,
@@ -52,6 +57,11 @@ export function Chat({
   onShare?: (title: string) => Promise<string>;
   onListShares?: () => Promise<{ id: string; title: string; sharedAt: string; path: string }[]>;
   onDeleteShare?: (id: string) => Promise<void>;
+  onListSessions?: () => Promise<{ id: string; title: string; updatedAt: string }[]>;
+  onLoadSession?: (id: string) => Promise<void>;
+  onDeleteSession?: (id: string) => Promise<void>;
+  onRenameSession?: (id: string, title: string) => Promise<void>;
+  sessionId?: string | null;
   onSignOut?: () => void;
   onManageAccount?: () => void;
   onCreateOrg?: () => void;
@@ -78,7 +88,7 @@ export function Chat({
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [filesOpen, setFilesOpen] = useState(false);
-  const [filesTab, setFilesTab] = useState<"files" | "shares">("files");
+  const [filesTab, setFilesTab] = useState<"files" | "shares" | "sessions">("files");
   const [shareOpen, setShareOpen] = useState(false);
   const [shareTitle, setShareTitle] = useState("");
   const [shareUrl, setShareUrl] = useState<string | null>(null);
@@ -86,6 +96,11 @@ export function Chat({
   const [shareCopied, setShareCopied] = useState(false);
   const [shares, setShares] = useState<{ id: string; title: string; sharedAt: string; path: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
+  const [sessions, setSessions] = useState<{ id: string; title: string; updatedAt: string }[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionMenu, setSessionMenu] = useState<string | null>(null);
+  const [renamingSession, setRenamingSession] = useState<string | null>(null);
+  const [renameTitle, setRenameTitle] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { scrollRef, contentRef } = useStickToBottom();
@@ -421,9 +436,9 @@ export function Chat({
         )}
       </LayoutGroup>
 
-      {/* Files / Shares panel */}
+      {/* Files / Shares / Sessions panel */}
       <AnimatePresence>
-        {filesOpen && (files || filesTab === "shares") && (
+        {filesOpen && (files || filesTab === "shares" || filesTab === "sessions") && (
           <>
             <motion.div
               initial={{ opacity: 0 }}
@@ -440,27 +455,43 @@ export function Chat({
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
               className="fixed top-0 right-0 bottom-0 z-50 w-full sm:w-[480px] border-l border-border bg-background flex flex-col"
             >
-              {/* Tab bar (only show when both files and shares are available) */}
-              {files && onListShares && (
+              {/* Tab bar */}
+              {(files || onListShares || onListSessions) && (
                 <div className="flex items-center border-b border-border px-4 sm:px-6">
-                  <button
-                    onClick={() => { setFilesTab("files"); files.onNavigate(files.path); }}
-                    className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "files" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                  >
-                    Files
-                  </button>
-                  <button
-                    onClick={() => {
-                      setFilesTab("shares");
-                      if (!shares.length && !sharesLoading) {
-                        setSharesLoading(true);
-                        onListShares().then((items) => { setShares(items); setSharesLoading(false); }).catch(() => setSharesLoading(false));
-                      }
-                    }}
-                    className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                  >
-                    Shares
-                  </button>
+                  {files && (
+                    <button
+                      onClick={() => { setFilesTab("files"); files.onNavigate(files.path); }}
+                      className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "files" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                    >
+                      Files
+                    </button>
+                  )}
+                  {onListShares && (
+                    <button
+                      onClick={() => {
+                        setFilesTab("shares");
+                        if (!shares.length && !sharesLoading) {
+                          setSharesLoading(true);
+                          onListShares().then((items) => { setShares(items); setSharesLoading(false); }).catch(() => setSharesLoading(false));
+                        }
+                      }}
+                      className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                    >
+                      Shares
+                    </button>
+                  )}
+                  {onListSessions && (
+                    <button
+                      onClick={() => {
+                        setFilesTab("sessions");
+                        setSessionsLoading(true);
+                        onListSessions().then((items) => { setSessions(items); setSessionsLoading(false); }).catch(() => setSessionsLoading(false));
+                      }}
+                      className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "sessions" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                    >
+                      Sessions
+                    </button>
+                  )}
                   <div className="flex-1" />
                   <button
                     onClick={() => setFilesOpen(false)}
@@ -474,7 +505,7 @@ export function Chat({
                 </div>
               )}
               {filesTab === "files" && files ? (
-                <Files {...files} onClose={!onListShares ? () => setFilesOpen(false) : undefined} />
+                <Files {...files} onClose={!onListShares && !onListSessions ? () => setFilesOpen(false) : undefined} />
               ) : filesTab === "shares" ? (
                 <div className="flex h-full flex-col">
                   {/* Shares toolbar (only when no tab bar) */}
@@ -543,6 +574,129 @@ export function Chat({
                                   </svg>
                                 </button>
                               </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : filesTab === "sessions" ? (
+                <div className="flex h-full flex-col">
+                  <div className="flex-1 overflow-y-auto">
+                    {sessionsLoading ? (
+                      <div className="flex items-center justify-center py-20">
+                        <svg className="size-5 animate-spin text-muted-foreground" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                      </div>
+                    ) : sessions.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+                        <svg className="size-10 mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                        </svg>
+                        <p className="text-sm">No sessions yet</p>
+                        <p className="text-xs mt-1">Start a conversation to see it here</p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-border">
+                        {sessions.map((s) => (
+                          <div
+                            key={s.id}
+                            className={`group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer ${sessionId === s.id ? "bg-secondary/30" : ""}`}
+                            onClick={() => {
+                              if (renamingSession === s.id) return;
+                              onLoadSession?.(s.id).then(() => setFilesOpen(false));
+                            }}
+                          >
+                            <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
+                              <svg className="size-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                              </svg>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              {renamingSession === s.id ? (
+                                <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                  <input
+                                    autoFocus
+                                    className="flex-1 min-w-0 text-sm bg-secondary/80 border border-border rounded px-2 py-0.5 text-foreground outline-none focus:border-foreground/30"
+                                    value={renameTitle}
+                                    onChange={(e) => setRenameTitle(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        onRenameSession?.(s.id, renameTitle).then(() => {
+                                          setSessions((prev) => prev.map((x) => x.id === s.id ? { ...x, title: renameTitle } : x));
+                                          setRenamingSession(null);
+                                        });
+                                      } else if (e.key === "Escape") {
+                                        setRenamingSession(null);
+                                      }
+                                    }}
+                                  />
+                                  <button
+                                    onClick={() => {
+                                      onRenameSession?.(s.id, renameTitle).then(() => {
+                                        setSessions((prev) => prev.map((x) => x.id === s.id ? { ...x, title: renameTitle } : x));
+                                        setRenamingSession(null);
+                                      });
+                                    }}
+                                    className="shrink-0 px-2 py-0.5 text-xs font-medium rounded bg-foreground text-background hover:opacity-80 transition-opacity cursor-pointer"
+                                  >
+                                    Save
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-sm text-foreground truncate block">{s.title || "Untitled"}</span>
+                              )}
+                            </div>
+                            {!renamingSession && (
+                              <>
+                                <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
+                                  {s.updatedAt ? new Date(s.updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : ""}
+                                </span>
+                                <div className="relative shrink-0">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSessionMenu(sessionMenu === s.id ? null : s.id);
+                                    }}
+                                    className="flex size-7 items-center justify-center rounded-md text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 hover:text-foreground hover:bg-secondary transition-all cursor-pointer"
+                                    aria-label="Session menu"
+                                  >
+                                    <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z" />
+                                    </svg>
+                                  </button>
+                                  {sessionMenu === s.id && (
+                                    <div className="absolute right-0 top-8 z-10 w-32 rounded-lg border border-border bg-background shadow-lg py-1">
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setRenameTitle(s.title || "");
+                                          setRenamingSession(s.id);
+                                          setSessionMenu(null);
+                                        }}
+                                        className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary transition-colors cursor-pointer"
+                                      >
+                                        Rename
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setSessionMenu(null);
+                                          onDeleteSession?.(s.id).then(() => {
+                                            setSessions((prev) => prev.filter((x) => x.id !== s.id));
+                                          });
+                                        }}
+                                        className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer"
+                                      >
+                                        Delete
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              </>
                             )}
                           </div>
                         ))}

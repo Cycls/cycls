@@ -144,7 +144,7 @@ def web(func, config):
         data = await request.json()
         messages = data.get("messages")
         parts = messages[1].get("parts") or [] if len(messages) > 1 else []
-        session_id = parts[0]["session_id"] if parts and parts[0].get("type") == "session_id" else str(uuid.uuid4())
+        session_id = data.get("session_id") or (parts[0]["session_id"] if parts and parts[0].get("type") == "session_id" else str(uuid.uuid4()))
 
         context = Context(messages=Messages(messages), user=user, session_id=session_id)
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)

@@ -20,7 +20,7 @@ import { useChat, AppConfig } from "./hooks/use-chat";
 import { useFiles } from "./hooks/use-files";
 
 function ChatWithAuth() {
-  const { messages, isStreaming, config, send, stop, clear, share, listShares, deleteShare, fetchConfig, setGetToken, uploadFile } =
+  const { messages, isStreaming, config, sessionId, send, stop, clear, share, listShares, deleteShare, listSessions, loadSession, deleteSession, renameSession, fetchConfig, setGetToken, uploadFile } =
     useChat("/api");
   const { entries, path, loading, list, upload, mkdir, rename, remove, openFile, setGetToken: setFilesToken } =
     useFiles("/api");
@@ -65,6 +65,11 @@ function ChatWithAuth() {
       onShare={handleShare}
       onListShares={listShares}
       onDeleteShare={deleteShare}
+      onListSessions={listSessions}
+      onLoadSession={loadSession}
+      onDeleteSession={deleteSession}
+      onRenameSession={renameSession}
+      sessionId={sessionId}
       onSignOut={() => signOut()}
       onManageAccount={() => clerk.openUserProfile()}
       onCreateOrg={() => clerk.openCreateOrganization()}

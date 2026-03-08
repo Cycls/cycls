@@ -98,12 +98,33 @@ def sessions_router(required_auth):
         (user.sessions / f"{session_id}.json").write_text(json.dumps(data))
         return data
 
+    @r.patch("/sessions/{session_id}")
+    async def patch_session(session_id: str, request: Request, user: Any = required_auth):
+        session_file = user.sessions / f"{session_id}.json"
+        if not session_file.is_file():
+            raise HTTPException(status_code=404, detail="Session not found")
+        data = json.loads(session_file.read_text())
+        patch = await request.json()
+        data.update(patch)
+        data["updatedAt"] = datetime.now(timezone.utc).isoformat()
+        session_file.write_text(json.dumps(data))
+        return data
+
+    @r.get("/sessions/{session_id}/history")
+    async def get_session_history(session_id: str, user: Any = required_auth):
+        hp = history_path(user, session_id)
+        messages = load_history(hp)
+        return messages
+
     @r.delete("/sessions/{session_id}")
     async def delete_session(session_id: str, user: Any = required_auth):
         session_file = user.sessions / f"{session_id}.json"
         if not session_file.is_file():
             raise HTTPException(status_code=404, detail="Session not found")
         session_file.unlink()
+        history_file = user.sessions / f"{session_id}.history.jsonl"
+        if history_file.is_file():
+            history_file.unlink()
         return {"ok": True}
 
     return r
