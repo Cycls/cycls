@@ -221,7 +221,7 @@ def share_router(required_auth):
                 src = user.workspace / att_path
                 if src.is_file():
                     shutil.copy2(src, share_dir / src.name)
-                    att["url"] = f"/api/shared-assets/{share_id}/{src.name}"
+                    att["url"] = f"/shared-assets/{share_id}/{src.name}"
 
         snapshot = {
             "id": share_id,
