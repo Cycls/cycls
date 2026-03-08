@@ -530,7 +530,7 @@ export function Chat({
               ) : filesTab === "shares" ? (
                 <div className="flex h-full flex-col">
                   {/* Shares toolbar (only when no tab bar) */}
-                  {!files && (
+                  {!files && !onListSessions && (
                     <div className="flex items-center justify-between border-b border-border px-4 py-3 sm:px-6">
                       <span className="text-sm font-medium text-foreground">Shares</span>
                       <button
@@ -579,9 +579,10 @@ export function Chat({
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
+                                    setSharesLoading(true);
                                     onDeleteShare(s.id).then(() => {
                                       setShares((prev) => prev.filter((x) => x.id !== s.id));
-                                    });
+                                    }).finally(() => setSharesLoading(false));
                                   }}
                                   className="flex size-7 items-center justify-center rounded-md text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 hover:text-red-500 hover:bg-red-500/10 transition-all cursor-pointer"
                                   aria-label="Delete share"
@@ -605,7 +606,7 @@ export function Chat({
                   loading={sessionsLoading}
                   activeId={sessionId}
                   onLoad={(id) => { onLoadSession?.(id); if (window.innerWidth < 640) setFilesOpen(false); }}
-                  onDelete={(id) => onDeleteSession?.(id).then(() => setSessions((prev) => prev.filter((x) => x.id !== id)))}
+                  onDelete={(id) => { setSessionsLoading(true); onDeleteSession?.(id).then(() => setSessions((prev) => prev.filter((x) => x.id !== id))).finally(() => setSessionsLoading(false)); }}
                 />
               ) : null}
             </motion.div>
