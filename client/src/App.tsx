@@ -21,9 +21,9 @@ import { useFiles } from "./hooks/use-files";
 
 function ChatWithAuth() {
   const { messages, isStreaming, sessionLoading, config, sessionId, send, stop, clear, share, listShares, deleteShare, listSessions, loadSession, deleteSession, fetchConfig, setGetToken, uploadFile } =
-    useChat("/api");
+    useChat();
   const { entries, path, loading, list, upload, mkdir, rename, remove, openFile, setGetToken: setFilesToken } =
-    useFiles("/api");
+    useFiles();
   const { getToken, signOut } = useAuth();
   const { user } = useUser();
   const clerk = useClerk();
@@ -107,9 +107,9 @@ function ChatWithAuth() {
 
 function ChatNoAuth() {
   const { messages, isStreaming, config, send, stop, clear, fetchConfig, uploadFile } =
-    useChat("/api");
+    useChat();
   const { entries, path, loading, list, upload, mkdir, rename, remove, openFile } =
-    useFiles("/api");
+    useFiles();
 
   useEffect(() => {
     fetchConfig();
@@ -244,7 +244,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/config")
+    fetch("/config")
       .then((r) => r.json())
       .then((c) => setConfig(c))
       .catch(() => {})
