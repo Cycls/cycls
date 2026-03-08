@@ -2,14 +2,18 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
+const backend = "http://localhost:8080";
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      "/api": {
-        target: "http://localhost:8080",
-        rewrite: (path) => path.replace(/^\/api/, ""),
-      },
+      ...Object.fromEntries(
+        ["/config", "/chat", "/sessions", "/files", "/shared-assets"].map(
+          (p) => [p, backend]
+        )
+      ),
+      "/share": { target: backend, bypass: (req) => req.url?.startsWith("/shared/") ? "/index.html" : undefined },
     },
   },
 });

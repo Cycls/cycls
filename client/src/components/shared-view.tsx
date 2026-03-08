@@ -16,7 +16,7 @@ export function SharedView({ path }: { path: string }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`/api/shared/${path}`)
+    fetch(`/share/${path}`)
       .then((res) => {
         if (res.status === 403) throw new Error("This share is private");
         if (!res.ok) throw new Error("Share not found");

@@ -43,7 +43,7 @@ export interface AppConfig {
   pk?: string;
 }
 
-export function useChat(baseUrl: string = "/api") {
+export function useChat(baseUrl: string = "") {
   const [messages, _setMessages] = useState<Message[]>([]);
   const setMessages = useCallback((updater: Message[] | ((prev: Message[]) => Message[])) => {
     _setMessages((prev) => {
@@ -145,7 +145,7 @@ export function useChat(baseUrl: string = "/api") {
           return { role: m.role, content, parts: m.parts };
         });
 
-        const response = await fetch(`${baseUrl}/`, {
+        const response = await fetch(`${baseUrl}/chat`, {
           method: "POST",
           headers,
           body: JSON.stringify({ messages: requestMessages, session_id: sessionIdRef.current || undefined }),

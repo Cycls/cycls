@@ -125,7 +125,7 @@ def files_router(required_auth):
     async def list_files(request: Request, user: Any = required_auth):
         target = _safe_path(user.workspace, request.query_params.get("path", ""))
         if not target.is_dir():
-            raise HTTPException(status_code=404, detail="Directory not found")
+            return []
         items = []
         for entry in os.scandir(target):
             if entry.name.startswith("."):
@@ -256,7 +256,7 @@ def share_router(required_auth):
         items.sort(key=lambda s: s.get("sharedAt", ""), reverse=True)
         return items
 
-    @r.get("/shared/{share_id}")
+    @r.get("/share/{share_id}")
     async def get_share(share_id: str):
         share_dir = _resolve(share_id)
         return json.loads((share_dir / "share.json").read_text())
