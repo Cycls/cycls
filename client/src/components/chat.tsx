@@ -594,7 +594,7 @@ export function Chat({
                     ) : sessions.length === 0 ? (
                       <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                         <svg className="size-10 mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
                         </svg>
                         <p className="text-sm">No sessions yet</p>
                         <p className="text-xs mt-1">Start a conversation to see it here</p>
@@ -612,7 +612,7 @@ export function Chat({
                           >
                             <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
                               <svg className="size-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
                               </svg>
                             </div>
                             <div className="flex-1 min-w-0">
@@ -641,7 +641,7 @@ export function Chat({
                                         setRenamingSession(null);
                                       });
                                     }}
-                                    className="shrink-0 px-2 py-0.5 text-xs font-medium rounded bg-foreground text-background hover:opacity-80 transition-opacity cursor-pointer"
+                                    className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer shrink-0"
                                   >
                                     Save
                                   </button>
