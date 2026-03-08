@@ -127,7 +127,7 @@ export function SharedView({ path }: { path: string }) {
           <div className="w-full max-w-3xl px-6 pt-8 pb-10">
             <div className="flex justify-center">
               <a href="/" className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors">
-                <span className="text-[10px]">Made with</span>
+                <span className="text-[10px]">Made in</span>
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 83.652 29" className="h-[13px] fill-current">
                   <path d="M 17.743 0.755 L 16.261 0.755 C 15.861 0.755 15.484 0.961 15.253 1.301 L 3.23 19.531 C 3.133 19.689 3.242 19.895 3.424 19.895 L 4.906 19.895 C 5.307 19.895 5.683 19.689 5.914 19.349 L 17.937 1.119 C 18.047 0.973 17.925 0.755 17.743 0.755 Z" />
                   <path d="M 5.248 0 L 5.734 1.654 C 6.164 3.153 7.345 4.33 8.844 4.765 L 10.496 5.241 L 8.844 5.718 C 7.345 6.152 6.164 7.329 5.734 8.829 L 5.248 10.496 L 4.762 8.843 C 4.332 7.343 3.152 6.166 1.652 5.732 L 0 5.255 L 1.652 4.779 C 3.152 4.344 4.332 3.167 4.762 1.668 L 5.248 0 Z" />
