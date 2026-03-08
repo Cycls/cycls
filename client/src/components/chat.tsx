@@ -105,6 +105,13 @@ export function Chat({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { scrollRef, contentRef } = useStickToBottom();
 
+  // Reset sidebar data when org changes
+  useEffect(() => {
+    setSessions([]);
+    setShares([]);
+    setFilesOpen(false);
+  }, [activeOrg?.id]);
+
   const handleFilesAdded = useCallback(async (newFiles: File[]) => {
     if (uploadFile) {
       // Add placeholders immediately — blob URL is a stable key per file
