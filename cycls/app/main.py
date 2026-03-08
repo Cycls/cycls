@@ -7,7 +7,7 @@ from .web import web, Config
 
 CYCLS_PATH = importlib.resources.files('cycls')
 
-THEMES = ["default", "dev"]
+THEMES = ["default", "dev", "wafi"]
 
 
 class App(Function):
@@ -38,9 +38,11 @@ class App(Function):
         files.update({f: f for f in copy or []})
         files.update({f: f"public/{f}" for f in self.copy_public})
 
-        # Fetch theme from GitHub releases during container build
-        theme_cmd = "mkdir -p /app/cycls/app/themes/default && cd /app/cycls/app/themes/default && curl -fsSLO https://github.com/Cycls/agentUI/releases/download/latest/agentUI.zip && unzip -o agentUI.zip && rm agentUI.zip"
-        all_run_commands = [theme_cmd, *(run_commands or [])]
+        # Fetch default theme from GitHub releases during container build
+        run_commands = list(run_commands or [])
+        if theme == "default":
+            run_commands.insert(0, "mkdir -p /app/cycls/app/themes/default && cd /app/cycls/app/themes/default && curl -fsSLO https://github.com/Cycls/agentUI/releases/download/latest/agentUI.zip && unzip -o agentUI.zip && rm agentUI.zip")
+        all_run_commands = run_commands
 
         super().__init__(
             func=func,
