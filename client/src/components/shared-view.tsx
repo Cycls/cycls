@@ -17,6 +17,13 @@ export function SharedView({ path }: { path: string }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const [canvasOpen, setCanvasOpen] = useState(false);
+  const [canvasData, setCanvasData] = useState<CanvasData | null>(null);
+  const handleCanvas = useCallback((d: CanvasData) => {
+    setCanvasData(d);
+    setCanvasOpen(true);
+  }, []);
+
   useEffect(() => {
     fetch(`/share/${path}`)
       .then((res) => {
@@ -47,13 +54,6 @@ export function SharedView({ path }: { path: string }) {
       </div>
     );
   }
-
-  const [canvasOpen, setCanvasOpen] = useState(false);
-  const [canvasData, setCanvasData] = useState<CanvasData | null>(null);
-  const handleCanvas = useCallback((d: CanvasData) => {
-    setCanvasData(d);
-    setCanvasOpen(true);
-  }, []);
 
   if (!data) return null;
 
