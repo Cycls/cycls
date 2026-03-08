@@ -7,7 +7,7 @@ export interface FileEntry {
   modified: string;
 }
 
-export function useFiles(baseUrl: string = "/api") {
+export function useFiles(baseUrl: string = "") {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [path, setPath] = useState("");
   const [loading, setLoading] = useState(false);

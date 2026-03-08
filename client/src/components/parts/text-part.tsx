@@ -1,17 +1,37 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
-import "katex/dist/katex.min.css";
-import { memo, useState } from "react";
+import { memo, useState, useEffect } from "react";
 import { CodeBlock, CodeBlockCode, CodeBlockGroup } from "./code-block";
 
+let rehypeKatexPlugin: any = null;
+const katexCdnUrl = "https://esm.sh/rehype-katex@7.0.1?deps=katex@0.16.33";
+// @ts-ignore - CDN import
+const rehypeKatexReady = import(/* @vite-ignore */ katexCdnUrl).then((m: any) => {
+  rehypeKatexPlugin = m.default;
+  // Load KaTeX CSS from CDN
+  if (!document.querySelector('link[href*="katex"]')) {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "https://esm.sh/katex@0.16.33/dist/katex.min.css";
+    document.head.appendChild(link);
+  }
+});
+
 export const TextPart = memo(function TextPart({ text }: { text: string }) {
+  const [katexLoaded, setKatexLoaded] = useState(!!rehypeKatexPlugin);
+
+  useEffect(() => {
+    if (!rehypeKatexPlugin) {
+      rehypeKatexReady.then(() => setKatexLoaded(true));
+    }
+  }, []);
+
   return (
     <div dir="auto" className="prose dark:prose-invert min-w-full">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        rehypePlugins={katexLoaded ? [rehypeKatexPlugin] : []}
         components={{
           code({ className, children }) {
             const match = /language-(\w+)/.exec(className || "");
