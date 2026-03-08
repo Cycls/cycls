@@ -47,6 +47,8 @@ export function useChat(baseUrl: string = "/api") {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [config, setConfig] = useState<AppConfig | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const getTokenRef = useRef<(() => Promise<string | null>) | null>(null);
 
@@ -137,7 +139,7 @@ export function useChat(baseUrl: string = "/api") {
         const response = await fetch(`${baseUrl}/`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ messages: requestMessages }),
+          body: JSON.stringify({ messages: requestMessages, session_id: sessionIdRef.current || undefined }),
           signal: controller.signal,
         });
 
@@ -167,6 +169,13 @@ export function useChat(baseUrl: string = "/api") {
             try {
               const item: Part = JSON.parse(data);
               const type = item.type;
+
+              // Capture session_id from server, don't add as part
+              if (type === "session_id" && item.session_id) {
+                sessionIdRef.current = item.session_id;
+                setSessionId(item.session_id);
+                continue;
+              }
 
               // Same type as current? Merge
               if (currentPart && currentPart.type === type) {
@@ -233,6 +242,20 @@ export function useChat(baseUrl: string = "/api") {
           }
           return updated;
         });
+
+        // Auto-save session metadata
+        if (sessionIdRef.current) {
+          const sid = sessionIdRef.current;
+          const firstUserMsg = [...messages, userMessage].find((m) => m.role === "user");
+          const title = (firstUserMsg?.content || "").slice(0, 100);
+          const authH = { "Content-Type": "application/json", ...(await authHeaders()) };
+          fetch(`${baseUrl}/sessions/${sid}`, {
+            method: "PUT",
+            headers: authH,
+            body: JSON.stringify({ title }),
+          }).then((r) => { if (!r.ok) console.error("Session save failed:", r.status); })
+            .catch((e) => console.error("Session save error:", e));
+        }
       } catch (err) {
         if ((err as Error).name !== "AbortError") {
           // Add error as callout
@@ -268,6 +291,8 @@ export function useChat(baseUrl: string = "/api") {
 
   const clear = useCallback(() => {
     setMessages([]);
+    setSessionId(null);
+    sessionIdRef.current = null;
   }, []);
 
   const authHeaders = useCallback(async () => {
@@ -304,16 +329,86 @@ export function useChat(baseUrl: string = "/api") {
     if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
   }, [baseUrl, authHeaders]);
 
+  const listSessions = useCallback(async () => {
+    const headers = await authHeaders();
+    const res = await fetch(`${baseUrl}/sessions`, { headers });
+    if (!res.ok) return [];
+    return res.json();
+  }, [baseUrl, authHeaders]);
+
+  const loadSession = useCallback(async (id: string) => {
+    const headers = await authHeaders();
+    const res = await fetch(`${baseUrl}/sessions/${id}/history`, { headers });
+    if (!res.ok) throw new Error(`Load failed: ${res.status}`);
+    const history: { role: string; content: unknown }[] = await res.json();
+
+    const loaded: Message[] = [];
+    for (const msg of history) {
+      if (msg.role === "user") {
+        // Skip tool_result messages
+        if (Array.isArray(msg.content) && msg.content.every((b: Record<string, unknown>) => b.type === "tool_result")) continue;
+        const text = Array.isArray(msg.content)
+          ? msg.content.filter((b: Record<string, unknown>) => b.type === "text").map((b: Record<string, unknown>) => b.text).join("")
+          : String(msg.content || "");
+        if (text) loaded.push({ role: "user", content: text });
+      } else if (msg.role === "assistant") {
+        const blocks = Array.isArray(msg.content) ? msg.content as Record<string, unknown>[] : [];
+        const parts: Part[] = [];
+        for (const b of blocks) {
+          if (b.type === "thinking" && b.thinking) {
+            parts.push({ type: "thinking", thinking: String(b.thinking) });
+          } else if (b.type === "text" && b.text) {
+            parts.push({ type: "text", text: String(b.text) });
+          }
+          // skip tool_use blocks
+        }
+        const contentText = parts.filter((p) => p.type === "text").map((p) => p.text).join("");
+        if (parts.length) loaded.push({ role: "assistant", content: contentText, parts });
+      }
+    }
+
+    setMessages(loaded);
+    setSessionId(id);
+    sessionIdRef.current = id;
+  }, [baseUrl, authHeaders]);
+
+  const deleteSession = useCallback(async (id: string) => {
+    const headers = await authHeaders();
+    const res = await fetch(`${baseUrl}/sessions/${id}`, { method: "DELETE", headers });
+    if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+    // If we deleted the current session, clear it
+    if (sessionIdRef.current === id) {
+      setMessages([]);
+      setSessionId(null);
+      sessionIdRef.current = null;
+    }
+  }, [baseUrl, authHeaders]);
+
+  const renameSession = useCallback(async (id: string, title: string) => {
+    const headers = { "Content-Type": "application/json", ...(await authHeaders()) };
+    const res = await fetch(`${baseUrl}/sessions/${id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ title }),
+    });
+    if (!res.ok) throw new Error(`Rename failed: ${res.status}`);
+  }, [baseUrl, authHeaders]);
+
   return {
     messages,
     isStreaming,
     config,
+    sessionId,
     send,
     stop,
     clear,
     share,
     listShares,
     deleteShare,
+    listSessions,
+    loadSession,
+    deleteSession,
+    renameSession,
     fetchConfig,
     setGetToken,
     uploadFile,
