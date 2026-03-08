@@ -451,6 +451,7 @@ export function Chat({
                   isStreaming={isStreaming}
                   onStop={onStop}
                   onOpenFilePicker={uploadFile ? openFilePicker : undefined}
+                  onOpenFiles={files ? () => { setFilesOpen(true); setFilesTab("files"); files.onNavigate(files.path); } : undefined}
                   attachments={attachments}
                   onRemoveFile={removeFile}
                 />
@@ -1058,31 +1059,9 @@ function InputBox({
 
       {/* Actions row: paperclip left, send right */}
       <div className="flex items-center justify-between px-1 pt-1">
-        <div className="flex items-center">
-          {onOpenFilePicker && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onOpenFilePicker(); }}
-              className="flex size-8 items-center justify-center rounded-2xl text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition cursor-pointer"
-              aria-label="Attach file"
-            >
-              {/* Paperclip */}
-              <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
-              </svg>
-            </button>
-          )}
-          {onOpenFiles && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onOpenFiles(); }}
-              className="flex size-8 items-center justify-center rounded-2xl text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition cursor-pointer"
-              aria-label="Browse files"
-            >
-              <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.06-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-              </svg>
-            </button>
+        <div className="relative flex items-center">
+          {(onOpenFilePicker || onOpenFiles) && (
+            <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} />
           )}
         </div>
         <div>
@@ -1114,5 +1093,68 @@ function InputBox({
         </div>
       </div>
     </motion.div>
+  );
+}
+
+function AttachMenu({ onOpenFilePicker, onOpenFiles }: { onOpenFilePicker?: () => void; onOpenFiles?: () => void }) {
+  const [open, setOpen] = useState(false);
+
+  if (onOpenFilePicker && !onOpenFiles) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onOpenFilePicker(); }}
+        className="flex size-8 items-center justify-center rounded-2xl text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition cursor-pointer"
+        aria-label="Attach file"
+      >
+        <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+        </svg>
+      </button>
+    );
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        className="flex size-8 items-center justify-center rounded-2xl text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition cursor-pointer"
+        aria-label="Attach"
+      >
+        <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+        </svg>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 bottom-full z-50 mb-2 w-44 rounded-lg border border-border bg-background shadow-lg py-1">
+            {onOpenFilePicker && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setOpen(false); onOpenFilePicker(); }}
+                className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+              >
+                <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                </svg>
+                Upload file
+              </button>
+            )}
+            {onOpenFiles && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setOpen(false); onOpenFiles(); }}
+                className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+              >
+                <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.06-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                </svg>
+                Browse files
+              </button>
+            )}
+          </div>
+        </>
+      )}
+    </>
   );
 }
