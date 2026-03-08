@@ -532,14 +532,22 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
     <div className="relative">
       <button
         onClick={() => { setOpen(!open); setShowOrgs(false); }}
-        className="flex size-8 items-center justify-center rounded-lg hover:opacity-80 transition-opacity cursor-pointer"
+        className="flex items-center justify-center rounded-lg hover:opacity-80 transition-opacity cursor-pointer px-1 h-8"
         aria-label="Profile"
       >
-        <div
-          className="size-6 rounded-full bg-secondary text-foreground flex items-center justify-center text-xs font-medium select-none"
-          style={user.imageUrl ? { backgroundImage: `url(${user.imageUrl})`, backgroundSize: "cover" } : undefined}
-        >
-          {!user.imageUrl && (user.name?.charAt(0) || user.email?.charAt(0) || "?")}
+        <div className="flex items-center -space-x-2">
+          {activeOrg?.imageUrl && (
+            <div
+              className="size-6 rounded-full bg-secondary shrink-0 ring-2 ring-background"
+              style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }}
+            />
+          )}
+          <div
+            className="size-6 rounded-full bg-secondary text-foreground flex items-center justify-center text-xs font-medium select-none ring-2 ring-background"
+            style={user.imageUrl ? { backgroundImage: `url(${user.imageUrl})`, backgroundSize: "cover" } : undefined}
+          >
+            {!user.imageUrl && (user.name?.charAt(0) || user.email?.charAt(0) || "?")}
+          </div>
         </div>
       </button>
       {open && (
