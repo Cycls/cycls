@@ -44,11 +44,19 @@ export interface AppConfig {
 }
 
 export function useChat(baseUrl: string = "/api") {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, _setMessages] = useState<Message[]>([]);
+  const setMessages = useCallback((updater: Message[] | ((prev: Message[]) => Message[])) => {
+    _setMessages((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      messagesRef.current = next;
+      return next;
+    });
+  }, []);
   const [isStreaming, setIsStreaming] = useState(false);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
+  const messagesRef = useRef<Message[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const getTokenRef = useRef<(() => Promise<string | null>) | null>(null);
 
@@ -268,16 +276,17 @@ export function useChat(baseUrl: string = "/api") {
         setIsStreaming(false);
         abortRef.current = null;
 
-        // Auto-save session metadata (runs on complete, abort, or error)
+        // Auto-save session with full messages snapshot
         if (sessionIdRef.current) {
           const sid = sessionIdRef.current;
-          const firstUserMsg = [...messages, userMessage].find((m) => m.role === "user");
+          const currentMessages = messagesRef.current;
+          const firstUserMsg = currentMessages.find((m) => m.role === "user");
           const title = (firstUserMsg?.content || "").slice(0, 100);
           const authH = { "Content-Type": "application/json", ...(await authHeaders()) };
           fetch(`${baseUrl}/sessions/${sid}`, {
             method: "PUT",
             headers: authH,
-            body: JSON.stringify({ title }),
+            body: JSON.stringify({ title, messages: currentMessages }),
           }).then((r) => { if (!r.ok) console.error("Session save failed:", r.status); })
             .catch((e) => console.error("Session save error:", e));
         }
@@ -339,38 +348,29 @@ export function useChat(baseUrl: string = "/api") {
 
   const loadSession = useCallback(async (id: string) => {
     const headers = await authHeaders();
-    const res = await fetch(`${baseUrl}/sessions/${id}/history`, { headers });
+    const res = await fetch(`${baseUrl}/sessions/${id}`, { headers });
     if (!res.ok) throw new Error(`Load failed: ${res.status}`);
-    const history: { role: string; content: unknown }[] = await res.json();
-
-    const loaded: Message[] = [];
-    for (const msg of history) {
-      if (msg.role === "user") {
-        // Skip tool_result messages
-        if (Array.isArray(msg.content) && msg.content.every((b: Record<string, unknown>) => b.type === "tool_result")) continue;
-        const text = Array.isArray(msg.content)
-          ? msg.content.filter((b: Record<string, unknown>) => b.type === "text").map((b: Record<string, unknown>) => b.text).join("")
-          : String(msg.content || "");
-        if (text) loaded.push({ role: "user", content: text });
-      } else if (msg.role === "assistant") {
-        const blocks = Array.isArray(msg.content) ? msg.content as Record<string, unknown>[] : [];
-        const parts: Part[] = [];
-        for (const b of blocks) {
-          if (b.type === "thinking" && b.thinking) {
-            parts.push({ type: "thinking", thinking: String(b.thinking) });
-          } else if (b.type === "text" && b.text) {
-            parts.push({ type: "text", text: String(b.text) });
-          }
-          // skip tool_use blocks
-        }
-        const contentText = parts.filter((p) => p.type === "text").map((p) => p.text).join("");
-        if (parts.length) loaded.push({ role: "assistant", content: contentText, parts });
-      }
-    }
+    const session = await res.json();
+    const loaded: Message[] = session.messages || [];
 
     setMessages(loaded);
     setSessionId(id);
     sessionIdRef.current = id;
+
+    // Rebuild attachment URLs with fresh token (after render)
+    const token = getTokenRef.current ? await getTokenRef.current() : null;
+    if (token) {
+      let changed = false;
+      for (const m of loaded) {
+        for (const att of m.attachments || []) {
+          if (att.path) {
+            att.url = `${baseUrl}/files/${att.path}?token=${token}`;
+            changed = true;
+          }
+        }
+      }
+      if (changed) setMessages([...loaded]);
+    }
   }, [baseUrl, authHeaders]);
 
   const deleteSession = useCallback(async (id: string) => {
