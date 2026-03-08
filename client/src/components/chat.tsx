@@ -218,7 +218,7 @@ export function Chat({
                     {shareOpen && (
                       <>
                         <div className="fixed inset-0 z-40" onClick={() => setShareOpen(false)} />
-                        <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-lg border border-border bg-background shadow-lg overflow-hidden">
+                        <div className="fixed right-2 top-12 z-50 mt-2 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-background shadow-lg overflow-hidden sm:absolute sm:right-0 sm:top-full">
                           {shareView === "create" ? (
                             <>
                               <div className="px-4 pt-4 pb-3">
