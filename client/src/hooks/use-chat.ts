@@ -55,6 +55,7 @@ export function useChat(baseUrl: string = "/api") {
   const [isStreaming, setIsStreaming] = useState(false);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
   const messagesRef = useRef<Message[]>([]);
   const abortRef = useRef<AbortController | null>(null);
@@ -347,29 +348,34 @@ export function useChat(baseUrl: string = "/api") {
   }, [baseUrl, authHeaders]);
 
   const loadSession = useCallback(async (id: string) => {
-    const headers = await authHeaders();
-    const res = await fetch(`${baseUrl}/sessions/${id}`, { headers });
-    if (!res.ok) throw new Error(`Load failed: ${res.status}`);
-    const session = await res.json();
-    const loaded: Message[] = session.messages || [];
+    setSessionLoading(true);
+    try {
+      const headers = await authHeaders();
+      const res = await fetch(`${baseUrl}/sessions/${id}`, { headers });
+      if (!res.ok) throw new Error(`Load failed: ${res.status}`);
+      const session = await res.json();
+      const loaded: Message[] = session.messages || [];
 
-    setMessages(loaded);
-    setSessionId(id);
-    sessionIdRef.current = id;
+      setMessages(loaded);
+      setSessionId(id);
+      sessionIdRef.current = id;
 
-    // Rebuild attachment URLs with fresh token (after render)
-    const token = getTokenRef.current ? await getTokenRef.current() : null;
-    if (token) {
-      let changed = false;
-      for (const m of loaded) {
-        for (const att of m.attachments || []) {
-          if (att.path) {
-            att.url = `${baseUrl}/files/${att.path}?token=${token}`;
-            changed = true;
+      // Rebuild attachment URLs with fresh token (after render)
+      const token = getTokenRef.current ? await getTokenRef.current() : null;
+      if (token) {
+        let changed = false;
+        for (const m of loaded) {
+          for (const att of m.attachments || []) {
+            if (att.path) {
+              att.url = `${baseUrl}/files/${att.path}?token=${token}`;
+              changed = true;
+            }
           }
         }
+        if (changed) setMessages([...loaded]);
       }
-      if (changed) setMessages([...loaded]);
+    } finally {
+      setSessionLoading(false);
     }
   }, [baseUrl, authHeaders]);
 
@@ -388,6 +394,7 @@ export function useChat(baseUrl: string = "/api") {
   return {
     messages,
     isStreaming,
+    sessionLoading,
     config,
     sessionId,
     send,
