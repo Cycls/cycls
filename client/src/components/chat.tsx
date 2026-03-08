@@ -78,8 +78,8 @@ export function Chat({
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [filesTab, setFilesTab] = useState<"files" | "shares">("files");
   const [shareOpen, setShareOpen] = useState(false);
-  const [shareView, setShareView] = useState<"create" | "list">("create");
   const [shareTitle, setShareTitle] = useState("");
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
@@ -199,7 +199,6 @@ export function Chat({
                       onClick={() => {
                         if (!shareOpen) {
                           setShareOpen(true);
-                          setShareView("create");
                           setShareTitle(messages.find((m) => m.role === "user")?.content?.slice(0, 100) || "");
                           setShareUrl(null);
                           setShareLoading(false);
@@ -219,165 +218,102 @@ export function Chat({
                       <>
                         <div className="fixed inset-0 z-40" onClick={() => setShareOpen(false)} />
                         <div className="fixed right-2 top-12 z-50 mt-2 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-background shadow-lg overflow-hidden sm:absolute sm:right-0 sm:top-full">
-                          {shareView === "create" ? (
-                            <>
-                              <div className="px-4 pt-4 pb-3">
-                                <div className="flex items-center gap-2 mb-1">
-                                  <svg className="w-4 h-4 text-foreground shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                                  </svg>
-                                  <h3 className="text-sm font-medium text-foreground">Share conversation</h3>
-                                </div>
-                                <p className="text-xs text-muted-foreground">
-                                  Anyone with the link can view.
-                                </p>
-                                <p className="mt-3 mb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">Title</p>
+                          <div className="px-4 pt-4 pb-3">
+                            <div className="flex items-center gap-2 mb-1">
+                              <svg className="w-4 h-4 text-foreground shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                              </svg>
+                              <h3 className="text-sm font-medium text-foreground">Share conversation</h3>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              Anyone with the link can view.
+                            </p>
+                            <p className="mt-3 mb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">Title</p>
+                            <input
+                              type="text"
+                              value={shareTitle}
+                              onChange={(e) => setShareTitle(e.target.value)}
+                              placeholder="Untitled"
+                              className="w-full rounded-md border border-border bg-secondary/50 px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
+                            />
+                          </div>
+
+                          <div className="border-t border-border px-4 py-3">
+                            {shareLoading ? (
+                              <div className="flex items-center justify-center py-2">
+                                <svg className="w-4 h-4 animate-spin text-muted-foreground" viewBox="0 0 24 24" fill="none">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                </svg>
+                                <span className="ml-2 text-xs text-muted-foreground">Creating share link...</span>
+                              </div>
+                            ) : shareUrl ? (
+                              <div className="flex items-center gap-2">
                                 <input
                                   type="text"
-                                  value={shareTitle}
-                                  onChange={(e) => setShareTitle(e.target.value)}
-                                  placeholder="Untitled"
-                                  className="w-full rounded-md border border-border bg-secondary/50 px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
+                                  readOnly
+                                  value={shareUrl}
+                                  className="flex-1 min-w-0 rounded-md border border-border bg-secondary/50 px-2.5 py-1.5 text-xs text-foreground select-all focus:outline-none"
+                                  onFocus={(e) => e.target.select()}
                                 />
-                              </div>
-
-                              <div className="border-t border-border px-4 py-3">
-                                {shareLoading ? (
-                                  <div className="flex items-center justify-center py-2">
-                                    <svg className="w-4 h-4 animate-spin text-muted-foreground" viewBox="0 0 24 24" fill="none">
-                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                                    </svg>
-                                    <span className="ml-2 text-xs text-muted-foreground">Creating share link...</span>
-                                  </div>
-                                ) : shareUrl ? (
-                                  <div className="flex items-center gap-2">
-                                    <input
-                                      type="text"
-                                      readOnly
-                                      value={shareUrl}
-                                      className="flex-1 min-w-0 rounded-md border border-border bg-secondary/50 px-2.5 py-1.5 text-xs text-foreground select-all focus:outline-none"
-                                      onFocus={(e) => e.target.select()}
-                                    />
-                                    <button
-                                      onClick={() => {
-                                        navigator.clipboard.writeText(shareUrl);
-                                        setShareCopied(true);
-                                        setTimeout(() => setShareCopied(false), 2000);
-                                      }}
-                                      className="shrink-0 text-muted-foreground hover:text-foreground transition-colors cursor-pointer p-1.5"
-                                      aria-label="Copy"
-                                    >
-                                      {shareCopied ? (
-                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                        </svg>
-                                      ) : (
-                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                                        </svg>
-                                      )}
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <button
-                                    onClick={() => {
-                                      setShareLoading(true);
-                                      setShareCopied(false);
-                                      onShare(shareTitle).then((url) => {
-                                        setShareUrl(url);
-                                        setShareLoading(false);
-                                      }).catch(() => setShareLoading(false));
-                                    }}
-                                    className="w-full rounded-md border border-border bg-secondary hover:bg-secondary/80 text-foreground py-2 text-xs font-medium transition-colors cursor-pointer"
-                                  >
-                                    Create link
-                                  </button>
-                                )}
-                              </div>
-
-                              {onListShares && (
-                                <div className="border-t border-border">
-                                  <button
-                                    onClick={() => {
-                                      setShareView("list");
-                                      setSharesLoading(true);
-                                      onListShares().then((items) => {
-                                        setShares(items);
-                                        setSharesLoading(false);
-                                      }).catch(() => setSharesLoading(false));
-                                    }}
-                                    className="flex w-full items-center justify-between px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors cursor-pointer"
-                                  >
-                                    Manage shares
-                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                    </svg>
-                                  </button>
-                                </div>
-                              )}
-                            </>
-                          ) : (
-                            <>
-                              <div className="flex items-center gap-2 px-4 pt-3 pb-2">
                                 <button
-                                  onClick={() => setShareView("create")}
-                                  className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(shareUrl);
+                                    setShareCopied(true);
+                                    setTimeout(() => setShareCopied(false), 2000);
+                                  }}
+                                  className="shrink-0 text-muted-foreground hover:text-foreground transition-colors cursor-pointer p-1.5"
+                                  aria-label="Copy"
                                 >
-                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                                  </svg>
-                                </button>
-                                <h3 className="text-sm font-medium text-foreground">Shared links</h3>
-                              </div>
-                              <div className="border-t border-border max-h-64 overflow-y-auto">
-                                {sharesLoading ? (
-                                  <div className="flex items-center justify-center py-6">
-                                    <svg className="w-4 h-4 animate-spin text-muted-foreground" viewBox="0 0 24 24" fill="none">
-                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                  {shareCopied ? (
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                                     </svg>
-                                  </div>
-                                ) : shares.length === 0 ? (
-                                  <div className="py-6 text-center text-xs text-muted-foreground">No shared links yet.</div>
-                                ) : (
-                                  shares.map((s) => (
-                                    <div key={s.id} className="group flex items-center gap-2 px-4 py-2.5 hover:bg-secondary/50 transition-colors">
-                                      <div className="flex-1 min-w-0">
-                                        <a
-                                          href={`/shared/${s.path}`}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="block text-xs font-medium text-foreground truncate hover:underline"
-                                        >
-                                          {s.title || "Untitled"}
-                                        </a>
-                                        <div className="flex items-center gap-1.5 mt-0.5">
-                                          <span className="text-[10px] text-muted-foreground">
-                                            {new Date(s.sharedAt).toLocaleDateString()}
-                                          </span>
-                                        </div>
-                                      </div>
-                                      {onDeleteShare && (
-                                        <button
-                                          onClick={() => {
-                                            onDeleteShare(s.id).then(() => {
-                                              setShares((prev) => prev.filter((x) => x.id !== s.id));
-                                            });
-                                          }}
-                                          className="shrink-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 transition-all cursor-pointer p-1 rounded hover:bg-red-500/10"
-                                          aria-label="Delete share"
-                                        >
-                                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                          </svg>
-                                        </button>
-                                      )}
-                                    </div>
-                                  ))
-                                )}
+                                  ) : (
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                    </svg>
+                                  )}
+                                </button>
                               </div>
-                            </>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setShareLoading(true);
+                                  setShareCopied(false);
+                                  onShare(shareTitle).then((url) => {
+                                    setShareUrl(url);
+                                    setShareLoading(false);
+                                  }).catch(() => setShareLoading(false));
+                                }}
+                                className="w-full rounded-md border border-border bg-secondary hover:bg-secondary/80 text-foreground py-2 text-xs font-medium transition-colors cursor-pointer"
+                              >
+                                Create link
+                              </button>
+                            )}
+                          </div>
+
+                          {onListShares && (
+                            <div className="border-t border-border">
+                              <button
+                                onClick={() => {
+                                  setShareOpen(false);
+                                  setFilesTab("shares");
+                                  setFilesOpen(true);
+                                  setSharesLoading(true);
+                                  onListShares().then((items) => {
+                                    setShares(items);
+                                    setSharesLoading(false);
+                                  }).catch(() => setSharesLoading(false));
+                                }}
+                                className="flex w-full items-center justify-between px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors cursor-pointer"
+                              >
+                                Manage shares
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                </svg>
+                              </button>
+                            </div>
                           )}
                         </div>
                       </>
@@ -388,7 +324,7 @@ export function Chat({
             )}
             {files && (
               <button
-                onClick={() => { setFilesOpen(!filesOpen); if (!filesOpen) files.onNavigate(files.path); }}
+                onClick={() => { setFilesOpen(!filesOpen); if (!filesOpen) { setFilesTab("files"); files.onNavigate(files.path); } }}
                 className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
                 aria-label="Files"
               >
@@ -485,9 +421,9 @@ export function Chat({
         )}
       </LayoutGroup>
 
-      {/* Files panel */}
+      {/* Files / Shares panel */}
       <AnimatePresence>
-        {filesOpen && files && (
+        {filesOpen && (files || filesTab === "shares") && (
           <>
             <motion.div
               initial={{ opacity: 0 }}
@@ -504,7 +440,117 @@ export function Chat({
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
               className="fixed top-0 right-0 bottom-0 z-50 w-full sm:w-[480px] border-l border-border bg-background flex flex-col"
             >
-              <Files {...files} onClose={() => setFilesOpen(false)} />
+              {/* Tab bar (only show when both files and shares are available) */}
+              {files && onListShares && (
+                <div className="flex items-center border-b border-border px-4 sm:px-6">
+                  <button
+                    onClick={() => { setFilesTab("files"); files.onNavigate(files.path); }}
+                    className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "files" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                  >
+                    Files
+                  </button>
+                  <button
+                    onClick={() => {
+                      setFilesTab("shares");
+                      if (!shares.length && !sharesLoading) {
+                        setSharesLoading(true);
+                        onListShares().then((items) => { setShares(items); setSharesLoading(false); }).catch(() => setSharesLoading(false));
+                      }
+                    }}
+                    className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                  >
+                    Shares
+                  </button>
+                  <div className="flex-1" />
+                  <button
+                    onClick={() => setFilesOpen(false)}
+                    className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                    aria-label="Close"
+                  >
+                    <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              )}
+              {filesTab === "files" && files ? (
+                <Files {...files} onClose={!onListShares ? () => setFilesOpen(false) : undefined} />
+              ) : filesTab === "shares" ? (
+                <div className="flex h-full flex-col">
+                  {/* Shares toolbar (only when no tab bar) */}
+                  {!files && (
+                    <div className="flex items-center justify-between border-b border-border px-4 py-3 sm:px-6">
+                      <span className="text-sm font-medium text-foreground">Shares</span>
+                      <button
+                        onClick={() => setFilesOpen(false)}
+                        className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                        aria-label="Close"
+                      >
+                        <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  )}
+                  <div className="flex-1 overflow-y-auto">
+                    {sharesLoading ? (
+                      <div className="flex items-center justify-center py-20">
+                        <svg className="size-5 animate-spin text-muted-foreground" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                      </div>
+                    ) : shares.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+                        <svg className="size-10 mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                        </svg>
+                        <p className="text-sm">No shared links yet</p>
+                        <p className="text-xs mt-1">Share a conversation to see it here</p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-border">
+                        {shares.map((s) => (
+                          <div key={s.id} className="group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer"
+                            onClick={() => window.open(`/shared/${s.path}`, "_blank")}
+                          >
+                            <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
+                              <svg className="size-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                              </svg>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <span className="text-sm text-foreground truncate block">{s.title || "Untitled"}</span>
+                            </div>
+                            <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
+                              {new Date(s.sharedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                            </span>
+                            {onDeleteShare && (
+                              <div className="relative shrink-0">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onDeleteShare(s.id).then(() => {
+                                      setShares((prev) => prev.filter((x) => x.id !== s.id));
+                                    });
+                                  }}
+                                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 hover:text-red-500 hover:bg-red-500/10 transition-all cursor-pointer"
+                                  aria-label="Delete share"
+                                >
+                                  <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.181 8.68a4 4 0 00-5.34.638l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.34-.638l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4l16 16" />
+                                  </svg>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
             </motion.div>
           </>
         )}

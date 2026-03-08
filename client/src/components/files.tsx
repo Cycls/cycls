@@ -192,7 +192,7 @@ export function Files({
             onClick={() => navigate("")}
             className={`shrink-0 transition-colors cursor-pointer ${path ? "text-muted-foreground hover:text-foreground" : "text-foreground font-medium"}`}
           >
-            Files
+            workspace
           </button>
           {segments.map((seg, i) => {
             const segPath = segments.slice(0, i + 1).join("/");
@@ -383,7 +383,7 @@ export function Files({
                   <div className="relative shrink-0">
                     <button
                       onClick={(e) => { e.stopPropagation(); setMenuOpen(menuOpen === entry.name ? null : entry.name); }}
-                      className="flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground hover:bg-secondary transition-all cursor-pointer"
+                      className="flex size-7 items-center justify-center rounded-md text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 hover:text-foreground hover:bg-secondary transition-all cursor-pointer"
                       aria-label="Actions"
                     >
                       <svg className="size-4" fill="currentColor" viewBox="0 0 24 24">
