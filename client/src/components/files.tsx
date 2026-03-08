@@ -287,11 +287,9 @@ export function Files({
         </AnimatePresence>
 
         {/* Navigation loading bar */}
-        {loading && entries.length > 0 && (
-          <div className="h-0.5 overflow-hidden">
-            <div className="h-full w-1/3 bg-muted-foreground/30 rounded-full animate-[slide_1s_ease-in-out_infinite]" />
-          </div>
-        )}
+        <div className="h-0.5 overflow-hidden">
+          {loading && entries.length > 0 && <div className="h-full w-1/3 bg-muted-foreground/30 rounded-full animate-[slide_1s_ease-in-out_infinite]" />}
+        </div>
 
         {loading && entries.length === 0 ? (
           <div className="flex items-center justify-center py-20">
