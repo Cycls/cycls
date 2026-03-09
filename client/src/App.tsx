@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDarkMode } from "./hooks/use-dark-mode";
 import {
   ClerkProvider,
@@ -39,6 +39,18 @@ function ChatWithAuth() {
   useEffect(() => {
     fetchConfig();
   }, [fetchConfig]);
+
+  // Auto-send ?q= param on first load
+  const qSent = useRef(false);
+  useEffect(() => {
+    if (qSent.current) return;
+    const q = new URLSearchParams(window.location.search).get("q");
+    if (q) {
+      qSent.current = true;
+      window.history.replaceState({}, "", window.location.pathname);
+      send(q);
+    }
+  }, [send]);
 
   const handleShare = async (title: string = "") => {
     const author = user ? {
@@ -116,6 +128,18 @@ function ChatNoAuth() {
     fetchConfig();
   }, [fetchConfig]);
 
+  // Auto-send ?q= param on first load
+  const qSent = useRef(false);
+  useEffect(() => {
+    if (qSent.current) return;
+    const q = new URLSearchParams(window.location.search).get("q");
+    if (q) {
+      qSent.current = true;
+      window.history.replaceState({}, "", window.location.pathname);
+      send(q);
+    }
+  }, [send]);
+
   return (
     <Chat
       messages={messages}
@@ -152,14 +176,13 @@ function SSOCallback() {
         if (result.status === "complete" && result.createdSessionId) {
           await setSignUpActive({ session: result.createdSessionId });
         }
-        window.location.href = "/";
-        return;
-      }
-      // Existing user: complete sign-in
-      if (signIn.status === "complete" && signIn.createdSessionId) {
+      } else if (signIn.status === "complete" && signIn.createdSessionId) {
         await setSignInActive({ session: signIn.createdSessionId });
       }
-      window.location.href = "/";
+      // Restore ?q= param through redirect
+      const q = sessionStorage.getItem("cycls_q");
+      if (q) sessionStorage.removeItem("cycls_q");
+      window.location.href = q ? `/?q=${encodeURIComponent(q)}` : "/";
     };
     handle().catch(console.error);
   }, [signIn, signUp, setSignInActive, setSignUpActive]);
@@ -178,10 +201,14 @@ function CustomSignIn() {
     try {
       setIsLoading(true);
       setError("");
+      // Preserve ?q= through OAuth redirect
+      const q = new URLSearchParams(window.location.search).get("q");
+      if (q) sessionStorage.setItem("cycls_q", q);
+      const redirectUrlComplete = q ? `/?q=${encodeURIComponent(q)}` : "/";
       await signIn.authenticateWithRedirect({
         strategy: "oauth_google",
         redirectUrl: "/sso-callback",
-        redirectUrlComplete: "/",
+        redirectUrlComplete,
       });
     } catch (err: unknown) {
       const clerkErr = err as { errors?: { message: string }[] };
