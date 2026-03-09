@@ -192,8 +192,9 @@ export function Chat({
     setCanvasOpen(true);
   }, []);
 
-  // Auto-open canvas when a canvas part appears (streaming or final)
+  // Auto-open canvas during streaming only (not on session load)
   useEffect(() => {
+    if (!isStreaming) return;
     const lastMsg = messages[messages.length - 1];
     if (lastMsg?.role !== "assistant") return;
     const parts = lastMsg.parts || [];
@@ -207,7 +208,7 @@ export function Chat({
       });
       setCanvasOpen(true);
     }
-  }, [messages]);
+  }, [messages, isStreaming]);
 
   const toggleDark = () => {
     document.body.classList.toggle("dark");
@@ -230,7 +231,7 @@ export function Chat({
             {messages.length > 0 && (
               <>
                 <button
-                  onClick={onClear}
+                  onClick={() => { onClear(); setCanvasOpen(false); }}
                   className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
                   aria-label="New chat"
                 >
@@ -643,7 +644,7 @@ export function Chat({
                   sessions={sessions}
                   loading={sessionsLoading}
                   activeId={sessionId}
-                  onLoad={(id) => { onLoadSession?.(id); if (window.innerWidth < 640) setFilesOpen(false); }}
+                  onLoad={(id) => { onLoadSession?.(id); setCanvasOpen(false); if (window.innerWidth < 640) setFilesOpen(false); }}
                   onDelete={(id) => { setSessionsLoading(true); onDeleteSession?.(id).then(() => setSessions((prev) => prev.filter((x) => x.id !== id))).finally(() => setSessionsLoading(false)); }}
                 />
               ) : null}
