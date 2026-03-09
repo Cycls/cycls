@@ -100,7 +100,7 @@ export function Chat({
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { scrollRef, contentRef } = useStickToBottom();
+  const { scrollRef, contentRef, scrollToBottom } = useStickToBottom();
 
   // Reset sidebar data when org changes
   useEffect(() => {
@@ -171,7 +171,8 @@ export function Chat({
     setInput("");
     setAttachments([]);
     onSend(text, sendAttachments);
-  }, [input, isStreaming, onSend, attachments]);
+    setTimeout(() => scrollToBottom(), 0);
+  }, [input, isStreaming, onSend, attachments, scrollToBottom]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const isMobile = window.matchMedia("(pointer: coarse)").matches;
@@ -204,7 +205,7 @@ export function Chat({
             {messages.length > 0 && (
               <>
                 <button
-                  onClick={onClear}
+                  onClick={() => { onClear(); setTimeout(() => textareaRef.current?.focus(), 0); }}
                   className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
                   aria-label="New chat"
                 >
