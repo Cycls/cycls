@@ -13,10 +13,12 @@ export const CalloutPart = memo(function CalloutPart({
   callout,
   style = "info",
   title,
+  onRetry,
 }: {
   callout: string;
   style?: string;
   title?: string;
+  onRetry?: () => void;
 }) {
   return (
     <div
@@ -27,6 +29,15 @@ export const CalloutPart = memo(function CalloutPart({
     >
       {title && <div className="font-semibold mb-1">{title}</div>}
       <div>{callout}</div>
+      {onRetry && style === "error" && (
+        <button
+          onClick={onRetry}
+          type="button"
+          className="mt-2 px-3 py-1 text-xs font-medium rounded-md bg-red-500/20 hover:bg-red-500/30 text-red-700 dark:text-red-300 transition-colors cursor-pointer"
+        >
+          Retry
+        </button>
+      )}
     </div>
   );
 });

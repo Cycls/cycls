@@ -60,6 +60,7 @@ export function useChat(baseUrl: string = "") {
   const messagesRef = useRef<Message[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const getTokenRef = useRef<(() => Promise<string | null>) | null>(null);
+  const lastRequestRef = useRef<{ text: string; attachments?: Attachment[] } | null>(null);
 
   const setGetToken = useCallback(
     (fn: () => Promise<string | null>) => {
@@ -115,10 +116,13 @@ export function useChat(baseUrl: string = "") {
       setMessages((prev) => [...prev, userMessage, assistantMessage]);
       setIsStreaming(true);
 
-      const controller = new AbortController();
-      abortRef.current = controller;
+      // Store for retry
+      lastRequestRef.current = { text, attachments };
 
-      try {
+      const doFetch = async () => {
+        const controller = new AbortController();
+        abortRef.current = controller;
+
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
         };
@@ -128,7 +132,8 @@ export function useChat(baseUrl: string = "") {
         }
 
         // Build request messages (all except the empty assistant we just added)
-        const requestMessages = [...messages, userMessage].map((m) => {
+        const currentMsgs = messagesRef.current;
+        const requestMessages = currentMsgs.slice(0, -1).map((m) => {
           const withPaths = m.attachments?.filter((a) => a.path);
           let content: string | Record<string, string>[] = m.content;
           if (withPaths && withPaths.length > 0) {
@@ -252,26 +257,49 @@ export function useChat(baseUrl: string = "") {
           return updated;
         });
 
+        // Success — clear retry ref
+        lastRequestRef.current = null;
+      };
+
+      try {
+        await doFetch();
       } catch (err) {
         if ((err as Error).name !== "AbortError") {
-          // Add error as callout
-          setMessages((prev) => {
-            const updated = [...prev];
-            const last = updated[updated.length - 1];
-            if (last.role === "assistant") {
-              updated[updated.length - 1] = {
-                ...last,
-                parts: [
-                  {
-                    type: "callout",
-                    callout: `Connection error: ${(err as Error).message}`,
-                    style: "error",
-                  },
-                ],
-              };
+          // Auto-retry once after a brief delay
+          try {
+            // Reset assistant message for retry
+            setMessages((prev) => {
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last.role === "assistant") {
+                updated[updated.length - 1] = { ...last, content: "", parts: [] };
+              }
+              return updated;
+            });
+            await new Promise((r) => setTimeout(r, 1000));
+            await doFetch();
+          } catch (retryErr) {
+            if ((retryErr as Error).name !== "AbortError") {
+              // Both attempts failed — show error with retry button
+              setMessages((prev) => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                if (last.role === "assistant") {
+                  updated[updated.length - 1] = {
+                    ...last,
+                    parts: [
+                      {
+                        type: "callout",
+                        callout: `Connection error: ${(retryErr as Error).message}`,
+                        style: "error",
+                      },
+                    ],
+                  };
+                }
+                return updated;
+              });
             }
-            return updated;
-          });
+          }
         }
       } finally {
         setIsStreaming(false);
@@ -295,6 +323,22 @@ export function useChat(baseUrl: string = "") {
     },
     [messages, isStreaming, baseUrl],
   );
+
+  const retry = useCallback(() => {
+    if (isStreaming || !lastRequestRef.current) return;
+    const { text, attachments } = lastRequestRef.current;
+    // Remove the last assistant message (the error one)
+    setMessages((prev) => {
+      const updated = [...prev];
+      if (updated.length >= 2 && updated[updated.length - 1].role === "assistant") {
+        // Remove both the failed assistant and the user message — send() will re-add them
+        updated.splice(updated.length - 2, 2);
+      }
+      return updated;
+    });
+    // Re-send after state update
+    setTimeout(() => send(text, attachments), 0);
+  }, [isStreaming, send]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -398,6 +442,7 @@ export function useChat(baseUrl: string = "") {
     config,
     sessionId,
     send,
+    retry,
     stop,
     clear,
     share,

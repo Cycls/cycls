@@ -28,6 +28,7 @@ export function Chat({
   onSend,
   onStop,
   onClear,
+  onRetry,
   onShare,
   onListShares,
   onDeleteShare,
@@ -54,6 +55,7 @@ export function Chat({
   onSend: (text: string, attachments?: Attachment[]) => void;
   onStop: () => void;
   onClear: () => void;
+  onRetry?: () => void;
   onShare?: (title: string) => Promise<string>;
   onListShares?: () => Promise<{ id: string; title: string; sharedAt: string; path: string }[]>;
   onDeleteShare?: (id: string) => Promise<void>;
@@ -426,17 +428,22 @@ export function Chat({
           <>
             <div ref={scrollRef} className="flex-1 overflow-y-auto">
               <div ref={contentRef} className="flex w-full flex-col items-center py-4">
-                {messages.map((msg, i) => (
-                  <MessageBubble
-                    key={i}
-                    message={msg}
-                    isStreaming={
-                      isStreaming &&
-                      i === messages.length - 1 &&
-                      msg.role === "assistant"
-                    }
-                  />
-                ))}
+                {messages.map((msg, i) => {
+                  const isLast = i === messages.length - 1;
+                  const hasError = msg.role === "assistant" && msg.parts?.some((p) => p.type === "callout" && p.style === "error");
+                  return (
+                    <MessageBubble
+                      key={i}
+                      message={msg}
+                      isStreaming={
+                        isStreaming &&
+                        isLast &&
+                        msg.role === "assistant"
+                      }
+                      onRetry={isLast && hasError && !isStreaming ? onRetry : undefined}
+                    />
+                  );
+                })}
               </div>
             </div>
             <div className="shrink-0 px-6 pb-4 pt-2">
