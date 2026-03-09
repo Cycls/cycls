@@ -28,7 +28,8 @@ TOOLS = [
     auth=True,      # web/config
     analytics=True, # web=["Auth", "Analytics"]
     copy=[".env"], 
-    force_rebuild=False
+    force_rebuild=False,
+    theme="wafi"
 ) 
 async def super(context):
     # yield f"{context.user}\n\n"
