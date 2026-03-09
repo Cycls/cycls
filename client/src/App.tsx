@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useDarkMode } from "./hooks/use-dark-mode";
 import {
+  AuthenticateWithRedirectCallback,
   ClerkProvider,
   SignedIn,
   SignedOut,
@@ -9,7 +10,6 @@ import {
   useOrganization,
   useOrganizationList,
   useSignIn,
-  useSignUp,
   useUser,
 } from "@clerk/clerk-react";
 import { useSubscription } from "@clerk/clerk-react/experimental";
@@ -164,30 +164,15 @@ function ChatNoAuth() {
 }
 
 function SSOCallback() {
-  const { signIn, setActive: setSignInActive } = useSignIn();
-  const { signUp, setActive: setSignUpActive } = useSignUp();
-
-  useEffect(() => {
-    if (!signIn || !signUp) return;
-    const handle = async () => {
-      // New user: OAuth succeeded but no account exists — transfer to sign-up
-      if (signIn.firstFactorVerification?.status === "transferable") {
-        const result = await signUp.create({ transfer: true });
-        if (result.status === "complete" && result.createdSessionId) {
-          await setSignUpActive({ session: result.createdSessionId });
-        }
-      } else if (signIn.status === "complete" && signIn.createdSessionId) {
-        await setSignInActive({ session: signIn.createdSessionId });
-      }
-      // Restore ?q= param through redirect
-      const q = sessionStorage.getItem("cycls_q");
-      if (q) sessionStorage.removeItem("cycls_q");
-      window.location.href = q ? `/?q=${encodeURIComponent(q)}` : "/";
-    };
-    handle().catch(console.error);
-  }, [signIn, signUp, setSignInActive, setSignUpActive]);
-
-  return null;
+  const q = sessionStorage.getItem("cycls_q");
+  if (q) sessionStorage.removeItem("cycls_q");
+  const dest = q ? `/?q=${encodeURIComponent(q)}` : "/";
+  return (
+    <AuthenticateWithRedirectCallback
+      signInForceRedirectUrl={dest}
+      signUpForceRedirectUrl={dest}
+    />
+  );
 }
 
 function CustomSignIn() {
