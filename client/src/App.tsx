@@ -10,6 +10,7 @@ import {
   useOrganization,
   useOrganizationList,
   useSignIn,
+  useSignUp,
   useUser,
 } from "@clerk/clerk-react";
 import { useSubscription } from "@clerk/clerk-react/experimental";
@@ -141,6 +142,7 @@ function ChatNoAuth() {
 
 function CustomSignIn() {
   const { isLoaded, signIn } = useSignIn();
+  const { signUp } = useSignUp();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -156,7 +158,24 @@ function CustomSignIn() {
         redirectUrlComplete: "/",
       });
     } catch (err: unknown) {
-      const clerkErr = err as { errors?: { message: string }[] };
+      const clerkErr = err as { errors?: { code: string; message: string }[] };
+      const code = clerkErr.errors?.[0]?.code;
+      // New user — start sign-up flow instead
+      if (code === "external_account_not_found" && signUp) {
+        try {
+          await signUp.authenticateWithRedirect({
+            strategy: "oauth_google",
+            redirectUrl: "/sso-callback",
+            redirectUrlComplete: "/",
+          });
+          return;
+        } catch (signUpErr: unknown) {
+          const suErr = signUpErr as { errors?: { message: string }[] };
+          setError(suErr.errors?.[0]?.message || "Sign up failed");
+          setIsLoading(false);
+          return;
+        }
+      }
       setError(clerkErr.errors?.[0]?.message || "Sign in failed");
       setIsLoading(false);
     }
