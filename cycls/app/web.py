@@ -167,11 +167,8 @@ def web(func, config):
     # ---- SPA fallback routes (before static mounts) ----
 
     @app.get("/sso-callback")
-    async def sso_callback():
-        return FileResponse(Path(config.public_path) / "index.html")
-
     @app.get("/shared/{path:path}")
-    async def shared_spa(path: str):
+    async def spa_fallback(path: str = ""):
         return FileResponse(Path(config.public_path) / "index.html")
 
     # ---- Static mounts (must be last) ----
