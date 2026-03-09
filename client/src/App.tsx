@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useDarkMode } from "./hooks/use-dark-mode";
 import {
-  AuthenticateWithRedirectCallback,
   ClerkProvider,
   SignedIn,
   SignedOut,
@@ -140,9 +139,36 @@ function ChatNoAuth() {
   );
 }
 
+function SSOCallback() {
+  const { signIn, setActive: setSignInActive } = useSignIn();
+  const { signUp, setActive: setSignUpActive } = useSignUp();
+
+  useEffect(() => {
+    if (!signIn || !signUp) return;
+    const handle = async () => {
+      // New user: OAuth succeeded but no account exists — transfer to sign-up
+      if (signIn.firstFactorVerification?.status === "transferable") {
+        const result = await signUp.create({ transfer: true });
+        if (result.status === "complete" && result.createdSessionId) {
+          await setSignUpActive({ session: result.createdSessionId });
+        }
+        window.location.href = "/";
+        return;
+      }
+      // Existing user: complete sign-in
+      if (signIn.status === "complete" && signIn.createdSessionId) {
+        await setSignInActive({ session: signIn.createdSessionId });
+      }
+      window.location.href = "/";
+    };
+    handle().catch(console.error);
+  }, [signIn, signUp, setSignInActive, setSignUpActive]);
+
+  return null;
+}
+
 function CustomSignIn() {
   const { isLoaded, signIn } = useSignIn();
-  const { signUp } = useSignUp();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -158,24 +184,7 @@ function CustomSignIn() {
         redirectUrlComplete: "/",
       });
     } catch (err: unknown) {
-      const clerkErr = err as { errors?: { code: string; message: string }[] };
-      const code = clerkErr.errors?.[0]?.code;
-      // New user — start sign-up flow instead
-      if (code === "external_account_not_found" && signUp) {
-        try {
-          await signUp.authenticateWithRedirect({
-            strategy: "oauth_google",
-            redirectUrl: "/sso-callback",
-            redirectUrlComplete: "/",
-          });
-          return;
-        } catch (signUpErr: unknown) {
-          const suErr = signUpErr as { errors?: { message: string }[] };
-          setError(suErr.errors?.[0]?.message || "Sign up failed");
-          setIsLoading(false);
-          return;
-        }
-      }
+      const clerkErr = err as { errors?: { message: string }[] };
       setError(clerkErr.errors?.[0]?.message || "Sign in failed");
       setIsLoading(false);
     }
@@ -288,7 +297,7 @@ export default function App() {
   if (window.location.pathname === "/sso-callback") {
     return (
       <ClerkProvider publishableKey={clerkKey}>
-        <AuthenticateWithRedirectCallback />
+        <SSOCallback />
       </ClerkProvider>
     );
   }

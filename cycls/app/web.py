@@ -164,7 +164,11 @@ def web(func, config):
     app.include_router(files_router(required_auth))
     app.include_router(share_router(required_auth))
 
-    # ---- SPA fallback for /shared/ (before static mounts) ----
+    # ---- SPA fallback routes (before static mounts) ----
+
+    @app.get("/sso-callback")
+    async def sso_callback():
+        return FileResponse(Path(config.public_path) / "index.html")
 
     @app.get("/shared/{path:path}")
     async def shared_spa(path: str):
