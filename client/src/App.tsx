@@ -20,7 +20,7 @@ import { useChat, AppConfig } from "./hooks/use-chat";
 import { useFiles } from "./hooks/use-files";
 
 function ChatWithAuth() {
-  const { messages, isStreaming, sessionLoading, config, sessionId, send, stop, clear, share, listShares, deleteShare, listSessions, loadSession, deleteSession, fetchConfig, setGetToken, uploadFile } =
+  const { messages, isStreaming, sessionLoading, config, sessionId, send, retry, stop, clear, share, listShares, deleteShare, listSessions, loadSession, deleteSession, fetchConfig, setGetToken, uploadFile } =
     useChat();
   const { entries, path, loading, list, upload, mkdir, rename, remove, openFile, setGetToken: setFilesToken } =
     useFiles();
@@ -63,6 +63,7 @@ function ChatWithAuth() {
       onSend={send}
       onStop={stop}
       onClear={clear}
+      onRetry={retry}
       onShare={handleShare}
       onListShares={listShares}
       onDeleteShare={deleteShare}
@@ -106,7 +107,7 @@ function ChatWithAuth() {
 }
 
 function ChatNoAuth() {
-  const { messages, isStreaming, config, send, stop, clear, fetchConfig, uploadFile } =
+  const { messages, isStreaming, config, send, retry, stop, clear, fetchConfig, uploadFile } =
     useChat();
   const { entries, path, loading, list, upload, mkdir, rename, remove, openFile } =
     useFiles();
@@ -122,6 +123,7 @@ function ChatNoAuth() {
       onSend={send}
       onStop={stop}
       onClear={clear}
+      onRetry={retry}
       title={config?.header}
       uploadFile={uploadFile}
       files={{

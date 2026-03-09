@@ -10,7 +10,7 @@ import { ImagePart } from "./parts/image-part";
 import { StepPart } from "./parts/step-part";
 import { cn } from "../lib/utils";
 
-function renderPart(part: Part, index: number, isStreaming?: boolean) {
+function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: () => void) {
   switch (part.type) {
     case "text":
       return <TextPart key={index} text={part.text || ""} />;
@@ -34,6 +34,7 @@ function renderPart(part: Part, index: number, isStreaming?: boolean) {
           callout={part.callout || ""}
           style={part.style}
           title={part.title}
+          onRetry={part.style === "error" ? onRetry : undefined}
         />
       );
     case "image":
@@ -85,9 +86,11 @@ function groupParts(parts: Part[]) {
 export function MessageBubble({
   message,
   isStreaming,
+  onRetry,
 }: {
   message: Message;
   isStreaming?: boolean;
+  onRetry?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -158,10 +161,10 @@ export function MessageBubble({
         {groupParts(parts).map((group, gi) =>
           group.type === "step" ? (
             <div key={gi} className="my-3 flex flex-col">
-              {group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming))}
+              {group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming, onRetry))}
             </div>
           ) : (
-            group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming))
+            group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming, onRetry))
           )
         )}
 
