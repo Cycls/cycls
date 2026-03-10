@@ -3,7 +3,7 @@
 import asyncio, base64, json, os, pathlib
 from cycls.app.state import ensure_workspace, history_path, load_history, save_history
 
-COMPACT_THRESHOLD = 150_000
+COMPACT_THRESHOLD = 100_000
 MAX_ATTACHMENTS = 5
 MAX_RETRIES = 3
 _RETRYABLE = ("overloaded", "rate limit", "too many requests", "429", "502", "503", "504")
