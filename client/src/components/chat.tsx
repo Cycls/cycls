@@ -469,7 +469,7 @@ export function Chat({
 
       {/* Files / Shares / Sessions panel */}
       <AnimatePresence>
-        {filesOpen && (files || filesTab === "shares" || filesTab === "sessions") && (
+        {filesOpen && (
           <>
             <motion.div
               initial={{ opacity: 0 }}
@@ -534,37 +534,18 @@ export function Chat({
                 </div>
               )}
               {filesTab === "files" && files ? (
-                <Files {...files} onClose={!onListShares && !onListSessions ? () => setFilesOpen(false) : undefined} />
+                <Files {...files} />
               ) : filesTab === "shares" ? (
                 <div className="flex h-full flex-col">
-                  {/* Shares toolbar (only when no tab bar) */}
-                  {!files && !onListSessions && (
-                    <div className="flex items-center justify-between border-b border-border px-4 py-3 sm:px-6">
-                      <span className="text-sm font-medium text-foreground">Shares</span>
-                      <button
-                        onClick={() => setFilesOpen(false)}
-                        className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                        aria-label="Close"
-                      >
-                        <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </div>
-                  )}
                   <div className="flex-1 overflow-y-auto">
                     {sharesLoading ? (
-                      <div className="h-0.5 overflow-hidden">
-                        <div className="h-full w-1/3 bg-muted-foreground/30 rounded-full animate-[slide_1s_ease-in-out_infinite]" />
-                      </div>
+                      <LoadingBar />
                     ) : shares.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-                        <svg className="size-10 mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                        </svg>
-                        <p className="text-sm">No shared links yet</p>
-                        <p className="text-xs mt-1">Share a conversation to see it here</p>
-                      </div>
+                      <EmptyState
+                        icon={<svg className="size-full" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>}
+                        title="No shared links yet"
+                        subtitle="Share a conversation to see it here"
+                      />
                     ) : (
                       <div className="divide-y divide-border">
                         {shares.map((s) => (
@@ -580,7 +561,7 @@ export function Chat({
                               <span className="text-sm text-foreground truncate block">{s.title || "Untitled"}</span>
                             </div>
                             <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
-                              {new Date(s.sharedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                              {formatShortDate(s.sharedAt)}
                             </span>
                             {onDeleteShare && (
                               <div className="relative shrink-0">
@@ -983,6 +964,28 @@ function InputBox({
   );
 }
 
+function LoadingBar() {
+  return (
+    <div className="h-0.5 overflow-hidden">
+      <div className="h-full w-1/3 bg-muted-foreground/30 rounded-full animate-[slide_1s_ease-in-out_infinite]" />
+    </div>
+  );
+}
+
+function EmptyState({ icon, title, subtitle }: { icon: React.ReactNode; title: string; subtitle: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+      <div className="size-10 mb-3 opacity-30">{icon}</div>
+      <p className="text-sm">{title}</p>
+      <p className="text-xs mt-1">{subtitle}</p>
+    </div>
+  );
+}
+
+function formatShortDate(iso: string) {
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 function SessionsPanel({ sessions, loading, activeId, onLoad, onDelete }: {
   sessions: { id: string; title: string; updatedAt: string }[];
   loading: boolean;
@@ -990,23 +993,15 @@ function SessionsPanel({ sessions, loading, activeId, onLoad, onDelete }: {
   onLoad: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
-  if (loading) {
-    return (
-      <div className="h-0.5 overflow-hidden">
-        <div className="h-full w-1/3 bg-muted-foreground/30 rounded-full animate-[slide_1s_ease-in-out_infinite]" />
-      </div>
-    );
-  }
+  if (loading) return <LoadingBar />;
 
   if (sessions.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-        <svg className="size-10 mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
-        </svg>
-        <p className="text-sm">No sessions yet</p>
-        <p className="text-xs mt-1">Start a conversation to see it here</p>
-      </div>
+      <EmptyState
+        icon={<svg className="size-full" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" /></svg>}
+        title="No sessions yet"
+        subtitle="Start a conversation to see it here"
+      />
     );
   }
 
@@ -1025,7 +1020,7 @@ function SessionsPanel({ sessions, loading, activeId, onLoad, onDelete }: {
           </div>
           <span className="flex-1 min-w-0 text-sm text-foreground truncate">{s.title || "Untitled"}</span>
           <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
-            {s.updatedAt ? new Date(s.updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : ""}
+            {s.updatedAt ? formatShortDate(s.updatedAt) : ""}
           </span>
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(s.id); }}

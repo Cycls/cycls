@@ -111,7 +111,6 @@ export function Files({
   onRename,
   onDelete,
   onOpenFile,
-  onClose,
 }: {
   entries: FileEntry[];
   path: string;
@@ -122,7 +121,6 @@ export function Files({
   onRename: (from: string, to: string) => Promise<void>;
   onDelete: (path: string) => Promise<void>;
   onOpenFile: (path: string) => Promise<string>;
-  onClose?: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -220,17 +218,6 @@ export function Files({
 
         {/* Actions */}
         <div className="flex items-center gap-1 shrink-0 ml-2">
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-              aria-label="Close"
-            >
-              <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          )}
           <button
             onClick={() => onNavigate(path)}
             className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
@@ -292,11 +279,8 @@ export function Files({
         </div>
 
         {loading && entries.length === 0 ? (
-          <div className="flex items-center justify-center py-20">
-            <svg className="size-5 animate-spin text-muted-foreground" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
+          <div className="h-0.5 overflow-hidden">
+            <div className="h-full w-1/3 bg-muted-foreground/30 rounded-full animate-[slide_1s_ease-in-out_infinite]" />
           </div>
         ) : (
           <div className="divide-y divide-border">
