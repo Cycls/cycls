@@ -19,8 +19,8 @@ import { SharedView } from "./components/shared-view";
 import { useChat, AppConfig } from "./hooks/use-chat";
 import { useFiles } from "./hooks/use-files";
 
-function ChatWithAuth() {
-  const { messages, isStreaming, sessionLoading, config, sessionId, send, retry, stop, clear, share, listShares, deleteShare, listSessions, loadSession, deleteSession, fetchConfig, setGetToken, uploadFile } =
+function ChatApp({ config }: { config: AppConfig | null }) {
+  const { messages, isStreaming, sessionLoading, sessionId, send, retry, stop, clear, share, listShares, deleteShare, listSessions, loadSession, deleteSession, setGetToken, uploadFile } =
     useChat();
   const { entries, path, loading, list, upload, mkdir, rename, remove, openFile, setGetToken: setFilesToken } =
     useFiles();
@@ -35,10 +35,6 @@ function ChatWithAuth() {
     setGetToken(() => getToken());
     setFilesToken(() => getToken());
   }, [getToken, setGetToken, setFilesToken]);
-
-  useEffect(() => {
-    fetchConfig();
-  }, [fetchConfig]);
 
   // Auto-send ?q= param on first load
   const qSent = useRef(false);
@@ -118,15 +114,11 @@ function ChatWithAuth() {
   );
 }
 
-function ChatNoAuth() {
-  const { messages, isStreaming, config, send, retry, stop, clear, fetchConfig, uploadFile } =
+function ChatNoAuth({ config }: { config: AppConfig | null }) {
+  const { messages, isStreaming, send, retry, stop, clear, uploadFile } =
     useChat();
   const { entries, path, loading, list, upload, mkdir, rename, remove, openFile } =
     useFiles();
-
-  useEffect(() => {
-    fetchConfig();
-  }, [fetchConfig]);
 
   // Auto-send ?q= param on first load
   const qSent = useRef(false);
@@ -303,7 +295,7 @@ export default function App() {
   const clerkKey = config?.auth ? (import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || config?.pk) : null;
 
   if (!clerkKey) {
-    return <ChatNoAuth />;
+    return <ChatNoAuth config={config} />;
   }
 
   if (window.location.pathname === "/sso-callback") {
@@ -317,7 +309,7 @@ export default function App() {
   return (
     <ClerkProvider publishableKey={clerkKey} appearance={{ baseTheme: isDark ? dark : undefined }}>
       <SignedIn>
-        <ChatWithAuth />
+        <ChatApp config={config} />
       </SignedIn>
       <SignedOut>
         <CustomSignIn />
