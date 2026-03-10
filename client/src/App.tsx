@@ -274,15 +274,12 @@ function CustomSignIn() {
 
 export default function App() {
   const isDark = useDarkMode();
-  const [config, setConfig] = useState<AppConfig | null>(null);
-  const [loading, setLoading] = useState(true);
+  const inlined = (window as any).__CONFIG__;
+  const [config, setConfig] = useState<AppConfig | null>(inlined || null);
+  const [loading, setLoading] = useState(!inlined);
 
   useEffect(() => {
-    const inlined = (window as any).__CONFIG__;
-    if (inlined) {
-      setConfig(inlined);
-      setLoading(false);
-    } else {
+    if (!inlined) {
       fetch("/config")
         .then((r) => r.json())
         .then((c) => setConfig(c))
