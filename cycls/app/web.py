@@ -164,8 +164,10 @@ def web(func, config):
     from html import escape
     _base_html = (Path(config.public_path) / "index.html").read_text()
 
+    _config_script = f'<script>window.__CONFIG__={config.model_dump_json()}</script>'
+
     def _seo_html(title: str = "Cycls", desc: str = "AI Agent"):
-        return _base_html.replace("__TITLE__", escape(title)).replace("__DESC__", escape(desc))
+        return _base_html.replace("__TITLE__", escape(title)).replace("__DESC__", escape(desc)).replace("</body>", f"{_config_script}</body>")
 
     app_title = f"{config.name.capitalize()} Agent | Cycls Pass" if config.name else "Cycls"
     _index_html = _seo_html(app_title, config.title or "AI Agent")
@@ -188,7 +190,6 @@ def web(func, config):
             share = json.loads((Path(pointer["path"]) / "share.json").read_text())
             title = share.get("title") or "Shared conversation"
             return Response(og_generate(og_title, title), media_type="image/png")
-            print("hit")
         except Exception:
             return Response(og_generate(og_title, config.title or ""), media_type="image/png")
 

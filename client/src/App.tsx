@@ -278,11 +278,17 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/config")
-      .then((r) => r.json())
-      .then((c) => setConfig(c))
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    const inlined = (window as any).__CONFIG__;
+    if (inlined) {
+      setConfig(inlined);
+      setLoading(false);
+    } else {
+      fetch("/config")
+        .then((r) => r.json())
+        .then((c) => setConfig(c))
+        .catch(() => {})
+        .finally(() => setLoading(false));
+    }
   }, []);
 
   const sharedMatch = window.location.pathname.match(/^\/shared\/(.+)/);
