@@ -74,7 +74,8 @@ export function SharedView({ path }: { path: string }) {
 
       <div className="shrink-0 h-12" />
 
-      <div className="flex-1 overflow-y-auto scrollbar-none">
+      <div className="relative flex-1 overflow-y-auto scrollbar-none">
+        <div className="pointer-events-none sticky top-0 z-10 h-6 -mb-6 bg-[linear-gradient(to_bottom,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
         <div className="flex w-full flex-col items-center py-4">
           {(data.title || data.author) && (
             <div className="w-full max-w-3xl px-6 py-10 text-center">
