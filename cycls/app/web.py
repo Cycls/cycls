@@ -189,7 +189,9 @@ def web(func, config):
             pointer = json.loads((Path("/workspace/shared") / f"{share_id}.json").read_text())
             share = json.loads((Path(pointer["path"]) / "share.json").read_text())
             title = share.get("title") or "Shared conversation"
-            return Response(og_generate(og_title, title), media_type="image/png")
+            author = share.get("author") or {}
+            avatars = [u for u in [author.get("org", {}).get("imageUrl"), author.get("imageUrl")] if u]
+            return Response(og_generate(og_title, title, avatars=avatars), media_type="image/png")
         except Exception:
             return Response(og_generate(og_title, config.title or ""), media_type="image/png")
 

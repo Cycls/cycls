@@ -1,6 +1,7 @@
 """Dynamic OG image generation."""
 
 import io
+from urllib.request import urlopen, Request
 from PIL import Image, ImageDraw, ImageFont
 import cairosvg
 
@@ -50,7 +51,22 @@ def _truncate(text, font, max_w):
     return "..."
 
 
-def generate(title, desc=""):
+def _circular_avatar(url, size=48):
+    """Fetch a URL and return a circular RGBA image."""
+    try:
+        req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        data = urlopen(req, timeout=5).read()
+        av = Image.open(io.BytesIO(data)).convert("RGBA").resize((size, size), Image.LANCZOS)
+        mask = Image.new("L", (size, size), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
+        av.putalpha(mask)
+        return av
+    except Exception as e:
+        print(f"avatar fetch failed: {e}")
+        return None
+
+
+def generate(title, desc="", avatars=None):
     img = Image.new("RGB", (W, H), "#000000")
     draw = ImageDraw.Draw(img)
     rtl = _rtl(title) or _rtl(desc)
@@ -71,11 +87,13 @@ def generate(title, desc=""):
     draw.text((tx, ty), tt, fill=(255, 255, 255), font=tf)
 
     # Description
+    desc_bottom = ty + th
     if desc:
         dt = _truncate(desc, df, max_w)
         db = draw.textbbox((0, 0), dt, font=df)
         dw = db[2] - db[0]
         dx = W - PAD - dw if rtl else PAD
+        desc_bottom = ty + th + 36 + (db[3] - db[1])
         draw.text((dx, ty + th + 36), dt, fill=(160, 160, 160), font=df)
 
     # Logo
@@ -84,6 +102,19 @@ def generate(title, desc=""):
     logo = Image.open(io.BytesIO(cairosvg.svg2png(bytestring=_LOGO_SVG.encode(), output_width=lw, output_height=lh))).convert("RGBA")
     lx = PAD if rtl else W - PAD - lw
     img.paste(logo, (lx, H - PAD - lh), logo)
+
+    # Avatars (aligned with logo at bottom)
+    if avatars:
+        av_size = 75
+        overlap = 22
+        loaded = [_circular_avatar(url, av_size) for url in avatars if url]
+        loaded = [a for a in loaded if a]
+        if loaded:
+            total_w = av_size + (len(loaded) - 1) * (av_size - overlap)
+            ax = W - PAD - total_w if rtl else PAD
+            ay = H - PAD - lh + (lh - av_size) // 2  # vertically centered with logo
+            for i, av in enumerate(loaded):
+                img.paste(av, (ax + i * (av_size - overlap), ay), av)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
