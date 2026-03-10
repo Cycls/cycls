@@ -7,6 +7,7 @@ from .auth import PK_LIVE, PK_TEST, JWKS_PROD, JWKS_TEST
 
 class Config(BaseModel):
     public_path: str = "theme"
+    name: Optional[str] = None
     header: Optional[str] = None
     intro: Optional[str] = None
     title: Optional[str] = None
@@ -163,6 +164,19 @@ def web(func, config):
     app.include_router(sessions_router(required_auth))
     app.include_router(files_router(required_auth))
     app.include_router(share_router(required_auth))
+
+    # ---- Rewrite index.html with OG meta tags ----
+
+    index_path = Path(config.public_path) / "index.html"
+    if index_path.is_file() and config.name:
+        from html import escape
+        html = index_path.read_text()
+        og_title = f"Cycls | @{escape(config.name)}"
+        html = html.replace('<meta property="og:title" content="Cycls" />', f'<meta property="og:title" content="{og_title}" />')
+        html = html.replace('<title>Cycls</title>', f'<title>{og_title}</title>')
+        if config.title:
+            html = html.replace('<meta property="og:description" content="AI Agent" />', f'<meta property="og:description" content="{escape(config.title)}" />')
+        index_path.write_text(html)
 
     # ---- SPA fallback routes (before static mounts) ----
 

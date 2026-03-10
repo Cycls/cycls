@@ -24,6 +24,7 @@ class App(Function):
         self.memory = memory
 
         self.config = Config(
+            name=name,
             header=header,
             intro=intro,
             title=title,
