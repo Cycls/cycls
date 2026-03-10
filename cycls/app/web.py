@@ -170,6 +170,28 @@ def web(func, config):
     app_title = f"{config.name.capitalize()} Agent | Cycls Pass" if config.name else "Cycls"
     _index_html = _seo_html(app_title, config.title or "AI Agent")
 
+    # ---- Dynamic OG images ----
+
+    from fastapi.responses import Response
+    from cycls.app.og import generate as og_generate
+
+    og_title = f"{config.name.capitalize()} Agent"
+
+    @app.get("/og.png")
+    async def og_image():
+        return Response(og_generate(og_title, config.title or ""), media_type="image/png")
+
+    @app.get("/og/{share_id}.png")
+    async def og_shared_image(share_id: str):
+        try:
+            pointer = json.loads((Path("/workspace/shared") / f"{share_id}.json").read_text())
+            share = json.loads((Path(pointer["path"]) / "share.json").read_text())
+            title = share.get("title") or "Shared conversation"
+            return Response(og_generate(og_title, title), media_type="image/png")
+            print("hit")
+        except Exception:
+            return Response(og_generate(og_title, config.title or ""), media_type="image/png")
+
     # ---- SPA fallback routes (before static mounts) ----
 
     @app.get("/")
@@ -180,11 +202,10 @@ def web(func, config):
     @app.get("/shared/{share_id:path}")
     async def shared_page(share_id: str):
         try:
-            share_file = Path("/workspace/shared") / f"{share_id}.json"
-            pointer = json.loads(share_file.read_text())
+            pointer = json.loads((Path("/workspace/shared") / f"{share_id}.json").read_text())
             share = json.loads((Path(pointer["path"]) / "share.json").read_text())
             title = share.get("title") or "Shared conversation"
-            return HTMLResponse(_seo_html(app_title, title))
+            return HTMLResponse(_seo_html(app_title, title).replace("/og.png", f"/og/{share_id}.png"))
         except Exception:
             return HTMLResponse(_index_html)
 
