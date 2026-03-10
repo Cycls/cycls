@@ -73,7 +73,6 @@ def web(func, config):
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
     import jwt
     from jwt import PyJWKClient
-    from typing import Optional, Any
     from fastapi.staticfiles import StaticFiles
 
     if isinstance(config, dict):
@@ -116,8 +115,6 @@ def web(func, config):
             return self.user.workspace if self.user else Path("/workspace/local")
 
     app = FastAPI()
-    
-    bearer_scheme = HTTPBearer()
 
     def validate(request: Request, bearer: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))):
         token = bearer.credentials if bearer else request.query_params.get("token")
@@ -129,12 +126,8 @@ def web(func, config):
             org = decoded.get("o") or {}
             return User(id=decoded.get("sub"), org_id=org.get("id"), org_slug=org.get("slg"), org_role=org.get("rol"), org_permissions=org.get("per"),
                         plan=decoded.get("pla"), features=decoded.get("fea"))
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired", headers={"WWW-Authenticate": "Bearer"})
-        except jwt.InvalidTokenError as e:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid token: {e}", headers={"WWW-Authenticate": "Bearer"})
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Auth error: {e}", headers={"WWW-Authenticate": "Bearer"})
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e), headers={"WWW-Authenticate": "Bearer"})
 
     auth = Depends(validate) if config.auth else Depends(lambda: None)
     required_auth = Depends(validate)
@@ -197,8 +190,6 @@ def serve(func, config, name, port):
     import uvicorn, logging
     from dotenv import load_dotenv
     load_dotenv()
-    if isinstance(config, dict):
-        config = Config(**config)
     logging.getLogger("uvicorn.error").addFilter(lambda r: "0.0.0.0" not in r.getMessage())
     print(f"\n🔨 {name} => http://localhost:{port}\n")
     uvicorn.run(web(func, config), host="0.0.0.0", port=port)

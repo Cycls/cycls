@@ -34,7 +34,7 @@ TOOLS = [
 ) 
 async def super(context):
     # yield f"{context.user}\n\n"
-    print(context.messages.raw)
+    # print(context.messages.raw)
     async for msg in cycls.Agent(
                                 context=context,
                                 system=SYSTEM, 
@@ -46,5 +46,5 @@ async def super(context):
         yield msg
 
 
-# super.local()
-super.deploy()
+super.local()
+# super.deploy()
