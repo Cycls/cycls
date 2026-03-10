@@ -69,7 +69,7 @@ class Messages(list):
 
 def web(func, config):
     from fastapi import FastAPI, Request, HTTPException, status, Depends
-    from fastapi.responses import StreamingResponse, FileResponse
+    from fastapi.responses import StreamingResponse
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
     import jwt
     from jwt import PyJWKClient
@@ -158,31 +158,41 @@ def web(func, config):
     app.include_router(files_router(required_auth))
     app.include_router(share_router(required_auth))
 
-    # ---- Rewrite index.html with OG meta tags ----
+    # ---- SEO helpers ----
 
-    index_path = Path(config.public_path) / "index.html"
-    if index_path.is_file() and config.name:
-        from html import escape
-        html = index_path.read_text()
-        og_title = f"Cycls | @{escape(config.name)}"
-        html = html.replace('<meta property="og:title" content="Cycls" />', f'<meta property="og:title" content="{og_title}" />')
-        html = html.replace('<title>Cycls</title>', f'<title>{og_title}</title>')
-        if config.title:
-            html = html.replace('<meta property="og:description" content="AI Agent" />', f'<meta property="og:description" content="{escape(config.title)}" />')
-        index_path.write_text(html)
+    from fastapi.responses import HTMLResponse
+    from html import escape
+    _base_html = (Path(config.public_path) / "index.html").read_text()
+
+    def _seo_html(title: str = "Cycls", desc: str = "AI Agent"):
+        return _base_html.replace("__TITLE__", escape(title)).replace("__DESC__", escape(desc))
+
+    app_title = f"{config.name.capitalize()} Agent | Cycls Pass" if config.name else "Cycls"
+    _index_html = _seo_html(app_title, config.title or "AI Agent")
 
     # ---- SPA fallback routes (before static mounts) ----
 
+    @app.get("/")
     @app.get("/sso-callback")
-    @app.get("/shared/{path:path}")
-    async def spa_fallback(path: str = ""):
-        return FileResponse(Path(config.public_path) / "index.html")
+    async def index():
+        return HTMLResponse(_index_html)
+
+    @app.get("/shared/{share_id:path}")
+    async def shared_page(share_id: str):
+        try:
+            share_file = Path("/workspace/shared") / f"{share_id}.json"
+            pointer = json.loads(share_file.read_text())
+            share = json.loads((Path(pointer["path"]) / "share.json").read_text())
+            title = share.get("title") or "Shared conversation"
+            return HTMLResponse(_seo_html(app_title, title))
+        except Exception:
+            return HTMLResponse(_index_html)
 
     # ---- Static mounts (must be last) ----
 
     if Path("public").is_dir():
         app.mount("/public", StaticFiles(directory="public", html=True))
-    app.mount("/", StaticFiles(directory=config.public_path, html=True))
+    app.mount("/", StaticFiles(directory=config.public_path))
 
     return app
 
