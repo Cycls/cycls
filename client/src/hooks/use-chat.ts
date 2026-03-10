@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from "react";
+import { useAuthHeaders } from "./use-auth-headers";
 
 export interface Part {
   type: string;
@@ -53,53 +54,30 @@ export function useChat(baseUrl: string = "") {
     });
   }, []);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [config, setConfig] = useState<AppConfig | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionLoading, setSessionLoading] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
   const messagesRef = useRef<Message[]>([]);
   const abortRef = useRef<AbortController | null>(null);
-  const getTokenRef = useRef<(() => Promise<string | null>) | null>(null);
   const lastRequestRef = useRef<{ text: string; attachments?: Attachment[] } | null>(null);
-
-  const setGetToken = useCallback(
-    (fn: () => Promise<string | null>) => {
-      getTokenRef.current = fn;
-    },
-    [],
-  );
-
-  const fetchConfig = useCallback(async () => {
-    try {
-      const res = await fetch(`${baseUrl}/config`);
-      const data = await res.json();
-      setConfig(data);
-      return data as AppConfig;
-    } catch {
-      return null;
-    }
-  }, [baseUrl]);
+  const { setGetToken, authHeaders, getToken } = useAuthHeaders();
 
   const uploadFile = useCallback(
     async (file: File): Promise<Attachment> => {
-      const authHeaders: Record<string, string> = {};
-      if (getTokenRef.current) {
-        const token = await getTokenRef.current();
-        if (token) authHeaders["Authorization"] = `Bearer ${token}`;
-      }
+      const h = await authHeaders();
       const id = crypto.randomUUID().slice(0, 8);
       const uploadPath = `attachments/${id}-${file.name}`;
       const form = new FormData();
       form.append("file", file);
       const res = await fetch(`${baseUrl}/files/${uploadPath}`, {
         method: "PUT",
-        headers: authHeaders,
+        headers: h,
         body: form,
       });
       if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
       return { name: file.name, size: file.size, type: file.type, url: "", path: uploadPath };
     },
-    [baseUrl],
+    [baseUrl, authHeaders],
   );
 
   const send = useCallback(
@@ -125,11 +103,8 @@ export function useChat(baseUrl: string = "") {
 
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
+          ...(await authHeaders()),
         };
-        if (getTokenRef.current) {
-          const token = await getTokenRef.current();
-          if (token) headers["Authorization"] = `Bearer ${token}`;
-        }
 
         // Build request messages (all except the empty assistant we just added)
         const currentMsgs = messagesRef.current;
@@ -321,7 +296,7 @@ export function useChat(baseUrl: string = "") {
         }
       }
     },
-    [messages, isStreaming, baseUrl],
+    [messages, isStreaming, baseUrl, authHeaders],
   );
 
   const retry = useCallback(() => {
@@ -348,15 +323,6 @@ export function useChat(baseUrl: string = "") {
     setMessages([]);
     setSessionId(null);
     sessionIdRef.current = null;
-  }, []);
-
-  const authHeaders = useCallback(async () => {
-    const h: Record<string, string> = {};
-    if (getTokenRef.current) {
-      const token = await getTokenRef.current();
-      if (token) h["Authorization"] = `Bearer ${token}`;
-    }
-    return h;
   }, []);
 
   const share = useCallback(async (title: string = "", author?: { name: string; imageUrl?: string }) => {
@@ -405,7 +371,7 @@ export function useChat(baseUrl: string = "") {
       sessionIdRef.current = id;
 
       // Rebuild attachment URLs with fresh token (after render)
-      const token = getTokenRef.current ? await getTokenRef.current() : null;
+      const token = await getToken();
       if (token) {
         let changed = false;
         for (const m of loaded) {
@@ -421,7 +387,7 @@ export function useChat(baseUrl: string = "") {
     } finally {
       setSessionLoading(false);
     }
-  }, [baseUrl, authHeaders]);
+  }, [baseUrl, authHeaders, getToken]);
 
   const deleteSession = useCallback(async (id: string) => {
     const headers = await authHeaders();
@@ -439,7 +405,6 @@ export function useChat(baseUrl: string = "") {
     messages,
     isStreaming,
     sessionLoading,
-    config,
     sessionId,
     send,
     retry,
@@ -451,7 +416,6 @@ export function useChat(baseUrl: string = "") {
     listSessions,
     loadSession,
     deleteSession,
-    fetchConfig,
     setGetToken,
     uploadFile,
   };
