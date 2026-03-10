@@ -16,7 +16,7 @@ TOOLS = [
             "properties": {
                 "src": {"type": "string", "description": "Image URL or path"},
                 "alt": {"type": "string"},
-                "caption": {"type": "string"}
+                "caption": {"type": "stbring"}
             },
             "required": ["src"]
         }
