@@ -1,4 +1,4 @@
-import base64, json, os, shutil
+import json, os, shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
