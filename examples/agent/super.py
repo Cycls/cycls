@@ -30,7 +30,7 @@ TOOLS = [
     copy=[".env"], 
     force_rebuild=False,
     theme="wafi",
-    title="Cycls most powerful agent for getting work done"
+    title="The agent for getting things done"
 ) 
 async def super(context):
     # yield f"{context.user}\n\n"
