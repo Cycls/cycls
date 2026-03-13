@@ -29,7 +29,7 @@ function ChatApp({ config }: { config: AppConfig | null }) {
   const clerk = useClerk();
   const { organization } = useOrganization();
   const { userMemberships, setActive } = useOrganizationList({ userMemberships: true });
-  const { data: subscription } = useSubscription();
+  const { data: subscription } = useSubscription({ for: organization ? "organization" : "user" });
 
   useEffect(() => {
     setGetToken(() => getToken());
