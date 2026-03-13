@@ -787,7 +787,7 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
         <>
           <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => setShowPricing(false)} />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
-            <div className="relative w-full max-w-lg rounded-2xl border border-border bg-background shadow-xl pointer-events-auto overflow-hidden">
+            <div className="relative w-full max-w-3xl max-h-[90vh] rounded-2xl border border-border bg-background shadow-xl pointer-events-auto overflow-y-auto">
               <div className="flex items-center justify-between px-6 pt-5 pb-3">
                 <h2 className="text-base font-semibold text-foreground">Plans</h2>
                 <button
