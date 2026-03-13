@@ -785,10 +785,10 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
           </div>
         </div>
       </button>
-      {open && (
+      {open && createPortal(
         <>
           <div className="fixed inset-0 z-40" onClick={() => { setOpen(false); setShowOrgs(false); }} />
-          <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-lg border border-border bg-background shadow-lg">
+          <div className="fixed right-2 top-12 z-50 mt-2 w-56 rounded-lg border border-border bg-background shadow-lg">
             {showOrgs ? (
               <>
                 <button
@@ -915,7 +915,8 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
               </>
             )}
           </div>
-        </>
+        </>,
+        document.body
       )}
       {pricingFor && createPortal(
         <>
