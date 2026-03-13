@@ -94,7 +94,7 @@ function ChatApp({ config }: { config: AppConfig | null }) {
         amount: subscription.subscriptionItems[0].amount,
         planPeriod: subscription.subscriptionItems[0].planPeriod,
       } : undefined}
-      title={config?.header}
+      name={config?.name}
       user={user ? {
         name: user.fullName || user.firstName || "",
         email: user.primaryEmailAddress?.emailAddress || "",
@@ -140,7 +140,7 @@ function ChatNoAuth({ config }: { config: AppConfig | null }) {
       onStop={stop}
       onClear={clear}
       onRetry={retry}
-      title={config?.header}
+      name={config?.name}
       uploadFile={uploadFile}
       files={{
         entries, path, loading,
