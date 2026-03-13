@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { SignedIn } from "@clerk/clerk-react";
@@ -194,7 +195,7 @@ export function Chat({
   return (
     <div className="h-dvh flex flex-col">
       {/* Header */}
-      <header className="pointer-events-none fixed top-0 right-0 left-0 z-50 h-12">
+      <header className="pointer-events-none fixed top-0 right-0 left-0 h-12">
         <div className="pointer-events-auto mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
           <div className="flex items-center gap-2">
           <a href="https://cycls.ai" className="flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity">
@@ -916,13 +917,13 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
           </div>
         </>
       )}
-      {pricingFor && (
+      {pricingFor && createPortal(
         <>
           <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => setPricingFor(null)} />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
             <div className="relative w-auto max-h-[90vh] rounded-2xl border border-border bg-background shadow-xl pointer-events-auto overflow-y-auto">
               <div className="flex items-center justify-between px-6 pt-5 pb-3">
-                <h2 className="text-base font-semibold text-foreground">{pricingFor === "organization" ? "Organization Plans" : "Plans"}</h2>
+                <h2 className="text-base font-semibold text-foreground">{pricingFor === "organization" ? "Organization Plans" : "Personal Plans"}</h2>
                 <button
                   onClick={() => setPricingFor(null)}
                   className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
@@ -937,7 +938,8 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
               </div>
             </div>
           </div>
-        </>
+        </>,
+        document.body
       )}
     </div>
   );
