@@ -124,8 +124,11 @@ def web(func, config):
             key = jwks.get_signing_key_from_jwt(token)
             decoded = jwt.decode(token, key.key, algorithms=["RS256"], leeway=10)
             org = decoded.get("o") or {}
-            return User(id=decoded.get("sub"), org_id=org.get("id"), org_slug=org.get("slg"), org_role=org.get("rol"), org_permissions=org.get("per"),
-                        plan=decoded.get("pla"), features=decoded.get("fea"))
+            fea = decoded.get("fea")
+            if isinstance(fea, str): fea = [f.strip() for f in fea.split(",") if f.strip()]
+            user = User(id=decoded.get("sub"), org_id=org.get("id"), org_slug=org.get("slg"), org_role=org.get("rol"), org_permissions=org.get("per"),
+                        plan=decoded.get("pla"), features=fea)
+            return user
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e), headers={"WWW-Authenticate": "Bearer"})
 
