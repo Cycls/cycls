@@ -630,9 +630,7 @@ function PricingCards({ onSelect }: { onSelect: () => void }) {
   const { data: plans, isLoading } = usePlans();
   const { data: subscription } = useSubscription();
   const [period, setPeriod] = useState<"month" | "annual">("month");
-  const activeItem = subscription?.subscriptionItems?.[0];
-  const activePlanId = activeItem?.plan?.id;
-  const activePeriod = activeItem?.planPeriod;
+  const activePlanId = subscription?.subscriptionItems?.[0]?.plan?.id;
 
   if (isLoading) {
     return (
@@ -671,10 +669,13 @@ function PricingCards({ onSelect }: { onSelect: () => void }) {
           return (
             <div
               key={plan.id}
-              className={`relative flex flex-col rounded-xl border p-4 ${isActive ? "border-foreground bg-secondary/50" : "border-border"}`}
+              className={`relative flex flex-col rounded-xl border p-4 ${isActive ? "border-emerald-500/50 bg-emerald-500/5" : "border-border"}`}
             >
               <div className="mb-3">
-                <h3 className="text-sm font-semibold text-foreground">{plan.name}</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-foreground">{plan.name}</h3>
+                  {isActive && <span className="px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">Active</span>}
+                </div>
                 {plan.description && (
                   <p className="text-xs text-muted-foreground mt-0.5">{plan.description}</p>
                 )}
@@ -718,18 +719,7 @@ function PricingCards({ onSelect }: { onSelect: () => void }) {
                 {isActive ? (
                   <div className="flex flex-col gap-1.5">
                     <SignedIn>
-                      {activePeriod === "month" && plan.annualFee && (
-                        <CheckoutButton
-                          planId={plan.id}
-                          planPeriod="annual"
-                          onSubscriptionComplete={onSelect}
-                        >
-                          <button onClick={onSelect} className="w-full py-1.5 text-[10px] font-medium rounded-lg text-muted-foreground hover:text-foreground transition-colors cursor-pointer">
-                            Switch to annual & save
-                          </button>
-                        </CheckoutButton>
-                      )}
-                      <SubscriptionDetailsButton>
+<SubscriptionDetailsButton>
                         <button onClick={onSelect} className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer">
                           Manage plan
                         </button>
