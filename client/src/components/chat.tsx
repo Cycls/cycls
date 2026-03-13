@@ -662,7 +662,7 @@ function PricingCards({ payerType = "user", onSelect }: { payerType?: "user" | "
           </button>
         </div>
       )}
-      <div className="inline-flex gap-3 flex-nowrap">
+      <div className="flex flex-col sm:flex-row gap-3 sm:flex-nowrap">
         {plans.map(plan => {
           const isActive = plan.id === activePlanId;
           const price = period === "annual" && plan.annualMonthlyFee ? plan.annualMonthlyFee : plan.fee;
@@ -670,7 +670,7 @@ function PricingCards({ payerType = "user", onSelect }: { payerType?: "user" | "
           return (
             <div
               key={plan.id}
-              className={`relative flex flex-col rounded-xl border p-4 w-[320px] shrink-0 ${isActive ? "border-muted-foreground/50 bg-muted/50" : "border-border"}`}
+              className={`relative flex flex-col rounded-xl border p-4 w-full sm:w-[320px] sm:shrink-0 ${isActive ? "border-muted-foreground/50 bg-muted/50" : "border-border"}`}
             >
               <div className="mb-3">
                 <div className="flex items-center gap-2">
