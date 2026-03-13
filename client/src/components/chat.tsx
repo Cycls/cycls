@@ -724,7 +724,7 @@ function PricingCards({ onSelect }: { onSelect: () => void }) {
                       planPeriod={period}
                       onSubscriptionComplete={onSelect}
                     >
-                      <button className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer">
+                      <button onClick={onSelect} className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer">
                         {isFreePlan ? "Get started" : "Subscribe"}
                       </button>
                     </CheckoutButton>
