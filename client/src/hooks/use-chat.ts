@@ -39,7 +39,7 @@ export interface Message {
 }
 
 export interface AppConfig {
-  header?: string;
+  name?: string;
   auth?: boolean;
   pk?: string;
 }
