@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { SignedIn } from "@clerk/clerk-react";
-import { usePlans, useSubscription, CheckoutButton } from "@clerk/clerk-react/experimental";
+import { usePlans, useSubscription, CheckoutButton, SubscriptionDetailsButton } from "@clerk/clerk-react/experimental";
 import { MessageBubble } from "./message";
 import { Files } from "./files";
 import type { Message, Attachment } from "../hooks/use-chat";
@@ -630,7 +630,9 @@ function PricingCards({ onSelect }: { onSelect: () => void }) {
   const { data: plans, isLoading } = usePlans();
   const { data: subscription } = useSubscription();
   const [period, setPeriod] = useState<"month" | "annual">("month");
-  const activePlanId = subscription?.subscriptionItems?.[0]?.plan?.id;
+  const activeItem = subscription?.subscriptionItems?.[0];
+  const activePlanId = activeItem?.plan?.id;
+  const activePeriod = activeItem?.planPeriod;
 
   if (isLoading) {
     return (
@@ -714,9 +716,26 @@ function PricingCards({ onSelect }: { onSelect: () => void }) {
               )}
               <div className="mt-auto">
                 {isActive ? (
-                  <span className="block w-full text-center py-1.5 text-xs font-medium text-muted-foreground">
-                    Current plan
-                  </span>
+                  <div className="flex flex-col gap-1.5">
+                    <SignedIn>
+                      {activePeriod === "month" && plan.annualFee && (
+                        <CheckoutButton
+                          planId={plan.id}
+                          planPeriod="annual"
+                          onSubscriptionComplete={onSelect}
+                        >
+                          <button onClick={onSelect} className="w-full py-1.5 text-[10px] font-medium rounded-lg text-muted-foreground hover:text-foreground transition-colors cursor-pointer">
+                            Switch to annual & save
+                          </button>
+                        </CheckoutButton>
+                      )}
+                      <SubscriptionDetailsButton>
+                        <button onClick={onSelect} className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer">
+                          Manage plan
+                        </button>
+                      </SubscriptionDetailsButton>
+                    </SignedIn>
+                  </div>
                 ) : (
                   <SignedIn>
                     <CheckoutButton
