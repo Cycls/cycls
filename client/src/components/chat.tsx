@@ -626,11 +626,105 @@ function formatPrice(money: { amount: number; currencySymbol: string; currency: 
   return formatted;
 }
 
-function PricingCards({ onSelect }: { onSelect: () => void }) {
-  const { data: plans, isLoading } = usePlans();
-  const { data: subscription } = useSubscription();
+function PlanGrid({ plans, activePlanId, period, payerType, onSelect }: {
+  plans: { id: string; name: string; description: string | null; fee: { amount: number; currencySymbol: string; currency: string; amountFormatted: string }; annualFee: { amount: number; currencySymbol: string; currency: string; amountFormatted: string } | null; annualMonthlyFee: { amount: number; currencySymbol: string; currency: string; amountFormatted: string } | null; hasBaseFee: boolean; freeTrialEnabled: boolean; freeTrialDays: number | null; features: { id: string; name: string }[] }[];
+  activePlanId: string | undefined;
+  period: "month" | "annual";
+  payerType: "user" | "organization";
+  onSelect: () => void;
+}) {
+  return (
+    <div className="inline-flex gap-3 flex-nowrap">
+      {plans.map(plan => {
+        const isActive = plan.id === activePlanId;
+        const price = period === "annual" && plan.annualMonthlyFee ? plan.annualMonthlyFee : plan.fee;
+        const isFreePlan = !plan.hasBaseFee;
+        return (
+          <div
+            key={plan.id}
+            className={`relative flex flex-col rounded-xl border p-4 w-[320px] shrink-0 ${isActive ? "border-muted-foreground/50 bg-muted/50" : "border-border"}`}
+          >
+            <div className="mb-3">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-semibold text-foreground">{plan.name}</h3>
+                {isActive && <span className="px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-muted text-muted-foreground">Active</span>}
+              </div>
+              {plan.description && (
+                <p className="text-xs text-muted-foreground mt-0.5">{plan.description}</p>
+              )}
+            </div>
+            <div className="mb-4 h-12">
+              {isFreePlan ? (
+                <span className="text-2xl font-bold text-foreground">Free</span>
+              ) : (
+                <>
+                  <div className="flex items-baseline gap-1">
+                    <span className="text-2xl font-bold text-foreground">
+                      {formatPrice(price)}
+                    </span>
+                    <span className="text-xs text-muted-foreground">/ mo</span>
+                  </div>
+                  {period === "annual" && plan.annualFee ? (
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      {formatPrice(plan.annualFee)} billed annually
+                    </p>
+                  ) : plan.freeTrialEnabled && plan.freeTrialDays ? (
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      {plan.freeTrialDays}-day free trial
+                    </p>
+                  ) : null}
+                </>
+              )}
+            </div>
+            {plan.features.length > 0 && (
+              <ul className="mb-4 space-y-1.5 flex-1">
+                {plan.features.map(f => (
+                  <li key={f.id} className="flex items-start gap-2 text-xs text-muted-foreground">
+                    <svg className="w-3.5 h-3.5 mt-0.5 shrink-0 text-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    {f.name}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="mt-auto">
+              {isActive ? (
+                <div className="flex flex-col gap-1.5">
+                  <SignedIn>
+                    <SubscriptionDetailsButton for={payerType}>
+                      <button onClick={onSelect} className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer">
+                        Manage plan
+                      </button>
+                    </SubscriptionDetailsButton>
+                  </SignedIn>
+                </div>
+              ) : (
+                <SignedIn>
+                  <CheckoutButton
+                    planId={plan.id}
+                    planPeriod={period}
+                    for={payerType}
+                    onSubscriptionComplete={onSelect}
+                  >
+                    <button onClick={onSelect} className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer">
+                      {isFreePlan ? "Get started" : "Subscribe"}
+                    </button>
+                  </CheckoutButton>
+                </SignedIn>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PricingCards({ payerType = "user", onSelect }: { payerType?: "user" | "organization"; onSelect: () => void }) {
+  const { data: plansData, isLoading } = usePlans({ for: payerType });
+  const { data: sub } = useSubscription({ for: payerType });
   const [period, setPeriod] = useState<"month" | "annual">("month");
-  const activePlanId = subscription?.subscriptionItems?.[0]?.plan?.id;
 
   if (isLoading) {
     return (
@@ -640,8 +734,9 @@ function PricingCards({ onSelect }: { onSelect: () => void }) {
     );
   }
 
-  const visiblePlans = plans?.filter(p => p.publiclyVisible) ?? [];
-  const hasAnnual = visiblePlans.some(p => p.annualFee);
+  const plans = plansData?.filter(p => p.publiclyVisible) ?? [];
+  const hasAnnual = plans.some(p => p.annualFee);
+  const activePlanId = sub?.subscriptionItems?.[0]?.plan?.id;
 
   return (
     <div>
@@ -661,89 +756,7 @@ function PricingCards({ onSelect }: { onSelect: () => void }) {
           </button>
         </div>
       )}
-      <div className={`grid grid-cols-1 gap-3 ${visiblePlans.length === 2 ? "sm:grid-cols-2" : visiblePlans.length >= 3 ? "sm:grid-cols-2 lg:grid-cols-3" : ""}`}>
-        {visiblePlans.map(plan => {
-          const isActive = plan.id === activePlanId;
-          const price = period === "annual" && plan.annualMonthlyFee ? plan.annualMonthlyFee : plan.fee;
-          const isFreePlan = !plan.hasBaseFee;
-          return (
-            <div
-              key={plan.id}
-              className={`relative flex flex-col rounded-xl border p-4 ${isActive ? "border-emerald-500/50 bg-emerald-500/5" : "border-border"}`}
-            >
-              <div className="mb-3">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-semibold text-foreground">{plan.name}</h3>
-                  {isActive && <span className="px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">Active</span>}
-                </div>
-                {plan.description && (
-                  <p className="text-xs text-muted-foreground mt-0.5">{plan.description}</p>
-                )}
-              </div>
-              <div className="mb-4 h-12">
-                {isFreePlan ? (
-                  <span className="text-2xl font-bold text-foreground">Free</span>
-                ) : (
-                  <>
-                    <div className="flex items-baseline gap-1">
-                      <span className="text-2xl font-bold text-foreground">
-                        {formatPrice(price)}
-                      </span>
-                      <span className="text-xs text-muted-foreground">/ mo</span>
-                    </div>
-                    {period === "annual" && plan.annualFee ? (
-                      <p className="text-[10px] text-muted-foreground mt-0.5">
-                        {formatPrice(plan.annualFee)} billed annually
-                      </p>
-                    ) : plan.freeTrialEnabled && plan.freeTrialDays ? (
-                      <p className="text-[10px] text-muted-foreground mt-0.5">
-                        {plan.freeTrialDays}-day free trial
-                      </p>
-                    ) : null}
-                  </>
-                )}
-              </div>
-              {plan.features.length > 0 && (
-                <ul className="mb-4 space-y-1.5 flex-1">
-                  {plan.features.map(f => (
-                    <li key={f.id} className="flex items-start gap-2 text-xs text-muted-foreground">
-                      <svg className="w-3.5 h-3.5 mt-0.5 shrink-0 text-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
-                      {f.name}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="mt-auto">
-                {isActive ? (
-                  <div className="flex flex-col gap-1.5">
-                    <SignedIn>
-<SubscriptionDetailsButton>
-                        <button onClick={onSelect} className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer">
-                          Manage plan
-                        </button>
-                      </SubscriptionDetailsButton>
-                    </SignedIn>
-                  </div>
-                ) : (
-                  <SignedIn>
-                    <CheckoutButton
-                      planId={plan.id}
-                      planPeriod={period}
-                      onSubscriptionComplete={onSelect}
-                    >
-                      <button onClick={onSelect} className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer">
-                        {isFreePlan ? "Get started" : "Subscribe"}
-                      </button>
-                    </CheckoutButton>
-                  </SignedIn>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <PlanGrid plans={plans} activePlanId={activePlanId} period={period} payerType={payerType} onSelect={onSelect} />
     </div>
   );
 }
@@ -762,6 +775,7 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
   const [open, setOpen] = useState(false);
   const [showOrgs, setShowOrgs] = useState(false);
   const [showPricing, setShowPricing] = useState(false);
+  const [showOrgPricing, setShowOrgPricing] = useState(false);
 
   return (
     <div className="relative">
@@ -892,6 +906,14 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                   </button>
                   </>
                 )}
+                {activeOrg && (
+                  <button
+                    onClick={() => { setOpen(false); setShowOrgPricing(true); }}
+                    className="flex w-full items-center px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                  >
+                    <span>Plans</span>
+                  </button>
+                )}
                 {onManageOrg && activeOrg && (
                   <button
                     onClick={() => { setOpen(false); onManageOrg(); }}
@@ -920,7 +942,7 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
         <>
           <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => setShowPricing(false)} />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
-            <div className="relative w-full max-w-3xl max-h-[90vh] rounded-2xl border border-border bg-background shadow-xl pointer-events-auto overflow-y-auto">
+            <div className="relative w-auto max-h-[90vh] rounded-2xl border border-border bg-background shadow-xl pointer-events-auto overflow-y-auto">
               <div className="flex items-center justify-between px-6 pt-5 pb-3">
                 <h2 className="text-base font-semibold text-foreground">Plans</h2>
                 <button
@@ -934,6 +956,29 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
               </div>
               <div className="px-6 pb-5">
                 <PricingCards onSelect={() => setShowPricing(false)} />
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+      {showOrgPricing && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => setShowOrgPricing(false)} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
+            <div className="relative w-auto max-h-[90vh] rounded-2xl border border-border bg-background shadow-xl pointer-events-auto overflow-y-auto">
+              <div className="flex items-center justify-between px-6 pt-5 pb-3">
+                <h2 className="text-base font-semibold text-foreground">Organization Plans</h2>
+                <button
+                  onClick={() => setShowOrgPricing(false)}
+                  className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="px-6 pb-5">
+                <PricingCards payerType="organization" onSelect={() => setShowOrgPricing(false)} />
               </div>
             </div>
           </div>
