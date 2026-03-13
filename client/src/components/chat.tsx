@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
-import { PricingTable } from "@clerk/clerk-react";
+import { SignedIn } from "@clerk/clerk-react";
+import { usePlans, useSubscription, CheckoutButton } from "@clerk/clerk-react/experimental";
 import { MessageBubble } from "./message";
 import { Files } from "./files";
 import type { Message, Attachment } from "../hooks/use-chat";
@@ -615,6 +616,129 @@ export function Chat({
   );
 }
 
+function formatPrice(money: { amount: number; currencySymbol: string; currency: string }) {
+  const value = money.amount / 100;
+  const formatted = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: money.currency,
+    minimumFractionDigits: value % 1 === 0 ? 0 : 2,
+  }).format(value);
+  return formatted;
+}
+
+function PricingCards({ onSelect }: { onSelect: () => void }) {
+  const { data: plans, isLoading } = usePlans();
+  const { data: subscription } = useSubscription();
+  const [period, setPeriod] = useState<"month" | "annual">("month");
+  const activePlanId = subscription?.subscriptionItems?.[0]?.plan?.id;
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="size-5 border-2 border-muted-foreground/30 border-t-foreground rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  const visiblePlans = plans?.filter(p => p.publiclyVisible) ?? [];
+  const hasAnnual = visiblePlans.some(p => p.annualFee);
+
+  return (
+    <div>
+      {hasAnnual && (
+        <div className="flex items-center justify-center gap-1 mb-4">
+          <button
+            onClick={() => setPeriod("month")}
+            className={`px-3 py-1 text-xs rounded-full transition-colors cursor-pointer ${period === "month" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
+          >
+            Monthly
+          </button>
+          <button
+            onClick={() => setPeriod("annual")}
+            className={`px-3 py-1 text-xs rounded-full transition-colors cursor-pointer ${period === "annual" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
+          >
+            Annual
+          </button>
+        </div>
+      )}
+      <div className={`grid grid-cols-1 gap-3 ${visiblePlans.length === 2 ? "sm:grid-cols-2" : visiblePlans.length >= 3 ? "sm:grid-cols-2 lg:grid-cols-3" : ""}`}>
+        {visiblePlans.map(plan => {
+          const isActive = plan.id === activePlanId;
+          const price = period === "annual" && plan.annualMonthlyFee ? plan.annualMonthlyFee : plan.fee;
+          const isFreePlan = !plan.hasBaseFee;
+          return (
+            <div
+              key={plan.id}
+              className={`relative flex flex-col rounded-xl border p-4 ${isActive ? "border-foreground bg-secondary/50" : "border-border"}`}
+            >
+              <div className="mb-3">
+                <h3 className="text-sm font-semibold text-foreground">{plan.name}</h3>
+                {plan.description && (
+                  <p className="text-xs text-muted-foreground mt-0.5">{plan.description}</p>
+                )}
+              </div>
+              <div className="mb-4 h-12">
+                {isFreePlan ? (
+                  <span className="text-2xl font-bold text-foreground">Free</span>
+                ) : (
+                  <>
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-2xl font-bold text-foreground">
+                        {formatPrice(price)}
+                      </span>
+                      <span className="text-xs text-muted-foreground">/ mo</span>
+                    </div>
+                    {period === "annual" && plan.annualFee ? (
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        {formatPrice(plan.annualFee)} billed annually
+                      </p>
+                    ) : plan.freeTrialEnabled && plan.freeTrialDays ? (
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        {plan.freeTrialDays}-day free trial
+                      </p>
+                    ) : null}
+                  </>
+                )}
+              </div>
+              {plan.features.length > 0 && (
+                <ul className="mb-4 space-y-1.5 flex-1">
+                  {plan.features.map(f => (
+                    <li key={f.id} className="flex items-start gap-2 text-xs text-muted-foreground">
+                      <svg className="w-3.5 h-3.5 mt-0.5 shrink-0 text-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      {f.name}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="mt-auto">
+                {isActive ? (
+                  <span className="block w-full text-center py-1.5 text-xs font-medium text-muted-foreground">
+                    Current plan
+                  </span>
+                ) : (
+                  <SignedIn>
+                    <CheckoutButton
+                      planId={plan.id}
+                      planPeriod={period}
+                      onSubscriptionComplete={onSelect}
+                    >
+                      <button className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer">
+                        {isFreePlan ? "Get started" : "Subscribe"}
+                      </button>
+                    </CheckoutButton>
+                  </SignedIn>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, activeOrg, orgs, plan }: {
   user: UserInfo;
   onSignOut?: () => void;
@@ -800,15 +924,7 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                 </button>
               </div>
               <div className="px-6 pb-5">
-                <PricingTable />
-              </div>
-              <div className="border-t border-border px-6 py-3">
-                <button
-                  onClick={() => { setShowPricing(false); onManageAccount?.(); }}
-                  className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                >
-                  Manage account <span className="text-muted-foreground/60">→ Billing</span>
-                </button>
+                <PricingCards onSelect={() => setShowPricing(false)} />
               </div>
             </div>
           </div>
