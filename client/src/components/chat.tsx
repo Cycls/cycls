@@ -1034,12 +1034,12 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                         )}
                       </div>
                     ) : (
-                      activeOrg ? `${t("orgPlans")} — ${activeOrg.name}` : t("orgPlans")
+                      t("orgPlans")
                     )
                   ) : t("personalPlans")}
                 </h2>
                 <button
-                  onClick={() => setPricingFor(null)}
+                  onClick={() => { setPricingFor(null); setShowOrgPicker(false); }}
                   className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1058,7 +1058,6 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
     </div>
   );
 }
-
 
 function InputBox({
   textareaRef,
