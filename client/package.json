@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@clerk/clerk-react": "^5",
+    "@clerk/localizations": "^4.2.1",
     "@clerk/themes": "^2.4.57",
     "clsx": "^2",
     "framer-motion": "^12.35.0",
