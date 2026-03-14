@@ -869,9 +869,6 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                   onClick={() => setLang(getLang() === "en" ? "ar" : "en")}
                   className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
-                  </svg>
                   {t("language")}
                 </button>
                 <div className="border-t border-border" />
@@ -941,7 +938,7 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
       {pricingFor && createPortal(
         <>
           <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => setPricingFor(null)} />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none" dir="ltr">
             <div className="relative w-auto max-h-[75vh] sm:max-h-[90vh] flex flex-col rounded-2xl border border-border bg-background shadow-xl pointer-events-auto">
               <div className="flex items-center justify-between px-6 pt-5 pb-3">
                 <h2 className="text-base font-semibold text-foreground">{pricingFor === "organization" ? t("orgPlans") : t("personalPlans")}</h2>
