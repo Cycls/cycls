@@ -938,8 +938,8 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
       {pricingFor && createPortal(
         <>
           <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => setPricingFor(null)} />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none" dir="ltr">
-            <div className="relative w-auto max-h-[75vh] sm:max-h-[90vh] flex flex-col rounded-2xl border border-border bg-background shadow-xl pointer-events-auto">
+          <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none" dir="ltr">
+            <div className="pointer-events-auto fixed top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] flex flex-col rounded-xl border border-border bg-background shadow-xl sm:relative sm:inset-auto sm:w-auto sm:max-h-[90vh] sm:rounded-2xl">
               <div className="flex items-center justify-between px-6 pt-5 pb-3">
                 <h2 className="text-base font-semibold text-foreground">{pricingFor === "organization" ? t("orgPlans") : t("personalPlans")}</h2>
                 <button
