@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { FileEntry } from "../hooks/use-files";
+import { t, useLang } from "../lib/i18n";
 
 // Icons
 function FolderIcon({ className = "size-5" }: { className?: string }) {
@@ -122,6 +123,7 @@ export function Files({
   onDelete: (path: string) => Promise<void>;
   onOpenFile: (path: string) => Promise<string>;
 }) {
+  useLang();
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [creatingFolder, setCreatingFolder] = useState(false);
@@ -221,8 +223,8 @@ export function Files({
           <button
             onClick={() => onNavigate(path)}
             className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-            aria-label="Refresh"
-            title="Refresh"
+            aria-label={t("refresh")}
+            title={t("refresh")}
           >
             <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
@@ -231,8 +233,8 @@ export function Files({
           <button
             onClick={() => setCreatingFolder(true)}
             className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-            aria-label="New folder"
-            title="New folder"
+            aria-label={t("newFolder")}
+            title={t("newFolder")}
           >
             <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 10.5v6m3-3H9m4.06-7.19l-2.12-2.12a1.5 1.5 0 00-1.06-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
@@ -241,8 +243,8 @@ export function Files({
           <button
             onClick={() => fileInputRef.current?.click()}
             className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-            aria-label="Upload"
-            title="Upload"
+            aria-label={t("upload")}
+            title={t("upload")}
           >
             <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
@@ -396,7 +398,7 @@ export function Files({
                         onClose={() => setMenuOpen(null)}
                         items={[
                           ...(!isDir ? [{
-                            label: "Download",
+                            label: t("download"),
                             onClick: () => {
                               onOpenFile(entryPath).then((url) => {
                                 const a = document.createElement("a");
@@ -407,11 +409,11 @@ export function Files({
                             },
                           }] : []),
                           {
-                            label: "Rename",
+                            label: t("rename"),
                             onClick: () => setRenaming(entry.name),
                           },
                           {
-                            label: "Delete",
+                            label: t("delete"),
                             danger: true,
                             onClick: async () => {
                               await onDelete(entryPath);
@@ -431,8 +433,8 @@ export function Files({
             {sorted.length === 0 && !creatingFolder && uploading.length === 0 && (
               <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                 <FolderIcon className="size-10 mb-3 opacity-30" />
-                <p className="text-sm">No files yet</p>
-                <p className="text-xs mt-1">Upload files or create a folder</p>
+                <p className="text-sm">{t("noFiles")}</p>
+                <p className="text-xs mt-1">{t("noFilesSub")}</p>
               </div>
             )}
           </div>

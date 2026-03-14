@@ -14,6 +14,8 @@ import {
 } from "@clerk/clerk-react";
 import { useSubscription } from "@clerk/clerk-react/experimental";
 import { dark } from "@clerk/themes";
+import { arSA } from "@clerk/localizations";
+import { useLang } from "./lib/i18n";
 import { Chat } from "./components/chat";
 import { SharedView } from "./components/shared-view";
 import { useChat, AppConfig } from "./hooks/use-chat";
@@ -274,6 +276,7 @@ function CustomSignIn() {
 
 export default function App() {
   const isDark = useDarkMode();
+  const lang = useLang();
   const inlined = (window as any).__CONFIG__;
   const [config, setConfig] = useState<AppConfig | null>(inlined || null);
   const [loading, setLoading] = useState(!inlined);
@@ -310,7 +313,7 @@ export default function App() {
   }
 
   return (
-    <ClerkProvider publishableKey={clerkKey} appearance={{ baseTheme: isDark ? dark : undefined }}>
+    <ClerkProvider publishableKey={clerkKey} appearance={{ baseTheme: isDark ? dark : undefined }} localization={lang === "ar" ? arSA : undefined}>
       <SignedIn>
         <ChatApp config={config} />
       </SignedIn>
