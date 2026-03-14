@@ -967,7 +967,9 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
         document.body
       )}
       {autoPlanId && (
-        <AutoCheckout planId={autoPlanId} />
+        plan?.status === "active"
+          ? <AutoManagePlan />
+          : <AutoCheckout planId={autoPlanId} />
       )}
     </div>
   );
@@ -983,6 +985,20 @@ function AutoCheckout({ planId }: { planId: string }) {
       <CheckoutButton planId={planId} planPeriod="month" for="user">
         <button ref={ref} />
       </CheckoutButton>
+    </div>
+  );
+}
+
+function AutoManagePlan() {
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    ref.current?.click();
+  }, []);
+  return (
+    <div className="hidden">
+      <SubscriptionDetailsButton for="user">
+        <button ref={ref} />
+      </SubscriptionDetailsButton>
     </div>
   );
 }
