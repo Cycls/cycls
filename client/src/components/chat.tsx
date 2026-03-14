@@ -774,6 +774,8 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
   const [open, setOpen] = useState(false);
   const [showOrgs, setShowOrgs] = useState(false);
   const [pricingFor, setPricingFor] = useState<"user" | "organization" | null>(null);
+  const [showNeedsOrg, setShowNeedsOrg] = useState(false);
+  const [showOrgPicker, setShowOrgPicker] = useState(false);
   const autoPlans = useRef((() => {
     const params = new URLSearchParams(window.location.search);
     return params.get("plans");
@@ -790,9 +792,10 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
       if (activeOrg) {
         autoPlans.current = null;
         window.history.replaceState({}, "", window.location.pathname);
+        setShowNeedsOrg(false);
         setPricingFor("organization");
       } else {
-        onCreateOrg?.();
+        setShowNeedsOrg(true);
       }
     }
   }, [activeOrg]);
@@ -958,13 +961,83 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
         </>,
         document.body
       )}
+      {showNeedsOrg && createPortal(
+        <>
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => { setShowNeedsOrg(false); autoPlans.current = null; window.history.replaceState({}, "", window.location.pathname); }} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none" dir="ltr">
+            <div className="pointer-events-auto w-full max-w-sm rounded-2xl border border-border bg-background shadow-xl p-6 text-center">
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
+                <svg className="w-6 h-6 text-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                </svg>
+              </div>
+              <h2 className="text-base font-semibold text-foreground mb-2">{t("needsOrgTitle")}</h2>
+              <p className="text-sm text-muted-foreground mb-5">{t("needsOrgDesc")}</p>
+              <button
+                onClick={() => { setShowNeedsOrg(false); onCreateOrg?.(); }}
+                className="w-full rounded-lg bg-foreground text-background px-4 py-2.5 text-sm font-medium hover:opacity-90 transition-opacity cursor-pointer"
+              >
+                {t("createOrg")}
+              </button>
+            </div>
+          </div>
+        </>,
+        document.body
+      )}
       {pricingFor && createPortal(
         <>
           <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => setPricingFor(null)} />
           <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none" dir="ltr">
             <div className="pointer-events-auto fixed top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] flex flex-col rounded-xl border border-border bg-background shadow-xl sm:relative sm:inset-auto sm:w-auto sm:max-h-[90vh] sm:rounded-2xl">
               <div className="flex items-center justify-between px-6 pt-5 pb-3">
-                <h2 className="text-base font-semibold text-foreground">{pricingFor === "organization" ? (activeOrg ? `Plans for ${activeOrg.name}` : t("orgPlans")) : t("personalPlans")}</h2>
+                <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
+                  {pricingFor === "organization" ? (
+                    orgs && orgs.length >= 1 ? (
+                      <div className="relative flex items-center gap-2">
+                        <span>{t("orgPlansFor")}</span>
+                        <button
+                          onClick={() => setShowOrgPicker(!showOrgPicker)}
+                          className="flex items-center gap-1.5 text-sm font-medium bg-secondary hover:bg-secondary/80 text-foreground rounded-lg px-2.5 py-1 border border-border cursor-pointer transition-colors"
+                        >
+                          {activeOrg?.imageUrl && (
+                            <div
+                              className="size-4 rounded-full bg-secondary shrink-0"
+                              style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }}
+                            />
+                          )}
+                          {activeOrg?.name || t("organization")}
+                          <svg className={`w-3 h-3 transition-transform ${showOrgPicker ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+                        {showOrgPicker && (
+                          <>
+                            <div className="fixed inset-0 z-[60]" onClick={() => setShowOrgPicker(false)} />
+                            <div className="absolute top-full left-0 mt-1 z-[60] min-w-[180px] rounded-xl border border-border bg-background shadow-lg py-1">
+                              {orgs.map((org) => (
+                                <button
+                                  key={org.id}
+                                  onClick={() => { onSwitchOrg?.(org.id); setShowOrgPicker(false); }}
+                                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors cursor-pointer ${activeOrg?.id === org.id ? "text-foreground bg-secondary/60" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80"}`}
+                                >
+                                  {org.imageUrl && (
+                                    <div
+                                      className="size-4 rounded-full bg-secondary shrink-0"
+                                      style={{ backgroundImage: `url(${org.imageUrl})`, backgroundSize: "cover" }}
+                                    />
+                                  )}
+                                  {org.name}
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ) : (
+                      activeOrg ? `${t("orgPlans")} — ${activeOrg.name}` : t("orgPlans")
+                    )
+                  ) : t("personalPlans")}
+                </h2>
                 <button
                   onClick={() => setPricingFor(null)}
                   className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
