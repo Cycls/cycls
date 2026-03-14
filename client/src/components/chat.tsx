@@ -247,10 +247,10 @@ export function Chat({
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                       </svg>
                     </button>
-                    {shareOpen && (
+                    {shareOpen && createPortal(
                       <>
                         <div className="fixed inset-0 z-40" onClick={() => setShareOpen(false)} />
-                        <div className="fixed right-2 top-12 z-50 mt-2 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-background shadow-lg overflow-hidden sm:absolute sm:right-0 sm:top-full">
+                        <div className="fixed right-2 top-12 z-50 mt-2 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-background shadow-lg overflow-hidden">
                           <div className="px-4 pt-4 pb-3">
                             <div className="flex items-center gap-2 mb-1">
                               <svg className="w-4 h-4 text-foreground shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -342,14 +342,15 @@ export function Chat({
                                 className="flex w-full items-center justify-between px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors cursor-pointer"
                               >
                                 {t("manageShares")}
-                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <svg className="w-3.5 h-3.5 rtl:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                                 </svg>
                               </button>
                             </div>
                           )}
                         </div>
-                      </>
+                      </>,
+                      document.body
                     )}
                   </div>
                 )}
