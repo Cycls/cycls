@@ -196,7 +196,7 @@ export function useChat(baseUrl: string = "") {
               setMessages((prev) => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];
-                if (last.role === "assistant") {
+                if (last?.role === "assistant") {
                   updated[updated.length - 1] = {
                     ...last,
                     parts: [...parts],
@@ -222,7 +222,7 @@ export function useChat(baseUrl: string = "") {
         setMessages((prev) => {
           const updated = [...prev];
           const last = updated[updated.length - 1];
-          if (last.role === "assistant") {
+          if (last?.role === "assistant") {
             updated[updated.length - 1] = {
               ...last,
               content: contentText,
@@ -246,7 +246,7 @@ export function useChat(baseUrl: string = "") {
             setMessages((prev) => {
               const updated = [...prev];
               const last = updated[updated.length - 1];
-              if (last.role === "assistant") {
+              if (last?.role === "assistant") {
                 updated[updated.length - 1] = { ...last, content: "", parts: [] };
               }
               return updated;
@@ -259,7 +259,7 @@ export function useChat(baseUrl: string = "") {
               setMessages((prev) => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];
-                if (last.role === "assistant") {
+                if (last?.role === "assistant") {
                   updated[updated.length - 1] = {
                     ...last,
                     parts: [
@@ -320,6 +320,7 @@ export function useChat(baseUrl: string = "") {
   }, []);
 
   const clear = useCallback(() => {
+    abortRef.current?.abort();
     setMessages([]);
     setSessionId(null);
     sessionIdRef.current = null;
@@ -358,6 +359,7 @@ export function useChat(baseUrl: string = "") {
   }, [baseUrl, authHeaders]);
 
   const loadSession = useCallback(async (id: string) => {
+    abortRef.current?.abort();
     setSessionLoading(true);
     try {
       const headers = await authHeaders();
@@ -395,6 +397,7 @@ export function useChat(baseUrl: string = "") {
     if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
     // If we deleted the current session, clear it
     if (sessionIdRef.current === id) {
+      abortRef.current?.abort();
       setMessages([]);
       setSessionId(null);
       sessionIdRef.current = null;
