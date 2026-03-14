@@ -160,11 +160,14 @@ function ChatNoAuth({ config }: { config: AppConfig | null }) {
 function SSOCallback() {
   const q = sessionStorage.getItem("cycls_q");
   const plan = sessionStorage.getItem("cycls_plan");
+  const plans = sessionStorage.getItem("cycls_plans");
   if (q) sessionStorage.removeItem("cycls_q");
   if (plan) sessionStorage.removeItem("cycls_plan");
+  if (plans) sessionStorage.removeItem("cycls_plans");
   const params = new URLSearchParams();
   if (q) params.set("q", q);
   if (plan) params.set("plan", plan);
+  if (plans) params.set("plans", plans);
   const dest = params.toString() ? `/?${params}` : "/";
   return (
     <AuthenticateWithRedirectCallback
@@ -185,15 +188,18 @@ function CustomSignIn() {
     try {
       setIsLoading(true);
       setError("");
-      // Preserve ?q= and ?plan= through OAuth redirect
+      // Preserve ?q=, ?plan=, ?plans= through OAuth redirect
       const params = new URLSearchParams(window.location.search);
       const q = params.get("q");
       const plan = params.get("plan");
+      const plans = params.get("plans");
       if (q) sessionStorage.setItem("cycls_q", q);
       if (plan) sessionStorage.setItem("cycls_plan", plan);
+      if (plans) sessionStorage.setItem("cycls_plans", plans);
       const returnParams = new URLSearchParams();
       if (q) returnParams.set("q", q);
       if (plan) returnParams.set("plan", plan);
+      if (plans) returnParams.set("plans", plans);
       const redirectUrlComplete = returnParams.toString() ? `/?${returnParams}` : "/";
       await signIn.authenticateWithRedirect({
         strategy: "oauth_google",
