@@ -30,8 +30,8 @@ export const TextPart = memo(function TextPart({ text }: { text: string }) {
   return (
     <div dir="auto" className="prose dark:prose-invert min-w-full">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={katexLoaded ? [rehypeKatexPlugin] : []}
+        remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: false }]]}
+        rehypePlugins={katexLoaded ? [[rehypeKatexPlugin, { strict: false }]] : []}
         components={{
           code({ className, children }) {
             const match = /language-(\w+)/.exec(className || "");
