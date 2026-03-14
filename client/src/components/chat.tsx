@@ -774,12 +774,28 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
   const [open, setOpen] = useState(false);
   const [showOrgs, setShowOrgs] = useState(false);
   const [pricingFor, setPricingFor] = useState<"user" | "organization" | null>(null);
-  const [autoPlanId] = useState(() => {
+  const autoPlans = useRef((() => {
     const params = new URLSearchParams(window.location.search);
-    const plan = params.get("plan");
-    if (plan) window.history.replaceState({}, "", window.location.pathname);
-    return plan;
-  });
+    return params.get("plans");
+  })());
+
+  useEffect(() => {
+    if (!autoPlans.current) return;
+    const plans = autoPlans.current;
+    if (plans === "b2c") {
+      autoPlans.current = null;
+      window.history.replaceState({}, "", window.location.pathname);
+      setPricingFor("user");
+    } else if (plans === "b2b") {
+      if (activeOrg) {
+        autoPlans.current = null;
+        window.history.replaceState({}, "", window.location.pathname);
+        setPricingFor("organization");
+      } else {
+        onCreateOrg?.();
+      }
+    }
+  }, [activeOrg]);
 
   return (
     <div className="relative">
@@ -948,7 +964,7 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
           <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none" dir="ltr">
             <div className="pointer-events-auto fixed top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] flex flex-col rounded-xl border border-border bg-background shadow-xl sm:relative sm:inset-auto sm:w-auto sm:max-h-[90vh] sm:rounded-2xl">
               <div className="flex items-center justify-between px-6 pt-5 pb-3">
-                <h2 className="text-base font-semibold text-foreground">{pricingFor === "organization" ? t("orgPlans") : t("personalPlans")}</h2>
+                <h2 className="text-base font-semibold text-foreground">{pricingFor === "organization" ? (activeOrg ? `Plans for ${activeOrg.name}` : t("orgPlans")) : t("personalPlans")}</h2>
                 <button
                   onClick={() => setPricingFor(null)}
                   className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
@@ -966,26 +982,10 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
         </>,
         document.body
       )}
-      {autoPlanId && (
-        <AutoCheckout planId={autoPlanId} />
-      )}
     </div>
   );
 }
 
-function AutoCheckout({ planId }: { planId: string }) {
-  const ref = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    ref.current?.click();
-  }, []);
-  return (
-    <div className="hidden">
-      <CheckoutButton planId={planId} planPeriod="month" for="user">
-        <button ref={ref} />
-      </CheckoutButton>
-    </div>
-  );
-}
 
 function InputBox({
   textareaRef,
