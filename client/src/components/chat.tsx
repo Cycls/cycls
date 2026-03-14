@@ -774,6 +774,12 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
   const [open, setOpen] = useState(false);
   const [showOrgs, setShowOrgs] = useState(false);
   const [pricingFor, setPricingFor] = useState<"user" | "organization" | null>(null);
+  const [autoPlanId] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    const plan = params.get("plan");
+    if (plan) window.history.replaceState({}, "", window.location.pathname);
+    return plan;
+  });
 
   return (
     <div className="relative">
@@ -960,6 +966,23 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
         </>,
         document.body
       )}
+      {autoPlanId && (
+        <AutoCheckout planId={autoPlanId} />
+      )}
+    </div>
+  );
+}
+
+function AutoCheckout({ planId }: { planId: string }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    ref.current?.click();
+  }, []);
+  return (
+    <div className="hidden">
+      <CheckoutButton planId={planId} planPeriod="month" for="user">
+        <button ref={ref} />
+      </CheckoutButton>
     </div>
   );
 }
