@@ -787,7 +787,7 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
         onCreateOrg?.();
       }
     }
-  }, [activeOrg]);
+  }, [activeOrg, onCreateOrg]);
 
   return (
     <div className="relative">
