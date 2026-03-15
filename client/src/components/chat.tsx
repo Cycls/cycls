@@ -53,6 +53,7 @@ export function Chat({
   user,
   uploadFile,
   authHeaders,
+  voice,
   files,
 }: {
   messages: Message[];
@@ -81,6 +82,7 @@ export function Chat({
   user?: UserInfo;
   uploadFile?: (file: File) => Promise<Attachment>;
   authHeaders?: () => Promise<Record<string, string>>;
+  voice?: boolean;
   files?: {
     entries: FileEntry[];
     path: string;
@@ -461,6 +463,7 @@ export function Chat({
                 transcribing={transcribing}
                 startMic={startMic}
                 stopMic={stopMic}
+                voice={voice}
               />
             </div>
           </div>
@@ -506,6 +509,7 @@ export function Chat({
                   transcribing={transcribing}
                   startMic={startMic}
                   stopMic={stopMic}
+                  voice={voice}
                 />
               </div>
             </div>
@@ -1024,6 +1028,7 @@ function InputBox({
   transcribing,
   startMic,
   stopMic,
+  voice,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   input: string;
@@ -1040,6 +1045,7 @@ function InputBox({
   transcribing: boolean;
   startMic: () => void;
   stopMic: () => void;
+  voice?: boolean;
 }) {
   return (
     <motion.div
@@ -1140,7 +1146,7 @@ function InputBox({
           )}
         </div>
         <div className="flex items-center gap-1">
-          <MicButton listening={listening} transcribing={transcribing} disabled={isStreaming} onStart={startMic} onStop={stopMic} />
+          {voice && <MicButton listening={listening} transcribing={transcribing} disabled={isStreaming} onStart={startMic} onStop={stopMic} />}
           {isStreaming ? (
             <button
               type="button"
@@ -1186,7 +1192,7 @@ function MicButton({ listening, transcribing, disabled, onStart, onStop }: { lis
       type="button"
       onClick={(e) => { e.stopPropagation(); listening ? onStop() : onStart(); }}
       disabled={transcribing || disabled}
-      className={`flex size-8 items-center justify-center rounded-full transition cursor-pointer ${listening ? "bg-foreground text-background animate-pulse" : transcribing ? "text-muted-foreground opacity-50" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
+      className={`flex size-8 items-center justify-center rounded-full transition ${disabled && !listening && !transcribing ? "text-muted-foreground opacity-30 cursor-not-allowed" : listening ? "bg-foreground text-background animate-pulse cursor-pointer" : transcribing ? "text-muted-foreground opacity-50 cursor-wait" : "text-muted-foreground hover:text-foreground hover:bg-secondary cursor-pointer"}`}
       aria-label={listening ? "Stop recording" : transcribing ? "Transcribing..." : "Start recording"}
     >
       {transcribing ? (
