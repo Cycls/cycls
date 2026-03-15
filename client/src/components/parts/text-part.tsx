@@ -18,6 +18,12 @@ const rehypeKatexReady = import(/* @vite-ignore */ katexCdnUrl).then((m: any) =>
   }
 });
 
+function escapeCurrencyDollars(text: string): string {
+  return text.replace(/\$\$|\$\d[^$\n]{0,3}\$|\$(?=\d)/g, (m) =>
+    m.length > 1 ? m : "\\$",
+  );
+}
+
 export const TextPart = memo(function TextPart({ text }: { text: string }) {
   const [katexLoaded, setKatexLoaded] = useState(!!rehypeKatexPlugin);
 
@@ -30,7 +36,7 @@ export const TextPart = memo(function TextPart({ text }: { text: string }) {
   return (
     <div dir="auto" className="prose dark:prose-invert min-w-full">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: false }]]}
+        remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={katexLoaded ? [[rehypeKatexPlugin, { strict: false }]] : []}
         components={{
           code({ className, children }) {
@@ -52,7 +58,7 @@ export const TextPart = memo(function TextPart({ text }: { text: string }) {
           },
         }}
       >
-        {text}
+        {escapeCurrencyDollars(text)}
       </ReactMarkdown>
     </div>
   );
