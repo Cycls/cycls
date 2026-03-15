@@ -897,14 +897,12 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                     <span className="text-[10px] text-muted-foreground/60">{plan.name}</span>
                   </button>
                 )}
-                {onManageAccount && (
-                  <button
-                    onClick={() => { setOpen(false); onManageAccount(); }}
-                    className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                  >
-                    {t("manageAccount")}
-                  </button>
-                )}
+                <button
+                  onClick={() => { setOpen(false); activeOrg && onManageOrg ? onManageOrg() : onManageAccount?.(); }}
+                  className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                >
+                  {activeOrg ? t("manageOrg") : t("manageAccount")}
+                </button>
                 {onSwitchOrg && (
                   <>
                   <div className="border-t border-border" />
@@ -924,14 +922,6 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                     </svg>
                   </button>
                   </>
-                )}
-                {onManageOrg && activeOrg && (
-                  <button
-                    onClick={() => { setOpen(false); onManageOrg(); }}
-                    className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                  >
-                    {t("manageOrg")}
-                  </button>
                 )}
                 {onSignOut && (
                   <>
