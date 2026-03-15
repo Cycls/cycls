@@ -157,15 +157,28 @@ function ChatNoAuth({ config }: { config: AppConfig | null }) {
   );
 }
 
-function SSOCallback() {
-  const q = sessionStorage.getItem("cycls_q");
-  const plans = sessionStorage.getItem("cycls_plans");
-  if (q) sessionStorage.removeItem("cycls_q");
-  if (plans) sessionStorage.removeItem("cycls_plans");
+const PERSIST_KEYS = ["q", "plans"] as const;
+const ssKey = (k: string) => `cycls_${k}`;
+
+function stashParams() {
+  const params = new URLSearchParams(window.location.search);
+  for (const k of PERSIST_KEYS) {
+    const v = params.get(k);
+    if (v) sessionStorage.setItem(ssKey(k), v);
+  }
+}
+
+function popParams(): string {
   const params = new URLSearchParams();
-  if (q) params.set("q", q);
-  if (plans) params.set("plans", plans);
-  const dest = params.toString() ? `/?${params}` : "/";
+  for (const k of PERSIST_KEYS) {
+    const v = sessionStorage.getItem(ssKey(k));
+    if (v) { params.set(k, v); sessionStorage.removeItem(ssKey(k)); }
+  }
+  return params.toString() ? `/?${params}` : "/";
+}
+
+function SSOCallback() {
+  const dest = popParams();
   return (
     <AuthenticateWithRedirectCallback
       signInForceRedirectUrl={dest}
@@ -185,16 +198,9 @@ function CustomSignIn() {
     try {
       setIsLoading(true);
       setError("");
-      // Preserve ?q= and ?plans= through OAuth redirect
+      stashParams();
       const params = new URLSearchParams(window.location.search);
-      const q = params.get("q");
-      const plans = params.get("plans");
-      if (q) sessionStorage.setItem("cycls_q", q);
-      if (plans) sessionStorage.setItem("cycls_plans", plans);
-      const returnParams = new URLSearchParams();
-      if (q) returnParams.set("q", q);
-      if (plans) returnParams.set("plans", plans);
-      const redirectUrlComplete = returnParams.toString() ? `/?${returnParams}` : "/";
+      const redirectUrlComplete = params.toString() ? `/?${params}` : "/";
       await signIn.authenticateWithRedirect({
         strategy: "oauth_google",
         redirectUrl: "/sso-callback",
