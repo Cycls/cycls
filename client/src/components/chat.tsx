@@ -1180,40 +1180,12 @@ function LoadingBar() {
 }
 
 function MicButton({ listening, transcribing, onStart, onStop }: { listening: boolean; transcribing: boolean; onStart: () => void; onStop: () => void }) {
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const startedRef = useRef(false);
-
-  const handlePointerDown = useCallback((e: React.PointerEvent) => {
-    e.stopPropagation();
-    if (transcribing || listening) return;
-    startedRef.current = false;
-    timerRef.current = setTimeout(() => {
-      startedRef.current = true;
-      onStart();
-    }, 300);
-  }, [transcribing, listening, onStart]);
-
-  const handlePointerUp = useCallback(() => {
-    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
-    if (startedRef.current) { startedRef.current = false; onStop(); }
-  }, [onStop]);
-
-  const handleClick = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (startedRef.current) return; // long-press already handled
-    if (listening) { onStop(); } else if (!transcribing) { onStart(); }
-  }, [listening, transcribing, onStart, onStop]);
-
   return (
     <button
       type="button"
-      onClick={handleClick}
-      onPointerDown={handlePointerDown}
-      onPointerUp={handlePointerUp}
-      onPointerLeave={handlePointerUp}
-      onContextMenu={(e) => e.preventDefault()}
+      onClick={() => listening ? onStop() : onStart()}
       disabled={transcribing}
-      className={`flex size-8 items-center justify-center rounded-full transition cursor-pointer select-none touch-none ${listening ? "bg-foreground text-background animate-pulse" : transcribing ? "text-muted-foreground opacity-50" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
+      className={`flex size-8 items-center justify-center rounded-full transition cursor-pointer ${listening ? "bg-foreground text-background animate-pulse" : transcribing ? "text-muted-foreground opacity-50" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
       aria-label={listening ? "Stop recording" : transcribing ? "Transcribing..." : "Start recording"}
     >
       {transcribing ? (
