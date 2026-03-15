@@ -421,5 +421,6 @@ export function useChat(baseUrl: string = "") {
     deleteSession,
     setGetToken,
     uploadFile,
+    authHeaders,
   };
 }

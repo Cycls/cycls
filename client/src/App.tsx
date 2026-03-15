@@ -22,7 +22,7 @@ import { useChat, AppConfig } from "./hooks/use-chat";
 import { useFiles } from "./hooks/use-files";
 
 function ChatApp({ config }: { config: AppConfig | null }) {
-  const { messages, isStreaming, sessionLoading, sessionId, send, retry, stop, clear, share, listShares, deleteShare, listSessions, loadSession, deleteSession, setGetToken, uploadFile } =
+  const { messages, isStreaming, sessionLoading, sessionId, send, retry, stop, clear, share, listShares, deleteShare, listSessions, loadSession, deleteSession, setGetToken, uploadFile, authHeaders } =
     useChat();
   const { entries, path, loading, list, upload, mkdir, rename, remove, openFile, setGetToken: setFilesToken } =
     useFiles();
@@ -103,6 +103,7 @@ function ChatApp({ config }: { config: AppConfig | null }) {
         imageUrl: user.imageUrl,
       } : undefined}
       uploadFile={uploadFile}
+      authHeaders={authHeaders}
       files={{
         entries, path, loading,
         onNavigate: list,
