@@ -41,6 +41,7 @@ export interface Message {
 export interface AppConfig {
   name?: string;
   auth?: boolean;
+  voice?: boolean;
   pk?: string;
 }
 

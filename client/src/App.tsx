@@ -104,6 +104,7 @@ function ChatApp({ config }: { config: AppConfig | null }) {
       } : undefined}
       uploadFile={uploadFile}
       authHeaders={authHeaders}
+      voice={config?.voice}
       files={{
         entries, path, loading,
         onNavigate: list,
