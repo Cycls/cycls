@@ -116,6 +116,7 @@ export function Chat({
   const onSpeechEnd = useCallback((text: string) => {
     if (text.trim()) {
       handleSubmitRef.current(text);
+      textareaRef.current?.blur();
     }
   }, []);
   const { listening, transcribing, start: startMic, stop: stopMic } = useSpeechRecognition({ onEnd: onSpeechEnd, authHeaders });
@@ -1139,11 +1140,11 @@ function InputBox({
           )}
         </div>
         <div className="flex items-center gap-1">
-          <MicButton listening={listening} transcribing={transcribing} onStart={startMic} onStop={stopMic} />
+          <MicButton listening={listening} transcribing={transcribing} disabled={isStreaming} onStart={startMic} onStop={stopMic} />
           {isStreaming ? (
             <button
               type="button"
-              onClick={onStop}
+              onClick={(e) => { e.stopPropagation(); onStop(); }}
               className="flex size-8 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 transition cursor-pointer"
               aria-label="Stop"
             >
@@ -1179,12 +1180,12 @@ function LoadingBar() {
   );
 }
 
-function MicButton({ listening, transcribing, onStart, onStop }: { listening: boolean; transcribing: boolean; onStart: () => void; onStop: () => void }) {
+function MicButton({ listening, transcribing, disabled, onStart, onStop }: { listening: boolean; transcribing: boolean; disabled: boolean; onStart: () => void; onStop: () => void }) {
   return (
     <button
       type="button"
-      onClick={() => listening ? onStop() : onStart()}
-      disabled={transcribing}
+      onClick={(e) => { e.stopPropagation(); listening ? onStop() : onStart(); }}
+      disabled={transcribing || disabled}
       className={`flex size-8 items-center justify-center rounded-full transition cursor-pointer ${listening ? "bg-foreground text-background animate-pulse" : transcribing ? "text-muted-foreground opacity-50" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
       aria-label={listening ? "Stop recording" : transcribing ? "Transcribing..." : "Start recording"}
     >
