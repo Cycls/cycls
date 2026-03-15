@@ -36,7 +36,7 @@ export const TextPart = memo(function TextPart({ text }: { text: string }) {
   return (
     <div dir="auto" className="prose dark:prose-invert min-w-full">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
+        remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkMath]}
         rehypePlugins={katexLoaded ? [[rehypeKatexPlugin, { strict: false }]] : []}
         components={{
           code({ className, children }) {
