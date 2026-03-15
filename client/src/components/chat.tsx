@@ -9,6 +9,7 @@ import { Files } from "./files";
 import type { Message, Attachment } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
+import { useSpeechRecognition } from "../hooks/use-speech";
 
 interface PlanInfo {
   name: string;
@@ -170,8 +171,8 @@ export function Chat({
     textareaRef.current?.focus();
   }, []);
 
-  const handleSubmit = useCallback(() => {
-    const text = input.trim();
+  const handleSubmit = useCallback((overrideText?: string) => {
+    const text = (overrideText ?? input).trim();
     if (!text || isStreaming || attachments.some((a) => a.status === "uploading")) return;
     const sendAttachments = attachments.length > 0 ? [...attachments] : undefined;
     setInput("");
@@ -1002,7 +1003,7 @@ function InputBox({
   input: string;
   setInput: (v: string) => void;
   handleKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  handleSubmit: () => void;
+  handleSubmit: (overrideText?: string) => void;
   isStreaming: boolean;
   onStop: () => void;
   onOpenFilePicker?: () => void;
@@ -1010,6 +1011,17 @@ function InputBox({
   attachments?: Attachment[];
   onRemoveFile?: (index: number) => void;
 }) {
+  const onTranscript = useCallback((text: string) => {
+    setInput(text);
+  }, [setInput]);
+  const onSpeechEnd = useCallback((text: string) => {
+    if (text.trim()) {
+      setInput("");
+      handleSubmit(text);
+    }
+  }, [setInput, handleSubmit]);
+  const { listening, start: startMic, stop: stopMic, supported: micSupported } = useSpeechRecognition({ onTranscript, onEnd: onSpeechEnd });
+
   return (
     <motion.div
       layoutId="chat-input"
@@ -1108,7 +1120,10 @@ function InputBox({
             <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} />
           )}
         </div>
-        <div>
+        <div className="flex items-center gap-1">
+          {micSupported && (
+            <MicButton listening={listening} onStart={startMic} onStop={stopMic} />
+          )}
           {isStreaming ? (
             <button
               type="button"
@@ -1145,6 +1160,51 @@ function LoadingBar() {
     <div className="h-0.5 overflow-hidden">
       <div className="h-full w-1/3 bg-muted-foreground/30 rounded-full animate-[slide_1s_ease-in-out_infinite]" />
     </div>
+  );
+}
+
+function MicButton({ listening, onStart, onStop }: { listening: boolean; onStart: () => void; onStop: () => void }) {
+  const isMobile = window.matchMedia("(pointer: coarse)").matches;
+  const heldRef = useRef(false);
+
+  // Mobile: tap to toggle
+  // Desktop: hold to record (mousedown starts, mouseup stops), click as fallback toggle
+  const handleMouseDown = useCallback(() => {
+    if (isMobile) return;
+    heldRef.current = true;
+    onStart();
+  }, [isMobile, onStart]);
+
+  const handleMouseUp = useCallback(() => {
+    if (isMobile || !heldRef.current) return;
+    heldRef.current = false;
+    onStop();
+  }, [isMobile, onStop]);
+
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isMobile) return; // desktop uses hold
+    if (listening) { onStop(); } else { onStart(); }
+  }, [isMobile, listening, onStart, onStop]);
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      onMouseDown={handleMouseDown}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={() => { if (heldRef.current) { heldRef.current = false; onStop(); } }}
+      onContextMenu={(e) => e.preventDefault()}
+      className={`flex size-8 items-center justify-center rounded-full transition cursor-pointer select-none ${listening ? "bg-foreground text-background animate-pulse" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
+      aria-label={listening ? "Stop dictation" : "Start dictation"}
+    >
+      <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 01-14 0v-2" />
+        <line x1="12" y1="19" x2="12" y2="23" strokeLinecap="round" />
+        <line x1="8" y1="23" x2="16" y2="23" strokeLinecap="round" />
+      </svg>
+    </button>
   );
 }
 
