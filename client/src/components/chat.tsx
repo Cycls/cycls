@@ -1040,7 +1040,6 @@ function InputBox({
   startMic: () => void;
   stopMic: () => void;
 }) {
-
   return (
     <motion.div
       layoutId="chat-input"
@@ -1184,10 +1183,6 @@ function MicButton({ listening, transcribing, onStart, onStop }: { listening: bo
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startedRef = useRef(false);
 
-  const clearTimer = useCallback(() => {
-    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
-  }, []);
-
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation();
     if (transcribing || listening) return;
@@ -1199,9 +1194,9 @@ function MicButton({ listening, transcribing, onStart, onStop }: { listening: bo
   }, [transcribing, listening, onStart]);
 
   const handlePointerUp = useCallback(() => {
-    clearTimer();
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
     if (startedRef.current) { startedRef.current = false; onStop(); }
-  }, [clearTimer, onStop]);
+  }, [onStop]);
 
   const handleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();

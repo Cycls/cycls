@@ -76,11 +76,6 @@ export function useSpeechRecognition({
     }
   }, [onEnd]);
 
-  const supported =
-    typeof window !== "undefined" &&
-    typeof navigator !== "undefined" &&
-    !!navigator.mediaDevices?.getUserMedia;
-
   useEffect(() => {
     return () => {
       recorderRef.current?.stop();
@@ -88,5 +83,5 @@ export function useSpeechRecognition({
     };
   }, []);
 
-  return { listening, transcribing, start, stop, supported };
+  return { listening, transcribing, start, stop };
 }
