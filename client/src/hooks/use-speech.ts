@@ -1,85 +1,92 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 
-interface SpeechRecognitionEvent {
-  resultIndex: number;
-  results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionErrorEvent {
-  error: string;
-}
-
 export function useSpeechRecognition({
-  onTranscript,
   onEnd,
+  authHeaders,
 }: {
-  onTranscript: (text: string) => void;
   onEnd: (text: string) => void;
+  authHeaders?: () => Promise<Record<string, string>>;
 }) {
   const [listening, setListening] = useState(false);
-  const recognitionRef = useRef<any>(null);
-  const transcriptRef = useRef("");
+  const [transcribing, setTranscribing] = useState(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const authHeadersRef = useRef(authHeaders);
+  authHeadersRef.current = authHeaders;
+
+  const stop = useCallback(() => {
+    recorderRef.current?.stop();
+  }, []);
+
+  const start = useCallback(async () => {
+    if (recorderRef.current) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      chunksRef.current = [];
+
+      const recorder = new MediaRecorder(stream);
+      recorderRef.current = recorder;
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+        recorderRef.current = null;
+        setListening(false);
+
+        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        chunksRef.current = [];
+
+        if (blob.size < 1000) {
+          onEnd("");
+          return;
+        }
+
+        setTranscribing(true);
+
+        const form = new FormData();
+        form.append("file", blob, "voice.webm");
+        try {
+          const headers = authHeadersRef.current ? await authHeadersRef.current() : {};
+          const token = headers["Authorization"]?.replace("Bearer ", "");
+          const url = token ? `/transcribe?token=${encodeURIComponent(token)}` : "/transcribe";
+          const res = await fetch(url, { method: "POST", body: form });
+          if (res.ok) {
+            const data = await res.json();
+            onEnd(data.text || "");
+          } else {
+            onEnd("");
+          }
+        } catch {
+          onEnd("");
+        } finally {
+          setTranscribing(false);
+        }
+      };
+
+      recorder.start();
+      setListening(true);
+    } catch {
+      // Mic access denied or unavailable
+    }
+  }, [onEnd]);
 
   const supported =
     typeof window !== "undefined" &&
-    ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
-
-  const start = useCallback(() => {
-    if (!supported || recognitionRef.current) return;
-
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
-    recognitionRef.current = recognition;
-    transcriptRef.current = "";
-
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = navigator.language || "en-US";
-
-    recognition.onresult = (e: SpeechRecognitionEvent) => {
-      let final = "";
-      let interim = "";
-      for (let i = 0; i < e.results.length; i++) {
-        const result = e.results[i];
-        if (result.isFinal) {
-          final += result[0].transcript;
-        } else {
-          interim += result[0].transcript;
-        }
-      }
-      const text = final + interim;
-      transcriptRef.current = text;
-      onTranscript(text);
-    };
-
-    recognition.onend = () => {
-      setListening(false);
-      recognitionRef.current = null;
-      onEnd(transcriptRef.current);
-    };
-
-    recognition.onerror = (e: SpeechRecognitionErrorEvent) => {
-      if (e.error !== "aborted") {
-        console.warn("Speech recognition error:", e.error);
-      }
-      setListening(false);
-      recognitionRef.current = null;
-    };
-
-    recognition.start();
-    setListening(true);
-  }, [supported, onTranscript, onEnd]);
-
-  const stop = useCallback(() => {
-    recognitionRef.current?.stop();
-  }, []);
+    typeof navigator !== "undefined" &&
+    !!navigator.mediaDevices?.getUserMedia;
 
   useEffect(() => {
     return () => {
-      recognitionRef.current?.abort();
+      recorderRef.current?.stop();
+      streamRef.current?.getTracks().forEach((t) => t.stop());
     };
   }, []);
 
-  return { listening, start, stop, supported };
+  return { listening, transcribing, start, stop, supported };
 }

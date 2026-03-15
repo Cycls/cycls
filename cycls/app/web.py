@@ -156,6 +156,30 @@ def web(func, config):
     async def get_config():
         return config
 
+    @app.post("/transcribe")
+    async def transcribe(request: Request, user: Optional[User] = auth):
+        import os
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=501, detail="Transcription not configured")
+        form = await request.form()
+        file = form.get("file")
+        if not file:
+            raise HTTPException(status_code=400, detail="No audio file")
+        audio_bytes = await file.read()
+        import httpx
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                "https://api.openai.com/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                files={"file": ("voice.webm", audio_bytes, file.content_type or "audio/webm")},
+                data={"model": "whisper-1"},
+                timeout=30,
+            )
+            if r.status_code != 200:
+                raise HTTPException(status_code=r.status_code, detail=r.text)
+            return r.json()
+
     from cycls.app.state import sessions_router, files_router, share_router
     app.include_router(sessions_router(required_auth))
     app.include_router(files_router(required_auth))

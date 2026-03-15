@@ -9,7 +9,7 @@ export default defineConfig({
   server: {
     proxy: {
       ...Object.fromEntries(
-        ["/config", "/chat", "/sessions", "/files", "/shared-assets"].map(
+        ["/config", "/chat", "/sessions", "/files", "/shared-assets", "/transcribe"].map(
           (p) => [p, backend]
         )
       ),

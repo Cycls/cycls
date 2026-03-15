@@ -52,6 +52,7 @@ export function Chat({
   name,
   user,
   uploadFile,
+  authHeaders,
   files,
 }: {
   messages: Message[];
@@ -79,6 +80,7 @@ export function Chat({
   name?: string;
   user?: UserInfo;
   uploadFile?: (file: File) => Promise<Attachment>;
+  authHeaders?: () => Promise<Record<string, string>>;
   files?: {
     entries: FileEntry[];
     path: string;
@@ -108,6 +110,15 @@ export function Chat({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { scrollRef, contentRef, scrollToBottom } = useStickToBottom();
+
+  const handleSubmitRef = useRef<(overrideText?: string) => void>(() => {});
+
+  const onSpeechEnd = useCallback((text: string) => {
+    if (text.trim()) {
+      handleSubmitRef.current(text);
+    }
+  }, []);
+  const { listening, transcribing, start: startMic, stop: stopMic } = useSpeechRecognition({ onEnd: onSpeechEnd, authHeaders });
 
   // Reset sidebar data when org changes
   useEffect(() => {
@@ -180,6 +191,8 @@ export function Chat({
     onSend(text, sendAttachments);
     setTimeout(() => scrollToBottom(), 0);
   }, [input, isStreaming, onSend, attachments, scrollToBottom]);
+
+  handleSubmitRef.current = handleSubmit;
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const isMobile = window.matchMedia("(pointer: coarse)").matches;
@@ -443,6 +456,10 @@ export function Chat({
                 onOpenFiles={files ? () => { setFilesOpen(true); setFilesTab("files"); files.onNavigate(files.path); } : undefined}
                 attachments={attachments}
                 onRemoveFile={removeFile}
+                listening={listening}
+                transcribing={transcribing}
+                startMic={startMic}
+                stopMic={stopMic}
               />
             </div>
           </div>
@@ -484,6 +501,10 @@ export function Chat({
                   onOpenFiles={files ? () => { setFilesOpen(true); setFilesTab("files"); files.onNavigate(files.path); } : undefined}
                   attachments={attachments}
                   onRemoveFile={removeFile}
+                  listening={listening}
+                  transcribing={transcribing}
+                  startMic={startMic}
+                  stopMic={stopMic}
                 />
               </div>
             </div>
@@ -998,6 +1019,10 @@ function InputBox({
   onOpenFiles,
   attachments,
   onRemoveFile,
+  listening,
+  transcribing,
+  startMic,
+  stopMic,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   input: string;
@@ -1010,17 +1035,11 @@ function InputBox({
   onOpenFiles?: () => void;
   attachments?: Attachment[];
   onRemoveFile?: (index: number) => void;
+  listening: boolean;
+  transcribing: boolean;
+  startMic: () => void;
+  stopMic: () => void;
 }) {
-  const onTranscript = useCallback((text: string) => {
-    setInput(text);
-  }, [setInput]);
-  const onSpeechEnd = useCallback((text: string) => {
-    if (text.trim()) {
-      setInput("");
-      handleSubmit(text);
-    }
-  }, [setInput, handleSubmit]);
-  const { listening, start: startMic, stop: stopMic, supported: micSupported } = useSpeechRecognition({ onTranscript, onEnd: onSpeechEnd });
 
   return (
     <motion.div
@@ -1121,9 +1140,7 @@ function InputBox({
           )}
         </div>
         <div className="flex items-center gap-1">
-          {micSupported && (
-            <MicButton listening={listening} onStart={startMic} onStop={stopMic} />
-          )}
+          <MicButton listening={listening} transcribing={transcribing} onStart={startMic} onStop={stopMic} />
           {isStreaming ? (
             <button
               type="button"
@@ -1163,47 +1180,28 @@ function LoadingBar() {
   );
 }
 
-function MicButton({ listening, onStart, onStop }: { listening: boolean; onStart: () => void; onStop: () => void }) {
-  const isMobile = window.matchMedia("(pointer: coarse)").matches;
-  const heldRef = useRef(false);
-
-  // Mobile: tap to toggle
-  // Desktop: hold to record (mousedown starts, mouseup stops), click as fallback toggle
-  const handleMouseDown = useCallback(() => {
-    if (isMobile) return;
-    heldRef.current = true;
-    onStart();
-  }, [isMobile, onStart]);
-
-  const handleMouseUp = useCallback(() => {
-    if (isMobile || !heldRef.current) return;
-    heldRef.current = false;
-    onStop();
-  }, [isMobile, onStop]);
-
-  const handleClick = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!isMobile) return; // desktop uses hold
-    if (listening) { onStop(); } else { onStart(); }
-  }, [isMobile, listening, onStart, onStop]);
-
+function MicButton({ listening, transcribing, onStart, onStop }: { listening: boolean; transcribing: boolean; onStart: () => void; onStop: () => void }) {
   return (
     <button
       type="button"
-      onClick={handleClick}
-      onMouseDown={handleMouseDown}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={() => { if (heldRef.current) { heldRef.current = false; onStop(); } }}
-      onContextMenu={(e) => e.preventDefault()}
-      className={`flex size-8 items-center justify-center rounded-full transition cursor-pointer select-none ${listening ? "bg-foreground text-background animate-pulse" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
-      aria-label={listening ? "Stop dictation" : "Start dictation"}
+      onClick={(e) => { e.stopPropagation(); if (listening) { onStop(); } else if (!transcribing) { onStart(); } }}
+      disabled={transcribing}
+      className={`flex size-8 items-center justify-center rounded-full transition cursor-pointer select-none ${listening ? "bg-foreground text-background animate-pulse" : transcribing ? "text-muted-foreground opacity-50" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
+      aria-label={listening ? "Stop recording" : transcribing ? "Transcribing..." : "Start recording"}
     >
-      <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 01-14 0v-2" />
-        <line x1="12" y1="19" x2="12" y2="23" strokeLinecap="round" />
-        <line x1="8" y1="23" x2="16" y2="23" strokeLinecap="round" />
-      </svg>
+      {transcribing ? (
+        <svg className="size-5 animate-spin" viewBox="0 0 24 24" fill="none">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+      ) : (
+        <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 01-14 0v-2" />
+          <line x1="12" y1="19" x2="12" y2="23" strokeLinecap="round" />
+          <line x1="8" y1="23" x2="16" y2="23" strokeLinecap="round" />
+        </svg>
+      )}
     </button>
   );
 }
