@@ -1,4 +1,4 @@
-import json, inspect, uuid
+import json, inspect, uuid, os
 from datetime import datetime, timezone
 from pathlib import Path
 from pydantic import BaseModel
@@ -15,6 +15,7 @@ class Config(BaseModel):
     auth: bool = False
     plan: str = "free"
     analytics: bool = False
+    voice: bool = False
     pk: Optional[str] = None
     jwks: Optional[str] = None
 
@@ -154,11 +155,11 @@ def web(func, config):
 
     @app.get("/config")
     async def get_config():
+        config.voice = bool(os.environ.get("OPENAI_API_KEY"))
         return config
 
     @app.post("/transcribe")
     async def transcribe(request: Request, user: Optional[User] = auth):
-        import os
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise HTTPException(status_code=501, detail="Transcription not configured")
