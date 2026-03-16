@@ -29,6 +29,9 @@ test = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build]
+artifacts = ["cycls/app/themes/"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["cycls"]
 

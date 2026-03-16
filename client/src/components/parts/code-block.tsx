@@ -1,11 +1,7 @@
 import { cn } from "../../lib/utils";
 import { useDarkMode } from "../../hooks/use-dark-mode";
 import { useEffect, useState } from "react";
-const cdnUrl = "https://esm.sh/shiki@3.4.2";
-// @ts-ignore - CDN import
-const shikiPromise: Promise<{ codeToHtml: any }> = import(/* @vite-ignore */ cdnUrl);
-const codeToHtml = (code: string, opts: { lang: string; theme: string }) =>
-  shikiPromise.then((m) => m.codeToHtml(code, opts) as Promise<string>);
+import { codeToHtml } from "shiki";
 
 export function CodeBlock({
   children,
