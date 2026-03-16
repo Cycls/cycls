@@ -7,8 +7,8 @@ import { memo, useState } from "react";
 import { CodeBlock, CodeBlockCode, CodeBlockGroup } from "./code-block";
 
 function escapeCurrencyDollars(text: string): string {
-  return text.replace(/\$\$|\$\d[^$\n]{0,3}\$|\$(?=\d)/g, (m) =>
-    m.length > 1 ? m : "\\$",
+  return text.replace(/\$\$|\$(?=\d)(?![^$\n]*[\\^_{}][^$\n]*\$)/g, (m) =>
+    m === "$$" ? m : "\\$",
   );
 }
 
