@@ -1157,7 +1157,7 @@ function InputBox({
       <div className="flex items-center justify-between px-1 pt-1">
         <div className="relative flex items-center">
           {(onOpenFilePicker || onOpenFiles) && (
-            <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} />
+            <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} disabled={isStreaming} />
           )}
         </div>
         <div className="flex items-center gap-1">
@@ -1293,7 +1293,7 @@ function SessionsPanel({ sessions, loading, activeId, onLoad, onDelete }: {
   );
 }
 
-function AttachMenu({ onOpenFilePicker, onOpenFiles }: { onOpenFilePicker?: () => void; onOpenFiles?: () => void }) {
+function AttachMenu({ onOpenFilePicker, onOpenFiles, disabled }: { onOpenFilePicker?: () => void; onOpenFiles?: () => void; disabled?: boolean }) {
   const [open, setOpen] = useState(false);
 
   if (onOpenFilePicker && !onOpenFiles) {
@@ -1301,7 +1301,8 @@ function AttachMenu({ onOpenFilePicker, onOpenFiles }: { onOpenFilePicker?: () =
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); onOpenFilePicker(); }}
-        className="flex size-8 items-center justify-center rounded-2xl text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition cursor-pointer"
+        disabled={disabled}
+        className={`flex size-8 items-center justify-center rounded-2xl transition ${disabled ? "text-muted-foreground opacity-30 cursor-not-allowed" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 cursor-pointer"}`}
         aria-label="Attach file"
       >
         <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -1315,8 +1316,9 @@ function AttachMenu({ onOpenFilePicker, onOpenFiles }: { onOpenFilePicker?: () =
     <>
       <button
         type="button"
-        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
-        className="flex size-8 items-center justify-center rounded-2xl text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition cursor-pointer"
+        onClick={(e) => { e.stopPropagation(); if (!disabled) setOpen(!open); }}
+        disabled={disabled}
+        className={`flex size-8 items-center justify-center rounded-2xl transition ${disabled ? "text-muted-foreground opacity-30 cursor-not-allowed" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 cursor-pointer"}`}
         aria-label="Attach"
       >
         <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
