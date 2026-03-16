@@ -210,7 +210,7 @@ def web(func, config):
 
     @app.get("/og.png")
     async def og_image():
-        return Response(og_generate(og_title, config.title or ""), media_type="image/png")
+        return Response(await og_generate(og_title, config.title or ""), media_type="image/png")
 
     @app.get("/og/{share_id}.png")
     async def og_shared_image(share_id: str):
@@ -220,9 +220,9 @@ def web(func, config):
             title = share.get("title") or "Shared conversation"
             author = share.get("author") or {}
             avatars = [u for u in [author.get("org", {}).get("imageUrl"), author.get("imageUrl")] if u]
-            return Response(og_generate(og_title, title, avatars=avatars), media_type="image/png")
+            return Response(await og_generate(og_title, title, avatars=avatars), media_type="image/png")
         except Exception:
-            return Response(og_generate(og_title, config.title or ""), media_type="image/png")
+            return Response(await og_generate(og_title, config.title or ""), media_type="image/png")
 
     # ---- SPA fallback routes (before static mounts) ----
 
