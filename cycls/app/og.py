@@ -1,9 +1,9 @@
-"""Dynamic OG image generation — pure SVG → PNG via cairosvg."""
+"""Dynamic OG image generation — pure SVG → PNG via resvg."""
 
 import base64
 from html import escape
 from urllib.request import urlopen, Request
-import cairosvg
+from resvg_py import svg_to_bytes
 
 W, H = 1200, 630
 PAD = 60
@@ -14,16 +14,6 @@ _LOGO = '<g transform="translate({x},{y}) scale({s})" fill="#fff"><path d="M 17.
 def _rtl(text):
     return any(0x0590 <= ord(c) <= 0x08FF or 0xFB50 <= ord(c) <= 0xFEFF for c in text)
 
-
-def _prep(text):
-    if not _rtl(text):
-        return text
-    try:
-        import arabic_reshaper
-        from bidi.algorithm import get_display
-        return get_display(arabic_reshaper.reshape(text))
-    except ImportError:
-        return text
 
 
 def _font(text):
@@ -42,8 +32,8 @@ def _avatar_data(url, size=75):
 
 def generate(title, desc="", avatars=None):
     rtl = _rtl(title) or _rtl(desc)
-    title = escape(_prep(title))
-    desc = escape(_prep(desc)) if desc else ""
+    title = escape(title)
+    desc = escape(desc) if desc else ""
     desc_font = _font(desc) if desc else "Inter"
     anchor = "end" if rtl else "start"
     tx = W - PAD if rtl else PAD
@@ -89,4 +79,4 @@ def generate(title, desc="", avatars=None):
 {avatar_els}
 </svg>'''
 
-    return cairosvg.svg2png(bytestring=svg.encode("utf-8"), output_width=W, output_height=H)
+    return svg_to_bytes(svg_string=svg, font_dirs=["/usr/share/fonts"], width=W, height=H)
