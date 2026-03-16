@@ -1282,9 +1282,9 @@ function SessionsPanel({ sessions, loading, activeId, onLoad, onDelete }: {
             className="flex size-7 items-center justify-center rounded-md text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 hover:text-red-500 hover:bg-red-500/10 transition-all cursor-pointer"
             aria-label="Delete session"
           >
-            <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4l16 16" />
+            <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" strokeLinecap="round">
+              <circle cx="12" cy="12" r="9" strokeWidth={1.5} />
+              <path d="M8 12h8" />
             </svg>
           </button>
         </div>
