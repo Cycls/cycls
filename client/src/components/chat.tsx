@@ -284,6 +284,7 @@ export function Chat({
                               value={shareTitle}
                               onChange={(e) => setShareTitle(e.target.value)}
                               placeholder={t("untitled")}
+                              dir="auto"
                               className="w-full rounded-md border border-border bg-secondary/50 px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
                             />
                           </div>
