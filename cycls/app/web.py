@@ -192,6 +192,7 @@ def web(func, config):
     from html import escape
     _base_html = (Path(config.public_path) / "index.html").read_text()
 
+    config.voice = bool(os.environ.get("OPENAI_API_KEY"))
     _config_script = f'<script>window.__CONFIG__={config.model_dump_json()}</script>'
 
     def _seo_html(title: str = "Cycls", desc: str = "AI Agent"):
