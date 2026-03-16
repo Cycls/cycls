@@ -52,10 +52,10 @@ async def generate(title, desc="", avatars=None):
     desc_text = escape(_truncate(desc, 50)) if desc else ""
 
     # Title + description
-    ty = H // 2 - 20
-    texts = f'<text x="{tx}" y="{ty}" text-anchor="{anchor}" font-family="{title_font}" font-size="78" font-weight="bold" fill="#fff">{title_text}</text>'
+    ty = H // 2 - 60
+    texts = f'<text x="{tx}" y="{ty}" text-anchor="{anchor}" font-family="{title_font}" font-size="70" font-weight="bold" fill="#fff">{title_text}</text>'
     if desc_text:
-        texts += f'<text x="{tx}" y="{ty + 60}" text-anchor="{anchor}" font-family="{desc_font}" font-size="42" fill="#a0a0a0">{desc_text}</text>'
+        texts += f'<text x="{tx}" y="{ty + 80}" text-anchor="{anchor}" font-family="{desc_font}" font-size="52" fill="#a0a0a0">{desc_text}</text>'
 
     # Logo
     logo_scale = 84 / 29
@@ -67,8 +67,8 @@ async def generate(title, desc="", avatars=None):
     # Avatars
     avatar_els = ""
     if avatars:
-        av_size = 75
-        overlap = 22
+        av_size = 98
+        overlap = 28
         async with httpx.AsyncClient(timeout=5, headers={"User-Agent": "Mozilla/5.0"}) as client:
             results = await asyncio.gather(*[_avatar_data(client, url) for url in avatars if url])
         loaded = [(i, d) for i, d in enumerate(results) if d]
