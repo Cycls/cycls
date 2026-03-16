@@ -31,9 +31,13 @@ def _truncate(text, max_chars):
 def _avatar_data(url, size=75):
     try:
         req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        data = urlopen(req, timeout=5).read()
+        resp = urlopen(req, timeout=5)
+        data = resp.read()
+        ct = resp.headers.get("Content-Type", "image/png").split(";")[0].strip()
+        if ct == "application/octet-stream":
+            ct = "image/png"
         b64 = base64.b64encode(data).decode()
-        return f"data:image/png;base64,{b64}"
+        return f"data:{ct};base64,{b64}"
     except Exception:
         return None
 
