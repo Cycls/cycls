@@ -15,9 +15,17 @@ def _rtl(text):
     return any(0x0590 <= ord(c) <= 0x08FF or 0xFB50 <= ord(c) <= 0xFEFF for c in text)
 
 
-
 def _font(text):
     return "Noto Sans Arabic" if _rtl(text) else "Noto Sans"
+
+
+def _truncate(text, max_chars):
+    if not text or len(text) <= max_chars:
+        return text or ""
+    trimmed = text[:max_chars - 1].rstrip()
+    if _rtl(text):
+        return "\u2026" + trimmed
+    return trimmed + "\u2026"
 
 
 def _avatar_data(url, size=75):
@@ -32,17 +40,19 @@ def _avatar_data(url, size=75):
 
 def generate(title, desc="", avatars=None):
     rtl = _rtl(title) or _rtl(desc)
-    title = escape(title)
-    desc = escape(desc) if desc else ""
-    desc_font = _font(desc) if desc else "Inter"
     anchor = "end" if rtl else "start"
     tx = W - PAD if rtl else PAD
+    title_font = _font(title)
+    desc_font = _font(desc) if desc else title_font
+
+    title_text = escape(_truncate(title, 27))
+    desc_text = escape(_truncate(desc, 50)) if desc else ""
 
     # Title + description
     ty = H // 2 - 20
-    texts = f'<text x="{tx}" y="{ty}" text-anchor="{anchor}" font-family="Noto Sans" font-size="78" font-weight="bold" fill="#fff">{title}</text>'
-    if desc:
-        texts += f'<text x="{tx}" y="{ty + 60}" text-anchor="{anchor}" font-family="{desc_font}" font-size="42" fill="#a0a0a0">{desc}</text>'
+    texts = f'<text x="{tx}" y="{ty}" text-anchor="{anchor}" font-family="{title_font}" font-size="78" font-weight="bold" fill="#fff">{title_text}</text>'
+    if desc_text:
+        texts += f'<text x="{tx}" y="{ty + 60}" text-anchor="{anchor}" font-family="{desc_font}" font-size="42" fill="#a0a0a0">{desc_text}</text>'
 
     # Logo
     logo_scale = 84 / 29
