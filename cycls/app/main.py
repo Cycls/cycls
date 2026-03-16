@@ -49,7 +49,7 @@ class App(Function):
             func=func,
             name=name,
             pip=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", "python-dotenv", "docker", "anthropic", "resvg-py", *(pip or [])],
-            apt=["curl", "unzip", "bubblewrap", "fonts-inter", "fonts-noto-core", *(apt or [])],
+            apt=["curl", "unzip", "bubblewrap", "fonts-noto-core", *(apt or [])],
             run_commands=all_run_commands,
             copy=files,
             base_url=_get_base_url(),

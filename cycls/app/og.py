@@ -17,7 +17,7 @@ def _rtl(text):
 
 
 def _font(text):
-    return "Noto Sans Arabic" if _rtl(text) else "Inter"
+    return "Noto Sans Arabic" if _rtl(text) else "Noto Sans"
 
 
 def _avatar_data(url, size=75):
@@ -40,7 +40,7 @@ def generate(title, desc="", avatars=None):
 
     # Title + description
     ty = H // 2 - 20
-    texts = f'<text x="{tx}" y="{ty}" text-anchor="{anchor}" font-family="Inter" font-size="78" font-weight="bold" fill="#fff">{title}</text>'
+    texts = f'<text x="{tx}" y="{ty}" text-anchor="{anchor}" font-family="Noto Sans" font-size="78" font-weight="bold" fill="#fff">{title}</text>'
     if desc:
         texts += f'<text x="{tx}" y="{ty + 60}" text-anchor="{anchor}" font-family="{desc_font}" font-size="42" fill="#a0a0a0">{desc}</text>'
 
