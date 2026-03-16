@@ -1,8 +1,9 @@
 """Dynamic OG image generation — pure SVG → PNG via resvg."""
 
+import asyncio
 import base64
 from html import escape
-from urllib.request import urlopen, Request
+import httpx
 from resvg_py import svg_to_bytes
 
 W, H = 1200, 630
@@ -28,21 +29,19 @@ def _truncate(text, max_chars):
     return trimmed + "\u2026"
 
 
-def _avatar_data(url, size=75):
+async def _avatar_data(client, url):
     try:
-        req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        resp = urlopen(req, timeout=5)
-        data = resp.read()
-        ct = resp.headers.get("Content-Type", "image/png").split(";")[0].strip()
+        resp = await client.get(url)
+        ct = resp.headers.get("content-type", "image/png").split(";")[0].strip()
         if ct == "application/octet-stream":
             ct = "image/png"
-        b64 = base64.b64encode(data).decode()
+        b64 = base64.b64encode(resp.content).decode()
         return f"data:{ct};base64,{b64}"
     except Exception:
         return None
 
 
-def generate(title, desc="", avatars=None):
+async def generate(title, desc="", avatars=None):
     rtl = _rtl(title) or _rtl(desc)
     anchor = "end" if rtl else "start"
     tx = W - PAD if rtl else PAD
@@ -70,8 +69,9 @@ def generate(title, desc="", avatars=None):
     if avatars:
         av_size = 75
         overlap = 22
-        loaded = [(i, _avatar_data(url, av_size)) for i, url in enumerate(avatars) if url]
-        loaded = [(i, d) for i, d in loaded if d]
+        async with httpx.AsyncClient(timeout=5, headers={"User-Agent": "Mozilla/5.0"}) as client:
+            results = await asyncio.gather(*[_avatar_data(client, url) for url in avatars if url])
+        loaded = [(i, d) for i, d in enumerate(results) if d]
         if loaded:
             total_w = av_size + (len(loaded) - 1) * (av_size - overlap)
             ax = W - PAD - total_w if rtl else PAD
@@ -93,4 +93,4 @@ def generate(title, desc="", avatars=None):
 {avatar_els}
 </svg>'''
 
-    return svg_to_bytes(svg_string=svg, font_dirs=["/usr/share/fonts"], width=W, height=H)
+    return await asyncio.to_thread(svg_to_bytes, svg_string=svg, font_dirs=["/usr/share/fonts"], width=W, height=H)
