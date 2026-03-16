@@ -464,6 +464,7 @@ export function Chat({
                 startMic={startMic}
                 stopMic={stopMic}
                 voice={voice}
+                onFilesAdded={uploadFile ? handleFilesAdded : undefined}
               />
             </div>
           </div>
@@ -510,6 +511,7 @@ export function Chat({
                   startMic={startMic}
                   stopMic={stopMic}
                   voice={voice}
+                  onFilesAdded={uploadFile ? handleFilesAdded : undefined}
                 />
               </div>
             </div>
@@ -1029,6 +1031,7 @@ function InputBox({
   startMic,
   stopMic,
   voice,
+  onFilesAdded,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   input: string;
@@ -1046,13 +1049,25 @@ function InputBox({
   startMic: () => void;
   stopMic: () => void;
   voice?: boolean;
+  onFilesAdded?: (files: File[]) => void;
 }) {
+  const [dragOver, setDragOver] = useState(false);
+
   return (
     <motion.div
       layoutId="chat-input"
-      className="border border-border bg-background rounded-3xl p-2 shadow-sm cursor-text"
+      className={`border bg-background rounded-3xl p-2 shadow-sm cursor-text ${dragOver ? "border-primary" : "border-border"}`}
       onClick={() => textareaRef.current?.focus()}
       transition={{ type: "spring", stiffness: 200, damping: 25 }}
+      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        if (onFilesAdded && e.dataTransfer.files.length) {
+          onFilesAdded(Array.from(e.dataTransfer.files));
+        }
+      }}
     >
       {/* File previews */}
       <AnimatePresence initial={false}>
