@@ -48,7 +48,7 @@ class App(Function):
         super().__init__(
             func=func,
             name=name,
-            pip=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", "python-dotenv", "docker", "anthropic", "pillow", "cairosvg", "arabic-reshaper", "python-bidi", *(pip or [])],
+            pip=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", "python-dotenv", "docker", "anthropic", "cairosvg", "arabic-reshaper", "python-bidi", *(pip or [])],
             apt=["curl", "unzip", "bubblewrap", "fonts-inter", "fonts-noto-core", "libcairo2", *(apt or [])],
             run_commands=all_run_commands,
             copy=files,
