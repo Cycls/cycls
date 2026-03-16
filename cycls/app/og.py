@@ -69,13 +69,13 @@ async def generate(title, desc="", avatars=None):
     if avatars:
         av_size = 98
         overlap = 28
-        async with httpx.AsyncClient(timeout=5, headers={"User-Agent": "Mozilla/5.0"}) as client:
+        async with httpx.AsyncClient(timeout=5, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as client:
             results = await asyncio.gather(*[_avatar_data(client, url) for url in avatars if url])
         loaded = [(i, d) for i, d in enumerate(results) if d]
         if loaded:
             total_w = av_size + (len(loaded) - 1) * (av_size - overlap)
             ax = W - PAD - total_w if rtl else PAD
-            ay = ly + (84 - av_size) // 2
+            ay = ly + 84 - av_size
             defs = ""
             imgs = ""
             for idx, (i, data_url) in enumerate(loaded):
