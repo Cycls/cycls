@@ -53,9 +53,9 @@ async def generate(title, desc="", avatars=None):
 
     # Title + description
     ty = H // 2 - 60
-    texts = f'<text x="{tx}" y="{ty}" text-anchor="{anchor}" font-family="{title_font}" font-size="70" font-weight="bold" fill="#fff">{title_text}</text>'
+    texts = f'<text x="{tx}" y="{ty}" text-anchor="{anchor}" font-family="{title_font}" font-size="70" font-weight="bold" fill="#fff">{title_text}<tspan fill-opacity="0.25">.cycls.ai</tspan></text>'
     if desc_text:
-        texts += f'<text x="{tx}" y="{ty + 80}" text-anchor="{anchor}" font-family="{desc_font}" font-size="52" fill="#a0a0a0">{desc_text}</text>'
+        texts += f'<text x="{tx}" y="{ty + 80}" text-anchor="{anchor}" font-family="{desc_font}" font-size="52" fill="#fff">{desc_text}</text>'
 
     # Logo
     logo_scale = 84 / 29

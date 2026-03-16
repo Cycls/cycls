@@ -198,7 +198,7 @@ def web(func, config):
     def _seo_html(title: str = "Cycls", desc: str = "AI Agent"):
         return _base_html.replace("__TITLE__", escape(title)).replace("__DESC__", escape(desc)).replace("</body>", f"{_config_script}</body>")
 
-    app_title = f"{config.name.capitalize()} Agent | Cycls Pass" if config.name else "Cycls"
+    app_title = f"{config.name.capitalize()} | Cycls Pass" if config.name else "Cycls"
     _index_html = _seo_html(app_title, config.title or "AI Agent")
 
     # ---- Dynamic OG images ----
@@ -206,7 +206,7 @@ def web(func, config):
     from fastapi.responses import Response
     from cycls.app.og import generate as og_generate
 
-    og_title = f"{config.name.capitalize()} Agent"
+    og_title = config.name.capitalize() if config.name else "Cycls"
 
     @app.get("/og.png")
     async def og_image():
