@@ -1,5 +1,6 @@
 # uv run examples/agent/super.py
 # cd client && npm run dev
+# ✻ Prestidigitating… (2m 21s · ↓ 4.5k tokens)
 import cycls
 
 SYSTEM = """
