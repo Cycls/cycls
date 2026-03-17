@@ -1215,7 +1215,7 @@ function MicButton({ listening, transcribing, disabled, onStart, onStop, onCance
       className={`flex size-8 items-center justify-center rounded-full transition ${disabled && !listening && !transcribing ? "text-muted-foreground opacity-30 cursor-not-allowed" : listening ? "bg-foreground text-background animate-pulse cursor-pointer" : transcribing ? "text-muted-foreground hover:text-foreground cursor-pointer" : "text-muted-foreground hover:text-foreground hover:bg-secondary cursor-pointer"}`}
       aria-label={listening ? "Stop recording" : transcribing ? "Cancel transcription" : "Start recording"}
     >
-      <svg className={`size-5${transcribing ? " animate-pulse" : ""}`} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+      <svg className={`size-5${transcribing ? " animate-pulse [animation-duration:0.9s]" : ""}`} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
         <path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 01-14 0v-2" />
         <line x1="12" y1="19" x2="12" y2="23" strokeLinecap="round" />
