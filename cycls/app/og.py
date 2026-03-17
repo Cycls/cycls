@@ -29,32 +29,16 @@ def _truncate(text, max_chars):
     return trimmed + "\u2026"
 
 
-def _wrap(text, max_chars, max_lines=2):
+def _wrap(text, max_chars):
     if not text:
         return []
-    words = text.split()
-    lines = []
-    current = ""
-    for word in words:
-        candidate = f"{current} {word}" if current else word
-        if len(candidate) <= max_chars:
-            current = candidate
-        else:
-            if current:
-                lines.append(current)
-            if len(lines) == max_lines:
-                # Truncate last line
-                last = lines[-1]
-                if len(last) + 1 + len(word) > max_chars:
-                    lines[-1] = _truncate(last + " " + word, max_chars)
-                return lines
-            current = word
-    if current:
-        if len(lines) == max_lines:
-            lines[-1] = _truncate(lines[-1] + " " + current, max_chars)
-        else:
-            lines.append(current)
-    return lines
+    words, line = text.split(), ""
+    for i, w in enumerate(words):
+        fit = f"{line} {w}" if line else w
+        if len(fit) > max_chars:
+            return [line or _truncate(w, max_chars), _truncate(" ".join(words[i + (not line):]), max_chars)]
+        line = fit
+    return [line]
 
 
 async def _avatar_data(client, url):
