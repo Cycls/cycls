@@ -29,6 +29,34 @@ def _truncate(text, max_chars):
     return trimmed + "\u2026"
 
 
+def _wrap(text, max_chars, max_lines=2):
+    if not text:
+        return []
+    words = text.split()
+    lines = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}" if current else word
+        if len(candidate) <= max_chars:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+            if len(lines) == max_lines:
+                # Truncate last line
+                last = lines[-1]
+                if len(last) + 1 + len(word) > max_chars:
+                    lines[-1] = _truncate(last + " " + word, max_chars)
+                return lines
+            current = word
+    if current:
+        if len(lines) == max_lines:
+            lines[-1] = _truncate(lines[-1] + " " + current, max_chars)
+        else:
+            lines.append(current)
+    return lines
+
+
 async def _avatar_data(client, url):
     try:
         resp = await client.get(url)
@@ -49,13 +77,13 @@ async def generate(title, desc="", avatars=None):
     desc_font = _font(desc) if desc else title_font
 
     title_text = escape(_truncate(title, 27))
-    desc_text = escape(_truncate(desc, 50)) if desc else ""
+    desc_lines = [escape(l) for l in _wrap(desc, 34)] if desc else []
 
     # Title + description
     ty = H // 2 - 60
     texts = f'<text x="{tx}" y="{ty}" text-anchor="{anchor}" font-family="{title_font}" font-size="70" font-weight="bold" fill="#fff">{title_text}<tspan fill-opacity="0.25">.cycls.ai</tspan></text>'
-    if desc_text:
-        texts += f'<text x="{tx}" y="{ty + 80}" text-anchor="{anchor}" font-family="{desc_font}" font-size="52" fill="#fff">{desc_text}</text>'
+    for i, line in enumerate(desc_lines):
+        texts += f'<text x="{tx}" y="{ty + 80 + i * 64}" text-anchor="{anchor}" font-family="{desc_font}" font-size="52" fill="#fff">{line}</text>'
 
     # Logo
     logo_scale = 84 / 29
