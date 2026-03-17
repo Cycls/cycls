@@ -63,8 +63,9 @@ async def generate(title, desc="", avatars=None):
     title_text = escape(_truncate(title, 27))
     desc_lines = [escape(l) for l in _wrap(desc, 42, 25)] if desc else []
     if rtl:
-        title_text = title_text.replace(".", "")
-        desc_lines = [l.replace(".", "") for l in desc_lines]
+        strip = str.maketrans("", "", ".,;:!?\u2026\u060c\u061b\u061f")
+        title_text = title_text.translate(strip)
+        desc_lines = [l.translate(strip) for l in desc_lines]
 
     # Title + description
     ty = H // 2 - 60
