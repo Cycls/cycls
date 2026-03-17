@@ -29,14 +29,14 @@ def _truncate(text, max_chars):
     return trimmed + "\u2026"
 
 
-def _wrap(text, max_chars):
+def _wrap(text, max_l1, max_l2):
     if not text:
         return []
     words, line = text.split(), ""
     for i, w in enumerate(words):
         fit = f"{line} {w}" if line else w
-        if len(fit) > max_chars:
-            return [line or _truncate(w, max_chars), _truncate(" ".join(words[i + (not line):]), max_chars)]
+        if len(fit) > max_l1:
+            return [line or _truncate(w, max_l1), _truncate(" ".join(words[i + (not line):]), max_l2)]
         line = fit
     return [line]
 
@@ -61,7 +61,10 @@ async def generate(title, desc="", avatars=None):
     desc_font = _font(desc) if desc else title_font
 
     title_text = escape(_truncate(title, 27))
-    desc_lines = [escape(l) for l in _wrap(desc, 34)] if desc else []
+    desc_lines = [escape(l) for l in _wrap(desc, 42, 25)] if desc else []
+    if rtl:
+        title_text = title_text.replace(".", "")
+        desc_lines = [l.replace(".", "") for l in desc_lines]
 
     # Title + description
     ty = H // 2 - 60
