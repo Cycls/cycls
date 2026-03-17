@@ -172,7 +172,7 @@ export function MessageBubble({
         {!isEmpty && !isStreaming && (
           <div
             className={cn(
-              "flex gap-0 -ml-2 opacity-0 transition-opacity group-hover:opacity-100",
+              "flex gap-0 -ml-2 opacity-100 sm:opacity-0 transition-opacity sm:group-hover:opacity-100",
             )}
           >
             <button
