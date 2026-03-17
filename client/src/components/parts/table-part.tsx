@@ -8,7 +8,7 @@ export const TablePart = memo(function TablePart({
   rows?: string[][];
 }) {
   return (
-    <div className="overflow-x-auto my-3 rounded-xl border border-border">
+    <div dir="auto" className="overflow-x-auto my-3 rounded-xl border border-border">
       <table className="min-w-full text-sm">
         {headers && (
           <thead>
@@ -16,7 +16,7 @@ export const TablePart = memo(function TablePart({
               {headers.map((h, i) => (
                 <th
                   key={i}
-                  className="px-4 py-2.5 text-left font-semibold text-foreground"
+                  className="px-4 py-2.5 font-semibold text-foreground"
                 >
                   {h}
                 </th>
