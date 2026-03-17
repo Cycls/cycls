@@ -12,11 +12,16 @@ export function useSpeechRecognition({
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const authHeadersRef = useRef(authHeaders);
   authHeadersRef.current = authHeaders;
 
   const stop = useCallback(() => {
     recorderRef.current?.stop();
+  }, []);
+
+  const cancel = useCallback(() => {
+    abortRef.current?.abort();
   }, []);
 
   const start = useCallback(async () => {
@@ -49,13 +54,15 @@ export function useSpeechRecognition({
 
         setTranscribing(true);
 
+        const controller = new AbortController();
+        abortRef.current = controller;
         const form = new FormData();
         form.append("file", blob, "voice.webm");
         try {
           const headers = authHeadersRef.current ? await authHeadersRef.current() : {};
           const token = headers["Authorization"]?.replace("Bearer ", "");
           const url = token ? `/transcribe?token=${encodeURIComponent(token)}` : "/transcribe";
-          const res = await fetch(url, { method: "POST", body: form });
+          const res = await fetch(url, { method: "POST", body: form, signal: controller.signal });
           if (res.ok) {
             const data = await res.json();
             onEnd(data.text || "");
@@ -65,6 +72,7 @@ export function useSpeechRecognition({
         } catch {
           onEnd("");
         } finally {
+          abortRef.current = null;
           setTranscribing(false);
         }
       };
@@ -80,8 +88,9 @@ export function useSpeechRecognition({
     return () => {
       recorderRef.current?.stop();
       streamRef.current?.getTracks().forEach((t) => t.stop());
+      abortRef.current?.abort();
     };
   }, []);
 
-  return { listening, transcribing, start, stop };
+  return { listening, transcribing, start, stop, cancel };
 }
