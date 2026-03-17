@@ -473,7 +473,7 @@ export function Chat({
         ) : (
           <>
             <div ref={scrollRef} className="relative flex-1 overflow-y-auto" dir="ltr">
-              <div className="pointer-events-none sticky top-0 z-10 h-6 -mb-6 bg-[linear-gradient(to_bottom,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
+              <div className="pointer-events-none sticky top-0 h-6 -mb-6 bg-[linear-gradient(to_bottom,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
               <div ref={contentRef} className="flex w-full flex-col items-center py-4">
                 {messages.map((msg, i) => {
                   const isLast = i === messages.length - 1;
@@ -492,7 +492,7 @@ export function Chat({
                   );
                 })}
               </div>
-              <div className="pointer-events-none sticky bottom-0 z-10 h-6 -mt-6 bg-[linear-gradient(to_top,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
+              <div className="pointer-events-none sticky bottom-0 h-6 -mt-6 bg-[linear-gradient(to_top,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
             </div>
             <div className="shrink-0 px-6 pb-2 pt-1">
               <div className="max-w-3xl mx-auto">
