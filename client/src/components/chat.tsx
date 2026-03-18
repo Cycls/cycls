@@ -11,6 +11,17 @@ import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
 import { useSpeechRecognition } from "../hooks/use-speech";
 
+interface PassAgent {
+  slug: string;
+  title: string;
+  title_ar?: string;
+  description: string;
+  description_ar?: string;
+  link: string;
+  icon_svg?: string;
+  tags?: string[];
+}
+
 interface PlanInfo {
   name: string;
   status: string;
@@ -98,6 +109,9 @@ export function Chat({
   useLang();
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [exploreOpen, setExploreOpen] = useState(false);
+  const [exploreAgents, setExploreAgents] = useState<PassAgent[]>([]);
+  const [exploreLoading, setExploreLoading] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [filesTab, setFilesTab] = useState<"files" | "shares" | "sessions">("files");
   const [shareOpen, setShareOpen] = useState(false);
@@ -211,6 +225,18 @@ export function Chat({
     document.body.classList.toggle("dark");
   };
 
+  const openExplore = useCallback(async () => {
+    setExploreOpen(true);
+    if (exploreAgents.length > 0) return;
+    setExploreLoading(true);
+    try {
+      const res = await fetch("https://framer-cms-proxy.mf-edc.workers.dev/agents");
+      const data = await res.json();
+      setExploreAgents(data.agents || []);
+    } catch { /* silent */ }
+    setExploreLoading(false);
+  }, [exploreAgents.length]);
+
   return (
     <div className="h-dvh flex flex-col">
       {/* Header */}
@@ -227,7 +253,15 @@ export function Chat({
           {name && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <span className="text-muted-foreground/40">|</span>
-              <span className="text-foreground font-medium capitalize">{name}</span>
+              <button
+                onClick={openExplore}
+                className="flex items-center gap-1 text-foreground font-medium capitalize hover:opacity-70 transition-opacity cursor-pointer"
+              >
+                {name}
+                <svg className="w-3 h-3 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
             </div>
           )}
           </div>
@@ -421,6 +455,50 @@ export function Chat({
           </div>
         </div>
       </header>
+
+      {/* Explore agents dropdown */}
+      {exploreOpen && createPortal(
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setExploreOpen(false)} />
+          <div className="fixed left-4 sm:left-6 top-12 z-50 mt-1 w-72 rounded-lg border border-border bg-background shadow-lg overflow-hidden" dir={getLang() === "ar" ? "rtl" : "ltr"}>
+            <div className="px-3 py-2 border-b border-border">
+              <p className="text-xs font-medium text-muted-foreground">{t("explore")}</p>
+            </div>
+            {exploreLoading ? (
+              <div className="flex items-center justify-center py-6">
+                <div className="size-4 border-2 border-muted-foreground/30 border-t-foreground rounded-full animate-spin" />
+              </div>
+            ) : (
+              <div className="max-h-80 overflow-y-auto py-1">
+                {exploreAgents.map((agent) => {
+                  const isAr = getLang() === "ar";
+                  const agentTitle = (isAr && agent.title_ar) || agent.title;
+                  const agentDesc = (isAr && agent.description_ar) || agent.description;
+                  const href = agent.link.startsWith("http") ? agent.link : `https://${agent.link}`;
+                  return (
+                    <a
+                      key={agent.slug}
+                      href={href}
+                      className="flex items-start gap-3 px-3 py-2.5 text-sm hover:bg-secondary/80 transition-colors cursor-pointer"
+                    >
+                      {agent.icon_svg ? (
+                        <div className="size-8 shrink-0 rounded-md overflow-hidden" dangerouslySetInnerHTML={{ __html: agent.icon_svg }} />
+                      ) : (
+                        <div className="size-8 shrink-0 rounded-md bg-secondary" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-foreground truncate">{agentTitle}</p>
+                        <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{agentDesc}</p>
+                      </div>
+                    </a>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </>,
+        document.body
+      )}
 
       {/* Spacer for fixed header */}
       <div className="shrink-0 h-12" />
