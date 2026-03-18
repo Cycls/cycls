@@ -999,12 +999,6 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                   </svg>
                   {document.body.classList.contains("dark") ? t("lightMode") : t("darkMode")}
                 </button>
-                <button
-                  onClick={() => setLang(getLang() === "en" ? "ar" : "en")}
-                  className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                >
-                  {t("language")}
-                </button>
                 <div className="border-t border-border" />
                 <p className="px-3 pt-2 pb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">{t("account")}</p>
                 {plan && (
@@ -1246,11 +1240,19 @@ function InputBox({
       />
 
       {/* Actions row: paperclip left, send right */}
-      <div className="flex items-center justify-between px-1 pt-1">
-        <div className="relative flex items-center">
+      <div className="flex items-center justify-between px-1 pt-1" dir="ltr">
+        <div className="relative flex items-center gap-0.5">
           {(onOpenFilePicker || onOpenFiles) && (
             <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} disabled={isStreaming} />
           )}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setLang(getLang() === "en" ? "ar" : "en"); }}
+            className="flex h-8 items-center justify-center rounded-full px-2.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition cursor-pointer text-xs font-semibold"
+            aria-label="Toggle language"
+          >
+            {getLang() === "en" ? "عربي" : "English"}
+          </button>
         </div>
         <div className="flex items-center gap-1">
           {voice && <MicButton listening={listening} transcribing={transcribing} disabled={isStreaming} onStart={startMic} onStop={stopMic} onCancel={cancelMic}  />}
