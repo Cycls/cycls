@@ -1251,7 +1251,7 @@ function InputBox({
             className="flex h-8 items-center justify-center rounded-full px-2.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition cursor-pointer text-xs font-semibold"
             aria-label="Toggle language"
           >
-            {getLang() === "en" ? "عربي" : "English"}
+            {getLang() === "en" ? "عربي" : "En"}
           </button>
         </div>
         <div className="flex items-center gap-1">
