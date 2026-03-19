@@ -38,8 +38,15 @@ export interface Message {
   attachments?: Attachment[];
 }
 
+export interface PassMetadata {
+  name: string;
+  description: string;
+  logo: string;
+}
+
 export interface AppConfig {
   name?: string;
+  pass_metadata?: { en: PassMetadata; ar: PassMetadata };
   auth?: boolean;
   voice?: boolean;
   pk?: string;

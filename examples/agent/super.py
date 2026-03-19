@@ -28,6 +28,7 @@ TOOLS = [
 @cycls.app(
     auth=True,      # web/config
     analytics=True, # web=["Auth", "Analytics"]
+    plan="cycls_pass",
     copy=[".env"], 
     force_rebuild=False,
     theme="wafi",
