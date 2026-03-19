@@ -197,7 +197,7 @@ def web(func, config):
                 "https://api.openai.com/v1/audio/transcriptions",
                 headers={"Authorization": f"Bearer {api_key}"},
                 files={"file": ("voice.webm", audio_bytes, file.content_type or "audio/webm")},
-                data={"model": "whisper-1"},
+                data={"model": "gpt-4o-transcribe"},
                 timeout=30,
             )
             if r.status_code != 200:
