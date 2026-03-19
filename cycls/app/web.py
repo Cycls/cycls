@@ -8,6 +8,7 @@ from .auth import PK_LIVE, PK_TEST, JWKS_PROD, JWKS_TEST
 class Config(BaseModel):
     public_path: str = "theme"
     name: Optional[str] = None
+    pass_metadata: Optional[dict] = None
     header: Optional[str] = None
     intro: Optional[str] = None
     title: Optional[str] = None
@@ -76,10 +77,32 @@ def web(func, config):
     from jwt import PyJWKClient
     from fastapi.staticfiles import StaticFiles
 
+    import httpx
+
     if isinstance(config, dict):
         config = Config(**config)
 
     jwks = PyJWKClient(config.jwks)
+
+    if config.plan == "cycls_pass" and config.name and not config.pass_metadata:
+        try:
+            resp = httpx.get(f"https://cms.cycls.ai/agents/{config.name}-agent", timeout=5)  # TODO: remove -agent suffix once CMS slug is updated
+            if resp.status_code == 200:
+                agent = resp.json()
+                config.pass_metadata = {
+                    "en": {
+                        "name": agent.get("title", config.name),
+                        "description": agent.get("description", ""),
+                        "logo": agent.get("icon_svg", ""),
+                    },
+                    "ar": {
+                        "name": agent.get("title_ar") or agent.get("title", config.name),
+                        "description": agent.get("description_ar", ""),
+                        "logo": agent.get("icon_svg", ""),
+                    },
+                }
+        except Exception:
+            pass
 
     class User(BaseModel):
         id: str

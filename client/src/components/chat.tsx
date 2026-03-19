@@ -6,7 +6,7 @@ import { SignedIn } from "@clerk/clerk-react";
 import { usePlans, useSubscription, CheckoutButton, SubscriptionDetailsButton } from "@clerk/clerk-react/experimental";
 import { MessageBubble } from "./message";
 import { Files } from "./files";
-import type { Message, Attachment } from "../hooks/use-chat";
+import type { Message, Attachment, PassMetadata } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
 import { useSpeechRecognition } from "../hooks/use-speech";
@@ -61,6 +61,7 @@ export function Chat({
   orgs,
   plan,
   name,
+  passMetadata,
   user,
   uploadFile,
   authHeaders,
@@ -90,6 +91,7 @@ export function Chat({
   orgs?: { id: string; name: string; imageUrl: string }[];
   plan?: PlanInfo;
   name?: string;
+  passMetadata?: { en: PassMetadata; ar: PassMetadata };
   user?: UserInfo;
   uploadFile?: (file: File) => Promise<Attachment>;
   authHeaders?: () => Promise<Record<string, string>>;
@@ -107,6 +109,8 @@ export function Chat({
   };
 }) {
   useLang();
+  const meta = passMetadata?.[getLang() === "ar" ? "ar" : "en"];
+  const inputPlaceholder = meta ? (getLang() === "ar" ? `اسأل ${meta.name}` : `Ask ${meta.name}`) : undefined;
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [exploreOpen, setExploreOpen] = useState(false);
@@ -257,7 +261,7 @@ export function Chat({
                 onClick={openExplore}
                 className="flex items-center gap-1 text-foreground font-medium capitalize hover:opacity-70 transition-opacity cursor-pointer"
               >
-                {name}
+                {meta?.name || name}
                 <svg className="w-3 h-3 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                 </svg>
@@ -525,7 +529,14 @@ export function Chat({
         </div>
         {isEmpty ? (
           <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16">
-            <div className="max-w-3xl w-full">
+            <div className="relative max-w-3xl w-full">
+              {meta && (
+                <div className="absolute bottom-full left-0 right-0 flex flex-col items-center gap-4 mb-10 text-center">
+                  {meta.logo && <div className="size-16 rounded-xl overflow-hidden border border-border" dangerouslySetInnerHTML={{ __html: meta.logo }} />}
+                  <h2 className="text-2xl font-semibold text-foreground">{meta.name}</h2>
+                  {meta.description && <p className="text-base text-muted-foreground max-w-lg">{meta.description}</p>}
+                </div>
+              )}
               <InputBox
                 textareaRef={textareaRef}
                 input={input}
@@ -545,6 +556,7 @@ export function Chat({
                 cancelMic={cancelMic}
                 voice={voice}
                 onFilesAdded={uploadFile ? handleFilesAdded : undefined}
+                placeholder={inputPlaceholder}
               />
               <div className="relative">
                 <div className="absolute inset-x-0 top-0">
@@ -602,6 +614,7 @@ export function Chat({
                   cancelMic={cancelMic}
                   voice={voice}
                   onFilesAdded={uploadFile ? handleFilesAdded : undefined}
+                  placeholder={inputPlaceholder}
                 />
               </div>
             </div>
@@ -1117,6 +1130,7 @@ function InputBox({
   cancelMic,
   voice,
   onFilesAdded,
+  placeholder,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   input: string;
@@ -1136,6 +1150,7 @@ function InputBox({
   cancelMic: () => void;
   voice?: boolean;
   onFilesAdded?: (files: File[]) => void;
+  placeholder?: string;
 }) {
   const [dragOver, setDragOver] = useState(false);
 
@@ -1234,7 +1249,7 @@ function InputBox({
         value={input}
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder={t("sendMessage")}
+        placeholder={placeholder || t("sendMessage")}
         rows={1}
         className="w-full min-h-[44px] max-h-[240px] resize-none bg-transparent px-3 py-2.5 text-foreground placeholder:text-muted-foreground focus:outline-none overflow-y-auto"
       />
