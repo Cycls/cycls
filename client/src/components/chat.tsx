@@ -528,7 +528,7 @@ export function Chat({
           {sessionLoading && <div className="h-full w-1/3 bg-muted-foreground/30 rounded-full animate-[slide_1s_ease-in-out_infinite]" />}
         </div>
         {isEmpty ? (
-          <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16">
+          <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16 pt-40 sm:pt-0">
             <div className="relative max-w-3xl w-full">
               {meta && (
                 <motion.div
