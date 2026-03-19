@@ -531,11 +531,16 @@ export function Chat({
           <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16">
             <div className="relative max-w-3xl w-full">
               {meta && (
-                <div className="absolute bottom-full left-0 right-0 flex flex-col items-center gap-4 mb-10 text-center">
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.4 }}
+                  className="absolute bottom-full left-0 right-0 flex flex-col items-center gap-4 mb-10 text-center"
+                >
                   {meta.logo && <div className="size-16 rounded-xl overflow-hidden border border-border" dangerouslySetInnerHTML={{ __html: meta.logo }} />}
                   <h2 className="text-2xl font-semibold text-foreground">{meta.name}</h2>
                   {meta.description && <p className="text-base text-muted-foreground max-w-lg">{meta.description}</p>}
-                </div>
+                </motion.div>
               )}
               <InputBox
                 textareaRef={textareaRef}
