@@ -230,7 +230,7 @@ export function Chat({
     if (exploreAgents.length > 0) return;
     setExploreLoading(true);
     try {
-      const res = await fetch("https://framer-cms-proxy.mf-edc.workers.dev/agents");
+      const res = await fetch("https://cms.cycls.ai/agents");
       const data = await res.json();
       setExploreAgents(data.agents || []);
     } catch { /* silent */ }
@@ -1651,7 +1651,7 @@ function Suggestions({
                   setActiveCategory(s.label);
                   onPreview(s.highlight);
                 }}
-                className="flex items-center gap-2 rounded-full border border-border px-3.5 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-foreground/30 hover:bg-secondary/50 transition-colors cursor-pointer"
+                className={`flex items-center gap-2 rounded-full border border-border px-3.5 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-foreground/30 hover:bg-secondary/50 transition-colors cursor-pointer ${i >= 3 ? "hidden sm:flex" : ""}`}
               >
                 {s.icon}
                 {s.label}
