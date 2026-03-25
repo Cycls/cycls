@@ -1,10 +1,10 @@
 """Tests for the Agent loop in cycls/agent.py.
 
-Mocks the Anthropic streaming API to test incremental history saving
+Mocks litellm.acompletion to test streaming, incremental history saving,
 and crash recovery without hitting a real LLM.
 """
 import asyncio
-import sys
+import json
 import types
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,7 +16,7 @@ from cycls.app.state import load_history
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers — build OpenAI-format mock objects for litellm streaming
 # ---------------------------------------------------------------------------
 
 def _make_context(ws, hp):
@@ -31,59 +31,101 @@ def _make_context(ws, hp):
     return ctx
 
 
-def _tool_use_block(tool_id, name="bash", inp=None):
-    b = MagicMock()
-    b.type = "tool_use"
-    b.name = name
-    b.id = tool_id
-    b.input = inp or {"command": "echo hi"}
-    b.model_dump.return_value = {
-        "type": "tool_use", "id": tool_id, "name": name, "input": b.input,
-    }
-    return b
+def _make_delta(content=None, tool_calls=None, reasoning_content=None):
+    """Build an OpenAI-format delta object."""
+    delta = MagicMock()
+    delta.content = content
+    delta.tool_calls = tool_calls
+    delta.reasoning_content = reasoning_content
+    return delta
 
 
-def _text_block(text="Done!"):
-    b = MagicMock()
-    b.type = "text"
-    b.text = text
-    b.model_dump.return_value = {"type": "text", "text": text}
-    return b
+def _make_tool_call_delta(index, tc_id=None, name=None, arguments=None):
+    """Build a streaming tool_call chunk."""
+    tc = MagicMock()
+    tc.index = index
+    tc.id = tc_id
+    func = MagicMock()
+    func.name = name
+    func.arguments = arguments
+    tc.function = func
+    return tc
 
 
-def _usage(inp=500, out=100):
-    u = MagicMock()
-    u.input_tokens = inp
-    u.output_tokens = out
-    u.cache_read_input_tokens = 0
-    u.cache_creation_input_tokens = 0
-    return u
+def _make_chunk(delta, finish_reason=None, usage=None):
+    """Build an OpenAI-format streaming chunk."""
+    choice = MagicMock()
+    choice.delta = delta
+    choice.finish_reason = finish_reason
+    chunk = MagicMock()
+    chunk.choices = [choice]
+    chunk.usage = usage
+    return chunk
 
 
-def _make_response(content_blocks, stop_reason="end_turn", usage=None):
-    resp = MagicMock()
-    resp.content = content_blocks
-    resp.stop_reason = stop_reason
-    resp.usage = usage or _usage()
-    return resp
+def _make_usage_chunk(prompt_tokens=500, completion_tokens=100):
+    """Build a usage-only chunk (no choices)."""
+    usage = MagicMock()
+    usage.prompt_tokens = prompt_tokens
+    usage.completion_tokens = completion_tokens
+    usage.prompt_tokens_details = None
+    chunk = MagicMock()
+    chunk.choices = []
+    chunk.usage = usage
+    return chunk
 
 
-class FakeStream:
-    def __init__(self, response):
-        self._response = response
+def _text_chunks(text="Done!"):
+    """Return chunks for a simple text response."""
+    return [
+        _make_chunk(_make_delta(content=text)),
+        _make_chunk(_make_delta(), finish_reason="stop"),
+        _make_usage_chunk(),
+    ]
 
-    async def __aenter__(self):
+
+def _tool_use_chunks(tool_id, name="bash", arguments='{"command": "echo hi"}'):
+    """Return chunks for a tool_use response."""
+    tc_start = _make_tool_call_delta(index=0, tc_id=tool_id, name=name, arguments=None)
+    tc_args = _make_tool_call_delta(index=0, tc_id=None, name=None, arguments=arguments)
+    return [
+        _make_chunk(_make_delta(tool_calls=[tc_start])),
+        _make_chunk(_make_delta(tool_calls=[tc_args])),
+        _make_chunk(_make_delta(), finish_reason="tool_calls"),
+        _make_usage_chunk(),
+    ]
+
+
+class FakeAsyncIter:
+    """Wraps a list of chunks into an async iterator."""
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def __aiter__(self):
         return self
 
-    async def __aexit__(self, *args):
-        pass
+    async def __anext__(self):
+        if not self._chunks:
+            raise StopAsyncIteration
+        return self._chunks.pop(0)
 
-    async def __aiter__(self):
-        return
-        yield
 
-    async def get_final_message(self):
-        return self._response
+def _mock_litellm_responses(*responses):
+    """Create a mock for litellm.acompletion that returns sequences of chunk lists."""
+    responses = list(responses)
+    call_count = 0
+
+    async def fake_acompletion(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count > len(responses):
+            raise Exception("Unexpected extra call to litellm.acompletion")
+        chunk_list = responses[call_count - 1]
+        if isinstance(chunk_list, Exception):
+            raise chunk_list
+        return FakeAsyncIter(list(chunk_list))
+
+    return fake_acompletion, lambda: call_count
 
 
 async def _drain(gen):
@@ -93,25 +135,15 @@ async def _drain(gen):
     return items
 
 
-def _mock_anthropic(client):
-    """Insert a fake anthropic module into sys.modules that returns *client*."""
-    mod = types.ModuleType("anthropic")
-    mod.AsyncAnthropic = lambda: client
-    return patch.dict(sys.modules, {"anthropic": mod})
-
-
 def _history_tool_ids(history):
-    """Extract (tool_use_ids, tool_result_ids) from a history list."""
+    """Extract (tool_use_ids, tool_result_ids) from a history list (OpenAI format)."""
     use_ids, result_ids = [], []
     for msg in history:
-        content = msg.get("content", [])
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if block.get("type") == "tool_use":
-                use_ids.append(block["id"])
-            elif block.get("type") == "tool_result":
-                result_ids.append(block["tool_use_id"])
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            for tc in msg["tool_calls"]:
+                use_ids.append(tc["id"])
+        elif msg.get("role") == "tool":
+            result_ids.append(msg["tool_call_id"])
     return use_ids, result_ids
 
 
@@ -131,87 +163,69 @@ def agent_env(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_history_saved_after_each_tool_round(agent_env):
-    """Two tool rounds then final text — all six messages should be on disk."""
+    """Two tool rounds then final text — all messages should be on disk."""
     ws, hp, ctx = agent_env
 
-    round1 = _make_response([_tool_use_block("t1")], stop_reason="tool_use")
-    round2 = _make_response([_tool_use_block("t2")], stop_reason="tool_use")
-    final = _make_response([_text_block("All done")])
-    responses = iter([round1, round2, final])
+    round1 = _tool_use_chunks("t1")
+    round2 = _tool_use_chunks("t2")
+    final = _text_chunks("All done")
 
-    mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+    fake_acompletion, _ = _mock_litellm_responses(round1, round2, final)
 
-    with _mock_anthropic(mock_client), \
+    with patch("litellm.acompletion", side_effect=fake_acompletion), \
          patch("cycls.agent._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
     history = load_history(hp)
     roles = [m["role"] for m in history]
-    assert roles == ["user", "assistant", "user", "assistant", "user", "assistant"]
+    assert roles == ["user", "assistant", "tool", "assistant", "tool", "assistant"]
 
 
 def test_history_survives_crash_after_first_tool_round(agent_env):
     """Crash during round 2 streaming — round 1 history should already be on disk."""
     ws, hp, ctx = agent_env
 
-    round1 = _make_response([_tool_use_block("t1")], stop_reason="tool_use")
-    call_count = 0
+    round1 = _tool_use_chunks("t1")
 
-    def stream_side_effect(**kw):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return FakeStream(round1)
-        raise ConnectionError("Lost connection to API")
+    # After recovery from ConnectionError, the loop retries and gets a final response
+    final = _text_chunks("Recovered after disconnect")
+    fake_acompletion, _ = _mock_litellm_responses(round1, ConnectionError("Lost connection to API"), final)
 
-    mock_client = MagicMock()
-    mock_client.messages.stream = stream_side_effect
-
-    with _mock_anthropic(mock_client), \
+    with patch("litellm.acompletion", side_effect=fake_acompletion), \
          patch("cycls.agent._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
-    # Should have gotten an error callout
+    # Recovery handled the error — no error callout shown
     callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
-    assert len(callouts) == 1
-    assert "Lost connection" in callouts[0]["callout"]
+    assert not callouts
 
     # Round 1 messages survived on disk
     history = load_history(hp)
-    assert len(history) >= 3  # user + assistant(tool) + user(result)
+    assert len(history) >= 3  # user + assistant(tool_calls) + tool(result)
     assert history[0]["role"] == "user"
     assert history[1]["role"] == "assistant"
-    assert history[2]["role"] == "user"
+    assert history[2]["role"] == "tool"
 
 
 def test_error_recovery_saves_incrementally(agent_env):
-    """When _exec_editor raises during coro building (after the assistant
-    tool_use message is already appended), the except handler patches
-    error tool_results. Those should be saved incrementally."""
+    """When tool execution raises, the except handler patches error tool_results.
+    Those should be saved incrementally."""
     ws, hp, ctx = agent_env
 
-    # Round 1: editor tool with missing "command" key → _exec_editor raises KeyError
-    # synchronously during coro building, AFTER the assistant message is appended.
-    bad_editor = _tool_use_block("t1", name="str_replace_based_edit_tool", inp={})
-    round1 = _make_response([bad_editor], stop_reason="tool_use")
-    # After error recovery injects error tool_results, the loop retries and gets final text.
-    final = _make_response([_text_block("Recovered")])
-    responses = iter([round1, final])
+    # Round 1: editor tool with missing "command" key → raises KeyError
+    round1 = _tool_use_chunks("t1", name="str_replace_based_edit_tool", arguments="{}")
+    final = _text_chunks("Recovered")
 
-    mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+    fake_acompletion, _ = _mock_litellm_responses(round1, final)
 
-    with _mock_anthropic(mock_client):
+    with patch("litellm.acompletion", side_effect=fake_acompletion):
         asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
     history = load_history(hp)
-    # Should have: user + assistant(bad tool_use) + user(error result) + assistant(final)
     assert len(history) >= 3
-    # The error recovery tool_result should be on disk
-    error_results = [m for m in history if m["role"] == "user"
-                     and isinstance(m.get("content"), list)
-                     and any("Error:" in str(r.get("content", "")) for r in m["content"])]
+    # The error recovery tool message should be on disk
+    error_results = [m for m in history if m.get("role") == "tool"
+                     and "Error:" in str(m.get("content", ""))]
     assert len(error_results) >= 1
 
 
@@ -227,11 +241,10 @@ def test_no_history_without_session(tmp_path):
     ctx.messages = types.SimpleNamespace()
     ctx.messages.raw = [{"role": "user", "content": "hi"}]
 
-    final = _make_response([_text_block("Hello!")])
-    mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: FakeStream(final)
+    final = _text_chunks("Hello!")
+    fake_acompletion, _ = _mock_litellm_responses(final)
 
-    with _mock_anthropic(mock_client):
+    with patch("litellm.acompletion", side_effect=fake_acompletion):
         asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
     assert not list(tmp_path.glob("**/*.jsonl"))
@@ -241,7 +254,6 @@ def test_no_history_without_session(tmp_path):
 # Media type sniffing tests
 # ---------------------------------------------------------------------------
 
-# Minimal valid file headers for each format
 _JPEG_HEADER = b"\xff\xd8\xff\xe0" + b"\x00" * 20
 _PNG_HEADER = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20
 _GIF_HEADER = b"GIF89a" + b"\x00" * 20
@@ -291,15 +303,11 @@ def test_tool_result_always_follows_tool_use_on_crash(agent_env):
     even when tool execution crashes mid-way."""
     ws, hp, ctx = agent_env
 
-    bad_editor = _tool_use_block("crash-1", name="str_replace_based_edit_tool", inp={})
-    round1 = _make_response([bad_editor], stop_reason="tool_use")
-    final = _make_response([_text_block("Recovered")])
-    responses = iter([round1, final])
+    round1 = _tool_use_chunks("crash-1", name="str_replace_based_edit_tool", arguments="{}")
+    final = _text_chunks("Recovered")
+    fake_acompletion, _ = _mock_litellm_responses(round1, final)
 
-    mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
-
-    with _mock_anthropic(mock_client):
+    with patch("litellm.acompletion", side_effect=fake_acompletion):
         asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
     history = load_history(hp)
@@ -312,16 +320,12 @@ def test_tool_result_present_after_bash_timeout(agent_env):
     must be saved so follow-up messages don't trigger 400 errors."""
     ws, hp, ctx = agent_env
 
-    bash_block = _tool_use_block("timeout-1", name="bash",
-                                  inp={"command": "pip install heavy-package"})
-    round1 = _make_response([bash_block], stop_reason="tool_use")
-    final = _make_response([_text_block("Sorry about the timeout")])
-    responses = iter([round1, final])
+    round1 = _tool_use_chunks("timeout-1", name="bash",
+                               arguments='{"command": "pip install heavy-package"}')
+    final = _text_chunks("Sorry about the timeout")
+    fake_acompletion, _ = _mock_litellm_responses(round1, final)
 
-    mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
-
-    with _mock_anthropic(mock_client), \
+    with patch("litellm.acompletion", side_effect=fake_acompletion), \
          patch("cycls.agent._exec_bash",
                new_callable=lambda: AsyncMock(return_value="Error: Command timed out after 300s")):
         asyncio.run(_drain(Agent(context=ctx, thinking=False)))
@@ -329,11 +333,11 @@ def test_tool_result_present_after_bash_timeout(agent_env):
     history = load_history(hp)
     use_ids, result_ids = _history_tool_ids(history)
     assert use_ids == result_ids
-    # Verify the timeout error made it into the correct tool_result
-    timeout_result = [b for m in history for b in (m.get("content") or [])
-                      if isinstance(b, dict) and b.get("tool_use_id") == "timeout-1"]
-    assert len(timeout_result) == 1, "Expected exactly one tool_result for timeout-1"
-    assert "timed out" in timeout_result[0]["content"]
+    # Verify the timeout error made it into the correct tool message
+    timeout_msgs = [m for m in history if m.get("role") == "tool"
+                    and m.get("tool_call_id") == "timeout-1"]
+    assert len(timeout_msgs) == 1, "Expected exactly one tool result for timeout-1"
+    assert "timed out" in timeout_msgs[0]["content"]
 
 
 def test_multiple_tool_calls_all_get_results(agent_env):
@@ -341,21 +345,26 @@ def test_multiple_tool_calls_all_get_results(agent_env):
     ALL tool_use ids must still have matching tool_results."""
     ws, hp, ctx = agent_env
 
-    block_ok = _tool_use_block("ok-1", inp={"command": "echo ok"})
-    block_fail = _tool_use_block("fail-1", inp={"command": "pip install heavy"})
-    round1 = _make_response([block_ok, block_fail], stop_reason="tool_use")
-    final = _make_response([_text_block("Done")])
-    responses = iter([round1, final])
-
-    mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+    # Build chunks with two parallel tool calls
+    tc1_start = _make_tool_call_delta(index=0, tc_id="ok-1", name="bash", arguments=None)
+    tc2_start = _make_tool_call_delta(index=1, tc_id="fail-1", name="bash", arguments=None)
+    tc1_args = _make_tool_call_delta(index=0, tc_id=None, name=None, arguments='{"command": "echo ok"}')
+    tc2_args = _make_tool_call_delta(index=1, tc_id=None, name=None, arguments='{"command": "pip install heavy"}')
+    round1 = [
+        _make_chunk(_make_delta(tool_calls=[tc1_start, tc2_start])),
+        _make_chunk(_make_delta(tool_calls=[tc1_args, tc2_args])),
+        _make_chunk(_make_delta(), finish_reason="tool_calls"),
+        _make_usage_chunk(),
+    ]
+    final = _text_chunks("Done")
+    fake_acompletion, _ = _mock_litellm_responses(round1, final)
 
     async def mock_bash(cmd, cwd, **kw):
         if "heavy" in cmd:
             return "Error: Command timed out after 300s"
         return "ok"
 
-    with _mock_anthropic(mock_client), \
+    with patch("litellm.acompletion", side_effect=fake_acompletion), \
          patch("cycls.agent._exec_bash", side_effect=mock_bash):
         asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
@@ -400,32 +409,19 @@ def test_api_400_from_tool_result_lets_llm_recover(agent_env):
     ws, hp, ctx = agent_env
 
     # Round 1: LLM asks to view a file
-    view_block = _tool_use_block("v1", name="str_replace_based_edit_tool",
-                                  inp={"command": "view", "path": "big.pdf"})
-    round1 = _make_response([view_block], stop_reason="tool_use")
-    # Round 2: API rejects because tool_result has oversized PDF content
+    round1 = _tool_use_chunks("v1", name="str_replace_based_edit_tool",
+                               arguments='{"command": "view", "path": "big.pdf"}')
+    # Round 2: API rejects because tool_result has oversized content
+    api_error = Exception("messages.1.content.0.tool_result: content too large")
     # Round 3 (after recovery): LLM responds with helpful text
-    final = _make_response([_text_block("The PDF is too large. Let me extract specific pages.")])
+    final = _text_chunks("The PDF is too large. Let me extract specific pages.")
 
-    call_count = 0
-
-    def stream_side_effect(**kw):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return FakeStream(round1)
-        if call_count == 2:
-            # Simulate Anthropic 400: content too large
-            raise Exception("messages.1.content.0.tool_result: content too large")
-        return FakeStream(final)
-
-    mock_client = MagicMock()
-    mock_client.messages.stream = stream_side_effect
+    fake_acompletion, _ = _mock_litellm_responses(round1, api_error, final)
 
     # Create a fake PDF file so _exec_editor can view it
     (Path(ws) / "big.pdf").write_bytes(_PDF_HEADER)
 
-    with _mock_anthropic(mock_client):
+    with patch("litellm.acompletion", side_effect=fake_acompletion):
         items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
     # Recovery = no error callout shown to user
@@ -436,14 +432,10 @@ def test_api_400_from_tool_result_lets_llm_recover(agent_env):
     history = load_history(hp)
     assert history[-1]["role"] == "assistant"
 
-    # Tool_result content was replaced with error string (not the raw PDF)
-    tool_results = [m for m in history if m["role"] == "user"
-                    and isinstance(m.get("content"), list)
-                    and any(b.get("type") == "tool_result" for b in m["content"])]
-    for msg in tool_results:
-        for b in msg["content"]:
-            if b.get("type") == "tool_result":
-                assert isinstance(b["content"], str), "Tool result content should be error string, not raw PDF"
+    # Tool result content was replaced with error string (not raw PDF data)
+    tool_msgs = [m for m in history if m.get("role") == "tool"]
+    for msg in tool_msgs:
+        assert isinstance(msg["content"], str), "Tool result content should be error string, not raw PDF"
 
     # All tool_use ids still have matching results
     use_ids, result_ids = _history_tool_ids(history)
@@ -484,10 +476,8 @@ def test_prepare_prompt_over_limit(tmp_path):
     ctx.messages.raw = [{"role": "user", "content": parts}]
 
     prompt = _prepare_prompt(ctx)
-    # First MAX_ATTACHMENTS are in the attached files list
     for i in range(MAX_ATTACHMENTS):
         assert f"img{i}.png" in prompt
-    # Extras are mentioned as on-disk, not in attached files
     for i in range(MAX_ATTACHMENTS, n):
         assert f"img{i}.png" in prompt
     assert "not loaded" in prompt
@@ -502,11 +492,14 @@ def test_compaction_triggers_above_threshold(agent_env):
     """When input tokens exceed COMPACT_THRESHOLD, history is rewritten with summary."""
     ws, hp, ctx = agent_env
 
-    over = _usage(inp=COMPACT_THRESHOLD + 1)
-    final = _make_response([_text_block("Done")], usage=over)
+    # Final chunk with usage above threshold
+    final_chunks = [
+        _make_chunk(_make_delta(content="Done")),
+        _make_chunk(_make_delta(), finish_reason="stop"),
+        _make_usage_chunk(prompt_tokens=COMPACT_THRESHOLD + 1, completion_tokens=100),
+    ]
 
-    mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: FakeStream(final)
+    fake_acompletion, _ = _mock_litellm_responses(final_chunks)
 
     # Mock _compact to return a known summary
     summary_messages = [
@@ -514,7 +507,7 @@ def test_compaction_triggers_above_threshold(agent_env):
         {"role": "assistant", "content": "Understood."},
     ]
 
-    with _mock_anthropic(mock_client), \
+    with patch("litellm.acompletion", side_effect=fake_acompletion), \
          patch("cycls.agent._compact", new_callable=lambda: AsyncMock(return_value=summary_messages)):
         asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
@@ -529,13 +522,15 @@ def test_no_compaction_below_threshold(agent_env):
     """When input tokens are under COMPACT_THRESHOLD, history is appended normally."""
     ws, hp, ctx = agent_env
 
-    under = _usage(inp=COMPACT_THRESHOLD - 1)
-    final = _make_response([_text_block("Done")], usage=under)
+    final_chunks = [
+        _make_chunk(_make_delta(content="Done")),
+        _make_chunk(_make_delta(), finish_reason="stop"),
+        _make_usage_chunk(prompt_tokens=COMPACT_THRESHOLD - 1, completion_tokens=100),
+    ]
 
-    mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: FakeStream(final)
+    fake_acompletion, _ = _mock_litellm_responses(final_chunks)
 
-    with _mock_anthropic(mock_client):
+    with patch("litellm.acompletion", side_effect=fake_acompletion):
         asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
     history = load_history(hp)
@@ -547,13 +542,15 @@ def test_compaction_failure_still_saves_history(agent_env):
     """If _compact raises, the final assistant message must still be saved."""
     ws, hp, ctx = agent_env
 
-    over = _usage(inp=COMPACT_THRESHOLD + 1)
-    final = _make_response([_text_block("Important answer")], usage=over)
+    final_chunks = [
+        _make_chunk(_make_delta(content="Important answer")),
+        _make_chunk(_make_delta(), finish_reason="stop"),
+        _make_usage_chunk(prompt_tokens=COMPACT_THRESHOLD + 1, completion_tokens=100),
+    ]
 
-    mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: FakeStream(final)
+    fake_acompletion, _ = _mock_litellm_responses(final_chunks)
 
-    with _mock_anthropic(mock_client), \
+    with patch("litellm.acompletion", side_effect=fake_acompletion), \
          patch("cycls.agent._compact", new_callable=lambda: AsyncMock(side_effect=Exception("API down"))):
         asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
@@ -634,20 +631,12 @@ def test_auto_retry_on_overloaded(agent_env):
     """Transient API errors should be retried, not shown as errors."""
     ws, hp, ctx = agent_env
 
-    call_count = 0
-    final = _make_response([_text_block("Done")])
+    final = _text_chunks("Done")
+    overloaded = Exception("overloaded")
 
-    def stream_side_effect(**kw):
-        nonlocal call_count
-        call_count += 1
-        if call_count <= 2:
-            raise Exception("overloaded")
-        return FakeStream(final)
+    fake_acompletion, get_count = _mock_litellm_responses(overloaded, overloaded, final)
 
-    mock_client = MagicMock()
-    mock_client.messages.stream = stream_side_effect
-
-    with _mock_anthropic(mock_client), \
+    with patch("litellm.acompletion", side_effect=fake_acompletion), \
          patch("asyncio.sleep", new_callable=lambda: AsyncMock(return_value=None)):
         items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
@@ -655,26 +644,20 @@ def test_auto_retry_on_overloaded(agent_env):
     callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
     assert not callouts
     # Should have retried and succeeded
-    assert call_count == 3
+    assert get_count() == 3
 
 
 def test_auto_retry_exhausted_shows_error(agent_env):
     """After MAX_RETRIES, the error should surface to the user."""
     ws, hp, ctx = agent_env
 
-    mock_client = MagicMock()
-    mock_client.messages.stream = MagicMock(side_effect=Exception("overloaded"))
+    errors = [Exception("overloaded")] * (MAX_RETRIES + 2)
+    fake_acompletion, _ = _mock_litellm_responses(*errors)
 
-    with _mock_anthropic(mock_client), \
+    with patch("litellm.acompletion", side_effect=fake_acompletion), \
          patch("asyncio.sleep", new_callable=lambda: AsyncMock(return_value=None)):
         items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
     callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
     assert len(callouts) == 1
     assert "overloaded" in callouts[0]["callout"]
-
-
-# ---------------------------------------------------------------------------
-# bwrap sandbox configuration tests
-# ---------------------------------------------------------------------------
-

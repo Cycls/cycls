@@ -1,6 +1,7 @@
-"""Agent loop — streams Claude tool-use turns with sandboxed execution."""
+"""Agent loop — streams LLM tool-use turns with sandboxed execution."""
 
-import asyncio, base64, json, os, pathlib
+import asyncio, base64, json, os, pathlib, warnings
+warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
 from cycls.app.state import ensure_workspace, history_path, load_history, save_history
 
 COMPACT_THRESHOLD = 150_000
@@ -76,6 +77,16 @@ def _is_retryable(e):
     msg = str(e).lower()
     return any(s in msg for s in _RETRYABLE)
 
+def _track_usage(usage, chunk):
+    u = getattr(chunk, "usage", None)
+    if not u:
+        return
+    usage["inputTokens"] += getattr(u, "prompt_tokens", 0) or 0
+    usage["outputTokens"] += getattr(u, "completion_tokens", 0) or 0
+    pd = getattr(u, "prompt_tokens_details", None)
+    if pd:
+        usage["cachedInputTokens"] += getattr(pd, "cached_tokens", 0) or 0
+
 def _prepare_prompt(context):
     content = context.messages.raw[-1].get("content", "")
     if not isinstance(content, list):
@@ -100,34 +111,84 @@ def _prepare_prompt(context):
         prompt += "\n\nAttached files: " + ", ".join(files)
     return prompt
 
-async def _compact(client, model, messages):
-    response = await client.messages.create(
+async def _compact(model, messages):
+    import litellm
+    sys_content = ("Summarize this conversation concisely but thoroughly. Include: "
+                   "key decisions made, code changes with file paths, current state "
+                   "of work, and any pending tasks. This summary replaces the full "
+                   "conversation history.")
+    response = await litellm.acompletion(
         model=model, max_tokens=8192,
-        system=[{"type": "text", "text": (
-            "Summarize this conversation concisely but thoroughly. Include: "
-            "key decisions made, code changes with file paths, current state "
-            "of work, and any pending tasks. This summary replaces the full "
-            "conversation history."
-        )}],
-        messages=messages + [{"role": "user", "content": "Summarize our conversation so far for continuity."}],
+        messages=[{"role": "system", "content": sys_content}]
+                 + messages
+                 + [{"role": "user", "content": "Summarize our conversation so far for continuity."}],
     )
+    summary = response.choices[0].message.content
     return [
-        {"role": "user", "content": "This session is being continued from a previous conversation that ran out of context. The conversation is summarized below:\n\n" + response.content[0].text},
+        {"role": "user", "content": "This session is being continued from a previous conversation that ran out of context. The conversation is summarized below:\n\n" + summary},
         {"role": "assistant", "content": "Understood. I have the full context from our previous conversation. How can I help?"},
     ]
 
 _BUILTINS = {
-    "Bash": {"type": "bash_20250124", "name": "bash"},
-    "Editor": {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"},
-    "WebSearch": {"type": "web_search_20250305", "name": "web_search"},
+    "Bash": {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Run a bash command in the sandbox. Working directory is /workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "The bash command to run"}
+                },
+                "required": ["command"]
+            }
+        }
+    },
+    "Editor": {
+        "type": "function",
+        "function": {
+            "name": "str_replace_based_edit_tool",
+            "description": (
+                "View, create, or edit files using commands: view, str_replace, create, insert. "
+                "Always use relative paths from /workspace."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "enum": ["view", "str_replace", "create", "insert"],
+                                "description": "The operation to perform"},
+                    "path": {"type": "string", "description": "Relative file path"},
+                    "old_str": {"type": "string", "description": "Text to find and replace (str_replace)"},
+                    "new_str": {"type": "string", "description": "Replacement text (str_replace/insert)"},
+                    "file_text": {"type": "string", "description": "Full file content (create)"},
+                    "insert_line": {"type": "integer", "description": "Line number to insert at (insert)"},
+                    "view_range": {"type": "array", "items": {"type": "integer"},
+                                   "description": "[start_line, end_line] range to view"}
+                },
+                "required": ["command", "path"]
+            }
+        }
+    },
+    # WebSearch is handled via web_search_options param, not as a tool
 }
 
 def _build_tools(builtin_tools, custom):
-    tools = [_BUILTINS[b] for b in builtin_tools]
-    tools += [{"type": "custom", "name": t["name"], "description": t.get("description", ""),
-               "input_schema": t.get("inputSchema", t.get("input_schema", {}))} for t in custom or []]
-    tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
-    return tools
+    tools = [_BUILTINS[b] for b in builtin_tools if b in _BUILTINS]
+    seen = {t["function"]["name"] for t in tools}
+    for t in (custom or []):
+        name = t["name"]
+        if name in seen:
+            continue
+        seen.add(name)
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": t.get("description", ""),
+                "parameters": t.get("inputSchema", t.get("input_schema", {}))
+            }
+        })
+    return tools or None
 
 # ---- Tool execution ----
 
@@ -211,8 +272,6 @@ def _exec_editor(inp, workspace):
         return f"Inserted at line {pos} in {path}"
     return f"Error: unknown command {cmd}"
 
-async def _defer(fn, *args): return fn(*args)
-
 _UI_TOOL_NAMES = {t["name"] for t in _UI_TOOLS}
 
 def _render_ui_tool(name, args):
@@ -236,8 +295,7 @@ def _render_ui_tool(name, args):
         ]
     return None
 
-def _prepare_tool(block, ws, timeout):
-    name, inp = block.name, block.input
+def _prepare_tool(name, inp, ws, timeout):
     if name == "bash":
         cmd = inp.get('command', '')
         label = cmd if len(cmd) <= 80 else cmd[:60] + ' … ' + cmd[-17:]
@@ -246,7 +304,8 @@ def _prepare_tool(block, ws, timeout):
     elif name == "str_replace_based_edit_tool":
         verb = "Editing" if inp.get("command") in ("str_replace", "create", "insert") else "Viewing"
         step = {"type": "step", "step": f"{verb} {inp.get('path', 'file')}"}
-        coro = _defer(_exec_editor, inp, ws)
+        async def _run_editor(i=inp, w=ws): return _exec_editor(i, w)
+        coro = _run_editor()
     elif name in _UI_TOOL_NAMES:
         step = _render_ui_tool(name, inp) or []
         coro = asyncio.sleep(0, result=f"{name} rendered successfully")
@@ -260,30 +319,29 @@ def _prepare_tool(block, ws, timeout):
 def _recover(e, messages):
     """Try to patch messages for recovery. Returns save mode ("a"/"w") or None."""
     last = messages[-1] if messages else {}
-    content = last.get("content", [])
-    if not isinstance(content, list):
-        return None
-    if last.get("role") == "assistant" and any(b.get("type") == "tool_use" for b in content):
-        results = [{"type": "tool_result", "tool_use_id": b["id"], "content": f"Error: {e}"}
-                   for b in content if b.get("type") == "tool_use"]
-        messages.append({"role": "user", "content": results})
+    # Case 1: assistant made tool_calls, API rejected next request → inject error tool results
+    if last.get("role") == "assistant" and last.get("tool_calls"):
+        for tc in last["tool_calls"]:
+            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": f"Error: {e}"})
         return "a"
-    if any(b.get("type") == "tool_result" and not str(b.get("content", "")).startswith("Error:")
-           for b in content):
-        for b in content:
-            if b.get("type") == "tool_result":
-                b["content"] = f"Error: {e}"
+    # Case 2: tool results exist but content was rejected (e.g. oversized) → replace with error
+    if last.get("role") == "tool" and not str(last.get("content", "")).startswith("Error:"):
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "tool":
+                messages[i]["content"] = f"Error: {e}"
+            else:
+                break
         return "w"
     return None
 
-async def _finalize(client, model, hp, messages, saved, usage, show_usage=False):
+async def _finalize(model, hp, messages, saved, usage, show_usage=False):
     new = messages[saved:]
     if hp:
         did_compact = False
         if usage["inputTokens"] > COMPACT_THRESHOLD and messages:
             try:
                 yield {"type": "step", "step": "Compacting context..."}
-                summary = await _compact(client, model, messages)
+                summary = await _compact(model, messages)
                 save_history(hp, summary, mode="w")
                 did_compact = True
             except Exception:
@@ -291,98 +349,141 @@ async def _finalize(client, model, hp, messages, saved, usage, show_usage=False)
         if not did_compact and new and new[-1].get("role") == "assistant":
             save_history(hp, new)
     if show_usage and usage["inputTokens"]:
-        yield f'\n\n*in: {usage["inputTokens"]:,} · out: {usage["outputTokens"]:,} · cached: {usage["cachedInputTokens"]:,} · cache-create: {usage["cacheCreationTokens"]:,}*'
+        yield f'\n\n*in: {usage["inputTokens"]:,} · out: {usage["outputTokens"]:,} · cached: {usage["cachedInputTokens"]:,}*'
 
 async def Agent(*, context, system="", tools=None, builtin_tools=[],
                 model="claude-sonnet-4-20250514", max_tokens=16384, thinking=True,
                 bash_timeout=600, show_usage=False):
-    """Run one Claude agent turn. Async generator yielding streaming UI components."""
-    import anthropic
+    """Run one agent turn. Async generator yielding streaming UI components."""
+    import litellm
+    litellm.drop_params = True
 
     ws = context.workspace
     ensure_workspace(ws)
     prompt = _prepare_prompt(context)
-    client = anthropic.AsyncAnthropic()
     hp = history_path(context.user, context.session_id) if context.session_id and context.user else None
     messages = load_history(hp) if hp else []
     saved = len(messages)
     messages.append({"role": "user", "content": prompt})
 
+    sys_msg = {"role": "system", "content": _DEFAULT_SYSTEM + ("\n\n" + system if system else "")}
+    tool_defs = _build_tools(builtin_tools, _UI_TOOLS + (tools or []))
+
     kwargs = {
         "model": model, "max_tokens": max_tokens,
-        "tools": _build_tools(builtin_tools, _UI_TOOLS + (tools or [])),
-        "messages": messages,
-        "system": [{"type": "text", "text": _DEFAULT_SYSTEM + ("\n\n" + system if system else ""),
-                     "cache_control": {"type": "ephemeral"}}],
-        **({"thinking": {"type": "adaptive"}} if thinking else {}),
+        "messages": [sys_msg] + messages,
+        "stream": True,
     }
+    if tool_defs:
+        kwargs["tools"] = tool_defs
+    if "WebSearch" in builtin_tools:
+        kwargs["web_search_options"] = {"search_context_size": "medium"}
+        # Gemini requires this to combine built-in search with function calling
+        if "gemini" in model.lower():
+            kwargs["include_server_side_tool_invocations"] = True
+    if thinking:
+        kwargs["reasoning_effort"] = "high"
 
-    usage = {"inputTokens": 0, "outputTokens": 0, "cachedInputTokens": 0, "cacheCreationTokens": 0}
+    usage = {"inputTokens": 0, "outputTokens": 0, "cachedInputTokens": 0}
     retries = 0
 
     while True:
         try:
             # ---- Stream ----
-            thinking_text, search_idx, search_query = "", None, ""
-            async with client.messages.stream(**kwargs) as stream:
-                async for ev in stream:
-                    if ev.type == "content_block_start":
-                        b = ev.content_block
-                        if b.type == "server_tool_use" and b.name == "web_search":
-                            search_idx, search_query = ev.index, ""
-                    elif ev.type == "content_block_delta":
-                        if ev.delta.type == "thinking_delta":
-                            thinking_text += ev.delta.thinking
-                        elif ev.delta.type == "text_delta":
-                            yield ev.delta.text
-                        elif ev.delta.type == "input_json_delta" and ev.index == search_idx:
-                            search_query += ev.delta.partial_json
-                    elif ev.type == "content_block_stop":
-                        if thinking_text:
-                            yield {"type": "thinking", "thinking": thinking_text}
-                            thinking_text = ""
-                        if ev.index == search_idx:
-                            try: q = json.loads(search_query).get("query", "")
-                            except Exception: q = ""
-                            yield {"type": "step", "step": f'Web Search("{q}")' if q else "Web Search"}
-                            search_idx = None
-                response = await stream.get_final_message()
+            text_parts, thinking_text = [], ""
+            tool_calls_acc = {}
+            server_tool_indices = set()
 
-            # ---- Process ----
+            response = await litellm.acompletion(**kwargs)
+            async for chunk in response:
+                choice = chunk.choices[0] if chunk.choices else None
+                if not choice:
+                    _track_usage(usage, chunk)
+                    continue
+
+                delta = choice.delta
+
+                # Thinking / reasoning
+                rc = getattr(delta, "reasoning_content", None)
+                if rc:
+                    thinking_text += rc
+
+                # Flush thinking before text or tool calls
+                if thinking_text and (delta.content or delta.tool_calls):
+                    yield {"type": "thinking", "thinking": thinking_text}
+                    thinking_text = ""
+
+                if delta.content:
+                    yield delta.content
+                    text_parts.append(delta.content)
+
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        idx = tc.index
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}
+                        if tc.id:
+                            tool_calls_acc[idx]["id"] = tc.id
+                            # Detect server-side tools immediately
+                            if tc.id.startswith("srvtoolu_"):
+                                server_tool_indices.add(idx)
+                        if tc.function and tc.function.name:
+                            tool_calls_acc[idx]["name"] = tc.function.name
+                            # Emit Web Search step in real-time
+                            if tc.function.name == "web_search":
+                                server_tool_indices.add(idx)
+                                yield {"type": "step", "step": "Web Search"}
+                        if tc.function and tc.function.arguments:
+                            tool_calls_acc[idx]["arguments"] += tc.function.arguments
+
+                if choice.finish_reason:
+                    _track_usage(usage, chunk)
+
+            if thinking_text:
+                yield {"type": "thinking", "thinking": thinking_text}
+
+            # ---- Build assistant message ----
             retries = 0
-            u = response.usage
-            usage["inputTokens"] += u.input_tokens
-            usage["outputTokens"] += u.output_tokens
-            usage["cachedInputTokens"] += u.cache_read_input_tokens or 0
-            usage["cacheCreationTokens"] += u.cache_creation_input_tokens or 0
+            assistant_msg = {"role": "assistant", "content": "".join(text_parts) or None}
+            parsed_calls = [
+                {"id": tc["id"], "type": "function",
+                 "function": {"name": tc["name"], "arguments": tc["arguments"]}}
+                for idx, tc in sorted(tool_calls_acc.items()) if idx not in server_tool_indices
+            ]
+            if parsed_calls:
+                assistant_msg["tool_calls"] = parsed_calls
+            messages.append(assistant_msg)
 
-            messages.append({"role": "assistant",
-                            "content": [b.model_dump(exclude_none=True) for b in response.content]})
-
-            if response.stop_reason != "tool_use":
+            if not parsed_calls:
                 break
 
             # ---- Execute tools ----
-            tool_blocks = [b for b in response.content if b.type == "tool_use"]
-            steps, coros = zip(*(_prepare_tool(b, ws, bash_timeout) for b in tool_blocks))
-            for s in steps:
-                if isinstance(s, list):
-                    for e in s: yield e
-                else:
-                    yield s
-            outputs = await asyncio.gather(*coros, return_exceptions=True)
+            tool_inputs = []
+            for tc in parsed_calls:
+                try: inp = json.loads(tc["function"]["arguments"])
+                except (json.JSONDecodeError, TypeError): inp = {}
+                tool_inputs.append((tc, *_prepare_tool(tc["function"]["name"], inp, ws, bash_timeout)))
 
-            results = []
-            for block, out in zip(tool_blocks, outputs):
+            for _, step, _ in tool_inputs:
+                if isinstance(step, list):
+                    for e in step: yield e
+                else:
+                    yield step
+
+            outputs = await asyncio.gather(*(coro for _, _, coro in tool_inputs), return_exceptions=True)
+
+            for (tc, _, _), out in zip(tool_inputs, outputs):
                 if isinstance(out, BaseException): out = f"Error: {out}"
-                if isinstance(out, str) and out.startswith("Error: Command timed out"):
+                if isinstance(out, str) and "Command timed out" in out:
                     yield {"type": "callout", "callout": out, "style": "warning"}
-                results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
-            messages.append({"role": "user", "content": results})
+                out = json.dumps(out) if isinstance(out, list) else str(out) if not isinstance(out, str) else out
+                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": out})
 
             if hp:
                 save_history(hp, messages[saved:])
                 saved = len(messages)
+
+            kwargs["messages"] = [sys_msg] + messages
 
         except Exception as e:
             if _is_retryable(e) and retries < MAX_RETRIES:
@@ -398,7 +499,8 @@ async def Agent(*, context, system="", tools=None, builtin_tools=[],
             if hp:
                 save_history(hp, messages if mode == "w" else messages[saved:], mode=mode)
                 saved = len(messages)
+            kwargs["messages"] = [sys_msg] + messages
             continue
 
-    async for event in _finalize(client, model, hp, messages, saved, usage, show_usage):
+    async for event in _finalize(model, hp, messages, saved, usage, show_usage):
         yield event
