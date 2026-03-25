@@ -403,15 +403,10 @@ async def Agent(*, context, system="", tools=None, builtin_tools=[],
 
                 delta = choice.delta
 
-                # Thinking / reasoning
+                # Thinking / reasoning — yield each chunk immediately
                 rc = getattr(delta, "reasoning_content", None)
                 if rc:
-                    thinking_text += rc
-
-                # Flush thinking before text or tool calls
-                if thinking_text and (delta.content or delta.tool_calls):
-                    yield {"type": "thinking", "thinking": thinking_text}
-                    thinking_text = ""
+                    yield {"type": "thinking", "thinking": rc}
 
                 if delta.content:
                     yield delta.content
@@ -438,9 +433,6 @@ async def Agent(*, context, system="", tools=None, builtin_tools=[],
 
                 if choice.finish_reason:
                     _track_usage(usage, chunk)
-
-            if thinking_text:
-                yield {"type": "thinking", "thinking": thinking_text}
 
             # ---- Build assistant message ----
             retries = 0
