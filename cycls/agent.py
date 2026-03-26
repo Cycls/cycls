@@ -2,6 +2,8 @@
 
 import asyncio, base64, json, os, pathlib, warnings
 warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
+import litellm
+litellm.drop_params = True
 from cycls.app.state import ensure_workspace, history_path, load_history, save_history
 
 COMPACT_THRESHOLD = 100_000
@@ -112,7 +114,6 @@ def _prepare_prompt(context):
     return prompt
 
 async def _compact(model, messages):
-    import litellm
     sys_content = ("Summarize this conversation concisely but thoroughly. Include: "
                    "key decisions made, code changes with file paths, current state "
                    "of work, and any pending tasks. This summary replaces the full "
@@ -355,8 +356,6 @@ async def Agent(*, context, system="", tools=None, builtin_tools=[],
                 model="claude-sonnet-4-20250514", max_tokens=16384, thinking=True,
                 bash_timeout=600, show_usage=False):
     """Run one agent turn. Async generator yielding streaming UI components."""
-    import litellm
-    litellm.drop_params = True
 
     ws = context.workspace
     ensure_workspace(ws)
