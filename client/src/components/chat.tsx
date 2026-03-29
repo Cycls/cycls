@@ -10,6 +10,7 @@ import type { Message, Attachment, PassMetadata } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
 import { useSpeechRecognition } from "../hooks/use-speech";
+import { SUGGESTIONS } from "./suggestions-data";
 
 interface PassAgent {
   slug: string;
@@ -19,7 +20,6 @@ interface PassAgent {
   description_ar?: string;
   link: string;
   icon_svg?: string;
-  tags?: string[];
 }
 
 interface PlanInfo {
@@ -108,9 +108,10 @@ export function Chat({
     onOpenFile: (path: string) => Promise<string>;
   };
 }) {
-  useLang();
-  const meta = passMetadata?.[getLang() === "ar" ? "ar" : "en"];
-  const inputPlaceholder = meta ? (getLang() === "ar" ? `اسأل ${meta.name}` : `Ask ${meta.name}`) : undefined;
+  const lang = useLang();
+  const isAr = lang === "ar";
+  const meta = passMetadata?.[isAr ? "ar" : "en"];
+  const inputPlaceholder = meta ? (isAr ? `اسأل ${meta.name}` : `Ask ${meta.name}`) : undefined;
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [exploreOpen, setExploreOpen] = useState(false);
@@ -229,7 +230,7 @@ export function Chat({
     document.body.classList.toggle("dark");
   };
 
-  const openExplore = useCallback(async () => {
+  const openExplore = async () => {
     setExploreOpen(true);
     if (exploreAgents.length > 0) return;
     setExploreLoading(true);
@@ -239,7 +240,7 @@ export function Chat({
       setExploreAgents(data.agents || []);
     } catch { /* silent */ }
     setExploreLoading(false);
-  }, [exploreAgents.length]);
+  };
 
   return (
     <div className="h-dvh flex flex-col">
@@ -424,11 +425,11 @@ export function Chat({
                   </svg>
                 </button>
                 <button
-                  onClick={() => setLang(getLang() === "en" ? "ar" : "en")}
+                  onClick={() => setLang(isAr ? "en" : "ar")}
                   className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
                   aria-label="Toggle language"
                 >
-                  <span className="text-xs font-medium w-4 h-4 flex items-center justify-center">{getLang() === "en" ? "ع" : "En"}</span>
+                  <span className="text-xs font-medium w-4 h-4 flex items-center justify-center">{isAr ? "En" : "ع"}</span>
                 </button>
               </>
             )}
@@ -464,7 +465,7 @@ export function Chat({
       {exploreOpen && createPortal(
         <>
           <div className="fixed inset-0 z-40" onClick={() => setExploreOpen(false)} />
-          <div className="fixed left-4 sm:left-6 top-12 z-50 mt-1 w-72 rounded-lg border border-border bg-background shadow-lg overflow-hidden" dir={getLang() === "ar" ? "rtl" : "ltr"}>
+          <div className="fixed left-4 sm:left-6 top-12 z-50 mt-1 w-72 rounded-lg border border-border bg-background shadow-lg overflow-hidden" dir={isAr ? "rtl" : "ltr"}>
             <div className="px-3 py-2 border-b border-border">
               <p className="text-xs font-medium text-muted-foreground">{t("explore")}</p>
             </div>
@@ -475,7 +476,6 @@ export function Chat({
             ) : (
               <div className="max-h-80 overflow-y-auto py-1">
                 {exploreAgents.map((agent) => {
-                  const isAr = getLang() === "ar";
                   const agentTitle = (isAr && agent.title_ar) || agent.title;
                   const agentDesc = (isAr && agent.description_ar) || agent.description;
                   const href = agent.link.startsWith("http") ? agent.link : `https://${agent.link}`;
@@ -1465,168 +1465,6 @@ function AttachMenu({ onOpenFilePicker, onOpenFiles, disabled }: { onOpenFilePic
   );
 }
 
-const SUGGESTIONS: Record<string, {
-  label: string;
-  highlight: string;
-  icon: React.ReactNode;
-  items: string[];
-}[]> = {
-  en: [
-    {
-      label: "Summary",
-      highlight: "Summarize",
-      icon: (
-        <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
-        </svg>
-      ),
-      items: [
-        "Summarize this article into 3 key points",
-        "Summarize the main arguments of this text",
-        "Summarize this meeting transcript into action items",
-        "Summarize this document in one paragraph",
-      ],
-    },
-    {
-      label: "Code",
-      highlight: "Write",
-      icon: (
-        <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 16.5" />
-        </svg>
-      ),
-      items: [
-        "Write a Python function that sorts a list",
-        "Write a regex to validate email addresses",
-        "Write a REST API endpoint in FastAPI",
-        "Write unit tests for this function",
-      ],
-    },
-    {
-      label: "Research",
-      highlight: "Research",
-      icon: (
-        <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
-        </svg>
-      ),
-      items: [
-        "Research the pros and cons of microservices vs monoliths",
-        "Research best practices for API authentication",
-        "Research the latest trends in AI agents",
-        "Research how to optimize database queries",
-      ],
-    },
-    {
-      label: "Creative",
-      highlight: "Create",
-      icon: (
-        <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9.53 16.122a3 3 0 0 0-5.78 1.128 2.25 2.25 0 0 1-2.4 2.245 4.5 4.5 0 0 0 8.4-2.245c0-.399-.078-.78-.22-1.128Zm0 0a15.998 15.998 0 0 0 3.388-1.62m-5.043-.025a15.994 15.994 0 0 1 1.622-3.395m3.42 3.42a15.995 15.995 0 0 0 4.764-4.648l3.876-5.814a1.151 1.151 0 0 0-1.597-1.597L14.146 6.32a15.996 15.996 0 0 0-4.649 4.763m3.42 3.42a6.776 6.776 0 0 0-3.42-3.42" />
-        </svg>
-      ),
-      items: [
-        "Create a catchy tagline for a tech startup",
-        "Create an outline for a blog post about AI",
-        "Create a product description for an app",
-        "Create a story prompt for a sci-fi setting",
-      ],
-    },
-    {
-      label: "Analyze",
-      highlight: "Analyze",
-      icon: (
-        <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5m.75-9 3-3 2.148 2.148A12.061 12.061 0 0 1 16.5 7.605" />
-        </svg>
-      ),
-      items: [
-        "Analyze this data and identify key trends",
-        "Analyze the performance bottlenecks in this code",
-        "Analyze the sentiment of these customer reviews",
-        "Analyze this business model and find weaknesses",
-      ],
-    },
-  ],
-  ar: [
-    {
-      label: "تلخيص",
-      highlight: "لخّص",
-      icon: (
-        <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
-        </svg>
-      ),
-      items: [
-        "لخّص هذا المقال في 3 نقاط رئيسية",
-        "لخّص الحجج الأساسية في هذا النص",
-        "لخّص محضر هذا الاجتماع إلى مهام",
-        "لخّص هذا المستند في فقرة واحدة",
-      ],
-    },
-    {
-      label: "برمجة",
-      highlight: "اكتب",
-      icon: (
-        <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 16.5" />
-        </svg>
-      ),
-      items: [
-        "اكتب دالة بايثون لترتيب قائمة",
-        "اكتب تعبير منتظم للتحقق من البريد الإلكتروني",
-        "اكتب نقطة نهاية REST API باستخدام FastAPI",
-        "اكتب اختبارات وحدة لهذه الدالة",
-      ],
-    },
-    {
-      label: "بحث",
-      highlight: "ابحث",
-      icon: (
-        <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
-        </svg>
-      ),
-      items: [
-        "ابحث عن إيجابيات وسلبيات الخدمات المصغرة مقابل المتراصة",
-        "ابحث عن أفضل ممارسات مصادقة الـ API",
-        "ابحث عن أحدث التوجهات في وكلاء الذكاء الاصطناعي",
-        "ابحث عن طرق تحسين استعلامات قواعد البيانات",
-      ],
-    },
-    {
-      label: "إبداع",
-      highlight: "أنشئ",
-      icon: (
-        <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9.53 16.122a3 3 0 0 0-5.78 1.128 2.25 2.25 0 0 1-2.4 2.245 4.5 4.5 0 0 0 8.4-2.245c0-.399-.078-.78-.22-1.128Zm0 0a15.998 15.998 0 0 0 3.388-1.62m-5.043-.025a15.994 15.994 0 0 1 1.622-3.395m3.42 3.42a15.995 15.995 0 0 0 4.764-4.648l3.876-5.814a1.151 1.151 0 0 0-1.597-1.597L14.146 6.32a15.996 15.996 0 0 0-4.649 4.763m3.42 3.42a6.776 6.776 0 0 0-3.42-3.42" />
-        </svg>
-      ),
-      items: [
-        "أنشئ شعارًا جذابًا لشركة تقنية ناشئة",
-        "أنشئ مخططًا لمقال عن الذكاء الاصطناعي",
-        "أنشئ وصفًا لمنتج تطبيق",
-        "أنشئ فكرة قصة في عالم خيال علمي",
-      ],
-    },
-    {
-      label: "تحليل",
-      highlight: "حلّل",
-      icon: (
-        <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5m.75-9 3-3 2.148 2.148A12.061 12.061 0 0 1 16.5 7.605" />
-        </svg>
-      ),
-      items: [
-        "حلّل هذه البيانات وحدد الاتجاهات الرئيسية",
-        "حلّل اختناقات الأداء في هذا الكود",
-        "حلّل مشاعر تقييمات العملاء هذه",
-        "حلّل نموذج العمل هذا وابحث عن نقاط الضعف",
-      ],
-    },
-  ],
-};
-
 function Suggestions({
   onSelect,
   onPreview,
@@ -1659,7 +1497,7 @@ function Suggestions({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.15 }}
-            className="flex flex-wrap gap-2 justify-center"
+            className="flex flex-wrap gap-2 justify-center max-h-10 overflow-hidden"
           >
             {suggestions.map((s, i) => (
               <motion.button
@@ -1671,7 +1509,7 @@ function Suggestions({
                   setActiveCategory(s.label);
                   onPreview(s.highlight);
                 }}
-                className={`flex items-center gap-2 rounded-full border border-border px-3.5 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-foreground/30 hover:bg-secondary/50 transition-colors cursor-pointer ${i >= 3 ? "hidden sm:flex" : ""}`}
+                className="flex items-center gap-2 rounded-full border border-border px-3.5 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-foreground/30 hover:bg-secondary/50 transition-colors cursor-pointer"
               >
                 {s.icon}
                 {s.label}

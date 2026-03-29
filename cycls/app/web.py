@@ -5,10 +5,15 @@ from pydantic import BaseModel
 from typing import Optional, Any
 from .auth import PK_LIVE, PK_TEST, JWKS_PROD, JWKS_TEST
 
+class PassMetadata(BaseModel):
+    name: str
+    description: str = ""
+    logo: str = ""
+
 class Config(BaseModel):
     public_path: str = "theme"
     name: Optional[str] = None
-    pass_metadata: Optional[dict] = None
+    pass_metadata: Optional[dict[str, PassMetadata]] = None
     header: Optional[str] = None
     intro: Optional[str] = None
     title: Optional[str] = None
@@ -78,29 +83,40 @@ def web(func, config):
     from fastapi.staticfiles import StaticFiles
 
     import httpx
+    import time
 
     if isinstance(config, dict):
         config = Config(**config)
 
     jwks = PyJWKClient(config.jwks)
 
-    if config.plan == "cycls_pass" and config.name and not config.pass_metadata:
+    _metadata_fetched_at = 0
+    _METADATA_TTL = 300  # 5 minutes
+
+    async def _fetch_pass_metadata():
+        nonlocal _metadata_fetched_at
+        if config.plan != "cycls_pass" or not config.name:
+            return
+        if time.monotonic() - _metadata_fetched_at < _METADATA_TTL:
+            return
         try:
-            resp = httpx.get(f"https://cms.cycls.ai/agents/{config.name}-agent", timeout=5)  # TODO: remove -agent suffix once CMS slug is updated
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"https://cms.cycls.ai/agents/{config.name}-agent", timeout=5)  # TODO: remove -agent suffix once CMS slug is updated
             if resp.status_code == 200:
                 agent = resp.json()
                 config.pass_metadata = {
-                    "en": {
-                        "name": agent.get("title", config.name),
-                        "description": agent.get("description", ""),
-                        "logo": agent.get("icon_svg", ""),
-                    },
-                    "ar": {
-                        "name": agent.get("title_ar") or agent.get("title", config.name),
-                        "description": agent.get("description_ar", ""),
-                        "logo": agent.get("icon_svg", ""),
-                    },
+                    "en": PassMetadata(
+                        name=agent.get("title", config.name),
+                        description=agent.get("description", ""),
+                        logo=agent.get("icon_svg", ""),
+                    ),
+                    "ar": PassMetadata(
+                        name=agent.get("title_ar") or agent.get("title", config.name),
+                        description=agent.get("description_ar", ""),
+                        logo=agent.get("icon_svg", ""),
+                    ),
                 }
+                _metadata_fetched_at = time.monotonic()
         except Exception:
             pass
 
@@ -179,6 +195,7 @@ def web(func, config):
     @app.get("/config")
     async def get_config():
         config.voice = bool(os.environ.get("OPENAI_API_KEY"))
+        await _fetch_pass_metadata()
         return config
 
     @app.post("/transcribe")
@@ -191,7 +208,6 @@ def web(func, config):
         if not file:
             raise HTTPException(status_code=400, detail="No audio file")
         audio_bytes = await file.read()
-        import httpx
         async with httpx.AsyncClient() as client:
             r = await client.post(
                 "https://api.openai.com/v1/audio/transcriptions",
