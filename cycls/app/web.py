@@ -14,6 +14,7 @@ class Config(BaseModel):
     public_path: str = "theme"
     name: Optional[str] = None
     pass_metadata: Optional[dict[str, PassMetadata]] = None
+    _metadata_fetched_at: float = 0
     header: Optional[str] = None
     intro: Optional[str] = None
     title: Optional[str] = None
@@ -90,14 +91,10 @@ def web(func, config):
 
     jwks = PyJWKClient(config.jwks)
 
-    _metadata_fetched_at = 0
-    _METADATA_TTL = 300  # 5 minutes
-
     async def _fetch_pass_metadata():
-        nonlocal _metadata_fetched_at
         if config.plan != "cycls_pass" or not config.name:
             return
-        if time.monotonic() - _metadata_fetched_at < _METADATA_TTL:
+        if time.monotonic() - config._metadata_fetched_at < 300:
             return
         try:
             async with httpx.AsyncClient() as client:
@@ -116,7 +113,7 @@ def web(func, config):
                         logo=agent.get("icon_svg", ""),
                     ),
                 }
-                _metadata_fetched_at = time.monotonic()
+                config._metadata_fetched_at = time.monotonic()
         except Exception:
             pass
 
