@@ -13,7 +13,6 @@ class Config(BaseModel):
     public_path: str = "theme"
     name: Optional[str] = None
     pass_metadata: Optional[dict[str, PassMetadata]] = None
-    _metadata_fetched_at: float = 0
     header: Optional[str] = None
     intro: Optional[str] = None
     title: Optional[str] = None
@@ -83,21 +82,15 @@ def web(func, config):
     from fastapi.staticfiles import StaticFiles
 
     import httpx
-    import time
 
     if isinstance(config, dict):
         config = Config(**config)
 
     jwks = PyJWKClient(config.jwks)
 
-    async def _fetch_pass_metadata():
-        if config.plan != "cycls_pass" or not config.name:
-            return
-        if time.monotonic() - config._metadata_fetched_at < 300:
-            return
+    if config.plan == "cycls_pass" and config.name and not config.pass_metadata:
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(f"https://cms.cycls.ai/agents/{config.name}-agent", timeout=5)  # TODO: remove -agent suffix once CMS slug is updated
+            resp = httpx.get(f"https://cms.cycls.ai/agents/{config.name}-agent", timeout=5)  # TODO: remove -agent suffix once CMS slug is updated
             if resp.status_code == 200:
                 agent = resp.json()
                 config.pass_metadata = {
@@ -112,7 +105,6 @@ def web(func, config):
                         logo=agent.get("icon_svg", ""),
                     ),
                 }
-                config._metadata_fetched_at = time.monotonic()
         except Exception:
             pass
 
@@ -191,7 +183,6 @@ def web(func, config):
     @app.get("/config")
     async def get_config():
         config.voice = bool(os.environ.get("OPENAI_API_KEY"))
-        await _fetch_pass_metadata()
         return config
 
     @app.post("/transcribe")
