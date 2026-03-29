@@ -27,3 +27,4 @@ node_modules/
 !.github
 mj/
 cycls/app/themes/
+*.tsbuildinfo
