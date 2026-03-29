@@ -10,12 +10,13 @@ import {
   useOrganization,
   useOrganizationList,
   useSignIn,
+  useSignUp,
   useUser,
 } from "@clerk/clerk-react";
 import { useSubscription } from "@clerk/clerk-react/experimental";
 import { dark } from "@clerk/themes";
 import { arSA } from "@clerk/localizations";
-import { useLang } from "./lib/i18n";
+import { useLang, t } from "./lib/i18n";
 import { Chat } from "./components/chat";
 import { SharedView } from "./components/shared-view";
 import { useChat, AppConfig } from "./hooks/use-chat";
@@ -192,21 +193,44 @@ function SSOCallback() {
 }
 
 function CustomSignIn() {
-  const { isLoaded, signIn } = useSignIn();
-  const [isLoading, setIsLoading] = useState(false);
+  const { isLoaded, signIn, setActive } = useSignIn();
+  const { signUp, setActive: setSignUpActive } = useSignUp();
+  const { client } = useClerk();
+  const lastStrategy = client?.lastAuthenticationStrategy;
+  const [isLoading, setIsLoading] = useState<string | false>(false);
   const [error, setError] = useState("");
+  const [mode, setMode] = useState<"sign-in" | "sign-up" | "forgot-password">("sign-in");
+  const [step, setStep] = useState<"form" | "verify">("form");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [newPassword, setNewPassword] = useState("");
 
   if (!isLoaded) return null;
 
-  const handleGoogle = async () => {
+  const resetForm = () => {
+    setError("");
+    setStep("form");
+    setEmail("");
+    setPassword("");
+    setCode("");
+    setNewPassword("");
+  };
+
+  const switchMode = (m: "sign-in" | "sign-up" | "forgot-password") => {
+    resetForm();
+    setMode(m);
+  };
+
+  const handleOAuth = async (strategy: "oauth_google" | "oauth_apple") => {
     try {
-      setIsLoading(true);
+      setIsLoading(strategy);
       setError("");
       stashParams();
       const params = new URLSearchParams(window.location.search);
       const redirectUrlComplete = params.toString() ? `/?${params}` : "/";
-      await signIn.authenticateWithRedirect({
-        strategy: "oauth_google",
+      await signIn!.authenticateWithRedirect({
+        strategy,
         redirectUrl: "/sso-callback",
         redirectUrlComplete,
       });
@@ -217,7 +241,115 @@ function CustomSignIn() {
     }
   };
 
+  const handleSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setIsLoading("form");
+      setError("");
+      const result = await signIn!.create({ identifier: email, password });
+      if (result.status === "complete") {
+        await setActive!({ session: result.createdSessionId });
+      } else if (result.status === "needs_first_factor") {
+        setStep("verify");
+      }
+    } catch (err: unknown) {
+      const clerkErr = err as { errors?: { message: string }[] };
+      setError(clerkErr.errors?.[0]?.message || "Sign in failed");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSignInVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setIsLoading("form");
+      setError("");
+      const result = await signIn!.attemptFirstFactor({ strategy: "email_code", code });
+      if (result.status === "complete") {
+        await setActive!({ session: result.createdSessionId });
+      }
+    } catch (err: unknown) {
+      const clerkErr = err as { errors?: { message: string }[] };
+      setError(clerkErr.errors?.[0]?.message || "Verification failed");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setIsLoading("form");
+      setError("");
+      await signUp!.create({ emailAddress: email, password });
+      await signUp!.prepareEmailAddressVerification({ strategy: "email_code" });
+      setStep("verify");
+    } catch (err: unknown) {
+      const clerkErr = err as { errors?: { message: string }[] };
+      setError(clerkErr.errors?.[0]?.message || "Sign up failed");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSignUpVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setIsLoading("form");
+      setError("");
+      const result = await signUp!.attemptEmailAddressVerification({ code });
+      if (result.status === "complete") {
+        await setSignUpActive!({ session: result.createdSessionId });
+      }
+    } catch (err: unknown) {
+      const clerkErr = err as { errors?: { message: string }[] };
+      setError(clerkErr.errors?.[0]?.message || "Verification failed");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setIsLoading("form");
+      setError("");
+      await signIn!.create({ strategy: "reset_password_email_code", identifier: email });
+      setStep("verify");
+    } catch (err: unknown) {
+      const clerkErr = err as { errors?: { message: string }[] };
+      setError(clerkErr.errors?.[0]?.message || "Reset failed");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResetVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setIsLoading("form");
+      setError("");
+      const result = await signIn!.attemptFirstFactor({
+        strategy: "reset_password_email_code",
+        code,
+        password: newPassword,
+      });
+      if (result.status === "complete") {
+        await setActive!({ session: result.createdSessionId });
+      }
+    } catch (err: unknown) {
+      const clerkErr = err as { errors?: { message: string }[] };
+      setError(clerkErr.errors?.[0]?.message || "Reset failed");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const toggleDark = () => document.body.classList.toggle("dark");
+
+  const inputClass = "w-full rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
+  const submitClass = "flex w-full items-center justify-center rounded-xl bg-foreground px-4 py-3 text-sm font-medium text-background hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer";
 
   return (
     <div className="flex h-dvh w-full flex-col bg-background">
@@ -248,10 +380,10 @@ function CustomSignIn() {
           <div className="rounded-2xl border border-border bg-card p-8">
             <div className="text-center mb-6">
               <h1 className="text-foreground text-xl font-semibold tracking-tight">
-                Welcome to Cycls
+                {t("welcomeTo")}
               </h1>
               <p className="text-muted-foreground text-sm mt-1.5">
-                Sign in to continue
+                {t("signInToContinue")}
               </p>
             </div>
 
@@ -261,33 +393,216 @@ function CustomSignIn() {
               </div>
             )}
 
-            <button
-              onClick={handleGoogle}
-              disabled={isLoading}
-              className="flex w-full items-center justify-center gap-3 rounded-xl border border-border bg-background px-4 py-3 text-sm font-medium text-foreground hover:bg-secondary transition-colors disabled:opacity-50 cursor-pointer"
-            >
-              <svg className="size-4" viewBox="0 0 24 24">
-                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-              </svg>
-              {isLoading ? "Connecting..." : "Continue with Google"}
-            </button>
+            {/* OAuth buttons */}
+            <div className="space-y-3">
+              <div className="relative">
+                {lastStrategy === "oauth_google" && (
+                  <span className="absolute -top-2.5 inset-x-0 flex justify-center">
+                    <span className="bg-secondary text-muted-foreground text-[10px] leading-none px-2 py-0.5 rounded-full">{t("lastUsed")}</span>
+                  </span>
+                )}
+                <button
+                  onClick={() => handleOAuth("oauth_google")}
+                  disabled={!!isLoading}
+                  className={`flex w-full items-center justify-center gap-3 rounded-xl border bg-background px-4 py-3 text-sm font-medium text-foreground hover:bg-secondary transition-colors disabled:opacity-50 cursor-pointer ${lastStrategy === "oauth_google" ? "border-foreground/30" : "border-border"}`}
+                >
+                  <svg className="size-4" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                  </svg>
+                  {isLoading === "oauth_google" ? t("connecting") : t("continueWithGoogle")}
+                </button>
+              </div>
+
+              <div className="relative">
+                {lastStrategy === "oauth_apple" && (
+                  <span className="absolute -top-2.5 inset-x-0 flex justify-center">
+                    <span className="bg-secondary text-muted-foreground text-[10px] leading-none px-2 py-0.5 rounded-full">{t("lastUsed")}</span>
+                  </span>
+                )}
+                <button
+                  onClick={() => handleOAuth("oauth_apple")}
+                  disabled={!!isLoading}
+                  className={`flex w-full items-center justify-center gap-3 rounded-xl border bg-background px-4 py-3 text-sm font-medium text-foreground hover:bg-secondary transition-colors disabled:opacity-50 cursor-pointer ${lastStrategy === "oauth_apple" ? "border-foreground/30" : "border-border"}`}
+                >
+                  <svg className="size-4" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24 0-1.44.62-2.2.44-3.06-.4C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z" />
+                  </svg>
+                  {isLoading === "oauth_apple" ? t("connecting") : t("continueWithApple")}
+                </button>
+              </div>
+            </div>
 
             <div className="mt-6 flex items-center gap-3">
               <div className="h-px flex-1 bg-border" />
-              <span className="text-xs text-muted-foreground">or</span>
+              <span className="text-xs text-muted-foreground">{t("or")}</span>
               <div className="h-px flex-1 bg-border" />
             </div>
 
-            <p className="mt-4 text-center text-xs text-muted-foreground">
-              More sign-in options coming soon
-            </p>
+            {/* Email/password forms */}
+            <div className="mt-6">
+              {mode === "sign-in" && step === "form" && (
+                <form onSubmit={handleSignIn} className="space-y-3">
+                  <input
+                    type="email"
+                    placeholder={t("email")}
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className={inputClass}
+                    required
+                    autoComplete="email"
+                  />
+                  <input
+                    type="password"
+                    placeholder={t("password")}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className={inputClass}
+                    required
+                    autoComplete="current-password"
+                  />
+                  <button type="submit" disabled={!!isLoading} className={submitClass}>
+                    {t("signIn")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => switchMode("forgot-password")}
+                    className="w-full text-center text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                  >
+                    {t("forgotPassword")}
+                  </button>
+                </form>
+              )}
+
+              {mode === "sign-in" && step === "verify" && (
+                <form onSubmit={handleSignInVerify} className="space-y-3">
+                  <input
+                    type="text"
+                    placeholder={t("verificationCode")}
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    className={inputClass}
+                    required
+                    autoComplete="one-time-code"
+                  />
+                  <button type="submit" disabled={!!isLoading} className={submitClass}>
+                    {t("signIn")}
+                  </button>
+                </form>
+              )}
+
+              {mode === "sign-up" && step === "form" && (
+                <form onSubmit={handleSignUp} className="space-y-3">
+                  <input
+                    type="email"
+                    placeholder={t("email")}
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className={inputClass}
+                    required
+                    autoComplete="email"
+                  />
+                  <input
+                    type="password"
+                    placeholder={t("password")}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className={inputClass}
+                    required
+                    autoComplete="new-password"
+                  />
+                  <div id="clerk-captcha" />
+                  <button type="submit" disabled={!!isLoading} className={submitClass}>
+                    {t("signUp")}
+                  </button>
+                </form>
+              )}
+
+              {mode === "sign-up" && step === "verify" && (
+                <form onSubmit={handleSignUpVerify} className="space-y-3">
+                  <input
+                    type="text"
+                    placeholder={t("verificationCode")}
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    className={inputClass}
+                    required
+                    autoComplete="one-time-code"
+                  />
+                  <button type="submit" disabled={!!isLoading} className={submitClass}>
+                    {t("signUp")}
+                  </button>
+                </form>
+              )}
+
+              {mode === "forgot-password" && step === "form" && (
+                <form onSubmit={handleForgotPassword} className="space-y-3">
+                  <input
+                    type="email"
+                    placeholder={t("email")}
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className={inputClass}
+                    required
+                    autoComplete="email"
+                  />
+                  <button type="submit" disabled={!!isLoading} className={submitClass}>
+                    {t("sendCode")}
+                  </button>
+                </form>
+              )}
+
+              {mode === "forgot-password" && step === "verify" && (
+                <form onSubmit={handleResetVerify} className="space-y-3">
+                  <input
+                    type="text"
+                    placeholder={t("verificationCode")}
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    className={inputClass}
+                    required
+                    autoComplete="one-time-code"
+                  />
+                  <input
+                    type="password"
+                    placeholder={t("newPassword")}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className={inputClass}
+                    required
+                    autoComplete="new-password"
+                  />
+                  <button type="submit" disabled={!!isLoading} className={submitClass}>
+                    {t("resetPassword")}
+                  </button>
+                </form>
+              )}
+            </div>
+
+            {/* Mode toggle links */}
+            <div className="mt-4 text-center text-xs text-muted-foreground">
+              {mode === "sign-in" && (
+                <button onClick={() => switchMode("sign-up")} className="hover:text-foreground transition-colors cursor-pointer">
+                  {t("noAccount")} <span className="font-medium">{t("signUp")}</span>
+                </button>
+              )}
+              {mode === "sign-up" && (
+                <button onClick={() => switchMode("sign-in")} className="hover:text-foreground transition-colors cursor-pointer">
+                  {t("hasAccount")} <span className="font-medium">{t("signIn")}</span>
+                </button>
+              )}
+              {mode === "forgot-password" && (
+                <button onClick={() => switchMode("sign-in")} className="hover:text-foreground transition-colors cursor-pointer">
+                  {t("backToSignIn")}
+                </button>
+              )}
+            </div>
           </div>
 
           <p className="mt-6 text-center text-xs text-muted-foreground">
-            By continuing, you agree to our Terms of Service
+            {t("termsOfService")}
           </p>
         </div>
       </main>
