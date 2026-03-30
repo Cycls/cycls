@@ -16,7 +16,7 @@ import {
 import { useSubscription } from "@clerk/clerk-react/experimental";
 import { dark } from "@clerk/themes";
 import { arSA } from "@clerk/localizations";
-import { useLang, t } from "./lib/i18n";
+import { useLang, getLang, setLang, t } from "./lib/i18n";
 import { Chat } from "./components/chat";
 import { SharedView } from "./components/shared-view";
 import { useChat, AppConfig } from "./hooks/use-chat";
@@ -196,6 +196,8 @@ function CustomSignIn() {
   const { isLoaded, signIn, setActive } = useSignIn();
   const { signUp, setActive: setSignUpActive } = useSignUp();
   const { client } = useClerk();
+  const lang = useLang();
+  const isAr = lang === "ar";
   const lastStrategy = client?.lastAuthenticationStrategy;
   const [isLoading, setIsLoading] = useState<string | false>(false);
   const [error, setError] = useState("");
@@ -357,7 +359,14 @@ function CustomSignIn() {
 
   return (
     <div className="flex h-dvh w-full flex-col bg-background">
-      <div className="fixed top-0 right-0 p-4">
+      <div className="fixed top-0 right-0 p-4 flex ltr:flex-row rtl:flex-row items-center gap-1" dir="ltr">
+        <button
+          onClick={() => setLang(isAr ? "en" : "ar")}
+          className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
+          aria-label="Toggle language"
+        >
+          <span className="text-xs font-medium w-4 h-4 flex items-center justify-center">{isAr ? "En" : "عربي"}</span>
+        </button>
         <button
           onClick={toggleDark}
           className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
