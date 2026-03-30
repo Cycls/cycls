@@ -15,7 +15,7 @@ async def super_gemini(context):
         builtin_tools=["Bash", "Editor", "WebSearch"],
         model="gemini/gemini-3.1-pro-preview",
         max_tokens=16384,
-        thinking=True,
+        thinking="low",
         show_usage=True,
     ):
         yield msg

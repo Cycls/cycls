@@ -381,7 +381,7 @@ async def Agent(*, context, system="", tools=None, builtin_tools=[],
         if "gemini" in model.lower():
             kwargs["include_server_side_tool_invocations"] = True
     if thinking:
-        kwargs["reasoning_effort"] = "high"
+        kwargs["reasoning_effort"] = thinking if isinstance(thinking, str) else "high"
 
     usage = {"inputTokens": 0, "outputTokens": 0, "cachedInputTokens": 0}
     retries = 0

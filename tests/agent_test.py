@@ -514,8 +514,7 @@ def test_compaction_triggers_above_threshold(agent_env):
     history = load_history(hp)
     assert len(history) == 2
     assert history[0]["content"] == "Summary of previous work."
-    # load_history wraps the last message's content with cache_control
-    assert history[1]["content"][0]["text"] == "Understood."
+    assert history[1]["content"] == "Understood."
 
 
 def test_no_compaction_below_threshold(agent_env):

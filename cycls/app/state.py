@@ -27,7 +27,7 @@ def history_path(user, session_id):
     return str(path)
 
 def load_history(path):
-    """Read JSONL history, strip stale cache_control, mark last message ephemeral."""
+    """Read JSONL history, strip stale cache_control."""
     messages = []
     try:
         with open(path) as f:
@@ -46,12 +46,6 @@ def load_history(path):
             for b in c:
                 if isinstance(b, dict):
                     b.pop("cache_control", None)
-    if messages:
-        c = messages[-1].get("content")
-        if isinstance(c, str):
-            messages[-1]["content"] = [{"type": "text", "text": c, "cache_control": {"type": "ephemeral"}}]
-        elif isinstance(c, list) and c:
-            c[-1]["cache_control"] = {"type": "ephemeral"}
     return messages
 
 def save_history(path, messages, mode="a"):
