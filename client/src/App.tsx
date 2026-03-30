@@ -410,8 +410,8 @@ function CustomSignIn() {
             <div className="space-y-3">
               <div className="relative">
                 {lastStrategy === "oauth_google" && (
-                  <span className="absolute -top-2.5 inset-x-0 flex justify-center">
-                    <span className="bg-secondary text-muted-foreground text-[10px] leading-none px-2 py-0.5 rounded-full">{t("lastUsed")}</span>
+                  <span className="absolute top-0 -translate-y-1/2 inset-x-0 flex justify-center">
+                    <span className="bg-card text-muted-foreground text-[10px] leading-none px-2 py-0.5 rounded-full">{t("lastUsed")}</span>
                   </span>
                 )}
                 <button
@@ -431,8 +431,8 @@ function CustomSignIn() {
 
               <div className="relative">
                 {lastStrategy === "oauth_apple" && (
-                  <span className="absolute -top-2.5 inset-x-0 flex justify-center">
-                    <span className="bg-secondary text-muted-foreground text-[10px] leading-none px-2 py-0.5 rounded-full">{t("lastUsed")}</span>
+                  <span className="absolute top-0 -translate-y-1/2 inset-x-0 flex justify-center">
+                    <span className="bg-card text-muted-foreground text-[10px] leading-none px-2 py-0.5 rounded-full">{t("lastUsed")}</span>
                   </span>
                 )}
                 <button
