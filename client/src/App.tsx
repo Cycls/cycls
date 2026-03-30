@@ -377,10 +377,10 @@ function CustomSignIn() {
           </svg>
         </button>
       </div>
-      <main className="flex flex-1 flex-col items-center justify-center px-4">
+      <main className="flex flex-1 flex-col items-center justify-center px-4 py-16">
         <div className="w-full max-w-sm">
           {/* Logo — two stars */}
-          <div className="flex justify-center mb-8">
+          <div className="hidden sm:flex justify-center mb-8">
             <svg viewBox="-1 -1 25 23" className="h-12 text-foreground">
               {/* Big star — filled */}
               <path fill="currentColor" d="M 5.248 0 L 5.734 1.654 C 6.164 3.153 7.345 4.33 8.844 4.765 L 10.496 5.241 L 8.844 5.718 C 7.345 6.152 6.164 7.329 5.734 8.829 L 5.248 10.496 L 4.762 8.843 C 4.332 7.343 3.152 6.166 1.652 5.732 L 0 5.255 L 1.652 4.779 C 3.152 4.344 4.332 3.167 4.762 1.668 L 5.248 0 Z" />
