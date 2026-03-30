@@ -31,7 +31,6 @@ TOOLS = [
     plan="cycls_pass",
     copy=[".env"], 
     force_rebuild=False,
-    theme="wafi",
     title="The agent for getting things done"
 ) 
 async def super(context):
@@ -48,5 +47,5 @@ async def super(context):
         yield msg
 
 
-super.local()
-# super.deploy()
+# super.local()
+super.deploy()

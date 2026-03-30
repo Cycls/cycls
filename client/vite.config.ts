@@ -7,7 +7,7 @@ const backend = "http://localhost:8080";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
-    outDir: "../cycls/app/themes/wafi",
+    outDir: "../cycls/app/themes/default",
     emptyOutDir: true,
   },
   server: {
