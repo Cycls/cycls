@@ -355,7 +355,7 @@ function CustomSignIn() {
   const toggleDark = () => document.body.classList.toggle("dark");
 
   const inputClass = "w-full rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
-  const submitClass = "flex w-full items-center justify-center rounded-xl bg-foreground px-4 py-3 text-sm font-medium text-background hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer";
+  const submitClass = "flex w-full items-center justify-center rounded-xl border border-border bg-background px-4 py-3 text-sm font-medium text-foreground hover:bg-secondary transition-colors disabled:opacity-50 cursor-pointer";
 
   return (
     <div className="flex h-dvh w-full flex-col bg-background">
