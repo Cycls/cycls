@@ -182,7 +182,6 @@ def web(func, config):
 
     @app.get("/config")
     async def get_config():
-        config.voice = bool(os.environ.get("OPENAI_API_KEY"))
         return config
 
     @app.post("/transcribe")
