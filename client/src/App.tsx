@@ -16,7 +16,7 @@ import {
 import { useSubscription } from "@clerk/clerk-react/experimental";
 import { dark } from "@clerk/themes";
 import { arSA } from "@clerk/localizations";
-import { useLang, getLang, setLang, t } from "./lib/i18n";
+import { useLang, setLang, t } from "./lib/i18n";
 import { Chat } from "./components/chat";
 import { SharedView } from "./components/shared-view";
 import { useChat, AppConfig } from "./hooks/use-chat";
@@ -359,7 +359,7 @@ function CustomSignIn() {
 
   return (
     <div className="flex h-dvh w-full flex-col bg-background">
-      <div className="fixed top-0 right-0 p-4 flex ltr:flex-row rtl:flex-row items-center gap-1" dir="ltr">
+      <div className="fixed top-0 right-0 p-4 flex items-center gap-1" dir="ltr">
         <button
           onClick={() => setLang(isAr ? "en" : "ar")}
           className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
