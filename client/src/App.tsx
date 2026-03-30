@@ -201,6 +201,7 @@ function CustomSignIn() {
   const lastStrategy = client?.lastAuthenticationStrategy;
   const [isLoading, setIsLoading] = useState<string | false>(false);
   const [error, setError] = useState("");
+  const [noticeProvider, setNoticeProvider] = useState("");
   const [mode, setMode] = useState<"sign-in" | "sign-up" | "forgot-password">("sign-in");
   const [step, setStep] = useState<"form" | "verify">("form");
   const [email, setEmail] = useState("");
@@ -224,7 +225,23 @@ function CustomSignIn() {
     setMode(m);
   };
 
+  const inAppBrowser = (() => {
+    const ua = navigator.userAgent;
+    if (/FBAN|FBIOS|FB_IAB/i.test(ua)) return "Facebook";
+    if (/Instagram/i.test(ua)) return "Instagram";
+    if (/LinkedInApp/i.test(ua)) return "LinkedIn";
+    if (/Snapchat/i.test(ua)) return "Snapchat";
+    if (/Twitter/i.test(ua)) return "Twitter";
+    if (/TikTok|trill/i.test(ua)) return "TikTok";
+    return null;
+  })();
+
   const handleOAuth = async (strategy: "oauth_google" | "oauth_apple") => {
+    if (inAppBrowser) {
+      const provider = strategy === "oauth_google" ? "Google" : "Apple";
+      setNoticeProvider(provider);
+      return;
+    }
     try {
       setIsLoading(strategy);
       setError("");
@@ -399,6 +416,12 @@ function CustomSignIn() {
                 {t("signInToContinue")}
               </p>
             </div>
+
+            {noticeProvider && inAppBrowser && (
+              <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-4 py-3 text-sm text-amber-600 dark:text-amber-400 mb-4">
+                {t("openInBrowser").replace("{provider}", noticeProvider).replace("{app}", inAppBrowser)}
+              </div>
+            )}
 
             {error && (
               <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-500 mb-4">

@@ -75,6 +75,8 @@ const translations = {
     welcomeTo: "Welcome to Cycls",
     signInToContinue: "Sign in to continue",
     lastUsed: "Last used",
+    openInBrowser: "Sign-in with {provider} isn't supported in {app}'s browser. Tap \u22EF and choose \"Open in Browser\".",
+    openInBrowserGeneric: "Sign-in with {provider} isn't supported in this browser. Open this page in Safari or Chrome.",
   },
   ar: {
     sendMessage: "أرسل رسالة...",
@@ -150,6 +152,8 @@ const translations = {
     welcomeTo: "مرحباً بك في Cycls",
     signInToContinue: "سجّل الدخول للمتابعة",
     lastUsed: "آخر استخدام",
+    openInBrowser: "تسجيل الدخول عبر {provider} غير مدعوم في متصفح {app}. اضغط \u22EF واختر \"فتح في المتصفح\".",
+    openInBrowserGeneric: "تسجيل الدخول عبر {provider} غير مدعوم في هذا المتصفح. افتح الصفحة في Safari أو Chrome.",
   },
 } as const;
 
