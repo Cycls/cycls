@@ -229,7 +229,7 @@ function CustomSignIn() {
       stashParams();
       const params = new URLSearchParams(window.location.search);
       const redirectUrlComplete = params.toString() ? `/?${params}` : "/";
-      await signIn!.authenticateWithRedirect({
+      await signUp!.authenticateWithRedirect({
         strategy,
         redirectUrl: "/sso-callback",
         redirectUrlComplete,
