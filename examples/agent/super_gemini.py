@@ -21,4 +21,4 @@ async def super_gemini(context):
         yield msg
 
 
-super_gemini.deploy()
+super_gemini.local()

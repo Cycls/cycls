@@ -48,4 +48,4 @@ async def super(context):
 
 
 # super.local()
-super.deploy()
+super.local()
