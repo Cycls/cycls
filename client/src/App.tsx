@@ -282,9 +282,13 @@ function CustomSignIn() {
     try {
       setIsLoading("form");
       setError("");
-      await signUp!.create({ emailAddress: email, password });
-      await signUp!.prepareEmailAddressVerification({ strategy: "email_code" });
-      setStep("verify");
+      const result = await signUp!.create({ emailAddress: email, password });
+      if (result.status === "complete") {
+        await setSignUpActive!({ session: result.createdSessionId });
+      } else {
+        await signUp!.prepareEmailAddressVerification({ strategy: "email_code" });
+        setStep("verify");
+      }
     } catch (err: unknown) {
       const clerkErr = err as { errors?: { message: string }[] };
       setError(clerkErr.errors?.[0]?.message || "Sign up failed");
