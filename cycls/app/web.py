@@ -198,7 +198,7 @@ def web(func, config):
             r = await client.post(
                 "https://api.openai.com/v1/audio/transcriptions",
                 headers={"Authorization": f"Bearer {api_key}"},
-                files={"file": ("voice.webm", audio_bytes, file.content_type or "audio/webm")},
+                files={"file": ("voice.m4a", audio_bytes, file.content_type or "audio/mp4")},
                 data={"model": "gpt-4o-transcribe"},
                 timeout=30,
             )
