@@ -90,7 +90,7 @@ def web(func, config):
 
     if config.plan == "cycls_pass" and config.name and not config.pass_metadata:
         try:
-            resp = httpx.get(f"https://cms.cycls.ai/agents/{config.name}-agent", timeout=5)  # TODO: remove -agent suffix once CMS slug is updated
+            resp = httpx.get(f"https://cms.cycls.ai/agents/{config.name}", timeout=5)
             if resp.status_code == 200:
                 agent = resp.json()
                 config.pass_metadata = {
