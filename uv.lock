@@ -164,7 +164,7 @@ wheels = [
 
 [[package]]
 name = "cycls"
-version = "0.0.2.118"
+version = "0.0.2.119"
 source = { editable = "." }
 dependencies = [
     { name = "cloudpickle" },
