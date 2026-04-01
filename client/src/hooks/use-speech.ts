@@ -31,7 +31,7 @@ export function useSpeechRecognition({
       streamRef.current = stream;
       chunksRef.current = [];
 
-      const recorder = new MediaRecorder(stream);
+      const recorder = new MediaRecorder(stream, { mimeType: "audio/mp4" });
       recorderRef.current = recorder;
 
       recorder.ondataavailable = (e) => {
@@ -44,7 +44,7 @@ export function useSpeechRecognition({
         recorderRef.current = null;
         setListening(false);
 
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        const blob = new Blob(chunksRef.current, { type: "audio/mp4" });
         chunksRef.current = [];
 
         if (blob.size < 1000) {
@@ -57,7 +57,7 @@ export function useSpeechRecognition({
         const controller = new AbortController();
         abortRef.current = controller;
         const form = new FormData();
-        form.append("file", blob, "voice.webm");
+        form.append("file", blob, "voice.m4a");
         try {
           const headers = authHeadersRef.current ? await authHeadersRef.current() : {};
           const token = headers["Authorization"]?.replace("Bearer ", "");
