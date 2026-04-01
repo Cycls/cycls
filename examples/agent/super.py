@@ -26,6 +26,7 @@ TOOLS = [
 
 
 @cycls.app(
+    # name="haseef",
     auth=True,      # web/config
     analytics=True, # web=["Auth", "Analytics"]
     plan="cycls_pass",
