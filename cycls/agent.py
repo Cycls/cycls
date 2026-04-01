@@ -1,6 +1,6 @@
 """Agent loop — streams Claude tool-use turns with sandboxed execution."""
 
-import asyncio, base64, json, os, pathlib
+import asyncio, base64, json, os, pathlib, unicodedata
 from cycls.app.state import ensure_workspace, history_path, load_history, save_history
 
 COMPACT_THRESHOLD = 100_000
@@ -164,7 +164,7 @@ async def _exec_bash(command, cwd, timeout=600):
 def _exec_editor(inp, workspace):
     cmd = inp["command"]
     ws = pathlib.Path(workspace).resolve()
-    raw = pathlib.PurePosixPath(inp["path"])
+    raw = pathlib.PurePosixPath(unicodedata.normalize("NFC", inp["path"]))
     try:
         rel = raw.relative_to("/workspace")
     except ValueError:
