@@ -1,4 +1,4 @@
-import json, os, shutil
+import json, os, shutil, unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 def resolve_path(workspace, rel):
     """Resolve *rel* inside *workspace*, raising ValueError on traversal."""
     workspace = Path(workspace)
+    rel = unicodedata.normalize("NFC", rel)
     resolved = (workspace / rel).resolve()
     if not resolved.is_relative_to(workspace.resolve()):
         raise ValueError("Path traversal denied")
