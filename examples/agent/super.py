@@ -26,7 +26,6 @@ TOOLS = [
 
 
 @cycls.app(
-    # name="haseef",
     auth=True,      # web/config
     analytics=True, # web=["Auth", "Analytics"]
     plan="cycls_pass",
@@ -48,5 +47,5 @@ async def super(context):
         yield msg
 
 
-super.local()
-# super.deploy()
+# super.local()
+super.deploy()
