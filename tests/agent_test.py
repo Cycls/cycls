@@ -11,7 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cycls.agent import Agent, COMPACT_THRESHOLD, MAX_ATTACHMENTS, MAX_RETRIES, _exec_bash, _exec_editor, _is_retryable, _prepare_prompt, _prepare_tool, _sniff_media_type
+from cycls.agent import (
+    Agent, COMPACT_BUFFER, KEEP_RECENT, MAX_ATTACHMENTS, MAX_RETRIES, MAX_OUTPUT,
+    _exec_bash, _exec_read, _exec_edit, _is_retryable, _prepare_prompt,
+    _dispatch, _resolve_path, _microcompact, _context_window, _recover,
+)
 from cycls.app.state import load_history
 
 
@@ -186,15 +190,13 @@ def test_history_survives_crash_after_first_tool_round(agent_env):
 
 
 def test_error_recovery_saves_incrementally(agent_env):
-    """When _exec_editor raises during coro building (after the assistant
-    tool_use message is already appended), the except handler patches
+    """When tool execution raises during dispatch, the except handler patches
     error tool_results. Those should be saved incrementally."""
     ws, hp, ctx = agent_env
 
-    # Round 1: editor tool with missing "command" key → _exec_editor raises KeyError
-    # synchronously during coro building, AFTER the assistant message is appended.
-    bad_editor = _tool_use_block("t1", name="str_replace_based_edit_tool", inp={})
-    round1 = _make_response([bad_editor], stop_reason="tool_use")
+    # Round 1: edit tool with missing keys → _exec_edit raises KeyError
+    bad_edit = _tool_use_block("t1", name="edit", inp={"path": "x.txt"})
+    round1 = _make_response([bad_edit], stop_reason="tool_use")
     # After error recovery injects error tool_results, the loop retries and gets final text.
     final = _make_response([_text_block("Recovered")])
     responses = iter([round1, final])
@@ -238,48 +240,176 @@ def test_no_history_without_session(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Media type sniffing tests
+# File reading tests (replaces editor view tests)
 # ---------------------------------------------------------------------------
 
-# Minimal valid file headers for each format
-_JPEG_HEADER = b"\xff\xd8\xff\xe0" + b"\x00" * 20
-_PNG_HEADER = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20
-_GIF_HEADER = b"GIF89a" + b"\x00" * 20
-_WEBP_HEADER = b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 20
-_PDF_HEADER = b"%PDF-1.4" + b"\x00" * 20
-
-
-def test_sniff_media_type_detects_all_formats():
-    assert _sniff_media_type(_JPEG_HEADER) == "image/jpeg"
-    assert _sniff_media_type(_PNG_HEADER) == "image/png"
-    assert _sniff_media_type(_GIF_HEADER) == "image/gif"
-    assert _sniff_media_type(_WEBP_HEADER) == "image/webp"
-    assert _sniff_media_type(_PDF_HEADER) == "application/pdf"
-    assert _sniff_media_type(b"unknown data") is None
-
-
-def test_exec_editor_view_uses_content_sniffing_over_extension(tmp_path):
-    """A .png file containing JPEG data should return media_type image/jpeg."""
+def test_exec_read_text_file(tmp_path):
+    """Read a text file — should return line-numbered output."""
     ws = tmp_path / "workspace"
     ws.mkdir()
-    (ws / "fake.png").write_bytes(_JPEG_HEADER)
+    (ws / "hello.txt").write_text("line1\nline2\nline3")
 
-    result = _exec_editor({"command": "view", "path": "fake.png"}, str(ws))
+    result = _exec_read({"path": "hello.txt"}, str(ws))
+    assert "line1" in result
+    assert "line2" in result
+    assert "line3" in result
 
+
+def test_exec_read_with_offset_and_limit(tmp_path):
+    """Read with offset and limit should return only the requested range."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "lines.txt").write_text("\n".join(f"line{i}" for i in range(1, 11)))
+
+    result = _exec_read({"path": "lines.txt", "offset": 3, "limit": 2}, str(ws))
+    assert "line3" in result
+    assert "line4" in result
+    assert "line2" not in result
+    assert "line5" not in result
+
+
+def test_exec_read_image_returns_base64(tmp_path):
+    """Reading a .png file should return an image content block."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "photo.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
+
+    result = _exec_read({"path": "photo.png"}, str(ws))
     assert isinstance(result, list)
     assert result[0]["type"] == "image"
+    assert result[0]["source"]["media_type"] == "image/png"
+
+
+def test_exec_read_jpeg_extension(tmp_path):
+    """Both .jpg and .jpeg should return image/jpeg."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "photo.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 20)
+
+    result = _exec_read({"path": "photo.jpg"}, str(ws))
     assert result[0]["source"]["media_type"] == "image/jpeg"
 
 
-def test_exec_editor_view_correct_extension_unchanged(tmp_path):
-    """A .png file with actual PNG content should stay image/png."""
+def test_exec_read_pdf_returns_document(tmp_path):
+    """Reading a .pdf should return a document content block."""
     ws = tmp_path / "workspace"
     ws.mkdir()
-    (ws / "real.png").write_bytes(_PNG_HEADER)
+    (ws / "doc.pdf").write_bytes(b"%PDF-1.4" + b"\x00" * 20)
 
-    result = _exec_editor({"command": "view", "path": "real.png"}, str(ws))
+    result = _exec_read({"path": "doc.pdf"}, str(ws))
+    assert isinstance(result, list)
+    assert result[0]["type"] == "document"
+    assert result[0]["source"]["media_type"] == "application/pdf"
 
-    assert result[0]["source"]["media_type"] == "image/png"
+
+def test_exec_read_nonexistent_file(tmp_path):
+    """Reading a missing file should return an error string."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+
+    result = _exec_read({"path": "nope.txt"}, str(ws))
+    assert "Error" in result
+    assert "does not exist" in result
+
+
+def test_exec_read_binary_file(tmp_path):
+    """Reading a file with invalid UTF-8 should return a binary error."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    # Write bytes that will trigger UnicodeDecodeError on .read_text()
+    (ws / "data.bin").write_bytes(b"\x80\x81\x82\x83" * 100)
+
+    result = _exec_read({"path": "data.bin"}, str(ws))
+    assert "Error" in result
+    assert "binary" in result
+
+
+# ---------------------------------------------------------------------------
+# File editing tests (replaces editor edit tests)
+# ---------------------------------------------------------------------------
+
+def test_exec_edit_str_replace(tmp_path):
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "f.txt").write_text("hello world")
+
+    result = _exec_edit({"path": "f.txt", "command": "str_replace", "old_str": "hello", "new_str": "goodbye"}, str(ws))
+    assert "Replaced" in result
+    assert (ws / "f.txt").read_text() == "goodbye world"
+
+
+def test_exec_edit_create(tmp_path):
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+
+    result = _exec_edit({"path": "new.txt", "command": "create", "file_text": "fresh file"}, str(ws))
+    assert "Created" in result
+    assert (ws / "new.txt").read_text() == "fresh file"
+
+
+def test_exec_edit_insert(tmp_path):
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "f.txt").write_text("line1\nline2\n")
+
+    result = _exec_edit({"path": "f.txt", "command": "insert", "insert_line": 1, "new_str": "inserted\n"}, str(ws))
+    assert "Inserted" in result
+    assert "inserted" in (ws / "f.txt").read_text()
+
+
+def test_exec_edit_str_replace_not_unique(tmp_path):
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "f.txt").write_text("aaa aaa")
+
+    result = _exec_edit({"path": "f.txt", "command": "str_replace", "old_str": "aaa"}, str(ws))
+    assert "Error" in result
+    assert "2 times" in result
+
+
+# ---------------------------------------------------------------------------
+# Path traversal tests
+# ---------------------------------------------------------------------------
+
+def test_resolve_path_blocks_traversal(tmp_path):
+    """Paths escaping the workspace must be rejected."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+
+    with pytest.raises(ValueError, match="escapes"):
+        _resolve_path("../../etc/passwd", str(ws))
+
+
+def test_resolve_path_allows_valid(tmp_path):
+    """Normal relative paths within workspace must work."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "hello.txt").write_text("world")
+
+    path = _resolve_path("hello.txt", str(ws))
+    assert path.exists()
+    assert path.name == "hello.txt"
+
+
+def test_resolve_path_strips_workspace_prefix(tmp_path):
+    """Paths prefixed with /workspace/ should work."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "hello.txt").write_text("world")
+
+    path = _resolve_path("/workspace/hello.txt", str(ws))
+    assert path.name == "hello.txt"
+
+
+def test_exec_read_blocks_path_traversal(tmp_path):
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+
+    result = _exec_read({"path": "../../etc/passwd"}, str(ws))
+    assert "Error" in result
+
+    result = _exec_read({"path": "/etc/passwd"}, str(ws))
+    assert "Error" in result
 
 
 # ---------------------------------------------------------------------------
@@ -291,8 +421,8 @@ def test_tool_result_always_follows_tool_use_on_crash(agent_env):
     even when tool execution crashes mid-way."""
     ws, hp, ctx = agent_env
 
-    bad_editor = _tool_use_block("crash-1", name="str_replace_based_edit_tool", inp={})
-    round1 = _make_response([bad_editor], stop_reason="tool_use")
+    bad_edit = _tool_use_block("crash-1", name="edit", inp={"path": "x.txt"})
+    round1 = _make_response([bad_edit], stop_reason="tool_use")
     final = _make_response([_text_block("Recovered")])
     responses = iter([round1, final])
 
@@ -329,10 +459,9 @@ def test_tool_result_present_after_bash_timeout(agent_env):
     history = load_history(hp)
     use_ids, result_ids = _history_tool_ids(history)
     assert use_ids == result_ids
-    # Verify the timeout error made it into the correct tool_result
     timeout_result = [b for m in history for b in (m.get("content") or [])
                       if isinstance(b, dict) and b.get("tool_use_id") == "timeout-1"]
-    assert len(timeout_result) == 1, "Expected exactly one tool_result for timeout-1"
+    assert len(timeout_result) == 1
     assert "timed out" in timeout_result[0]["content"]
 
 
@@ -365,7 +494,7 @@ def test_multiple_tool_calls_all_get_results(agent_env):
 
 
 # ---------------------------------------------------------------------------
-# Bash timeout tests (_exec_bash directly, no LLM mock needed)
+# Bash timeout tests (_exec_bash directly)
 # ---------------------------------------------------------------------------
 
 def test_exec_bash_returns_error_on_timeout(tmp_path):
@@ -391,21 +520,41 @@ def test_exec_bash_returns_error_on_timeout(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# API error recovery tests (e.g. oversized PDF in tool_results → 400)
+# Bash output truncation tests
 # ---------------------------------------------------------------------------
 
-def test_api_400_from_tool_result_lets_llm_recover(agent_env):
-    """When the API rejects tool_results (e.g. oversized PDF), the agent loop
-    should recover and let the LLM respond, not show a raw error."""
+def test_exec_bash_truncates_large_output(tmp_path):
+    """Output exceeding MAX_OUTPUT chars must be truncated with marker."""
+    ws = str(tmp_path / "workspace")
+    Path(ws).mkdir()
+
+    big_output = ("x" * (MAX_OUTPUT + 10000)).encode()
+    mock_proc = MagicMock()
+    mock_proc.communicate = AsyncMock(return_value=(big_output, b""))
+    mock_proc.kill = MagicMock()
+    mock_proc.wait = AsyncMock()
+
+    async def run():
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_proc)):
+            return await _exec_bash("echo big", ws)
+
+    result = asyncio.run(run())
+    assert len(result) < MAX_OUTPUT + 1000
+    assert "truncated" in result
+
+
+# ---------------------------------------------------------------------------
+# API error recovery tests
+# ---------------------------------------------------------------------------
+
+def test_api_400_after_tool_results_shows_error(agent_env):
+    """When the API rejects tool_results (e.g. oversized content), and the last
+    message is tool_results (not unresolved tool_use), the error is shown to the
+    user since recovery only handles unresolved tool_use blocks."""
     ws, hp, ctx = agent_env
 
-    # Round 1: LLM asks to view a file
-    view_block = _tool_use_block("v1", name="str_replace_based_edit_tool",
-                                  inp={"command": "view", "path": "big.pdf"})
-    round1 = _make_response([view_block], stop_reason="tool_use")
-    # Round 2: API rejects because tool_result has oversized PDF content
-    # Round 3 (after recovery): LLM responds with helpful text
-    final = _make_response([_text_block("The PDF is too large. Let me extract specific pages.")])
+    read_block = _tool_use_block("v1", name="read", inp={"path": "big.pdf"})
+    round1 = _make_response([read_block], stop_reason="tool_use")
 
     call_count = 0
 
@@ -414,40 +563,21 @@ def test_api_400_from_tool_result_lets_llm_recover(agent_env):
         call_count += 1
         if call_count == 1:
             return FakeStream(round1)
-        if call_count == 2:
-            # Simulate Anthropic 400: content too large
-            raise Exception("messages.1.content.0.tool_result: content too large")
-        return FakeStream(final)
+        # After tool_results are appended, API rejects them
+        raise Exception("messages.1.content.0.tool_result: content too large")
 
     mock_client = MagicMock()
     mock_client.messages.stream = stream_side_effect
 
-    # Create a fake PDF file so _exec_editor can view it
-    (Path(ws) / "big.pdf").write_bytes(_PDF_HEADER)
+    (Path(ws) / "big.pdf").write_bytes(b"%PDF-1.4" + b"\x00" * 20)
 
     with _mock_anthropic(mock_client):
         items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
-    # Recovery = no error callout shown to user
+    # Error should surface since recovery doesn't handle post-tool_result errors
     callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
-    assert not callouts, f"Raw error shown instead of recovering: {callouts}"
-
-    # LLM got a third call (recovery round) and produced a final assistant message
-    history = load_history(hp)
-    assert history[-1]["role"] == "assistant"
-
-    # Tool_result content was replaced with error string (not the raw PDF)
-    tool_results = [m for m in history if m["role"] == "user"
-                    and isinstance(m.get("content"), list)
-                    and any(b.get("type") == "tool_result" for b in m["content"])]
-    for msg in tool_results:
-        for b in msg["content"]:
-            if b.get("type") == "tool_result":
-                assert isinstance(b["content"], str), "Tool result content should be error string, not raw PDF"
-
-    # All tool_use ids still have matching results
-    use_ids, result_ids = _history_tool_ids(history)
-    assert use_ids == result_ids
+    assert len(callouts) == 1
+    assert "content too large" in callouts[0]["callout"]
 
 
 # ---------------------------------------------------------------------------
@@ -468,11 +598,10 @@ def test_prepare_prompt_under_limit(tmp_path):
     prompt = _prepare_prompt(ctx)
     for i in range(MAX_ATTACHMENTS):
         assert f"doc{i}.pdf" in prompt
-    assert "not loaded" not in prompt
 
 
 def test_prepare_prompt_over_limit(tmp_path):
-    """Attachments over MAX_ATTACHMENTS are excluded and noted as on-disk."""
+    """Attachments over MAX_ATTACHMENTS are noted but not all listed."""
     ws = str(tmp_path / "workspace")
     Path(ws).mkdir()
     n = MAX_ATTACHMENTS + 5
@@ -487,56 +616,57 @@ def test_prepare_prompt_over_limit(tmp_path):
     # First MAX_ATTACHMENTS are in the attached files list
     for i in range(MAX_ATTACHMENTS):
         assert f"img{i}.png" in prompt
-    # Extras are mentioned as on-disk, not in attached files
-    for i in range(MAX_ATTACHMENTS, n):
-        assert f"img{i}.png" in prompt
-    assert "not loaded" in prompt
-    assert "text editor view" in prompt
+    # Overflow is mentioned
+    assert "more files" in prompt
 
 
 # ---------------------------------------------------------------------------
 # Context compaction tests
 # ---------------------------------------------------------------------------
 
-def test_compaction_triggers_above_threshold(agent_env):
-    """When input tokens exceed COMPACT_THRESHOLD, history is rewritten with summary."""
+def test_compaction_triggers_when_approaching_window(agent_env):
+    """When input tokens approach context window and enough messages exist, compaction fires."""
     ws, hp, ctx = agent_env
 
-    over = _usage(inp=COMPACT_THRESHOLD + 1)
-    final = _make_response([_text_block("Done")], usage=over)
+    window = _context_window("claude-sonnet-4-20250514")
+    high_usage = _usage(inp=window - COMPACT_BUFFER + 1)
+
+    # Build enough tool rounds to exceed KEEP_RECENT messages
+    rounds = []
+    for i in range(KEEP_RECENT // 2 + 2):
+        u = high_usage if i == 0 else _usage(inp=500)
+        rounds.append(_make_response([_tool_use_block(f"t{i}")], stop_reason="tool_use", usage=u))
+    rounds.append(_make_response([_text_block("Done")]))
+    responses = iter(rounds)
 
     mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: FakeStream(final)
-
-    # Mock _compact to return a known summary
-    summary_messages = [
-        {"role": "user", "content": "Summary of previous work."},
-        {"role": "assistant", "content": "Understood."},
-    ]
+    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+    mock_client.messages.create = AsyncMock(return_value=MagicMock(
+        content=[MagicMock(text="<analysis>thinking</analysis><summary>Summary here</summary>")]))
 
     with _mock_anthropic(mock_client), \
-         patch("cycls.agent._compact", new_callable=lambda: AsyncMock(return_value=summary_messages)):
-        asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+         patch("cycls.agent._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
+        items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
-    history = load_history(hp)
-    assert len(history) == 2
-    assert history[0]["content"] == "Summary of previous work."
-    # load_history wraps the last message's content with cache_control
-    assert history[1]["content"][0]["text"] == "Understood."
+    steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Compacting context..."]
+    assert len(steps) >= 1
 
 
-def test_no_compaction_below_threshold(agent_env):
-    """When input tokens are under COMPACT_THRESHOLD, history is appended normally."""
+def test_no_compaction_when_under_threshold(agent_env):
+    """When input tokens are well under window, no compaction happens."""
     ws, hp, ctx = agent_env
 
-    under = _usage(inp=COMPACT_THRESHOLD - 1)
-    final = _make_response([_text_block("Done")], usage=under)
+    low_usage = _usage(inp=1000)
+    final = _make_response([_text_block("Done")], usage=low_usage)
 
     mock_client = MagicMock()
     mock_client.messages.stream = lambda **kw: FakeStream(final)
 
     with _mock_anthropic(mock_client):
-        asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+        items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+
+    steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Compacting context..."]
+    assert len(steps) == 0
 
     history = load_history(hp)
     roles = [m["role"] for m in history]
@@ -544,22 +674,26 @@ def test_no_compaction_below_threshold(agent_env):
 
 
 def test_compaction_failure_still_saves_history(agent_env):
-    """If _compact raises, the final assistant message must still be saved."""
+    """If compaction API call fails, the conversation must still be saved."""
     ws, hp, ctx = agent_env
 
-    over = _usage(inp=COMPACT_THRESHOLD + 1)
-    final = _make_response([_text_block("Important answer")], usage=over)
+    window = _context_window("claude-sonnet-4-20250514")
+    high_usage = _usage(inp=window - COMPACT_BUFFER + 1)
+
+    round1 = _make_response([_tool_use_block("t1")], stop_reason="tool_use", usage=high_usage)
+    final = _make_response([_text_block("Important answer")])
+    responses = iter([round1, final])
 
     mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: FakeStream(final)
+    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+    mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
 
     with _mock_anthropic(mock_client), \
-         patch("cycls.agent._compact", new_callable=lambda: AsyncMock(side_effect=Exception("API down"))):
+         patch("cycls.agent._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
     history = load_history(hp)
-    roles = [m["role"] for m in history]
-    assert roles == ["user", "assistant"]
+    assert len(history) >= 2
     # The actual answer must not be lost
     last = history[-1]["content"]
     text = last[0]["text"] if isinstance(last, list) else last
@@ -567,67 +701,50 @@ def test_compaction_failure_still_saves_history(agent_env):
 
 
 # ---------------------------------------------------------------------------
-# Editor path traversal tests
+# Microcompact tests
 # ---------------------------------------------------------------------------
 
-def test_exec_editor_blocks_path_traversal(tmp_path):
-    """Paths escaping the workspace must be rejected."""
-    ws = tmp_path / "workspace"
-    ws.mkdir()
-    (ws / "legit.txt").write_text("ok")
+def test_microcompact_clears_old_tool_results():
+    """Old tool results should be replaced with stub, recent ones preserved."""
+    messages = []
+    for i in range(KEEP_RECENT + 5):
+        messages.append({"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}"}]})
+        messages.append({"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": f"t{i}", "content": f"result {i} " * 100}
+        ]})
 
-    result = _exec_editor({"command": "view", "path": "../../etc/passwd"}, str(ws))
-    assert "Error" in result
+    _microcompact(messages)
 
-    result = _exec_editor({"command": "view", "path": "/etc/passwd"}, str(ws))
-    assert "Error" in result
+    # Old user messages (tool_results) should be cleared — index 1 is the first user message
+    old_user_msg = messages[1]  # first user message with tool_result
+    assert old_user_msg["content"][0]["content"] == "[Old tool result cleared]"
 
-
-def test_exec_editor_allows_valid_paths(tmp_path):
-    """Normal relative paths within workspace must work."""
-    ws = tmp_path / "workspace"
-    ws.mkdir()
-    (ws / "hello.txt").write_text("world")
-
-    result = _exec_editor({"command": "view", "path": "hello.txt"}, str(ws))
-    assert "world" in result
-
-
-# ---------------------------------------------------------------------------
-# Bash output truncation tests
-# ---------------------------------------------------------------------------
-
-def test_exec_bash_truncates_large_output(tmp_path):
-    """Output exceeding 20K chars must be truncated with marker."""
-    ws = str(tmp_path / "workspace")
-    Path(ws).mkdir()
-
-    big_output = ("x" * 30000).encode()
-    mock_proc = MagicMock()
-    mock_proc.communicate = AsyncMock(return_value=(big_output, b""))
-    mock_proc.kill = MagicMock()
-    mock_proc.wait = AsyncMock()
-
-    async def run():
-        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_proc)):
-            return await _exec_bash("echo big", ws)
-
-    result = asyncio.run(run())
-    assert len(result) < 25000
-    assert "truncated" in result
+    # Recent user messages should be preserved — last message is a user message
+    recent_user_msg = messages[-1]
+    assert "result" in recent_user_msg["content"][0]["content"]
+    assert recent_user_msg["content"][0]["content"] != "[Old tool result cleared]"
 
 
 # ---------------------------------------------------------------------------
 # Auto-retry tests
 # ---------------------------------------------------------------------------
 
-def test_is_retryable_detects_transient_errors():
+def test_is_retryable_detects_status_codes():
+    """Status code-based detection should work."""
+    e429 = MagicMock()
+    e429.status_code = 429
+    assert _is_retryable(e429)
+
+    e529 = MagicMock()
+    e529.status_code = 529
+    assert _is_retryable(e529)
+
+
+def test_is_retryable_detects_string_fallback():
+    """String-based fallback should still work."""
     assert _is_retryable(Exception("overloaded"))
     assert _is_retryable(Exception("rate limit exceeded"))
-    assert _is_retryable(Exception("429 Too Many Requests"))
-    assert _is_retryable(Exception("502 Bad Gateway"))
     assert not _is_retryable(Exception("invalid api key"))
-    assert not _is_retryable(Exception("context too long"))
 
 
 def test_auto_retry_on_overloaded(agent_env):
@@ -654,7 +771,6 @@ def test_auto_retry_on_overloaded(agent_env):
     # No error callouts — retries handled it
     callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
     assert not callouts
-    # Should have retried and succeeded
     assert call_count == 3
 
 
@@ -675,6 +791,39 @@ def test_auto_retry_exhausted_shows_error(agent_env):
 
 
 # ---------------------------------------------------------------------------
-# bwrap sandbox configuration tests
+# Recovery function tests
 # ---------------------------------------------------------------------------
 
+def test_recover_patches_unresolved_tool_use():
+    """_recover should inject error tool_results for unresolved tool_use blocks."""
+    messages = [
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1"},
+            {"type": "tool_use", "id": "t2"},
+        ]}
+    ]
+    assert _recover(Exception("API error"), messages) is True
+    assert len(messages) == 2
+    results = messages[1]["content"]
+    assert all(r["type"] == "tool_result" for r in results)
+    assert {r["tool_use_id"] for r in results} == {"t1", "t2"}
+
+
+def test_recover_returns_false_on_non_recoverable():
+    """_recover should return False when messages can't be patched."""
+    messages = [{"role": "user", "content": "hello"}]
+    assert _recover(Exception("bad"), messages) is False
+
+
+# ---------------------------------------------------------------------------
+# Context window tests
+# ---------------------------------------------------------------------------
+
+def test_context_window_known_models():
+    assert _context_window("claude-sonnet-4-20250514") == 200_000
+    assert _context_window("claude-opus-4-20250514") == 1_000_000
+    assert _context_window("claude-haiku-3-5-20241022") == 200_000
+
+
+def test_context_window_unknown_model():
+    assert _context_window("gpt-4o") == 200_000

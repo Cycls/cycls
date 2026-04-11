@@ -325,11 +325,12 @@ async def _compact(client, model, messages):
 
 async def Agent(*, context, system="", tools=None, builtin_tools=[],
                 model="claude-sonnet-4-20250514", max_tokens=16384, thinking=True,
-                bash_timeout=600, show_usage=False):
-    import anthropic
+                bash_timeout=600, show_usage=False, client=None):
+    if client is None:
+        import anthropic
+        client = anthropic.AsyncAnthropic()
     ws = context.workspace
     ensure_workspace(ws)
-    client = anthropic.AsyncAnthropic()
     hp = history_path(context.user, context.session_id) if context.session_id and context.user else None
     messages = load_history(hp) if hp else []
     saved = len(messages)
