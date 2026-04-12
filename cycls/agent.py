@@ -7,7 +7,6 @@ from cycls.app.state import ensure_workspace, history_path, load_history, save_h
 
 COMPACT_BUFFER = 30_000   # compact when within this many tokens of context window
 KEEP_RECENT = 10          # keep last N messages verbatim during partial compaction
-MAX_ATTACHMENTS = 5
 MAX_RETRIES = 10
 MAX_OUTPUT = 30_000
 BASE_DELAY_MS = 500
@@ -134,14 +133,12 @@ def _prepare_prompt(context):
     texts = [p["text"] for p in content if p.get("type") == "text"]
     files = [p.get("image") or p.get("file") for p in content if p.get("type") in ("image", "file")]
     files = [f for f in files if f]
-    if len(files) > MAX_ATTACHMENTS:
-        texts.append(f"({len(files) - MAX_ATTACHMENTS} more files in workspace, use read to view them.)")
-        files = files[:MAX_ATTACHMENTS]
     return " ".join(texts) + (f"\n\nAttached files: {', '.join(files)}" if files else "")
 
 def _build_tools(builtin_tools, custom):
-    tools = [_BUILTINS[b] for b in builtin_tools]
-    for t in [_READ_TOOL, _EDIT_TOOL] + (custom or []):
+    tools = [_BUILTINS[b] for b in builtin_tools if b in _BUILTINS]
+    editor = [_READ_TOOL, _EDIT_TOOL] if "Editor" in builtin_tools else []
+    for t in editor + (custom or []):
         tools.append({"type": "custom", "name": t["name"], "description": t.get("description", ""),
                       "input_schema": t.get("inputSchema", t.get("input_schema", {}))})
     if tools:
@@ -237,18 +234,17 @@ def _dispatch(block, ws, timeout):
 # ---- Stream ----
 
 async def _iter_stream(stream):
-    thinking, search_idx, search_buf = "", None, ""
+    search_idx, search_buf = None, ""
     async for ev in stream:
         if ev.type == "content_block_start":
             if ev.content_block.type == "server_tool_use" and ev.content_block.name == "web_search":
                 search_idx, search_buf = ev.index, ""
         elif ev.type == "content_block_delta":
             d = ev.delta
-            if d.type == "thinking_delta": thinking += d.thinking
+            if d.type == "thinking_delta": yield {"type": "thinking", "thinking": d.thinking}
             elif d.type == "text_delta": yield d.text
             elif d.type == "input_json_delta" and ev.index == search_idx: search_buf += d.partial_json
         elif ev.type == "content_block_stop":
-            if thinking: yield {"type": "thinking", "thinking": thinking}; thinking = ""
             if ev.index == search_idx:
                 try: q = json.loads(search_buf).get("query", "")
                 except Exception: q = ""

@@ -1,6 +1,9 @@
 # uv run examples/agent/super.py
 # cd client && npm run dev
-# ✻ Prestidigitating… (2m 21s · ↓ 4.5k tokens)
+# uv run pytest tests/agent_test.py -v
+
+# BLINKERS: ✻ Prestidigitating… (2m 21s · ↓ 4.5k tokens)
+# PDF: reportlab
 import cycls
 
 SYSTEM = """
