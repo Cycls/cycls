@@ -7,10 +7,10 @@ KEEP_RECENT = 10          # keep last N messages verbatim during partial compact
 
 def context_window(model):
     windows = {
-        "claude-opus-4-6[1m]": 1_000_000,
-        "claude-sonnet-4-6[1m]": 1_000_000,
-        "claude-sonnet": 200_000,
-        "claude-opus": 200_000,
+        "claude-sonnet-4-6": 1_000_000,
+        "claude-opus-4-6": 1_000_000,
+        "claude-sonnet": 200_000,   # earlier 4.x versions
+        "claude-opus": 200_000,     # earlier 4.x versions
         "claude-haiku": 200_000,
     }
     if model in windows: return windows[model]

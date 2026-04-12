@@ -35,7 +35,7 @@ TOOLS = [
     title="The agent for getting things done"
 ) 
 async def super(context):
-    yield f"{context.user.plan}\n\n"
+    # yield f"{context.user.plan}\n\n"
     # print(context.messages.raw)
     async for msg in cycls.Agent(
                                 context=context,
