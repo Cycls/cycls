@@ -1,7 +1,7 @@
 """Agent loop — streams Claude tool-use turns with sandboxed execution."""
 
 import asyncio, base64, json, os, pathlib, random, re, time
-from cycls import pdf
+from . import pdf
 from cycls.app.state import ensure_workspace, history_path, load_history, save_history
 
 # ---- Config ----
