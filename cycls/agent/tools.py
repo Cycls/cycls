@@ -5,13 +5,36 @@ from . import pdf
 MAX_OUTPUT = 30_000
 
 _BUILTINS = {
-    "Bash": {"type": "bash_20250124", "name": "bash"},
     "WebSearch": {"type": "web_search_20250305", "name": "web_search"},
 }
 _IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
 _DOC_EXTS = {"pdf"}
 
 # Custom tool schemas
+_BASH_TOOL = {
+    "name": "bash",
+    "description": (
+        "Execute a shell command in the workspace sandbox.\n\n"
+        "Usage:\n"
+        "- Working directory is /workspace. Never prefix commands with `cd /workspace`.\n"
+        "- Use `rg` or `rg --files` for searching — it's faster than grep.\n"
+        "- Use `jq` to extract fields from JSON.\n"
+        "- Use the `read` tool (not cat/head/tail) for viewing files.\n"
+        "- Use the `edit` tool (not sed/awk) for modifying files.\n"
+        "- Always quote paths containing spaces with double quotes.\n"
+        "- Output over 30K chars is truncated in the middle — use head/grep/tail in the command to keep results focused.\n"
+        "- Default timeout is 600s; adjust via `timeout` parameter (milliseconds).\n"
+        "- Avoid destructive commands (`rm -rf`) unless the user explicitly asks.\n"
+        "- For git: prefer new commits over amending. Never force-push without explicit user request.\n"
+        "- When issuing multiple independent commands, send multiple bash tool calls in parallel rather than chaining with &&."
+    ),
+    "inputSchema": {"type": "object", "properties": {
+        "command": {"type": "string", "description": "The shell command to execute."},
+        "timeout": {"type": "integer", "description": "Timeout in milliseconds (default: 600000, max: 600000)."},
+        "description": {"type": "string", "description": "Short 5-10 word active-voice summary of what this command does (shown in the UI). Example: 'List files in current directory', 'Run pytest suite'."},
+    }, "required": ["command"]}
+}
+
 _READ_TOOL = {
     "name": "read",
     "description": (
@@ -61,8 +84,10 @@ _EDIT_TOOL = {
 
 def build_tools(builtin_tools, custom):
     tools = [_BUILTINS[b] for b in builtin_tools if b in _BUILTINS]
-    editor = [_READ_TOOL, _EDIT_TOOL] if "Editor" in builtin_tools else []
-    for t in editor + (custom or []):
+    bundled = []
+    if "Bash" in builtin_tools: bundled.append(_BASH_TOOL)
+    if "Editor" in builtin_tools: bundled.extend([_READ_TOOL, _EDIT_TOOL])
+    for t in bundled + (custom or []):
         tools.append({"type": "custom", "name": t["name"], "description": t.get("description", ""),
                       "input_schema": t.get("inputSchema", t.get("input_schema", {}))})
     if tools:
@@ -170,7 +195,10 @@ def dispatch(block, ws, timeout):
     name, inp = block.name, block.input
     if name == "bash":
         cmd = inp.get("command", "")
-        return {"type": "step", "tool_name": "Bash", "step": cmd}, _exec_bash(cmd, ws, timeout=timeout)
+        step = inp.get("description") or cmd
+        t = inp.get("timeout")
+        secs = t / 1000 if t else timeout
+        return {"type": "step", "tool_name": "Bash", "step": step}, _exec_bash(cmd, ws, timeout=secs)
     if name == "read":
         return {"type": "step", "tool_name": "Reading", "step": inp.get("path", "")}, _exec_read(inp, ws)
     if name == "edit":
