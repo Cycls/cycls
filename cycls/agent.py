@@ -1,6 +1,6 @@
 """Agent loop — streams Claude tool-use turns with sandboxed execution."""
 
-import asyncio, base64, json, os, pathlib, random, re
+import asyncio, base64, json, os, pathlib, random, re, time
 from cycls.app.state import ensure_workspace, history_path, load_history, save_history
 
 # ---- Config ----
@@ -17,6 +17,12 @@ _BUILTINS = {
     "WebSearch": {"type": "web_search_20250305", "name": "web_search"},
 }
 _IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
+# Pricing per million tokens: (input, output, cache_read, cache_write)
+_PRICING = {
+    "claude-sonnet": (3, 15, 0.30, 3.75),
+    "claude-opus": (15, 75, 1.50, 18.75),
+    "claude-haiku": (0.80, 4, 0.08, 1),
+}
 _DOC_EXTS = {"pdf"}
 
 # Custom tool schemas
@@ -322,6 +328,7 @@ async def _compact(client, model, messages):
 async def Agent(*, context, system="", tools=None, builtin_tools=[],
                 model="claude-sonnet-4-20250514", max_tokens=16384, thinking=True,
                 bash_timeout=600, show_usage=False, client=None):
+    t0 = time.monotonic()
     if client is None:
         import anthropic
         client = anthropic.AsyncAnthropic()
@@ -397,4 +404,9 @@ async def Agent(*, context, system="", tools=None, builtin_tools=[],
     if hp and saved < len(messages):
         save_history(hp, messages[saved:])
     if show_usage and usage[0]:
-        yield f'\n\n*in: {usage[0]:,} · out: {usage[1]:,} · cached: {usage[2]:,} · cache-create: {usage[3]:,}*'
+        p = next((v for k, v in _PRICING.items() if k in model), _PRICING["claude-sonnet"])
+        cost = (usage[0] * p[0] + usage[1] * p[1] + usage[2] * p[2] + usage[3] * p[3]) / 1_000_000
+        elapsed = time.monotonic() - t0
+        m, s = divmod(int(elapsed), 60)
+        t = f"{m}m {s}s" if m else f"{s}s"
+        yield f'\n\n*in: {usage[0]:,} · out: {usage[1]:,} · cached: {usage[2]:,} · cache-create: {usage[3]:,} · cost: ${cost:.4f} · time: {t}*'
