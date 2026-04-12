@@ -37,7 +37,7 @@ TOOLS = [
     title="The agent for getting things done"
 ) 
 async def super(context):
-    # yield f"{context.user}\n\n"
+    yield f"{context.user.plan}\n\n"
     # print(context.messages.raw)
     async for msg in cycls.Agent(
                                 context=context,
@@ -45,7 +45,7 @@ async def super(context):
                                 tools=TOOLS, # skills+safe_keys
                                 builtin_tools=["Bash", "Editor", "WebSearch"], # "Canvas"
                                 model="claude-sonnet-4-6",
-                                show_usage=False
+                                show_usage=True
                             ):
         yield msg
 
