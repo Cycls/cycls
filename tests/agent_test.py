@@ -11,11 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cycls.agent.main import (
-    Agent, COMPACT_BUFFER, KEEP_RECENT, MAX_RETRIES, MAX_OUTPUT,
-    _exec_bash, _exec_read, _exec_edit, _is_retryable, _prepare_prompt,
-    _dispatch, _resolve_path, _microcompact, _context_window, _recover,
-)
+from cycls.agent.main import Agent, MAX_RETRIES, _is_retryable, _prepare_prompt, _recover
+from cycls.agent.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact, context_window
+from cycls.agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path, dispatch
 from cycls.app.state import load_history
 
 
@@ -147,7 +145,7 @@ def test_history_saved_after_each_tool_round(agent_env):
     mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
 
     with _mock_anthropic(mock_client), \
-         patch("cycls.agent.main._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
+         patch("cycls.agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
     history = load_history(hp)
@@ -173,7 +171,7 @@ def test_history_survives_crash_after_first_tool_round(agent_env):
     mock_client.messages.stream = stream_side_effect
 
     with _mock_anthropic(mock_client), \
-         patch("cycls.agent.main._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
+         patch("cycls.agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
     # Should have gotten an error callout
@@ -452,7 +450,7 @@ def test_tool_result_present_after_bash_timeout(agent_env):
     mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
 
     with _mock_anthropic(mock_client), \
-         patch("cycls.agent.main._exec_bash",
+         patch("cycls.agent.tools._exec_bash",
                new_callable=lambda: AsyncMock(return_value="Error: Command timed out after 300s")):
         asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
@@ -485,7 +483,7 @@ def test_multiple_tool_calls_all_get_results(agent_env):
         return "ok"
 
     with _mock_anthropic(mock_client), \
-         patch("cycls.agent.main._exec_bash", side_effect=mock_bash):
+         patch("cycls.agent.tools._exec_bash", side_effect=mock_bash):
         asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
     history = load_history(hp)
@@ -608,7 +606,7 @@ def test_compaction_triggers_when_approaching_window(agent_env):
     """When input tokens approach context window and enough messages exist, compaction fires."""
     ws, hp, ctx = agent_env
 
-    window = _context_window("claude-sonnet-4-20250514")
+    window = context_window("claude-sonnet-4-20250514")
     high_usage = _usage(inp=window - COMPACT_BUFFER + 1)
 
     # Build enough tool rounds to exceed KEEP_RECENT messages
@@ -625,7 +623,7 @@ def test_compaction_triggers_when_approaching_window(agent_env):
         content=[MagicMock(text="<analysis>thinking</analysis><summary>Summary here</summary>")]))
 
     with _mock_anthropic(mock_client), \
-         patch("cycls.agent.main._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
+         patch("cycls.agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
     steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Compacting context..."]
@@ -657,7 +655,7 @@ def test_compaction_failure_still_saves_history(agent_env):
     """If compaction API call fails, the conversation must still be saved."""
     ws, hp, ctx = agent_env
 
-    window = _context_window("claude-sonnet-4-20250514")
+    window = context_window("claude-sonnet-4-20250514")
     high_usage = _usage(inp=window - COMPACT_BUFFER + 1)
 
     round1 = _make_response([_tool_use_block("t1")], stop_reason="tool_use", usage=high_usage)
@@ -669,7 +667,7 @@ def test_compaction_failure_still_saves_history(agent_env):
     mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
 
     with _mock_anthropic(mock_client), \
-         patch("cycls.agent.main._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
+         patch("cycls.agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         asyncio.run(_drain(Agent(context=ctx, thinking=False)))
 
     history = load_history(hp)
@@ -693,7 +691,7 @@ def test_microcompact_clears_old_tool_results():
             {"type": "tool_result", "tool_use_id": f"t{i}", "content": f"result {i} " * 100}
         ]})
 
-    _microcompact(messages)
+    microcompact(messages)
 
     # Old user messages (tool_results) should be cleared — index 1 is the first user message
     old_user_msg = messages[1]  # first user message with tool_result
@@ -799,11 +797,16 @@ def test_recover_returns_false_on_non_recoverable():
 # Context window tests
 # ---------------------------------------------------------------------------
 
-def test_context_window_known_models():
-    assert _context_window("claude-sonnet-4-20250514") == 200_000
-    assert _context_window("claude-opus-4-20250514") == 1_000_000
-    assert _context_window("claude-haiku-3-5-20241022") == 200_000
+def test_context_window_family_models():
+    assert context_window("claude-sonnet-4-20250514") == 200_000
+    assert context_window("claude-opus-4-20250514") == 200_000
+    assert context_window("claude-haiku-3-5-20241022") == 200_000
+
+
+def test_context_window_1m_variants():
+    assert context_window("claude-opus-4-6[1m]") == 1_000_000
+    assert context_window("claude-sonnet-4-6[1m]") == 1_000_000
 
 
 def test_context_window_unknown_model():
-    assert _context_window("gpt-4o") == 200_000
+    assert context_window("gpt-4o") == 200_000
