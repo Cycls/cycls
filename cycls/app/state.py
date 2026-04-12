@@ -50,9 +50,9 @@ def load_history(path):
     if messages:
         c = messages[-1].get("content")
         if isinstance(c, str):
-            messages[-1]["content"] = [{"type": "text", "text": c, "cache_control": {"type": "ephemeral"}}]
+            messages[-1]["content"] = [{"type": "text", "text": c, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
         elif isinstance(c, list) and c:
-            c[-1]["cache_control"] = {"type": "ephemeral"}
+            c[-1]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
     return messages
 
 def save_history(path, messages, mode="a"):

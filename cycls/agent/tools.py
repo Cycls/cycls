@@ -91,7 +91,7 @@ def build_tools(builtin_tools, custom):
         tools.append({"type": "custom", "name": t["name"], "description": t.get("description", ""),
                       "input_schema": t.get("inputSchema", t.get("input_schema", {}))})
     if tools:
-        tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
+        tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}
     return tools
 
 def _resolve_path(raw_path, workspace):

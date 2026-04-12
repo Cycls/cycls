@@ -101,7 +101,7 @@ async def Agent(*, context, system="", tools=None, builtin_tools=[],
         "tools": build_tools(builtin_tools, tools or []),
         "messages": messages,
         "system": [{"type": "text", "text": DEFAULT_SYSTEM + ("\n\n" + system if system else ""),
-                     "cache_control": {"type": "ephemeral"}}],
+                     "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
         **({"thinking": {"type": "adaptive"}} if thinking else {}),
     }
     usage = [0, 0, 0, 0]  # in, out, cached, cache_create
