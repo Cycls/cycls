@@ -185,6 +185,8 @@ def _exec_read(inp, workspace):
     except ValueError as e: return f"Error: {e}"
     if not path.exists(): return f"Error: {path} does not exist"
     if path.is_dir(): return f"Error: {path} is a directory"
+    if path.stat().st_size > 3 * 1024 * 1024:
+        return "Error: file is too large to read (>3 MB)."
     ext = path.suffix.lower().lstrip(".")
     if ext in _IMAGE_EXTS or ext in _DOC_EXTS:
         kind = "image" if ext in _IMAGE_EXTS else "document"
