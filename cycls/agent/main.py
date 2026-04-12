@@ -257,8 +257,7 @@ def _dispatch(block, ws, timeout):
     name, inp = block.name, block.input
     if name == "bash":
         cmd = inp.get("command", "")
-        step = cmd if len(cmd) <= 80 else cmd[:60] + " … " + cmd[-17:]
-        return {"type": "step", "tool_name": "Bash", "step": step}, _exec_bash(cmd, ws, timeout=timeout)
+        return {"type": "step", "tool_name": "Bash", "step": cmd}, _exec_bash(cmd, ws, timeout=timeout)
     if name == "read":
         return {"type": "step", "tool_name": "Reading", "step": inp.get("path", "")}, _exec_read(inp, ws)
     if name == "edit":
