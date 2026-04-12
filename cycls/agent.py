@@ -1,6 +1,7 @@
 """Agent loop — streams Claude tool-use turns with sandboxed execution."""
 
 import asyncio, base64, json, os, pathlib, random, re, time
+from cycls import pdf
 from cycls.app.state import ensure_workspace, history_path, load_history, save_history
 
 # ---- Config ----
@@ -32,7 +33,10 @@ _READ_TOOL = {
         "Read a file from the workspace.\n\n"
         "Usage:\n"
         "- Reads text files with line numbers (cat -n format, 1-indexed).\n"
-        "- Reads images (PNG, JPG, GIF, WebP) and PDFs visually — you will see their contents.\n"
+        "- Reads images (PNG, JPG, GIF, WebP) and small PDFs visually — you will see their contents.\n"
+        "- For LARGE PDFs (over 3MB): you MUST provide the `pages` parameter, e.g. pages='1-5'. "
+        "The tool will render those pages as images. Maximum 20 pages per read. "
+        "If you don't know how many pages the PDF has, the error message will tell you.\n"
         "- When you already know which part of the file you need, use offset and limit to read only that part.\n"
         "- Only reads files, not directories. Use `ls` via bash for directories.\n"
         "- If you need to read a file the user mentioned, always use this tool — assume the path is valid.\n"
@@ -42,6 +46,7 @@ _READ_TOOL = {
         "path": {"type": "string", "description": "Relative path to read (e.g. src/main.py)"},
         "offset": {"type": "integer", "description": "Start line, 1-indexed (default: 1)"},
         "limit": {"type": "integer", "description": "Max lines to read. Omit to read entire file."},
+        "pages": {"type": "string", "description": "Page range for large PDFs, e.g. '1-5' or '3'. Required for PDFs over 3MB. Max 20 pages."},
     }, "required": ["path"]}
 }
 _EDIT_TOOL = {
@@ -180,18 +185,39 @@ async def _exec_bash(command, cwd, timeout=600):
         out = out[:h] + "\n... (truncated) ...\n" + out[-h:]
     return out.strip() or "(no output)"
 
-def _exec_read(inp, workspace):
+async def _exec_read(inp, workspace):
     try: path = _resolve_path(inp["path"], workspace)
     except ValueError as e: return f"Error: {e}"
     if not path.exists(): return f"Error: {path} does not exist"
     if path.is_dir(): return f"Error: {path} is a directory"
-    if path.stat().st_size > 3 * 1024 * 1024:
-        return "Error: file is too large to read (>3 MB)."
     ext = path.suffix.lower().lstrip(".")
+    size = path.stat().st_size
+
+    # Large PDF → extract page range via pdftoppm
+    if ext == "pdf" and size > pdf.EXTRACT_SIZE_THRESHOLD:
+        pages_spec = inp.get("pages")
+        if not pages_spec:
+            count = await pdf.page_count(path)
+            hint = f"{count} pages" if count else "unknown page count"
+            return (f"Error: PDF is {size//1024//1024}MB ({hint}). "
+                    f"Provide the `pages` parameter, e.g. pages='1-5'. "
+                    f"Max {pdf.MAX_PAGES_PER_READ} pages per read.")
+        parsed = pdf.parse_pages(pages_spec)
+        if not parsed:
+            return f"Error: invalid pages '{pages_spec}'. Use format '1-5' or '3'."
+        return await pdf.extract(path, *parsed)
+
+    # Other large files → reject
+    if size > 3 * 1024 * 1024:
+        return f"Error: file is too large to read (>3 MB). Use bash (head/grep/jq) to extract what you need from `{inp['path']}`."
+
+    # Small media → native content block
     if ext in _IMAGE_EXTS or ext in _DOC_EXTS:
         kind = "image" if ext in _IMAGE_EXTS else "document"
         mt = ("image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}") if ext in _IMAGE_EXTS else f"application/{ext}"
         return [{"type": kind, "source": {"type": "base64", "media_type": mt, "data": base64.b64encode(path.read_bytes()).decode()}}]
+
+    # Text → line-numbered output
     try: lines = path.read_text().splitlines()
     except UnicodeDecodeError: return f"Error: {path} is a binary file"
     start = max(1, inp.get("offset", 1))
@@ -234,7 +260,7 @@ def _dispatch(block, ws, timeout):
         step = cmd if len(cmd) <= 80 else cmd[:60] + " … " + cmd[-17:]
         return {"type": "step", "tool_name": "Bash", "step": step}, _exec_bash(cmd, ws, timeout=timeout)
     if name == "read":
-        return {"type": "step", "tool_name": "Reading", "step": inp.get("path", "")}, asyncio.to_thread(_exec_read, inp, ws)
+        return {"type": "step", "tool_name": "Reading", "step": inp.get("path", "")}, _exec_read(inp, ws)
     if name == "edit":
         return {"type": "step", "tool_name": "Editing", "step": inp.get("path", "")}, asyncio.to_thread(_exec_edit, inp, ws)
     return {"type": "tool_call", "tool": name, "args": inp}, asyncio.sleep(0, result=f"{name} executed")

@@ -249,7 +249,7 @@ def test_exec_read_text_file(tmp_path):
     ws.mkdir()
     (ws / "hello.txt").write_text("line1\nline2\nline3")
 
-    result = _exec_read({"path": "hello.txt"}, str(ws))
+    result = asyncio.run(_exec_read({"path": "hello.txt"}, str(ws)))
     assert "line1" in result
     assert "line2" in result
     assert "line3" in result
@@ -261,7 +261,7 @@ def test_exec_read_with_offset_and_limit(tmp_path):
     ws.mkdir()
     (ws / "lines.txt").write_text("\n".join(f"line{i}" for i in range(1, 11)))
 
-    result = _exec_read({"path": "lines.txt", "offset": 3, "limit": 2}, str(ws))
+    result = asyncio.run(_exec_read({"path": "lines.txt", "offset": 3, "limit": 2}, str(ws)))
     assert "line3" in result
     assert "line4" in result
     assert "line2" not in result
@@ -274,7 +274,7 @@ def test_exec_read_image_returns_base64(tmp_path):
     ws.mkdir()
     (ws / "photo.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
 
-    result = _exec_read({"path": "photo.png"}, str(ws))
+    result = asyncio.run(_exec_read({"path": "photo.png"}, str(ws)))
     assert isinstance(result, list)
     assert result[0]["type"] == "image"
     assert result[0]["source"]["media_type"] == "image/png"
@@ -286,7 +286,7 @@ def test_exec_read_jpeg_extension(tmp_path):
     ws.mkdir()
     (ws / "photo.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 20)
 
-    result = _exec_read({"path": "photo.jpg"}, str(ws))
+    result = asyncio.run(_exec_read({"path": "photo.jpg"}, str(ws)))
     assert result[0]["source"]["media_type"] == "image/jpeg"
 
 
@@ -296,7 +296,7 @@ def test_exec_read_pdf_returns_document(tmp_path):
     ws.mkdir()
     (ws / "doc.pdf").write_bytes(b"%PDF-1.4" + b"\x00" * 20)
 
-    result = _exec_read({"path": "doc.pdf"}, str(ws))
+    result = asyncio.run(_exec_read({"path": "doc.pdf"}, str(ws)))
     assert isinstance(result, list)
     assert result[0]["type"] == "document"
     assert result[0]["source"]["media_type"] == "application/pdf"
@@ -307,7 +307,7 @@ def test_exec_read_nonexistent_file(tmp_path):
     ws = tmp_path / "workspace"
     ws.mkdir()
 
-    result = _exec_read({"path": "nope.txt"}, str(ws))
+    result = asyncio.run(_exec_read({"path": "nope.txt"}, str(ws)))
     assert "Error" in result
     assert "does not exist" in result
 
@@ -319,7 +319,7 @@ def test_exec_read_binary_file(tmp_path):
     # Write bytes that will trigger UnicodeDecodeError on .read_text()
     (ws / "data.bin").write_bytes(b"\x80\x81\x82\x83" * 100)
 
-    result = _exec_read({"path": "data.bin"}, str(ws))
+    result = asyncio.run(_exec_read({"path": "data.bin"}, str(ws)))
     assert "Error" in result
     assert "binary" in result
 
@@ -405,10 +405,10 @@ def test_exec_read_blocks_path_traversal(tmp_path):
     ws = tmp_path / "workspace"
     ws.mkdir()
 
-    result = _exec_read({"path": "../../etc/passwd"}, str(ws))
+    result = asyncio.run(_exec_read({"path": "../../etc/passwd"}, str(ws)))
     assert "Error" in result
 
-    result = _exec_read({"path": "/etc/passwd"}, str(ws))
+    result = asyncio.run(_exec_read({"path": "/etc/passwd"}, str(ws)))
     assert "Error" in result
 
 
