@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from cycls.agent import (
-    Agent, COMPACT_BUFFER, KEEP_RECENT, MAX_ATTACHMENTS, MAX_RETRIES, MAX_OUTPUT,
+    Agent, COMPACT_BUFFER, KEEP_RECENT, MAX_RETRIES, MAX_OUTPUT,
     _exec_bash, _exec_read, _exec_edit, _is_retryable, _prepare_prompt,
     _dispatch, _resolve_path, _microcompact, _context_window, _recover,
 )
@@ -584,40 +584,20 @@ def test_api_400_after_tool_results_shows_error(agent_env):
 # File attachment limit tests
 # ---------------------------------------------------------------------------
 
-def test_prepare_prompt_under_limit(tmp_path):
-    """Attachments under MAX_ATTACHMENTS all appear in prompt."""
+def test_prepare_prompt_with_attachments(tmp_path):
+    """All attachments appear in prompt."""
     ws = str(tmp_path / "workspace")
     Path(ws).mkdir()
     parts = [{"type": "text", "text": "check these"}]
-    parts += [{"type": "file", "file": f"doc{i}.pdf"} for i in range(MAX_ATTACHMENTS)]
+    parts += [{"type": "file", "file": f"doc{i}.pdf"} for i in range(10)]
     ctx = types.SimpleNamespace()
     ctx.workspace = ws
     ctx.messages = types.SimpleNamespace()
     ctx.messages.raw = [{"role": "user", "content": parts}]
 
     prompt = _prepare_prompt(ctx)
-    for i in range(MAX_ATTACHMENTS):
+    for i in range(10):
         assert f"doc{i}.pdf" in prompt
-
-
-def test_prepare_prompt_over_limit(tmp_path):
-    """Attachments over MAX_ATTACHMENTS are noted but not all listed."""
-    ws = str(tmp_path / "workspace")
-    Path(ws).mkdir()
-    n = MAX_ATTACHMENTS + 5
-    parts = [{"type": "text", "text": "check these"}]
-    parts += [{"type": "image", "image": f"img{i}.png"} for i in range(n)]
-    ctx = types.SimpleNamespace()
-    ctx.workspace = ws
-    ctx.messages = types.SimpleNamespace()
-    ctx.messages.raw = [{"role": "user", "content": parts}]
-
-    prompt = _prepare_prompt(ctx)
-    # First MAX_ATTACHMENTS are in the attached files list
-    for i in range(MAX_ATTACHMENTS):
-        assert f"img{i}.png" in prompt
-    # Overflow is mentioned
-    assert "more files" in prompt
 
 
 # ---------------------------------------------------------------------------
