@@ -404,9 +404,13 @@ async def Agent(*, context, system="", tools=None, builtin_tools=[],
     if hp and saved < len(messages):
         save_history(hp, messages[saved:])
     if show_usage and usage[0]:
-        p = next((v for k, v in _PRICING.items() if k in model), _PRICING["claude-sonnet"])
-        cost = (usage[0] * p[0] + usage[1] * p[1] + usage[2] * p[2] + usage[3] * p[3]) / 1_000_000
+        p = next((v for k, v in _PRICING.items() if k in model), None)
         elapsed = time.monotonic() - t0
         m, s = divmod(int(elapsed), 60)
         t = f"{m}m {s}s" if m else f"{s}s"
-        yield f'\n\n*in: {usage[0]:,} · out: {usage[1]:,} · cached: {usage[2]:,} · cache-create: {usage[3]:,} · cost: ${cost:.4f} · time: {t}*'
+        parts = [f"in: {usage[0]:,}", f"out: {usage[1]:,}", f"cached: {usage[2]:,}", f"cache-create: {usage[3]:,}"]
+        if p:
+            cost = (usage[0] * p[0] + usage[1] * p[1] + usage[2] * p[2] + usage[3] * p[3]) / 1_000_000
+            parts.append(f"cost: ${cost:.4f}")
+        parts.append(f"time: {t}")
+        yield "\n\n*" + " · ".join(parts) + "*"
