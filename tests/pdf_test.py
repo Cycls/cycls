@@ -1,5 +1,5 @@
-"""Tests for cycls/pdf.py — pure helpers only (no subprocess calls)."""
-from cycls.pdf import parse_pages, MAX_PAGES_PER_READ, EXTRACT_SIZE_THRESHOLD
+"""Tests for cycls/agent/pdf.py — pure helpers only (no subprocess calls)."""
+from cycls.agent.pdf import parse_pages, MAX_PAGES_PER_READ, EXTRACT_SIZE_THRESHOLD
 
 
 def test_parse_pages_range():
