@@ -25,7 +25,6 @@ _BASH_TOOL = {
         "- Output over 30K chars is truncated in the middle — use head/grep/tail in the command to keep results focused.\n"
         "- Default timeout is 600s; adjust via `timeout` parameter (milliseconds).\n"
         "- Avoid destructive commands (`rm -rf`) unless the user explicitly asks.\n"
-        "- For git: prefer new commits over amending. Never force-push without explicit user request.\n"
         "- When issuing multiple independent commands, send multiple bash tool calls in parallel rather than chaining with &&."
     ),
     "inputSchema": {"type": "object", "properties": {
