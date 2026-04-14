@@ -16,7 +16,7 @@ THEMES = ["default", "dev"]
 
 class AgentApp(App):
     _base_pip = [*App._base_pip, "fastapi[standard]", "pyjwt", "cryptography",
-                 "python-dotenv", "resvg-py", "anthropic"]
+                 "python-dotenv", "resvg-py", "anthropic", "openai"]
     _base_apt = [*App._base_apt, "fonts-noto-core", "bubblewrap",
                  "poppler-utils", "ripgrep", "jq"]
 
