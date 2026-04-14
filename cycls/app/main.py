@@ -3,6 +3,7 @@ import uvicorn
 import importlib.resources
 
 from cycls.function import Function, _get_api_key, _get_base_url
+from cycls.agent.state import install_routers as _install_agent_routers
 from .web import web, Config
 
 CYCLS_PATH = importlib.resources.files('cycls')
@@ -60,14 +61,17 @@ class App(Function):
         self.config.set_prod(prod)
         self.config.public_path = f"cycls/app/themes/{self.theme}"
         user_func, config, name = self.user_func, self.config, self.name
-        self.func = lambda port: __import__("cycls.app.web", fromlist=["serve"]).serve(user_func, config, name, port)
+        routers = [_install_agent_routers]
+        self.func = lambda port: __import__("cycls.app.web", fromlist=["serve"]).serve(
+            user_func, config, name, port, extra_routers=routers)
 
     def _local(self, port=8080):
         """Run directly with uvicorn (no Docker)."""
         print(f"Starting local server at localhost:{port}")
         self.config.public_path = str(CYCLS_PATH.joinpath(f"app/themes/{self.theme}"))
         self.config.set_prod(False)
-        uvicorn.run(web(self.user_func, self.config), host="0.0.0.0", port=port)
+        uvicorn.run(web(self.user_func, self.config, extra_routers=[_install_agent_routers]),
+                    host="0.0.0.0", port=port)
 
     def local(self, port=8080, watch=True):
         """Run locally in Docker with file watching by default."""

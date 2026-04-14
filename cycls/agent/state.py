@@ -283,3 +283,10 @@ def share_router(required_auth):
         return {"ok": True}
 
     return r
+
+
+def install_routers(app, required_auth):
+    """Mount sessions, files, and share routers on a FastAPI app."""
+    app.include_router(sessions_router(required_auth))
+    app.include_router(files_router(required_auth))
+    app.include_router(share_router(required_auth))
