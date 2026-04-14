@@ -94,17 +94,6 @@ class App(Function):
         return super().deploy(port=port, memory=memory or self.memory)
 
 
-class AgentApp(App):
-    """App flavor that mounts sessions/files/share routers and installs agent deps."""
-
-    _base_pip = [*App._base_pip, "anthropic"]
-    _base_apt = [*App._base_apt, "bubblewrap", "poppler-utils", "ripgrep", "jq"]
-
-    def _extra_routers(self):
-        from cycls.agent.state import install_routers
-        return [install_routers]
-
-
 def _make_decorator(cls):
     def factory(name=None, **kwargs):
         if kwargs.get("plan") == "cycls_pass":
@@ -118,4 +107,3 @@ def _make_decorator(cls):
 
 
 app = _make_decorator(App)
-agent = _make_decorator(AgentApp)
