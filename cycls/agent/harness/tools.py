@@ -195,7 +195,7 @@ def _exec_edit(inp, workspace):
 
 # ---- Dispatch ----
 
-def dispatch(block, ws, timeout):
+def dispatch(block, ws, timeout, handlers=None):
     name, inp = block.name, block.input
     if name == "bash":
         cmd = inp.get("command", "")
@@ -207,4 +207,6 @@ def dispatch(block, ws, timeout):
         return {"type": "step", "tool_name": "Reading", "step": inp.get("path", "")}, _exec_read(inp, ws)
     if name == "edit":
         return {"type": "step", "tool_name": "Editing", "step": inp.get("path", "")}, asyncio.to_thread(_exec_edit, inp, ws)
+    if handlers and name in handlers:
+        return {"type": "step", "tool_name": name, "step": ""}, handlers[name](inp)
     return {"type": "tool_call", "tool": name, "args": inp}, asyncio.sleep(0, result=f"{name} executed")

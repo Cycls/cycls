@@ -115,7 +115,7 @@ def _recover(e, messages):
 async def _run(*, context, system="", tools=None, allowed_tools=[],
                model="anthropic/claude-sonnet-4-20250514", max_tokens=16384,
                bash_timeout=600, show_usage=False, client=None,
-               base_url=None, api_key=None):
+               base_url=None, api_key=None, handlers=None):
     t0 = time.monotonic()
     if client is None:
         client = _make_client(model, base_url=base_url, api_key=api_key)
@@ -166,7 +166,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             if response.stop_reason != "tool_use": break
 
             blocks = [b for b in response.content if b.type == "tool_use"]
-            pairs = [dispatch(b, ws, bash_timeout) for b in blocks]
+            pairs = [dispatch(b, ws, bash_timeout, handlers) for b in blocks]
             for step, _ in pairs: yield step
             outputs = await asyncio.gather(*(c for _, c in pairs), return_exceptions=True)
 
@@ -175,7 +175,14 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 if isinstance(out, BaseException): out = f"Error: {out}"
                 if isinstance(out, str) and "timed out" in out:
                     yield {"type": "callout", "callout": out, "style": "warning"}
-                results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
+                # Custom-handler results flow through the stream for the body to see
+                # (UI rendering) AND serialize into tool_result for the model (data).
+                if handlers and block.name in handlers and not isinstance(out, BaseException):
+                    yield out
+                    content = out if isinstance(out, str) else json.dumps(out, default=str)
+                else:
+                    content = out
+                results.append({"type": "tool_result", "tool_use_id": block.id, "content": content})
             messages.append({"role": "user", "content": results})
             if hp: save_history(hp, messages[saved:]); saved = len(messages)
 

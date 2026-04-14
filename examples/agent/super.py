@@ -26,12 +26,17 @@ TOOLS = [
 ]
 
 
+async def render_image(args):
+    return {"type": "image", "image": args["src"], "alt": args.get("alt", "")}
+
+
 llm = (
     cycls.LLM()
     .model("anthropic/claude-sonnet-4-6")
     # .model("openai/gpt-5.4")
     .system(SYSTEM)
     .tools(TOOLS)  # skills+safe_keys
+    .on("render_image", render_image)
     .allowed_tools(["Bash", "Editor", "WebSearch"])  # "Canvas"
     .show_usage(True)
 )
