@@ -105,16 +105,16 @@ async def Agent(*, context, system="", tools=None, builtin_tools=[],
         **({"thinking": {"type": "adaptive"}} if thinking else {}),
     }
     usage = [0, 0, 0, 0]  # in, out, cached, cache_create
+    tokens_since_compact = 0
     retries = 0
 
     while True:
         try:
-            # Pre-turn compaction: compact before API call if approaching context limit
-            if usage[0] > window - COMPACT_BUFFER and len(messages) > KEEP_RECENT:
+            if tokens_since_compact > window - COMPACT_BUFFER and len(messages) > KEEP_RECENT:
                 yield {"type": "step", "step": "Compacting context..."}
                 try:
                     messages[:] = await compact(client, model, messages)
-                    usage[0] = 0  # reset so we don't compact every turn
+                    tokens_since_compact = 0
                     if hp: save_history(hp, messages, mode="w"); saved = len(messages)
                 except Exception as ce:
                     yield {"type": "callout", "callout": f"Compaction failed: {ce}", "style": "warning"}
@@ -127,6 +127,7 @@ async def Agent(*, context, system="", tools=None, builtin_tools=[],
             u = response.usage
             usage[0] += u.input_tokens; usage[1] += u.output_tokens
             usage[2] += u.cache_read_input_tokens or 0; usage[3] += u.cache_creation_input_tokens or 0
+            tokens_since_compact = u.input_tokens + (u.cache_read_input_tokens or 0) + (u.cache_creation_input_tokens or 0)
             messages.append({"role": "assistant",
                             "content": [b.model_dump(exclude_none=True) for b in response.content]})
             if response.stop_reason != "tool_use": break
