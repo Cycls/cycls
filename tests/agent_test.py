@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cycls.agent.main import Agent, MAX_RETRIES, _is_retryable, _prepare_prompt, _recover
+from cycls.agent.main import Agent, MAX_RETRIES, _is_retryable, _ingest, _recover
 from cycls.agent.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact, context_window
 from cycls.agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path, dispatch
 from cycls.agent.state import load_history
@@ -579,23 +579,48 @@ def test_api_400_after_tool_results_shows_error(agent_env):
 
 
 # ---------------------------------------------------------------------------
-# File attachment limit tests
+# Ingest tests (attachment resolution)
 # ---------------------------------------------------------------------------
 
-def test_prepare_prompt_with_attachments(tmp_path):
-    """All attachments appear in prompt."""
+def test_ingest_plain_string_passthrough(tmp_path):
     ws = str(tmp_path / "workspace")
     Path(ws).mkdir()
-    parts = [{"type": "text", "text": "check these"}]
-    parts += [{"type": "file", "file": f"doc{i}.pdf"} for i in range(10)]
-    ctx = types.SimpleNamespace()
-    ctx.workspace = ws
-    ctx.messages = types.SimpleNamespace()
-    ctx.messages.raw = [{"role": "user", "content": parts}]
+    result = asyncio.run(_ingest("just a string", ws))
+    assert result == "just a string"
 
-    prompt = _prepare_prompt(ctx)
-    for i in range(10):
-        assert f"doc{i}.pdf" in prompt
+
+def test_ingest_image_becomes_content_block(tmp_path):
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "photo.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
+
+    parts = [
+        {"type": "text", "text": "what is this?"},
+        {"type": "image", "image": "photo.png"},
+    ]
+    result = asyncio.run(_ingest(parts, str(ws)))
+    assert len(result) == 2
+    assert result[0] == {"type": "text", "text": "what is this?"}
+    assert result[1]["type"] == "image"
+    assert result[1]["source"]["media_type"] == "image/png"
+
+
+def test_ingest_missing_file_becomes_text_hint(tmp_path):
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    parts = [{"type": "file", "file": "nope.txt"}]
+    result = asyncio.run(_ingest(parts, str(ws)))
+    assert len(result) == 1
+    assert result[0]["type"] == "text"
+    assert "Error" in result[0]["text"] or "does not exist" in result[0]["text"]
+
+
+def test_ingest_empty_file_ref_passes_through(tmp_path):
+    ws = str(tmp_path / "workspace")
+    Path(ws).mkdir()
+    parts = [{"type": "file"}]  # no fname
+    result = asyncio.run(_ingest(parts, ws))
+    assert result == parts
 
 
 # ---------------------------------------------------------------------------

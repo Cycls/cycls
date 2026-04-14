@@ -3,7 +3,7 @@ import asyncio, json, random, time
 from .state import ensure_workspace, history_path, load_history, save_history
 from .compact import COMPACT_BUFFER, KEEP_RECENT, compact, context_window
 from .prompts import DEFAULT_SYSTEM
-from .tools import build_tools, dispatch
+from .tools import build_tools, dispatch, _exec_read
 
 # ---- Config ----
 
@@ -19,16 +19,27 @@ _PRICING = {
     "claude-haiku": (0.80, 4, 0.08, 1),
 }
 
-# ---- Helpers ----
+# ---- Ingest ----
 
-def _prepare_prompt(context):
-    content = context.messages.raw[-1].get("content", "")
+async def _ingest(content, workspace):
+    """Resolve attachment refs in an incoming user message to inline content blocks.
+    Reuses _exec_read as the single source of truth for path → content blocks."""
     if not isinstance(content, list):
         return content
-    texts = [p["text"] for p in content if p.get("type") == "text"]
-    files = [p.get("image") or p.get("file") for p in content if p.get("type") in ("image", "file")]
-    files = [f for f in files if f]
-    return " ".join(texts) + (f"\n\nAttached files: {', '.join(files)}" if files else "")
+    out = []
+    for block in content:
+        if block.get("type") in ("image", "file"):
+            fname = block.get("image") or block.get("file")
+            if fname:
+                result = await _exec_read({"path": fname}, workspace)
+                if isinstance(result, list):
+                    out.extend(result)
+                    continue
+                if isinstance(result, str):
+                    out.append({"type": "text", "text": result})
+                    continue
+        out.append(block)
+    return out
 
 # ---- Stream ----
 
@@ -93,7 +104,8 @@ async def Agent(*, context, system="", tools=None, builtin_tools=[],
     hp = history_path(context.user, context.session_id) if context.session_id and context.user else None
     messages = load_history(hp) if hp else []
     saved = len(messages)
-    messages.append({"role": "user", "content": _prepare_prompt(context)})
+    incoming = context.messages.raw[-1].get("content", "")
+    messages.append({"role": "user", "content": await _ingest(incoming, ws)})
     window = context_window(model)
 
     kwargs = {
