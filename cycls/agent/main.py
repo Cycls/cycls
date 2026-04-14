@@ -1,8 +1,6 @@
-"""Agent loop — streams Claude tool-use turns with sandboxed execution.
-Also exports the AgentApp subclass and @cycls.agent decorator."""
+"""Agent loop — streams Claude tool-use turns with sandboxed execution."""
 import asyncio, json, random, time
-from cycls.app.main import App, _make_decorator
-from .state import ensure_workspace, history_path, load_history, save_history, install_routers
+from .state import ensure_workspace, history_path, load_history, save_history
 from .compact import COMPACT_BUFFER, KEEP_RECENT, compact, context_window
 from .prompts import DEFAULT_SYSTEM
 from .tools import build_tools, dispatch, _exec_read
@@ -187,16 +185,3 @@ async def Agent(*, context, system="", tools=None, builtin_tools=[],
         yield "\n\n*" + " · ".join(parts) + "*"
 
 
-# ---- AgentApp subclass + @cycls.agent decorator ----
-
-class AgentApp(App):
-    """App flavor that mounts sessions/files/share routers and installs agent deps."""
-
-    _base_pip = [*App._base_pip, "anthropic"]
-    _base_apt = [*App._base_apt, "bubblewrap", "poppler-utils", "ripgrep", "jq"]
-
-    def _extra_routers(self):
-        return [install_routers]
-
-
-agent = _make_decorator(AgentApp)

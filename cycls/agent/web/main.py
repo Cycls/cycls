@@ -227,7 +227,7 @@ def web(func, config, extra_routers=None):
     # ---- Dynamic OG images ----
 
     from fastapi.responses import Response
-    from cycls.app.og import generate as og_generate
+    from .og import generate as og_generate
 
     og_title = config.name.capitalize() if config.name else "Cycls"
 
