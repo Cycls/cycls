@@ -2,13 +2,13 @@ import pytest
 import json
 import asyncio
 import importlib.resources
-from cycls.app.web import web, Config, Messages, sse, encoder, openai_encoder
+from cycls.agent.web import web, Config, Messages, sse, encoder, openai_encoder
 
 # To run these tests:
 # poetry run pytest tests/web_test.py -v -s
 
 # Use actual default theme
-THEME_PATH = str(importlib.resources.files('cycls').joinpath('app/themes/dev'))
+THEME_PATH = str(importlib.resources.files('cycls').joinpath('agent/web/themes/dev'))
 
 
 # =============================================================================

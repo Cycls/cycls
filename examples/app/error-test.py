@@ -1,6 +1,6 @@
 import cycls
 
-@cycls.app()
+@cycls.agent()
 async def error_test(context):
     """Test app for error propagation to UI."""
     msg = context.last_message.lower()

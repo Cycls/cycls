@@ -1,7 +1,7 @@
 import cycls
 import asyncio
 
-@cycls.app()
+@cycls.agent()
 async def native_demo(context):
     yield "# Native Components Demo\n\n"
 

@@ -7,7 +7,7 @@ const backend = "http://localhost:8080";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
-    outDir: "../cycls/app/themes/default",
+    outDir: "../cycls/agent/web/themes/default",
     emptyOutDir: true,
   },
   server: {

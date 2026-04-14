@@ -1,83 +1,55 @@
 import os
 import uvicorn
-import importlib.resources
 
 from cycls.function import Function, _get_api_key, _get_base_url
-from .web import web, Config
-
-CYCLS_PATH = importlib.resources.files('cycls')
-
-THEMES = ["default", "dev"]
 
 
 class App(Function):
-    """App extends Function with web UI serving capabilities."""
+    """App extends Function with a blocking ASGI service.
 
-    _base_pip = ["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", "python-dotenv", "docker", "resvg-py"]
-    _base_apt = ["fonts-noto-core"]
+    The user function, when called, must return an ASGI application
+    (e.g., a FastAPI instance, an MCP server, a Gradio/Streamlit app).
+    App wraps it in uvicorn for local runs and containerized deployment.
+    """
 
-    def __init__(self, func, name, theme="default", pip=None, apt=None, run_commands=None, copy=None, copy_public=None,
-                 auth=False, header=None, intro=None, title=None, plan="free", analytics=False,
+    _base_pip = ["uvicorn[standard]"]
+    _base_apt = []
+
+    def __init__(self, func, name, pip=None, apt=None, run_commands=None, copy=None,
                  memory="1Gi", force_rebuild=False):
-        if theme not in THEMES:
-            raise ValueError(f"Unknown theme: {theme}. Available: {THEMES}")
         self.user_func = func
-        self.theme = theme
-        self.copy_public = copy_public or []
         self.memory = memory
-
-        self.config = Config(
-            name=name,
-            header=header,
-            intro=intro,
-            title=title,
-            auth=auth,
-            plan=plan,
-            analytics=analytics,
-
-        )
-
-        # Build files dict for Function (theme is inside cycls/)
-        files = {str(CYCLS_PATH): "cycls"}
-        files.update({f: f for f in copy or []})
-        files.update({f: f"public/{f}" for f in self.copy_public})
-
-        run_commands = list(run_commands or [])
+        self.prod = False
 
         super().__init__(
             func=func,
             name=name,
             pip=[*self._base_pip, *(pip or [])],
             apt=[*self._base_apt, *(apt or [])],
-            run_commands=run_commands,
-            copy=files,
+            run_commands=list(run_commands or []),
+            copy=copy or {},
             base_url=_get_base_url(),
             api_key=_get_api_key(),
-            force_rebuild=force_rebuild
+            force_rebuild=force_rebuild,
         )
 
     def __call__(self, *args, **kwargs):
         return self.user_func(*args, **kwargs)
 
-    def _extra_routers(self):
-        """Subclass hook — return a list of (fastapi_app, auth_dep) -> None callables."""
-        return []
+    def _build_asgi(self):
+        """Return the ASGI app to serve. Default: user function returns it.
+        Subclasses override to compose their own ASGI app around user_func."""
+        return self.user_func()
 
     def _prepare_func(self, prod):
-        self.config.set_prod(prod)
-        self.config.public_path = f"cycls/app/themes/{self.theme}"
-        user_func, config, name = self.user_func, self.config, self.name
-        routers = self._extra_routers()
-        self.func = lambda port: __import__("cycls.app.web", fromlist=["serve"]).serve(
-            user_func, config, name, port, extra_routers=routers)
+        self.prod = prod
+        self.func = lambda port: uvicorn.run(self._build_asgi(), host="0.0.0.0", port=port)
 
     def _local(self, port=8080):
         """Run directly with uvicorn (no Docker)."""
         print(f"Starting local server at localhost:{port}")
-        self.config.public_path = str(CYCLS_PATH.joinpath(f"app/themes/{self.theme}"))
-        self.config.set_prod(False)
-        uvicorn.run(web(self.user_func, self.config, extra_routers=self._extra_routers()),
-                    host="0.0.0.0", port=port)
+        self.prod = False
+        uvicorn.run(self._build_asgi(), host="0.0.0.0", port=port)
 
     def local(self, port=8080, watch=True):
         """Run locally in Docker with file watching by default."""
