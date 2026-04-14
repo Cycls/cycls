@@ -1,6 +1,6 @@
 """Agent loop — streams Claude tool-use turns with sandboxed execution."""
 import asyncio, json, random, time
-from cycls.app.state import ensure_workspace, history_path, load_history, save_history
+from .state import ensure_workspace, history_path, load_history, save_history
 from .compact import COMPACT_BUFFER, KEEP_RECENT, compact, context_window
 from .prompts import DEFAULT_SYSTEM
 from .tools import build_tools, dispatch
