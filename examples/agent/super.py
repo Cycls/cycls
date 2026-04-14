@@ -27,8 +27,7 @@ TOOLS = [
 
 
 async def render_image(args):
-    return {"type": "image", "image": args["src"], "alt": args.get("alt", "")}
-
+    return {"type": "text", "text": f"![{args.get('alt', '')}]({args['src']})"}
 
 llm = (
     cycls.LLM()
