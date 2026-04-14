@@ -1,6 +1,6 @@
 from .function import function, Function
 from .app import app, App
-from .agent import Agent, agent, AgentApp
+from .agent import LLM, agent, AgentApp
 
 # Module-level config
 api_key = None
