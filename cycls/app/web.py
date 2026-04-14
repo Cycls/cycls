@@ -73,7 +73,7 @@ class Messages(list):
     def raw(self):
         return self._raw
 
-def web(func, config):
+def web(func, config, extra_routers=None):
     from fastapi import FastAPI, Request, HTTPException, status, Depends
     from fastapi.responses import StreamingResponse
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -206,10 +206,8 @@ def web(func, config):
                 raise HTTPException(status_code=r.status_code, detail=r.text)
             return r.json()
 
-    from cycls.agent.state import sessions_router, files_router, share_router
-    app.include_router(sessions_router(required_auth))
-    app.include_router(files_router(required_auth))
-    app.include_router(share_router(required_auth))
+    for install in (extra_routers or []):
+        install(app, required_auth)
 
     # ---- SEO helpers ----
 
@@ -274,10 +272,10 @@ def web(func, config):
 
     return app
 
-def serve(func, config, name, port):
+def serve(func, config, name, port, extra_routers=None):
     import uvicorn, logging
     from dotenv import load_dotenv
     load_dotenv()
     logging.getLogger("uvicorn.error").addFilter(lambda r: "0.0.0.0" not in r.getMessage())
     print(f"\n🔨 {name} => http://localhost:{port}\n")
-    uvicorn.run(web(func, config), host="0.0.0.0", port=port)
+    uvicorn.run(web(func, config, extra_routers=extra_routers), host="0.0.0.0", port=port)
