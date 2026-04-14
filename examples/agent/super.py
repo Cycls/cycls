@@ -26,6 +26,7 @@ TOOLS = [
 ]
 
 
+# Show me a cat. Use the render_image tool with this URL: https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?w=800
 async def render_image(args):
     return {"type": "text", "text": f"![{args.get('alt', '')}]({args['src']})"}
 
