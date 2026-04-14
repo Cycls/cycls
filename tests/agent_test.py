@@ -14,7 +14,7 @@ import pytest
 from cycls.agent.main import Agent, MAX_RETRIES, _is_retryable, _prepare_prompt, _recover
 from cycls.agent.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact, context_window
 from cycls.agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path, dispatch
-from cycls.app.state import load_history
+from cycls.agent.state import load_history
 
 
 # ---------------------------------------------------------------------------
