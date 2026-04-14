@@ -159,6 +159,19 @@ class _Stream:
                     delta=SimpleNamespace(type="text_delta", text=delta.content),
                 )
 
+            # Reasoning deltas — GPT-5, o-series, and any OpenAI-compat reasoning
+            # model (vLLM, DeepSeek, etc.). `reasoning` is the modern field;
+            # `reasoning_content` is the legacy DeepSeek/old-vLLM name. Both map
+            # to Cycls' thinking_delta channel so _iter_stream yields them as
+            # regular thinking events and the UI shows thinking bubbles.
+            reasoning = getattr(delta, "reasoning", None) or getattr(delta, "reasoning_content", None)
+            if reasoning:
+                yield SimpleNamespace(
+                    type="content_block_delta",
+                    index=0,
+                    delta=SimpleNamespace(type="thinking_delta", thinking=reasoning),
+                )
+
             if delta.tool_calls:
                 for tc in delta.tool_calls:
                     idx = tc.index
