@@ -8,7 +8,7 @@ import importlib.resources
 
 from cycls.app.main import App, _make_decorator
 from ..state import install_routers
-from .main import web, Config
+from .main import web, serve as web_serve, Config
 
 CYCLS_PATH = importlib.resources.files('cycls')
 THEMES = ["default", "dev"]
@@ -49,10 +49,22 @@ class AgentApp(App):
             force_rebuild=force_rebuild,
         )
 
-    def _build_asgi(self):
-        self.config.set_prod(self.prod)
+    def _prepare_func(self, prod):
+        self.prod = prod
+        self.config.set_prod(prod)
+        self.config.public_path = f"cycls/agent/web/themes/{self.theme}"
+        user_func, config, name = self.user_func, self.config, self.name
+        self.func = lambda port: web_serve(
+            user_func, config, name, port, extra_routers=[install_routers])
+
+    def _local(self, port=8080):
+        print(f"Starting local server at localhost:{port}")
+        self.prod = False
+        self.config.set_prod(False)
         self.config.public_path = str(CYCLS_PATH.joinpath(f"agent/web/themes/{self.theme}"))
-        return web(self.user_func, self.config, extra_routers=[install_routers])
+        import uvicorn
+        uvicorn.run(web(self.user_func, self.config, extra_routers=[install_routers]),
+                    host="0.0.0.0", port=port)
 
 
 agent = _make_decorator(AgentApp)
