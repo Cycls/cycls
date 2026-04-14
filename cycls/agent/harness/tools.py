@@ -88,9 +88,9 @@ _BUILTINS = {
     "Editor": [_to_custom(_READ_TOOL), _to_custom(_EDIT_TOOL)],
 }
 
-def build_tools(builtin_tools, custom):
+def build_tools(allowed_tools, custom):
     tools = []
-    for name in builtin_tools:
+    for name in allowed_tools:
         tools.extend(_BUILTINS.get(name, []))
     for t in (custom or []):
         tools.append(_to_custom(t))
