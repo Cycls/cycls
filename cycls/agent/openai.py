@@ -218,7 +218,7 @@ class _Messages:
 
     def stream(self, **kwargs):
         oa_kwargs = {
-            "model": kwargs["model"].split("/", 1)[-1] if "/" in kwargs["model"] else kwargs["model"],
+            "model": kwargs["model"],
             "messages": _translate_messages(kwargs["messages"]),
             "max_completion_tokens": kwargs.get("max_tokens", 4096),
         }
