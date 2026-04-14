@@ -36,20 +36,16 @@ class App(Function):
     def __call__(self, *args, **kwargs):
         return self.user_func(*args, **kwargs)
 
-    def _build_asgi(self):
-        """Return the ASGI app to serve. Default: user function returns it.
-        Subclasses override to compose their own ASGI app around user_func."""
-        return self.user_func()
-
     def _prepare_func(self, prod):
         self.prod = prod
-        self.func = lambda port: uvicorn.run(self._build_asgi(), host="0.0.0.0", port=port)
+        user_func = self.user_func
+        self.func = lambda port: uvicorn.run(user_func(), host="0.0.0.0", port=port)
 
     def _local(self, port=8080):
         """Run directly with uvicorn (no Docker)."""
         print(f"Starting local server at localhost:{port}")
         self.prod = False
-        uvicorn.run(self._build_asgi(), host="0.0.0.0", port=port)
+        uvicorn.run(self.user_func(), host="0.0.0.0", port=port)
 
     def local(self, port=8080, watch=True):
         """Run locally in Docker with file watching by default."""

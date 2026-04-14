@@ -29,16 +29,6 @@ def test_app_is_callable():
     assert simple() == "asgi-app-sentinel"
 
 
-def test_app_build_asgi_delegates_to_user_func():
-    sentinel = object()
-
-    @cycls.app()
-    def svc():
-        return sentinel
-
-    assert svc._build_asgi() is sentinel
-
-
 def test_app_pip_merged_with_base():
     @cycls.app(pip=["httpx"])
     def svc():
