@@ -612,9 +612,8 @@ def test_compaction_triggers_when_approaching_window(agent_env):
     # Build enough tool rounds to exceed KEEP_RECENT messages
     rounds = []
     for i in range(KEEP_RECENT // 2 + 2):
-        u = high_usage if i == 0 else _usage(inp=500)
-        rounds.append(_make_response([_tool_use_block(f"t{i}")], stop_reason="tool_use", usage=u))
-    rounds.append(_make_response([_text_block("Done")]))
+        rounds.append(_make_response([_tool_use_block(f"t{i}")], stop_reason="tool_use", usage=high_usage))
+    rounds.append(_make_response([_text_block("Done")], usage=high_usage))
     responses = iter(rounds)
 
     mock_client = MagicMock()

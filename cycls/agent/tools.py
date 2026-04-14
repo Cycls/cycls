@@ -4,9 +4,6 @@ from . import pdf
 
 MAX_OUTPUT = 30_000
 
-_BUILTINS = {
-    "WebSearch": {"type": "web_search_20250305", "name": "web_search"},
-}
 _IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
 _DOC_EXTS = {"pdf"}
 
@@ -81,14 +78,22 @@ _EDIT_TOOL = {
     }, "required": ["path", "command"]}
 }
 
+def _to_custom(t):
+    return {"type": "custom", "name": t["name"], "description": t.get("description", ""),
+            "input_schema": t.get("inputSchema", t.get("input_schema", {}))}
+
+_BUILTINS = {
+    "WebSearch": [{"type": "web_search_20250305", "name": "web_search"}],
+    "Bash": [_to_custom(_BASH_TOOL)],
+    "Editor": [_to_custom(_READ_TOOL), _to_custom(_EDIT_TOOL)],
+}
+
 def build_tools(builtin_tools, custom):
-    tools = [_BUILTINS[b] for b in builtin_tools if b in _BUILTINS]
-    bundled = []
-    if "Bash" in builtin_tools: bundled.append(_BASH_TOOL)
-    if "Editor" in builtin_tools: bundled.extend([_READ_TOOL, _EDIT_TOOL])
-    for t in bundled + (custom or []):
-        tools.append({"type": "custom", "name": t["name"], "description": t.get("description", ""),
-                      "input_schema": t.get("inputSchema", t.get("input_schema", {}))})
+    tools = []
+    for name in builtin_tools:
+        tools.extend(_BUILTINS.get(name, []))
+    for t in (custom or []):
+        tools.append(_to_custom(t))
     if tools:
         tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}
     return tools
