@@ -26,14 +26,14 @@ TOOLS = [
 ]
 
 
-@cycls.app(
+@cycls.agent(
     auth=True,      # web/config
     analytics=True, # web=["Auth", "Analytics"]
     plan="cycls_pass",
-    copy=[".env"], 
+    copy=[".env"],
     force_rebuild=False,
     title="The agent for getting things done"
-) 
+)
 async def super(context):
     # yield f"{context.user.plan}\n\n"
     # print(context.messages.raw)
