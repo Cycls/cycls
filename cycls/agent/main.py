@@ -5,6 +5,21 @@ from .compact import COMPACT_BUFFER, KEEP_RECENT, compact, context_window
 from .prompts import DEFAULT_SYSTEM
 from .tools import build_tools, dispatch, _exec_read
 
+# ---- Client routing ----
+
+def _make_client(model, base_url=None, api_key=None):
+    """Pick the provider client. Model strings are `provider/model` (LiteLLM
+    style); bare names default to `anthropic`. Anything that isn't `anthropic`
+    routes through the OpenAI Chat Completions adapter — the lingua franca of
+    every other provider (OpenAI, Groq, vLLM, HUMAIN, local)."""
+    provider = model.split("/", 1)[0] if "/" in model else "anthropic"
+    if provider == "anthropic":
+        import anthropic
+        return anthropic.AsyncAnthropic(**({"api_key": api_key} if api_key else {}))
+    from .openai import AsyncOpenAI
+    return AsyncOpenAI(base_url=base_url, api_key=api_key)
+
+
 # ---- Config ----
 
 MAX_RETRIES = 10
@@ -94,11 +109,13 @@ def _recover(e, messages):
 
 async def Agent(*, context, system="", tools=None, builtin_tools=[],
                 model="claude-sonnet-4-20250514", max_tokens=16384, thinking=True,
-                bash_timeout=600, show_usage=False, client=None):
+                bash_timeout=600, show_usage=False, client=None,
+                base_url=None, api_key=None):
     t0 = time.monotonic()
     if client is None:
-        import anthropic
-        client = anthropic.AsyncAnthropic()
+        client = _make_client(model, base_url=base_url, api_key=api_key)
+    if "/" in model:
+        model = model.split("/", 1)[1]
     ws = context.workspace
     ensure_workspace(ws)
     hp = history_path(context.user, context.session_id) if context.session_id and context.user else None
