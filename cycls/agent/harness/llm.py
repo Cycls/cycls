@@ -20,6 +20,7 @@ class LLM:
         self._show_usage = False
         self._base_url = None
         self._api_key = None
+        self._handlers = {}
 
     def _copy(self, **updates):
         new = LLM.__new__(LLM)
@@ -37,6 +38,11 @@ class LLM:
     def show_usage(self, on=True):  return self._copy(_show_usage=on)
     def base_url(self, url):        return self._copy(_base_url=url)
     def api_key(self, key):         return self._copy(_api_key=key)
+    def on(self, name, handler):
+        """Register an async handler for a custom tool by name. The handler's
+        return value is both yielded to the stream (body sees it as a normal
+        event) and packaged as the tool_result sent back to the model."""
+        return self._copy(_handlers={**self._handlers, name: handler})
 
     # ---- Execution ----
 
@@ -61,5 +67,6 @@ class LLM:
             client=client,
             base_url=self._base_url,
             api_key=self._api_key,
+            handlers=self._handlers,
         ):
             yield msg
