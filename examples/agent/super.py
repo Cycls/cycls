@@ -42,7 +42,7 @@ async def super(context):
                                 system=SYSTEM, 
                                 tools=TOOLS, # skills+safe_keys
                                 builtin_tools=["Bash", "Editor", "WebSearch"], # "Canvas"
-                                model="claude-sonnet-4-6",
+                                model="anthropic/claude-sonnet-4-6",
                                 # model="openai/gpt-5.4",
                                 show_usage=True
                             ):
