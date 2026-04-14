@@ -3,7 +3,6 @@ import uvicorn
 import importlib.resources
 
 from cycls.function import Function, _get_api_key, _get_base_url
-from cycls.agent.state import install_routers as _install_agent_routers
 from .web import web, Config
 
 CYCLS_PATH = importlib.resources.files('cycls')
@@ -13,6 +12,9 @@ THEMES = ["default", "dev"]
 
 class App(Function):
     """App extends Function with web UI serving capabilities."""
+
+    _base_pip = ["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", "python-dotenv", "docker", "resvg-py"]
+    _base_apt = ["fonts-noto-core"]
 
     def __init__(self, func, name, theme="default", pip=None, apt=None, run_commands=None, copy=None, copy_public=None,
                  auth=False, header=None, intro=None, title=None, plan="free", analytics=False,
@@ -45,8 +47,8 @@ class App(Function):
         super().__init__(
             func=func,
             name=name,
-            pip=["fastapi[standard]", "pyjwt", "cryptography", "uvicorn", "python-dotenv", "docker", "anthropic", "resvg-py", *(pip or [])],
-            apt=["bubblewrap", "fonts-noto-core", "poppler-utils", "ripgrep", "jq", *(apt or [])],
+            pip=[*self._base_pip, *(pip or [])],
+            apt=[*self._base_apt, *(apt or [])],
             run_commands=run_commands,
             copy=files,
             base_url=_get_base_url(),
@@ -57,11 +59,15 @@ class App(Function):
     def __call__(self, *args, **kwargs):
         return self.user_func(*args, **kwargs)
 
+    def _extra_routers(self):
+        """Subclass hook — return a list of (fastapi_app, auth_dep) -> None callables."""
+        return []
+
     def _prepare_func(self, prod):
         self.config.set_prod(prod)
         self.config.public_path = f"cycls/app/themes/{self.theme}"
         user_func, config, name = self.user_func, self.config, self.name
-        routers = [_install_agent_routers]
+        routers = self._extra_routers()
         self.func = lambda port: __import__("cycls.app.web", fromlist=["serve"]).serve(
             user_func, config, name, port, extra_routers=routers)
 
@@ -70,7 +76,7 @@ class App(Function):
         print(f"Starting local server at localhost:{port}")
         self.config.public_path = str(CYCLS_PATH.joinpath(f"app/themes/{self.theme}"))
         self.config.set_prod(False)
-        uvicorn.run(web(self.user_func, self.config, extra_routers=[_install_agent_routers]),
+        uvicorn.run(web(self.user_func, self.config, extra_routers=self._extra_routers()),
                     host="0.0.0.0", port=port)
 
     def local(self, port=8080, watch=True):
@@ -88,12 +94,28 @@ class App(Function):
         return super().deploy(port=port, memory=memory or self.memory)
 
 
-def app(name=None, **kwargs):
-    """Decorator that transforms a function into a deployable App."""
-    if kwargs.get("plan") == "cycls_pass":
-        kwargs["auth"] = True
-        kwargs["analytics"] = True
+class AgentApp(App):
+    """App flavor that mounts sessions/files/share routers and installs agent deps."""
 
-    def decorator(func):
-        return App(func=func, name=name or func.__name__, **kwargs)
-    return decorator
+    _base_pip = [*App._base_pip, "anthropic"]
+    _base_apt = [*App._base_apt, "bubblewrap", "poppler-utils", "ripgrep", "jq"]
+
+    def _extra_routers(self):
+        from cycls.agent.state import install_routers
+        return [install_routers]
+
+
+def _make_decorator(cls):
+    def factory(name=None, **kwargs):
+        if kwargs.get("plan") == "cycls_pass":
+            kwargs["auth"] = True
+            kwargs["analytics"] = True
+
+        def decorator(func):
+            return cls(func=func, name=name or func.__name__, **kwargs)
+        return decorator
+    return factory
+
+
+app = _make_decorator(App)
+agent = _make_decorator(AgentApp)
