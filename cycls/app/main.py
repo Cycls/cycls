@@ -12,7 +12,7 @@ class App(Function):
     App wraps it in uvicorn for local runs and containerized deployment.
     """
 
-    _base_pip = ["uvicorn[standard]"]
+    _base_pip = ["uvicorn[standard]", "docker"]
     _base_apt = []
 
     def __init__(self, func, name, pip=None, apt=None, run_commands=None, copy=None,
