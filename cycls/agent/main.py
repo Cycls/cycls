@@ -108,7 +108,7 @@ def _recover(e, messages):
 # ---- Agent ----
 
 async def Agent(*, context, system="", tools=None, builtin_tools=[],
-                model="claude-sonnet-4-20250514", max_tokens=16384, thinking=True,
+                model="claude-sonnet-4-20250514", max_tokens=16384,
                 bash_timeout=600, show_usage=False, client=None,
                 base_url=None, api_key=None):
     t0 = time.monotonic()
@@ -131,7 +131,7 @@ async def Agent(*, context, system="", tools=None, builtin_tools=[],
         "messages": messages,
         "system": [{"type": "text", "text": DEFAULT_SYSTEM + ("\n\n" + system if system else ""),
                      "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
-        **({"thinking": {"type": "adaptive"}} if thinking else {}),
+        "thinking": {"type": "adaptive"},
     }
     usage = [0, 0, 0, 0]  # in, out, cached, cache_create
     tokens_since_compact = 0

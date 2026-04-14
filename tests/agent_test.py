@@ -146,7 +146,7 @@ def test_history_saved_after_each_tool_round(agent_env):
 
     with _mock_anthropic(mock_client), \
          patch("cycls.agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
-        asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+        asyncio.run(_drain(Agent(context=ctx)))
 
     history = load_history(hp)
     roles = [m["role"] for m in history]
@@ -172,7 +172,7 @@ def test_history_survives_crash_after_first_tool_round(agent_env):
 
     with _mock_anthropic(mock_client), \
          patch("cycls.agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
-        items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+        items = asyncio.run(_drain(Agent(context=ctx)))
 
     # Should have gotten an error callout
     callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
@@ -203,7 +203,7 @@ def test_error_recovery_saves_incrementally(agent_env):
     mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
 
     with _mock_anthropic(mock_client):
-        asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+        asyncio.run(_drain(Agent(context=ctx)))
 
     history = load_history(hp)
     # Should have: user + assistant(bad tool_use) + user(error result) + assistant(final)
@@ -232,7 +232,7 @@ def test_no_history_without_session(tmp_path):
     mock_client.messages.stream = lambda **kw: FakeStream(final)
 
     with _mock_anthropic(mock_client):
-        asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+        asyncio.run(_drain(Agent(context=ctx)))
 
     assert not list(tmp_path.glob("**/*.jsonl"))
 
@@ -428,7 +428,7 @@ def test_tool_result_always_follows_tool_use_on_crash(agent_env):
     mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
 
     with _mock_anthropic(mock_client):
-        asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+        asyncio.run(_drain(Agent(context=ctx)))
 
     history = load_history(hp)
     use_ids, result_ids = _history_tool_ids(history)
@@ -452,7 +452,7 @@ def test_tool_result_present_after_bash_timeout(agent_env):
     with _mock_anthropic(mock_client), \
          patch("cycls.agent.tools._exec_bash",
                new_callable=lambda: AsyncMock(return_value="Error: Command timed out after 300s")):
-        asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+        asyncio.run(_drain(Agent(context=ctx)))
 
     history = load_history(hp)
     use_ids, result_ids = _history_tool_ids(history)
@@ -484,7 +484,7 @@ def test_multiple_tool_calls_all_get_results(agent_env):
 
     with _mock_anthropic(mock_client), \
          patch("cycls.agent.tools._exec_bash", side_effect=mock_bash):
-        asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+        asyncio.run(_drain(Agent(context=ctx)))
 
     history = load_history(hp)
     use_ids, result_ids = _history_tool_ids(history)
@@ -570,7 +570,7 @@ def test_api_400_after_tool_results_shows_error(agent_env):
     (Path(ws) / "big.pdf").write_bytes(b"%PDF-1.4" + b"\x00" * 20)
 
     with _mock_anthropic(mock_client):
-        items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+        items = asyncio.run(_drain(Agent(context=ctx)))
 
     # Error should surface since recovery doesn't handle post-tool_result errors
     callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
@@ -648,7 +648,7 @@ def test_compaction_triggers_when_approaching_window(agent_env):
 
     with _mock_anthropic(mock_client), \
          patch("cycls.agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
-        items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+        items = asyncio.run(_drain(Agent(context=ctx)))
 
     steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Compacting context..."]
     assert len(steps) >= 1
@@ -665,7 +665,7 @@ def test_no_compaction_when_under_threshold(agent_env):
     mock_client.messages.stream = lambda **kw: FakeStream(final)
 
     with _mock_anthropic(mock_client):
-        items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+        items = asyncio.run(_drain(Agent(context=ctx)))
 
     steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Compacting context..."]
     assert len(steps) == 0
@@ -692,7 +692,7 @@ def test_compaction_failure_still_saves_history(agent_env):
 
     with _mock_anthropic(mock_client), \
          patch("cycls.agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
-        asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+        asyncio.run(_drain(Agent(context=ctx)))
 
     history = load_history(hp)
     assert len(history) >= 2
@@ -768,7 +768,7 @@ def test_auto_retry_on_overloaded(agent_env):
 
     with _mock_anthropic(mock_client), \
          patch("asyncio.sleep", new_callable=lambda: AsyncMock(return_value=None)):
-        items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+        items = asyncio.run(_drain(Agent(context=ctx)))
 
     # No error callouts — retries handled it
     callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
@@ -785,7 +785,7 @@ def test_auto_retry_exhausted_shows_error(agent_env):
 
     with _mock_anthropic(mock_client), \
          patch("asyncio.sleep", new_callable=lambda: AsyncMock(return_value=None)):
-        items = asyncio.run(_drain(Agent(context=ctx, thinking=False)))
+        items = asyncio.run(_drain(Agent(context=ctx)))
 
     callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
     assert len(callouts) == 1

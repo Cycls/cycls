@@ -43,7 +43,6 @@ async def super_openai(context):
         tools=TOOLS,
         builtin_tools=["Bash", "Editor"],  # WebSearch omitted — OpenAI-adapter drops Anthropic server tools
         model="openai/gpt-5.4",             # provider/model → routed to OpenAI Chat Completions adapter
-        thinking=False,                     # no Chat Completions equivalent; silently dropped anyway
         show_usage=True,
     ):
         yield msg
