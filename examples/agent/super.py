@@ -43,6 +43,7 @@ async def super(context):
                                 tools=TOOLS, # skills+safe_keys
                                 builtin_tools=["Bash", "Editor", "WebSearch"], # "Canvas"
                                 model="claude-sonnet-4-6",
+                                # model="openai/gpt-5.4",
                                 show_usage=True
                             ):
         yield msg
