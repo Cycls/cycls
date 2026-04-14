@@ -207,7 +207,7 @@ class _Messages:
         oa_kwargs = {
             "model": kwargs["model"].split("/", 1)[-1] if "/" in kwargs["model"] else kwargs["model"],
             "messages": _translate_messages(kwargs["messages"]),
-            "max_tokens": kwargs.get("max_tokens", 4096),
+            "max_completion_tokens": kwargs.get("max_tokens", 4096),
         }
         system = _translate_system(kwargs.get("system", ""))
         if system:
