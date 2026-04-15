@@ -64,12 +64,6 @@ class App(Function):
 
 def _make_decorator(cls):
     def factory(name=None, **kwargs):
-        if kwargs.get("plan") == "cycls_pass":
-            if kwargs.get("auth") is None:
-                from cycls.app.auth import Clerk
-                kwargs["auth"] = Clerk()
-            kwargs["analytics"] = True
-
         def decorator(func):
             return cls(func=func, name=name or func.__name__, **kwargs)
         return decorator

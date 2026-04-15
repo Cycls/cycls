@@ -1,8 +1,8 @@
 """Agent — App flavor that serves the Cycls chat product.
 
 Wraps a streaming chat handler in a full FastAPI service: themes, Clerk JWT auth,
-sessions, share links, OG images, transcription. Subclasses App by overriding
-_build_asgi to construct the chat service ASGI app around the user function.
+sessions, share links, OG images, transcription. Subclasses App and composes its
+chat-product ASGI app via the existing extra_routers hook.
 """
 import importlib.resources
 
@@ -10,11 +10,11 @@ from fastapi import APIRouter
 
 from cycls.app.main import App, _make_decorator
 from cycls.app.auth import make_validate, JWT
+from cycls.app.web import Web
 from .state import install_routers
 from .web import web, serve as web_serve, Config
 
 CYCLS_PATH = importlib.resources.files('cycls')
-THEMES = ["default", "dev"]
 
 
 class Agent(App):
@@ -23,24 +23,33 @@ class Agent(App):
     _base_apt = [*App._base_apt, "fonts-noto-core", "bubblewrap",
                  "poppler-utils", "ripgrep", "jq"]
 
-    def __init__(self, func, name, theme="default", pip=None, apt=None,
-                 run_commands=None, copy=None, copy_public=None,
-                 auth=None, header=None, intro=None, title=None,
-                 plan="free", analytics=False,
-                 memory="1Gi", force_rebuild=False):
-        if theme not in THEMES:
-            raise ValueError(f"Unknown theme: {theme}. Available: {THEMES}")
-        if auth is not None and not isinstance(auth, JWT):
+    def __init__(self, func, name, web=None, pip=None, apt=None,
+                 run_commands=None, copy=None, memory="1Gi", force_rebuild=False,
+                 # Chat config sugar — equivalent to cycls.Web().<method>(...).
+                 # Mutually exclusive with web=.
+                 auth=None, title=None, theme=None, plan=None,
+                 analytics=None, copy_public=None):
+        if web is not None and any(v is not None for v in (auth, title, theme, plan, analytics, copy_public)):
             raise TypeError(
-                f"auth must be a cycls.JWT instance (e.g. cycls.Clerk()) or None; got {type(auth).__name__}"
+                "Pass chat config via `web=cycls.Web()...` OR individual kwargs "
+                "(auth/title/theme/plan/analytics/copy_public), not both."
             )
-        self.theme = theme
-        self.copy_public = copy_public or []
+        if web is None:
+            web = Web()
+            if auth is not None:      web = web.auth(auth)
+            if title is not None:     web = web.title(title)
+            if theme is not None:     web = web.theme(theme)
+            if plan is not None:      web = web.plan(plan)
+            if analytics is not None: web = web.analytics(analytics)
+            if copy_public is not None: web = web.copy_public(*copy_public)
+
+        self.theme = web._theme
+        self.copy_public = web._copy_public
         self.server = APIRouter()
-        self._auth_provider = auth
+        self._auth_provider = web._auth
         self.config = Config(
-            name=name, header=header, intro=intro, title=title,
-            auth=auth is not None, plan=plan, analytics=analytics,
+            name=name, title=web._title,
+            auth=web._auth is not None, plan=web._plan, analytics=web._analytics,
         )
         self.auth = make_validate(self.config)
 

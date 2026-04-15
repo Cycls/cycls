@@ -13,8 +13,6 @@ class Config(BaseModel):
     public_path: str = "theme"
     name: Optional[str] = None
     pass_metadata: Optional[dict[str, PassMetadata]] = None
-    header: Optional[str] = None
-    intro: Optional[str] = None
     title: Optional[str] = None
     prod: bool = False
     auth: bool = False
