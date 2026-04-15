@@ -61,5 +61,7 @@ async def super(context):
         yield msg
 
 
-# super.local()
-super.deploy()
+if __name__ == "__main__":
+    # super.local()
+    # super.deploy()
+    pass
