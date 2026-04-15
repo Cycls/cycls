@@ -22,7 +22,7 @@ def test_short_lived_task_with_return_value():
     print("\n--- Running test: test_short_lived_task_with_return_value ---")
     # 1. Define the agent and the function to be containerized.
     #    This agent will have 'numpy' installed in its environment.
-    @cycls.function(pip=["numpy"])
+    @cycls.function(image=cycls.Image().pip("numpy"))
     def square_number(x):
         import numpy as np
         # The function prints to stdout inside the container and returns a value.
@@ -50,7 +50,7 @@ def test_long_running_service():
     #    We use a non-standard port to avoid conflicts with other services.
     TEST_PORT = 8999
     
-    @cycls.function(pip=["fastapi", "uvicorn"])
+    @cycls.function(image=cycls.Image().pip("fastapi", "uvicorn"))
     def simple_web_server(port):
         from fastapi import FastAPI
         import uvicorn
@@ -107,7 +107,7 @@ def test_apt_package_installation():
 
     # 2. Define the agent that will compile and run the C code.
     #    It needs 'gcc' to compile and 'libc6-dev' for standard libraries.
-    @cycls.function(apt=["gcc", "libc6-dev"])
+    @cycls.function(image=cycls.Image().apt("gcc", "libc6-dev"))
     def compile_and_run_c_code():
         import subprocess
 
@@ -145,7 +145,7 @@ def test_copy_local_directory():
     #    - `pip=["pandas"]`: Installs the pandas library.
     #    - `copy=["tests/data"]`: Copies the local 'tests/data' directory
     #      into the container (pytest runs from project root).
-    @cycls.function(pip=["pandas"], copy=["tests/data"])
+    @cycls.function(image=cycls.Image().pip("pandas").copy("tests/data"))
     def analyze_sales():
         import pandas as pd
         # The path inside the container mirrors the source structure.
@@ -172,7 +172,7 @@ def test_copy_file_collision():
     print("\n--- Running test: test_copy_file_collision ---")
     # 1. Copy two config.txt files from different directories.
     #    Both should be preserved with their directory structure.
-    @cycls.function(copy=["tests/data/dev/config.txt", "tests/data/prod/config.txt"])
+    @cycls.function(image=cycls.Image().copy("tests/data/dev/config.txt").copy("tests/data/prod/config.txt"))
     def check_for_collision():
         with open("tests/data/dev/config.txt", "r") as f:
             dev_content = f.read().strip()
@@ -199,7 +199,7 @@ def test_run_commands():
     print("\n--- Running test: test_run_commands ---")
     # 1. Define a function that uses run_commands to create a file during build.
     #    The function then reads that file to verify it was created.
-    @cycls.function(run_commands=["echo 'hello from build' > /app/build_marker.txt"])
+    @cycls.function(image=cycls.Image().run("echo 'hello from build' > /app/build_marker.txt"))
     def check_build_marker():
         with open("/app/build_marker.txt", "r") as f:
             return f.read().strip()
@@ -227,7 +227,7 @@ def test_build_deployable_image():
     CONTAINER_NAME = "test-build-deploy"
 
     # 1. Define a FastAPI service function.
-    @cycls.function(pip=["fastapi", "uvicorn"])
+    @cycls.function(image=cycls.Image().pip("fastapi", "uvicorn"))
     def build_test_service(port):
         from fastapi import FastAPI
         import uvicorn

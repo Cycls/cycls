@@ -89,19 +89,24 @@ def _copy_path(src_path: Path, dest_path: Path):
 class Function:
     """Executes functions in Docker containers."""
 
-    def __init__(self, func, name, python_version=None, pip=None, apt=None,
-                 run_commands=None, copy=None, base_url=None, api_key=None, force_rebuild=False):
+    _base_pip = []
+    _base_apt = []
+
+    def __init__(self, func, name, python_version=None, image=None,
+                 base_url=None, api_key=None):
+        image = image or {}
         self.func = func
         self.name = name.replace('_', '-')
         self.python_version = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
         self.base_image = f"python:{self.python_version}-slim"
-        self.apt = sorted(apt or [])
-        self.run_commands = list(run_commands or [])
-        self.copy = {f: f for f in copy} if isinstance(copy, list) else (copy or {})
+        self.apt = sorted([*self._base_apt, *image.get("apt", [])])
+        self.run_commands = list(image.get("run_commands", []))
+        copy = image.get("copy", {})
+        self.copy = {f: f for f in copy} if isinstance(copy, list) else copy
         self._base_url = base_url
         self._api_key = api_key
-        self.pip = sorted(set(pip or []) | {"cloudpickle"})
-        self.force_rebuild = force_rebuild
+        self.pip = sorted(set([*self._base_pip, *image.get("pip", [])]) | {"cloudpickle"})
+        self.force_rebuild = image.get("force_rebuild", False)
 
         self.image_prefix = f"cycls/{self.name}"
         self.managed_label = "cycls.function"
@@ -494,8 +499,9 @@ CMD ["python", "entrypoint.py"]
 
 def function(name=None, image=None, **kwargs):
     """Decorator that transforms a Python function into a containerized Function.
-    Accepts `image=cycls.Image()...` which spreads into pip/apt/run_commands/copy."""
+    Build config (pip, apt, run_commands, copy, force_rebuild) must be passed
+    via `image=cycls.Image()...` — flat kwargs are not accepted."""
     def decorator(func):
-        return Function(func, name or func.__name__, **{**(image or {}), **kwargs},
+        return Function(func, name or func.__name__, image=image, **kwargs,
                         base_url=_get_base_url(), api_key=_get_api_key())
     return decorator

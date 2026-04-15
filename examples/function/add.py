@@ -1,6 +1,6 @@
 import cycls
 
-@cycls.function(pip=["numpy"])
+@cycls.function(image=cycls.Image().pip("numpy"))
 def ziad(x, y):
     import numpy
     return (y*numpy.arange(x)).tolist()

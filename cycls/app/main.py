@@ -15,8 +15,7 @@ class App(Function):
     _base_pip = ["uvicorn[standard]", "docker"]
     _base_apt = []
 
-    def __init__(self, func, name, pip=None, apt=None, run_commands=None, copy=None,
-                 memory="1Gi", force_rebuild=False):
+    def __init__(self, func, name, image=None, memory="1Gi"):
         self.user_func = func
         self.memory = memory
         self.prod = False
@@ -24,13 +23,9 @@ class App(Function):
         super().__init__(
             func=func,
             name=name,
-            pip=[*self._base_pip, *(pip or [])],
-            apt=[*self._base_apt, *(apt or [])],
-            run_commands=list(run_commands or []),
-            copy=copy or {},
+            image=image,
             base_url=_get_base_url(),
             api_key=_get_api_key(),
-            force_rebuild=force_rebuild,
         )
 
     def __call__(self, *args, **kwargs):
@@ -65,7 +60,7 @@ class App(Function):
 def _make_decorator(cls):
     def factory(name=None, image=None, **kwargs):
         def decorator(func):
-            return cls(func=func, name=name or func.__name__, **{**(image or {}), **kwargs})
+            return cls(func=func, name=name or func.__name__, image=image, **kwargs)
         return decorator
     return factory
 

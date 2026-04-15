@@ -1,6 +1,6 @@
 import cycls
 
-@cycls.function(pip=["numpy", "pandas", "tabulate"])
+@cycls.function(image=cycls.Image().pip("numpy", "pandas", "tabulate"))
 def monte_carlo(num_points: int = 1000000):
     import numpy as np; import pandas as pd
     points = np.random.rand(num_points, 2)

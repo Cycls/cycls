@@ -224,7 +224,7 @@ def test_app_pip():
     """Tests that pip packages are stored correctly."""
     print("\n--- Running test: test_app_pip ---")
 
-    @cycls.agent(pip=["numpy", "pandas"])
+    @cycls.agent(image=cycls.Image().pip("numpy", "pandas"))
     async def data_app(context):
         yield "data"
 
@@ -240,7 +240,10 @@ def test_app_copy_params():
     """Tests that copy (Function) and Web().copy_public() are stored."""
     print("\n--- Running test: test_app_copy_params ---")
 
-    @cycls.agent(web=cycls.Web().copy_public("logo.png"), copy=["utils.py"])
+    @cycls.agent(
+        web=cycls.Web().copy_public("logo.png"),
+        image=cycls.Image().copy("utils.py"),
+    )
     async def file_app(context):
         yield "files"
 

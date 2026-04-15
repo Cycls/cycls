@@ -3,7 +3,7 @@
 import cycls
 import os
 
-@cycls.function(pip=["jupyter"])
+@cycls.function(image=cycls.Image().pip("jupyter"))
 def jupyter_notebook(port):
     """
     Runs a Jupyter Notebook server in a containerized environment.

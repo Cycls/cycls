@@ -1,7 +1,7 @@
 import cycls
 import os
 
-@cycls.function(pip=["marimo"])
+@cycls.function(image=cycls.Image().pip("marimo"))
 def marimo_notebook(port):
     """
     Runs a Marimo notebook server in a containerized environment.
