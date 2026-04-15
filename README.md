@@ -243,8 +243,6 @@ async def chat(context):
 | `POST /chat/cycls` | Cycls streaming protocol |
 | `POST /chat/completions` | OpenAI-compatible |
 
-See [docs/streaming-protocol.md](docs/streaming-protocol.md) for frontend integration.
-
 ## HTTP Extension
 
 Agents expose the underlying FastAPI surface via `.server` for webhooks, health checks, OAuth callbacks, and any custom routes:
@@ -364,10 +362,8 @@ No YAML. No Dockerfiles. No infrastructure repo. The code is the deployment.
 
 ## Learn More
 
-- [Tutorial](docs/tutorial.md) - Comprehensive guide from basics to advanced
-- [Streaming Protocol](docs/streaming-protocol.md) - Frontend integration
-- [Runtime](docs/runtime.md) - Containerization details
-- [Examples](examples/) - Working code samples
+- [Tutorial](docs/tutorial.md) — comprehensive guide from basics to advanced
+- [Examples](examples/) — working code samples
 
 ## License
 
