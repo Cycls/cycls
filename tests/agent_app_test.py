@@ -263,7 +263,7 @@ def test_app_all_config_options():
         header="Welcome",
         intro="How can I help?",
         title="My App",
-        auth=True,
+        auth=cycls.Clerk(),
         analytics=True,
     )
     async def full_app(context):
