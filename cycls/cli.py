@@ -73,6 +73,7 @@ def _api(method, path, **kwargs):
 
 def cmd_run(args):
     instance = _load_target(args.file)
+    instance._source_file = Path(args.file).resolve()
     if hasattr(instance, "local"):
         instance.local()
     else:

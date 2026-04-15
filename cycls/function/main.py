@@ -324,7 +324,8 @@ CMD ["python", "entrypoint.py"]
 
         import subprocess
 
-        script = Path(sys.argv[0]).resolve()
+        # CLI sets _source_file to the user's .py path; script mode falls back to argv[0].
+        script = Path(getattr(self, '_source_file', None) or sys.argv[0]).resolve()
         watch_paths = [script] + [Path(p).resolve() for p in self.copy if Path(p).exists()]
 
         print(f"Watching: {[p.name for p in watch_paths]}\n")
@@ -335,7 +336,10 @@ CMD ["python", "entrypoint.py"]
             # Force rebuild only on first run, then use cache for subsequent reloads
             env['_CYCLS_FORCE_REBUILD'] = '1' if (self.force_rebuild and first_run) else '0'
 
-            proc = subprocess.Popen([sys.executable, str(script)], env=env)
+            # Respawn with the exact argv that launched us — works for both
+            # `python super.py` (argv=['super.py']) and
+            # `cycls run super.py` (argv=['/.../cycls', 'run', 'super.py']).
+            proc = subprocess.Popen([sys.executable, *sys.argv], env=env)
             first_run = False
             try:
                 for changes in watchfiles_watch(*watch_paths):
