@@ -1,4 +1,3 @@
-# uv run examples/agent/super.py
 # uv run cycls run examples/agent/super.py
 # cd client && npm run dev
 # uv run pytest tests/agent_test.py -v
@@ -62,6 +61,7 @@ async def super(context):
         yield msg
 
 
+# uv run examples/agent/super.py
 # if __name__ == "__main__":
 #     super.local()
 #     super.deploy()
