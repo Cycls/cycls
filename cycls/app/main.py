@@ -63,9 +63,9 @@ class App(Function):
 
 
 def _make_decorator(cls):
-    def factory(name=None, **kwargs):
+    def factory(name=None, image=None, **kwargs):
         def decorator(func):
-            return cls(func=func, name=name or func.__name__, **kwargs)
+            return cls(func=func, name=name or func.__name__, **{**(image or {}), **kwargs})
         return decorator
     return factory
 

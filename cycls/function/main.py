@@ -488,8 +488,10 @@ CMD ["python", "entrypoint.py"]
         self._cleanup_container()
 
 
-def function(name=None, **kwargs):
-    """Decorator that transforms a Python function into a containerized Function."""
+def function(name=None, image=None, **kwargs):
+    """Decorator that transforms a Python function into a containerized Function.
+    Accepts `image=cycls.Image()...` which spreads into pip/apt/run_commands/copy."""
     def decorator(func):
-        return Function(func, name or func.__name__, **kwargs, base_url=_get_base_url(), api_key=_get_api_key())
+        return Function(func, name or func.__name__, **{**(image or {}), **kwargs},
+                        base_url=_get_base_url(), api_key=_get_api_key())
     return decorator
