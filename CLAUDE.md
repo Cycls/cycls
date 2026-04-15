@@ -2,6 +2,8 @@
 
 Python SDK for building, deploying, and monetizing AI agents. Write a function, deploy it as an API, web interface, or both.
 
+For a comprehensive walk through the primitives, decorators, CLI, and end-to-end patterns, see [docs/tutorial.md](docs/tutorial.md).
+
 ## Tech Stack
 
 - Python >= 3.9 (3.10+ for deployment)
