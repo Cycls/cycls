@@ -189,8 +189,6 @@ def test_config_endpoint():
 
     config = Config(
         public_path=THEME_PATH,
-        header="Test Header",
-        intro="Test Intro",
         title="Test Title",
         plan="free",
         auth=False
@@ -203,8 +201,6 @@ def test_config_endpoint():
     assert response.status_code == 200
 
     data = response.json()
-    assert data["header"] == "Test Header"
-    assert data["intro"] == "Test Intro"
     assert data["title"] == "Test Title"
     assert data["plan"] == "free"
     print("✅ Test passed.")
