@@ -42,14 +42,16 @@ llm = (
 )
 
 
-@cycls.agent(
-    auth=cycls.Clerk(),
-    analytics=True, # web=["Auth", "Analytics"]
-    plan="cycls_pass",
-    copy=[".env"],
-    force_rebuild=False,
-    title="The agent for getting things done"
+web = (
+    cycls.Web()
+    .auth(cycls.Clerk())
+    .analytics(True)
+    .plan("cycls_pass")
+    .title("The agent for getting things done")
 )
+
+
+@cycls.agent(web=web, copy=[".env"], force_rebuild=False)
 async def super(context):
     # yield f"{context.user.plan}\n\n"
     # print(context.messages.raw)
