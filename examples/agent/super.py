@@ -4,6 +4,16 @@
 
 import cycls
 
+image = cycls.Image().copy(".env").rebuild()
+
+web = (
+    cycls.Web()
+    .auth(cycls.Clerk())
+    .analytics(True)
+    .plan("cycls_pass")
+    .title("The agent for getting things done")
+)
+
 SYSTEM = """
 You are Cycls.
 """.strip()
@@ -30,6 +40,7 @@ TOOLS = [
 async def render_image(args):
     return {"type": "text", "text": f"![{args.get('alt', '')}]({args['src']})"}
 
+
 llm = (
     cycls.LLM()
     .model("anthropic/claude-sonnet-4-6")
@@ -42,16 +53,7 @@ llm = (
 )
 
 
-web = (
-    cycls.Web()
-    .auth(cycls.Clerk())
-    .analytics(True)
-    .plan("cycls_pass")
-    .title("The agent for getting things done")
-)
-
-
-@cycls.agent(web=web, copy=[".env"], force_rebuild=False)
+@cycls.agent(image=image, web=web)
 async def super(context):
     # yield f"{context.user.plan}\n\n"
     # print(context.messages.raw)

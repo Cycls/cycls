@@ -1,4 +1,4 @@
-from .function import function, Function
+from .function import function, Function, Image
 from .app import app, App, Clerk, JWT, User, Web
 from .agent import LLM, agent, Agent
 
