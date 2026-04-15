@@ -23,8 +23,7 @@ class Agent(App):
     _base_apt = [*App._base_apt, "fonts-noto-core", "bubblewrap",
                  "poppler-utils", "ripgrep", "jq"]
 
-    def __init__(self, func, name, web=None, pip=None, apt=None,
-                 run_commands=None, copy=None, memory="1Gi", force_rebuild=False):
+    def __init__(self, func, name, web=None, image=None, memory="1Gi"):
         if web is None:
             web = Web()
         self.theme = web._theme
@@ -37,19 +36,24 @@ class Agent(App):
         )
         self.auth = make_validate(self.config)
 
-        files = {str(CYCLS_PATH): "cycls"}
-        files.update({f: f for f in copy or []})
-        files.update({f: f"public/{f}" for f in self.copy_public})
+        # Merge Agent's own copy requirements into the image:
+        # cycls source tree (for themes + internal imports) and Web's
+        # copy_public files routed under public/.
+        image = dict(image or {})
+        user_copy = image.get("copy", {})
+        if isinstance(user_copy, list):
+            user_copy = {f: f for f in user_copy}
+        image["copy"] = {
+            str(CYCLS_PATH): "cycls",
+            **user_copy,
+            **{f: f"public/{f}" for f in self.copy_public},
+        }
 
         super().__init__(
             func=func,
             name=name,
-            pip=pip,
-            apt=apt,
-            run_commands=run_commands,
-            copy=files,
+            image=image,
             memory=memory,
-            force_rebuild=force_rebuild,
         )
 
     def _apply_auth(self, prod):

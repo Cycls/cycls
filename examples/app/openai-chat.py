@@ -22,7 +22,7 @@ def to_responses_format(messages):
             result.append(msg)
     return result
 
-@cycls.agent(pip=["openai"], copy=[".env"])
+@cycls.agent(image=cycls.Image().pip("openai").copy(".env"))
 async def openai_chat(context):
     from openai import AsyncOpenAI
     client = AsyncOpenAI()

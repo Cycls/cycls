@@ -1,6 +1,6 @@
 import cycls
 
-@cycls.function(pip=["numpy"])
+@cycls.function(image=cycls.Image().pip("numpy"))
 def ticker(x):
     import numpy as np
     import time

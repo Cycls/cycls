@@ -30,7 +30,7 @@ def test_app_is_callable():
 
 
 def test_app_pip_merged_with_base():
-    @cycls.app(pip=["httpx"])
+    @cycls.app(image=cycls.Image().pip("httpx"))
     def svc():
         return None
 

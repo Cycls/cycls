@@ -1,6 +1,6 @@
 import cycls
 
-@cycls.function(pip=["fastapi", "uvicorn"])
+@cycls.function(image=cycls.Image().pip("fastapi", "uvicorn"))
 def fast(port):
     from fastapi import FastAPI
     import uvicorn

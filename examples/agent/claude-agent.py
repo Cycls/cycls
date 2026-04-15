@@ -16,7 +16,11 @@ def extract_session_id(messages):
     return None
 
 
-@cycls.agent(pip=["claude-agent-sdk"], auth=True, copy=[".env"], memory="2Gi")
+@cycls.agent(
+    image=cycls.Image().pip("claude-agent-sdk").copy(".env"),
+    web=cycls.Web().auth(cycls.Clerk()),
+    memory="2Gi",
+)
 async def claude_agent(context):
     import os
     from claude_agent_sdk import (
