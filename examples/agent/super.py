@@ -1,10 +1,11 @@
 # uv run examples/agent/super.py
+# uv run cycls run examples/agent/super.py
 # cd client && npm run dev
 # uv run pytest tests/agent_test.py -v
 
 import cycls
 
-image = cycls.Image().copy(".env").rebuild()
+image = cycls.Image().copy(".env")#.rebuild()
 
 web = (
     cycls.Web()
@@ -61,7 +62,7 @@ async def super(context):
         yield msg
 
 
-if __name__ == "__main__":
-    # super.local()
-    # super.deploy()
-    pass
+# if __name__ == "__main__":
+#     super.local()
+#     super.deploy()
+#     pass
