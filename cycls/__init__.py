@@ -1,5 +1,5 @@
 from .function import function, Function
-from .app import app, App
+from .app import app, App, Clerk, JWT, User
 from .agent import LLM, agent, Agent
 
 # Module-level config

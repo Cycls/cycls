@@ -9,6 +9,7 @@ import importlib.resources
 from fastapi import APIRouter
 
 from cycls.app.main import App, _make_decorator
+from cycls.app.auth import make_validate
 from .state import install_routers
 from .web import web, serve as web_serve, Config
 
@@ -36,6 +37,7 @@ class Agent(App):
             name=name, header=header, intro=intro, title=title,
             auth=auth, plan=plan, analytics=analytics,
         )
+        self.auth = make_validate(self.config)
 
         files = {str(CYCLS_PATH): "cycls"}
         files.update({f: f for f in copy or []})
