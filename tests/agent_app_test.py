@@ -26,6 +26,28 @@ def test_app_decorator_returns_app():
     print("✅ Test passed.")
 
 
+def test_agent_server_api_route_records():
+    """Tests that @my_agent.server.api_route records routes on the APIRouter."""
+    print("\n--- Running test: test_agent_server_api_route_records ---")
+
+    @cycls.agent()
+    async def my_agent(context):
+        yield "hi"
+
+    @my_agent.server.api_route("/health", methods=["GET"])
+    def health():
+        return {"ok": True}
+
+    @my_agent.server.api_route("/webhook", methods=["POST"])
+    async def webhook(request):
+        return {"received": True}
+
+    paths = {r.path for r in my_agent.server.routes}
+    assert "/health" in paths
+    assert "/webhook" in paths
+    print("✅ Test passed.")
+
+
 # --- Test Case 2: Custom Name ---
 # Verifies that custom name parameter works
 

@@ -6,6 +6,8 @@ _build_asgi to construct the chat service ASGI app around the user function.
 """
 import importlib.resources
 
+from fastapi import APIRouter
+
 from cycls.app.main import App, _make_decorator
 from ..state import install_routers
 from .main import web, serve as web_serve, Config
@@ -29,6 +31,7 @@ class AgentApp(App):
             raise ValueError(f"Unknown theme: {theme}. Available: {THEMES}")
         self.theme = theme
         self.copy_public = copy_public or []
+        self.server = APIRouter()
         self.config = Config(
             name=name, header=header, intro=intro, title=title,
             auth=auth, plan=plan, analytics=analytics,
@@ -53,17 +56,20 @@ class AgentApp(App):
         self.prod = prod
         self.config.set_prod(prod)
         self.config.public_path = f"cycls/agent/web/themes/{self.theme}"
-        user_func, config, name = self.user_func, self.config, self.name
+        user_func, config, name, server = self.user_func, self.config, self.name, self.server
+        routers = [install_routers, lambda app, auth: app.include_router(server)]
         self.func = lambda port: web_serve(
-            user_func, config, name, port, extra_routers=[install_routers])
+            user_func, config, name, port, extra_routers=routers)
 
     def _local(self, port=8080):
         print(f"Starting local server at localhost:{port}")
         self.prod = False
         self.config.set_prod(False)
         self.config.public_path = str(CYCLS_PATH.joinpath(f"agent/web/themes/{self.theme}"))
+        server = self.server
+        routers = [install_routers, lambda app, auth: app.include_router(server)]
         import uvicorn
-        uvicorn.run(web(self.user_func, self.config, extra_routers=[install_routers]),
+        uvicorn.run(web(self.user_func, self.config, extra_routers=routers),
                     host="0.0.0.0", port=port)
 
 
