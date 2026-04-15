@@ -94,8 +94,6 @@ def test_app_default_config():
     assert default_app.config.auth == False
     assert default_app.config.analytics == False
     assert default_app.config.plan == "free"
-    assert default_app.config.header is None
-    assert default_app.config.intro is None
     assert default_app.config.title is None
     print("✅ Test passed.")
 
@@ -260,8 +258,6 @@ def test_app_all_config_options():
     print("\n--- Running test: test_app_all_config_options ---")
 
     @cycls.agent(
-        header="Welcome",
-        intro="How can I help?",
         title="My App",
         auth=cycls.Clerk(),
         analytics=True,
@@ -269,8 +265,6 @@ def test_app_all_config_options():
     async def full_app(context):
         yield "full"
 
-    assert full_app.config.header == "Welcome"
-    assert full_app.config.intro == "How can I help?"
     assert full_app.config.title == "My App"
     assert full_app.config.auth == True
     assert full_app.config.analytics == True
