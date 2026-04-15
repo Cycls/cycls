@@ -186,16 +186,17 @@ def web(func, config, extra_routers=None):
     # ---- Dynamic OG images ----
 
     from fastapi.responses import Response
-    from .og import generate as og_generate
 
     og_title = config.name.capitalize() if config.name else "Cycls"
 
     @app.get("/og.png")
     async def og_image():
+        from .og import generate as og_generate
         return Response(await og_generate(og_title, config.title or ""), media_type="image/png")
 
     @app.get("/og/{share_id}.png")
     async def og_shared_image(share_id: str):
+        from .og import generate as og_generate
         try:
             pointer = json.loads((Path("/workspace/shared") / f"{share_id}.json").read_text())
             share = json.loads((Path(pointer["path"]) / "share.json").read_text())
