@@ -9,7 +9,7 @@ import importlib.resources
 from fastapi import APIRouter
 
 from cycls.app.main import App, _make_decorator
-from cycls.app.auth import make_validate
+from cycls.app.auth import make_validate, JWT
 from .state import install_routers
 from .web import web, serve as web_serve, Config
 
@@ -25,17 +25,22 @@ class Agent(App):
 
     def __init__(self, func, name, theme="default", pip=None, apt=None,
                  run_commands=None, copy=None, copy_public=None,
-                 auth=False, header=None, intro=None, title=None,
+                 auth=None, header=None, intro=None, title=None,
                  plan="free", analytics=False,
                  memory="1Gi", force_rebuild=False):
         if theme not in THEMES:
             raise ValueError(f"Unknown theme: {theme}. Available: {THEMES}")
+        if auth is not None and not isinstance(auth, JWT):
+            raise TypeError(
+                f"auth must be a cycls.JWT instance (e.g. cycls.Clerk()) or None; got {type(auth).__name__}"
+            )
         self.theme = theme
         self.copy_public = copy_public or []
         self.server = APIRouter()
+        self._auth_provider = auth
         self.config = Config(
             name=name, header=header, intro=intro, title=title,
-            auth=auth, plan=plan, analytics=analytics,
+            auth=auth is not None, plan=plan, analytics=analytics,
         )
         self.auth = make_validate(self.config)
 
@@ -54,9 +59,20 @@ class Agent(App):
             force_rebuild=force_rebuild,
         )
 
+    def _apply_auth(self, prod):
+        """Resolve the auth provider's URLs/keys for this runtime mode into
+        config. Called after set_prod so the right dev/prod values land."""
+        if self._auth_provider is None:
+            return
+        resolved = self._auth_provider.resolve(prod)
+        self.config.jwks = resolved.get("jwks_url")
+        if "pk" in resolved:
+            self.config.pk = resolved["pk"]
+
     def _prepare_func(self, prod):
         self.prod = prod
         self.config.set_prod(prod)
+        self._apply_auth(prod)
         self.config.public_path = f"cycls/agent/web/themes/{self.theme}"
         user_func, config, name, server = self.user_func, self.config, self.name, self.server
         routers = [install_routers, lambda app, auth: app.include_router(server)]
@@ -67,6 +83,7 @@ class Agent(App):
         print(f"Starting local server at localhost:{port}")
         self.prod = False
         self.config.set_prod(False)
+        self._apply_auth(False)
         self.config.public_path = str(CYCLS_PATH.joinpath(f"agent/web/themes/{self.theme}"))
         server = self.server
         routers = [install_routers, lambda app, auth: app.include_router(server)]

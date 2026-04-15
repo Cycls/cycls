@@ -42,21 +42,58 @@ class User(BaseModel):
 # ---- JWT provider primitives ----
 
 class JWT:
-    """Generic JWT provider. Pass to `@cycls.app(auth=...)` or
-    `@cycls.agent(auth=...)`. Subclass for named wrappers (Clerk, Auth0, ...)."""
-    def __init__(self, jwks_url: str, issuer: Optional[str] = None):
+    """Generic JWT provider — supports dual-mode (dev/prod) out of the box.
+
+    Every serious OIDC provider (Auth0, WorkOS, Okta, Supabase, Firebase,
+    Clerk) expects a dev environment and a prod environment with separate
+    JWKS URLs. Cycls picks the right one at serve time based on whether the
+    agent is running via `.local()` (dev) or `.deploy()` (prod).
+
+    Dev is optional — falls back to prod when not specified (single-env setups).
+    """
+
+    def __init__(
+        self,
+        jwks_url: str,
+        dev_jwks_url: Optional[str] = None,
+        issuer: Optional[str] = None,
+        dev_issuer: Optional[str] = None,
+    ):
         self.jwks_url = jwks_url
+        self.dev_jwks_url = dev_jwks_url or jwks_url
         self.issuer = issuer
+        self.dev_issuer = dev_issuer or issuer
+
+    def resolve(self, prod: bool) -> dict:
+        """Return the config dict Cycls wires into Config at serve time."""
+        return {
+            "jwks_url": self.jwks_url if prod else self.dev_jwks_url,
+            "issuer": self.issuer if prod else self.dev_issuer,
+        }
 
 
 class Clerk(JWT):
-    """Clerk JWT provider. Defaults to Cycls's Clerk instance; override
-    `jwks_url` / `issuer` to point at your own Clerk tenant."""
-    def __init__(self, prod: bool = True, jwks_url: Optional[str] = None, issuer: Optional[str] = None):
-        super().__init__(
-            jwks_url=jwks_url or (JWKS_PROD if prod else JWKS_TEST),
-            issuer=issuer,
-        )
+    """Clerk JWT provider — defaults to Cycls's hosted Clerk instances for
+    both dev and prod. Adds publishable keys (pk) on top of the base JWT
+    for the browser SDK."""
+
+    def __init__(
+        self,
+        jwks_url: str = JWKS_PROD,
+        dev_jwks_url: str = JWKS_TEST,
+        pk: str = PK_LIVE,
+        dev_pk: str = PK_TEST,
+        issuer: Optional[str] = None,
+        dev_issuer: Optional[str] = None,
+    ):
+        super().__init__(jwks_url, dev_jwks_url, issuer, dev_issuer)
+        self.pk = pk
+        self.dev_pk = dev_pk
+
+    def resolve(self, prod: bool) -> dict:
+        result = super().resolve(prod)
+        result["pk"] = self.pk if prod else self.dev_pk
+        return result
 
 
 # ---- FastAPI dependency factory ----

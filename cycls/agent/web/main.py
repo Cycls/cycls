@@ -2,7 +2,7 @@ import json, inspect, uuid, os
 from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional, Any
-from cycls.app.auth import PK_LIVE, PK_TEST, JWKS_PROD, JWKS_TEST, User, make_validate
+from cycls.app.auth import User, make_validate
 
 class PassMetadata(BaseModel):
     name: str
@@ -26,8 +26,6 @@ class Config(BaseModel):
 
     def set_prod(self, prod: bool):
         self.prod = prod
-        self.pk = PK_LIVE if prod else PK_TEST
-        self.jwks = JWKS_PROD if prod else JWKS_TEST
 
 async def openai_encoder(stream):
     if inspect.isasyncgen(stream):

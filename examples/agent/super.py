@@ -43,7 +43,7 @@ llm = (
 
 
 @cycls.agent(
-    auth=True,      # web/config
+    auth=cycls.Clerk(),
     analytics=True, # web=["Auth", "Analytics"]
     plan="cycls_pass",
     copy=[".env"],
