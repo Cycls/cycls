@@ -25,6 +25,9 @@ uv run examples/app/app.py
 
 # Run example function
 uv run examples/function/add.py
+
+# Clean up Docker
+docker system prune -af
 ```
 
 ## Project Structure
