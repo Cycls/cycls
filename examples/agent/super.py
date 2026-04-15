@@ -38,7 +38,7 @@ llm = (
     .tools(TOOLS)  # skills+safe_keys
     .on("render_image", render_image)
     .allowed_tools(["Bash", "Editor", "WebSearch"])  # "Canvas"
-    .show_usage(True)
+    # .show_usage(True)
 )
 
 
@@ -57,5 +57,5 @@ async def super(context):
         yield msg
 
 
-super.local()
-# super.deploy()
+# super.local()
+super.deploy()
