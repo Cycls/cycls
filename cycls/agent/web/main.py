@@ -2,7 +2,7 @@ import json, inspect, uuid, os
 from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional, Any
-from .auth import PK_LIVE, PK_TEST, JWKS_PROD, JWKS_TEST
+from cycls.app.auth import PK_LIVE, PK_TEST, JWKS_PROD, JWKS_TEST, User, make_validate
 
 class PassMetadata(BaseModel):
     name: str
@@ -74,19 +74,14 @@ class Messages(list):
         return self._raw
 
 def web(func, config, extra_routers=None):
-    from fastapi import FastAPI, Request, HTTPException, status, Depends
+    from fastapi import FastAPI, Request, HTTPException, Depends
     from fastapi.responses import StreamingResponse
-    from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-    import jwt
-    from jwt import PyJWKClient
     from fastapi.staticfiles import StaticFiles
 
     import httpx
 
     if isinstance(config, dict):
         config = Config(**config)
-
-    jwks = PyJWKClient(config.jwks)
 
     if config.plan == "cycls_pass" and config.name and not config.pass_metadata:
         try:
@@ -108,23 +103,6 @@ def web(func, config, extra_routers=None):
         except Exception:
             pass
 
-    class User(BaseModel):
-        id: str
-        org_id: Optional[str] = None
-        org_slug: Optional[str] = None
-        org_role: Optional[str] = None
-        org_permissions: Optional[list] = None
-        plan: Optional[str] = None
-        features: Optional[list] = None
-
-        @property
-        def workspace(self) -> Path:
-            return Path(f"/workspace/{self.org_id}") if self.org_id else Path(f"/workspace/{self.id}")
-
-        @property
-        def sessions(self) -> Path:
-            return self.workspace / ".sessions" / self.id if self.org_id else self.workspace / ".sessions"
-
     class Context(BaseModel):
         messages: Any
         user: Optional[User] = None
@@ -144,22 +122,7 @@ def web(func, config, extra_routers=None):
 
     app = FastAPI()
 
-    def validate(request: Request, bearer: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))):
-        token = bearer.credentials if bearer else request.query_params.get("token")
-        if not token:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated", headers={"WWW-Authenticate": "Bearer"})
-        try:
-            key = jwks.get_signing_key_from_jwt(token)
-            decoded = jwt.decode(token, key.key, algorithms=["RS256"], leeway=10)
-            org = decoded.get("o") or {}
-            fea = decoded.get("fea")
-            if isinstance(fea, str): fea = [f.strip() for f in fea.split(",") if f.strip()]
-            user = User(id=decoded.get("sub"), org_id=org.get("id"), org_slug=org.get("slg"), org_role=org.get("rol"), org_permissions=org.get("per"),
-                        plan=decoded.get("pla"), features=fea)
-            return user
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e), headers={"WWW-Authenticate": "Bearer"})
-
+    validate = make_validate(config)
     auth = Depends(validate) if config.auth else Depends(lambda: None)
     required_auth = Depends(validate)
 
