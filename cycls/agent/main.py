@@ -24,25 +24,9 @@ class Agent(App):
                  "poppler-utils", "ripgrep", "jq"]
 
     def __init__(self, func, name, web=None, pip=None, apt=None,
-                 run_commands=None, copy=None, memory="1Gi", force_rebuild=False,
-                 # Chat config sugar — equivalent to cycls.Web().<method>(...).
-                 # Mutually exclusive with web=.
-                 auth=None, title=None, theme=None, plan=None,
-                 analytics=None, copy_public=None):
-        if web is not None and any(v is not None for v in (auth, title, theme, plan, analytics, copy_public)):
-            raise TypeError(
-                "Pass chat config via `web=cycls.Web()...` OR individual kwargs "
-                "(auth/title/theme/plan/analytics/copy_public), not both."
-            )
+                 run_commands=None, copy=None, memory="1Gi", force_rebuild=False):
         if web is None:
             web = Web()
-            if auth is not None:      web = web.auth(auth)
-            if title is not None:     web = web.title(title)
-            if theme is not None:     web = web.theme(theme)
-            if plan is not None:      web = web.plan(plan)
-            if analytics is not None: web = web.analytics(analytics)
-            if copy_public is not None: web = web.copy_public(*copy_public)
-
         self.theme = web._theme
         self.copy_public = web._copy_public
         self.server = APIRouter()
@@ -78,13 +62,22 @@ class Agent(App):
         if "pk" in resolved:
             self.config.pk = resolved["pk"]
 
+    def _routers(self):
+        """State routers (sessions, files, share) require auth to be meaningful.
+        Agents without auth skip them entirely — no silent 401s on unused endpoints."""
+        server = self.server
+        routers = [lambda app, auth: app.include_router(server)]
+        if self._auth_provider is not None:
+            routers.insert(0, install_routers)
+        return routers
+
     def _prepare_func(self, prod):
         self.prod = prod
         self.config.set_prod(prod)
         self._apply_auth(prod)
         self.config.public_path = f"cycls/agent/web/themes/{self.theme}"
-        user_func, config, name, server = self.user_func, self.config, self.name, self.server
-        routers = [install_routers, lambda app, auth: app.include_router(server)]
+        user_func, config, name = self.user_func, self.config, self.name
+        routers = self._routers()
         self.func = lambda port: web_serve(
             user_func, config, name, port, extra_routers=routers)
 
@@ -94,10 +87,8 @@ class Agent(App):
         self.config.set_prod(False)
         self._apply_auth(False)
         self.config.public_path = str(CYCLS_PATH.joinpath(f"agent/web/themes/{self.theme}"))
-        server = self.server
-        routers = [install_routers, lambda app, auth: app.include_router(server)]
         import uvicorn
-        uvicorn.run(web(self.user_func, self.config, extra_routers=routers),
+        uvicorn.run(web(self.user_func, self.config, extra_routers=self._routers()),
                     host="0.0.0.0", port=port)
 
 

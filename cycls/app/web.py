@@ -7,7 +7,7 @@ fields can be passed directly on `@cycls.agent` for the simple case —
 """
 from typing import List, Optional
 
-from .auth import JWT, Clerk
+from .auth import JWT
 
 
 THEMES = ["default", "dev"]
@@ -43,14 +43,7 @@ class Web:
         return self._copy(_theme=name)
 
     def plan(self, name: str):
-        """Set the billing plan. `cycls_pass` auto-applies Clerk auth +
-        analytics if they aren't already set explicitly."""
-        updates = {"_plan": name}
-        if name == "cycls_pass":
-            if self._auth is None:
-                updates["_auth"] = Clerk()
-            updates["_analytics"] = True
-        return self._copy(**updates)
+        return self._copy(_plan=name)
 
     def analytics(self, on: bool = True):
         return self._copy(_analytics=on)

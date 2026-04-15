@@ -63,14 +63,15 @@ def test_app_custom_name():
     print("✅ Test passed.")
 
 
-# --- Test Case 3: Plan cycls_pass Sets Auth and Analytics ---
-# Verifies that plan="cycls_pass" enables auth and analytics
+# --- Test Case 3: Web builder propagates into Config ---
 
-def test_plan_cycls_pass_enables_auth_analytics():
-    """Tests that plan='cycls_pass' sets auth=True and analytics=True."""
-    print("\n--- Running test: test_plan_cycls_pass_enables_auth_analytics ---")
+def test_web_builder_propagates_into_config():
+    """Tests that cycls.Web().auth().analytics().plan() fields land on Config."""
+    print("\n--- Running test: test_web_builder_propagates_into_config ---")
 
-    @cycls.agent(plan="cycls_pass")
+    web = cycls.Web().auth(cycls.Clerk()).analytics(True).plan("cycls_pass")
+
+    @cycls.agent(web=web)
     async def premium_app(context):
         yield "premium"
 
@@ -192,10 +193,10 @@ def test_app_sync_function():
 # Verifies that theme parameter works
 
 def test_app_theme_resolution():
-    """Tests that theme parameter is stored correctly."""
+    """Tests that Web().theme() is stored correctly on the agent."""
     print("\n--- Running test: test_app_theme_resolution ---")
 
-    @cycls.agent(theme="dev")
+    @cycls.agent(web=cycls.Web().theme("dev"))
     async def dev_app(context):
         yield "dev"
 
@@ -211,9 +212,7 @@ def test_app_invalid_theme_raises():
     print("\n--- Running test: test_app_invalid_theme_raises ---")
 
     with pytest.raises(ValueError, match="Unknown theme"):
-        @cycls.agent(theme="nonexistent")
-        async def bad_app(context):
-            yield "bad"
+        cycls.Web().theme("nonexistent")
 
     print("✅ Test passed.")
 
@@ -238,10 +237,10 @@ def test_app_pip():
 # Verifies that copy parameters are stored
 
 def test_app_copy_params():
-    """Tests that copy and copy_public are stored correctly."""
+    """Tests that copy (Function) and Web().copy_public() are stored."""
     print("\n--- Running test: test_app_copy_params ---")
 
-    @cycls.agent(copy=["utils.py"], copy_public=["logo.png"])
+    @cycls.agent(web=cycls.Web().copy_public("logo.png"), copy=["utils.py"])
     async def file_app(context):
         yield "files"
 
@@ -251,17 +250,15 @@ def test_app_copy_params():
 
 
 # --- Test Case 14: All Config Options ---
-# Verifies that all config options are passed through
+# Verifies that all Web builder fields flow into Config
 
 def test_app_all_config_options():
-    """Tests that all config options are passed through correctly."""
+    """Tests that Web().title().auth().analytics() flow into Config."""
     print("\n--- Running test: test_app_all_config_options ---")
 
-    @cycls.agent(
-        title="My App",
-        auth=cycls.Clerk(),
-        analytics=True,
-    )
+    web = cycls.Web().title("My App").auth(cycls.Clerk()).analytics(True)
+
+    @cycls.agent(web=web)
     async def full_app(context):
         yield "full"
 
