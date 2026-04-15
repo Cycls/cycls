@@ -1,2 +1,2 @@
 from .harness import LLM
-from .web.app import Agent, agent
+from .main import Agent, agent

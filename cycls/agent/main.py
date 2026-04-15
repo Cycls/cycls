@@ -9,8 +9,8 @@ import importlib.resources
 from fastapi import APIRouter
 
 from cycls.app.main import App, _make_decorator
-from ..state import install_routers
-from .main import web, serve as web_serve, Config
+from .state import install_routers
+from .web import web, serve as web_serve, Config
 
 CYCLS_PATH = importlib.resources.files('cycls')
 THEMES = ["default", "dev"]
