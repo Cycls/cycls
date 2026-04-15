@@ -1,6 +1,6 @@
 import pytest
 import cycls
-from cycls.agent import AgentApp
+from cycls.agent import Agent
 import asyncio
 import subprocess
 import tempfile
@@ -21,7 +21,7 @@ def test_app_decorator_returns_app():
     async def my_app(context):
         yield "hello"
 
-    assert isinstance(my_app, AgentApp)
+    assert isinstance(my_app, Agent)
     assert my_app.name == "my-app"  # underscores converted to dashes
     print("✅ Test passed.")
 
