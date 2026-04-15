@@ -33,31 +33,29 @@ docker system prune -af
 ## Project Structure
 
 ```
-cycls/                  # Main package
-├── function.py         # Base Function class - Docker containerization
-├── agent.py            # Agent class
-├── app/                # Web application layer
-│   ├── main.py         # App class - Web UI wrapper
-│   ├── web.py          # FastAPI server, streaming, auth
-│   ├── state.py        # Sessions + files API router
-│   ├── auth.py         # Clerk JWT constants
-│   └── themes/         # UI themes (default, dev)
-examples/               # Working code samples
-├── app/                # @cycls.app examples
-└── function/           # @cycls.function examples
-tests/                  # pytest tests
-docs/                   # Documentation
+cycls/
+├── cli.py                  # CLI: run, deploy, ls, rm, logs, init, version
+├── function/
+│   ├── main.py             # Function class + @cycls.function decorator
+│   └── image.py            # cycls.Image fluent builder
+├── app/
+│   ├── main.py             # App class + @cycls.app + _make_decorator
+│   ├── auth.py             # cycls.Clerk, cycls.JWT, User, make_validate
+│   └── web.py              # cycls.Web fluent builder
+└── agent/
+    ├── main.py             # Agent class + @cycls.agent decorator
+    ├── harness/            # LLM runtime (loop, tools, providers, compaction, prompts, pdf)
+    │   └── llm.py          # cycls.LLM fluent builder
+    ├── state/              # history I/O + sessions/files/share routers
+    └── web/                # FastAPI chat server, OG images, themes
 ```
 
 ## Core Architecture
 
 ```
-App extends Function
-├── Function (cycls/function.py) - Docker containerization, image building
-└── App (cycls/app/main.py) - Web UI, local/deploy methods
-    ├── web.py - FastAPI server, streaming, encoders
-    ├── state.py - Sessions + files REST endpoints
-    └── auth.py - Clerk JWT keys
+Agent extends App (chat product + managed LLM loop)
+  └── App extends Function (blocking ASGI service)
+      └── Function (Docker containerization)
 ```
 
 ## Key Patterns
@@ -71,9 +69,9 @@ async def my_app(context):
     yield "Hello!"  # Streams to client
 ```
 
-**Declarative infrastructure** - Dependencies declared in decorator:
+**Declarative infrastructure** - Build config via the `cycls.Image` primitive:
 ```python
-@cycls.function(pip=["numpy"], apt=["curl"], copy=["data/"])
+@cycls.function(image=cycls.Image().pip("numpy").apt("curl").copy("data/"))
 def my_func(x):
     ...
 ```
