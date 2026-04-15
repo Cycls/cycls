@@ -1,4 +1,4 @@
-"""AgentApp — App flavor that serves the Cycls chat product.
+"""Agent — App flavor that serves the Cycls chat product.
 
 Wraps a streaming chat handler in a full FastAPI service: themes, Clerk JWT auth,
 sessions, share links, OG images, transcription. Subclasses App by overriding
@@ -16,7 +16,7 @@ CYCLS_PATH = importlib.resources.files('cycls')
 THEMES = ["default", "dev"]
 
 
-class AgentApp(App):
+class Agent(App):
     _base_pip = [*App._base_pip, "fastapi[standard]", "pyjwt", "cryptography",
                  "python-dotenv", "resvg-py", "anthropic", "openai"]
     _base_apt = [*App._base_apt, "fonts-noto-core", "bubblewrap",
@@ -73,4 +73,4 @@ class AgentApp(App):
                     host="0.0.0.0", port=port)
 
 
-agent = _make_decorator(AgentApp)
+agent = _make_decorator(Agent)
