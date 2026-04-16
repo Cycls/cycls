@@ -3,7 +3,11 @@
 # cd client && npm run dev
 # uv run pytest tests/agent_test.py -v
 
+from datetime import datetime, timezone
+
 import cycls
+
+FREE_MONTHLY_LIMIT = 10
 
 image = cycls.Image().copy(".env")#.rebuild()
 
@@ -56,8 +60,30 @@ llm = (
 
 @cycls.agent(image=image, web=web)
 async def super(context):
-    # yield f"{context.user.plan}\n\n"
-    # print(context.messages.raw)
+    user = context.user
+
+    # b2b: free orgs blocked (no compute, no tracking)
+    if user.plan == "o:free_org":
+        yield {"type": "callout",
+               "callout": "This workspace needs a paid plan.",
+               "style": "error"}
+        return
+
+    # Track monthly usage; gate free users at FREE_MONTHLY_LIMIT.
+    with context.workspace():
+        usage = cycls.Dict("usage")
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+        entry = usage.get(month, {"count": 0})
+
+        if user.plan == "u:free_user" and entry["count"] >= FREE_MONTHLY_LIMIT:
+            yield {"type": "callout",
+                   "callout": f"Free tier limit reached ({FREE_MONTHLY_LIMIT}/mo). Upgrade for unlimited.",
+                   "style": "warning"}
+            return
+
+        entry["count"] += 1
+        usage[month] = entry
+
     async for msg in llm.run(context=context):
         yield msg
 

@@ -120,7 +120,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     if client is None:
         client = _make_client(model, base_url=base_url, api_key=api_key)
     model = model.split("/", 1)[1]
-    ws = context.workspace
+    ws = context.workspace().root
     ensure_workspace(ws)
     hp = history_path(context.user, context.session_id) if context.session_id and context.user else None
     messages = load_history(hp) if hp else []
