@@ -1,346 +1,338 @@
-# RFC 002: Data Primitives
+# RFC 002: cycls.Dict — The Memory Primitive
 
-**Status**: Draft — depends on RFC 001 landing
-**Target**: After `cycls 1.0`
-**Scope**: `cycls.Volume` as a first-class named primitive, backed by gfuse-mounted cloud buckets
+**Status**: Draft
+**Depends on**: RFC 001 (shipped)
+**First fold**: `cycls.Dict` (~50 lines, file-backed) — everything else falls out of it
 
 ---
 
 ## Summary
 
-Introduce `cycls.Volume("name")` as a fourth primitive sibling to `Image`/`Web`/`LLM`. Volumes are named, lifecycle-independent cloud buckets that multiple apps can mount. Modal-style ergonomics, gfuse under the hood. `Dict`, `Queue`, and `Secret` follow as higher-level primitives built on the same foundation — deferred to a later RFC.
+`cycls.Dict` is a named key-value store with queries. It's the fourth primitive alongside `Image` (container), `Web` (interface), and `LLM` (intelligence). Dict is memory — what the data remembers.
 
-## Decisions locked
+Internally, Cycls uses Dict to replace every filesystem-as-database hack in `state/main.py`: session index, share index, usage counters. Externally, developers use the same primitive for their own structured data — user preferences, agent memory, cached results, feature flags.
 
-- `cycls.Volume("name")` is a named resource, independent of any app's lifecycle
-- Volumes mount into apps via `@cycls.agent(..., volumes={"/path": vol, ...})`
-- Multiple apps can mount the same volume
-- Volumes persist across deployments; created on first use (`create_if_missing=True` by default)
-- Backed by gfuse-mounted cloud buckets (GCS)
-- CLI: `cycls volume create / ls / rm / info`
-- `Image.volume("/path")` shortcut (from RFC 001) stays for the anonymous single-volume case
-
-## Decisions deferred
-
-- `cycls.Dict`, `cycls.Queue`, `cycls.Secret` — later RFCs, each with its own GCP substrate (see *Future primitives roadmap* below)
-- Volume versioning / snapshots — TBD, GCS object versioning is the likely substrate
-- Multi-writer coordination primitives (locks, leases) — TBD when needed
+v1 is file-backed (`_index.json` on gcsfuse). When filesystem limits are hit, the backend migrates to Firestore. Same API surface, different substrate. The developer never changes their code.
 
 ---
 
 ## Why
 
-Today's state (post-RFC-001):
+`state/main.py` today has **15+ filesystem-as-database callsites** that all share the same anti-pattern: `json.loads(path.read_text())` for reads, `path.write_text(json.dumps(data))` for writes, `iterdir()` for listing. Each is a GCS API call via gcsfuse.
 
-- Each `@agent` can create one cloud bucket via `Image.volume("/workspace")`
-- The bucket is implicitly named after the app and tied to its lifecycle
-- No way to share state between apps
-- No way to reference a volume from outside the app that created it
-- No CLI to inspect, back up, or migrate volume state
+### The wrinkles Dict eliminates
 
-Modal's Volume solves all of this by making the volume a **named, first-class resource**:
-
-- Create once, reference by name, outlives the apps that use it
-- Multiple functions/apps can mount the same volume
-- Can be listed, inspected, deleted via CLI
-- Lifecycle is independent — delete an app, volume survives
-
-This unlocks genuinely useful patterns:
-
-- **Cross-app shared state**: one app writes, another reads
-- **Long-lived persistence**: a volume stores your agent's accumulated memory / knowledge base / user data across deployments
-- **Data migration**: back up a volume, restore to a new region
-- **Team-shared data**: multiple agents in an org mount the same knowledge base
+| Wrinkle | Current code | After Dict |
+|---|---|---|
+| **Two files per session** | `{id}.history.jsonl` + `{id}.json` | Single `{id}.jsonl`, metadata lives in Dict |
+| **N+1 session listing** | `iterdir()` + read each `.json` (50 sessions = 50 GCS reads) | `dict.list("sessions")` — one read |
+| **FE sends full history** | Server loads from disk anyway, ignores FE's array except last message | Server owns state, FE sends `?chat=id` + new message only |
+| **FE PUTs metadata** | `PUT /sessions/{id}` with title/updatedAt from the FE | Server derives title, writes Dict on each turn |
+| **Share pointer files** | Global `/workspace/shared/{id}.json` → user's `public/{id}/share.json` (two reads) | `dict.set("shares", id, snapshot)` — self-contained |
+| **Share N+1 listing** | `iterdir()` on public dir + read each `share.json` | `dict.list("shares")` — one read |
+| **Share attachment duplication** | `shutil.copy2(src, share_dir)` — every share copies attachments | Reference by URL, no copy (separate fix) |
+| **Session ID in JS state** | Lost on refresh | `?chat=` in URL, server generates ID |
+| **Session deletion race** | Delete `.json` + delete `.history.jsonl` separately | Delete from Dict + delete single `.jsonl` |
+| **No usage counters** | Nothing — can't enforce billing limits | `dict.increment("usage.2026-04.tokens", n)` |
+| **No pagination** | All list endpoints return everything | `dict.list(limit=20, offset=cursor)` |
+| **Clerk-coupled User** | `org_id`, `org_slug`, `org_role` as fields on User class | `User(id, claims)` — generic |
+| **Hardcoded `/workspace`** | `Path(f"/workspace/{self.org_id}")` in five places | Volume resolver, configurable |
+| **`/workspace/local` fallback** | No-auth agents share one flat dir, zero isolation | Default resolver: `/workspace/{user.id}` or `/workspace/local` — explicit |
+| **`/workspace/shared` hardcoded globally** | Three separate references to `Path("/workspace/shared")` | Dict-backed global share index |
 
 ---
 
-## Design
-
-### The primitive
+## The Primitive
 
 ```python
-# Create (or reference) a named volume
-notes = cycls.Volume("user-notes")
-shared = cycls.Volume("team-knowledge-base")
+db = cycls.Dict("sessions")
 
-# Mount in an agent — multiple volumes at different paths
-@cycls.agent(
-    image=image, web=web, llm=llm,
-    volumes={
-        "/workspace": notes,
-        "/shared":    shared,
-    },
-)
-async def super(context):
-    async for call in context:
-        ...
+await db.set(session_id, {"title": "Budget planning", "updatedAt": "..."})
+await db.get(session_id)
+await db.delete(session_id)
+await db.list(sort_by="updatedAt", limit=20)
+await db.increment(session_id, "messageCount", 1)
 ```
 
-### Naming semantics
+Named, lifecycle-independent, create-on-first-use. Same pattern as Image/Web/LLM — declare once, use anywhere.
 
-- `cycls.Volume("name")` → looks up the volume by name in the current Cycls account
-- If it doesn't exist, it's created on first deployment (`create_if_missing=True` is the default)
-- Names are account-scoped and unique
-- Names are slug-like: `[a-z0-9-]+`
+### Four consumers, one implementation
 
-### Mounting
+```
+cycls.Dict("name")
+    ├── sessions    → Cycls internal: session metadata index
+    ├── shares      → Cycls internal: share snapshot index
+    ├── usage       → Cycls internal: per-user billing counters
+    └── developer   → User-facing: whatever structured data they need
+```
 
-- Volumes are attached to apps via the `volumes={}` kwarg on `@function`, `@app`, and `@agent`
-- Key is the mount path inside the container, value is a `cycls.Volume` reference
-- Multiple volumes per app, mounted at different paths
-- The same volume can be mounted by multiple apps
+Cycls eats its own cooking. The same Dict developers use for their data is the same Dict that backs the session list, the share index, and the usage counters. One primitive, two audiences.
 
-### Under the hood
+---
 
-- **One project-wide GCS bucket** per environment (e.g. `cycls-volumes-prod`). All accounts share it.
-- **Each volume is a prefix** within that bucket: `gs://cycls-volumes-prod/<account_id>/<volume_name>/`.
-- **Isolation** is enforced via SDK path scoping (layer 1) and IAM conditions on the bucket that restrict read/write by prefix (layer 2). See *Credentials & trust model* below.
-- **Mounting**: at deploy time, Cycls configures the container to `gcsfuse --only-dir=<account_id>/<volume_name> cycls-volumes-prod <mount_path>`.
-- **Volume metadata** (creation time, size, last access, mounting apps) lives in Cycls's control plane, not in GCS.
+## Server-Owned Sessions
 
-### Shortcut: the `Image.volume()` method from RFC 001
+### Current flow (FE-driven)
 
-Stays as a convenience for single-volume apps that don't need naming. It's sugar for an anonymous volume — Cycls creates a volume with a system-generated name (e.g. `<app_id>__anon`), tied to the app's lifecycle, deleted when the app is deleted.
+```
+FE sends POST /chat:
+  body: { messages: [full history...], session_id: "abc" | null }
+                     ↑ wasteful                   ↑ JS state, lost on refresh
+
+Server loads history from disk anyway (ignores FE messages except last one)
+FE calls PUT /sessions/{id} to save metadata (title, updatedAt)
+```
+
+### Proposed flow (server-driven, URL-based)
+
+```
+URL: https://my-agent.cycls.ai/?chat=abc123
+
+FE sends POST /chat:
+  body: { session_id: "abc123", content: "user's new message" }
+                                         ↑ only the new input
+
+Server:
+  - if no session_id: generate UUID, create session in Dict
+  - load history from {session_id}.jsonl
+  - append user message, run loop, append response
+  - update Dict: title (from first message), updatedAt, messageCount
+  - first SSE event: { type: "session_id", session_id: "abc123" }
+
+FE:
+  - pushState(?chat=abc123) into URL bar
+  - refresh → reads ?chat= → fetches session → conversation restored
+  - "New Chat" → navigates to / (no ?chat)
+```
+
+What the FE stops doing: sending full history, tracking session ID in JS, PUTting metadata.
+
+What the server starts doing: generating IDs, owning all state, deriving titles, maintaining Dict.
+
+---
+
+## Single Session File
+
+### Current (two files)
+
+```
+.sessions/
+├── abc.history.jsonl     ← messages
+├── abc.json              ← metadata (written by FE)
+```
+
+### Proposed (one file, Claude Code-style)
+
+```
+sessions/
+├── abc.jsonl
+```
+
+Optional `_meta` header line:
+
+```jsonl
+{"_meta": true, "title": "Budget planning", "createdAt": "...", "updatedAt": "..."}
+{"role": "user", "content": "Help me plan my budget"}
+{"role": "assistant", "content": [{"type": "text", "text": "..."}]}
+```
+
+- **List sessions**: reads Dict (not the file)
+- **Open session**: reads the `.jsonl`, skips `_meta` lines
+- **Title**: server-derived from first user message, stored in Dict and `_meta` header
+
+The `_meta` line is a backup for index rebuilds. Dict is the authoritative index.
+
+---
+
+## Share Simplification
+
+### Current (two-level indirection + attachment duplication)
+
+```
+/workspace/shared/{share_id}.json         ← global pointer
+/workspace/{user}/.sessions/public/{id}/
+    ├── share.json                        ← full snapshot
+    └── attachment.png                    ← COPIED from workspace
+```
+
+### Proposed (self-contained + global Dict index)
+
+```
+/workspace/{user}/shared/{share_id}.json  ← self-contained snapshot
+
+Global: Dict("shares").set(share_id, {user, title, sharedAt})
+```
+
+- Resolve a share: Dict lookup → get user + share_id → read one file
+- List shares: `Dict("shares").list()`
+- Attachments: URL reference to workspace file, no copy (file deletion = broken link, acceptable trade — or snapshot-on-share for critical files)
+
+---
+
+## Usage Tracking
+
+Usage counters live in Dict, not in a separate system. Billing LOGIC (plan limits, tier enforcement, overage, Stripe) is a separate `cycls.billing` module that reads/writes Dict.
 
 ```python
-image = cycls.Image().pip("anthropic").volume("/workspace")
+usage = cycls.Dict("usage")
 
-@cycls.agent(image=image, web=web, llm=llm)
-async def my_agent(context):
+# After each agent loop turn:
+month = datetime.utcnow().strftime("%Y-%m")
+await usage.increment(f"{user.id}.{month}", "input_tokens", response.usage.input_tokens)
+await usage.increment(f"{user.id}.{month}", "output_tokens", response.usage.output_tokens)
+await usage.increment(f"{user.id}.{month}", "api_calls", 1)
+
+# Billing check before each call:
+counters = await usage.get(f"{user.id}.{month}")
+if counters and counters.get("input_tokens", 0) > plan_limit:
+    yield {"type": "callout", "callout": "Usage limit reached", "style": "error"}
+    return
+```
+
+Dict gives billing a place to store counters. Billing gives Dict a reason to exist beyond sessions. They compose without coupling.
+
+---
+
+## Workspace Decoupling
+
+### Generic User
+
+```python
+class User(BaseModel):
+    id: str              # from JWT "sub" — universal
+    claims: dict = {}    # raw JWT payload — provider-specific
+```
+
+Clerk-specific fields (`org_id`, `org_slug`, `org_role`, `org_permissions`, `plan`, `features`) move into `claims`. Developers read `user.claims["o"]["id"]` (Clerk) or `user.claims["org_id"]` (Auth0).
+
+### Configurable workspace resolver
+
+```python
+volume = cycls.Volume("workspace")
+# Default: /workspace/{user.id}
+
+volume = cycls.Volume("workspace",
+    resolve=lambda user: Path(f"/workspace/{user.claims['o']['id']}"))
+# Clerk org isolation
+```
+
+Five hardcoded `/workspace` references in state/web/auth replaced by one configurable resolver.
+
+---
+
+## Directory Layout
+
+```
+/workspace/{user_identity}/
+├── sessions/
+│   ├── {session_id}.jsonl        ← single file: _meta header + messages
+│   └── ...
+├── shared/
+│   └── {share_id}.json           ← self-contained share snapshot
+└── files/
+    └── (agent workspace: bash output, uploads, artifacts)
+```
+
+Dict-backed indexes (not on disk as files):
+- `Dict("sessions")` — per-user session metadata
+- `Dict("shares")` — global share index
+- `Dict("usage")` — per-user/per-month billing counters
+
+Flat session layout. Month partitioning deferred until someone hits 2000+ sessions per folder.
+
+---
+
+## Substrate
+
+### v1: file-backed (`_index.json`)
+
+```python
+class Dict:
+    def __init__(self, name):
+        self._path = workspace / f"_{name}.json"
+        self._data = json.loads(self._path.read_text()) if self._path.exists() else {}
+
+    async def get(self, key): ...
+    async def set(self, key, value): ...
+    async def delete(self, key): ...
+    async def list(self, sort_by=None, limit=None): ...
+    async def increment(self, key, field, n): ...
+```
+
+~50 lines. File-backed. Reads/writes the whole file (fine for <10K entries). Dev mode: regular local file. Prod mode: same file on gcsfuse.
+
+### v2: Firestore
+
+When file-backed Dict hits limits (cross-user queries for billing, atomic increments under concurrency, >1MB index files):
+
+```python
+class Dict:
+    def __init__(self, name):
+        self._collection = firestore.collection(f"{account_id}/{name}")
+
+    async def get(self, key):
+        return (await self._collection.document(key).get()).to_dict()
     ...
 ```
 
-Use the named primitive (`cycls.Volume("name")`) when you want persistence or sharing beyond a single app.
-
-### `Volume` API
-
-```python
-vol = cycls.Volume("my-notes")
-
-# Properties
-vol.name          # "my-notes"
-vol.created_at    # datetime
-vol.size_bytes    # int
-
-# Modifiers (return a new reference, don't mutate)
-vol.read_only()   # mounts as read-only; attempts to write raise
-```
-
-In-app reads/writes go through the mounted filesystem — users never call methods on the `Volume` object for data access. The object is a **reference**; actual I/O happens against the mount point. Control-plane operations (create, delete, copy, inspect) live on the CLI, not the Python object.
-
-**When is the volume created?** On first `cycls deploy` that references it. The Python call `cycls.Volume("name")` is just a reference — it does not make control-plane calls. Deploying an app that mounts an unknown volume triggers creation with `create_if_missing=True`.
+Same API. Different substrate. Developer code unchanged. The migration is a backend swap inside the Dict class, gated by a feature flag or config.
 
 ---
 
-## CLI
+## Shipping order (origami folds)
 
-```bash
-cycls volume create <name>        # create a named volume
-cycls volume ls                    # list all volumes in the account
-cycls volume info <name>           # size, created_at, mounted by which apps
-cycls volume rm <name>             # delete (with confirmation)
-cycls volume cp <src> <dest>       # copy files between local and volume paths
-```
+Each fold stands alone. Each makes the next one cheaper.
 
-**`cp` path convention**: local paths are plain (`./docs/`, `/tmp/foo.txt`), volume paths use `<volume_name>:<path>` (`team-kb:/`, `team-kb:/articles/x.md`). The colon separates the volume name from the path within it. Direction is inferred from which side has the colon.
+**Fold 1: `cycls.Dict` class** (~50 lines)
+- File-backed, async get/set/delete/list/increment
+- Importable as `cycls.Dict`
+- Works locally and on gcsfuse
 
-Examples:
+**Fold 2: Session index on Dict**
+- `list_sessions` reads Dict instead of `iterdir()` + N reads
+- `put_session` / `delete_session` update Dict
+- N+1 dies. One import, few lines changed in state.py.
 
-```bash
-# Create a knowledge base volume
-cycls volume create team-kb
+**Fold 3: Single session file + server-owned sessions**
+- Kill separate `.json` metadata files
+- Server generates session_id, derives title, owns all state
+- FE sends `?chat=id` + new message only (FE change)
 
-# Populate it
-cycls volume cp ./docs/ team-kb:/
+**Fold 4: Share index on Dict**
+- Kill pointer files, self-contained share snapshots
+- Global `Dict("shares")` for cross-user share lookup
 
-# Check what's using it
-cycls volume info team-kb
-# → Used by: agent-research, agent-support
+**Fold 5: Usage counters on Dict**
+- `dict.increment()` after each loop turn
+- Billing limit checks before each API call
+- Revenue-gating enabled
 
-# Delete (refuses if in use)
-cycls volume rm team-kb
-```
+**Fold 6: Workspace decoupling**
+- Generic `User(id, claims)`
+- Configurable Volume resolver
+- Strip Clerk fields
 
----
-
-## Full example
-
-```python
-# examples/agent/research.py
-import cycls
-
-image = cycls.Image().pip("anthropic", "httpx")
-web = cycls.Web().auth(True).title("Research Agent")
-llm = cycls.LLM().model("claude-sonnet-4-6").system("You are a research assistant.")
-
-# Named volumes
-kb = cycls.Volume("team-knowledge-base")       # shared across agents
-sessions = cycls.Volume("research-sessions")   # per-app history
-
-@cycls.agent(
-    image=image, web=web, llm=llm,
-    volumes={
-        "/kb":         kb,
-        "/workspace":  sessions,
-    },
-)
-async def research(context):
-    async for call in context:
-        if call.name == "save_to_kb":
-            path = f"/kb/{call.input['topic']}.md"
-            with open(path, "w") as f:
-                f.write(call.input["content"])
-            call.result = f"Saved to {path}"
-```
-
-Another agent can mount the same `kb` and read what `research` wrote:
-
-```python
-# examples/agent/support.py
-import cycls
-
-kb = cycls.Volume("team-knowledge-base")  # same volume
-
-@cycls.agent(
-    image=image, web=web, llm=llm,
-    volumes={"/kb": kb},
-)
-async def support(context):
-    async for call in context:
-        if call.name == "lookup":
-            # Read from the shared KB
-            ...
-```
-
-Two apps, same persistent shared state. No coordination code, just mount the same named volume.
-
-**Note on sync I/O in async bodies**: gfuse-mounted paths are regular filesystem paths — sync `open()`, `read_text()`, `write_text()` work and are usually fast enough. Use `aiofiles` if you need explicit async (long writes, many concurrent handlers). Don't block the event loop on huge files.
+**Fold 7 (future): Firestore backend**
+- When file-backed Dict hits scale limits
+- Same API, swap substrate
+- `cycls.Dict` becomes `cycls.Volume`'s sibling in the data primitive family
 
 ---
 
-## gfuse: what it can and can't do
+## What this does NOT solve
 
-Honest assessment of the backing substrate. gfuse-mounted GCS is great for most things and problematic for a few specific patterns.
+Two wrinkles that need separate treatment:
 
-### ✅ Works well
+1. **Share attachment duplication** — currently `shutil.copy2` copies files into the share directory. Dict doesn't change this. Fix: reference attachments by URL instead of copying. Separate decision, orthogonal to Dict.
 
-- **Single-writer**: one app at a time writes to a path, others read. This is ~80% of agent use cases.
-- **Append-only / new-file-per-write**: writing a new file per operation. Safe, scales, no conflicts.
-- **Large files**: gfuse is good at whole-file reads and writes.
-- **Read-heavy**: mounting a shared knowledge base read-only across many agents — fast, cheap, correct.
-- **Persistence**: GCS is durable, replicated, multi-region if configured.
-- **Workspace state**: the current Cycls workspace pattern (agent writes files, user browses them later) works perfectly.
-
-### ⚠️ Works with caveats
-
-- **Multi-writer**: concurrent writes to the same file are not safely ordered. Last-writer-wins with no conflict detection. Solve at the app level (use different file names, or use a real KV store).
-- **Small files with high frequency**: every file write is a GCS PUT (~50-100ms latency). Writing 10,000 tiny files in a loop is slow. Batch into larger files.
-- **File renames**: gcsfuse emulates renames with copy+delete. Not atomic, slower than native filesystems.
-- **Directory listings on huge directories**: listing a folder with 100K files is slow. Partition your data.
-
-### ❌ Doesn't work
-
-- **True locking**: fcntl-style file locks don't work across gfuse mounts. Need application-level coordination.
-- **Named pipes / sockets / special files**: no.
-- **Strict POSIX semantics**: partial writes, atomic renames, exclusive create — not reliable.
-
----
-
-## Migration from RFC 001's `Image.volume()`
-
-`Image.volume("/workspace")` (RFC 001) and `cycls.Volume("name")` (RFC 002) coexist. They're different features for different needs:
-
-| | `Image.volume(path)` | `cycls.Volume("name")` |
-|---|---|---|
-| Named | No (anonymous) | Yes |
-| Shared across apps | No | Yes |
-| Lifecycle | Tied to the app | Independent |
-| Referenced from CLI | No | Yes (`cycls volume ls`) |
-| Use case | Single-app workspace | Shared / long-lived state |
-
-`Image.volume("/workspace")` is the simple case and stays as-is. The named form adds an upgrade path when you need sharing or persistence beyond a single app. The internal implementation is identical — an anonymous volume is a named volume with a system-generated name.
-
----
-
-## Credentials & trust model
-
-**Devs never see GCP credentials.** Same pattern as today's gfuse-mounted workspaces: Cycls runtime has the creds, user containers inherit them via the metadata server, the Python primitives use default credentials automatically. No env vars, no JSON key files, no `GOOGLE_APPLICATION_CREDENTIALS`, no GCP account required on the user side.
-
-**Multi-tenancy via two layers of defense**:
-
-- **Layer 1 — SDK path scoping**. Every primitive is resolved under the current account's namespace. A `cycls.Volume("prefs")` call from account A resolves to `gs://cycls-volumes-prod/<A>/prefs/`; from account B, `gs://cycls-volumes-prod/<B>/prefs/`. User code has no way to address another account's resources.
-- **Layer 2 — GCS IAM conditions**. The service account can only read/write under the current account's prefix. Even if the SDK is bypassed, GCS refuses cross-account access.
-
-Same defense-in-depth pattern that already works for gfuse Volumes today.
-
-### Local development
-
-`cycls run my_agent.py` needs to reach the backing service without creating real GCP resources. For Volume: mount a local directory (`~/.cycls/local/volumes/<name>/`) in place of the gfuse mount. Zero setup. State survives between runs and can be wiped with `cycls clean`.
-
-When Dict/Queue/Secret arrive, they use the same pattern with emulators:
-
-| Primitive | Local backend |
-|---|---|
-| `Volume` | Local directory in place of gfuse mount |
-| `Dict` (future) | Firestore emulator (`gcloud emulators firestore start`) |
-| `Queue` (future) | Pub/Sub emulator (`gcloud emulators pubsub start`) |
-| `Secret` (future) | Values from a local `.env` file |
-
-The Cycls CLI spawns the relevant emulator(s) transparently on `cycls run` and sets the standard env vars (`FIRESTORE_EMULATOR_HOST`, `PUBSUB_EMULATOR_HOST`). The google-cloud-* client libraries automatically use them.
+2. **File browser on large workspaces** — `os.scandir` on gcsfuse for the `/files` endpoint is slow for big directories. Not a Dict concern — the filesystem IS the right abstraction for files. Fix: pagination + caching on the `/files` endpoint. Separate work.
 
 ---
 
 ## Open questions
 
-1. **Volume quota** — default size/count limits per account? Probably yes, with overage billing.
-2. **Volume versioning** — expose GCS object versioning as `cycls volume snapshot` / `restore`? Nice-to-have, not v1.
-3. **Multi-region volumes** — GCS dual-region and multi-region support. Expose as `cycls.Volume("name", region="us")`? Deferred.
-4. **Access control between apps in the same account** — v1 is account-wide (any app in the account can mount any volume). Per-volume ACLs deferred.
-
----
-
-## Rejected alternatives
-
-**Bake Volume into Image (RFC 001's method-only approach)** — fine for single-volume apps but can't express named, shareable, lifecycle-independent volumes. Both forms coexist.
-
-**Make Volume implicit (every app gets one automatically)** — too magical, hides the lifecycle question. Explicit `cycls.Volume("name")` forces the user to think about persistence.
-
-**Skip Volume, use a separate storage service API** — requires users to learn a parallel API (boto3-style). Loses the composability of "mount it, read/write files, done."
-
-**Build Dict/Queue on Volume** — filesystem semantics don't match KV atomicity or queue ordering requirements. Each data primitive gets its own purpose-built substrate (see *Future primitives roadmap*).
-
----
-
-## Future primitives roadmap
-
-The four-primitive vision. Each follows the same pattern: named GCP-native resource with a Pythonic facade. Each gets its own RFC as it's scoped.
-
-| Primitive | GCP substrate | Facade | Status |
-|---|---|---|---|
-| `cycls.Volume("name")` | GCS bucket (prefix-scoped) | gfuse mount → POSIX filesystem | **This RFC** |
-| `cycls.Dict("name")` | Firestore collection | Python async dict (`get`/`set`/`items`/`transaction`) | Future |
-| `cycls.Queue("name")` | Pub/Sub topic + auto-managed subscription | async `put` / `async for msg in q` / `ack` | Future |
-| `cycls.Secret("name")` | Secret Manager | Injected as env vars at container start | Future |
-
-**Rejected substrates** (for the record):
-
-- **Memorystore Redis** for Dict/Queue — breaks the zero-to-pay model (~$40/month minimum instance).
-- **Firestore as queue backend** — poll-based, inefficient; Pub/Sub is the right fit.
-- **gfuse as KV backend** — filesystem semantics don't match KV atomicity requirements.
-- **BigTable** — overkill for Cycls's scale, expensive minimum.
-
-**Why these substrates** (as of 2026 pricing): Firestore has a generous free tier (50K reads + 20K writes/day, 1GB), Pub/Sub has 10GB/month free, Secret Manager has 10K accesses/month free. At Cycls's scale, most users stay in free tier across all primitives. Beyond that, pricing is per-operation — matches Cycls's own usage-based model.
-
----
-
-## Status tracker
-
-- [ ] RFC 001 shipped (prerequisite)
-- [ ] `cycls.Volume` primitive implemented
-- [ ] `volumes={}` kwarg on `@function`, `@app`, `@agent`
-- [ ] Control plane for named volumes (create, list, info, delete)
-- [ ] CLI: `cycls volume create / ls / info / rm / cp`
-- [ ] gfuse mounting at deploy time based on `volumes={}`
-- [ ] Quota + billing integration
-- [ ] Local development story for volumes
-- [ ] Migration guide (how to upgrade from `Image.volume()` to `cycls.Volume()`)
+1. **Title derivation** — first user message (simple, free) vs LLM-generated summary (better UX, costs a call). Start with first message?
+2. **Dict scope** — per-user only, or also global? Sessions are per-user, shares are global, usage is per-user-per-month. The Dict API needs to handle both scopes cleanly.
+3. **Concurrency** — file-backed Dict does full-file read/write. Two concurrent requests writing to the same Dict race (last writer wins on gcsfuse). Acceptable for chat cadence (~1 write/30s per user). If agents do rapid parallel tool calls, batch Dict updates to end-of-turn.
+4. **Dict size limit** — file-backed Dict loads the entire JSON into memory. At 10K entries (~1MB) this is fine. At 100K entries (~10MB) it's not. That's the Firestore trigger.
+5. **Dev experience** — `cycls run` should auto-initialize Dict files. No emulator needed for v1 (it's just a JSON file). Firestore emulator only needed for v2.
