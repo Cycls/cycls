@@ -8,28 +8,35 @@
 ## The primitive
 
 ```python
-db = cycls.Dict("sessions")
+sessions = cycls.Dict("sessions")
 
-# Python dict ergonomics (stolen from Modal)
-await db.set(key, value)
-await db.get(key, default=None)
-await db.pop(key)                  # delete + return value
-await db.contains(key)
-await db.update({k1: v1, k2: v2}) # bulk write
-await db.clear()
-await db.len()
-await db.keys()
-await db.values()
-await db.items()
+# Python dict — brackets, operators, iteration
+sessions[session_id] = {"title": "Budget planning", "updatedAt": "..."}
+data = sessions[session_id]
+del sessions[session_id]
+"abc123" in sessions
+len(sessions)
+for key in sessions: ...
+sessions.update({k1: v1, k2: v2})
+sessions.pop(key)
+sessions.keys(), sessions.values(), sessions.items()
+sessions.clear()
 
-# Database power (Modal can't do these)
-await db.list(sort_by="updatedAt", limit=20)
-await db.increment(key, "tokens", 1500)
+# Two additions Python dicts can't express
+sessions.list(sort_by="updatedAt", limit=20)
+sessions.increment(session_id, "messageCount", 1)
 ```
 
-~50 lines. JSON-serialized (not cloudpickle — language-agnostic, inspectable, survives version bumps). File-backed v1 (`_index.json` on gcsfuse). Firestore v2 (same API, swap substrate).
+Dict subclass. Named. Persistent. ~50 lines. Same gene as Image (dict subclass, ~25 lines). JSON-serialized (not cloudpickle — language-agnostic, inspectable, survives version bumps).
 
-Per-user Dicts are scoped by workspace path. Global Dicts (shares) live at the workspace root.
+Scoping via context — same pattern as `llm.run(context=context)`:
+
+```python
+sessions = cycls.Dict("sessions", context)   # per-user → context.workspace/_sessions.json
+shares = cycls.Dict("shares")                # global → $CYCLS_DATA_DIR/_shares.json
+```
+
+With context: per-user, file in the user's workspace. Without: global. Auto-loads on first access, auto-saves on every write. Developer never sees a path.
 
 ---
 
@@ -58,9 +65,51 @@ Per-user Dicts are scoped by workspace path. Global Dicts (shares) live at the w
 
 **Title derivation**: first user message, truncated to 80 chars. Free, instant, good enough. LLM-generated summaries are a future upgrade, not v1.
 
-**Per-user vs global scope**: Dict constructor takes an optional `scope` — `"user"` (default, scoped to workspace path) or `"global"` (workspace root). Sessions and usage are per-user. Shares are global.
+**Scoping**: pass `context` for per-user, omit for global. Same pattern as `llm.run(context=context)`. Per-user files live in the user's workspace. Global files live at `$CYCLS_DATA_DIR`.
 
-**Concurrency**: last-writer-wins on gcsfuse. Fine for chat cadence (~1 write per 30s per user). Dict updates batch to end-of-turn for rapid tool calls.
+**Concurrency**: last-writer-wins on gcsfuse. Fine for chat cadence (~1 write per 30s per user). Batch writes to end-of-turn for rapid tool calls.
+
+---
+
+## Implementation
+
+```python
+class Dict(dict):
+    def __init__(self, name, context=None):
+        if context and hasattr(context, 'workspace'):
+            root = context.workspace
+        else:
+            root = Path(os.environ.get("CYCLS_DATA_DIR", "/workspace"))
+        self._path = root / f"_{name}.json"
+        if self._path.exists():
+            super().update(json.loads(self._path.read_text()))
+
+    def _save(self):
+        self._path.write_text(json.dumps(dict(self)))
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self._save()
+
+    def __delitem__(self, key):
+        super().__delitem__(key)
+        self._save()
+
+    def list(self, sort_by=None, limit=None):
+        items = list(self.values())
+        if sort_by:
+            items.sort(key=lambda x: x.get(sort_by, ""), reverse=True)
+        return items[:limit] if limit else items
+
+    def increment(self, key, field, n=1):
+        entry = self.get(key, {})
+        entry[field] = entry.get(field, 0) + n
+        self[key] = entry
+```
+
+Dict subclass. ~35 lines. Sync. Saves on write. Context scopes per-user; omit for global.
+
+When file-backed hits limits (>1MB, concurrent writes, cross-user aggregation), swap to Firestore. Same brackets, same `list`/`increment` — different persistence layer.
 
 ---
 
@@ -68,12 +117,12 @@ Per-user Dicts are scoped by workspace path. Global Dicts (shares) live at the w
 
 Each stands alone. Each makes the next cheaper.
 
-1. **`cycls.Dict` class** — file-backed, async, ~50 lines
+1. **`cycls.Dict` class** — dict subclass, sync, ~30 lines
 2. **Session index on Dict** — `list_sessions` becomes `dict.list()`. N+1 dies.
 3. **Single session file + server-owned sessions** — kill `.json` metadata files, `?chat=` URL, FE sends only new message
 4. **Share index on Dict** — kill pointer files, self-contained snapshots
 5. **Usage counters on Dict** — `dict.increment()` per turn, billing limits enabled
-6. **Workspace decoupling** — `User(id, claims)`, configurable Volume resolver
+6. **Workspace decoupling** — `User(id, claims)`, configurable resolver
 7. **Firestore backend** — when file-backed hits scale limits, swap substrate
 
 ---
