@@ -1,8 +1,9 @@
 import json, inspect, uuid, os
 from pathlib import Path
-from pydantic import BaseModel
+from pydantic import BaseModel, PrivateAttr
 from typing import Optional, Any
 from cycls.app.auth import User, make_validate
+from cycls.data import Workspace
 
 class PassMetadata(BaseModel):
     name: str
@@ -21,6 +22,7 @@ class Config(BaseModel):
     voice: bool = False
     pk: Optional[str] = None
     jwks: Optional[str] = None
+    volume: str = "/workspace"
 
     def set_prod(self, prod: bool):
         self.prod = prod
@@ -99,6 +101,8 @@ def web(func, config, extra_routers=None):
         except Exception:
             pass
 
+    volume = Path(config.volume)
+
     class Context(BaseModel):
         messages: Any
         user: Optional[User] = None
@@ -112,9 +116,13 @@ def web(func, config, extra_routers=None):
                 return self.messages[-1].get("content", "")
             return ""
 
-        @property
-        def workspace(self) -> Path:
-            return self.user.workspace if self.user else Path("/workspace/local")
+        def workspace(self) -> Workspace:
+            user = self.user
+            if user is None:
+                return Workspace(volume / "local")
+            if user.org_id:
+                return Workspace(volume / user.org_id, user_id=user.id)
+            return Workspace(volume / user.id)
 
     app = FastAPI()
 

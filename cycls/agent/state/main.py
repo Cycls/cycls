@@ -7,12 +7,17 @@ from fastapi import APIRouter, Request, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 
 def resolve_path(workspace, rel):
-    """Resolve *rel* inside *workspace*, raising ValueError on traversal."""
+    """Resolve *rel* inside *workspace*, raising ValueError on traversal or
+    access to the reserved `.cycls/` tree (framework-managed)."""
     workspace = Path(workspace)
     rel = unicodedata.normalize("NFC", rel)
     resolved = (workspace / rel).resolve()
-    if not resolved.is_relative_to(workspace.resolve()):
+    ws = workspace.resolve()
+    if not resolved.is_relative_to(ws):
         raise ValueError("Path traversal denied")
+    reserved = ws / ".cycls"
+    if resolved == reserved or resolved.is_relative_to(reserved):
+        raise ValueError("Reserved path: .cycls/ is managed by cycls")
     return resolved
 
 def ensure_workspace(workspace):

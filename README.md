@@ -233,7 +233,8 @@ async def chat(context):
     context.messages      # [{"role": "user", "content": "..."}]
     context.messages.raw  # Full data including UI component parts
     context.user          # User(id, org_id, plan, features, ...) when auth is set
-    context.workspace     # Per-user persistent workspace Path
+    with context.workspace():   # Per-user persistent scope — enables cycls.Dict(...)
+        usage = cycls.Dict("usage")
 ```
 
 ## API Endpoints

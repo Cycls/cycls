@@ -23,7 +23,7 @@ from cycls.agent.state import load_history
 
 def _make_context(ws, hp):
     ctx = types.SimpleNamespace()
-    ctx.workspace = ws
+    ctx.workspace = lambda ws=ws: types.SimpleNamespace(root=Path(ws))
     ctx.session_id = "test-session"
     user = types.SimpleNamespace()
     user.sessions = Path(hp).parent
@@ -221,7 +221,7 @@ def test_no_history_without_session(tmp_path):
     Path(ws).mkdir()
 
     ctx = types.SimpleNamespace()
-    ctx.workspace = ws
+    ctx.workspace = lambda ws=ws: types.SimpleNamespace(root=Path(ws))
     ctx.session_id = None
     ctx.user = None
     ctx.messages = types.SimpleNamespace()

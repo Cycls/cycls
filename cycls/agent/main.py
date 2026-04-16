@@ -33,6 +33,7 @@ class Agent(App):
         self.config = Config(
             name=name, title=web._title,
             auth=web._auth is not None, plan=web._plan, analytics=web._analytics,
+            volume=(image or {}).get("volume", "/workspace"),
         )
         self.auth = make_validate(self.config)
 

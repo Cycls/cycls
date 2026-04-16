@@ -97,7 +97,8 @@ async def my_agent(context):
     context.messages.raw  # full data with all parts
     context.last_message  # shortcut: last user message text
     context.user          # User(id, org_id, plan, features, ...) when auth is set
-    context.workspace     # per-user persistent Path
+    with context.workspace():   # per-user persistent scope — enables cycls.Dict(...)
+        usage = cycls.Dict("usage")
 ```
 
 ---
@@ -354,6 +355,46 @@ if context.user.plan == "cycls_pass":
 else:
     yield "Upgrade for full access."
 ```
+
+### Free-tier quota recipe
+
+Block free orgs (b2b) and rate-limit free users (b2c) with a per-workspace counter. `cycls.Dict` stores the counter under the user's `.cycls/` directory; the key is the month, so history accumulates and resets happen naturally.
+
+```python
+from datetime import datetime, timezone
+import cycls
+
+FREE_MONTHLY_LIMIT = 10
+
+@cycls.agent(image=image, web=web)
+async def my_agent(context):
+    user = context.user
+
+    if user.plan == "o:free_org":
+        yield {"type": "callout",
+               "callout": "This workspace needs a paid plan.",
+               "style": "error"}
+        return
+
+    with context.workspace():
+        usage = cycls.Dict("usage")
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+        entry = usage.get(month, {"count": 0})
+
+        if user.plan == "u:free_user" and entry["count"] >= FREE_MONTHLY_LIMIT:
+            yield {"type": "callout",
+                   "callout": f"Free tier limit reached ({FREE_MONTHLY_LIMIT}/mo).",
+                   "style": "warning"}
+            return
+
+        entry["count"] += 1
+        usage[month] = entry
+
+    async for msg in llm.run(context=context):
+        yield msg
+```
+
+`cycls.Dict("name")` is a persistent JSON-backed dict scoped to the surrounding `with context.workspace():` block. The `.cycls/` directory is framework-managed — user tools (Bash, Editor, files API) can read it but cannot write to it, so the quota cannot be tampered with from inside the agent.
 
 ---
 

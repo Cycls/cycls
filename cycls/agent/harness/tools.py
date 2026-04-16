@@ -103,6 +103,9 @@ def _resolve_path(raw_path, workspace):
     rel = raw_path.removeprefix("/workspace/").lstrip("/")
     path = (ws / rel).resolve()
     if not path.is_relative_to(ws): raise ValueError("path escapes workspace")
+    reserved = ws / ".cycls"
+    if path == reserved or path.is_relative_to(reserved):
+        raise ValueError(".cycls/ is managed by cycls")
     return path
 
 # ---- Tool execution ----
@@ -110,6 +113,7 @@ def _resolve_path(raw_path, workspace):
 async def _exec_bash(command, cwd, timeout=600):
     proc = await asyncio.create_subprocess_exec(
         "bwrap", "--ro-bind", "/", "/", "--bind", cwd, "/workspace",
+        "--ro-bind-try", str(pathlib.Path(cwd) / ".cycls"), "/workspace/.cycls",
         "--tmpfs", "/app", "--tmpfs", "/tmp", "--dev", "/dev", "--proc", "/proc",
         "--chdir", "/workspace", "--die-with-parent", "--clearenv",
         "--setenv", "PATH", os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
