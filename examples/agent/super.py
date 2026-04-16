@@ -1,4 +1,5 @@
 # uv run cycls run examples/agent/super.py
+# uv run cycls deploy examples/agent/super.py
 # cd client && npm run dev
 # uv run pytest tests/agent_test.py -v
 
@@ -46,8 +47,8 @@ llm = (
     .model("anthropic/claude-sonnet-4-6")
     # .model("openai/gpt-5.4")
     .system(SYSTEM)
-    .tools(TOOLS)  # skills+safe_keys
-    .on("render_image", render_image)
+    # .tools(TOOLS)  # skills+safe_keys
+    # .on("render_image", render_image)
     .allowed_tools(["Bash", "Editor", "WebSearch"])  # "Canvas"
     # .show_usage(True)
 )
