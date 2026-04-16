@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import cycls
 
-FREE_MONTHLY_LIMIT = 10
+FREE_MONTHLY_LIMIT = 5
 
 image = cycls.Image().copy(".env")#.rebuild()
 
@@ -64,9 +64,7 @@ async def super(context):
 
     # b2b: free orgs blocked (no compute, no tracking)
     if user.plan == "o:free_org":
-        yield {"type": "callout",
-               "callout": "This workspace needs a paid plan.",
-               "style": "error"}
+        yield {"type": "text", "text": "🔒 This workspace needs a paid plan."}
         return
 
     # Track monthly usage; gate free users at FREE_MONTHLY_LIMIT.
@@ -76,9 +74,8 @@ async def super(context):
         entry = usage.get(month, {"count": 0})
 
         if user.plan == "u:free_user" and entry["count"] >= FREE_MONTHLY_LIMIT:
-            yield {"type": "callout",
-                   "callout": f"Free tier limit reached ({FREE_MONTHLY_LIMIT}/mo). Upgrade for unlimited.",
-                   "style": "warning"}
+            yield {"type": "text",
+                   "text": f"🚨 Free tier limit reached ({FREE_MONTHLY_LIMIT}/mo). Upgrade for unlimited."}
             return
 
         entry["count"] += 1
