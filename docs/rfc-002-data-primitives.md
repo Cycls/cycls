@@ -10,14 +10,24 @@
 ```python
 db = cycls.Dict("sessions")
 
+# Python dict ergonomics (stolen from Modal)
 await db.set(key, value)
-await db.get(key)
-await db.delete(key)
+await db.get(key, default=None)
+await db.pop(key)                  # delete + return value
+await db.contains(key)
+await db.update({k1: v1, k2: v2}) # bulk write
+await db.clear()
+await db.len()
+await db.keys()
+await db.values()
+await db.items()
+
+# Database power (Modal can't do these)
 await db.list(sort_by="updatedAt", limit=20)
-await db.increment(key, "field", n)
+await db.increment(key, "tokens", 1500)
 ```
 
-~50 lines. File-backed v1 (`_index.json` on gcsfuse). Firestore v2 (same API, swap substrate).
+~50 lines. JSON-serialized (not cloudpickle — language-agnostic, inspectable, survives version bumps). File-backed v1 (`_index.json` on gcsfuse). Firestore v2 (same API, swap substrate).
 
 Per-user Dicts are scoped by workspace path. Global Dicts (shares) live at the workspace root.
 
