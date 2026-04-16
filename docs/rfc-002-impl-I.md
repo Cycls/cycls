@@ -12,7 +12,8 @@ Folds 1 + 2 from RFC 002, plus a developer-side guard pattern (no SDK code).
 |---|---|---|
 | 1 | `cycls.Dict` + `cycls.Workspace` (Fold 1) | ~25 |
 | 2 | `Image.volume()` plumbing + `Context.workspace()` method (Fold 2) | ~10 |
-| 3 | Guard pattern in agent body (developer code) | ~8 |
+| 3 | `.cycls/` sandbox + editor guard (read-only) | ~6 |
+| 4 | Guard pattern in agent body (developer code) | ~8 |
 
 **Out of scope** (deferred to later folds): session index, single session file, FE coordination (`?chat=`, server-owned sessions), share index + nuke, Firestore, audit log, per-org aggregate usage.
 
@@ -71,7 +72,37 @@ Wire the primitive into the framework so `with context.workspace():` works in ha
 
 ---
 
-## Step 3 — Guard pattern in agent body
+## Step 3 — Guard `.cycls/` from user tools
+
+Billing gates are meaningless if the user can run `echo '{}' > .cycls/usage.json` in the Bash tool. Close the exploit at two layers: the sandbox bind and the path resolver.
+
+**1. bwrap read-only bind** in `cycls/agent/harness/tools.py`. After the main `--bind cwd /workspace`, add:
+```python
+"--ro-bind", str(cwd / ".cycls"), "/workspace/.cycls",
+```
+User's bash can read `.cycls/` (useful for "show me my usage" prompts, session recall) but any write or delete fails.
+
+**2. Reserved-path check** in `cycls/agent/state/main.py`. Extend `resolve_path` to refuse paths inside `.cycls/`:
+```python
+def ensure_not_reserved(workspace: Path, resolved: Path) -> None:
+    reserved = (workspace / ".cycls").resolve()
+    if resolved == reserved or resolved.is_relative_to(reserved):
+        raise ValueError("Reserved path: .cycls/ is managed by cycls")
+```
+
+Called inside `resolve_path` — covers the Editor tool and every `/files/{path}` HTTP endpoint (PUT, PATCH, DELETE, mkdir). Agent developers can still reference `.cycls/` through `cycls.Dict` (the legit way); raw filesystem access is denied.
+
+**Tests**:
+- Bash sandbox can read `.cycls/usage.json` but can't write or delete it
+- Editor tool rejects paths inside `.cycls/` with a clear error
+- `PUT /files/.cycls/usage.json` returns 403
+- `cycls.Dict("usage")` inside a handler still works
+
+~6 lines of new code, two files touched. Ships in the same PR as Step 2 (both touch adjacent code).
+
+---
+
+## Step 4 — Guard pattern in agent body
 
 No SDK changes. Copy-paste into the user's agent file. Publish as a recipe in the tutorial.
 
@@ -84,28 +115,28 @@ FREE_MONTHLY_LIMIT = 10   # product call: messages, or tokens, or requests
 async def my_agent(context):
     user = context.user
 
-    # b2b: free orgs blocked
+    # b2b: free orgs blocked (no compute, no tracking)
     if user.plan == "o:free_org":
         yield {"type": "callout",
                "callout": "This workspace needs a paid plan.",
                "style": "error"}
         return
 
-    # b2c: free users quota-limited per month
-    if user.plan == "u:free_user":
-        with context.workspace():
-            usage = cycls.Dict("usage")
-            month = datetime.now(timezone.utc).strftime("%Y-%m")
-            entry = usage.get("self", {"month": month, "count": 0})
-            if entry["month"] != month:
-                entry = {"month": month, "count": 0}       # reset window
-            if entry["count"] >= FREE_MONTHLY_LIMIT:
-                yield {"type": "callout",
-                       "callout": f"Free tier limit reached ({FREE_MONTHLY_LIMIT}/mo). Upgrade for unlimited.",
-                       "style": "warning"}
-                return
-            entry["count"] += 1
-            usage["self"] = entry
+    # Track usage for every non-blocked user; gate free users on monthly quota.
+    # Keys are months — history accumulates, no data loss across month boundaries.
+    with context.workspace():
+        usage = cycls.Dict("usage")
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+        entry = usage.get(month, {"count": 0})
+
+        if user.plan == "u:free_user" and entry["count"] >= FREE_MONTHLY_LIMIT:
+            yield {"type": "callout",
+                   "callout": f"Free tier limit reached ({FREE_MONTHLY_LIMIT}/mo). Upgrade for unlimited.",
+                   "style": "warning"}
+            return
+
+        entry["count"] += 1
+        usage[month] = entry
 
     async for msg in llm.run(context=context):
         yield msg
@@ -118,7 +149,7 @@ Sharing this pattern in the tutorial makes it the canonical "how to gate free pl
 ## Shipping order
 
 1. PR 1: `cycls.Dict` + `cycls.Workspace` with tests. Zero-risk, no callers.
-2. PR 2: `Image.volume()` + `Context.workspace()` wiring. Breaking change for the `context.workspace` attr users; audit and update examples/tutorial in the same PR.
+2. PR 2: `Image.volume()` + `Context.workspace()` wiring **+ `.cycls/` sandbox guard + reserved-path check**. Breaking change for the `context.workspace` attr users; audit and update examples/tutorial in the same PR.
 3. Deploy new SDK version.
 4. Update Cycls's own agent file with the guard pattern. Deploy.
 5. Publish the recipe in the tutorial.
@@ -134,6 +165,7 @@ Sharing this pattern in the tutorial makes it the canonical "how to gate free pl
 | Dropped increments under concurrent writes | Low for "refuse at N" semantics | Accept; Fold 9 (Firestore) fixes it when accurate billing matters |
 | `context.workspace()` breaking change misses a call site | Medium | grep for `context.workspace` in examples, tests, docs before PR 2 merges |
 | gcsfuse `rename()` atomicity | Low | Standard temp+rename pattern; verify in a scratch deploy |
+| User bypasses quota via Bash/Editor writing to `.cycls/` | **High** without Step 3 | Step 3 ro-binds `.cycls/` in bwrap and blocks writes in `resolve_path` |
 | Developers forget the `with` block | Low | `RuntimeError` at Dict construction makes the mistake loud |
 
 ---
