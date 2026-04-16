@@ -87,29 +87,66 @@ class Dict(dict):
     def _save(self):
         self._path.write_text(json.dumps(dict(self)))
 
-    def __setitem__(self, key, value):
-        super().__setitem__(key, value)
-        self._save()
-
-    def __delitem__(self, key):
-        super().__delitem__(key)
-        self._save()
+    # Every mutation goes through here → guaranteed persistence
+    def __setitem__(self, k, v):     super().__setitem__(k, v);   self._save()
+    def __delitem__(self, k):        super().__delitem__(k);      self._save()
+    def update(self, *a, **kw):      super().update(*a, **kw);    self._save()
+    def pop(self, *a, **kw):         v = super().pop(*a, **kw);   self._save(); return v
+    def popitem(self):               kv = super().popitem();      self._save(); return kv
+    def clear(self):                 super().clear();             self._save()
+    def setdefault(self, k, d=None): v = super().setdefault(k, d); self._save(); return v
 
     def list(self, sort_by=None, limit=None):
-        items = list(self.values())
+        """Return (key, value) pairs, optionally sorted/limited."""
+        items = list(self.items())
         if sort_by:
-            items.sort(key=lambda x: x.get(sort_by, ""), reverse=True)
+            items.sort(key=lambda kv: kv[1].get(sort_by) if isinstance(kv[1], dict) else kv[1],
+                       reverse=True)
         return items[:limit] if limit else items
 
     def increment(self, key, field, n=1):
-        entry = self.get(key, {})
+        entry = dict(self.get(key, {}))
         entry[field] = entry.get(field, 0) + n
         self[key] = entry
 ```
 
-Dict subclass. ~35 lines. Sync. Saves on write. Context scopes per-user; omit for global.
+Dict subclass. ~40 lines. Sync. Every mutation persists — no inherited dict method silently skips the save. `list()` returns `(key, value)` pairs, not just values — keys stay meaningful.
 
 When file-backed hits limits (>1MB, concurrent writes, cross-user aggregation), swap to Firestore. Same brackets, same `list`/`increment` — different persistence layer.
+
+---
+
+## Shares
+
+Same Dict-as-index pattern as sessions. Dict holds metadata, files hold content.
+
+```python
+shares = cycls.Dict("shares")  # global, no context — shares are public
+
+# Create
+share_id = uuid4().hex[:12]
+snapshot = {"id": share_id, "title": title, "messages": messages,
+            "author": author, "sharedAt": now}
+Path(f"/workspace/_shared/{share_id}.json").write_text(json.dumps(snapshot))
+shares[share_id] = {"id": share_id, "user": user.id, "title": title, "sharedAt": now}
+
+# List (for the sharing user)
+user_shares = [v for v in shares.list(sort_by="sharedAt") if v["user"] == user.id]
+
+# Resolve (public, no auth)
+meta = shares[share_id]
+snapshot = json.loads(Path(f"/workspace/_shared/{share_id}.json").read_text())
+
+# Delete
+del shares[share_id]
+Path(f"/workspace/_shared/{share_id}.json").unlink()
+```
+
+**What changes from today:**
+- Kill the pointer indirection (`/workspace/shared/{id}.json` → user's `public/{id}/share.json`). One global dir, one global index.
+- Kill attachment duplication (`shutil.copy2`). Reference originals by URL. Broken if user deletes the file — acceptable.
+- Kill N+1 listing. `shares.list()` reads the index.
+- Snapshots live at `/workspace/_shared/`, not inside any user's workspace. Shares survive independent of user data.
 
 ---
 
@@ -117,13 +154,15 @@ When file-backed hits limits (>1MB, concurrent writes, cross-user aggregation), 
 
 Each stands alone. Each makes the next cheaper.
 
-1. **`cycls.Dict` class** — dict subclass, sync, ~30 lines
-2. **Session index on Dict** — `list_sessions` becomes `dict.list()`. N+1 dies.
-3. **Single session file + server-owned sessions** — kill `.json` metadata files, `?chat=` URL, FE sends only new message
-4. **Share index on Dict** — kill pointer files, self-contained snapshots
-5. **Usage counters on Dict** — `dict.increment()` per turn, billing limits enabled
-6. **Workspace decoupling** — `User(id, claims)`, configurable resolver
-7. **Firestore backend** — when file-backed hits scale limits, swap substrate
+1. **`cycls.Dict` class** — dict subclass, sync, ~40 lines
+2. **Session index on Dict** — `list_sessions` becomes `dict.list()`. N+1 dies. Backend-only.
+3. **Single session file** — merge `{id}.json` + `{id}.history.jsonl` into one `{id}.jsonl` with `_meta` header. Backend-only; existing FE keeps working.
+4. **Server-owned sessions** — server generates session_id and derives title. FE can stop PUTting metadata. Coordinated with FE.
+5. **`?chat=` URL** — FE moves session_id into the URL, stops sending full history. FE-driven.
+6. **Share index on Dict** — kill pointer files, self-contained snapshots.
+7. **Usage counters on Dict** — `dict.increment()` per turn, billing limits enabled.
+8. **Workspace decoupling** — `User(id, claims)`, configurable resolver.
+9. **Firestore backend** — when file-backed hits scale limits, swap substrate.
 
 ---
 
