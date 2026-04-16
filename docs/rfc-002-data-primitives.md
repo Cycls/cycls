@@ -106,7 +106,7 @@ When `cycls.Volume` becomes a real primitive, `.volume()` accepts it in place of
 ## Implementation
 
 ```python
-import contextvars, json
+import contextvars, copy, json
 from pathlib import Path
 
 _current_workspace = contextvars.ContextVar("cycls_workspace")
@@ -141,12 +141,15 @@ class Dict(dict):
         tmp.write_text(json.dumps(dict(self)))
         tmp.rename(self._path)
 
+    # Returns a deep copy — in-place mutation of the returned value can't silently skip _save()
+    def __getitem__(self, k):    return copy.deepcopy(super().__getitem__(k))
+    def get(self, k, d=None):    return copy.deepcopy(super().get(k, d))
     def __setitem__(self, k, v): super().__setitem__(k, v); self._save()
     def __delitem__(self, k):    super().__delitem__(k);    self._save()
     def update(self, *a, **kw):  super().update(*a, **kw);  self._save()
 ```
 
-~25 lines. Workspace: context manager over a Path. Dict: persistent dict that reads the active workspace. Atomic write via temp-file-and-rename.
+~28 lines. Workspace: context manager over a Path. Dict: persistent dict that reads the active workspace. Atomic write via temp-file-and-rename. `__getitem__` and `get` return deep copies — forces read-modify-write pattern so in-place mutation of nested values can't silently skip `_save()`. Matches Modal's Dict semantics.
 
 When file-backed hits limits (>1MB, concurrent writes, cross-user aggregation), swap to Firestore — same brackets, different persistence layer.
 
