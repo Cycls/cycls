@@ -38,11 +38,38 @@ Key properties:
 
 We tried. `--unshare-all` adds PID/IPC/UTS/cgroup unsharing and triggers `--proc /proc` to mount a fresh procfs in the new PID namespace. That fails with `bwrap: Can't mount proc on /newroot/proc: Operation not permitted` in our nested-container runtime — even with `cap_add=SYS_ADMIN`, `seccomp=unconfined`, `apparmor=unconfined` on the outer container. The nested Docker + user namespace chain blocks the procfs mount.
 
-Consequence: `/proc` inside the sandbox shows the full container PID tree, including the parent Python process. Bash can read `/proc/<ppid>/environ` and see whatever env vars the agent runtime was launched with. Mitigations in place:
+Dropping `--unshare-all` means `/proc` inside the sandbox shows the full container PID tree. That *sounds* bad — bash can see bwrap, Python, every process. But the actual protection is one layer down: bwrap still implicitly `--unshare-user`s, so bash runs in a child user namespace. Every `/proc/<pid>/environ`, `/proc/<pid>/mem`, `/proc/<pid>/root` access requires `PTRACE_MODE_READ_FSCREDS` across the user-namespace boundary, which the kernel denies. See the attack probes below — `cat /proc/*/environ` returns "Permission denied" for every PID except bash's own.
 
-- `cycls.Image().copy(".providers.env", ".env")` — keep `CYCLS_API_KEY`, `UV_PUBLISH_TOKEN`, and other tool-level secrets out of the shipped image. Only provider keys the agent actually needs end up in the container's environ.
-- `--unshare-net` when `network=False` — even if a secret is read, no egress.
-- bwrap's own environ is sanitized (see next section) so *bwrap itself* doesn't add to the leak surface.
+## Threat model — attack probes
+
+We ran a battery of attacker-perspective bash commands from inside the sandbox. Findings:
+
+| Attack | Result | Why |
+|---|---|---|
+| `cat /proc/$PPID/environ` (read bwrap/Python env) | Permission denied | Cross-user-NS ptrace blocked |
+| Grep `/proc/*/environ` for planted API-key sentinel | No match — every PID blocked except bash's own | Same |
+| `ls /proc/<other_pid>/root/workspace/` (cross-tenant FS via magic symlink) | Permission denied | Same |
+| `cat /proc/<other_pid>/root/<other_tenant>/secret` | Permission denied | Same |
+| `ls /workspace/` | Only current tenant's dir visible | `--bind <cwd> /workspace` masks sibling tenants |
+| `mount \| grep workspace` | Shows only the bound current-tenant dir | Mount namespace unshared by bwrap default |
+| `cat /etc/shadow` | Permission denied | File mode 0400 root-only; bash is non-root |
+| `cat /app/.env` | Empty dir | `/app` is `--tmpfs` — masks the provider-keys file baked into the image |
+| Read container's `/proc/1/environ` (docker-init) | Permission denied | Same cross-user-NS rule |
+| `getent hosts example.com` with `network=False` | Fails | `--unshare-net` — no egress |
+| `curl http://evil` with `network=True` | Works | Explicit opt-in; only current tenant's data is readable anyway |
+
+### What's provably safe in prod
+
+- **Cross-tenant data** — blocked both at the filesystem layer (`--bind` remap) and the `/proc` layer (ptrace).
+- **Provider keys** (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) — live in Python's env, unreadable via `/proc/<python_pid>/environ` due to user-NS boundary. `/app/.env` is masked by tmpfs.
+- **CLI/publish secrets** (`CYCLS_API_KEY`, `UV_PUBLISH_TOKEN`) — not shipped into the runtime container at all, thanks to the `.providers.env` split (`Image.copy(".providers.env", ".env")`). They can't leak from a place they never existed.
+- **Network egress** — off unless the agent opts in with `sandbox(network=True)`.
+
+### Dev-only caveat
+
+`bwrap --ro-bind / /` exposes the *entire* host root read-only inside the sandbox. In prod that's just the runtime container's filesystem (clean, no host secrets). But if you run `._local()` (no Docker) during development on a machine that has `/workspaces/<project>/.env`, `~/.claude/.credentials.json`, or similar *local* secrets, those are readable from the sandbox.
+
+Mitigation: during dev, use `.local()` (Docker-wrapped) instead of `._local()` when exercising agents that accept untrusted input and have `sandbox(network=True)`. Or keep `network=False` so even if a dev-host secret is read, there's no exfil path.
 
 ## Gotcha — bwrap's own environ
 
