@@ -17,7 +17,7 @@ class Config(BaseModel):
     title: Optional[str] = None
     prod: bool = False
     auth: bool = False
-    plan: str = "free"
+    cycls_pass: bool = False
     analytics: bool = False
     voice: bool = False
     pk: Optional[str] = None
@@ -81,7 +81,7 @@ def web(func, config, extra_routers=None):
     if isinstance(config, dict):
         config = Config(**config)
 
-    if config.plan == "cycls_pass" and config.name and not config.pass_metadata:
+    if config.cycls_pass and config.name and not config.pass_metadata:
         try:
             resp = httpx.get(f"https://cms.cycls.ai/agents/{config.name}", timeout=5)
             if resp.status_code == 200:

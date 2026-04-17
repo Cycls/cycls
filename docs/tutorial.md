@@ -207,7 +207,7 @@ web = (
     .auth(cycls.Clerk())
     .title("My Agent")
     .theme("default")
-    .plan("cycls_pass")
+    .cycls_pass()
     .analytics(True)
     .copy_public("./assets/logo.png", "./downloads/")
 )
@@ -218,7 +218,7 @@ web = (
 | `.auth(provider)` | Set auth provider (`cycls.Clerk()` or `cycls.JWT(...)`) |
 | `.title(str)` | Browser tab + app title |
 | `.theme(name)` | `"default"` or `"dev"` |
-| `.plan(str)` | Billing plan (`"free"` or `"cycls_pass"`) |
+| `.cycls_pass()` | Register on the Cycls Pass subscription (CMS fetch + wallet pass UI) |
 | `.analytics(bool)` | Enable usage metrics |
 | `.copy_public(*files)` | Static files served at `/public` |
 
@@ -343,7 +343,7 @@ web = (
     cycls.Web()
     .auth(cycls.Clerk())
     .analytics(True)
-    .plan("cycls_pass")
+    .cycls_pass()
 )
 ```
 

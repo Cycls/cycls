@@ -11,14 +11,6 @@ from typing import Any, Optional
 from pydantic import BaseModel
 
 
-# ---- Clerk defaults ----
-
-JWKS_PROD = "https://clerk.cycls.ai/.well-known/jwks.json"
-JWKS_TEST = "https://select-sloth-58.clerk.accounts.dev/.well-known/jwks.json"
-PK_LIVE = "pk_live_Y2xlcmsuY3ljbHMuYWkk"
-PK_TEST = "pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ"
-
-
 # ---- User model ----
 
 class User(BaseModel):
@@ -73,22 +65,44 @@ class JWT:
 
 
 class Clerk(JWT):
-    """Clerk JWT provider — defaults to Cycls's hosted Clerk instances for
-    both dev and prod. Adds publishable keys (pk) on top of the base JWT
-    for the browser SDK."""
+    """Clerk JWT provider. Pass a known app name (`Clerk("cycls.ai")`) to
+    resolve hosted-Cycls Clerk defaults, or explicit `jwks_url`/`pk` for a
+    custom Clerk app. Adds publishable keys (pk) on top of the base JWT for
+    the browser SDK."""
+
+    APPS = {
+        "cycls.ai": {
+            "jwks_url":     "https://clerk.cycls.ai/.well-known/jwks.json",
+            "dev_jwks_url": "https://select-sloth-58.clerk.accounts.dev/.well-known/jwks.json",
+            "pk":           "pk_live_Y2xlcmsuY3ljbHMuYWkk",
+            "dev_pk":       "pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ",
+        },
+    }
 
     def __init__(
         self,
-        jwks_url: str = JWKS_PROD,
-        dev_jwks_url: str = JWKS_TEST,
-        pk: str = PK_LIVE,
-        dev_pk: str = PK_TEST,
+        app: Optional[str] = "cycls.ai",
+        *,
+        jwks_url: Optional[str] = None,
+        dev_jwks_url: Optional[str] = None,
+        pk: Optional[str] = None,
+        dev_pk: Optional[str] = None,
         issuer: Optional[str] = None,
         dev_issuer: Optional[str] = None,
     ):
+        if app:
+            d = self.APPS[app]
+            jwks_url     = jwks_url     or d["jwks_url"]
+            dev_jwks_url = dev_jwks_url or d["dev_jwks_url"]
+            pk           = pk           or d["pk"]
+            dev_pk       = dev_pk       or d["dev_pk"]
+        if not jwks_url:
+            raise ValueError(
+                "Clerk requires either a known app name (e.g. Clerk('cycls.ai')) "
+                "or an explicit jwks_url for a custom Clerk app."
+            )
         super().__init__(jwks_url, dev_jwks_url, issuer, dev_issuer)
-        self.pk = pk
-        self.dev_pk = dev_pk
+        self.pk, self.dev_pk = pk, dev_pk
 
     def resolve(self, prod: bool) -> dict:
         result = super().resolve(prod)
