@@ -8,6 +8,12 @@ from datetime import datetime, timezone
 import cycls
 
 FREE_MONTHLY_LIMIT = 5
+EXEMPT_USERS = {
+    "user_2yY1NGlkgUtCgYiPLSHQUriCWrr",
+    "user_2yXuICg28R0J2xXMDb6csQ0iEu9",
+    "user_32PvPiUrZ649nniAJrLjzGSTRnS",
+    "user_36FACLzxj35TJLMiYhGGj30k3bt",
+}
 
 image = cycls.Image().copy(".env")#.rebuild()
 
@@ -61,9 +67,10 @@ llm = (
 @cycls.agent(image=image, web=web)
 async def super(context):
     user = context.user
+    exempt = user.id in EXEMPT_USERS
 
     # b2b: free orgs blocked (no compute, no tracking)
-    if user.plan == "o:free_org":
+    if user.plan == "o:free_org" and not exempt:
         yield {"type": "text", "text": "🔒 This workspace needs a paid plan."}
         return
 
@@ -73,7 +80,7 @@ async def super(context):
         month = datetime.now(timezone.utc).strftime("%Y-%m")
         entry = usage.get(month, {"count": 0})
 
-        if user.plan == "u:free_user" and entry["count"] >= FREE_MONTHLY_LIMIT:
+        if user.plan == "u:free_user" and entry["count"] >= FREE_MONTHLY_LIMIT and not exempt:
             yield {"type": "text",
                    "text": f"🚨 Free tier limit reached ({FREE_MONTHLY_LIMIT}/mo). Upgrade for unlimited."}
             return
