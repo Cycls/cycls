@@ -1,15 +1,6 @@
-"""cycls.Dict + cycls.Workspace — persistent dict scoped to a workspace.
-
-Workspace is a context manager over a Path. Dict is a persistent dict that
-reads the active workspace from a ContextVar. JSON-serialized, atomic writes
-via temp+rename. __getitem__/get return deep copies so in-place mutation of
-nested values can't silently skip _save() (matches Modal's Dict semantics).
-"""
-import contextvars
-import copy
-import json
+"""cycls.Dict + cycls.Workspace — persistent dict scoped to a workspace."""
+import contextvars, copy, json
 from pathlib import Path
-
 
 _current_workspace = contextvars.ContextVar("cycls_workspace")
 
@@ -32,13 +23,11 @@ class Workspace:
 
 class Dict(dict):
     def __init__(self, name):
-        try:
-            ws = _current_workspace.get()
+        try: ws = _current_workspace.get()
         except LookupError:
             raise RuntimeError(
                 f"cycls.Dict({name!r}) used outside a workspace scope — "
-                f"wrap in `with context.workspace():`"
-            )
+                f"wrap in `with context.workspace():`")
         self._path = ws.data / f"{name}.json"
         if self._path.exists():
             super().update(json.loads(self._path.read_text()))
@@ -48,20 +37,9 @@ class Dict(dict):
         tmp.write_text(json.dumps(dict(self)))
         tmp.rename(self._path)
 
-    def __getitem__(self, k):
-        return copy.deepcopy(super().__getitem__(k))
-
-    def get(self, k, d=None):
-        return copy.deepcopy(super().get(k, d))
-
-    def __setitem__(self, k, v):
-        super().__setitem__(k, v)
-        self._save()
-
-    def __delitem__(self, k):
-        super().__delitem__(k)
-        self._save()
-
-    def update(self, *a, **kw):
-        super().update(*a, **kw)
-        self._save()
+    # Reads return deep copies — in-place mutation can't silently skip _save().
+    def __getitem__(self, k):    return copy.deepcopy(super().__getitem__(k))
+    def get(self, k, d=None):    return copy.deepcopy(super().get(k, d))
+    def __setitem__(self, k, v): super().__setitem__(k, v); self._save()
+    def __delitem__(self, k):    super().__delitem__(k);    self._save()
+    def update(self, *a, **kw):  super().update(*a, **kw);  self._save()
