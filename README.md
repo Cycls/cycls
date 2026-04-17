@@ -146,7 +146,7 @@ web = (
     cycls.Web()
     .auth(cycls.Clerk())
     .analytics(True)        # usage metrics on the Cycls dashboard
-    .cycls_pass()           # monetize via Cycls Pass subscriptions
+    .cms("cycls.ai")        # CMS entry → monetize via Cycls Pass subscriptions
     .title("My Agent")
 )
 ```

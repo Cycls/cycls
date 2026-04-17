@@ -202,7 +202,7 @@ def test_config_endpoint():
 
     data = response.json()
     assert data["title"] == "Test Title"
-    assert data["cycls_pass"] is False
+    assert data["cms"] is None
     print("✅ Test passed.")
 
 

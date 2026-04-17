@@ -18,7 +18,7 @@ class Web:
         self._auth: Optional[JWT] = None
         self._title: Optional[str] = None
         self._theme: str = "default"
-        self._cycls_pass: bool = False
+        self._cms: Optional[str] = None
         self._analytics: bool = False
         self._copy_public: List[str] = []
 
@@ -42,10 +42,11 @@ class Web:
             raise ValueError(f"Unknown theme: {name}. Available: {THEMES}")
         return self._copy(_theme=name)
 
-    def cycls_pass(self, on: bool = True):
-        """Register this agent as part of the Cycls Pass subscription.
-        Triggers a CMS fetch at serve time to populate wallet-pass metadata."""
-        return self._copy(_cycls_pass=on)
+    def cms(self, host: str = "cycls.ai"):
+        """Register this agent with a CMS. At serve time, the framework fetches
+        metadata from the named CMS (default `cms.cycls.ai/agents/{name}`) to
+        populate wallet-pass UI and other client-rendered product surfaces."""
+        return self._copy(_cms=host)
 
     def analytics(self, on: bool = True):
         return self._copy(_analytics=on)
