@@ -111,9 +111,11 @@ def _resolve_path(raw_path, workspace):
 # ---- Tool execution ----
 
 async def _exec_bash(command, cwd, timeout=600, network=False):
-    net_flags = ("--share-net",) if network else ()
-    # bwrap itself is visible as PID 1 inside the sandbox's /proc, so its own
-    # environ must be sanitized — --clearenv only affects the child (bash).
+    # Network is isolated only when requested off — unshare-net works in nested
+    # containers where --unshare-pid (and its procfs mount) doesn't.
+    net_flags = () if network else ("--unshare-net",)
+    # bwrap itself is visible inside the sandbox's /proc, so its own environ
+    # must be sanitized — --clearenv only affects the child (bash).
     path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     lang = os.environ.get("LANG", "C.UTF-8")
     bwrap_env = {"PATH": path, "LANG": lang}
@@ -121,7 +123,7 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
         "bwrap", "--ro-bind", "/", "/", "--bind", cwd, "/workspace",
         "--ro-bind-try", str(pathlib.Path(cwd) / ".cycls"), "/workspace/.cycls",
         "--tmpfs", "/app", "--tmpfs", "/tmp", "--dev", "/dev", "--proc", "/proc",
-        "--unshare-all", *net_flags,
+        *net_flags,
         "--chdir", "/workspace", "--die-with-parent", "--clearenv",
         "--setenv", "PATH", path,
         "--setenv", "HOME", "/workspace", "--setenv", "TERM", "xterm",
