@@ -107,6 +107,7 @@ def web(func, config, extra_routers=None):
         messages: Any
         user: Optional[User] = None
         session_id: Optional[str] = None
+        prod: bool = False
 
         model_config = {"arbitrary_types_allowed": True}
 
@@ -138,7 +139,7 @@ def web(func, config, extra_routers=None):
         messages = data.get("messages")
         session_id = data.get("session_id") or str(uuid.uuid4())
 
-        context = Context(messages=Messages(messages), user=user, session_id=session_id)
+        context = Context(messages=Messages(messages), user=user, session_id=session_id, prod=config.prod)
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
 
         if request.url.path == "/chat/completions":

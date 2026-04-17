@@ -15,7 +15,7 @@ EXEMPT_USERS = {
     "user_36FACLzxj35TJLMiYhGGj30k3bt",
 }
 
-image = cycls.Image().copy(".env")#.rebuild()
+image = cycls.Image().copy(".providers.env", ".env")#.rebuild()
 
 web = (
     cycls.Web()
@@ -68,7 +68,8 @@ llm = (
 @cycls.agent(image=image, web=web)
 async def super(context):
     user = context.user
-    exempt = user.id in EXEMPT_USERS
+    # Local dev is always exempted so prototyping isn't blocked by gates.
+    exempt = user.id in EXEMPT_USERS or not context.prod
 
     # b2b: free orgs blocked (no compute, no tracking)
     if user.plan == "o:free_org" and not exempt:
