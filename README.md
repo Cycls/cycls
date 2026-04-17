@@ -233,6 +233,7 @@ async def chat(context):
     context.messages      # [{"role": "user", "content": "..."}]
     context.messages.raw  # Full data including UI component parts
     context.user          # User(id, org_id, plan, features, ...) when auth is set
+    context.prod          # True via .deploy(), False via .local() — gate billing/analytics
     with context.workspace():   # Per-user persistent scope — enables cycls.Dict(...)
         usage = cycls.Dict("usage")
 ```
@@ -364,6 +365,7 @@ No YAML. No Dockerfiles. No infrastructure repo. The code is the deployment.
 ## Learn More
 
 - [Tutorial](docs/tutorial.md) — comprehensive guide from basics to advanced
+- [Sandbox threat model](docs/sandbox.md) — how the Bash tool is isolated
 - [Examples](examples/) — working code samples
 
 ## License

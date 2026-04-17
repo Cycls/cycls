@@ -75,9 +75,10 @@ async def my_agent(context):
         yield msg
 ```
 
-- **`cycls.Image`** — container build config (pip, apt, copy, run commands)
-- **`cycls.Web`** — UI, auth, branding, billing, analytics
-- **`cycls.LLM`** — model, system prompt, tools, handlers, allowed builtins
+- **`cycls.Image`** — container build config (pip, apt, copy, run commands, volume)
+- **`cycls.Web`** — UI, auth, branding, CMS, analytics
+- **`cycls.LLM`** — model, system prompt, tools, handlers, allowed builtins, sandbox
+- **`cycls.Workspace` / `cycls.Dict`** — persistent per-user state (see [Free-tier quota recipe](#free-tier-quota-recipe))
 
 Each decorator accepts exactly the primitives it needs:
 
@@ -97,6 +98,7 @@ async def my_agent(context):
     context.messages.raw  # full data with all parts
     context.last_message  # shortcut: last user message text
     context.user          # User(id, org_id, plan, features, ...) when auth is set
+    context.prod          # True when running via .deploy(), False on .local() — gate billing/analytics
     with context.workspace():   # per-user persistent scope — enables cycls.Dict(...)
         usage = cycls.Dict("usage")
 ```
@@ -193,9 +195,25 @@ def my_func(x):
 | `.apt(*pkgs)` | Install system packages |
 | `.copy(src, dst=None)` | Bundle local files/directories (dst defaults to src) |
 | `.run(cmd)` | Run a shell command during build |
+| `.volume(path)` | Mount path for per-request workspaces (default `/workspace`) |
 | `.rebuild()` | Force Docker cache bust |
 
 Cycls hashes image config to create deterministic Docker tags. Same inputs = instant rebuild from cache. Changed inputs = rebuild only what changed.
+
+### Splitting secrets by audience
+
+A common pattern is to split a project `.env` into two files so CLI-only tokens never end up in the shipped image:
+
+```
+.env              # CYCLS_API_KEY, UV_PUBLISH_TOKEN — stays on dev machine
+.providers.env    # OPENAI_API_KEY, ANTHROPIC_API_KEY — ships inside the container
+```
+
+```python
+image = cycls.Image().copy(".providers.env", ".env")
+```
+
+`.copy(src, dst)` renames during copy, so `.providers.env` on disk becomes `.env` inside the container. The agent's `python-dotenv` loader finds it at the expected name; your CLI auth token and publish token never enter the image.
 
 ---
 
@@ -253,9 +271,12 @@ async for msg in llm.run(context=context):
 | `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`) |
 | `.max_tokens(n)` | Max output tokens |
 | `.bash_timeout(secs)` | Bash sandbox timeout |
+| `.sandbox(network=True)` | Allow bash to make network calls (`curl`, `pip`, `git`). Default off |
 | `.show_usage(bool)` | Print cost + token usage at end of run |
 | `.base_url(url)` | Custom endpoint (Groq, vLLM, HUMAIN, self-hosted) |
 | `.api_key(key)` | Override API key |
+
+The Bash tool runs inside a `bubblewrap` sandbox with the workspace bound at `/workspace` and a sanitized environ. Network is off by default — enabling it allows outbound calls but means a prompt-injected bash could exfiltrate anything it can read. See [docs/sandbox.md](sandbox.md) for the full threat model.
 
 ### Multi-provider
 
@@ -347,7 +368,9 @@ web = (
 )
 ```
 
-`.cms("cycls.ai")` registers this agent with the Cycls CMS, which drives wallet-pass UI and [Cycls Pass](https://cycls.com) monetization. Agents can read `context.user.plan` to gate features:
+`.cms("cycls.ai")` registers this agent with the Cycls CMS, which drives wallet-pass UI and [Cycls Pass](https://cycls.com) monetization.
+
+`context.user.plan` exposes the authenticated user's subscription tier, set by your auth provider's JWT claim. The Cycls-hosted Clerk app emits values like `"u:free_user"` / `"o:free_org"` (user-plan / org-plan prefixes) and `"cycls_pass"` for paid subscribers. Gate features by inspecting the value:
 
 ```python
 if context.user.plan == "cycls_pass":
