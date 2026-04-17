@@ -66,10 +66,10 @@ def test_app_custom_name():
 # --- Test Case 3: Web builder propagates into Config ---
 
 def test_web_builder_propagates_into_config():
-    """Tests that cycls.Web().auth().analytics().plan() fields land on Config."""
+    """Tests that cycls.Web().auth().analytics().cycls_pass() fields land on Config."""
     print("\n--- Running test: test_web_builder_propagates_into_config ---")
 
-    web = cycls.Web().auth(cycls.Clerk()).analytics(True).plan("cycls_pass")
+    web = cycls.Web().auth(cycls.Clerk()).analytics(True).cycls_pass()
 
     @cycls.agent(web=web)
     async def premium_app(context):
@@ -77,7 +77,7 @@ def test_web_builder_propagates_into_config():
 
     assert premium_app.config.auth == True
     assert premium_app.config.analytics == True
-    assert premium_app.config.plan == "cycls_pass"
+    assert premium_app.config.cycls_pass is True
     print("✅ Test passed.")
 
 
@@ -94,7 +94,7 @@ def test_app_default_config():
 
     assert default_app.config.auth == False
     assert default_app.config.analytics == False
-    assert default_app.config.plan == "free"
+    assert default_app.config.cycls_pass is False
     assert default_app.config.title is None
     print("✅ Test passed.")
 

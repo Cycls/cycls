@@ -20,8 +20,8 @@ image = cycls.Image().copy(".providers.env", ".env")#.rebuild()
 web = (
     cycls.Web()
     .auth(cycls.Clerk())
+    .cycls_pass()
     .analytics(True)
-    .plan("cycls_pass")
     .title("The agent for getting things done")
 )
 
