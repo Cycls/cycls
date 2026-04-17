@@ -19,9 +19,9 @@ image = cycls.Image().copy(".providers.env", ".env")#.rebuild()
 
 web = (
     cycls.Web()
-    .auth(cycls.Clerk())
-    .cycls_pass()
-    .analytics(True)
+    .auth(cycls.Clerk("cycls.ai"))
+    .cms("cycls.ai")
+    .analytics(True) # "cycls.ai"
     .title("The agent for getting things done")
 )
 

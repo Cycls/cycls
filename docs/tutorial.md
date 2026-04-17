@@ -207,7 +207,7 @@ web = (
     .auth(cycls.Clerk())
     .title("My Agent")
     .theme("default")
-    .cycls_pass()
+    .cms("cycls.ai")
     .analytics(True)
     .copy_public("./assets/logo.png", "./downloads/")
 )
@@ -218,7 +218,7 @@ web = (
 | `.auth(provider)` | Set auth provider (`cycls.Clerk()` or `cycls.JWT(...)`) |
 | `.title(str)` | Browser tab + app title |
 | `.theme(name)` | `"default"` or `"dev"` |
-| `.cycls_pass()` | Register on the Cycls Pass subscription (CMS fetch + wallet pass UI) |
+| `.cms(host)` | Register this agent with a CMS (default `"cycls.ai"` fetches from `cms.cycls.ai/agents/{name}`) |
 | `.analytics(bool)` | Enable usage metrics |
 | `.copy_public(*files)` | Static files served at `/public` |
 
@@ -343,11 +343,11 @@ web = (
     cycls.Web()
     .auth(cycls.Clerk())
     .analytics(True)
-    .cycls_pass()
+    .cms("cycls.ai")
 )
 ```
 
-`plan("cycls_pass")` wires monetization via [Cycls Pass](https://cycls.com) subscriptions. Agents can read `context.user.plan` to gate features:
+`.cms("cycls.ai")` registers this agent with the Cycls CMS, which drives wallet-pass UI and [Cycls Pass](https://cycls.com) monetization. Agents can read `context.user.plan` to gate features:
 
 ```python
 if context.user.plan == "cycls_pass":
