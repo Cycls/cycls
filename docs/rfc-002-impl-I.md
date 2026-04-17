@@ -21,11 +21,11 @@ Folds 1 + 2 from RFC 002, plus a developer-side guard pattern (no SDK code).
 
 ## Step 1 — `cycls.Dict` + `cycls.Workspace`
 
-**New file**: `cycls/data.py` (or similar) containing both classes exactly as specified in RFC 002 Implementation section.
+**New file**: `cycls/app/store.py` containing both classes exactly as specified in RFC 002 Implementation section.
 
-**Export** from `cycls/__init__.py`:
+**Export** from `cycls/app/__init__.py` (re-exported by top-level `cycls/__init__.py`):
 ```python
-from cycls.data import Dict, Workspace
+from cycls.app.store import Dict, Workspace
 ```
 
 **Tests** (`tests/data_test.py`):

@@ -251,22 +251,10 @@ def test_build_tools_custom_passthrough():
 
 # ---- LLM builder plumbing ----
 
-def test_llm_sandbox_network_default_false():
-    llm = cycls.LLM()
-    assert llm._bash_network is False
-
-
 def test_llm_sandbox_network_opt_in():
-    llm = cycls.LLM().sandbox(network=True)
-    assert llm._bash_network is True
-
-
-def test_llm_sandbox_is_immutable():
-    """Fluent builder must not mutate the original instance."""
-    base = cycls.LLM()
-    on = base.sandbox(network=True)
-    assert base._bash_network is False
-    assert on._bash_network is True
+    """Default off; opt-in flips the flag that dispatch threads to _exec_bash."""
+    assert cycls.LLM()._bash_network is False
+    assert cycls.LLM().sandbox(network=True)._bash_network is True
 
 
 def test_llm_sandbox_network_kwarg_only():

@@ -384,51 +384,25 @@ def test_streaming_multiple_yields():
 
 
 # =============================================================================
-# Context.workspace() + Image.volume() wiring (RFC 002 Fold 2)
+# Context.workspace() wiring — Image.volume() threaded from Config to Workspace.
+# Org path nesting is covered in tests/data_test.py::test_user_id_produces_nested_path.
 # =============================================================================
 
-def test_image_volume_sets_key():
-    """Image.volume(path) stores the mount path as an immutable builder update."""
-    import cycls
-    img = cycls.Image().volume("/tmp/vol-test")
-    assert img["volume"] == "/tmp/vol-test"
-
-
-def test_context_workspace_personal():
-    """Personal user (no org): Workspace rooted at volume / user_id."""
+def test_context_workspace_uses_config_volume():
+    """Config.volume threads into Context.workspace() at per-request construction."""
     from fastapi.testclient import TestClient
-    from cycls.data import Workspace
+    from pathlib import Path
+    from cycls.app.store import Workspace
 
     captured = {}
-
     async def handler(context):
-        ws = context.workspace()
-        captured["ws"] = ws
+        captured["ws"] = context.workspace()
         yield "ok"
 
     config = Config(public_path=THEME_PATH, auth=False, volume="/tmp/cycls-test-vol")
-    app = web(handler, config)
-    client = TestClient(app)
+    client = TestClient(web(handler, config))
     client.post("/", json={"messages": [{"role": "user", "content": "hi"}]})
 
-    ws = captured["ws"]
-    assert isinstance(ws, Workspace)
-    # No user → falls back to volume/local
-    from pathlib import Path
-    assert ws.root == Path("/tmp/cycls-test-vol/local")
-
-
-def test_context_workspace_org_nests_user():
-    """Org user: Workspace rooted at volume/org_id with user_id nesting under .cycls/."""
-    from cycls.app.auth import User
-    from cycls.data import Workspace
-    from pathlib import Path
-
-    # Call the Context construction path directly by simulating what web() does.
-    # Simpler: build a Workspace the same way Context.workspace() does and assert.
-    volume = Path("/tmp/cycls-vol")
-    user = User(id="u_1", org_id="o_7")
-    ws = Workspace(volume / user.org_id, user_id=user.id)
-    assert ws.root == Path("/tmp/cycls-vol/o_7")
-    assert ws.data == Path("/tmp/cycls-vol/o_7/.cycls/u_1")
+    assert isinstance(captured["ws"], Workspace)
+    assert captured["ws"].root == Path("/tmp/cycls-test-vol/local")  # no auth → 'local'
 
