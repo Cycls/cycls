@@ -1,5 +1,8 @@
-"""Tests for .cycls/ reserved-path guards (RFC 002 Impl I Step 3)."""
+"""Tests for .cycls/ reserved-path guards (RFC 002 Impl I Step 3)
+and bash sandbox / tool-scoping hardening."""
 import asyncio
+import os
+import shutil
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,7 +10,7 @@ import pytest
 
 import cycls
 from cycls.agent.state.main import resolve_path
-from cycls.agent.harness.tools import _resolve_path, _exec_bash
+from cycls.agent.harness.tools import _resolve_path, _exec_bash, build_tools
 
 
 def test_state_resolve_path_rejects_cycls(tmp_path):
@@ -65,3 +68,228 @@ def test_bash_sandbox_ro_binds_cycls(tmp_path):
     i = argv.index("--ro-bind-try")
     assert argv[i + 1] == str(tmp_path / ".cycls")
     assert argv[i + 2] == "/workspace/.cycls"
+
+
+def _capture_bash_exec(tmp_path, **kwargs):
+    mock_proc = MagicMock()
+    mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
+    captured = {}
+
+    async def fake_exec(*args, **kw):
+        captured["argv"] = args
+        captured["kwargs"] = kw
+        return mock_proc
+
+    with patch("asyncio.create_subprocess_exec", fake_exec):
+        asyncio.run(_exec_bash("echo", str(tmp_path), **kwargs))
+    return captured
+
+
+def _capture_bash_argv(tmp_path, **kwargs):
+    return _capture_bash_exec(tmp_path, **kwargs)["argv"]
+
+
+def test_bash_sandbox_unshares_all(tmp_path):
+    """/proc must not leak host PIDs/env. --unshare-all isolates namespaces."""
+    argv = _capture_bash_argv(tmp_path)
+    assert "--unshare-all" in argv
+
+
+def test_bash_sandbox_network_off_by_default(tmp_path):
+    """Network is OFF by default — sandboxed bash can't egress even if
+    it reads a secret. Opt in per-agent via LLM.bash_network(True)."""
+    argv = _capture_bash_argv(tmp_path)
+    assert "--share-net" not in argv
+
+
+def test_bash_sandbox_network_opt_in(tmp_path):
+    """network=True adds --share-net, and it must come after --unshare-all
+    or it has no effect."""
+    argv = _capture_bash_argv(tmp_path, network=True)
+    assert "--share-net" in argv
+    assert argv.index("--share-net") > argv.index("--unshare-all")
+
+
+def test_bash_sandbox_clearenv(tmp_path):
+    """--clearenv strips parent env so secrets like ANTHROPIC_API_KEY don't
+    cross the sandbox boundary."""
+    argv = _capture_bash_argv(tmp_path)
+    assert "--clearenv" in argv
+
+
+def test_bash_sandbox_forwards_only_safe_env(tmp_path):
+    """Only PATH / HOME / TERM / LANG may be forwarded via --setenv.
+    Anything else risks leaking a secret the caller forgot to strip."""
+    argv = _capture_bash_argv(tmp_path)
+    safe = {"PATH", "HOME", "TERM", "LANG"}
+    forwarded = {argv[i + 1] for i, a in enumerate(argv) if a == "--setenv"}
+    assert forwarded <= safe, f"unexpected env forwarded: {forwarded - safe}"
+
+
+def test_bash_sandbox_die_with_parent(tmp_path):
+    """--die-with-parent prevents orphaned sandbox processes."""
+    argv = _capture_bash_argv(tmp_path)
+    assert "--die-with-parent" in argv
+
+
+def test_bash_sandbox_bwrap_env_is_sanitized(tmp_path, monkeypatch):
+    """REGRESSION: bwrap itself is visible as PID 1 inside the sandbox, so
+    its own environ must be sanitized via subprocess env=. --clearenv only
+    affects the bash child — without env= on subprocess_exec, bwrap leaks
+    the parent Python's secrets via /proc/1/environ."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-LEAK")
+    monkeypatch.setenv("CYCLS_API_KEY", "ak-LEAK")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghu_LEAK")
+    captured = _capture_bash_exec(tmp_path)
+    env = captured["kwargs"].get("env")
+    assert env is not None, "bwrap must be launched with explicit env= to block leak"
+    assert set(env.keys()) <= {"PATH", "LANG"}, f"unexpected bwrap env keys: {env.keys()}"
+    blob = "\n".join(f"{k}={v}" for k, v in env.items())
+    assert "LEAK" not in blob
+    assert "sk-ant" not in blob
+    assert "ak-" not in blob
+    assert "ghu_" not in blob
+
+
+def _bwrap_live_ok():
+    """Probe whether bwrap can actually run with our mount config.
+    Deployed containers have /workspace; dev hosts usually don't,
+    and --ro-bind / / blocks creating it."""
+    if shutil.which("bwrap") is None:
+        return False
+    try:
+        out = asyncio.run(_exec_bash("echo ok", "/tmp"))
+        return "ok" in out and "Read-only file system" not in out
+    except Exception:
+        return False
+
+
+_BWRAP_LIVE = _bwrap_live_ok()
+
+
+@pytest.mark.skipif(not _BWRAP_LIVE, reason="bwrap cannot run in this env (needs /workspace mount point)")
+def test_bash_sandbox_does_not_leak_parent_env_live(tmp_path, monkeypatch):
+    """Live: parent-process secrets must not be readable from inside the
+    sandbox — neither via /proc/1/environ (bwrap) nor any other PID."""
+    monkeypatch.setenv("CYCLS_SANDBOX_LEAK_SENTINEL_XYZ", "should-not-leak")
+    monkeypatch.setenv("CYCLS_FAKE_API_KEY", "sk-fake-shouldnotleak")
+    out = asyncio.run(_exec_bash(
+        r"grep -la 'LEAK_SENTINEL\|FAKE_API_KEY' /proc/*/environ 2>/dev/null || echo CLEAN",
+        str(tmp_path),
+    ))
+    assert "should-not-leak" not in out
+    assert "sk-fake" not in out
+    assert "CLEAN" in out
+
+
+@pytest.mark.skipif(not _BWRAP_LIVE, reason="bwrap cannot run in this env (needs /workspace mount point)")
+def test_bash_sandbox_hides_host_pids_live(tmp_path):
+    """Live sandbox run: /proc must only show sandboxed PIDs, not the
+    thousands of host processes."""
+    out = asyncio.run(_exec_bash(
+        "ls /proc | grep -E '^[0-9]+$' | wc -l",
+        str(tmp_path),
+    ))
+    # Sandbox has ~2-5 PIDs (bash + children). Host has hundreds.
+    assert int(out.strip()) < 20, f"too many PIDs visible: {out}"
+
+
+# ---- _resolve_path escape hardening ----
+
+def test_resolve_path_rejects_dotdot_escape(tmp_path):
+    """Relative `..` must not escape the workspace root."""
+    with pytest.raises(ValueError, match="escapes workspace"):
+        _resolve_path("../etc/passwd", tmp_path)
+
+
+def test_resolve_path_rejects_workspace_prefix_escape(tmp_path):
+    """`/workspace/../etc/passwd` must not resolve outside the workspace
+    just because it carries the /workspace/ prefix."""
+    with pytest.raises(ValueError, match="escapes workspace"):
+        _resolve_path("/workspace/../etc/passwd", tmp_path)
+
+
+def test_resolve_path_normalizes_absolute_to_workspace(tmp_path):
+    """Absolute paths without /workspace/ prefix are normalized to
+    workspace-relative (documented behavior — not an escape)."""
+    out = _resolve_path("/etc/passwd", tmp_path)
+    assert out == (tmp_path / "etc/passwd").resolve()
+
+
+def test_resolve_path_allows_workspace_prefix(tmp_path):
+    """Paths under /workspace/... resolve to workspace-relative files."""
+    out = _resolve_path("/workspace/notes.md", tmp_path)
+    assert out == (tmp_path / "notes.md").resolve()
+
+
+# ---- build_tools scoping ----
+
+def test_build_tools_empty_allowlist_returns_empty():
+    assert build_tools([], None) == []
+
+
+def test_build_tools_scopes_to_allowlist():
+    """Only tools named in allowed_tools are exposed to the LLM."""
+    tools = build_tools(["Bash"], None)
+    names = {t.get("name") for t in tools}
+    assert "bash" in names
+    assert "read" not in names
+    assert "edit" not in names
+    assert "web_search" not in names
+
+
+def test_build_tools_editor_bundle_has_read_and_edit():
+    tools = build_tools(["Editor"], None)
+    names = {t.get("name") for t in tools}
+    assert names == {"read", "edit"}
+
+
+def test_build_tools_unknown_name_ignored():
+    """Unknown tool names silently drop — don't crash the agent boot."""
+    tools = build_tools(["Bash", "NotARealTool"], None)
+    names = {t.get("name") for t in tools}
+    assert names == {"bash"}
+
+
+def test_build_tools_custom_passthrough():
+    """User-supplied custom tools are normalized and included."""
+    custom = [{"name": "render_image", "description": "x",
+               "inputSchema": {"type": "object"}}]
+    tools = build_tools([], custom)
+    assert len(tools) == 1
+    assert tools[0]["type"] == "custom"
+    assert tools[0]["name"] == "render_image"
+
+
+# ---- LLM builder plumbing ----
+
+def test_llm_sandbox_network_default_false():
+    llm = cycls.LLM()
+    assert llm._bash_network is False
+
+
+def test_llm_sandbox_network_opt_in():
+    llm = cycls.LLM().sandbox(network=True)
+    assert llm._bash_network is True
+
+
+def test_llm_sandbox_is_immutable():
+    """Fluent builder must not mutate the original instance."""
+    base = cycls.LLM()
+    on = base.sandbox(network=True)
+    assert base._bash_network is False
+    assert on._bash_network is True
+
+
+def test_llm_sandbox_network_kwarg_only():
+    """`network` is keyword-only — prevents accidental positional misuse."""
+    with pytest.raises(TypeError):
+        cycls.LLM().sandbox(True)
+
+
+def test_build_tools_cache_control_on_last():
+    """Last tool gets ephemeral cache_control for prompt-cache efficiency."""
+    tools = build_tools(["Bash", "Editor"], None)
+    assert tools[-1].get("cache_control") == {"type": "ephemeral", "ttl": "1h"}
+    for t in tools[:-1]:
+        assert "cache_control" not in t
