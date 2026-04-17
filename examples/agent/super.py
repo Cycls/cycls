@@ -60,6 +60,7 @@ llm = (
     # .tools(TOOLS)  # skills+safe_keys
     # .on("render_image", render_image)
     .allowed_tools(["Bash", "Editor", "WebSearch"])  # "Canvas"
+    .sandbox(network=True)
     # .show_usage(True)
 )
 

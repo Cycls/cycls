@@ -110,16 +110,24 @@ def _resolve_path(raw_path, workspace):
 
 # ---- Tool execution ----
 
-async def _exec_bash(command, cwd, timeout=600):
+async def _exec_bash(command, cwd, timeout=600, network=False):
+    net_flags = ("--share-net",) if network else ()
+    # bwrap itself is visible as PID 1 inside the sandbox's /proc, so its own
+    # environ must be sanitized — --clearenv only affects the child (bash).
+    path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    lang = os.environ.get("LANG", "C.UTF-8")
+    bwrap_env = {"PATH": path, "LANG": lang}
     proc = await asyncio.create_subprocess_exec(
         "bwrap", "--ro-bind", "/", "/", "--bind", cwd, "/workspace",
         "--ro-bind-try", str(pathlib.Path(cwd) / ".cycls"), "/workspace/.cycls",
         "--tmpfs", "/app", "--tmpfs", "/tmp", "--dev", "/dev", "--proc", "/proc",
+        "--unshare-all", *net_flags,
         "--chdir", "/workspace", "--die-with-parent", "--clearenv",
-        "--setenv", "PATH", os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "--setenv", "PATH", path,
         "--setenv", "HOME", "/workspace", "--setenv", "TERM", "xterm",
-        "--setenv", "LANG", os.environ.get("LANG", "C.UTF-8"),
+        "--setenv", "LANG", lang,
         "--", "bash", "-c", command,
+        env=bwrap_env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     try: stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
@@ -199,14 +207,14 @@ def _exec_edit(inp, workspace):
 
 # ---- Dispatch ----
 
-def dispatch(block, ws, timeout, handlers=None):
+def dispatch(block, ws, timeout, handlers=None, network=False):
     name, inp = block.name, block.input
     if name == "bash":
         cmd = inp.get("command", "")
         step = inp.get("description") or cmd
         t = inp.get("timeout")
         secs = t / 1000 if t else timeout
-        return {"type": "step", "tool_name": "Bash", "step": step}, _exec_bash(cmd, ws, timeout=secs)
+        return {"type": "step", "tool_name": "Bash", "step": step}, _exec_bash(cmd, ws, timeout=secs, network=network)
     if name == "read":
         return {"type": "step", "tool_name": "Reading", "step": inp.get("path", "")}, _exec_read(inp, ws)
     if name == "edit":

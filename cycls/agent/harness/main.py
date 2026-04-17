@@ -114,7 +114,7 @@ def _recover(e, messages):
 
 async def _run(*, context, system="", tools=None, allowed_tools=[],
                model="anthropic/claude-sonnet-4-20250514", max_tokens=16384,
-               bash_timeout=600, show_usage=False, client=None,
+               bash_timeout=600, bash_network=False, show_usage=False, client=None,
                base_url=None, api_key=None, handlers=None):
     t0 = time.monotonic()
     if client is None:
@@ -166,7 +166,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             if response.stop_reason != "tool_use": break
 
             blocks = [b for b in response.content if b.type == "tool_use"]
-            pairs = [dispatch(b, ws, bash_timeout, handlers) for b in blocks]
+            pairs = [dispatch(b, ws, bash_timeout, handlers, network=bash_network) for b in blocks]
             for step, _ in pairs: yield step
             outputs = await asyncio.gather(*(c for _, c in pairs), return_exceptions=True)
 
