@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import { useAuthHeaders } from "./use-auth-headers";
+import { track } from "../lib/posthog";
 
 export interface Part {
   type: string;
@@ -50,6 +51,7 @@ export interface AppConfig {
   auth?: boolean;
   voice?: boolean;
   pk?: string;
+  analytics?: boolean;
 }
 
 export function useChat(baseUrl: string = "") {
@@ -67,7 +69,7 @@ export function useChat(baseUrl: string = "") {
   const sessionIdRef = useRef<string | null>(null);
   const messagesRef = useRef<Message[]>([]);
   const abortRef = useRef<AbortController | null>(null);
-  const lastRequestRef = useRef<{ text: string; attachments?: Attachment[] } | null>(null);
+  const lastRequestRef = useRef<{ text: string; attachments?: Attachment[]; origin?: string } | null>(null);
   const { setGetToken, authHeaders, getToken } = useAuthHeaders();
 
   const uploadFile = useCallback(
@@ -82,14 +84,28 @@ export function useChat(baseUrl: string = "") {
         headers: h,
         body: form,
       });
-      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+      if (!res.ok) {
+        track("file_upload_failed", {
+          file_name: file.name,
+          file_type: file.type,
+          file_size: file.size,
+          status: res.status,
+        });
+        throw new Error(`Upload failed: ${res.status}`);
+      }
+      track("file_uploaded", {
+        file_name: file.name,
+        file_type: file.type,
+        file_size: file.size,
+        context: "chat_attachment",
+      });
       return { name: file.name, size: file.size, type: file.type, url: "", path: uploadPath };
     },
     [baseUrl, authHeaders],
   );
 
   const send = useCallback(
-    async (text: string, attachments?: Attachment[]) => {
+    async (text: string, attachments?: Attachment[], origin: string = "keyboard") => {
       if (isStreaming) return;
 
       const userMessage: Message = { role: "user", content: text, attachments };
@@ -102,8 +118,17 @@ export function useChat(baseUrl: string = "") {
       setMessages((prev) => [...prev, userMessage, assistantMessage]);
       setIsStreaming(true);
 
+      track("message_sent", {
+        message_length: text.length,
+        has_attachments: !!(attachments && attachments.length),
+        attachment_count: attachments?.length || 0,
+        is_new_session: !sessionIdRef.current,
+        session_id: sessionIdRef.current,
+        origin,
+      });
+
       // Store for retry
-      lastRequestRef.current = { text, attachments };
+      lastRequestRef.current = { text, attachments, origin };
 
       const doFetch = async () => {
         const controller = new AbortController();
@@ -263,6 +288,10 @@ export function useChat(baseUrl: string = "") {
             await doFetch();
           } catch (retryErr) {
             if ((retryErr as Error).name !== "AbortError") {
+              track("message_failed", {
+                error_message: (retryErr as Error).message,
+                session_id: sessionIdRef.current,
+              });
               // Both attempts failed — show error with retry button
               setMessages((prev) => {
                 const updated = [...prev];
@@ -309,7 +338,8 @@ export function useChat(baseUrl: string = "") {
 
   const retry = useCallback(() => {
     if (isStreaming || !lastRequestRef.current) return;
-    const { text, attachments } = lastRequestRef.current;
+    track("message_retried", { session_id: sessionIdRef.current });
+    const { text, attachments, origin } = lastRequestRef.current;
     // Remove the last assistant message (the error one)
     setMessages((prev) => {
       const updated = [...prev];
@@ -320,14 +350,18 @@ export function useChat(baseUrl: string = "") {
       return updated;
     });
     // Re-send after state update
-    setTimeout(() => send(text, attachments), 0);
+    setTimeout(() => send(text, attachments, origin), 0);
   }, [isStreaming, send]);
 
   const stop = useCallback(() => {
+    if (abortRef.current) {
+      track("generation_stopped", { session_id: sessionIdRef.current });
+    }
     abortRef.current?.abort();
   }, []);
 
   const clear = useCallback(() => {
+    track("chat_cleared", { session_id: sessionIdRef.current });
     abortRef.current?.abort();
     setMessages([]);
     setSessionId(null);
@@ -341,9 +375,20 @@ export function useChat(baseUrl: string = "") {
       headers,
       body: JSON.stringify({ messages, title, author }),
     });
-    if (!res.ok) throw new Error(`Share failed: ${res.status}`);
+    if (!res.ok) {
+      track("share_create_failed", { status: res.status });
+      throw new Error(`Share failed: ${res.status}`);
+    }
     const { path } = await res.json();
-    return `${window.location.origin}/shared/${path}`;
+    const shareUrl = `${window.location.origin}/shared/${path}`;
+    track("share_created", {
+      share_path: path,
+      share_url: shareUrl,
+      title,
+      message_count: messages.length,
+      session_id: sessionIdRef.current,
+    });
+    return shareUrl;
   }, [messages, baseUrl, authHeaders]);
 
   const listShares = useCallback(async () => {
@@ -357,6 +402,7 @@ export function useChat(baseUrl: string = "") {
     const headers = await authHeaders();
     const res = await fetch(`${baseUrl}/share/${id}`, { method: "DELETE", headers });
     if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+    track("share_deleted", { share_id: id });
   }, [baseUrl, authHeaders]);
 
   const listSessions = useCallback(async () => {
@@ -379,6 +425,11 @@ export function useChat(baseUrl: string = "") {
       setMessages(loaded);
       setSessionId(id);
       sessionIdRef.current = id;
+
+      track("session_loaded", {
+        session_id: id,
+        message_count: loaded.length,
+      });
 
       // Rebuild attachment URLs with fresh token (after render)
       const token = await getToken();
@@ -403,6 +454,7 @@ export function useChat(baseUrl: string = "") {
     const headers = await authHeaders();
     const res = await fetch(`${baseUrl}/sessions/${id}`, { method: "DELETE", headers });
     if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+    track("session_deleted", { session_id: id });
     // If we deleted the current session, clear it
     if (sessionIdRef.current === id) {
       abortRef.current?.abort();

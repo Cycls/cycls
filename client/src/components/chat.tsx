@@ -9,6 +9,7 @@ import { Files } from "./files";
 import type { Message, Attachment, PassMetadata } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
+import { track } from "../lib/posthog";
 import { useSpeechRecognition } from "../hooks/use-speech";
 import { SUGGESTIONS } from "./suggestions-data";
 
@@ -70,7 +71,7 @@ export function Chat({
 }: {
   messages: Message[];
   isStreaming: boolean;
-  onSend: (text: string, attachments?: Attachment[]) => void;
+  onSend: (text: string, attachments?: Attachment[], origin?: string) => void;
   onStop: () => void;
   onClear: () => void;
   onRetry?: () => void;
@@ -132,11 +133,11 @@ export function Chat({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { scrollRef, contentRef, scrollToBottom } = useStickToBottom();
 
-  const handleSubmitRef = useRef<(overrideText?: string) => void>(() => {});
+  const handleSubmitRef = useRef<(overrideText?: string, origin?: string) => void>(() => {});
 
   const onSpeechEnd = useCallback((text: string) => {
     if (text.trim()) {
-      handleSubmitRef.current(text);
+      handleSubmitRef.current(text, "voice");
       textareaRef.current?.blur();
     }
   }, []);
@@ -204,13 +205,13 @@ export function Chat({
     textareaRef.current?.focus();
   }, []);
 
-  const handleSubmit = useCallback((overrideText?: string) => {
+  const handleSubmit = useCallback((overrideText?: string, origin: string = "keyboard") => {
     const text = (overrideText ?? input).trim();
     if (!text || isStreaming || attachments.some((a) => a.status === "uploading")) return;
     const sendAttachments = attachments.length > 0 ? [...attachments] : undefined;
     setInput("");
     setAttachments([]);
-    onSend(text, sendAttachments);
+    onSend(text, sendAttachments, origin);
     setTimeout(() => scrollToBottom(), 0);
   }, [input, isStreaming, onSend, attachments, scrollToBottom]);
 
@@ -228,10 +229,15 @@ export function Chat({
 
   const toggleDark = () => {
     document.body.classList.toggle("dark");
+    track("theme_changed", {
+      to: document.body.classList.contains("dark") ? "dark" : "light",
+      source: "header",
+    });
   };
 
   const openExplore = async () => {
     setExploreOpen(true);
+    track("explore_opened", { cached: exploreAgents.length > 0 });
     if (exploreAgents.length > 0) return;
     setExploreLoading(true);
     try {
@@ -425,7 +431,11 @@ export function Chat({
                   </svg>
                 </button>
                 <button
-                  onClick={() => setLang(isAr ? "en" : "ar")}
+                  onClick={() => {
+                    const next = isAr ? "en" : "ar";
+                    setLang(next);
+                    track("language_changed", { to: next, source: "header" });
+                  }}
                   className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
                   aria-label="Toggle language"
                 >
@@ -483,6 +493,11 @@ export function Chat({
                     <a
                       key={agent.slug}
                       href={href}
+                      onClick={() => track("explore_agent_clicked", {
+                        agent_slug: agent.slug,
+                        agent_title: agent.title,
+                        agent_link: href,
+                      })}
                       className="flex items-start gap-3 px-3 py-2.5 text-sm hover:bg-secondary/80 transition-colors cursor-pointer"
                     >
                       {agent.icon_svg ? (
@@ -566,7 +581,7 @@ export function Chat({
               <div className="relative">
                 <div className="absolute inset-x-0 top-0">
                   <Suggestions
-                    onSelect={(text) => handleSubmit(text)}
+                    onSelect={(text) => handleSubmit(text, "suggestion")}
                     onPreview={(text) => setInput(text)}
                     input={input}
                   />
@@ -869,7 +884,17 @@ function PricingCards({ payerType = "user", onSelect }: { payerType?: "user" | "
                 {isActive ? (
                   <SignedIn>
                     <SubscriptionDetailsButton for={payerType}>
-                      <button onClick={onSelect} className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer">
+                      <button
+                        onClick={() => {
+                          track("plan_manage_clicked", {
+                            plan_id: plan.id,
+                            plan_name: plan.name,
+                            payer_type: payerType,
+                          });
+                          onSelect();
+                        }}
+                        className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer"
+                      >
                         {t("managePlan")}
                       </button>
                     </SubscriptionDetailsButton>
@@ -880,9 +905,32 @@ function PricingCards({ payerType = "user", onSelect }: { payerType?: "user" | "
                       planId={plan.id}
                       planPeriod={period}
                       for={payerType}
-                      onSubscriptionComplete={onSelect}
+                      onSubscriptionComplete={() => {
+                        track("plan_subscription_completed", {
+                          plan_id: plan.id,
+                          plan_name: plan.name,
+                          plan_period: period,
+                          plan_price: price,
+                          payer_type: payerType,
+                          is_free: isFreePlan,
+                        });
+                        onSelect();
+                      }}
                     >
-                      <button onClick={onSelect} className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer">
+                      <button
+                        onClick={() => {
+                          track("plan_checkout_clicked", {
+                            plan_id: plan.id,
+                            plan_name: plan.name,
+                            plan_period: period,
+                            plan_price: price,
+                            payer_type: payerType,
+                            is_free: isFreePlan,
+                          });
+                          onSelect();
+                        }}
+                        className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer"
+                      >
                         {isFreePlan ? t("getStarted") : t("subscribe")}
                       </button>
                     </CheckoutButton>
@@ -911,15 +959,23 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
   const [open, setOpen] = useState(false);
   const [showOrgs, setShowOrgs] = useState(false);
   const [pricingFor, setPricingFor] = useState<"user" | "organization" | null>(null);
+  const openPricing = (payer: "user" | "organization", source: string) => {
+    setPricingFor(payer);
+    track("plan_modal_opened", { payer_type: payer, source });
+  };
+  const closePricing = (method: string) => {
+    if (pricingFor) track("plan_modal_closed", { payer_type: pricingFor, method });
+    setPricingFor(null);
+  };
   useEffect(() => {
     const plans = new URLSearchParams(window.location.search).get("plans");
     if (!plans) return;
     window.history.replaceState({}, "", window.location.pathname);
     if (plans === "b2c") {
-      setPricingFor("user");
+      openPricing("user", "url_param");
     } else if (plans === "b2b") {
       if (activeOrg) {
-        setPricingFor("organization");
+        openPricing("organization", "url_param");
       } else {
         onCreateOrg?.();
       }
@@ -1009,7 +1065,13 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                 </div>
                 <div className="border-t border-border" />
                 <button
-                  onClick={() => document.body.classList.toggle("dark")}
+                  onClick={() => {
+                    document.body.classList.toggle("dark");
+                    track("theme_changed", {
+                      to: document.body.classList.contains("dark") ? "dark" : "light",
+                      source: "user_menu",
+                    });
+                  }}
                   className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1021,7 +1083,7 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                 <p className="px-3 pt-2 pb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">{t("account")}</p>
                 {plan && (
                   <button
-                    onClick={() => { setOpen(false); setPricingFor(activeOrg ? "organization" : "user"); }}
+                    onClick={() => { setOpen(false); openPricing(activeOrg ? "organization" : "user", "user_menu"); }}
                     className="flex w-full items-center justify-between px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                   >
                     {t("plans")}
@@ -1073,7 +1135,7 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
       )}
       {pricingFor && createPortal(
         <>
-          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => setPricingFor(null)} />
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => closePricing("backdrop")} />
           <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none" dir="ltr">
             <div className="pointer-events-auto fixed top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] flex flex-col rounded-xl border border-border bg-background shadow-xl sm:relative sm:inset-auto sm:w-auto sm:max-h-[90vh] sm:rounded-2xl">
               <div className="flex items-center justify-between px-6 pt-5 pb-3">
@@ -1096,7 +1158,7 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                   ) : t("personalPlans")}
                 </h2>
                 <button
-                  onClick={() => setPricingFor(null)}
+                  onClick={() => closePricing("dismiss")}
                   className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1105,7 +1167,7 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                 </button>
               </div>
               <div className="px-6 pb-5 overflow-y-auto">
-                <PricingCards payerType={pricingFor} onSelect={() => setPricingFor(null)} />
+                <PricingCards payerType={pricingFor} onSelect={() => closePricing("select")} />
               </div>
             </div>
           </div>
@@ -1267,7 +1329,12 @@ function InputBox({
           )}
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); setLang(getLang() === "en" ? "ar" : "en"); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              const next = getLang() === "en" ? "ar" : "en";
+              setLang(next);
+              track("language_changed", { to: next, source: "composer" });
+            }}
             className="flex h-8 items-center justify-center rounded-full px-2.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition cursor-pointer text-xs font-semibold"
             aria-label="Toggle language"
           >
@@ -1508,6 +1575,7 @@ function Suggestions({
                 onClick={() => {
                   setActiveCategory(s.label);
                   onPreview(s.highlight);
+                  track("suggestion_category_selected", { category: s.label });
                 }}
                 className="flex items-center gap-2 rounded-full border border-border px-3.5 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-foreground/30 hover:bg-secondary/50 transition-colors cursor-pointer"
               >
@@ -1535,6 +1603,10 @@ function Suggestions({
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ duration: 0.15, delay: i * 0.05 }}
                   onClick={() => {
+                    track("suggestion_prompt_clicked", {
+                      category: activeSuggestion.label,
+                      prompt: item,
+                    });
                     onSelect(item);
                     setActiveCategory(null);
                   }}

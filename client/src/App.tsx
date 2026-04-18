@@ -21,6 +21,8 @@ import { Chat } from "./components/chat";
 import { SharedView } from "./components/shared-view";
 import { useChat, AppConfig } from "./hooks/use-chat";
 import { useFiles } from "./hooks/use-files";
+import { usePostHogIdentify } from "./hooks/use-posthog-identify";
+import { initPostHog, setAgentDomain, track, register } from "./lib/posthog";
 
 function ChatApp({ config }: { config: AppConfig | null }) {
   const { messages, isStreaming, sessionLoading, sessionId, send, retry, stop, clear, share, listShares, deleteShare, listSessions, loadSession, deleteSession, setGetToken, uploadFile, authHeaders } =
@@ -33,6 +35,31 @@ function ChatApp({ config }: { config: AppConfig | null }) {
   const { organization } = useOrganization();
   const { userMemberships, setActive } = useOrganizationList({ userMemberships: true });
   const { data: subscription } = useSubscription({ for: organization ? "organization" : "user" });
+  const lang = useLang();
+
+  const subItem = subscription?.subscriptionItems?.[0];
+  const subSummary = subItem ? {
+    planName: subItem.plan.name,
+    status: subItem.status,
+    amount: subItem.amount,
+    planPeriod: subItem.planPeriod,
+    periodEnd: subItem.periodEnd,
+    canceledAt: subItem.canceledAt,
+  } : undefined;
+  const orgSummary = organization ? {
+    id: organization.id,
+    name: organization.name,
+    imageUrl: organization.imageUrl,
+  } : undefined;
+
+  usePostHogIdentify(
+    !!config?.analytics,
+    user,
+    subSummary,
+    orgSummary,
+    lang,
+    clerk?.client?.lastAuthenticationStrategy,
+  );
 
   useEffect(() => {
     setGetToken(() => getToken());
@@ -47,7 +74,7 @@ function ChatApp({ config }: { config: AppConfig | null }) {
     if (q) {
       qSent.current = true;
       window.history.replaceState({}, "", window.location.pathname);
-      send(q);
+      send(q, undefined, "url_param");
     }
   }, [send]);
 
@@ -134,7 +161,7 @@ function ChatNoAuth({ config }: { config: AppConfig | null }) {
     if (q) {
       qSent.current = true;
       window.history.replaceState({}, "", window.location.pathname);
-      send(q);
+      send(q, undefined, "url_param");
     }
   }, [send]);
 
@@ -245,6 +272,7 @@ function CustomSignIn() {
     try {
       setIsLoading(strategy);
       setError("");
+      track("sign_in_attempted", { method: strategy, step: "oauth_redirect" });
       stashParams();
       const params = new URLSearchParams(window.location.search);
       const redirectUrlComplete = params.toString() ? `/?${params}` : "/";
@@ -265,6 +293,7 @@ function CustomSignIn() {
     try {
       setIsLoading("form");
       setError("");
+      track("sign_in_attempted", { method: "password", step: "form" });
       const result = await signIn!.create({ identifier: email, password });
       if (result.status === "complete") {
         await setActive!({ session: result.createdSessionId });
@@ -284,6 +313,7 @@ function CustomSignIn() {
     try {
       setIsLoading("form");
       setError("");
+      track("sign_in_attempted", { method: "email_code", step: "verify" });
       const result = await signIn!.attemptFirstFactor({ strategy: "email_code", code });
       if (result.status === "complete") {
         await setActive!({ session: result.createdSessionId });
@@ -301,6 +331,7 @@ function CustomSignIn() {
     try {
       setIsLoading("form");
       setError("");
+      track("sign_up_attempted", { method: "password", step: "form" });
       const result = await signUp!.create({ emailAddress: email, password });
       if (result.status === "complete") {
         await setSignUpActive!({ session: result.createdSessionId });
@@ -321,6 +352,7 @@ function CustomSignIn() {
     try {
       setIsLoading("form");
       setError("");
+      track("sign_up_attempted", { method: "email_code", step: "verify" });
       const result = await signUp!.attemptEmailAddressVerification({ code });
       if (result.status === "complete") {
         await setSignUpActive!({ session: result.createdSessionId });
@@ -369,7 +401,13 @@ function CustomSignIn() {
     }
   };
 
-  const toggleDark = () => document.body.classList.toggle("dark");
+  const toggleDark = () => {
+    document.body.classList.toggle("dark");
+    track("theme_changed", {
+      to: document.body.classList.contains("dark") ? "dark" : "light",
+      source: "sign_in",
+    });
+  };
 
   const inputClass = "w-full rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
   const submitClass = "flex w-full items-center justify-center rounded-xl border border-border bg-background px-4 py-3 text-sm font-medium text-foreground hover:bg-secondary transition-colors disabled:opacity-50 cursor-pointer";
@@ -378,7 +416,11 @@ function CustomSignIn() {
     <div className="flex h-dvh w-full flex-col bg-background">
       <div className="fixed top-0 right-0 p-4 flex items-center gap-1" dir="ltr">
         <button
-          onClick={() => setLang(isAr ? "en" : "ar")}
+          onClick={() => {
+            const next = isAr ? "en" : "ar";
+            setLang(next);
+            track("language_changed", { to: next, source: "sign_in" });
+          }}
           className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
           aria-label="Toggle language"
         >
@@ -662,6 +704,17 @@ export default function App() {
         .finally(() => setLoading(false));
     }
   }, []);
+
+  useEffect(() => {
+    if (config?.analytics) {
+      initPostHog();
+      setAgentDomain(config.name);
+    }
+  }, [config?.analytics, config?.name]);
+
+  useEffect(() => {
+    register({ theme: isDark ? "dark" : "light", language: lang });
+  }, [isDark, lang]);
 
   const sharedMatch = window.location.pathname.match(/^\/shared\/(.+)/);
   if (sharedMatch) {

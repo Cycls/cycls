@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { useAuthHeaders } from "./use-auth-headers";
+import { track } from "../lib/posthog";
 
 export interface FileEntry {
   name: string;
@@ -41,7 +42,22 @@ export function useFiles(baseUrl: string = "") {
       headers: h,
       body: form,
     });
-    if (!res.ok) throw new Error(`${res.status}`);
+    if (!res.ok) {
+      track("file_upload_failed", {
+        file_name: file.name,
+        file_type: file.type,
+        file_size: file.size,
+        context: "files_panel",
+        status: res.status,
+      });
+      throw new Error(`${res.status}`);
+    }
+    track("file_uploaded", {
+      file_name: file.name,
+      file_type: file.type,
+      file_size: file.size,
+      context: "files_panel",
+    });
   }, [baseUrl, authHeaders]);
 
   const mkdir = useCallback(async (dir: string, name: string) => {
@@ -52,6 +68,7 @@ export function useFiles(baseUrl: string = "") {
       headers: h,
     });
     if (!res.ok) throw new Error(`${res.status}`);
+    track("folder_created", { path: dirPath });
   }, [baseUrl, authHeaders]);
 
   const rename = useCallback(async (from: string, to: string) => {
@@ -63,6 +80,7 @@ export function useFiles(baseUrl: string = "") {
       body: JSON.stringify({ to }),
     });
     if (!res.ok) throw new Error(`${res.status}`);
+    track("file_renamed", { from, to });
   }, [baseUrl, authHeaders]);
 
   const remove = useCallback(async (filePath: string) => {
@@ -72,6 +90,7 @@ export function useFiles(baseUrl: string = "") {
       headers: h,
     });
     if (!res.ok) throw new Error(`${res.status}`);
+    track("file_deleted", { path: filePath });
   }, [baseUrl, authHeaders]);
 
   const openFile = useCallback(async (filePath: string) => {
