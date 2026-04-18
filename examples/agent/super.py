@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import cycls
 
 FREE_MONTHLY_LIMIT = 5
+DOMAIN = "cycls.ai"
 EXEMPT_USERS = {
     "user_2yY1NGlkgUtCgYiPLSHQUriCWrr",
     "user_2yXuICg28R0J2xXMDb6csQ0iEu9",
@@ -19,8 +20,8 @@ image = cycls.Image().copy(".providers.env", ".env")#.rebuild()
 
 web = (
     cycls.Web()
-    .auth(cycls.Clerk("cycls.ai"))
-    .cms("cycls.ai")
+    .auth(cycls.Clerk(DOMAIN))
+    .cms(DOMAIN)
     .analytics(True) # "cycls.ai"
     .title("The agent for getting things done")
 )
