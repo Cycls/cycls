@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { MessageBubble } from "./message";
 import type { Message } from "../hooks/use-chat";
+import { track } from "../lib/posthog";
 
 interface ShareData {
   id: string;
@@ -25,8 +26,24 @@ export function SharedView({ path }: { path: string }) {
       .then((d) => {
         setData(d);
         document.title = d.title ? `Cycls | ${d.title}` : "Cycls";
+        track("share_viewed", {
+          share_path: path,
+          share_url: window.location.href,
+          title: d.title,
+          author_name: d.author?.name,
+          org_name: d.author?.org?.name,
+          message_count: d.messages?.length || 0,
+          referrer: document.referrer || null,
+        });
       })
-      .catch((err) => setError(err.message))
+      .catch((err) => {
+        setError(err.message);
+        track("share_view_failed", {
+          share_path: path,
+          share_url: window.location.href,
+          error: err.message,
+        });
+      })
       .finally(() => setLoading(false));
   }, [path]);
 
