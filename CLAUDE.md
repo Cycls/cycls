@@ -88,6 +88,7 @@ Yield these from app functions:
 - `{"type": "status", "status": "..."}` - Status indicator
 - `{"type": "callout", "callout": "...", "style": "info|warning|error|success"}`
 - `{"type": "image", "src": "...", "alt": "...", "caption": "..."}`
+- `{"type": "ui", "action": "open_plan_modal"}` — fire-and-forget UI trigger; not rendered, not persisted in session history
 
 ## Environment Variables
 

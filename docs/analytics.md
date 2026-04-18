@@ -317,6 +317,57 @@ Cohort: users who fired `plan_checkout_clicked` but never fired
 `plan_subscription_completed` in the following 24 hours. These are hot
 re-engagement targets.
 
+### Agent-driven plan modal opens
+
+**Business question:** when the agent programmatically opens the plans modal
+(e.g. free-tier limit hit via `yield {"type": "ui", "action": "open_plan_modal"}`),
+how often does it convert vs a user-initiated open?
+
+`plan_modal_opened` carries a `source` property. Agent-triggered opens use
+`source = "agent_event"`; user clicks use `source = "user_menu"`; landing-page
+deep links use `source = "url_param"`.
+
+```sql
+SELECT
+  properties.source AS source,
+  count() AS opens,
+  uniq(distinct_id) AS users,
+  countIf(distinct_id IN (
+    SELECT distinct_id FROM events
+    WHERE event = 'plan_subscription_completed'
+      AND timestamp > now() - INTERVAL 7 DAY
+  )) AS converted
+FROM events
+WHERE event = 'plan_modal_opened'
+  AND timestamp > now() - INTERVAL 30 DAY
+GROUP BY source
+ORDER BY opens DESC
+```
+
+**Read it as:** if `agent_event` converts at a higher rate than `user_menu`,
+your agent's "you've hit the limit" moment is hotter than the browsing
+user — prioritize that trigger.
+
+### Agent UI action audit
+
+**Business question:** which UI actions are agents firing, and how often?
+
+```sql
+SELECT
+  properties.agent_domain AS agent,
+  properties.action       AS action,
+  count()                 AS fires
+FROM events
+WHERE event = 'agent_ui_action'
+  AND timestamp > now() - INTERVAL 30 DAY
+GROUP BY agent, action
+ORDER BY fires DESC
+```
+
+Every `{"type": "ui", "action": "..."}` yielded from any agent lands here,
+even ones the client doesn't currently handle — useful for discovering
+when someone's started emitting a new action we haven't wired up yet.
+
 ### Close-method distribution
 
 ```sql

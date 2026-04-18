@@ -25,7 +25,7 @@ import { usePostHogIdentify } from "./hooks/use-posthog-identify";
 import { initPostHog, setAgentDomain, track, register } from "./lib/posthog";
 
 function ChatApp({ config }: { config: AppConfig | null }) {
-  const { messages, isStreaming, sessionLoading, sessionId, send, retry, stop, clear, share, listShares, deleteShare, listSessions, loadSession, deleteSession, setGetToken, uploadFile, authHeaders } =
+  const { messages, isStreaming, sessionLoading, sessionId, send, retry, stop, clear, share, listShares, deleteShare, listSessions, loadSession, deleteSession, setGetToken, uploadFile, authHeaders, setUIHandler } =
     useChat();
   const { entries, path, loading, list, upload, mkdir, rename, remove, openFile, setGetToken: setFilesToken } =
     useFiles();
@@ -134,6 +134,7 @@ function ChatApp({ config }: { config: AppConfig | null }) {
       uploadFile={uploadFile}
       authHeaders={authHeaders}
       voice={config?.voice}
+      setUIHandler={setUIHandler}
       files={{
         entries, path, loading,
         onNavigate: list,

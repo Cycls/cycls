@@ -70,11 +70,12 @@ llm = (
 async def super(context):
     user = context.user
     # Local dev is always exempted so prototyping isn't blocked by gates.
-    exempt = user.id in EXEMPT_USERS or not context.prod
+    exempt = user.id in EXEMPT_USERS # or not context.prod
 
     # b2b: free orgs blocked (no compute, no tracking)
     if user.plan == "o:free_org" and not exempt:
         yield {"type": "text", "text": "🔒 This workspace needs a paid plan."}
+        yield {"type": "ui", "action": "open_plan_modal"}
         return
 
     # Track monthly usage; gate free users at FREE_MONTHLY_LIMIT.
@@ -86,6 +87,7 @@ async def super(context):
         if user.plan == "u:free_user" and entry["count"] >= FREE_MONTHLY_LIMIT and not exempt:
             yield {"type": "text",
                    "text": f"🚨 Free tier limit reached ({FREE_MONTHLY_LIMIT}/mo). Upgrade for unlimited."}
+            yield {"type": "ui", "action": "open_plan_modal"}
             return
 
         entry["count"] += 1
