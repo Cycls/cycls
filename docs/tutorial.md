@@ -152,6 +152,24 @@ yield {"type": "status", "status": "Connecting to database..."}
 yield {"type": "image", "src": "/public/chart.png", "alt": "Chart"}
 ```
 
+### UI actions
+
+Fire-and-forget client-side triggers — nothing is rendered in the conversation and nothing is persisted in session history. Use these to drive the chat UI from agent logic.
+
+```python
+# Free-tier hit their limit? Pop the plan modal.
+if over_quota(context.user):
+    yield {"type": "callout", "callout": "Free tier limit reached.", "style": "warning"}
+    yield {"type": "ui", "action": "open_plan_modal"}
+    return
+```
+
+Supported actions:
+
+| Action | Fields | Behavior |
+|--------|--------|----------|
+| `open_plan_modal` | — | Opens the pricing modal. FE auto-picks `user` vs `organization` based on the active Clerk org. |
+
 ### Component reference
 
 | Component | Required keys | Behavior |
@@ -163,6 +181,7 @@ yield {"type": "image", "src": "/public/chart.png", "alt": "Chart"}
 | `callout` | `callout`, `style` | Single |
 | `status` | `status` | Replaces previous |
 | `image` | `src` | Single |
+| `ui` | `action` | Fire-and-forget client action |
 
 HTML strings pass through for custom styling.
 

@@ -21,7 +21,11 @@ export interface Part {
   alt?: string;
   caption?: string;
   session_id?: string;
+  action?: string;
 }
+
+export type UIAction = { action: string } & Record<string, unknown>;
+export type UIHandler = (ev: UIAction) => void;
 
 export interface Attachment {
   name: string;
@@ -70,6 +74,10 @@ export function useChat(baseUrl: string = "") {
   const messagesRef = useRef<Message[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const lastRequestRef = useRef<{ text: string; attachments?: Attachment[]; origin?: string } | null>(null);
+  const uiHandlerRef = useRef<UIHandler | null>(null);
+  const setUIHandler = useCallback((h: UIHandler | null) => {
+    uiHandlerRef.current = h;
+  }, []);
   const { setGetToken, authHeaders, getToken } = useAuthHeaders();
 
   const uploadFile = useCallback(
@@ -196,6 +204,18 @@ export function useChat(baseUrl: string = "") {
               if (type === "session_id" && item.session_id) {
                 sessionIdRef.current = item.session_id;
                 setSessionId(item.session_id);
+                continue;
+              }
+
+              // Agent-driven UI action — dispatch to handler, don't add as part,
+              // don't persist in session history
+              if (type === "ui" && item.action) {
+                const ev = item as unknown as UIAction;
+                track("agent_ui_action", {
+                  ...ev,
+                  session_id: sessionIdRef.current,
+                });
+                uiHandlerRef.current?.(ev);
                 continue;
               }
 
@@ -482,5 +502,6 @@ export function useChat(baseUrl: string = "") {
     setGetToken,
     uploadFile,
     authHeaders,
+    setUIHandler,
   };
 }

@@ -6,7 +6,7 @@ import { SignedIn } from "@clerk/clerk-react";
 import { usePlans, useSubscription, CheckoutButton, SubscriptionDetailsButton } from "@clerk/clerk-react/experimental";
 import { MessageBubble } from "./message";
 import { Files } from "./files";
-import type { Message, Attachment, PassMetadata } from "../hooks/use-chat";
+import type { Message, Attachment, PassMetadata, UIHandler } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
 import { track } from "../lib/posthog";
@@ -68,6 +68,7 @@ export function Chat({
   authHeaders,
   voice,
   files,
+  setUIHandler,
 }: {
   messages: Message[];
   isStreaming: boolean;
@@ -97,6 +98,7 @@ export function Chat({
   uploadFile?: (file: File) => Promise<Attachment>;
   authHeaders?: () => Promise<Record<string, string>>;
   voice?: boolean;
+  setUIHandler?: (h: UIHandler | null) => void;
   files?: {
     entries: FileEntry[];
     path: string;
@@ -134,6 +136,42 @@ export function Chat({
   const { scrollRef, contentRef, scrollToBottom } = useStickToBottom();
 
   const handleSubmitRef = useRef<(overrideText?: string, origin?: string) => void>(() => {});
+  const [pricingFor, setPricingFor] = useState<"user" | "organization" | null>(null);
+  const openPricing = useCallback((payer: "user" | "organization", source: string) => {
+    setPricingFor(payer);
+    track("plan_modal_opened", { payer_type: payer, source });
+  }, []);
+  const closePricing = useCallback((method: string) => {
+    setPricingFor((cur) => {
+      if (cur) track("plan_modal_closed", { payer_type: cur, method });
+      return null;
+    });
+  }, []);
+
+  useEffect(() => {
+    const plans = new URLSearchParams(window.location.search).get("plans");
+    if (!plans) return;
+    window.history.replaceState({}, "", window.location.pathname);
+    if (plans === "b2c") {
+      openPricing("user", "url_param");
+    } else if (plans === "b2b") {
+      if (activeOrg) {
+        openPricing("organization", "url_param");
+      } else {
+        onCreateOrg?.();
+      }
+    }
+  }, [activeOrg, onCreateOrg, openPricing]);
+
+  useEffect(() => {
+    if (!setUIHandler) return;
+    setUIHandler((ev) => {
+      if (ev.action === "open_plan_modal") {
+        openPricing(activeOrg ? "organization" : "user", "agent_event");
+      }
+    });
+    return () => setUIHandler(null);
+  }, [setUIHandler, activeOrg, openPricing]);
 
   const onSpeechEnd = useCallback((text: string) => {
     if (text.trim()) {
@@ -466,7 +504,7 @@ export function Chat({
                 </svg>
               </button>
             )}
-            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} /></div>}
+            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} /></div>}
           </div>
         </div>
       </header>
@@ -777,6 +815,47 @@ export function Chat({
           </>
         )}
       </AnimatePresence>
+      {pricingFor && createPortal(
+        <>
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => closePricing("backdrop")} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none" dir="ltr">
+            <div className="pointer-events-auto fixed top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] flex flex-col rounded-xl border border-border bg-background shadow-xl sm:relative sm:inset-auto sm:w-auto sm:max-h-[90vh] sm:rounded-2xl">
+              <div className="flex items-center justify-between px-6 pt-5 pb-3">
+                <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
+                  {pricingFor === "organization" ? (
+                    activeOrg ? (
+                      <>
+                        <span>{t("orgPlansFor")}</span>
+                        <span className="inline-flex items-center gap-1.5 text-sm font-medium bg-secondary text-foreground rounded-lg px-2.5 py-1">
+                          {activeOrg.imageUrl && (
+                            <div
+                              className="size-4 rounded-full bg-secondary shrink-0"
+                              style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }}
+                            />
+                          )}
+                          {activeOrg.name}
+                        </span>
+                      </>
+                    ) : t("orgPlans")
+                  ) : t("personalPlans")}
+                </h2>
+                <button
+                  onClick={() => closePricing("dismiss")}
+                  className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="px-6 pb-5 overflow-y-auto">
+                <PricingCards payerType={pricingFor} onSelect={() => closePricing("select")} />
+              </div>
+            </div>
+          </div>
+        </>,
+        document.body
+      )}
     </div>
   );
 }
@@ -945,7 +1024,7 @@ function PricingCards({ payerType = "user", onSelect }: { payerType?: "user" | "
   );
 }
 
-function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, activeOrg, orgs, plan }: {
+function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, activeOrg, orgs, plan, onOpenPlans }: {
   user: UserInfo;
   onSignOut?: () => void;
   onManageAccount?: () => void;
@@ -955,32 +1034,10 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
   activeOrg?: { id: string; name: string; imageUrl?: string };
   orgs?: { id: string; name: string; imageUrl: string }[];
   plan?: PlanInfo;
+  onOpenPlans?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [showOrgs, setShowOrgs] = useState(false);
-  const [pricingFor, setPricingFor] = useState<"user" | "organization" | null>(null);
-  const openPricing = (payer: "user" | "organization", source: string) => {
-    setPricingFor(payer);
-    track("plan_modal_opened", { payer_type: payer, source });
-  };
-  const closePricing = (method: string) => {
-    if (pricingFor) track("plan_modal_closed", { payer_type: pricingFor, method });
-    setPricingFor(null);
-  };
-  useEffect(() => {
-    const plans = new URLSearchParams(window.location.search).get("plans");
-    if (!plans) return;
-    window.history.replaceState({}, "", window.location.pathname);
-    if (plans === "b2c") {
-      openPricing("user", "url_param");
-    } else if (plans === "b2b") {
-      if (activeOrg) {
-        openPricing("organization", "url_param");
-      } else {
-        onCreateOrg?.();
-      }
-    }
-  }, [activeOrg, onCreateOrg]);
 
   return (
     <div className="relative">
@@ -1081,9 +1138,9 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                 </button>
                 <div className="border-t border-border" />
                 <p className="px-3 pt-2 pb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">{t("account")}</p>
-                {plan && (
+                {plan && onOpenPlans && (
                   <button
-                    onClick={() => { setOpen(false); openPricing(activeOrg ? "organization" : "user", "user_menu"); }}
+                    onClick={() => { setOpen(false); onOpenPlans(); }}
                     className="flex w-full items-center justify-between px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                   >
                     {t("plans")}
@@ -1129,47 +1186,6 @@ function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, 
                 )}
               </>
             )}
-          </div>
-        </>,
-        document.body
-      )}
-      {pricingFor && createPortal(
-        <>
-          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => closePricing("backdrop")} />
-          <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none" dir="ltr">
-            <div className="pointer-events-auto fixed top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] flex flex-col rounded-xl border border-border bg-background shadow-xl sm:relative sm:inset-auto sm:w-auto sm:max-h-[90vh] sm:rounded-2xl">
-              <div className="flex items-center justify-between px-6 pt-5 pb-3">
-                <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
-                  {pricingFor === "organization" ? (
-                    activeOrg ? (
-                      <>
-                        <span>{t("orgPlansFor")}</span>
-                        <span className="inline-flex items-center gap-1.5 text-sm font-medium bg-secondary text-foreground rounded-lg px-2.5 py-1">
-                          {activeOrg.imageUrl && (
-                            <div
-                              className="size-4 rounded-full bg-secondary shrink-0"
-                              style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }}
-                            />
-                          )}
-                          {activeOrg.name}
-                        </span>
-                      </>
-                    ) : t("orgPlans")
-                  ) : t("personalPlans")}
-                </h2>
-                <button
-                  onClick={() => closePricing("dismiss")}
-                  className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-              <div className="px-6 pb-5 overflow-y-auto">
-                <PricingCards payerType={pricingFor} onSelect={() => closePricing("select")} />
-              </div>
-            </div>
           </div>
         </>,
         document.body
