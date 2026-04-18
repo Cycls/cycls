@@ -70,7 +70,7 @@ llm = (
 async def super(context):
     user = context.user
     # Local dev is always exempted so prototyping isn't blocked by gates.
-    exempt = user.id in EXEMPT_USERS # or not context.prod
+    exempt = user.id in EXEMPT_USERS or not context.prod
 
     # b2b: free orgs blocked (no compute, no tracking)
     if user.plan == "o:free_org" and not exempt:
