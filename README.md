@@ -365,7 +365,7 @@ No YAML. No Dockerfiles. No infrastructure repo. The code is the deployment.
 ## Learn More
 
 - [Tutorial](docs/tutorial.md) — comprehensive guide from basics to advanced
-- [Sandbox threat model](docs/sandbox.md) — how the Bash tool is isolated
+- [Sandbox security](docs/sandbox-security.md) — how the Bash tool is isolated
 - [Examples](examples/) — working code samples
 
 ## License

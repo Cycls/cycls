@@ -169,7 +169,7 @@ def test_bash_sandbox_bwrap_pid_environ_is_clean_live(tmp_path, monkeypatch):
     environ is what matters, and bwrap's must be sanitized.
     Note: without --unshare-pid, bash CAN read the parent Python's environ
     via /proc/<ppid>/environ. This is the pre-existing state documented in
-    docs/sandbox.md — eliminating it requires PID namespace isolation that
+    docs/sandbox-security.md — eliminating it requires PID namespace isolation that
     isn't available in our nested-container runtime."""
     monkeypatch.setenv("CYCLS_SANDBOX_LEAK_SENTINEL_XYZ", "should-not-leak")
     out = asyncio.run(_exec_bash(
