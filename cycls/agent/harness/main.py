@@ -65,6 +65,7 @@ async def _ingest(content, workspace):
 
 async def _iter_stream(stream):
     search_idx, search_buf = None, ""
+    json_deltas = 0
     async for ev in stream:
         if ev.type == "content_block_start":
             if ev.content_block.type == "server_tool_use" and ev.content_block.name == "web_search":
@@ -73,7 +74,11 @@ async def _iter_stream(stream):
             d = ev.delta
             if d.type == "thinking_delta": yield {"type": "thinking", "thinking": d.thinking}
             elif d.type == "text_delta": yield d.text
-            elif d.type == "input_json_delta" and ev.index == search_idx: search_buf += d.partial_json
+            elif d.type == "input_json_delta":
+                if ev.index == search_idx: search_buf += d.partial_json
+                json_deltas += 1
+                # Keep the SSE/UDP flow warm while tool input streams silently — else QUIC middleboxes reap the idle flow.
+                if json_deltas % 10 == 0: yield {"type": "ui", "ui": "heartbeat"}
         elif ev.type == "content_block_stop":
             if ev.index == search_idx:
                 try: q = json.loads(search_buf).get("query", "")
