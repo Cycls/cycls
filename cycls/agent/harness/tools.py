@@ -17,7 +17,7 @@ _BASH_TOOL = {
         "- Use `rg` or `rg --files` for searching — it's faster than grep.\n"
         "- Use `jq` to extract fields from JSON.\n"
         "- Use the `read` tool (not cat/head/tail) for viewing files.\n"
-        "- Use the `edit` tool (not sed/awk) for modifying files.\n"
+        "- Use the `edit` tool to create OR modify files — never `cat >`, `echo >`, heredocs, or `sed`/`awk`. Bash for files bypasses safety checks and blows the output-token budget on long content.\n"
         "- Always quote paths containing spaces with double quotes.\n"
         "- Output over 30K chars is truncated in the middle — use head/grep/tail in the command to keep results focused.\n"
         "- Default timeout is 600s; adjust via `timeout` parameter (milliseconds).\n"
