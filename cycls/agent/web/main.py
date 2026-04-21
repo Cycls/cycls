@@ -28,12 +28,15 @@ class Config(BaseModel):
         self.prod = prod
 
 async def openai_encoder(stream):
-    if inspect.isasyncgen(stream):
-        async for msg in stream:
-            if msg: yield f"data: {json.dumps({'choices': [{'delta': {'content': msg}}]})}\n\n"
-    else:
-        for msg in stream:
-            if msg: yield f"data: {json.dumps({'choices': [{'delta': {'content': msg}}]})}\n\n"
+    try:
+        if inspect.isasyncgen(stream):
+            async for msg in stream:
+                if msg: yield f"data: {json.dumps({'choices': [{'delta': {'content': msg}}]})}\n\n"
+        else:
+            for msg in stream:
+                if msg: yield f"data: {json.dumps({'choices': [{'delta': {'content': msg}}]})}\n\n"
+    except Exception as e:
+        yield f"data: {json.dumps({'choices': [{'delta': {'content': f'\n\n[stream failed: {e}]'}}]})}\n\n"
     yield "data: [DONE]\n\n"
 
 def sse(item):
@@ -44,12 +47,15 @@ def sse(item):
 async def encoder(stream, session_id=None):
     if session_id:
         yield sse({"type": "session_id", "session_id": session_id})
-    if inspect.isasyncgen(stream):
-        async for item in stream:
-            if msg := sse(item): yield msg
-    else:
-        for item in stream:
-            if msg := sse(item): yield msg
+    try:
+        if inspect.isasyncgen(stream):
+            async for item in stream:
+                if msg := sse(item): yield msg
+        else:
+            for item in stream:
+                if msg := sse(item): yield msg
+    except Exception as e:
+        yield sse({"type": "callout", "callout": f"Stream failed: {e}", "style": "error"})
     yield "data: [DONE]\n\n"
 
 class Messages(list):
