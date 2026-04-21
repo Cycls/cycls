@@ -491,6 +491,85 @@ def test_multiple_tool_calls_all_get_results(agent_env):
     assert sorted(use_ids) == sorted(result_ids)
 
 
+def test_orphan_tool_use_on_disk_healed_before_send(agent_env):
+    """Regression test for the Anthropic 400 error:
+
+        "messages.2: `tool_use` ids were found without `tool_result`
+        blocks immediately after: toolu_01Niwc5nQoRwdvhGH9h3nx5D. Each
+        `tool_use` block must have a corresponding `tool_result` block
+        in the next message."
+
+    Reproduces a session.history.jsonl left in a corrupted state by a
+    prior interrupted turn (assistant tool_use persisted, tool_result
+    never written — container killed, tab closed, network drop, etc.).
+    On the next request, cycls must heal the history by injecting a
+    synthetic tool_result BEFORE sending to the Anthropic API.
+    """
+    import json
+    ws, hp, ctx = agent_env
+
+    # Pre-populate session as it would look after an interrupted tool:
+    # user turn, then assistant emitted a tool_use, then the process died
+    # before the tool_result could be persisted.
+    orphan_id = "toolu_01Niwc5nQoRwdvhGH9h3nx5D"
+    with open(hp, "w") as f:
+        f.write(json.dumps({"role": "user", "content": "run something"}) + "\n")
+        f.write(json.dumps({"role": "assistant", "content": [
+            {"type": "text", "text": "Running the tool now"},
+            {"type": "tool_use", "id": orphan_id, "name": "bash",
+             "input": {"command": "echo hi"}},
+        ]}) + "\n")
+
+    # Capture the messages actually sent to the Anthropic client on this
+    # request so we can assert the API invariant holds.
+    captured = {}
+    final = _make_response([_text_block("Recovered from interruption")])
+    def make_stream(**kw):
+        captured.update(kw)
+        return FakeStream(final)
+    mock_client = MagicMock()
+    mock_client.messages.stream = make_stream
+
+    with _mock_anthropic(mock_client):
+        asyncio.run(_drain(_run(context=ctx)))
+
+    sent = captured["messages"]
+
+    # Invariant Anthropic enforces: every assistant tool_use must be
+    # immediately followed by a user message containing a matching
+    # tool_result. Walk the sent history and verify.
+    for i, m in enumerate(sent):
+        if m.get("role") != "assistant":
+            continue
+        content = m.get("content", [])
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if not (isinstance(b, dict) and b.get("type") == "tool_use"):
+                continue
+            assert i + 1 < len(sent), (
+                f"tool_use {b['id']} has no follow-up message — would 400")
+            nxt = sent[i + 1]
+            assert nxt["role"] == "user", (
+                f"tool_use {b['id']} not followed by user message — would 400")
+            assert isinstance(nxt["content"], list)
+            assert any(
+                isinstance(r, dict) and r.get("type") == "tool_result"
+                and r.get("tool_use_id") == b["id"]
+                for r in nxt["content"]
+            ), f"tool_use {b['id']} has no matching tool_result — would 400"
+
+    # Specifically: the orphan from disk must have been healed with a
+    # synthetic is_error tool_result.
+    healed = [r for m in sent
+              if isinstance(m.get("content"), list)
+              for r in m["content"]
+              if isinstance(r, dict) and r.get("type") == "tool_result"
+              and r.get("tool_use_id") == orphan_id]
+    assert len(healed) == 1, f"Expected one synthetic tool_result for {orphan_id}"
+    assert healed[0].get("is_error") is True
+
+
 # ---------------------------------------------------------------------------
 # Bash timeout tests (_exec_bash directly)
 # ---------------------------------------------------------------------------
