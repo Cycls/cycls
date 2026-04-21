@@ -145,6 +145,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     usage = [0, 0, 0, 0]  # in, out, cached, cache_create
     tokens_since_compact = 0
     retries = 0
+    recovery = 0
 
     while True:
         try:
@@ -168,6 +169,17 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             tokens_since_compact = u.input_tokens + (u.cache_read_input_tokens or 0) + (u.cache_creation_input_tokens or 0)
             messages.append({"role": "assistant",
                             "content": [b.model_dump(exclude_none=True) for b in response.content]})
+            if response.stop_reason == "max_tokens" and recovery < 3:
+                recovery += 1
+                ids = [b["id"] for b in (messages[-1].get("content") or [])
+                       if isinstance(b, dict) and b.get("type") == "tool_use"]
+                msg = "Cut off by output limit. Resume — break remaining work into smaller pieces."
+                messages.append({"role": "user", "content": (
+                    [{"type": "tool_result", "tool_use_id": i, "content": msg, "is_error": True} for i in ids]
+                    if ids else msg
+                )})
+                yield {"type": "step", "step": f"Output limit hit, continuing... ({recovery}/3)"}
+                continue
             if response.stop_reason not in ("tool_use", "end_turn"):
                 yield {"type": "callout", "callout": f"Stopped: {response.stop_reason}", "style": "warning"}
             if response.stop_reason != "tool_use": break
