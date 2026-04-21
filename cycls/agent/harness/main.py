@@ -118,7 +118,7 @@ def _recover(e, messages):
 # ---- Agent ----
 
 async def _run(*, context, system="", tools=None, allowed_tools=[],
-               model="anthropic/claude-sonnet-4-20250514", max_tokens=16384,
+               model="anthropic/claude-sonnet-4-20250514", max_tokens=64000,
                bash_timeout=600, bash_network=False, show_usage=False, client=None,
                base_url=None, api_key=None, handlers=None):
     t0 = time.monotonic()
@@ -168,6 +168,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             tokens_since_compact = u.input_tokens + (u.cache_read_input_tokens or 0) + (u.cache_creation_input_tokens or 0)
             messages.append({"role": "assistant",
                             "content": [b.model_dump(exclude_none=True) for b in response.content]})
+            if response.stop_reason not in ("tool_use", "end_turn"):
+                yield {"type": "callout", "callout": f"Stopped: {response.stop_reason}", "style": "warning"}
             if response.stop_reason != "tool_use": break
 
             blocks = [b for b in response.content if b.type == "tool_use"]
