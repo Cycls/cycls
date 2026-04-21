@@ -124,13 +124,6 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     ensure_workspace(ws)
     hp = history_path(context.user, context.session_id) if context.session_id and context.user else None
     messages = load_history(hp) if hp else []
-    # Heal trailing orphan tool_use left by a prior interrupted turn — else Anthropic 400s.
-    if messages and messages[-1].get("role") == "assistant" and isinstance(messages[-1].get("content"), list):
-        ids = [b["id"] for b in messages[-1]["content"] if isinstance(b, dict) and b.get("type") == "tool_use"]
-        if ids:
-            messages.append({"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": i, "content": "[Interrupted]", "is_error": True} for i in ids
-            ]})
     saved = len(messages)
     incoming = context.messages.raw[-1].get("content", "")
     messages.append({"role": "user", "content": await _ingest(incoming, ws)})
