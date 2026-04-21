@@ -28,3 +28,4 @@ node_modules/
 mj/
 cycls/agent/web/themes/
 *.tsbuildinfo
+uv.lock
