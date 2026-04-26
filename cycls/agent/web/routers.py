@@ -1,3 +1,10 @@
+"""HTTP routers for the agent's state surface — sessions, files, share.
+
+Sessions metadata lives in `KV("sessions", workspace)` (one scan replaces
+N+1 file reads). Files and share dirs stay on the workspace filesystem
+(they're POSIX-shaped — file uploads, frozen share snapshots with
+attachments). Path safety guards live here too.
+"""
 import json, os, shutil, unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
@@ -5,6 +12,11 @@ from uuid import uuid4
 from typing import Any
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
+
+from cycls.db import KV, Workspace
+
+
+# ---- Path safety ----
 
 def resolve_path(workspace, rel):
     """Resolve *rel* inside *workspace*, raising ValueError on traversal or
@@ -20,99 +32,59 @@ def resolve_path(workspace, rel):
         raise ValueError("Reserved path: .cycls/ is managed by cycls")
     return resolved
 
-def ensure_workspace(workspace):
-    """Create the workspace directory tree if it doesn't exist."""
-    Path(workspace).mkdir(parents=True, exist_ok=True)
 
-def history_path(user, session_id):
-    """Validate *session_id* and return the JSONL history file path."""
-    if os.sep in session_id or (os.altsep and os.altsep in session_id):
-        raise ValueError(f"Invalid session id: {session_id}")
-    path = user.sessions / f"{session_id}.history.jsonl"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return str(path)
+def _ws(user):
+    """Build a Workspace from a User, mirroring Context.workspace()."""
+    if user.org_id:
+        return Workspace(user.workspace, user_id=user.id)
+    return Workspace(user.workspace)
 
-def load_history(path):
-    """Read JSONL history, strip stale cache_control, mark last message ephemeral.
-    Malformed lines are logged and skipped — never silently truncates the history."""
-    messages = []
-    try:
-        with open(path) as f:
-            for i, line in enumerate(f):
-                line = line.strip()
-                if not line: continue
-                try: messages.append(json.loads(line))
-                except json.JSONDecodeError as e:
-                    print(f"[WARN] skipping malformed line {i} in {path}: {e}")
-    except FileNotFoundError:
-        return []
-    except UnicodeDecodeError as e:
-        print(f"[DEBUG] UnicodeDecodeError in {path} at line {i}: {e}")
-        return messages
-    for msg in messages:
-        c = msg.get("content")
-        if isinstance(c, list):
-            for b in c:
-                if isinstance(b, dict):
-                    b.pop("cache_control", None)
-    if messages:
-        c = messages[-1].get("content")
-        if isinstance(c, str):
-            messages[-1]["content"] = [{"type": "text", "text": c, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
-        elif isinstance(c, list) and c:
-            c[-1]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
-    return messages
 
-def save_history(path, messages, mode="a"):
-    """Write messages as JSONL."""
-    with open(path, mode) as f:
-        for msg in messages:
-            f.write(json.dumps(msg) + "\n")
-
+# ---- Sessions ----
 
 def sessions_router(required_auth):
     r = APIRouter()
 
     @r.get("/sessions")
     async def list_sessions(user: Any = required_auth):
-        if not user.sessions.is_dir():
-            return []
+        sessions = KV("sessions", _ws(user))
         items = []
-        for f in user.sessions.iterdir():
-            if f.suffix != ".json":
-                continue
-            try:
-                data = json.loads(f.read_text())
-                items.append({"id": data.get("id", f.stem), "title": data.get("title", ""), "updatedAt": data.get("updatedAt", "")})
-            except (json.JSONDecodeError, OSError):
-                continue
+        async for sid, data in sessions.items():
+            items.append({
+                "id": data.get("id", sid),
+                "title": data.get("title", ""),
+                "updatedAt": data.get("updatedAt", ""),
+            })
         items.sort(key=lambda s: s.get("updatedAt", ""), reverse=True)
         return items
 
     @r.get("/sessions/{session_id}")
     async def get_session(session_id: str, user: Any = required_auth):
-        session_file = user.sessions / f"{session_id}.json"
-        if not session_file.is_file():
+        sessions = KV("sessions", _ws(user))
+        data = await sessions.get(session_id)
+        if data is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        return json.loads(session_file.read_text())
+        return data
 
     @r.put("/sessions/{session_id}")
     async def put_session(session_id: str, request: Request, user: Any = required_auth):
-        user.sessions.mkdir(parents=True, exist_ok=True)
+        sessions = KV("sessions", _ws(user))
         data = await request.json()
         data["id"] = session_id
         data["updatedAt"] = datetime.now(timezone.utc).isoformat()
         if "createdAt" not in data:
-            data["createdAt"] = data["updatedAt"]
-        (user.sessions / f"{session_id}.json").write_text(json.dumps(data))
+            existing = await sessions.get(session_id, {})
+            data["createdAt"] = existing.get("createdAt", data["updatedAt"])
+        await sessions.put(session_id, data)
         return data
 
     @r.delete("/sessions/{session_id}")
     async def delete_session(session_id: str, user: Any = required_auth):
-        session_file = user.sessions / f"{session_id}.json"
-        if not session_file.is_file():
+        sessions = KV("sessions", _ws(user))
+        if (await sessions.get(session_id)) is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        session_file.unlink()
+        await sessions.delete(session_id)
+        # History still file-backed JSONL — clean up the sidecar.
         history_file = user.sessions / f"{session_id}.history.jsonl"
         if history_file.is_file():
             history_file.unlink()
@@ -120,6 +92,8 @@ def sessions_router(required_auth):
 
     return r
 
+
+# ---- Files ----
 
 def files_router(required_auth):
     r = APIRouter()
@@ -195,6 +169,8 @@ def files_router(required_auth):
 
     return r
 
+
+# ---- Share ----
 
 def share_router(required_auth):
     r = APIRouter()
@@ -292,6 +268,8 @@ def share_router(required_auth):
 
     return r
 
+
+# ---- Mount ----
 
 def install_routers(app, required_auth):
     """Mount sessions, files, and share routers on a FastAPI app."""

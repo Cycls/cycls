@@ -11,7 +11,7 @@ from fastapi import APIRouter
 from cycls.app.main import App, _make_decorator
 from cycls.app.auth import make_validate, JWT
 from cycls.app.web import Web
-from .state import install_routers
+from .web.routers import install_routers
 from .web import web, serve as web_serve, Config
 
 CYCLS_PATH = importlib.resources.files('cycls')
@@ -19,7 +19,7 @@ CYCLS_PATH = importlib.resources.files('cycls')
 
 class Agent(App):
     _base_pip = [*App._base_pip, "fastapi[standard]", "pyjwt", "cryptography",
-                 "python-dotenv", "resvg-py", "anthropic", "openai"]
+                 "python-dotenv", "resvg-py", "anthropic", "openai", "slatedb"]
     _base_apt = [*App._base_apt, "fonts-noto-core", "bubblewrap",
                  "poppler-utils", "ripgrep", "jq", "curl"]
 

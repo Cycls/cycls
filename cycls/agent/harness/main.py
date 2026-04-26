@@ -1,9 +1,34 @@
 """Agent loop — streams Claude tool-use turns with sandboxed execution."""
 import asyncio, json, random, time
-from ..state import ensure_workspace, history_path, load_history, save_history
+from datetime import datetime, timezone
+from cycls.db import KV
+from .history import ensure_workspace, history_path, load_history, save_history
 from .compact import COMPACT_BUFFER, KEEP_RECENT, compact, context_window
 from .prompts import DEFAULT_SYSTEM
 from .tools import build_tools, dispatch, _exec_read
+
+
+async def _maybe_set_title(workspace, session_id, content):
+    """First-write title from the user's first message; idempotent on later turns."""
+    sessions = KV("sessions", workspace)
+    existing = await sessions.get(session_id, {})
+    if existing.get("title"):
+        return
+    text = content if isinstance(content, str) else next(
+        (b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"),
+        "",
+    )
+    title = text.strip()[:80]
+    if not title:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    await sessions.put(session_id, {
+        **existing,
+        "id": session_id,
+        "title": title,
+        "updatedAt": now,
+        "createdAt": existing.get("createdAt", now),
+    })
 
 # ---- Client routing ----
 
@@ -125,13 +150,17 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     if client is None:
         client = _make_client(model, base_url=base_url, api_key=api_key)
     model = model.split("/", 1)[1]
-    ws = context.workspace().root
+    workspace = context.workspace()
+    ws = workspace.root
     ensure_workspace(ws)
     hp = history_path(context.user, context.session_id) if context.session_id and context.user else None
     messages = load_history(hp) if hp else []
     saved = len(messages)
     incoming = context.messages.raw[-1].get("content", "")
     messages.append({"role": "user", "content": await _ingest(incoming, ws)})
+    if context.session_id and context.user:
+        try: await _maybe_set_title(workspace, context.session_id, incoming)
+        except Exception as e: print(f"[WARN] title set failed: {e}")
     window = context_window(model)
 
     kwargs = {

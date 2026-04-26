@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import cycls
-from cycls.agent.state.main import resolve_path
+from cycls.agent.web.routers import resolve_path
 from cycls.agent.harness.tools import _resolve_path, _exec_bash, build_tools
 
 
@@ -38,14 +38,6 @@ def test_tools_resolve_path_rejects_cycls(tmp_path):
         _resolve_path("/workspace/.cycls/usage.json", tmp_path)
     with pytest.raises(ValueError, match=".cycls/"):
         _resolve_path(".cycls", tmp_path)
-
-
-def test_dict_still_works_inside_workspace(tmp_path):
-    """Guards block raw filesystem access; cycls.Dict keeps working."""
-    with cycls.Workspace(tmp_path):
-        d = cycls.Dict("usage")
-        d["2026-04"] = {"count": 1}
-    assert (tmp_path / ".cycls" / "usage.json").exists()
 
 
 def test_bash_sandbox_ro_binds_cycls(tmp_path):

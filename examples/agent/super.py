@@ -80,19 +80,18 @@ async def super(context):
         return
 
     # Track monthly usage; gate free users at FREE_MONTHLY_LIMIT.
-    with context.workspace():
-        usage = cycls.Dict("usage")
-        month = datetime.now(timezone.utc).strftime("%Y-%m")
-        entry = usage.get(month, {"count": 0})
+    usage = cycls.KV("usage", context.workspace())
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    entry = await usage.get(month, {"count": 0})
 
-        if user.plan == "u:free_user" and entry["count"] >= FREE_MONTHLY_LIMIT and not exempt:
-            yield {"type": "text",
-                   "text": f"🚨 Free tier limit reached ({FREE_MONTHLY_LIMIT}/mo). Upgrade for unlimited."}
-            yield {"type": "ui", "action": "open_plan_modal"}
-            return
+    if user.plan == "u:free_user" and entry["count"] >= FREE_MONTHLY_LIMIT and not exempt:
+        yield {"type": "text",
+               "text": f"🚨 Free tier limit reached ({FREE_MONTHLY_LIMIT}/mo). Upgrade for unlimited."}
+        yield {"type": "ui", "action": "open_plan_modal"}
+        return
 
-        entry["count"] += 1
-        usage[month] = entry
+    entry["count"] += 1
+    await usage.put(month, entry)
 
     async for msg in llm.run(context=context):
         yield msg
