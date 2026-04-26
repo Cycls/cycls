@@ -12,7 +12,8 @@ class App(Function):
     App wraps it in uvicorn for local runs and containerized deployment.
     """
 
-    _base_pip = ["uvicorn[standard]", "docker"]
+    _base_pip = ["uvicorn[standard]", "docker", "slatedb",
+                 "fastapi[standard]", "pyjwt", "cryptography", "python-dotenv"]
     _base_apt = []
 
     def __init__(self, func, name, image=None, memory="1Gi"):

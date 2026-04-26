@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 
-from cycls.db import KV, Workspace
+from cycls.app.db import KV, Workspace
 
 
 # ---- Path safety ----
