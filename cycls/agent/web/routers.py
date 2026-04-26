@@ -1,9 +1,8 @@
-"""HTTP routers for the agent's state surface — sessions, files, share.
+"""HTTP routers for the agent's state surface — chats, files, share.
 
-Sessions metadata lives in `KV("sessions", workspace)` (one scan replaces
-N+1 file reads). Files and share dirs stay on the workspace filesystem
-(they're POSIX-shaped — file uploads, frozen share snapshots with
-attachments). Path safety guards live here too.
+Chat metadata + message log live in one KV (`KV("chat", workspace)`) — see
+`cycls.agent.chat`. Files and share dirs stay on the workspace filesystem
+(they're POSIX-shaped). Path safety guards live here too.
 """
 import json, os, shutil, unicodedata
 from datetime import datetime, timezone
@@ -13,7 +12,8 @@ from typing import Any
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 
-from cycls.app.db import KV, Workspace
+from cycls.app.db import Workspace
+from cycls.agent import chat
 
 
 # ---- Path safety ----
@@ -47,9 +47,9 @@ def chats_router(required_auth):
 
     @r.get("/chats")
     async def list_chats(user: Any = required_auth):
-        chats = KV("chats", _ws(user))
+        ws = _ws(user)
         items = []
-        async for cid, data in chats.items():
+        async for cid, data in chat.list_chats(ws):
             items.append({
                 "id": data.get("id", cid),
                 "title": data.get("title", ""),
@@ -60,34 +60,33 @@ def chats_router(required_auth):
 
     @r.get("/chats/{chat_id}")
     async def get_chat(chat_id: str, user: Any = required_auth):
-        chats = KV("chats", _ws(user))
-        data = await chats.get(chat_id)
-        if data is None:
+        ws = _ws(user)
+        meta = await chat.get_meta(ws, chat_id)
+        if meta is None:
             raise HTTPException(status_code=404, detail="Chat not found")
-        return data
+        messages = await chat.load_messages(ws, chat_id)
+        return {**meta, "messages": messages}
 
     @r.put("/chats/{chat_id}")
     async def put_chat(chat_id: str, request: Request, user: Any = required_auth):
-        chats = KV("chats", _ws(user))
+        ws = _ws(user)
         data = await request.json()
         data["id"] = chat_id
         data["updatedAt"] = datetime.now(timezone.utc).isoformat()
+        existing = (await chat.get_meta(ws, chat_id)) or {}
         if "createdAt" not in data:
-            existing = await chats.get(chat_id, {})
             data["createdAt"] = existing.get("createdAt", data["updatedAt"])
-        await chats.put(chat_id, data)
+        # Drop "messages" if FE accidentally sends it — that's not metadata.
+        data.pop("messages", None)
+        await chat.put_meta(ws, chat_id, data)
         return data
 
     @r.delete("/chats/{chat_id}")
     async def delete_chat(chat_id: str, user: Any = required_auth):
-        chats = KV("chats", _ws(user))
-        if (await chats.get(chat_id)) is None:
+        ws = _ws(user)
+        if (await chat.get_meta(ws, chat_id)) is None:
             raise HTTPException(status_code=404, detail="Chat not found")
-        await chats.delete(chat_id)
-        # Message log still file-backed JSONL — clean up the sidecar.
-        log_file = user.sessions / f"{chat_id}.history.jsonl"
-        if log_file.is_file():
-            log_file.unlink()
+        await chat.delete_chat(ws, chat_id)
         return {"ok": True}
 
     return r

@@ -1,17 +1,34 @@
 """Agent loop — streams Claude tool-use turns with sandboxed execution."""
 import asyncio, json, random, time
 from datetime import datetime, timezone
-from cycls.app.db import KV
-from .chat import ensure_workspace, chat_path, load_chat, save_chat
+from pathlib import Path
+from .. import chat
 from .compact import COMPACT_BUFFER, KEEP_RECENT, compact, context_window
 from .prompts import DEFAULT_SYSTEM
 from .tools import build_tools, dispatch, _exec_read
 
 
+def _ephemeralize(messages):
+    """Strip stale cache_control markers; tag the last message ephemeral so
+    prompt caching keeps the prior context warm and the new turn is fresh."""
+    for msg in messages:
+        c = msg.get("content")
+        if isinstance(c, list):
+            for b in c:
+                if isinstance(b, dict):
+                    b.pop("cache_control", None)
+    if messages:
+        c = messages[-1].get("content")
+        if isinstance(c, str):
+            messages[-1]["content"] = [{"type": "text", "text": c, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+        elif isinstance(c, list) and c:
+            c[-1]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
+    return messages
+
+
 async def _maybe_set_title(workspace, chat_id, content):
     """First-write title from the user's first message; idempotent on later turns."""
-    chats = KV("chats", workspace)
-    existing = await chats.get(chat_id, {})
+    existing = (await chat.get_meta(workspace, chat_id)) or {}
     if existing.get("title"):
         return
     text = content if isinstance(content, str) else next(
@@ -22,7 +39,7 @@ async def _maybe_set_title(workspace, chat_id, content):
     if not title:
         return
     now = datetime.now(timezone.utc).isoformat()
-    await chats.put(chat_id, {
+    await chat.put_meta(workspace, chat_id, {
         **existing,
         "id": chat_id,
         "title": title,
@@ -152,13 +169,13 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     model = model.split("/", 1)[1]
     workspace = context.workspace
     ws = workspace.root
-    ensure_workspace(ws)
-    cp = chat_path(context.user, context.chat_id) if context.chat_id and context.user else None
-    messages = load_chat(cp) if cp else []
+    Path(ws).mkdir(parents=True, exist_ok=True)
+    persist = bool(context.chat_id and context.user)
+    messages = _ephemeralize(await chat.load_messages(workspace, context.chat_id)) if persist else []
     saved = len(messages)
     incoming = context.messages.raw[-1].get("content", "")
     messages.append({"role": "user", "content": await _ingest(incoming, ws)})
-    if context.chat_id and context.user:
+    if persist:
         try: await _maybe_set_title(workspace, context.chat_id, incoming)
         except Exception as e: print(f"[WARN] title set failed: {e}")
     window = context_window(model)
@@ -183,7 +200,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 try:
                     messages[:] = await compact(client, model, messages)
                     tokens_since_compact = 0
-                    if cp: save_chat(cp, messages, mode="w"); saved = len(messages)
+                    if persist:
+                        await chat.replace_messages(workspace, context.chat_id, messages); saved = len(messages)
                 except Exception as ce:
                     yield {"type": "callout", "callout": f"Compaction failed: {ce}", "style": "warning"}
 
@@ -232,7 +250,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     content = out
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": content})
             messages.append({"role": "user", "content": results})
-            if cp: save_chat(cp, messages[saved:]); saved = len(messages)
+            if persist:
+                await chat.append_messages(workspace, context.chat_id, messages[saved:], saved); saved = len(messages)
 
         except Exception as e:
             if _is_retryable(e) and retries < MAX_RETRIES:
@@ -242,12 +261,13 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 await asyncio.sleep(delay); continue
             if not _recover(e, messages):
                 yield {"type": "callout", "callout": str(e), "style": "error"}; break
-            if cp: save_chat(cp, messages[saved:]); saved = len(messages)
+            if persist:
+                await chat.append_messages(workspace, context.chat_id, messages[saved:], saved); saved = len(messages)
             continue
 
     # Finalize: save any unsaved messages
-    if cp and saved < len(messages):
-        save_chat(cp, messages[saved:])
+    if persist and saved < len(messages):
+        await chat.append_messages(workspace, context.chat_id, messages[saved:], saved)
     if show_usage and usage[0]:
         p = next((v for k, v in _PRICING.items() if k in model), None)
         elapsed = time.monotonic() - t0
