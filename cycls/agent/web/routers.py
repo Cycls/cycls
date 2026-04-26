@@ -181,6 +181,7 @@ def share_router(required_auth, volume):
             raise HTTPException(status_code=400, detail="messages required")
         share_id, _ = await share.create_share(
             _ws(user, volume),
+            volume,
             messages=messages,
             title=data.get("title", ""),
             author=data.get("author"),
@@ -202,14 +203,14 @@ def share_router(required_auth, volume):
 
     @r.get("/share/{share_id}")
     async def get_share(share_id: str):
-        snap = share.read_snapshot(share_id)
+        snap = share.read_snapshot(volume, share_id)
         if snap is None:
             raise HTTPException(status_code=404, detail="Not found")
         return snap
 
     @r.get("/shared-assets/{share_id}/{filename}")
     async def get_shared_asset(share_id: str, filename: str):
-        p = share.asset_path(share_id, filename)
+        p = share.asset_path(volume, share_id, filename)
         if p is None:
             raise HTTPException(status_code=404, detail="Not found")
         return FileResponse(p)
@@ -219,7 +220,7 @@ def share_router(required_auth, volume):
         ws = _ws(user, volume)
         if not await share.is_owner(ws, share_id):
             raise HTTPException(status_code=404, detail="Not found")
-        await share.delete_share(ws, share_id)
+        await share.delete_share(ws, volume, share_id)
         return {"ok": True}
 
     return r

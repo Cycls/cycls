@@ -1,5 +1,6 @@
 """cycls.db — Workspace + KV."""
 import asyncio, json, os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 
@@ -53,33 +54,75 @@ async def _db(url):
         return db
 
 
-class KV:
-    def __init__(self, name, workspace):
-        self._name = name
-        self._workspace = workspace
+class _BaseKV:
+    """Shared get/put/delete/items implementation. Subclasses provide the
+    underlying handle (Db or DbTransaction) via `_handle()`."""
 
-    async def _open(self):
-        return await _db(self._workspace.url())
+    def __init__(self, name):
+        self._name = name
 
     def _key(self, k):
         return f"{self._name}/{k}".encode()
 
+    async def _handle(self):
+        raise NotImplementedError
+
     async def get(self, key, default=None):
-        db = await self._open()
-        v = await db.get(self._key(key))
+        h = await self._handle()
+        v = await h.get(self._key(key))
         return json.loads(v) if v is not None else default
 
     async def put(self, key, value):
-        db = await self._open()
-        await db.put(self._key(key), json.dumps(value).encode())
+        h = await self._handle()
+        await h.put(self._key(key), json.dumps(value).encode())
 
     async def delete(self, key):
-        db = await self._open()
-        await db.delete(self._key(key))
+        h = await self._handle()
+        await h.delete(self._key(key))
 
     async def items(self, prefix=None):
-        db = await self._open()
-        it = await db.scan_prefix(self._key(prefix or ""))
+        h = await self._handle()
+        it = await h.scan_prefix(self._key(prefix or ""))
         strip = len(self._name) + 1
         while (kv := await it.next()) is not None:
             yield kv.key.decode()[strip:], json.loads(kv.value)
+
+
+class KV(_BaseKV):
+    def __init__(self, name, workspace):
+        super().__init__(name)
+        self._workspace = workspace
+
+    async def _handle(self):
+        return await _db(self._workspace.url())
+
+    @asynccontextmanager
+    async def transaction(self):
+        """Atomic multi-op transaction with serializable snapshot isolation.
+
+            async with kv.transaction() as t:
+                await t.delete("a")
+                await t.put("b", {...})
+
+        Commit happens at clean exit; rollback on exception."""
+        from slatedb.uniffi import IsolationLevel
+        db = await self._handle()
+        txn = await db.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
+        try:
+            yield _TxKV(self._name, txn)
+        except Exception:
+            await txn.rollback()
+            raise
+        else:
+            await txn.commit()
+
+
+class _TxKV(_BaseKV):
+    """Transactional view of a KV — same interface, atomic on commit."""
+
+    def __init__(self, name, txn):
+        super().__init__(name)
+        self._txn = txn
+
+    async def _handle(self):
+        return self._txn

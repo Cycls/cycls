@@ -61,21 +61,22 @@ async def append_messages(workspace, chat_id, messages, start_idx):
 
 
 async def replace_messages(workspace, chat_id, messages):
-    """Wipe and rewrite all messages for *chat_id* (used by compaction)."""
+    """Wipe and rewrite all messages for *chat_id* atomically (used by
+    compaction)."""
     _validate(chat_id)
-    kv = _kv(workspace)
-    async for key, _ in kv.items(prefix=f"log/{chat_id}/"):
-        await kv.delete(key)
-    for i, msg in enumerate(messages):
-        await kv.put(f"log/{chat_id}/{i:06d}", msg)
+    async with _kv(workspace).transaction() as t:
+        async for key, _ in t.items(prefix=f"log/{chat_id}/"):
+            await t.delete(key)
+        for i, msg in enumerate(messages):
+            await t.put(f"log/{chat_id}/{i:06d}", msg)
 
 
 # ---- Combined ----
 
 async def delete_chat(workspace, chat_id):
-    """Delete metadata + all messages for *chat_id*."""
+    """Atomically delete metadata + all messages for *chat_id*."""
     _validate(chat_id)
-    kv = _kv(workspace)
-    await kv.delete(f"meta/{chat_id}")
-    async for key, _ in kv.items(prefix=f"log/{chat_id}/"):
-        await kv.delete(key)
+    async with _kv(workspace).transaction() as t:
+        await t.delete(f"meta/{chat_id}")
+        async for key, _ in t.items(prefix=f"log/{chat_id}/"):
+            await t.delete(key)
