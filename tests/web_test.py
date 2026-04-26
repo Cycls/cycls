@@ -392,7 +392,7 @@ def test_context_workspace_uses_config_volume():
     """Config.volume threads into Context.workspace() at per-request construction."""
     from fastapi.testclient import TestClient
     from pathlib import Path
-    from cycls.app.store import Workspace
+    from cycls.db import Workspace
 
     captured = {}
     async def handler(context):
