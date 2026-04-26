@@ -12,7 +12,7 @@
 | Chat metadata + log unified on KV | **Shipped** | `cycls/agent/chat.py` — one `KV("chat")` with `meta/{id}` and `log/{id}/{turn}` prefixes |
 | Auto-derived chat titles | **Shipped** | `cycls/agent/harness/main.py:_maybe_set_title` |
 | Substrate auto-detection (FUSE → direct GCS) | **Shipped** | `Workspace.url()` |
-| Shares (pointer indirection) | **Deferred** | `cycls/agent/web/routers.py:share_router` still file-based |
+| Shares — owner KV index + global frozen snapshots | **Shipped** | `cycls/agent/share.py` — `KV("share")` ownership + `{volume}/.cycls/shared/{id}/` snapshots |
 
 ---
 
@@ -138,7 +138,7 @@ if not existing.get("title"):
 | Concern | Why it stays |
 |---|---|
 | User files (`/workspace/{user_id}/...`) | The agent's bwrap surface needs POSIX. FUSE/object-storage-as-filesystem is the right shape. |
-| Shares (pointer + dir + assets) | Cross-tenant public read is its own concern; deferred to a follow-up. Attachments (blobs) belong on the filesystem regardless. |
+| Share snapshots (`{volume}/.cycls/shared/{id}/snapshot.json` + `assets/`) | Cross-tenant public read; binary attachments belong on the filesystem regardless. Per-user ownership index lives in `KV("share", ws)`. |
 
 ---
 
