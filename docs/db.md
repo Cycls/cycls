@@ -125,7 +125,6 @@ Set `CYCLS_STATE_URL=gs://separate-bucket` in the deploy environment to point st
 | Concern | Why |
 |---|---|
 | User files (the agent's bwrap surface) | POSIX needed for bash/editor; FUSE/object-storage-as-filesystem is the right shape |
-| Chat log JSONL | Hot path, current shape isn't biting; KV migration is mechanical (~30–50 LOC) when needed |
 | Shares (pointer + dir + assets) | Cross-tenant public read is its own design concern; deferred |
 
 See [rfc-002-data-primitives.md](rfc-002-data-primitives.md) for the design and forward-compat audit.

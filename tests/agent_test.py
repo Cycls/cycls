@@ -14,19 +14,25 @@ import pytest
 from cycls.agent.harness.main import _run, MAX_RETRIES, _is_retryable, _ingest, _recover
 from cycls.agent.harness.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact, context_window
 from cycls.agent.harness.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path, dispatch
-from cycls.agent.harness.chat import load_chat
+from cycls.agent.chat import load_messages
+from cycls.app.db import Workspace
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_context(ws, hp):
+def _read_history(ctx):
+    """Sync test helper around the async load_messages."""
+    return asyncio.run(load_messages(ctx.workspace, ctx.chat_id))
+
+
+def _make_context(ws):
     ctx = types.SimpleNamespace()
-    ctx.workspace = types.SimpleNamespace(root=Path(ws))
+    ctx.workspace = Workspace(Path(ws))
     ctx.chat_id = "test-chat"
     user = types.SimpleNamespace()
-    user.sessions = Path(hp).parent
+    user.sessions = Path(ws) / ".sessions"  # legacy path; unused by KV-backed harness
     ctx.user = user
     ctx.messages = types.SimpleNamespace()
     ctx.messages.raw = [{"role": "user", "content": "do stuff"}]
@@ -119,13 +125,12 @@ def _history_tool_ids(history):
 
 @pytest.fixture
 def agent_env(tmp_path):
-    """Create workspace + session dir + context for agent tests."""
-    ws = str(tmp_path / "workspace")
-    Path(ws).mkdir()
-    hp_dir = tmp_path / "sessions"
-    hp_dir.mkdir()
-    hp = str(hp_dir / "test-chat.history.jsonl")
-    return ws, hp, _make_context(ws, hp)
+    """Create workspace + context for agent tests. Returns (ws, ctx) — the
+    chat log lives in `KV("chat", workspace)` keyed under `log/{chat_id}/`."""
+    ws_root = tmp_path / "tenant"
+    ws_root.mkdir()
+    ws = str(ws_root)
+    return ws, _make_context(ws)
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +139,7 @@ def agent_env(tmp_path):
 
 def test_history_saved_after_each_tool_round(agent_env):
     """Two tool rounds then final text — all six messages should be on disk."""
-    ws, hp, ctx = agent_env
+    ws, ctx = agent_env
 
     round1 = _make_response([_tool_use_block("t1")], stop_reason="tool_use")
     round2 = _make_response([_tool_use_block("t2")], stop_reason="tool_use")
@@ -148,14 +153,14 @@ def test_history_saved_after_each_tool_round(agent_env):
          patch("cycls.agent.harness.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         asyncio.run(_drain(_run(context=ctx)))
 
-    history = load_chat(hp)
+    history = _read_history(ctx)
     roles = [m["role"] for m in history]
     assert roles == ["user", "assistant", "user", "assistant", "user", "assistant"]
 
 
 def test_history_survives_crash_after_first_tool_round(agent_env):
     """Crash during round 2 streaming — round 1 history should already be on disk."""
-    ws, hp, ctx = agent_env
+    ws, ctx = agent_env
 
     round1 = _make_response([_tool_use_block("t1")], stop_reason="tool_use")
     call_count = 0
@@ -180,7 +185,7 @@ def test_history_survives_crash_after_first_tool_round(agent_env):
     assert "Lost connection" in callouts[0]["callout"]
 
     # Round 1 messages survived on disk
-    history = load_chat(hp)
+    history = _read_history(ctx)
     assert len(history) >= 3  # user + assistant(tool) + user(result)
     assert history[0]["role"] == "user"
     assert history[1]["role"] == "assistant"
@@ -190,7 +195,7 @@ def test_history_survives_crash_after_first_tool_round(agent_env):
 def test_error_recovery_saves_incrementally(agent_env):
     """When tool execution raises during dispatch, the except handler patches
     error tool_results. Those should be saved incrementally."""
-    ws, hp, ctx = agent_env
+    ws, ctx = agent_env
 
     # Round 1: edit tool with missing keys → _exec_edit raises KeyError
     bad_edit = _tool_use_block("t1", name="edit", inp={"path": "x.txt"})
@@ -205,7 +210,7 @@ def test_error_recovery_saves_incrementally(agent_env):
     with _mock_anthropic(mock_client):
         asyncio.run(_drain(_run(context=ctx)))
 
-    history = load_chat(hp)
+    history = _read_history(ctx)
     # Should have: user + assistant(bad tool_use) + user(error result) + assistant(final)
     assert len(history) >= 3
     # The error recovery tool_result should be on disk
@@ -417,7 +422,7 @@ def test_exec_read_blocks_path_traversal(tmp_path):
 def test_tool_result_always_follows_tool_use_on_crash(agent_env):
     """Every tool_use id in history must have a matching tool_result,
     even when tool execution crashes mid-way."""
-    ws, hp, ctx = agent_env
+    ws, ctx = agent_env
 
     bad_edit = _tool_use_block("crash-1", name="edit", inp={"path": "x.txt"})
     round1 = _make_response([bad_edit], stop_reason="tool_use")
@@ -430,7 +435,7 @@ def test_tool_result_always_follows_tool_use_on_crash(agent_env):
     with _mock_anthropic(mock_client):
         asyncio.run(_drain(_run(context=ctx)))
 
-    history = load_chat(hp)
+    history = _read_history(ctx)
     use_ids, result_ids = _history_tool_ids(history)
     assert use_ids == result_ids
 
@@ -438,7 +443,7 @@ def test_tool_result_always_follows_tool_use_on_crash(agent_env):
 def test_tool_result_present_after_bash_timeout(agent_env):
     """Simulates a bash timeout. The tool_result with the timeout error
     must be saved so follow-up messages don't trigger 400 errors."""
-    ws, hp, ctx = agent_env
+    ws, ctx = agent_env
 
     bash_block = _tool_use_block("timeout-1", name="bash",
                                   inp={"command": "pip install heavy-package"})
@@ -454,7 +459,7 @@ def test_tool_result_present_after_bash_timeout(agent_env):
                new_callable=lambda: AsyncMock(return_value="Error: Command timed out after 300s")):
         asyncio.run(_drain(_run(context=ctx)))
 
-    history = load_chat(hp)
+    history = _read_history(ctx)
     use_ids, result_ids = _history_tool_ids(history)
     assert use_ids == result_ids
     timeout_result = [b for m in history for b in (m.get("content") or [])
@@ -466,7 +471,7 @@ def test_tool_result_present_after_bash_timeout(agent_env):
 def test_multiple_tool_calls_all_get_results(agent_env):
     """When the LLM issues multiple parallel tool calls and one fails,
     ALL tool_use ids must still have matching tool_results."""
-    ws, hp, ctx = agent_env
+    ws, ctx = agent_env
 
     block_ok = _tool_use_block("ok-1", inp={"command": "echo ok"})
     block_fail = _tool_use_block("fail-1", inp={"command": "pip install heavy"})
@@ -486,7 +491,7 @@ def test_multiple_tool_calls_all_get_results(agent_env):
          patch("cycls.agent.harness.tools._exec_bash", side_effect=mock_bash):
         asyncio.run(_drain(_run(context=ctx)))
 
-    history = load_chat(hp)
+    history = _read_history(ctx)
     use_ids, result_ids = _history_tool_ids(history)
     assert sorted(use_ids) == sorted(result_ids)
 
@@ -549,7 +554,7 @@ def test_api_400_after_tool_results_shows_error(agent_env):
     """When the API rejects tool_results (e.g. oversized content), and the last
     message is tool_results (not unresolved tool_use), the error is shown to the
     user since recovery only handles unresolved tool_use blocks."""
-    ws, hp, ctx = agent_env
+    ws, ctx = agent_env
 
     read_block = _tool_use_block("v1", name="read", inp={"path": "big.pdf"})
     round1 = _make_response([read_block], stop_reason="tool_use")
@@ -629,7 +634,7 @@ def test_ingest_empty_file_ref_passes_through(tmp_path):
 
 def test_compaction_triggers_when_approaching_window(agent_env):
     """When input tokens approach context window and enough messages exist, compaction fires."""
-    ws, hp, ctx = agent_env
+    ws, ctx = agent_env
 
     window = context_window("claude-sonnet-4-20250514")
     high_usage = _usage(inp=window - COMPACT_BUFFER + 1)
@@ -656,7 +661,7 @@ def test_compaction_triggers_when_approaching_window(agent_env):
 
 def test_no_compaction_when_under_threshold(agent_env):
     """When input tokens are well under window, no compaction happens."""
-    ws, hp, ctx = agent_env
+    ws, ctx = agent_env
 
     low_usage = _usage(inp=1000)
     final = _make_response([_text_block("Done")], usage=low_usage)
@@ -670,14 +675,14 @@ def test_no_compaction_when_under_threshold(agent_env):
     steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Compacting context..."]
     assert len(steps) == 0
 
-    history = load_chat(hp)
+    history = _read_history(ctx)
     roles = [m["role"] for m in history]
     assert roles == ["user", "assistant"]
 
 
 def test_compaction_failure_still_saves_history(agent_env):
     """If compaction API call fails, the conversation must still be saved."""
-    ws, hp, ctx = agent_env
+    ws, ctx = agent_env
 
     window = context_window("claude-sonnet-4-20250514")
     high_usage = _usage(inp=window - COMPACT_BUFFER + 1)
@@ -694,7 +699,7 @@ def test_compaction_failure_still_saves_history(agent_env):
          patch("cycls.agent.harness.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         asyncio.run(_drain(_run(context=ctx)))
 
-    history = load_chat(hp)
+    history = _read_history(ctx)
     assert len(history) >= 2
     # The actual answer must not be lost
     last = history[-1]["content"]
@@ -751,7 +756,7 @@ def test_is_retryable_detects_string_fallback():
 
 def test_auto_retry_on_overloaded(agent_env):
     """Transient API errors should be retried, not shown as errors."""
-    ws, hp, ctx = agent_env
+    ws, ctx = agent_env
 
     call_count = 0
     final = _make_response([_text_block("Done")])
@@ -778,7 +783,7 @@ def test_auto_retry_on_overloaded(agent_env):
 
 def test_auto_retry_exhausted_shows_error(agent_env):
     """After MAX_RETRIES, the error should surface to the user."""
-    ws, hp, ctx = agent_env
+    ws, ctx = agent_env
 
     mock_client = MagicMock()
     mock_client.messages.stream = MagicMock(side_effect=Exception("overloaded"))

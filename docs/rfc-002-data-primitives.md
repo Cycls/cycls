@@ -9,10 +9,9 @@
 | Phase | State | Where |
 |---|---|---|
 | `Workspace` + `KV` primitives | **Shipped** | `cycls/app/db/main.py` |
-| Chats on KV (kills N+1) | **Shipped** | `cycls/agent/web/routers.py` |
+| Chat metadata + log unified on KV | **Shipped** | `cycls/agent/chat.py` — one `KV("chat")` with `meta/{id}` and `log/{id}/{turn}` prefixes |
 | Auto-derived chat titles | **Shipped** | `cycls/agent/harness/main.py:_maybe_set_title` |
 | Substrate auto-detection (FUSE → direct GCS) | **Shipped** | `Workspace.url()` |
-| Chat log (JSONL → KV) | **Deferred** | `cycls/agent/harness/chat.py` still file-based |
 | Shares (pointer indirection) | **Deferred** | `cycls/agent/web/routers.py:share_router` still file-based |
 
 ---
@@ -139,7 +138,6 @@ if not existing.get("title"):
 | Concern | Why it stays |
 |---|---|
 | User files (`/workspace/{user_id}/...`) | The agent's bwrap surface needs POSIX. FUSE/object-storage-as-filesystem is the right shape. |
-| Chat log JSONL | Hot path, current shape isn't biting. KV migration is mechanical (~30–50 LOC across `chat.py`, harness, and tests) when the wrinkle hurts — substrate is already in place. |
 | Shares (pointer + dir + assets) | Cross-tenant public read is its own concern; deferred to a follow-up. Attachments (blobs) belong on the filesystem regardless. |
 
 ---
