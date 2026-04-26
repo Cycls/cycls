@@ -32,7 +32,6 @@ def _make_context(ws):
     ctx.workspace = Workspace(Path(ws))
     ctx.chat_id = "test-chat"
     user = types.SimpleNamespace()
-    user.sessions = Path(ws) / ".sessions"  # legacy path; unused by KV-backed harness
     ctx.user = user
     ctx.messages = types.SimpleNamespace()
     ctx.messages.raw = [{"role": "user", "content": "do stuff"}]

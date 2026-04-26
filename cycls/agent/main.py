@@ -67,12 +67,14 @@ class Agent(App):
             self.config.pk = resolved["pk"]
 
     def _routers(self):
-        """State routers (sessions, files, share) require auth to be meaningful.
+        """State routers (chats, files, share) require auth to be meaningful.
         Agents without auth skip them entirely — no silent 401s on unused endpoints."""
         server = self.server
         routers = [lambda app, auth: app.include_router(server)]
         if self._auth_provider is not None:
-            routers.insert(0, install_routers)
+            from pathlib import Path
+            volume = Path(self.config.volume)
+            routers.insert(0, lambda app, auth: install_routers(app, auth, volume))
         return routers
 
     def _prepare_func(self, prod):

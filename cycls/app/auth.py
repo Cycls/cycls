@@ -5,7 +5,6 @@ protection capability. `@cycls.app` and `@cycls.agent` both pick it up.
 User code references the FastAPI dependency via `Depends(my_agent.auth)`
 or `Depends(my_app.auth)`.
 """
-from pathlib import Path
 from typing import Any, Optional
 
 from pydantic import BaseModel
@@ -21,14 +20,6 @@ class User(BaseModel):
     org_permissions: Optional[list] = None
     plan: Optional[str] = None
     features: Optional[list] = None
-
-    @property
-    def workspace(self) -> Path:
-        return Path(f"/workspace/{self.org_id}") if self.org_id else Path(f"/workspace/{self.id}")
-
-    @property
-    def sessions(self) -> Path:
-        return self.workspace / ".sessions" / self.id if self.org_id else self.workspace / ".sessions"
 
 
 # ---- JWT provider primitives ----

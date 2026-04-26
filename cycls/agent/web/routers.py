@@ -32,21 +32,21 @@ def resolve_path(workspace, rel):
     return resolved
 
 
-def _ws(user):
-    """Build a Workspace from a User, mirroring Context.workspace()."""
+def _ws(user, volume):
+    """Build a Workspace from a User + volume, mirroring Context.workspace."""
     if user.org_id:
-        return Workspace(user.workspace, user_id=user.id)
-    return Workspace(user.workspace)
+        return Workspace(volume / user.org_id, user_id=user.id)
+    return Workspace(volume / user.id)
 
 
 # ---- Chats ----
 
-def chats_router(required_auth):
+def chats_router(required_auth, volume):
     r = APIRouter()
 
     @r.get("/chats")
     async def list_chats(user: Any = required_auth):
-        ws = _ws(user)
+        ws = _ws(user, volume)
         items = []
         async for cid, data in chat.list_chats(ws):
             items.append({
@@ -59,7 +59,7 @@ def chats_router(required_auth):
 
     @r.get("/chats/{chat_id}")
     async def get_chat(chat_id: str, user: Any = required_auth):
-        ws = _ws(user)
+        ws = _ws(user, volume)
         meta = await chat.get_meta(ws, chat_id)
         if meta is None:
             raise HTTPException(status_code=404, detail="Chat not found")
@@ -68,7 +68,7 @@ def chats_router(required_auth):
 
     @r.put("/chats/{chat_id}")
     async def put_chat(chat_id: str, request: Request, user: Any = required_auth):
-        ws = _ws(user)
+        ws = _ws(user, volume)
         data = await request.json()
         data["id"] = chat_id
         data["updatedAt"] = datetime.now(timezone.utc).isoformat()
@@ -82,7 +82,7 @@ def chats_router(required_auth):
 
     @r.delete("/chats/{chat_id}")
     async def delete_chat(chat_id: str, user: Any = required_auth):
-        ws = _ws(user)
+        ws = _ws(user, volume)
         if (await chat.get_meta(ws, chat_id)) is None:
             raise HTTPException(status_code=404, detail="Chat not found")
         await chat.delete_chat(ws, chat_id)
@@ -93,7 +93,7 @@ def chats_router(required_auth):
 
 # ---- Files ----
 
-def files_router(required_auth):
+def files_router(required_auth, volume):
     r = APIRouter()
 
     def _safe_path(workspace, rel):
@@ -104,7 +104,7 @@ def files_router(required_auth):
 
     @r.get("/files")
     async def list_files(request: Request, user: Any = required_auth):
-        target = _safe_path(user.workspace, request.query_params.get("path", ""))
+        target = _safe_path(_ws(user, volume).root, request.query_params.get("path", ""))
         if not target.is_dir():
             return []
         items = []
@@ -123,7 +123,7 @@ def files_router(required_auth):
 
     @r.get("/files/{path:path}")
     async def get_file(path: str, request: Request, user: Any = required_auth):
-        file_path = _safe_path(user.workspace, path)
+        file_path = _safe_path(_ws(user, volume).root, path)
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
         if request.query_params.get("download") is not None:
@@ -132,31 +132,31 @@ def files_router(required_auth):
 
     @r.put("/files/{path:path}")
     async def put_file(path: str, request: Request, file: UploadFile = File(...), user: Any = required_auth):
-        file_path = _safe_path(user.workspace, path)
+        file_path = _safe_path(_ws(user, volume).root, path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_bytes(await file.read())
         return {"ok": True}
 
     @r.patch("/files/{path:path}")
     async def rename(path: str, request: Request, user: Any = required_auth):
-        src = _safe_path(user.workspace, path)
+        src = _safe_path(_ws(user, volume).root, path)
         if not src.exists():
             raise HTTPException(status_code=404, detail="Not found")
         data = await request.json()
-        dest = _safe_path(user.workspace, data["to"])
+        dest = _safe_path(_ws(user, volume).root, data["to"])
         dest.parent.mkdir(parents=True, exist_ok=True)
         src.rename(dest)
         return {"ok": True}
 
     @r.post("/files/{path:path}")
     async def mkdir(path: str, user: Any = required_auth):
-        dir_path = _safe_path(user.workspace, path)
+        dir_path = _safe_path(_ws(user, volume).root, path)
         dir_path.mkdir(parents=True, exist_ok=True)
         return {"ok": True}
 
     @r.delete("/files/{path:path}")
     async def delete_path(path: str, user: Any = required_auth):
-        target = _safe_path(user.workspace, path)
+        target = _safe_path(_ws(user, volume).root, path)
         if not target.exists():
             raise HTTPException(status_code=404, detail="Not found")
         if target.is_dir():
@@ -170,7 +170,7 @@ def files_router(required_auth):
 
 # ---- Share ----
 
-def share_router(required_auth):
+def share_router(required_auth, volume):
     r = APIRouter()
 
     @r.post("/share")
@@ -180,7 +180,7 @@ def share_router(required_auth):
         if not messages:
             raise HTTPException(status_code=400, detail="messages required")
         share_id, _ = await share.create_share(
-            _ws(user),
+            _ws(user, volume),
             messages=messages,
             title=data.get("title", ""),
             author=data.get("author"),
@@ -190,7 +190,7 @@ def share_router(required_auth):
     @r.get("/share")
     async def list_shares(user: Any = required_auth):
         items = []
-        async for sid, meta in share.list_shares(_ws(user)):
+        async for sid, meta in share.list_shares(_ws(user, volume)):
             items.append({
                 "id": meta.get("id", sid),
                 "title": meta.get("title", ""),
@@ -216,7 +216,7 @@ def share_router(required_auth):
 
     @r.delete("/share/{share_id}")
     async def delete_share(share_id: str, user: Any = required_auth):
-        ws = _ws(user)
+        ws = _ws(user, volume)
         if not await share.is_owner(ws, share_id):
             raise HTTPException(status_code=404, detail="Not found")
         await share.delete_share(ws, share_id)
@@ -227,8 +227,8 @@ def share_router(required_auth):
 
 # ---- Mount ----
 
-def install_routers(app, required_auth):
+def install_routers(app, required_auth, volume):
     """Mount chats, files, and share routers on a FastAPI app."""
-    app.include_router(chats_router(required_auth))
-    app.include_router(files_router(required_auth))
-    app.include_router(share_router(required_auth))
+    app.include_router(chats_router(required_auth, volume))
+    app.include_router(files_router(required_auth, volume))
+    app.include_router(share_router(required_auth, volume))
