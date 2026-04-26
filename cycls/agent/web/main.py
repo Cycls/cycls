@@ -123,6 +123,7 @@ def web(func, config, extra_routers=None):
                 return self.messages[-1].get("content", "")
             return ""
 
+        @property
         def workspace(self) -> Workspace:
             user = self.user
             if user is None:

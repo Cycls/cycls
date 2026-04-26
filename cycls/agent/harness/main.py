@@ -150,7 +150,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     if client is None:
         client = _make_client(model, base_url=base_url, api_key=api_key)
     model = model.split("/", 1)[1]
-    workspace = context.workspace()
+    workspace = context.workspace
     ws = workspace.root
     ensure_workspace(ws)
     cp = chat_path(context.user, context.chat_id) if context.chat_id and context.user else None
