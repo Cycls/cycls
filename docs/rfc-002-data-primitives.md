@@ -1,7 +1,18 @@
 # RFC 002: cycls.Dict
 
-**Status**: Draft
 **Depends on**: RFC 001 (shipped)
+**Companion**: [forward-compatibility audits](rfc-002-forward-compat.md)
+
+---
+
+## Status
+
+| Phase | State | Where |
+|---|---|---|
+| Impl I — primitives | **Shipped** | `cycls/app/store.py:8–46`, `cycls/agent/web/main.py:126–132`, commit `e162a20` |
+| Impl II — workspace plumbing | **Pending** | 5-step refactor below |
+| Shares (RFC vision) | **Unshipped** | Code still uses pre-RFC pointer-and-scatter layout; design below; ships as Fold 8 |
+| Folds 4–9 | **Planned** | Folds ladder below |
 
 ---
 
@@ -103,7 +114,9 @@ When `cycls.Volume` becomes a real primitive, `.volume()` accepts it in place of
 
 ---
 
-## Implementation
+## Implementation I — primitives (shipped)
+
+Canonical: `cycls/app/store.py`. The implementation is ~28 lines: Workspace as a context manager over a Path, Dict as a persistent dict reading the active workspace via ContextVar, atomic write via temp+rename. `__getitem__` and `get` return deep copies — forces read-modify-write so in-place mutation of nested values can't silently skip `_save()`. Matches Modal's Dict semantics.
 
 ```python
 import contextvars, copy, json
@@ -141,7 +154,6 @@ class Dict(dict):
         tmp.write_text(json.dumps(dict(self)))
         tmp.rename(self._path)
 
-    # Returns a deep copy — in-place mutation of the returned value can't silently skip _save()
     def __getitem__(self, k):    return copy.deepcopy(super().__getitem__(k))
     def get(self, k, d=None):    return copy.deepcopy(super().get(k, d))
     def __setitem__(self, k, v): super().__setitem__(k, v); self._save()
@@ -149,30 +161,142 @@ class Dict(dict):
     def update(self, *a, **kw):  super().update(*a, **kw);  self._save()
 ```
 
-~28 lines. Workspace: context manager over a Path. Dict: persistent dict that reads the active workspace. Atomic write via temp-file-and-rename. `__getitem__` and `get` return deep copies — forces read-modify-write pattern so in-place mutation of nested values can't silently skip `_save()`. Matches Modal's Dict semantics.
-
 When file-backed hits limits (>1MB, concurrent writes, cross-user aggregation), swap to Firestore — same brackets, different persistence layer.
 
 ### Wiring `context.workspace()`
 
-Framework captures the volume from `Image.volume()` at decoration, stores it on the Agent/App instance, passes it into every `Context` built per request. `Context.workspace()` is a method that returns a fresh Workspace:
-
-```python
-class Context:
-    def workspace(self) -> Workspace:
-        user, volume = self.user, self._volume
-        if user.org_id:
-            return Workspace(root=volume / user.org_id, user_id=user.id)
-        return Workspace(root=volume / user.id)
-```
-
-`with context.workspace():` enters it; the ContextVar does the rest. Breaking change from today's `context.workspace` (Path attr) to `context.workspace()` (method returning Workspace).
+Framework captures the volume from `Image.volume()` at decoration, stores it on the Agent/App instance, passes it into every `Context` built per request. `Context.workspace()` is a method that returns a fresh Workspace (`cycls/agent/web/main.py:126`).
 
 ---
 
-## Shares
+## Implementation II — workspace plumbing (pending)
+
+**Goal:** finish the wrinkle Impl I left half-closed. After this, `Image.volume()` works end-to-end, `User` carries identity only, and every request-scoped primitive (Dict, sessions, bash cwd, editor paths) resolves from the same `with context.workspace():` block.
+
+**Key principle:** `with context.workspace():` means *"I want persistence."* Stateless agents (no tools, no history) don't need it. Agents with tools or history fail loudly at first use with a clear error.
+
+| # | Step | LOC |
+|---|---|---|
+| 1 | Harness reads `_current_workspace` *lazily* at point of use | ~15 |
+| 2 | State routers derive paths from Workspace, not User | ~30 |
+| 3 | Drop `User.workspace` and `User.sessions` properties | −10 |
+| 4 | Lazy `mkdir` — `Workspace.__enter__` stops creating `.cycls/` eagerly | ~2 |
+| 5 | Update `super.py` + tutorial: `llm.run` inside the `with` block | ~5 |
+
+Net change: roughly zero lines, substantially cleaner boundaries.
+
+### Step 1 — Harness lazy ContextVar reads
+
+Today the harness reaches into `context.user.workspace` (host path for bash cwd) and `context.user.sessions` (history file path) — Clerk-shaped hardcodes on `User`.
+
+After this step, the harness reads the active workspace from the ContextVar set by the caller's `with context.workspace():` block — **but only at the moment each tool fires or each history write happens**, never at `llm.run` entry.
+
+```python
+# Bash tool — reads workspace only when actually invoked
+async def _exec_bash(...):
+    try:
+        cwd = _current_workspace.get().root
+    except LookupError:
+        raise RuntimeError("Bash tool requires a workspace scope. Wrap llm.run in `with context.workspace():`")
+    # ...
+
+# Session history save — fails gracefully if stateless
+def _persist_history(...):
+    try:
+        ws = _current_workspace.get()
+    except LookupError:
+        return   # stateless agent, no persistence — silent no-op
+    path = ws.data / "sessions" / f"{sid}.jsonl"
+    # ...
+```
+
+**Files:** `cycls/agent/harness/tools.py` (bash + editor), `cycls/agent/harness/main.py` (history writer).
+
+**Tests:** stateless `llm.run` works and persists nothing; tool-using `llm.run` without `with` raises `RuntimeError` at first tool call; tool-using `llm.run` inside `with` routes correctly to personal and org workspaces.
+
+### Step 2 — State routers off User
+
+HTTP routes (`/sessions/*`, `/files/*`, `/share/*`) don't run inside a developer handler so they can't inherit the ContextVar. Build the Workspace directly from `user` + `Config.volume` in each router via a helper:
+
+```python
+def _user_workspace(user, volume: Path) -> Workspace:
+    if user.org_id:
+        return Workspace(volume / user.org_id, user_id=user.id)
+    return Workspace(volume / user.id)
+```
+
+Used by `Context.workspace()` and every route handler — one source of truth.
+
+**File:** `cycls/agent/state/main.py`.
+
+### Step 3 — Drop `User.workspace` / `User.sessions`
+
+`cycls/app/auth.py:25–31` — remove the properties. User becomes pure identity (`id`, `org_id`, `org_slug`, `plan`, claims). Anything still reaching for `user.workspace` fails at runtime — that's the point, flush out stragglers.
+
+**Grep gate:**
+```
+grep -rn "user\.workspace\|user\.sessions\|\.user\.workspace\|context\.user\.workspace" cycls/ tests/ examples/ docs/
+```
+Expect zero hits after Steps 1 and 2 land.
+
+### Step 4 — Lazy `mkdir` in Workspace
+
+`Workspace.__enter__` currently eagerly creates `.cycls/`. Stateless agents that enter a workspace conditionally pay an unnecessary fs op every request. Move the `mkdir` into `_save`:
+
+```python
+class Workspace:
+    def __enter__(self):
+        self._token = _current_workspace.set(self)
+        return self
+
+class Dict(dict):
+    def _save(self):
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(dict(self)))
+        tmp.rename(self._path)
+```
+
+Session history writer does the same (`path.parent.mkdir(...)` before write). After this, a `with` block that doesn't mutate produces zero filesystem writes.
+
+### Step 5 — Examples + tutorial
+
+`examples/agent/super.py` — indent `async for msg in llm.run(...)` inside the existing `with context.workspace():`. One line.
+
+`docs/tutorial.md` — show two canonical shapes side by side:
+
+```python
+# Stateless — no `with` needed.
+@cycls.agent(image=image, web=web)
+async def simple(context):
+    async for msg in llm.run(context=context):
+        yield msg
+
+# Persistent / tool-using — wrap to opt in.
+@cycls.agent(image=image, web=web)
+async def persistent(context):
+    with context.workspace():
+        async for msg in llm.run(context=context):
+            yield msg
+```
+
+One sentence: *"`with context.workspace():` means 'I want persistence.' If you save Dicts, use Bash/Editor tools, or want session history, wrap your handler body. Stateless agents skip it."*
+
+### Shipping order
+
+1. **PR 1** — Steps 1+2+3 in one change. Audited together; grep verifies zero stragglers before merge.
+2. **PR 2** — Step 4: lazy mkdir.
+3. **PR 3** — Step 5: tutorial + super.py.
+
+**Total engineering:** half a day to a full day, most of it on the router audit in Step 2.
+
+---
+
+## Shares (unshipped vision — Fold 8)
 
 Shares are **frozen snapshots** by design — users expect "the chat I shared" to look the same forever, even if the original files change, get renamed, or get deleted. Copying attachments at share time is the correct semantic, kept as-is from today.
+
+> Status: code currently uses the pre-RFC layout (`/workspace/shared/{id}.json` pointers → user `.sessions/public/{id}/share.json`). The migration to the layout below ships as **Fold 8** with a brief soak window — see Risks.
 
 **Two pieces, decoupled:**
 - **Per-workspace shares Dict** — lists the current workspace's own shares. Same per-workspace rule as sessions.
@@ -248,70 +372,21 @@ if snap["author"] == user.id:
 
 ---
 
-## Forward-compatibility
+## Folds
 
-Two audits live in [rfc-002-forward-compat.md](rfc-002-forward-compat.md): **share variants (RFC 003 scope)** and **usage & billing compatibility**. Both conclude that RFC 002's primitives don't lock the future out — every missing piece is additive.
+Each stands alone. Each makes the next cheaper. Ordered by risk — **low first, irreversible last.**
 
----
-
-## Migration
-
-Backend scripts, not lazy-per-request. The SDK ships speaking only the new format — no dual-read code, no ongoing migration drag. Two scripts, reversible in two stages.
-
-### Script 1 — migrate (additive, reversible)
-
-Copies old layout into new. Does not delete anything. After this runs, both layouts coexist; new SDK reads `.cycls/`, old SDK reads `.sessions/`.
-
-```
-For each /workspace/{user_or_org_id}/:
-  - Build .cycls/ (personal) or .cycls/{user_id}/ (org members)
-  - Copy .history.jsonl → .cycls/sessions/{sid}.jsonl       # copy, not move
-  - Write .cycls/sessions.json built from legacy .json metadata
-  - Write .cycls/_migrated marker
-
-For /workspace/shared/:
-  - Build /workspace/.cycls/shares.json (the Dict index)
-  - For each legacy share:
-    - Create /workspace/.cycls/shared/{id}/
-    - Copy share.json → /workspace/.cycls/shared/{id}/snapshot.json
-    - Copy any attachments from .sessions/public/{id}/ → .cycls/shared/{id}/assets/
-
-DO NOT TOUCH:
-  - .sessions/*.json / .sessions/*.history.jsonl  (legacy)
-  - .sessions/public/                              (legacy)
-  - /workspace/shared/                             (legacy pointers)
-```
-
-Before Script 1: `gsutil cp -r gs://prod-workspace gs://prod-workspace-backup-YYYY-MM-DD` for the worst-case restore.
-
-### Deploy the new SDK
-
-New SDK reads only from `.cycls/`. Ignores `.sessions/` and `/workspace/shared/` entirely.
-
-**Rollback path** during soak window:
-1. Revert SDK deploy → old SDK reads old layout → data intact, users unaffected
-2. (Optional) Delete `.cycls/` to clean up unused new-layout files
-
-Writes made under the new SDK during soak (new sessions, usage counters) are lost if you roll back. Keep the soak short (hours to a day) so the tradeoff stays small.
-
-### Script 2 — finalize (destructive, non-reversible)
-
-Runs only after soak, once confidence is earned:
-
-```
-For each workspace with .cycls/_migrated:
-  - Delete .sessions/
-  - Delete .sessions/public/
-
-For /workspace/:
-  - Delete shared/
-```
-
-After Script 2, rollback requires restoring the bucket snapshot. This is the real point of no return — run deliberately.
-
-### No SDK-level migration
-
-The SDK ships speaking only the new format — no dual-read, no lazy migration, no fallback. Production is covered by the scripts above. Dev workspaces from pre-0.X installs are scratch dirs; `rm -rf` them. If a real "upgrade my local workspace" need emerges, ship a `cycls migrate <path>` CLI command then — additive, not burden on Workspace.
+| # | Fold | Status |
+|---|---|---|
+| 1 | `cycls.Dict` + `Workspace` | **Shipped** (Impl I) |
+| 2 | Plumb `Image.volume()` | **Shipped** (Impl I); finalized by Impl II Steps 1–3 |
+| 3 | Usage counters | **Shipped** (month-keyed usage Dict, commit `e162a20`) |
+| 4 | Session index on Dict — `list_sessions` becomes one read; lazy migration per user | Planned |
+| 5 | Single session file — merge `{id}.json` + `{id}.history.jsonl` with `_meta` header | Planned |
+| 6 | Server-owned sessions — server generates session_id and title; FE stops PUTting metadata | Planned (FE coord) |
+| 7 | `?chat=` URL — session_id in URL, FE stops sending full history | Planned (FE-driven) |
+| 8 | Share index + nuke — kill pointers, self-contained snapshots; wipes existing public shares | Planned |
+| 9 | Firestore backend — when file-backed hits scale limits, swap substrate; same `cycls.Dict("name")` call | Future |
 
 ---
 
@@ -319,29 +394,13 @@ The SDK ships speaking only the new format — no dual-read, no lazy migration, 
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| Shares nuke is irreversible | **High** | Announce before deploy; "this share was reset" landing page |
-| Concurrent writes on `_sessions.json` | **High** | Atomic write (temp + rename); end-of-turn batching |
-| Script 1 fails mid-run | **Low** | Additive only — legacy untouched, just rerun |
-| New-SDK writes lost on rollback | **Low** | Short soak window; announce migration in release notes |
+| Shares nuke is irreversible (Fold 8) | **High** | Announce before deploy; "this share was reset" landing page |
+| Concurrent writes on `_sessions.json` | **High** | Atomic write (temp + rename); end-of-turn batching; Firestore at Fold 9 |
 | FE/BE coordination (server-owned IDs, `?chat=`) | **Medium** | Ship together, feature-flag if needed |
-| Missing `with` at call site | **Low** | Clear error, not silent fallback; `@cycls.agent` docs make pattern obvious |
-| Dict + Workspace implementation | **Low** | ~25 lines, tested in isolation |
-
----
-
-## Folds
-
-Each stands alone. Each makes the next cheaper. Ordered by risk — **low first, irreversible last.**
-
-1. **`cycls.Dict` + `Workspace`** *(low)* — ~25 lines, ships next to existing code. No callers yet.
-2. **Plumb `Image.volume()`** *(low)* — mount path threaded from Image → Agent/App instance → `context.workspace()`. Kills the hardcoded `/workspace` references. User class stays as-is.
-3. **Usage counters** *(low)* — new writes only, no migration. Exercises Dict on low-stakes data. Unlocks billing limits on Cycls Pass.
-4. **Session index on Dict** *(medium)* — `list_sessions` becomes one read. Lazy migration per user. Backend-only.
-5. **Single session file** *(medium)* — merge `{id}.json` + `{id}.history.jsonl` with `_meta` header. Backend-only.
-6. **Server-owned sessions** *(medium)* — server generates session_id and title. FE stops PUTting metadata. Coordinated with FE.
-7. **`?chat=` URL** *(medium)* — session_id in URL, FE stops sending full history. FE-driven.
-8. **Share index + nuke** *(high)* — kill pointers, self-contained snapshots. Wipes existing public shares.
-9. **Firestore backend** *(future)* — when file-backed hits scale limits, swap substrate. Same `cycls.Dict("name")` call; different persistence.
+| Tool-using agent without `with` block (post Impl II) | **Medium** | Lazy reads raise `RuntimeError` at first tool invocation with a clear fix message |
+| Missed `user.workspace` / `user.sessions` callsite (Impl II) | **Medium** | Single grep gate; properties removed so runtime catches what grep misses |
+| Pre-Impl-II developer agents | **Low** | One-line indent: move `llm.run` inside `with`. Tutorial shows both shapes. |
+| ContextVar across spawned subprocess | **Low** | Bash tool reads cwd just before spawn; ContextVar resolved on the calling task |
 
 ---
 
