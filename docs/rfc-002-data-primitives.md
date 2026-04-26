@@ -139,7 +139,7 @@ if not existing.get("title"):
 | Concern | Why it stays |
 |---|---|
 | User files (`/workspace/{user_id}/...`) | The agent's bwrap surface needs POSIX. FUSE/object-storage-as-filesystem is the right shape. |
-| Session history JSONL | Hot path, current shape isn't biting. KV migration is one-line-equivalent when the wrinkle hurts. |
+| Session history JSONL | Hot path, current shape isn't biting. KV migration is mechanical (~30–50 LOC across `history.py`, harness, and tests) when the wrinkle hurts — substrate is already in place. |
 | Shares (pointer + dir + assets) | Cross-tenant public read is its own concern; deferred to a follow-up. Attachments (blobs) belong on the filesystem regardless. |
 
 ---
