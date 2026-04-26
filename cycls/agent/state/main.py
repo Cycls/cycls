@@ -33,15 +33,18 @@ def history_path(user, session_id):
     return str(path)
 
 def load_history(path):
-    """Read JSONL history, strip stale cache_control, mark last message ephemeral."""
+    """Read JSONL history, strip stale cache_control, mark last message ephemeral.
+    Malformed lines are logged and skipped — never silently truncates the history."""
     messages = []
     try:
         with open(path) as f:
             for i, line in enumerate(f):
                 line = line.strip()
-                if line:
-                    messages.append(json.loads(line))
-    except (FileNotFoundError, json.JSONDecodeError):
+                if not line: continue
+                try: messages.append(json.loads(line))
+                except json.JSONDecodeError as e:
+                    print(f"[WARN] skipping malformed line {i} in {path}: {e}")
+    except FileNotFoundError:
         return []
     except UnicodeDecodeError as e:
         print(f"[DEBUG] UnicodeDecodeError in {path} at line {i}: {e}")
