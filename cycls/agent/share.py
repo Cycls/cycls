@@ -1,8 +1,8 @@
 """Frozen public shares of a chat — owner-deletable, anyone-readable.
 
 A share is a frozen snapshot. Ownership lives in the owner's per-user
-`KV("share", workspace)` index; the snapshot itself lives at a workspace-global
-path so it survives even if the owner's account is deleted.
+`KV("share", workspace)` index; the snapshot itself lives at a workspace-
+global path so it survives even if the owner's account is deleted.
 
     KV("share", owner_ws)
         {share_id} → metadata (title, sharedAt, ...) — owner-only
@@ -16,31 +16,20 @@ authorization check. The path *is* the resolver.
 """
 import json
 import shutil
-from pathlib import Path
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from cycls.app.db import KV
 
 
-# Mirror of `Workspace.url()`'s assumption: volume root is the parent of any
-# tenant root. Shared snapshots live globally under {volume}/.cycls/shared/.
-# TODO: thread `Config.volume` through here properly (paired with Impl II
-# Step 3 — dropping User.workspace/sessions). For now, derive from any
-# Workspace passed in (auth'd routes) and hardcode for public reads.
-_DEFAULT_VOLUME = Path("/workspace")
+def _shared_root(volume):
+    return volume / ".cycls" / "shared"
 
 
-def _shared_root(workspace=None):
-    if workspace is not None:
-        return workspace.root.parent / ".cycls" / "shared"
-    return _DEFAULT_VOLUME / ".cycls" / "shared"
-
-
-def _share_dir(share_id, workspace=None):
+def _share_dir(share_id, volume):
     if "/" in share_id or ".." in share_id or share_id.startswith("."):
         raise ValueError(f"Invalid share id: {share_id}")
-    return _shared_root(workspace) / share_id
+    return _shared_root(volume) / share_id
 
 
 def _kv(workspace):
@@ -59,12 +48,12 @@ async def is_owner(workspace, share_id):
     return (await _kv(workspace).get(share_id)) is not None
 
 
-async def create_share(workspace, *, messages, title="", author=None):
+async def create_share(workspace, volume, *, messages, title="", author=None):
     """Freeze a chat: copy attachments to the global snapshot dir, write
     snapshot.json, register in the owner's KV. Returns (share_id, snapshot).
     The *messages* list is mutated in place to set asset URLs."""
     share_id = uuid4().hex[:12]
-    sdir = _share_dir(share_id, workspace)
+    sdir = _share_dir(share_id, volume)
     (sdir / "assets").mkdir(parents=True, exist_ok=True)
 
     for msg in messages:
@@ -96,10 +85,10 @@ async def create_share(workspace, *, messages, title="", author=None):
     return share_id, snapshot
 
 
-async def delete_share(workspace, share_id):
+async def delete_share(workspace, volume, share_id):
     """Remove from owner's KV and rmtree the snapshot dir. Caller must verify
-    ownership via is_owner first (returns False from this function = idempotent)."""
-    sdir = _share_dir(share_id, workspace)
+    ownership via is_owner first."""
+    sdir = _share_dir(share_id, volume)
     if sdir.is_dir():
         shutil.rmtree(sdir)
     await _kv(workspace).delete(share_id)
@@ -107,10 +96,10 @@ async def delete_share(workspace, share_id):
 
 # ---- Public read (no auth) ----
 
-def read_snapshot(share_id):
+def read_snapshot(volume, share_id):
     """Public — read the frozen snapshot. Returns None if missing."""
     try:
-        sdir = _share_dir(share_id)
+        sdir = _share_dir(share_id, volume)
     except ValueError:
         return None
     snap = sdir / "snapshot.json"
@@ -119,12 +108,12 @@ def read_snapshot(share_id):
     return json.loads(snap.read_text())
 
 
-def asset_path(share_id, filename):
+def asset_path(volume, share_id, filename):
     """Public — return Path to a shared asset, or None if missing/invalid."""
     if "/" in filename or ".." in filename or filename.startswith("."):
         return None
     try:
-        sdir = _share_dir(share_id)
+        sdir = _share_dir(share_id, volume)
     except ValueError:
         return None
     p = sdir / "assets" / filename
