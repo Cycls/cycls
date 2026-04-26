@@ -4,16 +4,15 @@ Chat metadata + message log live in one KV (`KV("chat", workspace)`) — see
 `cycls.agent.chat`. Files and share dirs stay on the workspace filesystem
 (they're POSIX-shaped). Path safety guards live here too.
 """
-import json, os, shutil, unicodedata
+import os, shutil, unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
 from typing import Any
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 
 from cycls.app.db import Workspace
-from cycls.agent import chat
+from cycls.agent import chat, share
 
 
 # ---- Path safety ----
@@ -173,18 +172,6 @@ def files_router(required_auth):
 
 def share_router(required_auth):
     r = APIRouter()
-    shared_index = Path("/workspace/shared")
-
-    def _resolve(share_id):
-        pointer = shared_index / f"{share_id}.json"
-        if not pointer.is_file():
-            raise HTTPException(status_code=404, detail="Not found")
-        data = json.loads(pointer.read_text())
-        share_dir = Path(data["path"])
-        if not share_dir.is_dir():
-            pointer.unlink(missing_ok=True)
-            raise HTTPException(status_code=404, detail="Not found")
-        return share_dir
 
     @r.post("/share")
     async def create_share(request: Request, user: Any = required_auth):
@@ -192,77 +179,47 @@ def share_router(required_auth):
         messages = data.get("messages")
         if not messages:
             raise HTTPException(status_code=400, detail="messages required")
-
-        share_id = uuid4().hex[:12]
-        share_dir = user.sessions / "public" / share_id
-        share_dir.mkdir(parents=True, exist_ok=True)
-
-        for msg in messages:
-            for att in msg.get("attachments") or []:
-                att_path = att.get("path")
-                if not att_path:
-                    continue
-                src = user.workspace / att_path
-                if src.is_file():
-                    shutil.copy2(src, share_dir / src.name)
-                    att["url"] = f"/shared-assets/{share_id}/{src.name}"
-
-        snapshot = {
-            "id": share_id,
-            "title": data.get("title", ""),
-            "author": data.get("author"),
-            "sharedAt": datetime.now(timezone.utc).isoformat(),
-            "messages": messages,
-        }
-        (share_dir / "share.json").write_text(json.dumps(snapshot))
-
-        # Write global pointer
-        shared_index.mkdir(parents=True, exist_ok=True)
-        (shared_index / f"{share_id}.json").write_text(json.dumps({"path": str(share_dir)}))
-
+        share_id, _ = await share.create_share(
+            _ws(user),
+            messages=messages,
+            title=data.get("title", ""),
+            author=data.get("author"),
+        )
         return {"id": share_id, "path": share_id}
 
     @r.get("/share")
     async def list_shares(user: Any = required_auth):
-        public_dir = user.sessions / "public"
-        if not public_dir.is_dir():
-            return []
         items = []
-        for d in public_dir.iterdir():
-            f = d / "share.json"
-            if not f.is_file():
-                continue
-            try:
-                data = json.loads(f.read_text())
-                items.append({"id": data.get("id", d.name), "title": data.get("title", ""), "sharedAt": data.get("sharedAt", ""), "path": data.get("id", d.name)})
-            except (json.JSONDecodeError, OSError):
-                continue
+        async for sid, meta in share.list_shares(_ws(user)):
+            items.append({
+                "id": meta.get("id", sid),
+                "title": meta.get("title", ""),
+                "sharedAt": meta.get("sharedAt", ""),
+                "path": meta.get("id", sid),
+            })
         items.sort(key=lambda s: s.get("sharedAt", ""), reverse=True)
         return items
 
     @r.get("/share/{share_id}")
     async def get_share(share_id: str):
-        share_dir = _resolve(share_id)
-        return json.loads((share_dir / "share.json").read_text())
+        snap = share.read_snapshot(share_id)
+        if snap is None:
+            raise HTTPException(status_code=404, detail="Not found")
+        return snap
 
     @r.get("/shared-assets/{share_id}/{filename}")
     async def get_shared_asset(share_id: str, filename: str):
-        share_dir = _resolve(share_id)
-        file_path = share_dir / filename
-        if not file_path.is_file():
+        p = share.asset_path(share_id, filename)
+        if p is None:
             raise HTTPException(status_code=404, detail="Not found")
-        return FileResponse(file_path)
+        return FileResponse(p)
 
     @r.delete("/share/{share_id}")
     async def delete_share(share_id: str, user: Any = required_auth):
-        share_dir = user.sessions / "public" / share_id
-        if not share_dir.is_dir():
+        ws = _ws(user)
+        if not await share.is_owner(ws, share_id):
             raise HTTPException(status_code=404, detail="Not found")
-        shutil.rmtree(share_dir)
-        # Remove pointer
-        pointer = shared_index / f"{share_id}.json"
-        if pointer.is_file():
-            pointer.unlink()
+        await share.delete_share(ws, share_id)
         return {"ok": True}
 
     return r

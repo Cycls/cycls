@@ -125,6 +125,6 @@ Set `CYCLS_STATE_URL=gs://separate-bucket` in the deploy environment to point st
 | Concern | Why |
 |---|---|
 | User files (the agent's bwrap surface) | POSIX needed for bash/editor; FUSE/object-storage-as-filesystem is the right shape |
-| Shares (pointer + dir + assets) | Cross-tenant public read is its own design concern; deferred |
+| Share snapshots (`{volume}/.cycls/shared/{id}/`) | Cross-tenant public read works without auth; binary attachments belong on the filesystem regardless. Per-user owner index lives in `KV("share", ws)`. |
 
 See [rfc-002-data-primitives.md](rfc-002-data-primitives.md) for the design and forward-compat audit.
