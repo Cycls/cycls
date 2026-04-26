@@ -51,8 +51,8 @@ export function Chat({
   onListSessions,
   onLoadSession,
   onDeleteSession,
-  sessionId,
-  sessionLoading,
+  chatId,
+  chatLoading,
   onSignOut,
   onManageAccount,
   onCreateOrg,
@@ -82,8 +82,8 @@ export function Chat({
   onListSessions?: () => Promise<{ id: string; title: string; updatedAt: string }[]>;
   onLoadSession?: (id: string) => Promise<void>;
   onDeleteSession?: (id: string) => Promise<void>;
-  sessionId?: string | null;
-  sessionLoading?: boolean;
+  chatId?: string | null;
+  chatLoading?: boolean;
   onSignOut?: () => void;
   onManageAccount?: () => void;
   onCreateOrg?: () => void;
@@ -121,7 +121,7 @@ export function Chat({
   const [exploreAgents, setExploreAgents] = useState<PassAgent[]>([]);
   const [exploreLoading, setExploreLoading] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
-  const [filesTab, setFilesTab] = useState<"files" | "shares" | "sessions">("files");
+  const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats">("files");
   const [shareOpen, setShareOpen] = useState(false);
   const [shareTitle, setShareTitle] = useState("");
   const [shareUrl, setShareUrl] = useState<string | null>(null);
@@ -129,8 +129,8 @@ export function Chat({
   const [shareCopied, setShareCopied] = useState(false);
   const [shares, setShares] = useState<{ id: string; title: string; sharedAt: string; path: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
-  const [sessions, setSessions] = useState<{ id: string; title: string; updatedAt: string }[]>([]);
-  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string }[]>([]);
+  const [chatsLoading, setChatsLoading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { scrollRef, contentRef, scrollToBottom } = useStickToBottom();
@@ -183,7 +183,7 @@ export function Chat({
 
   // Reset sidebar data when org changes
   useEffect(() => {
-    setSessions([]);
+    setChats([]);
     setShares([]);
     setFilesOpen(false);
   }, [activeOrg?.id]);
@@ -487,9 +487,9 @@ export function Chat({
                   setFilesOpen(!filesOpen);
                   if (!filesOpen) {
                     if (onListSessions) {
-                      setFilesTab("sessions");
-                      setSessionsLoading(true);
-                      onListSessions().then((items) => { setSessions(items); setSessionsLoading(false); }).catch(() => setSessionsLoading(false));
+                      setFilesTab("chats");
+                      setChatsLoading(true);
+                      onListSessions().then((items) => { setChats(items); setChatsLoading(false); }).catch(() => setChatsLoading(false));
                     } else if (files) {
                       setFilesTab("files");
                       files.onNavigate(files.path);
@@ -578,7 +578,7 @@ export function Chat({
 
       <LayoutGroup>
         <div className="h-0.5 overflow-hidden">
-          {sessionLoading && <div className="h-full w-1/3 bg-muted-foreground/30 rounded-full animate-[slide_1s_ease-in-out_infinite]" />}
+          {chatLoading && <div className="h-full w-1/3 bg-muted-foreground/30 rounded-full animate-[slide_1s_ease-in-out_infinite]" />}
         </div>
         {isEmpty ? (
           <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16 pt-40 sm:pt-0">
@@ -705,13 +705,13 @@ export function Chat({
                   {onListSessions && (
                     <button
                       onClick={() => {
-                        setFilesTab("sessions");
-                        setSessionsLoading(true);
-                        onListSessions().then((items) => { setSessions(items); setSessionsLoading(false); }).catch(() => setSessionsLoading(false));
+                        setFilesTab("chats");
+                        setChatsLoading(true);
+                        onListSessions().then((items) => { setChats(items); setChatsLoading(false); }).catch(() => setChatsLoading(false));
                       }}
-                      className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "sessions" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "chats" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                     >
-                      {t("sessions")}
+                      {t("chats")}
                     </button>
                   )}
                   {files && (
@@ -802,13 +802,13 @@ export function Chat({
                     )}
                   </div>
                 </div>
-              ) : filesTab === "sessions" ? (
-                <SessionsPanel
-                  sessions={sessions}
-                  loading={sessionsLoading}
-                  activeId={sessionId}
+              ) : filesTab === "chats" ? (
+                <ChatsPanel
+                  chats={chats}
+                  loading={chatsLoading}
+                  activeId={chatId}
                   onLoad={(id) => { onLoadSession?.(id); if (window.innerWidth < 640) setFilesOpen(false); }}
-                  onDelete={(id) => { setSessionsLoading(true); onDeleteSession?.(id).then(() => setSessions((prev) => prev.filter((x) => x.id !== id))).finally(() => setSessionsLoading(false)); }}
+                  onDelete={(id) => { setChatsLoading(true); onDeleteSession?.(id).then(() => setChats((prev) => prev.filter((x) => x.id !== id))).finally(() => setChatsLoading(false)); }}
                 />
               ) : null}
             </motion.div>
@@ -1431,8 +1431,8 @@ function formatShortDate(iso: string) {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function SessionsPanel({ sessions, loading, activeId, onLoad, onDelete }: {
-  sessions: { id: string; title: string; updatedAt: string }[];
+function ChatsPanel({ chats, loading, activeId, onLoad, onDelete }: {
+  chats: { id: string; title: string; updatedAt: string }[];
   loading: boolean;
   activeId?: string | null;
   onLoad: (id: string) => void;
@@ -1440,19 +1440,19 @@ function SessionsPanel({ sessions, loading, activeId, onLoad, onDelete }: {
 }) {
   if (loading) return <LoadingBar />;
 
-  if (sessions.length === 0) {
+  if (chats.length === 0) {
     return (
       <EmptyState
         icon={<svg className="size-full" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" /></svg>}
-        title={t("noSessions")}
-        subtitle={t("noSessionsSub")}
+        title={t("noChats")}
+        subtitle={t("noChatsSub")}
       />
     );
   }
 
   return (
     <div className="flex-1 overflow-y-auto divide-y divide-border">
-      {sessions.map((s) => (
+      {chats.map((s) => (
         <div
           key={s.id}
           className={`group flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer ${activeId === s.id ? "bg-secondary/30" : ""}`}
@@ -1470,7 +1470,7 @@ function SessionsPanel({ sessions, loading, activeId, onLoad, onDelete }: {
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(s.id); }}
             className="flex size-7 items-center justify-center rounded-md text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 hover:text-red-500 hover:bg-red-500/10 transition-all cursor-pointer"
-            aria-label="Delete session"
+            aria-label="Delete chat"
           >
             <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" strokeLinecap="round">
               <circle cx="12" cy="12" r="9" strokeWidth={1.5} />

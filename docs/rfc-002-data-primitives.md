@@ -8,11 +8,11 @@
 
 | Phase | State | Where |
 |---|---|---|
-| `Workspace` + `KV` primitives | **Shipped** | `cycls/db/main.py` |
-| Sessions on KV (kills N+1) | **Shipped** | `cycls/agent/web/routers.py` |
-| Auto-derived session titles | **Shipped** | `cycls/agent/harness/main.py:_maybe_set_title` |
+| `Workspace` + `KV` primitives | **Shipped** | `cycls/app/db/main.py` |
+| Chats on KV (kills N+1) | **Shipped** | `cycls/agent/web/routers.py` |
+| Auto-derived chat titles | **Shipped** | `cycls/agent/harness/main.py:_maybe_set_title` |
 | Substrate auto-detection (FUSE → direct GCS) | **Shipped** | `Workspace.url()` |
-| Session history (JSONL → KV) | **Deferred** | `cycls/agent/harness/history.py` still file-based |
+| Chat log (JSONL → KV) | **Deferred** | `cycls/agent/harness/chat.py` still file-based |
 | Shares (pointer indirection) | **Deferred** | `cycls/agent/web/routers.py:share_router` still file-based |
 
 ---
@@ -86,8 +86,8 @@ One SlateDB instance per tenant; KVs share the underlying handle, namespaced by 
 | Per-Dict file-per-name | `.cycls/{name}.json` per Dict | One SlateDB per tenant, KVs are prefix views |
 | ContextVar magic | `with context.workspace():` required | Explicit `workspace` arg, no `with` block |
 | Sync/async mismatch | Dict was sync, harness async | KV is async-native, composes with FastAPI |
-| N+1 session listing | `iterdir()` + read each `.json` | One `scan_prefix` returns all sessions |
-| Empty session titles | FE-PUTs metadata, often skipped | Server auto-derives from first user message |
+| N+1 chat listing | `iterdir()` + read each `.json` | One `scan_prefix` returns all chats |
+| Empty chat titles | FE-PUTs metadata, often skipped | Server auto-derives from first user message |
 | Counter races (theoretical) | Read-modify-write JSON file | Same pattern on KV; merge ops available if/when needed |
 | FUSE-only state | All state through `gcsfuse` | Direct `gs://` for state, FUSE only for user files |
 
@@ -113,11 +113,11 @@ async for month, entry in usage.items():
     print(month, entry["count"])
 ```
 
-### Sessions (framework code, lives in `cycls/agent/web/routers.py`)
+### Chats (framework code, lives in `cycls/agent/web/routers.py`)
 
 ```python
-sessions = KV("sessions", _ws(user))
-items = [v async for _, v in sessions.items()]   # N+1 → one scan
+chats = KV("chats", _ws(user))
+items = [v async for _, v in chats.items()]   # N+1 → one scan
 items.sort(key=lambda s: s.get("updatedAt", ""), reverse=True)
 return items
 ```
@@ -125,11 +125,11 @@ return items
 ### Auto-title (in the harness)
 
 ```python
-sessions = KV("sessions", workspace)
-existing = await sessions.get(session_id, {})
+chats = KV("chats", workspace)
+existing = await chats.get(chat_id, {})
 if not existing.get("title"):
     title = first_user_message[:80]
-    await sessions.put(session_id, {**existing, "title": title, ...})
+    await chats.put(chat_id, {**existing, "title": title, ...})
 ```
 
 ---
@@ -139,7 +139,7 @@ if not existing.get("title"):
 | Concern | Why it stays |
 |---|---|
 | User files (`/workspace/{user_id}/...`) | The agent's bwrap surface needs POSIX. FUSE/object-storage-as-filesystem is the right shape. |
-| Session history JSONL | Hot path, current shape isn't biting. KV migration is mechanical (~30–50 LOC across `history.py`, harness, and tests) when the wrinkle hurts — substrate is already in place. |
+| Chat log JSONL | Hot path, current shape isn't biting. KV migration is mechanical (~30–50 LOC across `chat.py`, harness, and tests) when the wrinkle hurts — substrate is already in place. |
 | Shares (pointer + dir + assets) | Cross-tenant public read is its own concern; deferred to a follow-up. Attachments (blobs) belong on the filesystem regardless. |
 
 ---

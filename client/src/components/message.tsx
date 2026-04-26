@@ -140,7 +140,7 @@ export function MessageBubble({
     );
   }
 
-  const parts = (message.parts || []).filter((p) => p.type !== "session_id");
+  const parts = (message.parts || []).filter((p) => p.type !== "chat_id");
   const isEmpty = parts.length === 0;
 
   const copyAll = () => {

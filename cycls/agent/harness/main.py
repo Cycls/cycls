@@ -2,16 +2,16 @@
 import asyncio, json, random, time
 from datetime import datetime, timezone
 from cycls.app.db import KV
-from .history import ensure_workspace, history_path, load_history, save_history
+from .chat import ensure_workspace, chat_path, load_chat, save_chat
 from .compact import COMPACT_BUFFER, KEEP_RECENT, compact, context_window
 from .prompts import DEFAULT_SYSTEM
 from .tools import build_tools, dispatch, _exec_read
 
 
-async def _maybe_set_title(workspace, session_id, content):
+async def _maybe_set_title(workspace, chat_id, content):
     """First-write title from the user's first message; idempotent on later turns."""
-    sessions = KV("sessions", workspace)
-    existing = await sessions.get(session_id, {})
+    chats = KV("chats", workspace)
+    existing = await chats.get(chat_id, {})
     if existing.get("title"):
         return
     text = content if isinstance(content, str) else next(
@@ -22,9 +22,9 @@ async def _maybe_set_title(workspace, session_id, content):
     if not title:
         return
     now = datetime.now(timezone.utc).isoformat()
-    await sessions.put(session_id, {
+    await chats.put(chat_id, {
         **existing,
-        "id": session_id,
+        "id": chat_id,
         "title": title,
         "updatedAt": now,
         "createdAt": existing.get("createdAt", now),
@@ -153,13 +153,13 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     workspace = context.workspace()
     ws = workspace.root
     ensure_workspace(ws)
-    hp = history_path(context.user, context.session_id) if context.session_id and context.user else None
-    messages = load_history(hp) if hp else []
+    cp = chat_path(context.user, context.chat_id) if context.chat_id and context.user else None
+    messages = load_chat(cp) if cp else []
     saved = len(messages)
     incoming = context.messages.raw[-1].get("content", "")
     messages.append({"role": "user", "content": await _ingest(incoming, ws)})
-    if context.session_id and context.user:
-        try: await _maybe_set_title(workspace, context.session_id, incoming)
+    if context.chat_id and context.user:
+        try: await _maybe_set_title(workspace, context.chat_id, incoming)
         except Exception as e: print(f"[WARN] title set failed: {e}")
     window = context_window(model)
 
@@ -183,7 +183,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 try:
                     messages[:] = await compact(client, model, messages)
                     tokens_since_compact = 0
-                    if hp: save_history(hp, messages, mode="w"); saved = len(messages)
+                    if cp: save_chat(cp, messages, mode="w"); saved = len(messages)
                 except Exception as ce:
                     yield {"type": "callout", "callout": f"Compaction failed: {ce}", "style": "warning"}
 
@@ -232,7 +232,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     content = out
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": content})
             messages.append({"role": "user", "content": results})
-            if hp: save_history(hp, messages[saved:]); saved = len(messages)
+            if cp: save_chat(cp, messages[saved:]); saved = len(messages)
 
         except Exception as e:
             if _is_retryable(e) and retries < MAX_RETRIES:
@@ -242,12 +242,12 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 await asyncio.sleep(delay); continue
             if not _recover(e, messages):
                 yield {"type": "callout", "callout": str(e), "style": "error"}; break
-            if hp: save_history(hp, messages[saved:]); saved = len(messages)
+            if cp: save_chat(cp, messages[saved:]); saved = len(messages)
             continue
 
     # Finalize: save any unsaved messages
-    if hp and saved < len(messages):
-        save_history(hp, messages[saved:])
+    if cp and saved < len(messages):
+        save_chat(cp, messages[saved:])
     if show_usage and usage[0]:
         p = next((v for k, v in _PRICING.items() if k in model), None)
         elapsed = time.monotonic() - t0

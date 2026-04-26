@@ -44,9 +44,9 @@ def sse(item):
     if not isinstance(item, dict): item = {"type": "text", "text": item}
     return f"data: {json.dumps(item)}\n\n"
 
-async def encoder(stream, session_id=None):
-    if session_id:
-        yield sse({"type": "session_id", "session_id": session_id})
+async def encoder(stream, chat_id=None):
+    if chat_id:
+        yield sse({"type": "chat_id", "chat_id": chat_id})
     try:
         if inspect.isasyncgen(stream):
             async for item in stream:
@@ -112,7 +112,7 @@ def web(func, config, extra_routers=None):
     class Context(BaseModel):
         messages: Any
         user: Optional[User] = None
-        session_id: Optional[str] = None
+        chat_id: Optional[str] = None
         prod: bool = False
 
         model_config = {"arbitrary_types_allowed": True}
@@ -143,15 +143,15 @@ def web(func, config, extra_routers=None):
     async def back(request: Request, user: Optional[User] = auth):
         data = await request.json()
         messages = data.get("messages")
-        session_id = data.get("session_id") or str(uuid.uuid4())
+        chat_id = data.get("chat_id") or str(uuid.uuid4())
 
-        context = Context(messages=Messages(messages), user=user, session_id=session_id, prod=config.prod)
+        context = Context(messages=Messages(messages), user=user, chat_id=chat_id, prod=config.prod)
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
 
         if request.url.path == "/chat/completions":
             stream = openai_encoder(stream)
         else:
-            stream = encoder(stream, session_id=session_id)
+            stream = encoder(stream, chat_id=chat_id)
         return StreamingResponse(stream, media_type="text/event-stream")
 
     @app.get("/config")

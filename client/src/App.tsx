@@ -25,7 +25,7 @@ import { usePostHogIdentify } from "./hooks/use-posthog-identify";
 import { initPostHog, setAgentDomain, track, register } from "./lib/posthog";
 
 function ChatApp({ config }: { config: AppConfig | null }) {
-  const { messages, isStreaming, sessionLoading, sessionId, send, retry, stop, clear, share, listShares, deleteShare, listSessions, loadSession, deleteSession, setGetToken, uploadFile, authHeaders, setUIHandler } =
+  const { messages, isStreaming, chatLoading, chatId, send, retry, stop, clear, share, listShares, deleteShare, listChats, loadChat, deleteChat, setGetToken, uploadFile, authHeaders, setUIHandler } =
     useChat();
   const { entries, path, loading, list, upload, mkdir, rename, remove, openFile, setGetToken: setFilesToken } =
     useFiles();
@@ -97,7 +97,7 @@ function ChatApp({ config }: { config: AppConfig | null }) {
     <Chat
       messages={messages}
       isStreaming={isStreaming}
-      sessionLoading={sessionLoading}
+      chatLoading={chatLoading}
       onSend={send}
       onStop={stop}
       onClear={clear}
@@ -105,10 +105,10 @@ function ChatApp({ config }: { config: AppConfig | null }) {
       onShare={handleShare}
       onListShares={listShares}
       onDeleteShare={deleteShare}
-      onListSessions={listSessions}
-      onLoadSession={loadSession}
-      onDeleteSession={deleteSession}
-      sessionId={sessionId}
+      onListSessions={listChats}
+      onLoadSession={loadChat}
+      onDeleteSession={deleteChat}
+      chatId={chatId}
       onSignOut={() => signOut()}
       onManageAccount={() => clerk.openUserProfile()}
       onCreateOrg={() => clerk.openCreateOrganization()}

@@ -38,7 +38,7 @@ async for k, v in kv.items(prefix=None):
     ...
 ```
 
-One SlateDB instance per workspace; multiple KVs (`KV("sessions")`, `KV("usage")`, ...) share the underlying handle, namespaced by `{name}/` key prefix. Pool keyed by `workspace.url()` in `cycls/db/main.py:_pool`.
+One SlateDB instance per workspace; multiple KVs (`KV("chats")`, `KV("usage")`, ...) share the underlying handle, namespaced by `{name}/` key prefix. Pool keyed by `workspace.url()` in `cycls/app/db/main.py:_pool`.
 
 ## Lifecycle
 
@@ -125,7 +125,7 @@ Set `CYCLS_STATE_URL=gs://separate-bucket` in the deploy environment to point st
 | Concern | Why |
 |---|---|
 | User files (the agent's bwrap surface) | POSIX needed for bash/editor; FUSE/object-storage-as-filesystem is the right shape |
-| Session history JSONL | Hot path, current shape isn't biting; KV migration is mechanical (~30–50 LOC) when needed |
+| Chat log JSONL | Hot path, current shape isn't biting; KV migration is mechanical (~30–50 LOC) when needed |
 | Shares (pointer + dir + assets) | Cross-tenant public read is its own design concern; deferred |
 
 See [rfc-002-data-primitives.md](rfc-002-data-primitives.md) for the design and forward-compat audit.
