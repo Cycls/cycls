@@ -69,7 +69,7 @@ export function useChat(baseUrl: string = "") {
   }, []);
   const [isStreaming, setIsStreaming] = useState(false);
   const [chatId, setChatId] = useState<string | null>(null);
-  const [chatLoading, setSessionLoading] = useState(false);
+  const [chatLoading, setChatLoading] = useState(false);
   const chatIdRef = useRef<string | null>(null);
   const messagesRef = useRef<Message[]>([]);
   const abortRef = useRef<AbortController | null>(null);
@@ -147,29 +147,31 @@ export function useChat(baseUrl: string = "") {
           ...(await authHeaders()),
         };
 
-        // Build request messages (all except the empty assistant we just added)
+        // Server loads history from disk; only ship the new user message.
         const currentMsgs = messagesRef.current;
-        const requestMessages = currentMsgs.slice(0, -1).map((m) => {
-          const withPaths = m.attachments?.filter((a) => a.path);
-          let content: string | Record<string, string>[] = m.content;
-          if (withPaths && withPaths.length > 0) {
-            const parts: Record<string, string>[] = [{ type: "text", text: m.content }];
-            for (const att of withPaths) {
-              if (att.type.startsWith("image/")) {
-                parts.push({ type: "image", image: att.path! });
-              } else {
-                parts.push({ type: "file", file: att.path! });
-              }
+        const newUserMsg = currentMsgs[currentMsgs.length - 2]; // -1 is the empty assistant placeholder
+        const withPaths = newUserMsg.attachments?.filter((a) => a.path);
+        let content: string | Record<string, string>[] = newUserMsg.content;
+        if (withPaths && withPaths.length > 0) {
+          const parts: Record<string, string>[] = [{ type: "text", text: newUserMsg.content }];
+          for (const att of withPaths) {
+            if (att.type.startsWith("image/")) {
+              parts.push({ type: "image", image: att.path! });
+            } else {
+              parts.push({ type: "file", file: att.path! });
             }
-            content = parts;
           }
-          return { role: m.role, content, parts: m.parts };
-        });
+          content = parts;
+        }
+        const requestMessage = { role: newUserMsg.role, content, parts: newUserMsg.parts };
 
-        const response = await fetch(`${baseUrl}/chat`, {
+        const url = chatIdRef.current
+          ? `${baseUrl}/chat?chat=${encodeURIComponent(chatIdRef.current)}`
+          : `${baseUrl}/chat`;
+        const response = await fetch(url, {
           method: "POST",
           headers,
-          body: JSON.stringify({ messages: requestMessages, chat_id: chatIdRef.current || undefined }),
+          body: JSON.stringify({ messages: [requestMessage] }),
           signal: controller.signal,
         });
 
@@ -204,6 +206,10 @@ export function useChat(baseUrl: string = "") {
               if (type === "chat_id" && item.chat_id) {
                 chatIdRef.current = item.chat_id;
                 setChatId(item.chat_id);
+                // Reflect in browser URL so the chat is bookmarkable/shareable
+                const u = new URL(window.location.href);
+                u.searchParams.set("chat", item.chat_id);
+                window.history.replaceState({}, "", u.toString());
                 continue;
               }
 
@@ -386,6 +392,10 @@ export function useChat(baseUrl: string = "") {
     setMessages([]);
     setChatId(null);
     chatIdRef.current = null;
+    // Drop ?chat= from URL on clear
+    const u = new URL(window.location.href);
+    u.searchParams.delete("chat");
+    window.history.replaceState({}, "", u.toString());
   }, []);
 
   const share = useCallback(async (title: string = "", author?: { name: string; imageUrl?: string }) => {
@@ -434,7 +444,7 @@ export function useChat(baseUrl: string = "") {
 
   const loadChat = useCallback(async (id: string) => {
     abortRef.current?.abort();
-    setSessionLoading(true);
+    setChatLoading(true);
     try {
       const headers = await authHeaders();
       const res = await fetch(`${baseUrl}/chats/${id}`, { headers });
@@ -445,6 +455,9 @@ export function useChat(baseUrl: string = "") {
       setMessages(loaded);
       setChatId(id);
       chatIdRef.current = id;
+      const u = new URL(window.location.href);
+      u.searchParams.set("chat", id);
+      window.history.replaceState({}, "", u.toString());
 
       track("chat_loaded", {
         chat_id: id,
@@ -466,7 +479,7 @@ export function useChat(baseUrl: string = "") {
         if (changed) setMessages([...loaded]);
       }
     } finally {
-      setSessionLoading(false);
+      setChatLoading(false);
     }
   }, [baseUrl, authHeaders, getToken]);
 
@@ -481,6 +494,9 @@ export function useChat(baseUrl: string = "") {
       setMessages([]);
       setChatId(null);
       chatIdRef.current = null;
+      const u = new URL(window.location.href);
+      u.searchParams.delete("chat");
+      window.history.replaceState({}, "", u.toString());
     }
   }, [baseUrl, authHeaders]);
 
