@@ -48,9 +48,9 @@ export function Chat({
   onShare,
   onListShares,
   onDeleteShare,
-  onListSessions,
-  onLoadSession,
-  onDeleteSession,
+  onListChats,
+  onLoadChat,
+  onDeleteChat,
   chatId,
   chatLoading,
   onSignOut,
@@ -79,9 +79,9 @@ export function Chat({
   onShare?: (title: string) => Promise<string>;
   onListShares?: () => Promise<{ id: string; title: string; sharedAt: string; path: string }[]>;
   onDeleteShare?: (id: string) => Promise<void>;
-  onListSessions?: () => Promise<{ id: string; title: string; updatedAt: string }[]>;
-  onLoadSession?: (id: string) => Promise<void>;
-  onDeleteSession?: (id: string) => Promise<void>;
+  onListChats?: () => Promise<{ id: string; title: string; updatedAt: string }[]>;
+  onLoadChat?: (id: string) => Promise<void>;
+  onDeleteChat?: (id: string) => Promise<void>;
   chatId?: string | null;
   chatLoading?: boolean;
   onSignOut?: () => void;
@@ -481,15 +481,15 @@ export function Chat({
                 </button>
               </>
             )}
-            {(files || onListSessions) && (
+            {(files || onListChats) && (
               <button
                 onClick={() => {
                   setFilesOpen(!filesOpen);
                   if (!filesOpen) {
-                    if (onListSessions) {
+                    if (onListChats) {
                       setFilesTab("chats");
                       setChatsLoading(true);
-                      onListSessions().then((items) => { setChats(items); setChatsLoading(false); }).catch(() => setChatsLoading(false));
+                      onListChats().then((items) => { setChats(items); setChatsLoading(false); }).catch(() => setChatsLoading(false));
                     } else if (files) {
                       setFilesTab("files");
                       files.onNavigate(files.path);
@@ -700,14 +700,14 @@ export function Chat({
               className="fixed top-1 right-1 bottom-1 z-50 w-[calc(100%-0.5rem)] sm:w-[480px] rounded-xl border border-border bg-background flex flex-col overflow-hidden"
             >
               {/* Tab bar */}
-              {(files || onListShares || onListSessions) && (
+              {(files || onListShares || onListChats) && (
                 <div className="flex items-center border-b border-border px-4 sm:px-6">
-                  {onListSessions && (
+                  {onListChats && (
                     <button
                       onClick={() => {
                         setFilesTab("chats");
                         setChatsLoading(true);
-                        onListSessions().then((items) => { setChats(items); setChatsLoading(false); }).catch(() => setChatsLoading(false));
+                        onListChats().then((items) => { setChats(items); setChatsLoading(false); }).catch(() => setChatsLoading(false));
                       }}
                       className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "chats" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                     >
@@ -807,8 +807,8 @@ export function Chat({
                   chats={chats}
                   loading={chatsLoading}
                   activeId={chatId}
-                  onLoad={(id) => { onLoadSession?.(id); if (window.innerWidth < 640) setFilesOpen(false); }}
-                  onDelete={(id) => { setChatsLoading(true); onDeleteSession?.(id).then(() => setChats((prev) => prev.filter((x) => x.id !== id))).finally(() => setChatsLoading(false)); }}
+                  onLoad={(id) => { onLoadChat?.(id); if (window.innerWidth < 640) setFilesOpen(false); }}
+                  onDelete={(id) => { setChatsLoading(true); onDeleteChat?.(id).then(() => setChats((prev) => prev.filter((x) => x.id !== id))).finally(() => setChatsLoading(false)); }}
                 />
               ) : null}
             </motion.div>

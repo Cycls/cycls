@@ -29,7 +29,7 @@ function ChatApp({ config }: { config: AppConfig | null }) {
     useChat();
   const { entries, path, loading, list, upload, mkdir, rename, remove, openFile, setGetToken: setFilesToken } =
     useFiles();
-  const { getToken, signOut } = useAuth();
+  const { getToken, signOut, isLoaded: authLoaded } = useAuth();
   const { user } = useUser();
   const clerk = useClerk();
   const { organization } = useOrganization();
@@ -78,6 +78,21 @@ function ChatApp({ config }: { config: AppConfig | null }) {
     }
   }, [send]);
 
+  // Restore ?chat=<id> from URL on first load — once Clerk has settled so
+  // authed agents can fetch with credentials. Stale ids get cleared.
+  const chatRestored = useRef(false);
+  useEffect(() => {
+    if (chatRestored.current || !authLoaded) return;
+    chatRestored.current = true;
+    const id = new URLSearchParams(window.location.search).get("chat");
+    if (!id) return;
+    loadChat(id).catch(() => {
+      const u = new URL(window.location.href);
+      u.searchParams.delete("chat");
+      window.history.replaceState({}, "", u.toString());
+    });
+  }, [authLoaded, loadChat]);
+
   const handleShare = async (title: string = "") => {
     const author = user ? {
       name: user.fullName || user.firstName || "",
@@ -105,9 +120,9 @@ function ChatApp({ config }: { config: AppConfig | null }) {
       onShare={handleShare}
       onListShares={listShares}
       onDeleteShare={deleteShare}
-      onListSessions={listChats}
-      onLoadSession={loadChat}
-      onDeleteSession={deleteChat}
+      onListChats={listChats}
+      onLoadChat={loadChat}
+      onDeleteChat={deleteChat}
       chatId={chatId}
       onSignOut={() => signOut()}
       onManageAccount={() => clerk.openUserProfile()}
