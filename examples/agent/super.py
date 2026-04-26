@@ -80,7 +80,7 @@ async def super(context):
         return
 
     # Track monthly usage; gate free users at FREE_MONTHLY_LIMIT.
-    usage = cycls.KV("usage", context.workspace())
+    usage = cycls.KV("usage", context.workspace)
     month = datetime.now(timezone.utc).strftime("%Y-%m")
     entry = await usage.get(month, {"count": 0})
 

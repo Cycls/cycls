@@ -23,7 +23,7 @@ from cycls.agent.harness.chat import load_chat
 
 def _make_context(ws, hp):
     ctx = types.SimpleNamespace()
-    ctx.workspace = lambda ws=ws: types.SimpleNamespace(root=Path(ws))
+    ctx.workspace = types.SimpleNamespace(root=Path(ws))
     ctx.chat_id = "test-chat"
     user = types.SimpleNamespace()
     user.sessions = Path(hp).parent
@@ -221,7 +221,7 @@ def test_no_history_without_session(tmp_path):
     Path(ws).mkdir()
 
     ctx = types.SimpleNamespace()
-    ctx.workspace = lambda ws=ws: types.SimpleNamespace(root=Path(ws))
+    ctx.workspace = types.SimpleNamespace(root=Path(ws))
     ctx.chat_id = None
     ctx.user = None
     ctx.messages = types.SimpleNamespace()

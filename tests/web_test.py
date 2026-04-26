@@ -396,7 +396,7 @@ def test_context_workspace_uses_config_volume():
 
     captured = {}
     async def handler(context):
-        captured["ws"] = context.workspace()
+        captured["ws"] = context.workspace
         yield "ok"
 
     config = Config(public_path=THEME_PATH, auth=False, volume="/tmp/cycls-test-vol")

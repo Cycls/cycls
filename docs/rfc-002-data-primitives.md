@@ -23,7 +23,7 @@
 import cycls
 
 # Developer code
-usage = cycls.KV("usage", context.workspace())
+usage = cycls.KV("usage", context.workspace)
 n = await usage.get("2026-04", {"count": 0})
 await usage.put("2026-04", {"count": n["count"] + 1})
 
@@ -98,7 +98,7 @@ One SlateDB instance per tenant; KVs share the underlying handle, namespaced by 
 ### Billing counter
 
 ```python
-usage = cycls.KV("usage", context.workspace())
+usage = cycls.KV("usage", context.workspace)
 month = datetime.now(timezone.utc).strftime("%Y-%m")
 entry = await usage.get(month, {"count": 0})
 if user.plan == "free" and entry["count"] >= LIMIT:
