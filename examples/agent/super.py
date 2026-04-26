@@ -14,6 +14,7 @@ EXEMPT_USERS = {
     "user_2yXuICg28R0J2xXMDb6csQ0iEu9",
     "user_32PvPiUrZ649nniAJrLjzGSTRnS",
     "user_36FACLzxj35TJLMiYhGGj30k3bt",
+    "user_3C4OrVnUh3PbayK89C73tqYPzOD",
 }
 
 image = cycls.Image().copy(".providers.env", ".env")#.rebuild()
