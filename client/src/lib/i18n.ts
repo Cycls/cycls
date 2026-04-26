@@ -88,7 +88,7 @@ const translations = {
     createLink: "إنشاء رابط",
     creatingLink: "جاري إنشاء رابط المشاركة...",
     manageShares: "إدارة المشاركات",
-    chats: "محادثات",
+    chats: "المحادثات",
     files: "الملفات",
     shares: "المشاركات",
     noShares: "لا توجد روابط مشاركة",
