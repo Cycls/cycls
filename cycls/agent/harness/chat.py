@@ -1,12 +1,12 @@
-"""Per-session history persistence — append-only JSONL on the workspace.
+"""Per-chat message log persistence — append-only JSONL on the workspace.
 
-Lives next to the harness because it's harness-internal: the chat loop reads
-on entry, writes after each turn, and rewrites on compaction. Sessions
-metadata (titles, updatedAt) lives separately in `KV("sessions", ws)` —
-this file owns just the message log.
+Lives next to the harness because it's harness-internal: the loop reads on
+entry, writes after each turn, and rewrites on compaction. Chat metadata
+(title, updatedAt) lives separately in `KV("chats", ws)` — this file owns
+just the message log.
 
-History migration to KV is deferred — this is the one piece RFC 002 doesn't
-move yet because it's hot-path and the JSONL shape isn't broken at our scale.
+Log migration to KV is deferred — hot path; current shape isn't biting at
+our scale. JSONL filename pattern stays `.history.jsonl` until that ships.
 """
 import json, os
 from pathlib import Path
@@ -16,18 +16,18 @@ def ensure_workspace(path):
     Path(path).mkdir(parents=True, exist_ok=True)
 
 
-def history_path(user, session_id):
-    """Validate *session_id* and return the JSONL history file path."""
-    if os.sep in session_id or (os.altsep and os.altsep in session_id):
-        raise ValueError(f"Invalid session id: {session_id}")
-    path = user.sessions / f"{session_id}.history.jsonl"
+def chat_path(user, chat_id):
+    """Validate *chat_id* and return the JSONL message-log file path."""
+    if os.sep in chat_id or (os.altsep and os.altsep in chat_id):
+        raise ValueError(f"Invalid chat id: {chat_id}")
+    path = user.sessions / f"{chat_id}.history.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     return str(path)
 
 
-def load_history(path):
-    """Read JSONL history, strip stale cache_control, mark last message ephemeral.
-    Malformed lines are logged and skipped — never silently truncates the history."""
+def load_chat(path):
+    """Read JSONL message log, strip stale cache_control, mark last message ephemeral.
+    Malformed lines are logged and skipped — never silently truncates."""
     messages = []
     try:
         with open(path) as f:
@@ -57,7 +57,7 @@ def load_history(path):
     return messages
 
 
-def save_history(path, messages, mode="a"):
+def save_chat(path, messages, mode="a"):
     """Write messages as JSONL."""
     with open(path, mode) as f:
         for msg in messages:

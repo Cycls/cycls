@@ -40,54 +40,54 @@ def _ws(user):
     return Workspace(user.workspace)
 
 
-# ---- Sessions ----
+# ---- Chats ----
 
-def sessions_router(required_auth):
+def chats_router(required_auth):
     r = APIRouter()
 
-    @r.get("/sessions")
-    async def list_sessions(user: Any = required_auth):
-        sessions = KV("sessions", _ws(user))
+    @r.get("/chats")
+    async def list_chats(user: Any = required_auth):
+        chats = KV("chats", _ws(user))
         items = []
-        async for sid, data in sessions.items():
+        async for cid, data in chats.items():
             items.append({
-                "id": data.get("id", sid),
+                "id": data.get("id", cid),
                 "title": data.get("title", ""),
                 "updatedAt": data.get("updatedAt", ""),
             })
         items.sort(key=lambda s: s.get("updatedAt", ""), reverse=True)
         return items
 
-    @r.get("/sessions/{session_id}")
-    async def get_session(session_id: str, user: Any = required_auth):
-        sessions = KV("sessions", _ws(user))
-        data = await sessions.get(session_id)
+    @r.get("/chats/{chat_id}")
+    async def get_chat(chat_id: str, user: Any = required_auth):
+        chats = KV("chats", _ws(user))
+        data = await chats.get(chat_id)
         if data is None:
-            raise HTTPException(status_code=404, detail="Session not found")
+            raise HTTPException(status_code=404, detail="Chat not found")
         return data
 
-    @r.put("/sessions/{session_id}")
-    async def put_session(session_id: str, request: Request, user: Any = required_auth):
-        sessions = KV("sessions", _ws(user))
+    @r.put("/chats/{chat_id}")
+    async def put_chat(chat_id: str, request: Request, user: Any = required_auth):
+        chats = KV("chats", _ws(user))
         data = await request.json()
-        data["id"] = session_id
+        data["id"] = chat_id
         data["updatedAt"] = datetime.now(timezone.utc).isoformat()
         if "createdAt" not in data:
-            existing = await sessions.get(session_id, {})
+            existing = await chats.get(chat_id, {})
             data["createdAt"] = existing.get("createdAt", data["updatedAt"])
-        await sessions.put(session_id, data)
+        await chats.put(chat_id, data)
         return data
 
-    @r.delete("/sessions/{session_id}")
-    async def delete_session(session_id: str, user: Any = required_auth):
-        sessions = KV("sessions", _ws(user))
-        if (await sessions.get(session_id)) is None:
-            raise HTTPException(status_code=404, detail="Session not found")
-        await sessions.delete(session_id)
-        # History still file-backed JSONL — clean up the sidecar.
-        history_file = user.sessions / f"{session_id}.history.jsonl"
-        if history_file.is_file():
-            history_file.unlink()
+    @r.delete("/chats/{chat_id}")
+    async def delete_chat(chat_id: str, user: Any = required_auth):
+        chats = KV("chats", _ws(user))
+        if (await chats.get(chat_id)) is None:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        await chats.delete(chat_id)
+        # Message log still file-backed JSONL — clean up the sidecar.
+        log_file = user.sessions / f"{chat_id}.history.jsonl"
+        if log_file.is_file():
+            log_file.unlink()
         return {"ok": True}
 
     return r
@@ -272,7 +272,7 @@ def share_router(required_auth):
 # ---- Mount ----
 
 def install_routers(app, required_auth):
-    """Mount sessions, files, and share routers on a FastAPI app."""
-    app.include_router(sessions_router(required_auth))
+    """Mount chats, files, and share routers on a FastAPI app."""
+    app.include_router(chats_router(required_auth))
     app.include_router(files_router(required_auth))
     app.include_router(share_router(required_auth))

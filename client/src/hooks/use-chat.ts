@@ -20,7 +20,7 @@ export interface Part {
   src?: string;
   alt?: string;
   caption?: string;
-  session_id?: string;
+  chat_id?: string;
   action?: string;
 }
 
@@ -68,9 +68,9 @@ export function useChat(baseUrl: string = "") {
     });
   }, []);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [sessionLoading, setSessionLoading] = useState(false);
-  const sessionIdRef = useRef<string | null>(null);
+  const [chatId, setChatId] = useState<string | null>(null);
+  const [chatLoading, setSessionLoading] = useState(false);
+  const chatIdRef = useRef<string | null>(null);
   const messagesRef = useRef<Message[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const lastRequestRef = useRef<{ text: string; attachments?: Attachment[]; origin?: string } | null>(null);
@@ -130,8 +130,8 @@ export function useChat(baseUrl: string = "") {
         message_length: text.length,
         has_attachments: !!(attachments && attachments.length),
         attachment_count: attachments?.length || 0,
-        is_new_session: !sessionIdRef.current,
-        session_id: sessionIdRef.current,
+        is_new_chat: !chatIdRef.current,
+        chat_id: chatIdRef.current,
         origin,
       });
 
@@ -169,7 +169,7 @@ export function useChat(baseUrl: string = "") {
         const response = await fetch(`${baseUrl}/chat`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ messages: requestMessages, session_id: sessionIdRef.current || undefined }),
+          body: JSON.stringify({ messages: requestMessages, chat_id: chatIdRef.current || undefined }),
           signal: controller.signal,
         });
 
@@ -200,20 +200,20 @@ export function useChat(baseUrl: string = "") {
               const item: Part = JSON.parse(data);
               const type = item.type;
 
-              // Capture session_id from server, don't add as part
-              if (type === "session_id" && item.session_id) {
-                sessionIdRef.current = item.session_id;
-                setSessionId(item.session_id);
+              // Capture chat_id from server, don't add as part
+              if (type === "chat_id" && item.chat_id) {
+                chatIdRef.current = item.chat_id;
+                setChatId(item.chat_id);
                 continue;
               }
 
               // Agent-driven UI action — dispatch to handler, don't add as part,
-              // don't persist in session history
+              // don't persist in chat history
               if (type === "ui" && item.action) {
                 const ev = item as unknown as UIAction;
                 track("agent_ui_action", {
                   ...ev,
-                  session_id: sessionIdRef.current,
+                  chat_id: chatIdRef.current,
                 });
                 uiHandlerRef.current?.(ev);
                 continue;
@@ -310,7 +310,7 @@ export function useChat(baseUrl: string = "") {
             if ((retryErr as Error).name !== "AbortError") {
               track("message_failed", {
                 error_message: (retryErr as Error).message,
-                session_id: sessionIdRef.current,
+                chat_id: chatIdRef.current,
               });
               // Both attempts failed — show error with retry button
               setMessages((prev) => {
@@ -337,14 +337,14 @@ export function useChat(baseUrl: string = "") {
         setIsStreaming(false);
         abortRef.current = null;
 
-        // Auto-save session with full messages snapshot
-        if (sessionIdRef.current) {
-          const sid = sessionIdRef.current;
+        // Auto-save chat with full messages snapshot
+        if (chatIdRef.current) {
+          const sid = chatIdRef.current;
           const currentMessages = messagesRef.current;
           const firstUserMsg = currentMessages.find((m) => m.role === "user");
           const title = (firstUserMsg?.content || "").slice(0, 100);
           const authH = { "Content-Type": "application/json", ...(await authHeaders()) };
-          fetch(`${baseUrl}/sessions/${sid}`, {
+          fetch(`${baseUrl}/chats/${sid}`, {
             method: "PUT",
             headers: authH,
             body: JSON.stringify({ title, messages: currentMessages }),
@@ -358,7 +358,7 @@ export function useChat(baseUrl: string = "") {
 
   const retry = useCallback(() => {
     if (isStreaming || !lastRequestRef.current) return;
-    track("message_retried", { session_id: sessionIdRef.current });
+    track("message_retried", { chat_id: chatIdRef.current });
     const { text, attachments, origin } = lastRequestRef.current;
     // Remove the last assistant message (the error one)
     setMessages((prev) => {
@@ -375,17 +375,17 @@ export function useChat(baseUrl: string = "") {
 
   const stop = useCallback(() => {
     if (abortRef.current) {
-      track("generation_stopped", { session_id: sessionIdRef.current });
+      track("generation_stopped", { chat_id: chatIdRef.current });
     }
     abortRef.current?.abort();
   }, []);
 
   const clear = useCallback(() => {
-    track("chat_cleared", { session_id: sessionIdRef.current });
+    track("chat_cleared", { chat_id: chatIdRef.current });
     abortRef.current?.abort();
     setMessages([]);
-    setSessionId(null);
-    sessionIdRef.current = null;
+    setChatId(null);
+    chatIdRef.current = null;
   }, []);
 
   const share = useCallback(async (title: string = "", author?: { name: string; imageUrl?: string }) => {
@@ -406,7 +406,7 @@ export function useChat(baseUrl: string = "") {
       share_url: shareUrl,
       title,
       message_count: messages.length,
-      session_id: sessionIdRef.current,
+      chat_id: chatIdRef.current,
     });
     return shareUrl;
   }, [messages, baseUrl, authHeaders]);
@@ -425,29 +425,29 @@ export function useChat(baseUrl: string = "") {
     track("share_deleted", { share_id: id });
   }, [baseUrl, authHeaders]);
 
-  const listSessions = useCallback(async () => {
+  const listChats = useCallback(async () => {
     const headers = await authHeaders();
-    const res = await fetch(`${baseUrl}/sessions`, { headers });
+    const res = await fetch(`${baseUrl}/chats`, { headers });
     if (!res.ok) return [];
     return res.json();
   }, [baseUrl, authHeaders]);
 
-  const loadSession = useCallback(async (id: string) => {
+  const loadChat = useCallback(async (id: string) => {
     abortRef.current?.abort();
     setSessionLoading(true);
     try {
       const headers = await authHeaders();
-      const res = await fetch(`${baseUrl}/sessions/${id}`, { headers });
+      const res = await fetch(`${baseUrl}/chats/${id}`, { headers });
       if (!res.ok) throw new Error(`Load failed: ${res.status}`);
-      const session = await res.json();
-      const loaded: Message[] = session.messages || [];
+      const chat = await res.json();
+      const loaded: Message[] = chat.messages || [];
 
       setMessages(loaded);
-      setSessionId(id);
-      sessionIdRef.current = id;
+      setChatId(id);
+      chatIdRef.current = id;
 
-      track("session_loaded", {
-        session_id: id,
+      track("chat_loaded", {
+        chat_id: id,
         message_count: loaded.length,
       });
 
@@ -470,25 +470,25 @@ export function useChat(baseUrl: string = "") {
     }
   }, [baseUrl, authHeaders, getToken]);
 
-  const deleteSession = useCallback(async (id: string) => {
+  const deleteChat = useCallback(async (id: string) => {
     const headers = await authHeaders();
-    const res = await fetch(`${baseUrl}/sessions/${id}`, { method: "DELETE", headers });
+    const res = await fetch(`${baseUrl}/chats/${id}`, { method: "DELETE", headers });
     if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
-    track("session_deleted", { session_id: id });
-    // If we deleted the current session, clear it
-    if (sessionIdRef.current === id) {
+    track("chat_deleted", { chat_id: id });
+    // If we deleted the current chat, clear it
+    if (chatIdRef.current === id) {
       abortRef.current?.abort();
       setMessages([]);
-      setSessionId(null);
-      sessionIdRef.current = null;
+      setChatId(null);
+      chatIdRef.current = null;
     }
   }, [baseUrl, authHeaders]);
 
   return {
     messages,
     isStreaming,
-    sessionLoading,
-    sessionId,
+    chatLoading,
+    chatId,
     send,
     retry,
     stop,
@@ -496,9 +496,9 @@ export function useChat(baseUrl: string = "") {
     share,
     listShares,
     deleteShare,
-    listSessions,
-    loadSession,
-    deleteSession,
+    listChats,
+    loadChat,
+    deleteChat,
     setGetToken,
     uploadFile,
     authHeaders,

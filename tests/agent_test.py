@@ -14,7 +14,7 @@ import pytest
 from cycls.agent.harness.main import _run, MAX_RETRIES, _is_retryable, _ingest, _recover
 from cycls.agent.harness.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact, context_window
 from cycls.agent.harness.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path, dispatch
-from cycls.agent.harness.history import load_history
+from cycls.agent.harness.chat import load_chat
 
 
 # ---------------------------------------------------------------------------
@@ -24,7 +24,7 @@ from cycls.agent.harness.history import load_history
 def _make_context(ws, hp):
     ctx = types.SimpleNamespace()
     ctx.workspace = lambda ws=ws: types.SimpleNamespace(root=Path(ws))
-    ctx.session_id = "test-session"
+    ctx.chat_id = "test-chat"
     user = types.SimpleNamespace()
     user.sessions = Path(hp).parent
     ctx.user = user
@@ -124,7 +124,7 @@ def agent_env(tmp_path):
     Path(ws).mkdir()
     hp_dir = tmp_path / "sessions"
     hp_dir.mkdir()
-    hp = str(hp_dir / "test-session.history.jsonl")
+    hp = str(hp_dir / "test-chat.history.jsonl")
     return ws, hp, _make_context(ws, hp)
 
 
@@ -148,7 +148,7 @@ def test_history_saved_after_each_tool_round(agent_env):
          patch("cycls.agent.harness.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         asyncio.run(_drain(_run(context=ctx)))
 
-    history = load_history(hp)
+    history = load_chat(hp)
     roles = [m["role"] for m in history]
     assert roles == ["user", "assistant", "user", "assistant", "user", "assistant"]
 
@@ -180,7 +180,7 @@ def test_history_survives_crash_after_first_tool_round(agent_env):
     assert "Lost connection" in callouts[0]["callout"]
 
     # Round 1 messages survived on disk
-    history = load_history(hp)
+    history = load_chat(hp)
     assert len(history) >= 3  # user + assistant(tool) + user(result)
     assert history[0]["role"] == "user"
     assert history[1]["role"] == "assistant"
@@ -205,7 +205,7 @@ def test_error_recovery_saves_incrementally(agent_env):
     with _mock_anthropic(mock_client):
         asyncio.run(_drain(_run(context=ctx)))
 
-    history = load_history(hp)
+    history = load_chat(hp)
     # Should have: user + assistant(bad tool_use) + user(error result) + assistant(final)
     assert len(history) >= 3
     # The error recovery tool_result should be on disk
@@ -216,13 +216,13 @@ def test_error_recovery_saves_incrementally(agent_env):
 
 
 def test_no_history_without_session(tmp_path):
-    """No session_id → nothing saved to disk."""
+    """No chat_id → nothing saved to disk."""
     ws = str(tmp_path / "workspace")
     Path(ws).mkdir()
 
     ctx = types.SimpleNamespace()
     ctx.workspace = lambda ws=ws: types.SimpleNamespace(root=Path(ws))
-    ctx.session_id = None
+    ctx.chat_id = None
     ctx.user = None
     ctx.messages = types.SimpleNamespace()
     ctx.messages.raw = [{"role": "user", "content": "hi"}]
@@ -430,7 +430,7 @@ def test_tool_result_always_follows_tool_use_on_crash(agent_env):
     with _mock_anthropic(mock_client):
         asyncio.run(_drain(_run(context=ctx)))
 
-    history = load_history(hp)
+    history = load_chat(hp)
     use_ids, result_ids = _history_tool_ids(history)
     assert use_ids == result_ids
 
@@ -454,7 +454,7 @@ def test_tool_result_present_after_bash_timeout(agent_env):
                new_callable=lambda: AsyncMock(return_value="Error: Command timed out after 300s")):
         asyncio.run(_drain(_run(context=ctx)))
 
-    history = load_history(hp)
+    history = load_chat(hp)
     use_ids, result_ids = _history_tool_ids(history)
     assert use_ids == result_ids
     timeout_result = [b for m in history for b in (m.get("content") or [])
@@ -486,7 +486,7 @@ def test_multiple_tool_calls_all_get_results(agent_env):
          patch("cycls.agent.harness.tools._exec_bash", side_effect=mock_bash):
         asyncio.run(_drain(_run(context=ctx)))
 
-    history = load_history(hp)
+    history = load_chat(hp)
     use_ids, result_ids = _history_tool_ids(history)
     assert sorted(use_ids) == sorted(result_ids)
 
@@ -670,7 +670,7 @@ def test_no_compaction_when_under_threshold(agent_env):
     steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Compacting context..."]
     assert len(steps) == 0
 
-    history = load_history(hp)
+    history = load_chat(hp)
     roles = [m["role"] for m in history]
     assert roles == ["user", "assistant"]
 
@@ -694,7 +694,7 @@ def test_compaction_failure_still_saves_history(agent_env):
          patch("cycls.agent.harness.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         asyncio.run(_drain(_run(context=ctx)))
 
-    history = load_history(hp)
+    history = load_chat(hp)
     assert len(history) >= 2
     # The actual answer must not be lost
     last = history[-1]["content"]

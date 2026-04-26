@@ -565,10 +565,10 @@ POST /attachments          # File upload (multipart)
 GET  /attachments/<token>  # Attachment download
 
 # Authenticated:
-GET    /sessions              # List sessions
-GET    /sessions/<id>         # Get session
-PUT    /sessions/<id>         # Create or update
-DELETE /sessions/<id>         # Delete
+GET    /chats                 # List chats
+GET    /chats/<id>            # Get chat
+PUT    /chats/<id>            # Create or update
+DELETE /chats/<id>            # Delete
 
 GET    /files                 # List files (?path=subdir)
 GET    /files/<path>          # Download (?download for header)
