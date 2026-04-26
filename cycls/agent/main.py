@@ -18,8 +18,7 @@ CYCLS_PATH = importlib.resources.files('cycls')
 
 
 class Agent(App):
-    _base_pip = [*App._base_pip, "fastapi[standard]", "pyjwt", "cryptography",
-                 "python-dotenv", "resvg-py", "anthropic", "openai", "slatedb"]
+    _base_pip = [*App._base_pip, "resvg-py", "anthropic", "openai"]
     _base_apt = [*App._base_apt, "fonts-noto-core", "bubblewrap",
                  "poppler-utils", "ripgrep", "jq", "curl"]
 

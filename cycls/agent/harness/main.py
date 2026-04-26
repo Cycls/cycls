@@ -1,7 +1,7 @@
 """Agent loop — streams Claude tool-use turns with sandboxed execution."""
 import asyncio, json, random, time
 from datetime import datetime, timezone
-from cycls.db import KV
+from cycls.app.db import KV
 from .history import ensure_workspace, history_path, load_history, save_history
 from .compact import COMPACT_BUFFER, KEEP_RECENT, compact, context_window
 from .prompts import DEFAULT_SYSTEM
