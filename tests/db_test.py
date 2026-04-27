@@ -36,24 +36,22 @@ def test_workspace_org_data_path(tmp_path):
 
 
 def test_workspace_url_file_fallback(tmp_path):
-    """No env var, no FUSE → file:// to data path."""
+    """No bucket → file:// to data path."""
     ws = Workspace(tmp_path / "user")
     url = ws.url()
     assert url.startswith("file://")
     assert url.endswith("/.cycls")
 
 
-def test_workspace_url_env_override(tmp_path, monkeypatch):
-    """CYCLS_STATE_URL bypasses FUSE detection; tenant-relative path appended."""
-    monkeypatch.setenv("CYCLS_STATE_URL", "gs://my-bucket")
-    ws = Workspace(tmp_path / "user")
-    assert ws.url() == "gs://my-bucket/user/.cycls"
+def test_workspace_url_with_bucket(tmp_path):
+    """bucket=... → object-store URL with tenant-relative path appended."""
+    ws = Workspace(tmp_path / "user", bucket="gs://cycls-ws-myagent")
+    assert ws.url() == "gs://cycls-ws-myagent/user/.cycls"
 
 
-def test_workspace_url_env_override_org(tmp_path, monkeypatch):
-    monkeypatch.setenv("CYCLS_STATE_URL", "gs://my-bucket")
-    ws = Workspace(tmp_path / "org", user_id="member_1")
-    assert ws.url() == "gs://my-bucket/org/.cycls/member_1"
+def test_workspace_url_with_bucket_org(tmp_path):
+    ws = Workspace(tmp_path / "org", user_id="member_1", bucket="gs://cycls-ws-myagent")
+    assert ws.url() == "gs://cycls-ws-myagent/org/.cycls/member_1"
 
 
 # ---------------------------------------------------------------------------

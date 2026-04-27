@@ -27,6 +27,10 @@ class Config(BaseModel):
     def set_prod(self, prod: bool):
         self.prod = prod
 
+    @property
+    def bucket(self) -> Optional[str]:
+        return f"gs://cycls-ws-{self.name}" if self.prod and self.name else None
+
 async def openai_encoder(stream):
     try:
         if inspect.isasyncgen(stream):
@@ -108,6 +112,7 @@ def web(func, config, extra_routers=None):
             pass
 
     volume = Path(config.volume)
+    bucket = config.bucket
 
     class Context(BaseModel):
         messages: Any
@@ -127,10 +132,10 @@ def web(func, config, extra_routers=None):
         def workspace(self) -> Workspace:
             user = self.user
             if user is None:
-                return Workspace(volume / "local")
+                return Workspace(volume / "local", bucket=bucket)
             if user.org_id:
-                return Workspace(volume / user.org_id, user_id=user.id)
-            return Workspace(volume / user.id)
+                return Workspace(volume / user.org_id, user_id=user.id, bucket=bucket)
+            return Workspace(volume / user.id, bucket=bucket)
 
     app = FastAPI()
 
