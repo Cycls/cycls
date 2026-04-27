@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notes</title>
+<style>
+  :root {
+    --bg:#fafaf9; --surface:#fff; --border:#e7e5e4; --muted:#78716c;
+    --fg:#1c1917; --accent:#0f172a; --soft:#f4f4f5; --hl:#fef9c3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0c0a09; --surface:#171413; --border:#27241f; --muted:#a8a29e;
+            --fg:#f5f5f4; --accent:#f5f5f4; --soft:#1c1917; --hl:#3f3f12; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font: 15px/1.55 -apple-system,system-ui,"Segoe UI",sans-serif;
+    background: var(--bg); color: var(--fg);
+    max-width: 640px; margin: 2em auto; padding: 0 1.25em;
+  }
+  h1 { font-weight: 300; font-size: 1.75em; letter-spacing: -0.02em; margin: 0; }
+  .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1.5em; }
+  .who { color: var(--muted); font-size: 0.85em; font-family: ui-monospace, monospace; }
+  input, textarea, button {
+    font: inherit; padding: 0.55em 0.8em; border: 1px solid var(--border);
+    border-radius: 8px; background: var(--surface); color: var(--fg);
+    transition: border-color 0.15s, opacity 0.15s;
+  }
+  input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:hover { opacity: 0.75; }
+  button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  button.ghost { background: transparent; border: none; color: var(--muted); padding: 0.3em 0.5em; font-size: 0.85em; }
+
+  .search { width: 100%; font-size: 1.02em; margin-bottom: 1em; }
+
+  .compose {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 0.75em; margin-bottom: 1.5em;
+  }
+  .compose input.title { width: 100%; border: none; padding: 0.3em 0.2em; font-weight: 500; }
+  .compose textarea {
+    width: 100%; border: none; resize: vertical; min-height: 56px;
+    padding: 0.3em 0.2em; font-family: inherit;
+  }
+  .compose .row { display: flex; justify-content: flex-end; padding-top: 0.5em; }
+
+  .note {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1em 1.15em; margin-bottom: 0.6em;
+  }
+  .note .title { font-weight: 500; margin-bottom: 0.25em; }
+  .note .body { color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+  .note .row { display: flex; justify-content: space-between; align-items: center; margin-top: 0.6em; }
+  .note .meta { font-size: 0.78em; color: var(--muted); }
+  .note mark { background: var(--hl); color: inherit; padding: 0 2px; border-radius: 2px; }
+
+  .empty { text-align: center; color: var(--muted); padding: 2.5em 0; }
+  .stats { color: var(--muted); font-size: 0.82em; text-align: center; margin-top: 2em;
+           padding-top: 1em; border-top: 1px solid var(--border); }
+  .err { color: #b91c1c; padding: 1em; background: #fef2f2; border-radius: 8px; }
+  @media (prefers-color-scheme: dark) { .err { background: #450a0a; color: #fca5a5; } }
+</style>
+</head>
+<body>
+<div id="app">Loading…</div>
+
+<script async crossorigin="anonymous"
+  src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js"
+  data-clerk-publishable-key="__CLERK_PK__">
+</script>
+
+<script>
+async function api(method, path, opts = {}) {
+  const t = await Clerk.session.getToken();
+  const headers = { Authorization: "Bearer " + t, ...(opts.headers || {}) };
+  const res = await fetch(path, { method, ...opts, headers });
+  if (!res.ok) throw new Error(method + " " + path + " → " + res.status);
+  return res.status === 204 ? null : res.json();
+}
+
+const el = (tag, props = {}, ...kids) => {
+  const e = Object.assign(document.createElement(tag), props);
+  kids.flat().forEach(k => k != null && e.append(k));
+  return e;
+};
+
+const TOKEN_RE = /[a-z0-9]+/g;
+function highlight(text, query) {
+  const terms = (query || "").toLowerCase().match(TOKEN_RE) || [];
+  if (!terms.length) return [text];
+  const re = new RegExp("(" + terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "gi");
+  const parts = text.split(re);
+  return parts.map(p => terms.includes(p.toLowerCase()) ? el("mark", {}, p) : p);
+}
+
+let listEl = null;
+let composeBody = null;
+let composeTitle = null;
+let searchInput = null;
+
+function renderList(docs, query) {
+  listEl.innerHTML = "";
+  if (!docs.length) {
+    listEl.append(el("div", { className: "empty" },
+      query ? `no notes match "${query}"` : "no notes yet — write one above"));
+    return;
+  }
+  for (const d of docs) {
+    const card = el("div", { className: "note" });
+    if (d.title) card.append(el("div", { className: "title" }, ...highlight(d.title, query)));
+    card.append(el("div", { className: "body" }, ...highlight(d.body || "", query)));
+    card.append(el("div", { className: "row" },
+      el("span", { className: "meta" }, new Date(d.createdAt).toLocaleString()),
+      el("button", { className: "ghost", onclick: async () => {
+        if (confirm("delete?")) { await api("DELETE", "/notes/" + d.id); await refresh(); }
+      }}, "delete"),
+    ));
+    listEl.append(card);
+  }
+}
+
+async function refresh() {
+  const q = (searchInput?.value || "").trim();
+  const path = q ? `/search?q=${encodeURIComponent(q)}` : "/notes";
+  const docs = await api("GET", path);
+  renderList(docs, q);
+}
+
+let debounceTimer = null;
+function debounce(fn, ms) {
+  return (...a) => { clearTimeout(debounceTimer); debounceTimer = setTimeout(() => fn(...a), ms); };
+}
+
+async function render() {
+  const app = document.getElementById("app");
+  app.innerHTML = "";
+
+  const user = await api("GET", "/me");
+  app.append(el("div", { className: "head" },
+    el("h1", {}, "Notes"),
+    el("div", {},
+      el("span", { className: "who" }, user.id.slice(0, 14) + "… "),
+      el("button", { className: "ghost", onclick: () => Clerk.signOut().then(boot) }, "sign out"),
+    ),
+  ));
+
+  searchInput = el("input", {
+    className: "search", placeholder: "search…", autocomplete: "off",
+    oninput: debounce(() => refresh(), 150),
+  });
+  app.append(searchInput);
+
+  composeTitle = el("input", { className: "title", placeholder: "title (optional)" });
+  composeBody = el("textarea", { placeholder: "write a note…", rows: 2 });
+  const save = el("button", { className: "primary", onclick: async () => {
+    const body = composeBody.value.trim();
+    if (!body) return;
+    await api("POST", "/notes", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: composeTitle.value.trim(), body }),
+    });
+    composeTitle.value = "";
+    composeBody.value = "";
+    if (searchInput.value) searchInput.value = "";
+    await refresh();
+  }}, "save");
+  composeBody.addEventListener("keydown", e => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) save.click();
+  });
+  app.append(el("div", { className: "compose" },
+    composeTitle,
+    composeBody,
+    el("div", { className: "row" }, save),
+  ));
+
+  listEl = el("div");
+  app.append(listEl);
+  await refresh();
+}
+
+async function boot() {
+  await Clerk.load();
+  const app = document.getElementById("app");
+  if (!Clerk.user) {
+    app.innerHTML = "";
+    Clerk.mountSignIn(app);
+    return;
+  }
+  try { await render(); }
+  catch (e) {
+    app.innerHTML = "";
+    app.append(el("div", { className: "err" }, e.message));
+  }
+}
+
+window.addEventListener("load", () => {
+  const wait = setInterval(() => {
+    if (window.Clerk) { clearInterval(wait); boot(); }
+  }, 50);
+});
+</script>
+</body>
+</html>
