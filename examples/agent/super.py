@@ -69,7 +69,7 @@ llm = (
 
 @cycls.agent(image=image, web=web, name="super-stage")
 async def super(context):
-1-    user = context.user
+    user = context.user
     # Local dev is shalways exempted so prototyping isn't blocked by gates.
     exempt = user.id in EXEMPT_USERS or not context.prod
 

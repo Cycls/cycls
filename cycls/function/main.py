@@ -8,9 +8,6 @@ import sys
 import shutil
 from pathlib import Path
 import tarfile
-from dotenv import load_dotenv
-
-load_dotenv()
 
 os.environ["DOCKER_BUILDKIT"] = "1"
 
@@ -111,6 +108,15 @@ class Function:
         self.managed_label = "cycls.function"
         self._docker_client = None
         self._container = None
+
+    def __getstate__(self):
+        # Strip runtime-only attrs (Docker client/container hold sockets)
+        # so cloudpickle can serialize Function/App/Agent instances when
+        # the user function references them via closure.
+        state = self.__dict__.copy()
+        state["_docker_client"] = None
+        state["_container"] = None
+        return state
 
     @property
     def api_key(self):

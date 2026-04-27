@@ -1,3 +1,9 @@
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from .function import function, Function, Image
 from .app import app, App, Clerk, JWT, User
 from .agent.web import Web
