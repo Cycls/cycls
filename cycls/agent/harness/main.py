@@ -1,5 +1,5 @@
 """Agent loop — streams Claude tool-use turns with sandboxed execution."""
-import asyncio, json, os, random, time
+import asyncio, json, random, time
 from datetime import datetime, timezone
 from pathlib import Path
 from .. import chat
@@ -171,31 +171,20 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                bash_timeout=600, bash_network=False, show_usage=False, client=None,
                base_url=None, api_key=None, handlers=None):
     t0 = time.monotonic()
-    profile = os.environ.get("CYCLS_PROFILE")
-    _ph = {}
-    _t = time.perf_counter()
-
     if client is None:
         client = _make_client(model, base_url=base_url, api_key=api_key)
-    _ph["client"] = (time.perf_counter() - _t) * 1000; _t = time.perf_counter()
     model = model.split("/", 1)[1]
     workspace = context.workspace
     ws = workspace.root
     Path(ws).mkdir(parents=True, exist_ok=True)
     persist = bool(context.chat_id and context.user)
-
     messages = _ephemeralize(await chat.load_messages(workspace, context.chat_id)) if persist else []
     saved = len(messages)
-    _ph["load"] = (time.perf_counter() - _t) * 1000; _t = time.perf_counter()
-
     incoming = context.messages.raw[-1].get("content", "")
     messages.append({"role": "user", "content": await _ingest(incoming, ws)})
-    _ph["ingest"] = (time.perf_counter() - _t) * 1000; _t = time.perf_counter()
-
     if persist:
         try: await _touch_meta(workspace, context.chat_id, incoming)
         except Exception as e: print(f"[WARN] meta touch failed: {e}")
-    _ph["meta"] = (time.perf_counter() - _t) * 1000
 
     window = context_window(model)
     kwargs = {
@@ -206,8 +195,6 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                      "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
         "thinking": {"type": "adaptive"},
     }
-    if profile:
-        print("[profile] harness " + " ".join(f"{k}={v:.0f}ms" for k, v in _ph.items()), flush=True)
     usage = [0, 0, 0, 0]  # in, out, cached, cache_create
     tokens_since_compact = 0
     retries = 0
@@ -225,23 +212,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 except Exception as ce:
                     yield {"type": "callout", "callout": f"Compaction failed: {ce}", "style": "warning"}
 
-            t_llm = time.perf_counter()
-            ttfb = None
             async with client.messages.stream(**kwargs) as stream:
-                async for event in _iter_stream(stream):
-                    if ttfb is None: ttfb = time.perf_counter() - t_llm
-                    yield event
+                async for event in _iter_stream(stream): yield event
                 response = await stream.get_final_message()
-            if profile:
-                u = response.usage
-                print(
-                    f"[profile] llm ttfb={(ttfb or 0)*1000:.0f}ms "
-                    f"total={(time.perf_counter()-t_llm)*1000:.0f}ms "
-                    f"in={u.input_tokens} out={u.output_tokens} "
-                    f"cache_read={u.cache_read_input_tokens or 0} "
-                    f"cache_create={u.cache_creation_input_tokens or 0}",
-                    flush=True,
-                )
 
             retries = 0
             u = response.usage
@@ -302,18 +275,6 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     # Finalize: save any unsaved messages
     if persist and saved < len(messages):
         await chat.append_messages(workspace, context.chat_id, messages[saved:], saved)
-
-    # When CYCLS_PROFILE is set, surface DB op stats for the request as a
-    # callout. Read after final persist so the numbers reflect the full
-    # request including the trailing append_messages.
-    if profile:
-        from cycls.app.db import db_stats
-        s = db_stats()
-        if s:
-            yield {"type": "callout", "callout": (
-                f"💾 db: {s['opens']} opens · {s['ops']} ops · "
-                f"open={s['open_ms']:.0f}ms · op={s['op_ms']:.0f}ms"
-            ), "style": "info"}
 
     if show_usage and usage[0]:
         p = next((v for k, v in _PRICING.items() if k in model), None)

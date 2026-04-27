@@ -5,9 +5,6 @@ operation on object storage (manifest fetch, TLS handshake, HTTP/2
 warmup) — once paid, the Db handle is kept alive across requests and
 reused. Bounded LRU eviction keeps memory in check.
 
-`request_scope()` doesn't manage Db lifecycle anymore — it's a stats
-collector for `db_stats()`. The pool is the lifecycle owner.
-
 Multi-container safety: SlateDB's manifest CAS handles concurrent writers
 correctly (no corruption). Cross-pod write-write races on the *same*
 workspace can lose the latest write within the manifest-poll window;
@@ -16,38 +13,15 @@ mitigate with LB session affinity so the same user lands on the same pod.
 Substrate selection lives in `Workspace`: pass `bucket="gs://cycls-ws-foo"`
 for prod; omit for local `file://`. The container's runtime credentials are
 expected to grant access to the bucket — no auth config flows through here.
-
-Set CYCLS_PROFILE=1 to print per-op open/op timings to stdout. The env
-var is read lazily so user code can flip it on at runtime.
 """
-import asyncio, json, os, time
+import asyncio, json
 from collections import OrderedDict
 from contextlib import asynccontextmanager
-from contextvars import ContextVar
 from pathlib import Path
 
-_stats: ContextVar = ContextVar("_stats", default=None)
 _pool: "OrderedDict[str, object]" = OrderedDict()
 _pool_lock = asyncio.Lock()
 MAX_POOL_SIZE = 100
-
-
-def db_stats():
-    """Accumulated DB op timings for the current `request_scope`. Returns
-    None outside any scope."""
-    return _stats.get()
-
-
-@asynccontextmanager
-async def request_scope():
-    """Tracks per-request DB op stats (readable via `db_stats()`). Db
-    lifecycle is owned by the process pool, not the scope."""
-    stats = {"opens": 0, "ops": 0, "open_ms": 0.0, "op_ms": 0.0}
-    token = _stats.set(stats)
-    try:
-        yield
-    finally:
-        _stats.reset(token)
 
 
 async def shutdown_pool():
@@ -90,12 +64,9 @@ async def _get_pooled(url):
     cached = _pool.get(url)
     if cached is not None:
         _pool.move_to_end(url)
-        return cached, 0.0  # 0ms open
+        return cached
 
-    t0 = time.perf_counter()
     db = await _build_db(url)
-    open_ms = (time.perf_counter() - t0) * 1000
-
     evict = None
     discard = None
     async with _pool_lock:
@@ -114,31 +85,14 @@ async def _get_pooled(url):
     if discard is not None:
         try: await discard.shutdown()
         except Exception as e: print(f"[WARN] db shutdown (discard) failed: {e}", flush=True)
-    return db, open_ms
+    return db
 
 
 @asynccontextmanager
 async def _open(url):
     """Borrow a pooled SlateDB for *url*. Open cost is paid only on cache
     miss; subsequent ops on the same workspace find the warm handle."""
-    profile = os.environ.get("CYCLS_PROFILE")
-    stats = _stats.get()
-
-    db, open_ms = await _get_pooled(url)
-    if stats is not None and open_ms > 0:
-        stats["opens"] += 1
-        stats["open_ms"] += open_ms
-
-    t0 = time.perf_counter()
-    try:
-        yield db
-    finally:
-        op_ms = (time.perf_counter() - t0) * 1000
-        if stats is not None:
-            stats["ops"] += 1
-            stats["op_ms"] += op_ms
-        if profile:
-            print(f"[profile] db url={url[-48:]} open={open_ms:.0f}ms op={op_ms:.0f}ms", flush=True)
+    yield await _get_pooled(url)
 
 
 def _enc(name, key):
