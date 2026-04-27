@@ -342,21 +342,8 @@ export function useChat(baseUrl: string = "") {
       } finally {
         setIsStreaming(false);
         abortRef.current = null;
-
-        // Auto-save chat with full messages snapshot
-        if (chatIdRef.current) {
-          const sid = chatIdRef.current;
-          const currentMessages = messagesRef.current;
-          const firstUserMsg = currentMessages.find((m) => m.role === "user");
-          const title = (firstUserMsg?.content || "").slice(0, 100);
-          const authH = { "Content-Type": "application/json", ...(await authHeaders()) };
-          fetch(`${baseUrl}/chats/${sid}`, {
-            method: "PUT",
-            headers: authH,
-            body: JSON.stringify({ title, messages: currentMessages }),
-          }).then((r) => { if (!r.ok) console.error("Session save failed:", r.status); })
-            .catch((e) => console.error("Session save error:", e));
-        }
+        // Server is the sole writer of chat metadata. The harness stamps
+        // updatedAt + first-turn title during the stream — no FE save needed.
       }
     },
     [messages, isStreaming, baseUrl, authHeaders],
