@@ -49,35 +49,30 @@ async def _maybe_set_title(workspace, chat_id, content):
 
 # ---- Client routing ----
 
-_client_cache: dict = {}
+_clients: dict = {}  # provider → reused client. Anthropic construction is
+                     # ~1s (httpx + TLS warmup); reuse is safe across requests.
 
 
 def _make_client(model, base_url=None, api_key=None):
     """Pick the provider client from a `provider/model` string. Anthropic
     routes native; everything else (openai, groq, humain, vllm, local) routes
     through the OpenAI Chat Completions adapter — the lingua franca of every
-    non-Anthropic provider.
-
-    Clients are cached by (provider, base_url, api_key) — `AsyncAnthropic`
-    construction is ~1s (httpx + TLS warmup), and they're safe to reuse
-    across concurrent async requests."""
+    non-Anthropic provider."""
     if "/" not in model:
         raise ValueError(
             f"model must be `provider/model` (e.g. `anthropic/claude-sonnet-4-6`, "
             f"`openai/gpt-5.4`, `groq/llama-3.3-70b`); got {model!r}"
         )
     provider = model.split("/", 1)[0]
-    key = (provider, base_url, api_key)
-    cached = _client_cache.get(key)
-    if cached is not None:
-        return cached
+    if provider in _clients:
+        return _clients[provider]
     if provider == "anthropic":
         import anthropic
         client = anthropic.AsyncAnthropic(**({"api_key": api_key} if api_key else {}))
     else:
         from .openai import AsyncOpenAI
         client = AsyncOpenAI(base_url=base_url, api_key=api_key)
-    _client_cache[key] = client
+    _clients[provider] = client
     return client
 
 
