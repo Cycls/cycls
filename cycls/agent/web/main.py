@@ -3,24 +3,10 @@ from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional, Any
 from cycls.app.auth import User, make_validate
-from cycls.app.db import Workspace, request_scope
+from cycls.app.db import Workspace
 from cycls.agent import share as share_mod
 from .routers import workspace_for
 
-
-class RequestScopeMiddleware:
-    """ASGI middleware that opens a `request_scope` for every HTTP request,
-    so all KV ops in that request share a single SlateDB open. Wraps the
-    full request including streaming body."""
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-        async with request_scope():
-            await self.app(scope, receive, send)
 
 class PassMetadata(BaseModel):
     name: str
@@ -150,7 +136,6 @@ def web(func, config, extra_routers=None):
             return workspace_for(self.user, volume, bucket)
 
     app = FastAPI()
-    app.add_middleware(RequestScopeMiddleware)
 
     validate = make_validate(config)
     auth = Depends(validate) if config.auth else Depends(lambda: None)
