@@ -1,16 +1,23 @@
-"""Auth providers — Clerk JWT, generic JWT base, User model, FastAPI validator.
+"""Auth — JWT primitives, framework-agnostic verification, FastAPI adapter.
+
+Two layers:
+- **Core**: `User`, `JWT`, `Clerk`, `verify_jwt`, `InvalidToken`. No HTTP
+  framework imports. Anyone wiring auth into a different ASGI framework
+  (Starlette, Litestar, Quart, custom) imports from here.
+- **Adapter**: `make_validate` builds a FastAPI `Depends` on top of
+  `verify_jwt`. The default cycls App and Agent use this.
 
 Lives at the App layer (not Agent) because auth is a cross-cutting HTTP
 protection capability. `@cycls.app` and `@cycls.agent` both pick it up.
-User code references the FastAPI dependency via `Depends(my_agent.auth)`
-or `Depends(my_app.auth)`.
 """
-from typing import Any, Optional
+from typing import Optional
 
 from pydantic import BaseModel
 
 
-# ---- User model ----
+# =============================================================================
+# Core — framework-agnostic JWT primitives
+# =============================================================================
 
 class User(BaseModel):
     id: str
@@ -21,8 +28,6 @@ class User(BaseModel):
     plan: Optional[str] = None
     features: Optional[list] = None
 
-
-# ---- JWT provider primitives ----
 
 class JWT:
     """Generic JWT provider — supports dual-mode (dev/prod) out of the box.
@@ -101,35 +106,61 @@ class Clerk(JWT):
         return result
 
 
-# ---- FastAPI dependency factory ----
+class InvalidToken(Exception):
+    """Raised by `verify_jwt` when validation fails."""
 
-def make_validate(source: Any):
-    """Build a FastAPI dependency that validates a Clerk JWT.
 
-    `source` is a JWT/Clerk provider (has `.jwks_url`) or a Config-like
-    object (has `.jwks`). Captured by reference so jwks_url can be read
-    lazily at first request — lets agents create the dependency at decoration
-    time before `config.set_prod()` has populated the real URL.
+_jwks_clients: dict = {}
+
+
+def verify_jwt(token: str, jwks_url: str) -> User:
+    """Verify *token* against *jwks_url* and return a `User`. Raises
+    `InvalidToken` on signature, expiry, format, or claims errors. Pure —
+    no HTTP framework coupling. The PyJWKClient is cached per URL."""
+    import jwt as jwtlib
+    from jwt import PyJWKClient
+    client = _jwks_clients.get(jwks_url)
+    if client is None:
+        client = PyJWKClient(jwks_url)
+        _jwks_clients[jwks_url] = client
+    try:
+        key = client.get_signing_key_from_jwt(token)
+        decoded = jwtlib.decode(token, key.key, algorithms=["RS256"], leeway=10)
+    except Exception as e:
+        raise InvalidToken(str(e))
+    org = decoded.get("o") or {}
+    fea = decoded.get("fea")
+    if isinstance(fea, str):
+        fea = [f.strip() for f in fea.split(",") if f.strip()]
+    return User(
+        id=decoded.get("sub"),
+        org_id=org.get("id"),
+        org_slug=org.get("slg"),
+        org_role=org.get("rol"),
+        org_permissions=org.get("per"),
+        plan=decoded.get("pla"),
+        features=fea,
+    )
+
+
+# =============================================================================
+# Adapter — FastAPI dependency on top of `verify_jwt`
+# =============================================================================
+
+def make_validate(get_jwks_url):
+    """Build a FastAPI dependency that validates a JWT via `verify_jwt`.
+
+    `get_jwks_url` is a zero-arg callable returning the JWKS URL. Called
+    lazily on the first request so agents can create the dependency at
+    decoration time before `config.set_prod()` has populated the URL.
     """
     from fastapi import Depends, HTTPException, Request, status
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-    import jwt as jwtlib
-    from jwt import PyJWKClient
-
-    _jwks = [None]
-
-    def _resolve_jwks_url():
-        return getattr(source, 'jwks_url', None) or getattr(source, 'jwks', None)
 
     def validate(
         request: Request,
         bearer: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
     ) -> User:
-        if _jwks[0] is None:
-            url = _resolve_jwks_url()
-            if not url:
-                raise HTTPException(500, "Auth not configured (missing JWKS URL)")
-            _jwks[0] = PyJWKClient(url)
         token = bearer.credentials if bearer else request.query_params.get("token")
         if not token:
             raise HTTPException(
@@ -137,25 +168,12 @@ def make_validate(source: Any):
                 detail="Not authenticated",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        url = get_jwks_url()
+        if not url:
+            raise HTTPException(500, "Auth not configured (missing JWKS URL)")
         try:
-            key = _jwks[0].get_signing_key_from_jwt(token)
-            decoded = jwtlib.decode(token, key.key, algorithms=["RS256"], leeway=10)
-            org = decoded.get("o") or {}
-            fea = decoded.get("fea")
-            if isinstance(fea, str):
-                fea = [f.strip() for f in fea.split(",") if f.strip()]
-            return User(
-                id=decoded.get("sub"),
-                org_id=org.get("id"),
-                org_slug=org.get("slg"),
-                org_role=org.get("rol"),
-                org_permissions=org.get("per"),
-                plan=decoded.get("pla"),
-                features=fea,
-            )
-        except HTTPException:
-            raise
-        except Exception as e:
+            return verify_jwt(token, url)
+        except InvalidToken as e:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=str(e),

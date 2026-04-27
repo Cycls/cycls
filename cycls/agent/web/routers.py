@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 
-from cycls.app.db import Workspace
+from cycls.app.db import Workspace, workspace_for
 from cycls.agent import chat, share
 
 
@@ -30,18 +30,6 @@ def resolve_path(workspace, rel):
     if resolved == reserved or resolved.is_relative_to(reserved):
         raise ValueError("Reserved path: .cycls/ is managed by cycls")
     return resolved
-
-
-# ---- Workspace builder (single source) ----
-
-def workspace_for(user, volume, bucket=None):
-    """Build a Workspace for *user* under *volume*. None → /local; org member →
-    /<org>/.cycls/<user>; personal → /<user>/.cycls."""
-    if user is None:
-        return Workspace(volume / "local", bucket=bucket)
-    if user.org_id:
-        return Workspace(volume / user.org_id, user_id=user.id, bucket=bucket)
-    return Workspace(volume / user.id, bucket=bucket)
 
 
 # ---- Chats ----

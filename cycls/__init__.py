@@ -1,5 +1,6 @@
 from .function import function, Function, Image
-from .app import app, App, Clerk, JWT, User, Web
+from .app import app, App, Clerk, JWT, User
+from .agent.web import Web
 from .app.db import KV, Workspace
 from .agent import LLM, agent, Agent
 
