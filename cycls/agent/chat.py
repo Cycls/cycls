@@ -53,11 +53,14 @@ async def load_messages(workspace, chat_id):
 
 
 async def append_messages(workspace, chat_id, messages, start_idx):
-    """Append *messages* starting at turn index *start_idx*."""
+    """Append *messages* starting at turn index *start_idx*. Single open
+    via transaction so a 3-message turn doesn't pay 3× the open cost."""
     _validate(chat_id)
-    kv = _kv(workspace)
-    for offset, msg in enumerate(messages):
-        await kv.put(f"log/{chat_id}/{(start_idx + offset):06d}", msg)
+    if not messages:
+        return
+    async with _kv(workspace).transaction() as t:
+        for offset, msg in enumerate(messages):
+            await t.put(f"log/{chat_id}/{(start_idx + offset):06d}", msg)
 
 
 async def replace_messages(workspace, chat_id, messages):

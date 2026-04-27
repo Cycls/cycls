@@ -55,6 +55,7 @@ class Agent(App):
             image=image,
             memory=memory,
         )
+        self.config.name = self.name
 
     def _apply_auth(self, prod):
         """Resolve the auth provider's URLs/keys for this runtime mode into
@@ -74,7 +75,8 @@ class Agent(App):
         if self._auth_provider is not None:
             from pathlib import Path
             volume = Path(self.config.volume)
-            routers.insert(0, lambda app, auth: install_routers(app, auth, volume))
+            bucket = self.config.bucket
+            routers.insert(0, lambda app, auth: install_routers(app, auth, volume, bucket))
         return routers
 
     def _prepare_func(self, prod):
