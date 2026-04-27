@@ -1,4 +1,4 @@
-"""Tests for cycls.KV — async K/V primitive backed by SlateDB.
+"""Tests for cycls.DB.kv() — async K/V primitive backed by SlateDB.
 
 Each test opens a real SlateDB at a tmp path. Slow-ish but exercises the
 substrate that everything else depends on.
@@ -6,7 +6,7 @@ substrate that everything else depends on.
 import asyncio
 import pytest
 
-from cycls.app.db import KV, Workspace
+from cycls.app.db import DB, Workspace
 
 
 def _run(coro):
@@ -60,7 +60,7 @@ def test_workspace_url_with_bucket_org(tmp_path):
 
 def test_kv_put_get_round_trip(workspace):
     async def t():
-        kv = KV("test", workspace)
+        kv = DB(workspace).kv("test")
         await kv.put("k", {"a": 1})
         assert await kv.get("k") == {"a": 1}
     _run(t())
@@ -68,21 +68,21 @@ def test_kv_put_get_round_trip(workspace):
 
 def test_kv_get_missing_returns_none(workspace):
     async def t():
-        kv = KV("test", workspace)
+        kv = DB(workspace).kv("test")
         assert await kv.get("nope") is None
     _run(t())
 
 
 def test_kv_get_missing_returns_default(workspace):
     async def t():
-        kv = KV("test", workspace)
+        kv = DB(workspace).kv("test")
         assert await kv.get("nope", default={"x": 0}) == {"x": 0}
     _run(t())
 
 
 def test_kv_delete(workspace):
     async def t():
-        kv = KV("test", workspace)
+        kv = DB(workspace).kv("test")
         await kv.put("k", 1)
         await kv.delete("k")
         assert await kv.get("k") is None
@@ -92,7 +92,7 @@ def test_kv_delete(workspace):
 def test_kv_json_roundtrip_preserves_types(workspace):
     """JSON values round-trip cleanly — dicts, lists, strings, ints, bools, None."""
     async def t():
-        kv = KV("test", workspace)
+        kv = DB(workspace).kv("test")
         for v in [{"a": 1}, [1, 2, 3], "string", 42, True, False, None]:
             await kv.put("k", v)
             assert await kv.get("k") == v
@@ -101,7 +101,7 @@ def test_kv_json_roundtrip_preserves_types(workspace):
 
 def test_kv_overwrite(workspace):
     async def t():
-        kv = KV("test", workspace)
+        kv = DB(workspace).kv("test")
         await kv.put("k", "first")
         await kv.put("k", "second")
         assert await kv.get("k") == "second"
@@ -114,7 +114,7 @@ def test_kv_overwrite(workspace):
 
 def test_kv_items_returns_all_in_namespace(workspace):
     async def t():
-        kv = KV("test", workspace)
+        kv = DB(workspace).kv("test")
         await kv.put("a", 1)
         await kv.put("b", 2)
         await kv.put("c", 3)
@@ -126,7 +126,7 @@ def test_kv_items_returns_all_in_namespace(workspace):
 def test_kv_items_strips_namespace_from_keys(workspace):
     """Returned keys should be exactly what the caller put — no leaked namespace prefix."""
     async def t():
-        kv = KV("sessions", workspace)
+        kv = DB(workspace).kv("sessions")
         await kv.put("abc", "value")
         keys = [k async for k, _ in kv.items()]
         assert keys == ["abc"]
@@ -135,7 +135,7 @@ def test_kv_items_strips_namespace_from_keys(workspace):
 
 def test_kv_items_filtered_by_prefix(workspace):
     async def t():
-        kv = KV("test", workspace)
+        kv = DB(workspace).kv("test")
         await kv.put("foo/1", 1)
         await kv.put("foo/2", 2)
         await kv.put("bar/1", 3)
@@ -146,7 +146,7 @@ def test_kv_items_filtered_by_prefix(workspace):
 
 def test_kv_items_empty(workspace):
     async def t():
-        kv = KV("test", workspace)
+        kv = DB(workspace).kv("test")
         items = [i async for i in kv.items()]
         assert items == []
     _run(t())
@@ -160,8 +160,8 @@ def test_multiple_kvs_share_db_but_isolated_by_namespace(workspace):
     """Two KVs on the same workspace can use the same key without collision —
     they're prefix-views into one SlateDB instance."""
     async def t():
-        sessions = KV("sessions", workspace)
-        usage = KV("usage", workspace)
+        sessions = DB(workspace).kv("sessions")
+        usage = DB(workspace).kv("usage")
         await sessions.put("k", "session-value")
         await usage.put("k", "usage-value")
         assert await sessions.get("k") == "session-value"
@@ -179,7 +179,7 @@ def test_multiple_kvs_share_db_but_isolated_by_namespace(workspace):
 
 def test_transaction_commits_on_clean_exit(workspace):
     async def t():
-        kv = KV("test", workspace)
+        kv = DB(workspace).kv("test")
         async with kv.transaction() as txn:
             await txn.put("a", 1)
             await txn.put("b", 2)
@@ -191,7 +191,7 @@ def test_transaction_commits_on_clean_exit(workspace):
 def test_transaction_rolls_back_on_exception(workspace):
     """If the body raises, the transaction reverts — original value preserved."""
     async def t():
-        kv = KV("test", workspace)
+        kv = DB(workspace).kv("test")
         await kv.put("a", "original")
         with pytest.raises(RuntimeError, match="boom"):
             async with kv.transaction() as txn:
@@ -204,7 +204,7 @@ def test_transaction_rolls_back_on_exception(workspace):
 def test_transaction_atomic_prefix_delete_then_rewrite(workspace):
     """The compaction pattern: wipe all matching keys then write new ones, atomically."""
     async def t():
-        kv = KV("test", workspace)
+        kv = DB(workspace).kv("test")
         await kv.put("log/0", "old0")
         await kv.put("log/1", "old1")
         await kv.put("log/2", "old2")
