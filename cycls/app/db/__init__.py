@@ -1,1 +1,1 @@
-from .main import KV, Workspace, workspace_for, shutdown_pool
+from .main import DB, KV, Workspace, workspace_for, shutdown_pool

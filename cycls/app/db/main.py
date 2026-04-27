@@ -90,6 +90,30 @@ async def _open(url):
     yield await _get_pooled(url)
 
 
+class DB:
+    """Per-workspace database. Sits over a pooled SlateDB handle.
+
+    - `db.kv(name)` returns a namespaced JSON view (`KV`) — the recommended
+      ergonomics for chat-shaped state.
+    - `async with db.raw() as slate:` yields the raw SlateDB Db for
+      snapshots, TTL, custom WriteOptions, raw bytes — anything KV
+      doesn't surface.
+
+    Both layers are first-class. `KV` is convenience over `slate`; `slate`
+    is the substrate. Reach for the level that matches the need."""
+
+    def __init__(self, workspace):
+        self._workspace = workspace
+
+    def kv(self, name: str) -> "KV":
+        return KV(name, self._workspace)
+
+    @asynccontextmanager
+    async def raw(self):
+        async with _open(self._workspace.url()) as db:
+            yield db
+
+
 def _enc(name, key):
     return f"{name}/{key}".encode()
 

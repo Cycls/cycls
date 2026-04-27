@@ -19,7 +19,7 @@ import shutil
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from cycls.app.db import KV
+from cycls.app.db import DB
 
 
 def _shared_root(volume):
@@ -33,7 +33,7 @@ def _share_dir(share_id, volume):
 
 
 def _kv(workspace):
-    return KV("share", workspace)
+    return DB(workspace).kv("share")
 
 
 # ---- Owner operations (auth'd) ----

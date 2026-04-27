@@ -28,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from cycls.app.db import KV, Workspace
+from cycls.app.db import DB, Workspace
 from cycls.agent import chat
 
 
@@ -74,7 +74,7 @@ async def _migrate_shares(ws, member_dir, volume, dry_run):
     if not public.is_dir():
         return
     new_root = volume / ".cycls" / "shared"
-    share_kv = KV("share", ws)
+    share_kv = DB(ws).kv("share")
     for old in public.iterdir():
         if not old.is_dir():
             continue

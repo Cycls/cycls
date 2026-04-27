@@ -9,11 +9,11 @@ sub-prefixes:
 list_chats scans `meta/`. load_messages scans `log/{id}/`. delete_chat removes
 both. One KV, one logical concept, prefix-scan ergonomics throughout.
 """
-from cycls.app.db import KV
+from cycls.app.db import DB
 
 
 def _kv(workspace):
-    return KV("chat", workspace)
+    return DB(workspace).kv("chat")
 
 
 def _validate(chat_id):
