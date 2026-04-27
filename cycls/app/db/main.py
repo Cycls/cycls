@@ -1,19 +1,3 @@
-"""cycls.db — Workspace + KV.
-
-SlateDB handles are pooled at the process level. Open is the expensive
-operation on object storage (manifest fetch, TLS handshake, HTTP/2
-warmup) — once paid, the Db handle is kept alive across requests and
-reused. Bounded LRU eviction keeps memory in check.
-
-Multi-container safety: SlateDB's manifest CAS handles concurrent writers
-correctly (no corruption). Cross-pod write-write races on the *same*
-workspace can lose the latest write within the manifest-poll window;
-mitigate with LB session affinity so the same user lands on the same pod.
-
-Substrate selection lives in `Workspace`: pass `bucket="gs://cycls-ws-foo"`
-for prod; omit for local `file://`. The container's runtime credentials are
-expected to grant access to the bucket — no auth config flows through here.
-"""
 import asyncio, json
 from collections import OrderedDict
 from contextlib import asynccontextmanager
