@@ -66,8 +66,8 @@ def chats_router(ws_dep):
         meta = await chat.get_meta(ws, chat_id)
         if meta is None:
             raise HTTPException(status_code=404, detail="Chat not found")
-        messages = await chat.load_messages(ws, chat_id)
-        return {**meta, "messages": messages}
+        raw = await chat.load_messages(ws, chat_id)
+        return {**meta, "messages": chat.to_ui_messages(raw)}
 
     @r.put("/chats/{chat_id}")
     async def put_chat(chat_id: str, request: Request, ws: Workspace = ws_dep):
