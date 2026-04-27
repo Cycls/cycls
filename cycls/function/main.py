@@ -1,5 +1,4 @@
 import contextlib
-import docker
 import cloudpickle
 import tempfile
 import hashlib
@@ -124,6 +123,7 @@ class Function:
     @property
     def docker_client(self):
         if self._docker_client is None:
+            import docker
             try:
                 print("Initializing Docker client...")
                 client = docker.from_env()
@@ -208,6 +208,7 @@ CMD ["python", "entrypoint.py"]
             _copy_path(Path(src).resolve(), context_files_dir / dst)
 
     def _build_image(self, tag: str, workdir: Path) -> str:
+        import docker
         print("--- Docker Build Logs ---")
         force = os.environ.get('_CYCLS_FORCE_REBUILD') == '1' if os.environ.get('_CYCLS_WATCH') else self.force_rebuild
         try:
@@ -225,6 +226,7 @@ CMD ["python", "entrypoint.py"]
             raise
 
     def _ensure_local_image(self) -> str:
+        import docker
         tag = self._image_tag(extra_parts=["local-v1"])
         force = os.environ.get('_CYCLS_FORCE_REBUILD') == '1' if os.environ.get('_CYCLS_WATCH') else self.force_rebuild
         if not force:
@@ -245,6 +247,7 @@ CMD ["python", "entrypoint.py"]
 
     def _cleanup_container(self):
         if getattr(self, '_container', None):
+            import docker
             try:
                 self._container.stop(timeout=3)
                 self._container.remove()
@@ -369,6 +372,7 @@ CMD ["python", "entrypoint.py"]
             cloudpickle.dump((self.func, args, kwargs), f)
 
     def build(self, *args, **kwargs):
+        import docker
         port = kwargs.pop('port', 8080)
         payload = cloudpickle.dumps((self.func, args, {**kwargs, 'port': port}))
         tag = f"{self.image_prefix}:deploy-{hashlib.sha256(payload).hexdigest()[:16]}"
