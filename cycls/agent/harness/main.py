@@ -302,6 +302,19 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     # Finalize: save any unsaved messages
     if persist and saved < len(messages):
         await chat.append_messages(workspace, context.chat_id, messages[saved:], saved)
+
+    # When CYCLS_PROFILE is set, surface DB op stats for the request as a
+    # callout. Read after final persist so the numbers reflect the full
+    # request including the trailing append_messages.
+    if profile:
+        from cycls.app.db import db_stats
+        s = db_stats()
+        if s:
+            yield {"type": "callout", "callout": (
+                f"💾 db: {s['opens']} opens · {s['ops']} ops · "
+                f"open={s['open_ms']:.0f}ms · op={s['op_ms']:.0f}ms"
+            ), "style": "info"}
+
     if show_usage and usage[0]:
         p = next((v for k, v in _PRICING.items() if k in model), None)
         elapsed = time.monotonic() - t0

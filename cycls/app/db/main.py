@@ -1,45 +1,65 @@
 """cycls.db — Workspace + KV.
 
-By default, SlateDB is opened per-operation and shut down on exit. Open is
-cheap (one manifest fetch + WAL replay), and the per-op lifecycle keeps
-memory flat across tenants, sidesteps stale-handle issues across multi-pod
-deploys, and removes pooling entirely.
+SlateDB handles are pooled at the process level. Open is the expensive
+operation on object storage (manifest fetch, TLS handshake, HTTP/2
+warmup) — once paid, the Db handle is kept alive across requests and
+reused. Bounded LRU eviction keeps memory in check.
 
-For a single HTTP request (or any other unit of work), wrap the work in
-`request_scope()`: while inside, `_open(url)` returns a Db cached for the
-scope. All KV ops in the scope share one open. On scope exit, every Db
-opened inside is shut down. Outside any scope, behavior is unchanged.
+`request_scope()` doesn't manage Db lifecycle anymore — it's a stats
+collector for `db_stats()`. The pool is the lifecycle owner.
+
+Multi-container safety: SlateDB's manifest CAS handles concurrent writers
+correctly (no corruption). Cross-pod write-write races on the *same*
+workspace can lose the latest write within the manifest-poll window;
+mitigate with LB session affinity so the same user lands on the same pod.
 
 Substrate selection lives in `Workspace`: pass `bucket="gs://cycls-ws-foo"`
 for prod; omit for local `file://`. The container's runtime credentials are
 expected to grant access to the bucket — no auth config flows through here.
 
-Set CYCLS_PROFILE=1 to print per-op open/op/shutdown timings to stdout.
-The env var is read lazily so user code can flip it on at runtime.
+Set CYCLS_PROFILE=1 to print per-op open/op timings to stdout. The env
+var is read lazily so user code can flip it on at runtime.
 """
-import json, os, time
+import asyncio, json, os, time
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from pathlib import Path
 
-_scope: ContextVar = ContextVar("_scope", default=None)
+_stats: ContextVar = ContextVar("_stats", default=None)
+_pool: "OrderedDict[str, object]" = OrderedDict()
+_pool_lock = asyncio.Lock()
+MAX_POOL_SIZE = 100
+
+
+def db_stats():
+    """Accumulated DB op timings for the current `request_scope`. Returns
+    None outside any scope."""
+    return _stats.get()
 
 
 @asynccontextmanager
 async def request_scope():
-    """Inside this scope, `_open(url)` reuses one Db per URL. All opened
-    Dbs are shut down on exit."""
-    dbs: dict = {}
-    token = _scope.set(dbs)
+    """Tracks per-request DB op stats (readable via `db_stats()`). Db
+    lifecycle is owned by the process pool, not the scope."""
+    stats = {"opens": 0, "ops": 0, "open_ms": 0.0, "op_ms": 0.0}
+    token = _stats.set(stats)
     try:
         yield
     finally:
-        _scope.reset(token)
-        for db in dbs.values():
-            try:
-                await db.shutdown()
-            except Exception as e:
-                print(f"[WARN] db shutdown failed: {e}", flush=True)
+        _stats.reset(token)
+
+
+async def shutdown_pool():
+    """Shut down every pooled Db. Use in test teardown or process exit."""
+    async with _pool_lock:
+        items = list(_pool.items())
+        _pool.clear()
+    for _, db in items:
+        try:
+            await db.shutdown()
+        except Exception as e:
+            print(f"[WARN] db shutdown failed: {e}", flush=True)
 
 
 class Workspace:
@@ -63,39 +83,62 @@ async def _build_db(url):
     return await DbBuilder("db", store).build()
 
 
-@asynccontextmanager
-async def _open(url):
-    """Yield a SlateDB at *url*. Inside `request_scope`, the Db is built
-    once per URL and reused; the scope owns shutdown. Outside, build and
-    shutdown each call."""
-    profile = os.environ.get("CYCLS_PROFILE")
-    dbs = _scope.get()
-
-    if dbs is not None and url in dbs:
-        t0 = time.perf_counter()
-        try:
-            yield dbs[url]
-        finally:
-            if profile:
-                print(f"[profile] db url={url[-48:]} open=0ms op={(time.perf_counter()-t0)*1000:.0f}ms shutdown=0ms", flush=True)
-        return
+async def _get_pooled(url):
+    """Pool lookup with LRU semantics. Concurrent misses for the same url
+    may build twice — the loser discards its Db. Acceptable: rare, and
+    serializing all opens behind a lock would block independent workspaces."""
+    cached = _pool.get(url)
+    if cached is not None:
+        _pool.move_to_end(url)
+        return cached, 0.0  # 0ms open
 
     t0 = time.perf_counter()
     db = await _build_db(url)
-    t_open = time.perf_counter() - t0
-    if dbs is not None:
-        dbs[url] = db
+    open_ms = (time.perf_counter() - t0) * 1000
+
+    evict = None
+    discard = None
+    async with _pool_lock:
+        existing = _pool.get(url)
+        if existing is not None:
+            _pool.move_to_end(url)
+            discard = db
+            db = existing
+        else:
+            _pool[url] = db
+            if len(_pool) > MAX_POOL_SIZE:
+                _, evict = _pool.popitem(last=False)
+    if evict is not None:
+        try: await evict.shutdown()
+        except Exception as e: print(f"[WARN] db shutdown (evict) failed: {e}", flush=True)
+    if discard is not None:
+        try: await discard.shutdown()
+        except Exception as e: print(f"[WARN] db shutdown (discard) failed: {e}", flush=True)
+    return db, open_ms
+
+
+@asynccontextmanager
+async def _open(url):
+    """Borrow a pooled SlateDB for *url*. Open cost is paid only on cache
+    miss; subsequent ops on the same workspace find the warm handle."""
+    profile = os.environ.get("CYCLS_PROFILE")
+    stats = _stats.get()
+
+    db, open_ms = await _get_pooled(url)
+    if stats is not None and open_ms > 0:
+        stats["opens"] += 1
+        stats["open_ms"] += open_ms
+
+    t0 = time.perf_counter()
     try:
         yield db
     finally:
-        t1 = time.perf_counter()
-        if dbs is None:
-            await db.shutdown()
+        op_ms = (time.perf_counter() - t0) * 1000
+        if stats is not None:
+            stats["ops"] += 1
+            stats["op_ms"] += op_ms
         if profile:
-            t_shutdown = time.perf_counter() - t1
-            t_op = t1 - t0 - t_open
-            tag = "deferred" if dbs is not None else f"{t_shutdown*1000:.0f}ms"
-            print(f"[profile] db url={url[-48:]} open={t_open*1000:.0f}ms op={t_op*1000:.0f}ms shutdown={tag}", flush=True)
+            print(f"[profile] db url={url[-48:]} open={open_ms:.0f}ms op={op_ms:.0f}ms", flush=True)
 
 
 def _enc(name, key):
