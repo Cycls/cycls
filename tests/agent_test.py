@@ -17,11 +17,11 @@ from cycls.agent.harness.main import _run, MAX_RETRIES, _is_retryable, _ingest, 
 
 @pytest.fixture(autouse=True)
 def _clear_client_cache():
-    """The harness caches AsyncAnthropic between requests. Tests patch the
-    anthropic module per-test, so the cache must be reset between them."""
-    _harness_main._client_cache.clear()
+    """The harness caches one client per provider. Tests patch the anthropic
+    module per-test, so the cache must be reset between them."""
+    _harness_main._clients.clear()
     yield
-    _harness_main._client_cache.clear()
+    _harness_main._clients.clear()
 from cycls.agent.harness.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact, context_window
 from cycls.agent.harness.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path, dispatch
 from cycls.agent.chat import load_messages
