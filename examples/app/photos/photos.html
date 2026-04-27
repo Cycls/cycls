@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Photos</title>
+<style>
+  :root {
+    --bg:#fafaf9; --surface:#fff; --border:#e7e5e4; --muted:#78716c;
+    --fg:#1c1917; --accent:#0f172a; --soft:#f4f4f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0c0a09; --surface:#171413; --border:#27241f; --muted:#a8a29e;
+            --fg:#f5f5f4; --accent:#f5f5f4; --soft:#1c1917; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font: 15px/1.55 -apple-system,system-ui,"Segoe UI",sans-serif;
+    background: var(--bg); color: var(--fg);
+    max-width: 960px; margin: 2em auto; padding: 0 1.25em;
+  }
+  h1 { font-weight: 300; font-size: 1.75em; letter-spacing: -0.02em; margin: 0; }
+  .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1.5em; }
+  .who { color: var(--muted); font-size: 0.85em; font-family: ui-monospace, monospace; }
+  button { padding: 0.5em 1em; border: 1px solid var(--border); background: var(--surface);
+           color: var(--fg); border-radius: 8px; cursor: pointer; font: inherit; transition: opacity 0.15s; }
+  button:hover { opacity: 0.75; }
+  button.ghost { background: transparent; border: none; color: var(--muted); padding: 0.3em 0.5em; font-size: 0.85em; }
+
+  .dropzone {
+    border: 2px dashed var(--border); border-radius: 12px; padding: 2.5em;
+    text-align: center; color: var(--muted); margin-bottom: 1.5em;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .dropzone.over { border-color: var(--accent); background: var(--soft); }
+  .dropzone label { cursor: pointer; }
+  .dropzone input { display: none; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.5em; }
+  .cell { aspect-ratio: 1; border-radius: 8px; overflow: hidden; position: relative; background: var(--soft); }
+  .cell img { width: 100%; height: 100%; object-fit: cover; cursor: pointer; transition: transform 0.2s; display: block; }
+  .cell:hover img { transform: scale(1.04); }
+  .cell .del {
+    position: absolute; top: 6px; right: 6px;
+    background: rgba(0,0,0,0.65); color: #fff; border: none;
+    border-radius: 50%; width: 26px; height: 26px; padding: 0; line-height: 1;
+    opacity: 0; transition: opacity 0.15s; cursor: pointer;
+  }
+  .cell:hover .del { opacity: 1; }
+
+  .lightbox {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.93);
+    display: flex; align-items: center; justify-content: center;
+    padding: 2em; z-index: 100;
+  }
+  .lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .lightbox .close { position: absolute; top: 1em; right: 1em; color: #fff;
+                     background: none; border: none; font-size: 1.75em; cursor: pointer; }
+
+  .empty { text-align: center; color: var(--muted); padding: 3em 0; }
+  .stats { color: var(--muted); font-size: 0.82em; text-align: center; margin-top: 2em;
+           padding-top: 1em; border-top: 1px solid var(--border); }
+  .err { color: #b91c1c; padding: 1em; background: #fef2f2; border-radius: 8px; }
+  @media (prefers-color-scheme: dark) { .err { background: #450a0a; color: #fca5a5; } }
+</style>
+</head>
+<body>
+<div id="app">Loading…</div>
+
+<script async crossorigin="anonymous"
+  src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js"
+  data-clerk-publishable-key="__CLERK_PK__">
+</script>
+
+<script>
+async function api(method, path, opts = {}) {
+  const t = await Clerk.session.getToken();
+  const headers = { Authorization: "Bearer " + t, ...(opts.headers || {}) };
+  const res = await fetch(path, { method, ...opts, headers });
+  if (!res.ok) throw new Error(method + " " + path + " → " + res.status);
+  return res.status === 204 ? null : res.json();
+}
+
+const el = (tag, props = {}, ...kids) => {
+  const e = Object.assign(document.createElement(tag), props);
+  kids.flat().forEach(k => k != null && e.append(k));
+  return e;
+};
+
+async function loadBlobUrl(id) {
+  const t = await Clerk.session.getToken();
+  const res = await fetch(`/photos/${id}/raw`, { headers: { Authorization: "Bearer " + t } });
+  if (!res.ok) throw new Error(`/photos/${id}/raw → ${res.status}`);
+  return URL.createObjectURL(await res.blob());
+}
+
+async function uploadFiles(files) {
+  if (!files || !files.length) return;
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f);
+  await api("POST", "/photos", { body: fd });
+  await render();
+}
+
+async function lightbox(p) {
+  const url = await loadBlobUrl(p.id);
+  const lb = el("div", { className: "lightbox", onclick: (e) => { if (e.target === lb) lb.remove(); } },
+    el("button", { className: "close", onclick: () => lb.remove() }, "✕"),
+    el("img", { src: url, alt: p.filename }),
+  );
+  document.body.append(lb);
+  document.addEventListener("keydown", function esc(e) {
+    if (e.key === "Escape") { lb.remove(); document.removeEventListener("keydown", esc); }
+  });
+}
+
+async function render() {
+  const app = document.getElementById("app");
+  app.innerHTML = "";
+
+  const user = await api("GET", "/me");
+  app.append(el("div", { className: "head" },
+    el("h1", {}, "Photos"),
+    el("div", {},
+      el("span", { className: "who" }, user.id.slice(0, 14) + "… "),
+      el("button", { className: "ghost", onclick: () => Clerk.signOut().then(boot) }, "sign out"),
+    ),
+  ));
+
+  const dz = el("div", { className: "dropzone" },
+    el("label", {},
+      el("input", {
+        type: "file", multiple: true, accept: "image/*",
+        onchange: (e) => uploadFiles(e.target.files),
+      }),
+      "drop photos here, or click to choose",
+    ),
+  );
+  dz.addEventListener("dragover", e => { e.preventDefault(); dz.classList.add("over"); });
+  dz.addEventListener("dragleave", () => dz.classList.remove("over"));
+  dz.addEventListener("drop", async e => {
+    e.preventDefault(); dz.classList.remove("over");
+    await uploadFiles(e.dataTransfer.files);
+  });
+  app.append(dz);
+
+  const photos = await api("GET", "/photos");
+
+  if (!photos.length) {
+    app.append(el("div", { className: "empty" }, "no photos yet — drop one in"));
+  } else {
+    const grid = el("div", { className: "grid" });
+    for (const p of photos) {
+      const img = el("img", { src: "", loading: "lazy", alt: p.filename, onclick: () => lightbox(p) });
+      loadBlobUrl(p.id).then(url => { img.src = url; }).catch(() => {});
+      const del = el("button", {
+        className: "del", title: "delete",
+        onclick: async (e) => {
+          e.stopPropagation();
+          if (confirm("delete this photo?")) {
+            await api("DELETE", "/photos/" + p.id);
+            render();
+          }
+        },
+      }, "✕");
+      grid.append(el("div", { className: "cell" }, img, del));
+    }
+    app.append(grid);
+  }
+
+  const totalSize = photos.reduce((a, p) => a + (p.size || 0), 0);
+  app.append(el("div", { className: "stats" },
+    `${photos.length} photo${photos.length === 1 ? "" : "s"} · ${(totalSize / 1024 / 1024).toFixed(1)} MB on object storage`));
+}
+
+async function boot() {
+  await Clerk.load();
+  const app = document.getElementById("app");
+  if (!Clerk.user) {
+    app.innerHTML = "";
+    Clerk.mountSignIn(app);
+    return;
+  }
+  try { await render(); }
+  catch (e) {
+    app.innerHTML = "";
+    app.append(el("div", { className: "err" }, e.message));
+  }
+}
+
+window.addEventListener("load", () => {
+  const wait = setInterval(() => {
+    if (window.Clerk) { clearInterval(wait); boot(); }
+  }, 50);
+});
+</script>
+</body>
+</html>
