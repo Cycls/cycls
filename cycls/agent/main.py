@@ -55,13 +55,15 @@ class Agent(App):
         )
         self.config.name = self.name
 
-    def _sync_config_auth(self):
-        """Mirror App's resolved auth into Config so server.py's validate
-        and the browser-SDK pk find them."""
-        if self._auth_resolved:
-            self.config.jwks = self._auth_resolved.get("jwks_url")
-            if "pk" in self._auth_resolved:
-                self.config.pk = self._auth_resolved["pk"]
+    def _sync_config_auth(self, prod):
+        """Mirror provider's resolved-for-mode URLs into Config so
+        server.py's validate and the browser-SDK pk find them."""
+        if self._auth_provider is None:
+            return
+        resolved = self._auth_provider.resolve(prod)
+        self.config.jwks = resolved.get("jwks_url")
+        if "pk" in resolved:
+            self.config.pk = resolved["pk"]
 
     def _routers(self):
         """State routers (chats, files, share) require auth to be meaningful.
@@ -76,8 +78,7 @@ class Agent(App):
 
     def _prepare_func(self, prod):
         self.prod = prod
-        self._resolve_auth(prod)
-        self._sync_config_auth()
+        self._sync_config_auth(prod)
         self.config.set_prod(prod)
         self.config.public_path = f"cycls/agent/web/themes/{self.theme}"
         user_func, config, name = self.user_func, self.config, self.name
@@ -88,8 +89,7 @@ class Agent(App):
     def _local(self, port=8080):
         print(f"Starting local server at localhost:{port}")
         self.prod = False
-        self._resolve_auth(False)
-        self._sync_config_auth()
+        self._sync_config_auth(False)
         self.config.set_prod(False)
         self.config.public_path = str(CYCLS_PATH.joinpath(f"agent/web/themes/{self.theme}"))
         import uvicorn
