@@ -6,7 +6,7 @@ substrate that everything else depends on.
 import asyncio
 import pytest
 
-from cycls.app.db import KV, Workspace
+from cycls.app.db import KV, Workspace, request_scope
 
 
 def _run(coro):
@@ -214,4 +214,32 @@ def test_transaction_atomic_prefix_delete_then_rewrite(workspace):
             await txn.put("log/0", "new0")
         items = sorted([(k, v) async for k, v in kv.items(prefix="log/")])
         assert items == [("log/0", "new0")]
+    _run(t())
+
+
+# ---------------------------------------------------------------------------
+# request_scope — ops in the same scope share one Db open
+# ---------------------------------------------------------------------------
+
+def test_request_scope_caches_db_across_ops(workspace):
+    """All KV ops inside `request_scope` should reuse the same Db instance."""
+    async def t():
+        kv = KV("test", workspace)
+        async with request_scope():
+            await kv.put("a", 1)
+            await kv.put("b", 2)
+            await kv.put("c", 3)
+            items = sorted([(k, v) async for k, v in kv.items()])
+            assert items == [("a", 1), ("b", 2), ("c", 3)]
+    _run(t())
+
+
+def test_request_scope_isolation(workspace):
+    """Two scopes are independent: the second sees what the first persisted."""
+    async def t():
+        kv = KV("test", workspace)
+        async with request_scope():
+            await kv.put("x", "first")
+        async with request_scope():
+            assert await kv.get("x") == "first"
     _run(t())

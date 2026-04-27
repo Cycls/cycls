@@ -67,7 +67,7 @@ llm = (
 )
 
 
-@cycls.agent(image=image, web=web)
+@cycls.agent(image=image, web=web, name="super-stage")
 async def super(context):
     user = context.user
     # Local dev is always exempted so prototyping isn't blocked by gates.

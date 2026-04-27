@@ -1,5 +1,5 @@
 """Agent loop — streams Claude tool-use turns with sandboxed execution."""
-import asyncio, json, random, time
+import asyncio, json, os, random, time
 from datetime import datetime, timezone
 from pathlib import Path
 from .. import chat
@@ -49,22 +49,36 @@ async def _maybe_set_title(workspace, chat_id, content):
 
 # ---- Client routing ----
 
+_client_cache: dict = {}
+
+
 def _make_client(model, base_url=None, api_key=None):
     """Pick the provider client from a `provider/model` string. Anthropic
     routes native; everything else (openai, groq, humain, vllm, local) routes
     through the OpenAI Chat Completions adapter — the lingua franca of every
-    non-Anthropic provider."""
+    non-Anthropic provider.
+
+    Clients are cached by (provider, base_url, api_key) — `AsyncAnthropic`
+    construction is ~1s (httpx + TLS warmup), and they're safe to reuse
+    across concurrent async requests."""
     if "/" not in model:
         raise ValueError(
             f"model must be `provider/model` (e.g. `anthropic/claude-sonnet-4-6`, "
             f"`openai/gpt-5.4`, `groq/llama-3.3-70b`); got {model!r}"
         )
     provider = model.split("/", 1)[0]
+    key = (provider, base_url, api_key)
+    cached = _client_cache.get(key)
+    if cached is not None:
+        return cached
     if provider == "anthropic":
         import anthropic
-        return anthropic.AsyncAnthropic(**({"api_key": api_key} if api_key else {}))
-    from .openai import AsyncOpenAI
-    return AsyncOpenAI(base_url=base_url, api_key=api_key)
+        client = anthropic.AsyncAnthropic(**({"api_key": api_key} if api_key else {}))
+    else:
+        from .openai import AsyncOpenAI
+        client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+    _client_cache[key] = client
+    return client
 
 
 # ---- Config ----
@@ -164,22 +178,33 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                bash_timeout=600, bash_network=False, show_usage=False, client=None,
                base_url=None, api_key=None, handlers=None):
     t0 = time.monotonic()
+    profile = os.environ.get("CYCLS_PROFILE")
+    _ph = {}
+    _t = time.perf_counter()
+
     if client is None:
         client = _make_client(model, base_url=base_url, api_key=api_key)
+    _ph["client"] = (time.perf_counter() - _t) * 1000; _t = time.perf_counter()
     model = model.split("/", 1)[1]
     workspace = context.workspace
     ws = workspace.root
     Path(ws).mkdir(parents=True, exist_ok=True)
     persist = bool(context.chat_id and context.user)
+
     messages = _ephemeralize(await chat.load_messages(workspace, context.chat_id)) if persist else []
     saved = len(messages)
+    _ph["load"] = (time.perf_counter() - _t) * 1000; _t = time.perf_counter()
+
     incoming = context.messages.raw[-1].get("content", "")
     messages.append({"role": "user", "content": await _ingest(incoming, ws)})
+    _ph["ingest"] = (time.perf_counter() - _t) * 1000; _t = time.perf_counter()
+
     if persist:
         try: await _maybe_set_title(workspace, context.chat_id, incoming)
         except Exception as e: print(f"[WARN] title set failed: {e}")
-    window = context_window(model)
+    _ph["title"] = (time.perf_counter() - _t) * 1000
 
+    window = context_window(model)
     kwargs = {
         "model": model, "max_tokens": max_tokens,
         "tools": build_tools(allowed_tools, tools or []),
@@ -188,6 +213,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                      "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
         "thinking": {"type": "adaptive"},
     }
+    if profile:
+        print("[profile] harness " + " ".join(f"{k}={v:.0f}ms" for k, v in _ph.items()), flush=True)
     usage = [0, 0, 0, 0]  # in, out, cached, cache_create
     tokens_since_compact = 0
     retries = 0
@@ -205,9 +232,23 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 except Exception as ce:
                     yield {"type": "callout", "callout": f"Compaction failed: {ce}", "style": "warning"}
 
+            t_llm = time.perf_counter()
+            ttfb = None
             async with client.messages.stream(**kwargs) as stream:
-                async for event in _iter_stream(stream): yield event
+                async for event in _iter_stream(stream):
+                    if ttfb is None: ttfb = time.perf_counter() - t_llm
+                    yield event
                 response = await stream.get_final_message()
+            if profile:
+                u = response.usage
+                print(
+                    f"[profile] llm ttfb={(ttfb or 0)*1000:.0f}ms "
+                    f"total={(time.perf_counter()-t_llm)*1000:.0f}ms "
+                    f"in={u.input_tokens} out={u.output_tokens} "
+                    f"cache_read={u.cache_read_input_tokens or 0} "
+                    f"cache_create={u.cache_creation_input_tokens or 0}",
+                    flush=True,
+                )
 
             retries = 0
             u = response.usage
