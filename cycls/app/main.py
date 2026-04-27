@@ -1,4 +1,5 @@
 import os
+from functools import cached_property
 from pathlib import Path
 from typing import Optional
 
@@ -18,10 +19,7 @@ class App(Function):
 
     def __init__(self, func, name, image=None, memory="1Gi", auth: Optional[JWT] = None):
         if auth is not None and not isinstance(auth, JWT):
-            raise TypeError(
-                f"auth must be a cycls.JWT instance (e.g. cycls.Clerk(...)) or None; "
-                f"got {type(auth).__name__}"
-            )
+            raise TypeError(f"auth must be cycls.JWT or None, got {type(auth).__name__}")
         self.user_func = func
         self.memory = memory
         self.prod = False
@@ -49,32 +47,26 @@ class App(Function):
 
     # ---- FastAPI Depends instances (lazy) ----
 
-    @property
+    @cached_property
     def auth(self):
-        """FastAPI Depends that validates the request's JWT and yields a User.
-        Requires `auth=...` at decoration time."""
+        """FastAPI Depends that validates the JWT and yields a User."""
         if self._auth_provider is None:
             raise RuntimeError("App.auth requires auth=... on the @cycls.app decorator")
-        if not hasattr(self, "_auth_dep"):
-            from fastapi import Depends
-            self._auth_dep = Depends(make_validate(
-                lambda: self._auth_provider.resolve(self.prod).get("jwks_url")
-            ))
-        return self._auth_dep
+        from fastapi import Depends
+        return Depends(make_validate(
+            lambda: self._auth_provider.resolve(self.prod).get("jwks_url")
+        ))
 
-    @property
+    @cached_property
     def workspace(self):
-        """FastAPI Depends that yields a per-request `Workspace` for the
-        authenticated user. Requires `auth=...` at decoration time."""
+        """FastAPI Depends that yields a per-request `Workspace` for the user."""
         if self._auth_provider is None:
             raise RuntimeError("App.workspace requires auth=... on the @cycls.app decorator")
-        if not hasattr(self, "_workspace_dep"):
-            from fastapi import Depends
-            auth_dep = self.auth
-            def _build_ws(user=auth_dep):
-                return workspace_for(user, self.volume, self.bucket)
-            self._workspace_dep = Depends(_build_ws)
-        return self._workspace_dep
+        from fastapi import Depends
+        auth_dep = self.auth
+        def _build_ws(user=auth_dep):
+            return workspace_for(user, self.volume, self.bucket)
+        return Depends(_build_ws)
 
     # ---- Lifecycle ----
 

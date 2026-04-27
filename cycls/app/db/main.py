@@ -3,6 +3,11 @@ from collections import OrderedDict
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from slatedb.uniffi import (
+    DbBuilder, IsolationLevel, ObjectStore,
+    PutOptions, Ttl, WriteOptions,
+)
+
 _pool: "OrderedDict[str, object]" = OrderedDict()
 _pool_lock = asyncio.Lock()
 MAX_POOL_SIZE = 100
@@ -45,62 +50,41 @@ def workspace_for(user, volume, bucket=None):
 
 
 async def _build_db(url):
-    from slatedb.uniffi import ObjectStore, DbBuilder
     if url.startswith("file://"):
         Path(url[7:]).mkdir(parents=True, exist_ok=True)
-    store = ObjectStore.resolve(url)
-    return await DbBuilder("db", store).build()
+    return await DbBuilder("db", ObjectStore.resolve(url)).build()
 
 
 async def _get_pooled(url):
-    """Pool lookup with LRU semantics. Concurrent misses for the same url
-    may build twice — the loser discards its Db. Acceptable: rare, and
-    serializing all opens behind a lock would block independent workspaces."""
+    """Pool lookup with LRU. Concurrent misses for the same url may build
+    twice — the loser discards. Cheaper than serializing all opens."""
     cached = _pool.get(url)
     if cached is not None:
         _pool.move_to_end(url)
         return cached
 
     db = await _build_db(url)
-    evict = None
-    discard = None
+    to_shutdown = []
     async with _pool_lock:
         existing = _pool.get(url)
         if existing is not None:
             _pool.move_to_end(url)
-            discard = db
+            to_shutdown.append(db)
             db = existing
         else:
             _pool[url] = db
             if len(_pool) > MAX_POOL_SIZE:
-                _, evict = _pool.popitem(last=False)
-    if evict is not None:
-        try: await evict.shutdown()
-        except Exception as e: print(f"[WARN] db shutdown (evict) failed: {e}", flush=True)
-    if discard is not None:
-        try: await discard.shutdown()
-        except Exception as e: print(f"[WARN] db shutdown (discard) failed: {e}", flush=True)
+                _, old = _pool.popitem(last=False)
+                to_shutdown.append(old)
+    for old in to_shutdown:
+        try: await old.shutdown()
+        except Exception as e: print(f"[WARN] db shutdown failed: {e}", flush=True)
     return db
 
 
-@asynccontextmanager
-async def _open(url):
-    """Borrow a pooled SlateDB for *url*. Open cost is paid only on cache
-    miss; subsequent ops on the same workspace find the warm handle."""
-    yield await _get_pooled(url)
-
-
 class DB:
-    """Per-workspace database. Sits over a pooled SlateDB handle.
-
-    - `db.kv(name)` returns a namespaced JSON view (`KV`) — the recommended
-      ergonomics for chat-shaped state.
-    - `async with db.raw() as slate:` yields the raw SlateDB Db for
-      snapshots, TTL, custom WriteOptions, raw bytes — anything KV
-      doesn't surface.
-
-    Both layers are first-class. `KV` is convenience over `slate`; `slate`
-    is the substrate. Reach for the level that matches the need."""
+    """Per-workspace database. `db.kv(name)` for namespaced JSON;
+    `async with db.raw() as slate:` for the raw SlateDB handle."""
 
     def __init__(self, workspace):
         self._workspace = workspace
@@ -110,8 +94,7 @@ class DB:
 
     @asynccontextmanager
     async def raw(self):
-        async with _open(self._workspace.url()) as db:
-            yield db
+        yield await _get_pooled(self._workspace.url())
 
 
 def _enc(name, key):
@@ -153,15 +136,12 @@ class KV(_BaseKV):
 
     @asynccontextmanager
     async def _handle(self):
-        async with _open(self._workspace.url()) as db:
-            yield db
+        yield await _get_pooled(self._workspace.url())
 
     async def put(self, key, value):
-        """Non-durable put: WAL fsync is deferred. Trades sync-on-write
-        durability (~100ms/op) for a small risk of losing the write on
-        process crash before the next flush. Acceptable for chat persist,
-        usage counters, share registry — all at-most-once-anyway domains."""
-        from slatedb.uniffi import PutOptions, WriteOptions, Ttl
+        """Non-durable put — WAL fsync deferred. ~100ms/op savings; small
+        risk of losing the write on crash before next flush. Acceptable for
+        chat persist, usage counters, share registry."""
         async with self._handle() as h:
             await h.put_with_options(
                 _enc(self._name, key),
@@ -171,31 +151,22 @@ class KV(_BaseKV):
             )
 
     async def delete(self, key):
-        from slatedb.uniffi import WriteOptions
         async with self._handle() as h:
             await h.delete_with_options(_enc(self._name, key), WriteOptions(await_durable=False))
 
     @asynccontextmanager
     async def transaction(self):
-        """Atomic multi-op transaction with serializable snapshot isolation.
-
-            async with kv.transaction() as t:
-                await t.delete("a")
-                await t.put("b", {...})
-
-        Commit happens at clean exit; rollback on exception. Opens the DB
-        once for the lifetime of the block. Commit is non-durable (see
-        `KV.put` rationale)."""
-        from slatedb.uniffi import IsolationLevel, WriteOptions
-        async with _open(self._workspace.url()) as db:
-            txn = await db.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
-            try:
-                yield _TxKV(self._name, txn)
-            except Exception:
-                await txn.rollback()
-                raise
-            else:
-                await txn.commit_with_options(WriteOptions(await_durable=False))
+        """Atomic multi-op transaction (serializable snapshot isolation).
+        Commits on clean exit; rolls back on exception. Non-durable commit."""
+        db = await _get_pooled(self._workspace.url())
+        txn = await db.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
+        try:
+            yield _TxKV(self._name, txn)
+        except Exception:
+            await txn.rollback()
+            raise
+        else:
+            await txn.commit_with_options(WriteOptions(await_durable=False))
 
 
 class _TxKV(_BaseKV):
