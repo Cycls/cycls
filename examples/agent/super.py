@@ -3,6 +3,7 @@
 # cd client && npm run dev
 # uv run pytest tests/agent_test.py -v
 
+import os
 from datetime import datetime, timezone
 
 import cycls
@@ -69,8 +70,9 @@ llm = (
 
 @cycls.agent(image=image, web=web, name="super-stage")
 async def super(context):
+    os.environ["CYCLS_PROFILE"] = "1"
     user = context.user
-    # Local dev is always exempted so prototyping isn't blocked by gates.
+    # Local dev is shalways exempted so prototyping isn't blocked by gates.
     exempt = user.id in EXEMPT_USERS or not context.prod
 
     # b2b: free orgs blocked (no compute, no tracking)
