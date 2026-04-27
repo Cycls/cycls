@@ -10,7 +10,6 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from cycls.app.main import App, _make_decorator
-from cycls.app.auth import make_validate, JWT
 from .web.routers import install_routers
 from .web import Web, web, serve as web_serve, Config
 
@@ -28,13 +27,11 @@ class Agent(App):
         self.theme = web._theme
         self.copy_public = web._copy_public
         self.server = APIRouter()
-        self._auth_provider = web._auth
         self.config = Config(
             name=name, title=web._title,
             auth=web._auth is not None, cms=web._cms, analytics=web._analytics,
             volume=(image or {}).get("volume", "/workspace"),
         )
-        self.auth = make_validate(lambda: self.config.jwks)
 
         # Merge Agent's own copy requirements into the image:
         # cycls source tree (for themes + internal imports) and Web's
@@ -54,18 +51,17 @@ class Agent(App):
             name=name,
             image=image,
             memory=memory,
+            auth=web._auth,
         )
         self.config.name = self.name
 
-    def _apply_auth(self, prod):
-        """Resolve the auth provider's URLs/keys for this runtime mode into
-        config. Called after set_prod so the right dev/prod values land."""
-        if self._auth_provider is None:
-            return
-        resolved = self._auth_provider.resolve(prod)
-        self.config.jwks = resolved.get("jwks_url")
-        if "pk" in resolved:
-            self.config.pk = resolved["pk"]
+    def _sync_config_auth(self):
+        """Mirror App's resolved auth into Config so server.py's validate
+        and the browser-SDK pk find them."""
+        if self._auth_resolved:
+            self.config.jwks = self._auth_resolved.get("jwks_url")
+            if "pk" in self._auth_resolved:
+                self.config.pk = self._auth_resolved["pk"]
 
     def _routers(self):
         """State routers (chats, files, share) require auth to be meaningful.
@@ -80,8 +76,9 @@ class Agent(App):
 
     def _prepare_func(self, prod):
         self.prod = prod
+        self._resolve_auth(prod)
+        self._sync_config_auth()
         self.config.set_prod(prod)
-        self._apply_auth(prod)
         self.config.public_path = f"cycls/agent/web/themes/{self.theme}"
         user_func, config, name = self.user_func, self.config, self.name
         routers = self._routers()
@@ -91,8 +88,9 @@ class Agent(App):
     def _local(self, port=8080):
         print(f"Starting local server at localhost:{port}")
         self.prod = False
+        self._resolve_auth(False)
+        self._sync_config_auth()
         self.config.set_prod(False)
-        self._apply_auth(False)
         self.config.public_path = str(CYCLS_PATH.joinpath(f"agent/web/themes/{self.theme}"))
         import uvicorn
         uvicorn.run(web(self.user_func, self.config, extra_routers=self._routers()),
