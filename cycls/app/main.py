@@ -27,7 +27,6 @@ class App(Function):
         self.prod = False
         self.volume = Path((image or {}).get("volume", "/workspace"))
         self._auth_provider = auth
-        self._auth_resolved: Optional[dict] = None
 
         super().__init__(
             func=func,
@@ -59,7 +58,7 @@ class App(Function):
         if not hasattr(self, "_auth_dep"):
             from fastapi import Depends
             self._auth_dep = Depends(make_validate(
-                lambda: (self._auth_resolved or {}).get("jwks_url")
+                lambda: self._auth_provider.resolve(self.prod).get("jwks_url")
             ))
         return self._auth_dep
 
@@ -79,15 +78,8 @@ class App(Function):
 
     # ---- Lifecycle ----
 
-    def _resolve_auth(self, prod):
-        """Resolve auth provider URLs for the given mode. Subclasses call
-        this in their own `_prepare_func` to share the resolution path."""
-        if self._auth_provider is not None:
-            self._auth_resolved = self._auth_provider.resolve(prod)
-
     def _prepare_func(self, prod):
         self.prod = prod
-        self._resolve_auth(prod)
         user_func = self.user_func
         self.func = lambda port: uvicorn.run(user_func(), host="0.0.0.0", port=port)
 
@@ -95,7 +87,6 @@ class App(Function):
         """Run directly with uvicorn (no Docker)."""
         print(f"Starting local server at localhost:{port}")
         self.prod = False
-        self._resolve_auth(False)
         uvicorn.run(self.user_func(), host="0.0.0.0", port=port)
 
     def local(self, port=8080, watch=True):

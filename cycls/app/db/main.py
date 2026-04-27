@@ -95,16 +95,11 @@ def _enc(name, key):
 
 
 class _BaseKV:
-    """Shared get/put/delete/items implementation. Subclasses provide the
-    underlying handle (Db or DbTransaction) via async ctx `_handle()`."""
+    """Shared get/put/delete/items. Subclasses provide `_handle()` — an async
+    context manager yielding a Db or DbTransaction."""
 
     def __init__(self, name):
         self._name = name
-
-    @asynccontextmanager
-    async def _handle(self):
-        raise NotImplementedError
-        yield  # pragma: no cover — make it a generator
 
     async def get(self, key, default=None):
         async with self._handle() as h:
