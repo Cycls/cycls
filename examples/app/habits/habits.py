@@ -27,10 +27,10 @@ from uuid import uuid4
 
 import cycls
 
-HTML = (Path(__file__).parent / "habits.html").read_text()
+HTML_PATH = str(Path(__file__).parent / "habits.html")
 
 
-@cycls.app(image=cycls.Image(), auth=cycls.Clerk("cycls.ai"))
+@cycls.app(image=cycls.Image().copy(HTML_PATH, "habits.html"), auth=cycls.Clerk("cycls.ai"))
 def habits():
     from fastapi import FastAPI, HTTPException
     from fastapi.responses import HTMLResponse
@@ -42,7 +42,8 @@ def habits():
     @app.get("/")
     async def index():
         pk = habits._auth_provider.resolve(habits.prod).get("pk", "")
-        return HTMLResponse(HTML.replace("__CLERK_PK__", pk))
+        html = Path("habits.html").read_text().replace("__CLERK_PK__", pk)
+        return HTMLResponse(html)
 
     class HabitIn(BaseModel):
         title: str
@@ -128,7 +129,3 @@ def habits():
             return result
 
     return app
-
-
-if __name__ == "__main__":
-    habits.local()
