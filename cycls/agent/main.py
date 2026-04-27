@@ -33,18 +33,13 @@ class Agent(App):
             volume=(image or {}).get("volume", "/workspace"),
         )
 
-        # Merge Agent's own copy requirements into the image:
-        # cycls source tree (for themes + internal imports) and Web's
-        # copy_public files routed under public/.
+        # Merge Web's copy_public files under public/. App.__init__ adds
+        # the cycls source tree on top.
         image = dict(image or {})
         user_copy = image.get("copy", {})
         if isinstance(user_copy, list):
             user_copy = {f: f for f in user_copy}
-        image["copy"] = {
-            str(CYCLS_PATH): "cycls",
-            **user_copy,
-            **{f: f"public/{f}" for f in self.copy_public},
-        }
+        image["copy"] = {**user_copy, **{f: f"public/{f}" for f in self.copy_public}}
 
         super().__init__(
             func=func,

@@ -1,3 +1,4 @@
+import importlib.resources
 import os
 from functools import cached_property
 from pathlib import Path
@@ -8,6 +9,8 @@ import uvicorn
 from cycls.function import Function, _get_api_key, _get_base_url
 from cycls.app.auth import JWT, make_validate
 from cycls.app.db import workspace_for
+
+CYCLS_PATH = importlib.resources.files("cycls")
 
 
 class App(Function):
@@ -25,6 +28,15 @@ class App(Function):
         self.prod = False
         self.volume = Path((image or {}).get("volume", "/workspace"))
         self._auth_provider = auth
+
+        # User code referencing `cycls.DB`, `cycls.Workspace`, `app.auth`,
+        # etc. inside the function gets serialized via cloudpickle — which
+        # requires the cycls source to be importable in the container.
+        image = dict(image or {})
+        user_copy = image.get("copy", {})
+        if isinstance(user_copy, list):
+            user_copy = {f: f for f in user_copy}
+        image["copy"] = {str(CYCLS_PATH): "cycls", **user_copy}
 
         super().__init__(
             func=func,
