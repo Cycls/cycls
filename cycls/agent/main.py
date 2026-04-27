@@ -5,6 +5,7 @@ sessions, share links, OG images, transcription. Subclasses App and composes its
 chat-product ASGI app via the existing extra_routers hook.
 """
 import importlib.resources
+from pathlib import Path
 
 from fastapi import APIRouter
 
@@ -73,7 +74,6 @@ class Agent(App):
         server = self.server
         routers = [lambda app, auth: app.include_router(server)]
         if self._auth_provider is not None:
-            from pathlib import Path
             volume = Path(self.config.volume)
             bucket = self.config.bucket
             routers.insert(0, lambda app, auth: install_routers(app, auth, volume, bucket))

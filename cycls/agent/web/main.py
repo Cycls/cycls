@@ -4,6 +4,8 @@ from pydantic import BaseModel
 from typing import Optional, Any
 from cycls.app.auth import User, make_validate
 from cycls.app.db import Workspace
+from cycls.agent import share as share_mod
+from .routers import workspace_for
 
 class PassMetadata(BaseModel):
     name: str
@@ -130,12 +132,7 @@ def web(func, config, extra_routers=None):
 
         @property
         def workspace(self) -> Workspace:
-            user = self.user
-            if user is None:
-                return Workspace(volume / "local", bucket=bucket)
-            if user.org_id:
-                return Workspace(volume / user.org_id, user_id=user.id, bucket=bucket)
-            return Workspace(volume / user.id, bucket=bucket)
+            return workspace_for(self.user, volume, bucket)
 
     app = FastAPI()
 
@@ -218,15 +215,13 @@ def web(func, config, extra_routers=None):
     @app.get("/og/{share_id}.png")
     async def og_shared_image(share_id: str):
         from .og import generate as og_generate
-        try:
-            pointer = json.loads((Path("/workspace/shared") / f"{share_id}.json").read_text())
-            share = json.loads((Path(pointer["path"]) / "share.json").read_text())
-            title = share.get("title") or "Shared conversation"
-            author = share.get("author") or {}
+        snap = share_mod.read_snapshot(volume, share_id)
+        if snap:
+            title = snap.get("title") or "Shared conversation"
+            author = snap.get("author") or {}
             avatars = [u for u in [author.get("org", {}).get("imageUrl"), author.get("imageUrl")] if u]
             return Response(await og_generate(og_title, title, avatars=avatars), media_type="image/png")
-        except Exception:
-            return Response(await og_generate(og_title, config.title or ""), media_type="image/png")
+        return Response(await og_generate(og_title, config.title or ""), media_type="image/png")
 
     # ---- SPA fallback routes (before static mounts) ----
 
@@ -237,13 +232,11 @@ def web(func, config, extra_routers=None):
 
     @app.get("/shared/{share_id:path}")
     async def shared_page(share_id: str):
-        try:
-            pointer = json.loads((Path("/workspace/shared") / f"{share_id}.json").read_text())
-            share = json.loads((Path(pointer["path"]) / "share.json").read_text())
-            title = share.get("title") or "Shared conversation"
+        snap = share_mod.read_snapshot(volume, share_id)
+        if snap:
+            title = snap.get("title") or "Shared conversation"
             return HTMLResponse(_seo_html(app_title, title).replace("/og.png", f"/og/{share_id}.png"))
-        except Exception:
-            return HTMLResponse(_index_html)
+        return HTMLResponse(_index_html)
 
     # ---- Static mounts (must be last) ----
 
