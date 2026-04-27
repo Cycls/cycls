@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Habits</title>
+<style>
+  :root {
+    --bg:#fafaf9; --surface:#fff; --border:#e7e5e4; --muted:#78716c;
+    --fg:#1c1917; --accent:#0f172a; --good:#15803d; --soft:#f4f4f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0c0a09; --surface:#171413; --border:#27241f; --muted:#a8a29e;
+            --fg:#f5f5f4; --accent:#f5f5f4; --good:#86efac; --soft:#1c1917; }
+  }
+  * { box-sizing:border-box; }
+  html,body { background:var(--bg); color:var(--fg); }
+  body {
+    font: 15px/1.55 -apple-system,system-ui,"Segoe UI",sans-serif;
+    max-width: 560px; margin: 3em auto; padding: 0 1.25em;
+  }
+  h1 { font-weight:300; font-size:1.75em; letter-spacing:-0.02em; margin:0; }
+  .head { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:1.75em; }
+  .who { color:var(--muted); font-size:0.85em; font-family: ui-monospace, monospace; }
+  .who button { margin-left:0.5em; }
+  input, button {
+    font: inherit; padding:0.55em 0.8em; border:1px solid var(--border);
+    border-radius:8px; background:var(--surface); color:var(--fg);
+    transition: border-color 0.15s, opacity 0.15s, transform 0.05s;
+  }
+  input:focus { outline:none; border-color:var(--accent); }
+  button { cursor:pointer; user-select:none; }
+  button:hover { opacity:0.75; }
+  button:active { transform:scale(0.98); }
+  button.primary { background:var(--accent); color:var(--bg); border-color:var(--accent); }
+  button.ghost { background:transparent; border-color:transparent; color:var(--muted); padding:0.3em 0.5em; font-size:0.85em; }
+  .add { display:flex; gap:0.5em; margin-bottom:1.5em; }
+  .add input.title { flex:1; }
+  .add input.target { width:64px; text-align:center; }
+  .habit {
+    background:var(--surface); border:1px solid var(--border); border-radius:12px;
+    padding:1em 1.15em; margin-bottom:0.75em;
+  }
+  .habit-row { display:flex; justify-content:space-between; align-items:start; gap:1em; }
+  .habit h3 { margin:0; font-size:1em; font-weight:500; }
+  .habit .meta { color:var(--muted); font-size:0.82em; margin-top:0.15em; }
+  .habit-actions { display:flex; gap:0.4em; align-items:center; flex-shrink:0; }
+  .week { display:flex; gap:4px; margin-top:0.85em; }
+  .day { flex:1; height:22px; border-radius:4px; background:var(--soft); display:flex;
+         align-items:flex-end; justify-content:center; font-size:0.65em; color:var(--muted);
+         padding-bottom:2px; }
+  .day.done { background:var(--good); color:#fff; opacity:0.9; }
+  .day.today { outline:2px solid var(--accent); outline-offset:1px; }
+  .empty { color:var(--muted); padding:2.5em 0; text-align:center; font-size:0.95em; }
+  .stats { color:var(--muted); font-size:0.82em; text-align:center; padding:1.5em 0 0; border-top:1px solid var(--border); margin-top:2em; }
+  .err { color:#b91c1c; padding:1em; background:#fef2f2; border-radius:8px; }
+  @media (prefers-color-scheme: dark) { .err { background:#450a0a; color:#fca5a5; } }
+  /* Clerk overrides — let it inherit our look */
+  .cl-rootBox { font-family: inherit !important; }
+</style>
+</head>
+<body>
+<div id="app" class="empty">Loading…</div>
+
+<script async crossorigin="anonymous"
+  src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js"
+  data-clerk-publishable-key="__CLERK_PK__">
+</script>
+
+<script>
+async function api(method, path, body) {
+  const token = await Clerk.session.getToken();
+  const res = await fetch(path, {
+    method,
+    headers: { Authorization: "Bearer " + token, ...(body ? {"Content-Type":"application/json"} : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error(method + " " + path + " → " + res.status);
+  return res.status === 204 ? null : res.json();
+}
+
+const el = (tag, props = {}, ...kids) => {
+  const e = Object.assign(document.createElement(tag), props);
+  kids.flat().forEach(k => e.append(k));
+  return e;
+};
+
+// Build the last 7 calendar days (oldest → today), ISO strings.
+function lastSevenDays() {
+  const out = [];
+  const d = new Date();
+  for (let i = 6; i >= 0; i--) {
+    const x = new Date(d);
+    x.setDate(d.getDate() - i);
+    out.push(x.toISOString().slice(0, 10));
+  }
+  return out;
+}
+
+function weekRow(checkins) {
+  const days = lastSevenDays();
+  const set = new Set(checkins);
+  const today = days[6];
+  return el("div", {className:"week"},
+    days.map(d => {
+      const cls = "day" + (set.has(d) ? " done" : "") + (d === today ? " today" : "");
+      return el("div", {className: cls, title: d}, d.slice(8));
+    })
+  );
+}
+
+async function render() {
+  const app = document.getElementById("app");
+  app.className = "";
+  app.innerHTML = "";
+
+  const user = await api("GET", "/me");
+  app.append(el("div", {className:"head"},
+    el("h1", {}, "Habits"),
+    el("div", {className:"who"},
+      user.id.slice(0, 14) + "…",
+      el("button", {className:"ghost", onclick: () => Clerk.signOut().then(boot)}, "sign out"),
+    ),
+  ));
+
+  const title = el("input", {className:"title", placeholder:"new habit, e.g. 'morning run'"});
+  const target = el("input", {className:"target", type:"number", value:"7", min:"1", max:"7"});
+  const add = el("button", {className:"primary", onclick: async () => {
+    if (!title.value.trim()) return;
+    await api("POST", "/habits", {title: title.value.trim(), target_per_week: parseInt(target.value)});
+    render();
+  }}, "add");
+  title.addEventListener("keydown", e => { if (e.key === "Enter") add.click(); });
+  app.append(el("div", {className:"add"}, title, target, add));
+
+  const habits = await api("GET", "/habits");
+  if (!habits.length) {
+    app.append(el("div", {className:"empty"}, "no habits yet — add your first one above"));
+  }
+  for (const h of habits) {
+    const detail = await api("GET", "/habits/" + h.id);
+    const checkedToday = detail.checkins.includes(new Date().toISOString().slice(0, 10));
+    const card = el("div", {className:"habit"});
+    card.append(el("div", {className:"habit-row"},
+      el("div", {},
+        el("h3", {}, h.title),
+        el("div", {className:"meta"}, `target ${h.target_per_week}/week · ${detail.checkins.length} total`),
+      ),
+      el("div", {className:"habit-actions"},
+        el("button", {disabled: checkedToday, onclick: async () => {
+          await api("POST", `/habits/${h.id}/check`); render();
+        }}, checkedToday ? "✓ done" : "check in"),
+        el("button", {className:"ghost", onclick: async () => {
+          if (confirm("Delete this habit?")) { await api("DELETE", `/habits/${h.id}`); render(); }
+        }}, "delete"),
+      ),
+    ));
+    card.append(weekRow(detail.checkins));
+    app.append(card);
+  }
+
+  const stats = await api("GET", "/stats");
+  app.append(el("div", {className:"stats"},
+    `${stats.habits} habit${stats.habits===1?"":"s"} · ${stats.checkins} check-in${stats.checkins===1?"":"s"} · stats cached`,
+  ));
+}
+
+async function boot() {
+  await Clerk.load();
+  const app = document.getElementById("app");
+  if (!Clerk.user) {
+    app.className = "";
+    app.innerHTML = "";
+    Clerk.mountSignIn(app);
+    return;
+  }
+  try { await render(); }
+  catch (e) {
+    app.className = "";
+    app.innerHTML = "";
+    app.append(el("div", {className:"err"}, e.message));
+  }
+}
+
+window.addEventListener("load", () => {
+  const wait = setInterval(() => {
+    if (window.Clerk) { clearInterval(wait); boot(); }
+  }, 50);
+});
+</script>
+</body>
+</html>

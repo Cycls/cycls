@@ -22,18 +22,27 @@ Routes:
 """
 import json
 from datetime import date, datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 import cycls
+
+HTML = (Path(__file__).parent / "habits.html").read_text()
 
 
 @cycls.app(image=cycls.Image(), auth=cycls.Clerk("cycls.ai"))
 def habits():
     from fastapi import FastAPI, HTTPException
+    from fastapi.responses import HTMLResponse
     from pydantic import BaseModel
     from slatedb.uniffi import PutOptions, Ttl, WriteOptions
 
     app = FastAPI(title="Habits")
+
+    @app.get("/")
+    async def index():
+        pk = habits._auth_provider.resolve(habits.prod).get("pk", "")
+        return HTMLResponse(HTML.replace("__CLERK_PK__", pk))
 
     class HabitIn(BaseModel):
         title: str
