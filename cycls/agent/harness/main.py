@@ -26,26 +26,24 @@ def _ephemeralize(messages):
     return messages
 
 
-async def _maybe_set_title(workspace, chat_id, content):
-    """First-write title from the user's first message; idempotent on later turns."""
+async def _touch_meta(workspace, chat_id, content):
+    """Stamp `updatedAt` for chat-list ordering; on the first turn also derive
+    title from the user message and set createdAt. Sole writer of chat meta —
+    the FE shouldn't PUT this back."""
     existing = (await chat.get_meta(workspace, chat_id)) or {}
-    if existing.get("title"):
-        return
-    text = content if isinstance(content, str) else next(
-        (b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"),
-        "",
-    )
-    title = text.strip()[:80]
-    if not title:
-        return
     now = datetime.now(timezone.utc).isoformat()
-    await chat.put_meta(workspace, chat_id, {
-        **existing,
-        "id": chat_id,
-        "title": title,
-        "updatedAt": now,
-        "createdAt": existing.get("createdAt", now),
-    })
+    meta = {**existing, "id": chat_id, "updatedAt": now}
+    if "createdAt" not in meta:
+        meta["createdAt"] = now
+    if not meta.get("title"):
+        text = content if isinstance(content, str) else next(
+            (b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"),
+            "",
+        )
+        title = text.strip()[:80]
+        if title:
+            meta["title"] = title
+    await chat.put_meta(workspace, chat_id, meta)
 
 # ---- Client routing ----
 
@@ -195,9 +193,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     _ph["ingest"] = (time.perf_counter() - _t) * 1000; _t = time.perf_counter()
 
     if persist:
-        try: await _maybe_set_title(workspace, context.chat_id, incoming)
-        except Exception as e: print(f"[WARN] title set failed: {e}")
-    _ph["title"] = (time.perf_counter() - _t) * 1000
+        try: await _touch_meta(workspace, context.chat_id, incoming)
+        except Exception as e: print(f"[WARN] meta touch failed: {e}")
+    _ph["meta"] = (time.perf_counter() - _t) * 1000
 
     window = context_window(model)
     kwargs = {

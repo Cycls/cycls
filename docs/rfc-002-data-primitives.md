@@ -10,7 +10,7 @@
 |---|---|---|
 | `Workspace` + `KV` primitives | **Shipped** | `cycls/app/db/main.py` |
 | Chat metadata + log unified on KV | **Shipped** | `cycls/agent/chat.py` — one `KV("chat")` with `meta/{id}` and `log/{id}/{turn}` prefixes |
-| Auto-derived chat titles | **Shipped** | `cycls/agent/harness/main.py:_maybe_set_title` |
+| Auto-derived chat titles | **Shipped** | `cycls/agent/harness/main.py:_touch_meta` |
 | Substrate auto-detection (FUSE → direct GCS) | **Shipped** | `Workspace.url()` |
 | Shares — owner KV index + global frozen snapshots | **Shipped** | `cycls/agent/share.py` — `KV("share")` ownership + `{volume}/.cycls/shared/{id}/` snapshots |
 
