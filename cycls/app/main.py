@@ -10,16 +10,7 @@ from cycls.app.db import workspace_for
 
 
 class App(Function):
-    """App extends Function with a blocking ASGI service.
-
-    The user function, when called, must return an ASGI application
-    (e.g., a FastAPI instance, an MCP server, a Gradio/Streamlit app).
-    App wraps it in uvicorn for local runs and containerized deployment.
-
-    Pass `auth=cycls.Clerk(...)` to wire JWT validation; `app.auth` and
-    `app.workspace` are FastAPI Depends instances usable directly in the
-    user's routes — multi-tenant DB and JWT validation come for free.
-    """
+    """App extends Function with a blocking ASGI service."""
 
     _base_pip = ["uvicorn[standard]", "slatedb",
                  "fastapi[standard]", "pyjwt", "cryptography"]
