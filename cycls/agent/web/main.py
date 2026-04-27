@@ -3,9 +3,8 @@ from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional, Any
 from cycls.app.auth import User, make_validate
-from cycls.app.db import Workspace
+from cycls.app.db import Workspace, workspace_for
 from cycls.agent import share as share_mod
-from .routers import workspace_for
 
 
 class PassMetadata(BaseModel):
@@ -137,7 +136,7 @@ def web(func, config, extra_routers=None):
 
     app = FastAPI()
 
-    validate = make_validate(config)
+    validate = make_validate(lambda: config.jwks)
     auth = Depends(validate) if config.auth else Depends(lambda: None)
     required_auth = Depends(validate)
 

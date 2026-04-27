@@ -49,6 +49,17 @@ class Workspace:
         return f"file://{self.data}"
 
 
+def workspace_for(user, volume, bucket=None):
+    """Build a Workspace for *user* under *volume*. None → /local; org member →
+    /<org>/.cycls/<user>; personal → /<user>/.cycls. Duck-types on the user
+    object (`.id`, `.org_id`) so any auth model with those attributes works."""
+    if user is None:
+        return Workspace(volume / "local", bucket=bucket)
+    if getattr(user, "org_id", None):
+        return Workspace(volume / user.org_id, user_id=user.id, bucket=bucket)
+    return Workspace(volume / user.id, bucket=bucket)
+
+
 async def _build_db(url):
     from slatedb.uniffi import ObjectStore, DbBuilder
     if url.startswith("file://"):

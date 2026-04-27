@@ -11,15 +11,14 @@ from fastapi import APIRouter
 
 from cycls.app.main import App, _make_decorator
 from cycls.app.auth import make_validate, JWT
-from cycls.app.web import Web
 from .web.routers import install_routers
-from .web import web, serve as web_serve, Config
+from .web import Web, web, serve as web_serve, Config
 
 CYCLS_PATH = importlib.resources.files('cycls')
 
 
 class Agent(App):
-    _base_pip = [*App._base_pip, "resvg-py", "anthropic", "openai"]
+    _base_pip = [*App._base_pip, "resvg-py", "anthropic", "openai", "python-dotenv"]
     _base_apt = [*App._base_apt, "fonts-noto-core", "bubblewrap",
                  "poppler-utils", "ripgrep", "jq", "curl"]
 
@@ -35,7 +34,7 @@ class Agent(App):
             auth=web._auth is not None, cms=web._cms, analytics=web._analytics,
             volume=(image or {}).get("volume", "/workspace"),
         )
-        self.auth = make_validate(self.config)
+        self.auth = make_validate(lambda: self.config.jwks)
 
         # Merge Agent's own copy requirements into the image:
         # cycls source tree (for themes + internal imports) and Web's

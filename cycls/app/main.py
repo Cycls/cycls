@@ -13,7 +13,7 @@ class App(Function):
     """
 
     _base_pip = ["uvicorn[standard]", "docker", "slatedb",
-                 "fastapi[standard]", "pyjwt", "cryptography", "python-dotenv"]
+                 "fastapi[standard]", "pyjwt", "cryptography"]
     _base_apt = []
 
     def __init__(self, func, name, image=None, memory="1Gi"):

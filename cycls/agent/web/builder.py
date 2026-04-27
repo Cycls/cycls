@@ -7,7 +7,7 @@ fields can be passed directly on `@cycls.agent` for the simple case —
 """
 from typing import List, Optional
 
-from .auth import JWT
+from cycls.app.auth import JWT
 
 
 THEMES = ["default", "dev"]
