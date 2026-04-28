@@ -14,17 +14,17 @@ from cycls.agent.harness.tools import _resolve_path, _exec_bash, build_tools
 
 
 def test_state_resolve_path_rejects_cycls(tmp_path):
-    (tmp_path / ".cycls").mkdir()
+    (tmp_path / ".db").mkdir()
     with pytest.raises(ValueError, match="Reserved path"):
-        resolve_path(tmp_path, ".cycls")
+        resolve_path(tmp_path, ".db")
     with pytest.raises(ValueError, match="Reserved path"):
-        resolve_path(tmp_path, ".cycls/usage.json")
+        resolve_path(tmp_path, ".db/usage.json")
 
 
 def test_state_resolve_path_rejects_cycls_nested(tmp_path):
-    (tmp_path / ".cycls" / "sub").mkdir(parents=True)
+    (tmp_path / ".db" / "sub").mkdir(parents=True)
     with pytest.raises(ValueError, match="Reserved path"):
-        resolve_path(tmp_path, ".cycls/sub/file.json")
+        resolve_path(tmp_path, ".db/sub/file.json")
 
 
 def test_state_resolve_path_allows_normal(tmp_path):
@@ -33,11 +33,11 @@ def test_state_resolve_path_allows_normal(tmp_path):
 
 
 def test_tools_resolve_path_rejects_cycls(tmp_path):
-    (tmp_path / ".cycls").mkdir()
-    with pytest.raises(ValueError, match=".cycls/"):
-        _resolve_path("/workspace/.cycls/usage.json", tmp_path)
-    with pytest.raises(ValueError, match=".cycls/"):
-        _resolve_path(".cycls", tmp_path)
+    (tmp_path / ".db").mkdir()
+    with pytest.raises(ValueError, match=".db/"):
+        _resolve_path("/workspace/.db/usage.json", tmp_path)
+    with pytest.raises(ValueError, match=".db/"):
+        _resolve_path(".db", tmp_path)
 
 
 def test_bash_sandbox_ro_binds_cycls(tmp_path):
@@ -58,8 +58,8 @@ def test_bash_sandbox_ro_binds_cycls(tmp_path):
     argv = captured["argv"]
     assert "--ro-bind-try" in argv
     i = argv.index("--ro-bind-try")
-    assert argv[i + 1] == str(tmp_path / ".cycls")
-    assert argv[i + 2] == "/workspace/.cycls"
+    assert argv[i + 1] == str(tmp_path / ".db")
+    assert argv[i + 2] == "/workspace/.db"
 
 
 def _capture_bash_exec(tmp_path, **kwargs):

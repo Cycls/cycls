@@ -22,16 +22,16 @@ from cycls.agent import chat
 
 def resolve_path(workspace, rel):
     """Resolve *rel* inside *workspace*, raising ValueError on traversal or
-    access to the reserved `.cycls/` tree (framework-managed)."""
+    access to the reserved `.db/` tree (framework-managed)."""
     workspace = Path(workspace)
     rel = unicodedata.normalize("NFC", rel)
     resolved = (workspace / rel).resolve()
     ws = workspace.resolve()
     if not resolved.is_relative_to(ws):
         raise ValueError("Path traversal denied")
-    reserved = ws / ".cycls"
+    reserved = ws / ".db"
     if resolved == reserved or resolved.is_relative_to(reserved):
-        raise ValueError("Reserved path: .cycls/ is managed by cycls")
+        raise ValueError("Reserved path: .db/ is managed by cycls")
     return resolved
 
 

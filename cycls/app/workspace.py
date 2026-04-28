@@ -1,17 +1,27 @@
-"""Workspace — pointer at a tenant's filesystem root + slatedb URL.
+"""Workspace — pointer at a tenant's filesystem layout.
 
-A `Workspace` is a frozen value: `(root, url)`. `workspace_for` builds one
-from a User; `workspace_at` builds one from a tenant string (e.g. the
-subject in a signed URL). Both are inverses through `subject_for`.
+A `Workspace` is a frozen value:
+    volume — mount root for the deployment (e.g. /workspace)
+    root   — fs root for this tenant (= volume/<tenant>)
+    data   — framework-reserved subdir under root (= root/.db[/user])
+    bucket — optional object-store prefix (e.g. gs://cycls-ws-foo)
+
+Workspace doesn't know how to *format* a URL — that's a `db.py` concern,
+since URL syntax (file://, gs://) is storage-backend-specific. Workspace
+only knows the convention that the framework reserves `<root>/.db` for
+its per-tenant managed state.
 """
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 
 @dataclass(frozen=True)
 class Workspace:
+    volume: Path
     root: Path
-    url: str
+    data: Path
+    bucket: Optional[str] = None
 
 
 def subject_for(user) -> str:
@@ -22,7 +32,7 @@ def subject_for(user) -> str:
 
 def workspace_for(user, volume, bucket=None) -> Workspace:
     """Workspace for *user* under *volume*. None → /local; org member →
-    /<org>/.cycls/<user>; personal → /<user>/.cycls."""
+    /<org>/.db/<user>; personal → /<user>/.db."""
     return workspace_at("local" if user is None else subject_for(user), volume, bucket)
 
 
@@ -32,10 +42,8 @@ def workspace_at(tenant, volume, bucket=None) -> Workspace:
     if "/" in tenant:
         org, user = tenant.split("/", 1)
         root = volume / org
-        data = root / ".cycls" / user
+        data = root / ".db" / user
     else:
         root = volume / tenant
-        data = root / ".cycls"
-    url = (f"{bucket.rstrip('/')}/{data.relative_to(volume)}"
-           if bucket else f"file://{data}")
-    return Workspace(root=root, url=url)
+        data = root / ".db"
+    return Workspace(volume=volume, root=root, data=data, bucket=bucket)
