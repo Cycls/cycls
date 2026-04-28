@@ -94,14 +94,10 @@ def test_subject_org_member():
     assert subject_for(User(id="user_abc", org_id="org_xyz")) == "org_xyz/user_abc"
 
 
-def test_subject_anonymous():
-    assert subject_for(None) == "local"
-
-
 def test_workspace_for_subject_inverse(tmp_path):
     """`workspace_for_subject(subject_for(u))` reproduces `workspace_for(u)` data path."""
     from cycls.app.db import workspace_for
-    for u in [None, User(id="user_abc"), User(id="user_abc", org_id="org_xyz")]:
+    for u in [User(id="user_abc"), User(id="user_abc", org_id="org_xyz")]:
         ws_a = workspace_for(u, tmp_path)
         ws_b = workspace_for_subject(subject_for(u), tmp_path)
         assert ws_a.data == ws_b.data

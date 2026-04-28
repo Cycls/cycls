@@ -111,14 +111,14 @@ class App(Function):
             chat/<id>   → /shared?path=...&user=...&exp=...&sig=...   (SPA page)
             file/<path> → /shared/file/<path>?user=...&exp=...&sig=... (raw bytes)
         Either way, the HMAC binds the literal *path* string."""
-        from urllib.parse import quote
+        from urllib.parse import quote, urlencode
         sub = user if isinstance(user, str) else subject_for(user)
         params = signing.sign(path, sub, self.signing_key, ttl=ttl)
         if path.startswith("file/"):
             params.pop("path")  # file path lives in the URL, not the query
             rest = quote(path[len("file/"):], safe="/")
-            return f"/shared/file/{rest}?{signing.query_string(params)}"
-        return f"/shared?{signing.query_string(params)}"
+            return f"/shared/file/{rest}?{urlencode(params)}"
+        return f"/shared?{urlencode(params)}"
 
     def verify_signed(self, path: str, user: str, exp, sig: str) -> bool:
         """True if (path, user, exp, sig) is a valid, unexpired signature."""
