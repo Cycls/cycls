@@ -50,21 +50,15 @@ class Workspace:
 
 
 def subject_for(user) -> str:
-    """The path-safe identifier for *user*'s workspace tenancy. `user_id` for
-    personal users, `org_id/user_id` for org members. *user* must be
-    authenticated; signed URLs aren't minted for anonymous callers."""
-    if getattr(user, "org_id", None):
-        return f"{user.org_id}/{user.id}"
-    return user.id
+    """`user_id` for personal users, `org_id/user_id` for org members. The
+    string round-trips through `Workspace(volume, ..., bucket)`."""
+    return f"{user.org_id}/{user.id}" if getattr(user, "org_id", None) else user.id
 
 
 def workspace_for(user, volume, bucket=None):
     """Build a Workspace for *user* under *volume*. None → /local; org member →
-    /<org>/.cycls/<user>; personal → /<user>/.cycls. Duck-types on the user
-    object (`.id`, `.org_id`) so any auth model with those attributes works."""
-    if user is None:
-        return Workspace(volume, "local", bucket=bucket)
-    return Workspace(volume, subject_for(user), bucket=bucket)
+    /<org>/.cycls/<user>; personal → /<user>/.cycls."""
+    return Workspace(volume, "local" if user is None else subject_for(user), bucket=bucket)
 
 
 async def _build_db(url):
