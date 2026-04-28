@@ -49,6 +49,27 @@ def workspace_for(user, volume, bucket=None):
     return Workspace(volume / user.id, bucket=bucket)
 
 
+def subject_for(user) -> str:
+    """The path-safe identifier for *user*'s workspace tenancy. `user_id` for
+    personal users, `org_id/user_id` for org members. Used as the bound subject
+    of signed URLs — the inverse is `workspace_for_subject`."""
+    if user is None:
+        return "local"
+    if getattr(user, "org_id", None):
+        return f"{user.org_id}/{user.id}"
+    return user.id
+
+
+def workspace_for_subject(subject, volume, bucket=None):
+    """Inverse of `subject_for` — rebuild a Workspace from a signed-URL subject."""
+    if subject == "local":
+        return Workspace(volume / "local", bucket=bucket)
+    if "/" in subject:
+        org_id, user_id = subject.split("/", 1)
+        return Workspace(volume / org_id, user_id=user_id, bucket=bucket)
+    return Workspace(volume / subject, bucket=bucket)
+
+
 async def _build_db(url):
     if url.startswith("file://"):
         Path(url[7:]).mkdir(parents=True, exist_ok=True)

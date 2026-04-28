@@ -1,6 +1,10 @@
 """Tests for the bare @cycls.app decorator: user function returns an ASGI app."""
+from urllib.parse import parse_qs, urlparse
+
 import cycls
 from cycls.app import App
+from cycls.app.auth import User
+from cycls.app.db import Workspace, subject_for, workspace_for_subject
 
 
 def test_app_decorator_returns_app():
@@ -71,3 +75,77 @@ def test_app_no_auth_means_deps_raise():
         _ = svc.auth
     with pytest.raises(RuntimeError, match="auth=..."):
         _ = svc.workspace
+
+
+# ---- Signed-URL surface ----
+
+def _app(tmp_path):
+    @cycls.app(image={"volume": str(tmp_path)})
+    def svc():
+        return None
+    return svc
+
+
+def test_subject_personal_user():
+    assert subject_for(User(id="user_abc")) == "user_abc"
+
+
+def test_subject_org_member():
+    assert subject_for(User(id="user_abc", org_id="org_xyz")) == "org_xyz/user_abc"
+
+
+def test_subject_anonymous():
+    assert subject_for(None) == "local"
+
+
+def test_workspace_for_subject_inverse(tmp_path):
+    """`workspace_for_subject(subject_for(u))` reproduces `workspace_for(u)` data path."""
+    from cycls.app.db import workspace_for
+    for u in [None, User(id="user_abc"), User(id="user_abc", org_id="org_xyz")]:
+        ws_a = workspace_for(u, tmp_path)
+        ws_b = workspace_for_subject(subject_for(u), tmp_path)
+        assert ws_a.data == ws_b.data
+
+
+def test_signed_url_roundtrip_personal(tmp_path):
+    app = _app(tmp_path)
+    user = User(id="user_abc")
+    url = app.signed_url("chat/c1", user, ttl=3600)
+    q = parse_qs(urlparse(url).query)
+    assert q["user"] == ["user_abc"]
+    assert q["path"] == ["chat/c1"]
+    assert app.verify_signed(q["path"][0], q["user"][0], int(q["exp"][0]), q["sig"][0])
+
+
+def test_signed_url_roundtrip_org_member(tmp_path):
+    app = _app(tmp_path)
+    user = User(id="user_abc", org_id="org_xyz")
+    url = app.signed_url("file/notes.md", user, ttl=3600)
+    q = parse_qs(urlparse(url).query)
+    assert q["user"] == ["org_xyz/user_abc"]
+    assert app.verify_signed(q["path"][0], q["user"][0], int(q["exp"][0]), q["sig"][0])
+
+
+def test_signed_url_tampering_fails(tmp_path):
+    app = _app(tmp_path)
+    url = app.signed_url("chat/c1", User(id="u"), ttl=3600)
+    q = parse_qs(urlparse(url).query)
+    assert not app.verify_signed("chat/other", q["user"][0], int(q["exp"][0]), q["sig"][0])
+    assert not app.verify_signed(q["path"][0], "imposter", int(q["exp"][0]), q["sig"][0])
+
+
+def test_signed_url_expired(tmp_path):
+    app = _app(tmp_path)
+    url = app.signed_url("chat/c1", User(id="u"), ttl=-10)  # already expired
+    q = parse_qs(urlparse(url).query)
+    assert not app.verify_signed(q["path"][0], q["user"][0], int(q["exp"][0]), q["sig"][0])
+
+
+def test_signing_key_persists_across_property_access(tmp_path):
+    app = _app(tmp_path)
+    k1 = app.signing_key
+    # cached_property — same instance returns same bytes
+    assert app.signing_key is k1
+    # And on a fresh App instance pointed at the same volume, the file persists
+    app2 = _app(tmp_path)
+    assert app2.signing_key == k1
