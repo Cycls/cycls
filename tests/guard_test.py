@@ -243,10 +243,10 @@ def test_build_tools_custom_passthrough():
 
 # ---- LLM builder plumbing ----
 
-def test_llm_sandbox_network_opt_in():
-    """Default off; opt-in flips the flag that dispatch threads to _exec_bash."""
-    assert cycls.LLM()._bash_network is False
-    assert cycls.LLM().sandbox(network=True)._bash_network is True
+def test_llm_sandbox_network_default_on():
+    """Default on for the LLM bash tool; opt out via sandbox(network=False)."""
+    assert cycls.LLM()._bash_network is True
+    assert cycls.LLM().sandbox(network=False)._bash_network is False
 
 
 def test_llm_sandbox_network_kwarg_only():

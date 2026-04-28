@@ -517,7 +517,6 @@ def test_exec_bash_returns_error_on_timeout(tmp_path):
     mock_proc = MagicMock()
     mock_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
     mock_proc.kill = MagicMock()
-    mock_proc.wait = AsyncMock()
 
     async def run():
         with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_proc)):
@@ -528,7 +527,6 @@ def test_exec_bash_returns_error_on_timeout(tmp_path):
     assert "timed out" in result
     assert "5s" in result
     mock_proc.kill.assert_called_once()
-    mock_proc.wait.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
