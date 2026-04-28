@@ -26,16 +26,36 @@ async def shutdown_pool():
 
 
 class Workspace:
-    def __init__(self, root, user_id=None, bucket=None):
-        self.root = Path(root)
-        self.data = self.root / ".cycls" / user_id if user_id else self.root / ".cycls"
+    """Per-tenant root + slatedb data dir under *volume*. *tenant* is `user_id`
+    for personal users or `org_id/user_id` for org members — the same string
+    `subject_for(user)` returns. Signed-URL subjects round-trip through this
+    constructor, so it's the single source of truth for tenant→path mapping."""
+
+    def __init__(self, volume, tenant, bucket=None):
+        self.volume = Path(volume)
+        self.tenant = tenant
+        if "/" in tenant:
+            org_id, user_id = tenant.split("/", 1)
+            self.root = self.volume / org_id
+            self.data = self.root / ".cycls" / user_id
+        else:
+            self.root = self.volume / tenant
+            self.data = self.root / ".cycls"
         self._bucket = bucket
 
     def url(self) -> str:
         if self._bucket:
-            rel = self.data.relative_to(self.root.parent)
-            return f"{self._bucket.rstrip('/')}/{rel}"
+            return f"{self._bucket.rstrip('/')}/{self.data.relative_to(self.volume)}"
         return f"file://{self.data}"
+
+
+def subject_for(user) -> str:
+    """The path-safe identifier for *user*'s workspace tenancy. `user_id` for
+    personal users, `org_id/user_id` for org members. *user* must be
+    authenticated; signed URLs aren't minted for anonymous callers."""
+    if getattr(user, "org_id", None):
+        return f"{user.org_id}/{user.id}"
+    return user.id
 
 
 def workspace_for(user, volume, bucket=None):
@@ -43,28 +63,8 @@ def workspace_for(user, volume, bucket=None):
     /<org>/.cycls/<user>; personal → /<user>/.cycls. Duck-types on the user
     object (`.id`, `.org_id`) so any auth model with those attributes works."""
     if user is None:
-        return Workspace(volume / "local", bucket=bucket)
-    if getattr(user, "org_id", None):
-        return Workspace(volume / user.org_id, user_id=user.id, bucket=bucket)
-    return Workspace(volume / user.id, bucket=bucket)
-
-
-def subject_for(user) -> str:
-    """The path-safe identifier for *user*'s workspace tenancy. `user_id` for
-    personal users, `org_id/user_id` for org members. Used as the bound subject
-    of signed URLs — the inverse is `workspace_for_subject`. *user* must be
-    authenticated; signed URLs aren't minted for anonymous callers."""
-    if getattr(user, "org_id", None):
-        return f"{user.org_id}/{user.id}"
-    return user.id
-
-
-def workspace_for_subject(subject, volume, bucket=None):
-    """Inverse of `subject_for` — rebuild a Workspace from a signed-URL subject."""
-    if "/" in subject:
-        org_id, user_id = subject.split("/", 1)
-        return Workspace(volume / org_id, user_id=user_id, bucket=bucket)
-    return Workspace(volume / subject, bucket=bucket)
+        return Workspace(volume, "local", bucket=bucket)
+    return Workspace(volume, subject_for(user), bucket=bucket)
 
 
 async def _build_db(url):
