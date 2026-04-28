@@ -35,6 +35,11 @@ sandbox = (
         LANG="C.UTF-8",
     )
     .die_with_parent()
+    # Network on: matches the agent's default. Codespaces-nested Docker can't
+    # bring up loopback in an unshared netns ("RTM_NEWADDR: No child processes"),
+    # and most users want curl/pip/git anyway. Flip to .network(False) in prod
+    # if you want strict egress isolation.
+    .network(True)
     .timeout(10)
 )
 
