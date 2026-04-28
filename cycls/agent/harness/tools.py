@@ -103,9 +103,9 @@ def _resolve_path(raw_path, workspace):
     rel = raw_path.removeprefix("/workspace/").lstrip("/")
     path = (ws / rel).resolve()
     if not path.is_relative_to(ws): raise ValueError("path escapes workspace")
-    reserved = ws / ".cycls"
+    reserved = ws / ".db"
     if path == reserved or path.is_relative_to(reserved):
-        raise ValueError(".cycls/ is managed by cycls")
+        raise ValueError(".db/ is managed by cycls")
     return path
 
 # ---- Tool execution ----
@@ -117,7 +117,7 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
     sb = (Sandbox()
           .ro_bind("/", "/")
           .bind(cwd, "/workspace")
-          .ro_bind_try(str(pathlib.Path(cwd) / ".cycls"), "/workspace/.cycls")
+          .ro_bind_try(str(pathlib.Path(cwd) / ".db"), "/workspace/.db")
           .tmpfs("/app").tmpfs("/tmp").dev("/dev").proc("/proc")
           .network(network).chdir("/workspace").die_with_parent().clearenv()
           .setenv(PATH=path, HOME="/workspace", TERM="xterm", LANG=lang)
