@@ -14,7 +14,6 @@ import hmac
 import hashlib
 import secrets
 import time
-from urllib.parse import urlencode
 
 
 def _digest(secret: bytes, path: str, user_id: str, exp: int) -> str:
@@ -38,11 +37,6 @@ def verify(path: str, user_id: str, exp: int, sig: str, secret: bytes) -> bool:
         return hmac.compare_digest(expected, sig)
     except Exception:
         return False
-
-
-def query_string(params: dict) -> str:
-    """`?path=...&user=...&exp=...&sig=...` for embedding in a URL."""
-    return urlencode(params)
 
 
 def new_secret() -> bytes:

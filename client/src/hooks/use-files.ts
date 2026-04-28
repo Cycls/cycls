@@ -102,7 +102,7 @@ export function useFiles(baseUrl: string = "") {
       headers: h,
       body: JSON.stringify({ path: filePath }),
     });
-    if (!res.ok) return `${baseUrl}/files/${filePath}`;
+    if (!res.ok) throw new Error(`Sign failed: ${res.status}`);
     const { url } = await res.json();
     return `${baseUrl}${url}`;
   }, [baseUrl, authHeaders]);
