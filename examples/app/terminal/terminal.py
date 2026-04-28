@@ -29,7 +29,10 @@ sandbox = (
     .tmpfs("/tmp").dev("/dev").proc("/proc")
     .clearenv()
     .setenv(
-        PATH="/usr/local/bin:/usr/bin:/bin",
+        # ~/.local/bin first so packages installed by `pip install` (which
+        # auto-falls-back to --user when /usr is ro) put their CLI entry
+        # points on PATH.
+        PATH="/workspace/.local/bin:/usr/local/bin:/usr/bin:/bin",
         HOME="/workspace",
         TERM="xterm-256color",
         LANG="C.UTF-8",
@@ -40,7 +43,8 @@ sandbox = (
     # and most users want curl/pip/git anyway. Flip to .network(False) in prod
     # if you want strict egress isolation.
     .network(True)
-    .timeout(10)
+    # Long enough for a fresh `pip install numpy` over a slow link.
+    .timeout(120)
 )
 
 
