@@ -4,7 +4,7 @@ from urllib.parse import parse_qs, urlparse
 import cycls
 from cycls.app import App
 from cycls.app.auth import User
-from cycls.app.workspace import workspace_at, subject_for
+from cycls.app.tenancy import workspace_at, subject_for
 
 
 def test_app_decorator_returns_app():
@@ -96,7 +96,7 @@ def test_subject_org_member():
 
 def test_workspace_for_subject_inverse(tmp_path):
     """`workspace_at(subject_for(u))` reproduces `workspace_for(u)`."""
-    from cycls.app.workspace import workspace_for
+    from cycls.app.tenancy import workspace_for
     for u in [User(id="user_abc"), User(id="user_abc", org_id="org_xyz")]:
         ws_a = workspace_for(u, tmp_path)
         ws_b = workspace_at(subject_for(u), tmp_path)

@@ -278,7 +278,7 @@ def _share_test_app(tmp_path):
     from fastapi import Depends, FastAPI
     from fastapi.testclient import TestClient
     from cycls.app.auth import User
-    from cycls.app.workspace import workspace_for
+    from cycls.app.tenancy import workspace_for
     from cycls.agent.web.routers import share_router
 
     import cycls
@@ -299,7 +299,7 @@ def _share_test_app(tmp_path):
 def test_share_router_mint_and_resolve(tmp_path):
     """POST /share mints a signed URL; GET /shared/data?... returns the chat."""
     from cycls.agent import chat
-    from cycls.app.workspace import workspace_for
+    from cycls.app.tenancy import workspace_for
     from cycls.app.auth import User
     import asyncio
 
@@ -332,7 +332,7 @@ def test_share_router_mint_and_resolve(tmp_path):
 
 def test_share_router_rejects_tampered_url(tmp_path):
     from cycls.agent import chat
-    from cycls.app.workspace import workspace_for
+    from cycls.app.tenancy import workspace_for
     from cycls.app.auth import User
     import asyncio
 
@@ -355,7 +355,7 @@ def test_share_router_unknown_chat_404(tmp_path):
 
 def test_share_router_list_and_delete(tmp_path):
     from cycls.agent import chat
-    from cycls.app.workspace import workspace_for
+    from cycls.app.tenancy import workspace_for
     import asyncio
 
     svc, user, client = _share_test_app(tmp_path)
@@ -376,7 +376,7 @@ def test_files_sign_mints_signed_url(tmp_path):
     from fastapi import Depends, FastAPI
     from fastapi.testclient import TestClient
     from cycls.app.auth import User
-    from cycls.app.workspace import workspace_for
+    from cycls.app.tenancy import workspace_for
     from cycls.agent.web.routers import files_router, share_router
     import cycls
 
@@ -552,7 +552,7 @@ def test_context_workspace_uses_config_volume():
     """Config.volume threads into Context.workspace() at per-request construction."""
     from fastapi.testclient import TestClient
     from pathlib import Path
-    from cycls.app.workspace import Workspace
+    from cycls.app.tenancy import Workspace
 
     captured = {}
     async def handler(context):

@@ -29,7 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cycls.app.db import DB
-from cycls.app.workspace import workspace_at
+from cycls.app.tenancy import workspace_at
 from cycls.agent import chat
 
 
