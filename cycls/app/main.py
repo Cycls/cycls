@@ -10,6 +10,7 @@ from cycls.function import Function, _get_api_key, _get_base_url
 from cycls.app.auth import JWT, make_validate
 from cycls.app.db import workspace_for
 from cycls.app.sandbox import Sandbox
+from cycls.app import signing
 
 CYCLS_PATH = importlib.resources.files("cycls")
 
@@ -90,6 +91,29 @@ class App(Function):
         if self._sandbox is None:
             raise RuntimeError("App.sandbox requires sandbox=... on the @cycls.app decorator")
         return self._sandbox
+
+    @cached_property
+    def signing_key(self) -> bytes:
+        """HMAC secret persisted in the deployment's bucket so all pods share
+        it across restarts. First boot generates 32 bytes; subsequent reads
+        return the same key. Delete the file and redeploy to rotate."""
+        path = self.volume / ".cycls" / "signing.key"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            return path.read_bytes()
+        key = signing.new_secret()
+        path.write_bytes(key)
+        return key
+
+    def signed_url(self, path: str, user_id: str, ttl: int = 3600) -> str:
+        """Return a signed `/shared?path=&user=&exp=&sig=` URL granting
+        access to *path* in *user_id*'s workspace for *ttl* seconds."""
+        params = signing.sign(path, user_id, self.signing_key, ttl=ttl)
+        return f"/shared?{signing.query_string(params)}"
+
+    def verify_signed(self, path: str, user_id: str, exp, sig: str) -> bool:
+        """True if (path, user_id, exp, sig) is a valid, unexpired signature."""
+        return signing.verify(path, user_id, exp, sig, self.signing_key)
 
     # ---- Lifecycle ----
 
