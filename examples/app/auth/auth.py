@@ -21,7 +21,7 @@ from uuid import uuid4
 
 import cycls
 from cycls.app.auth import User
-from cycls.app.db import Workspace, workspace_for
+from cycls.app.workspace import Workspace, workspace_for
 
 HTML_PATH = str(Path(__file__).parent / "auth.html")
 
