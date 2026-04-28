@@ -1,18 +1,20 @@
 """HTTP routers for the agent's state surface — chats, files, share.
 
 Chat metadata + message log live in one KV (`KV("chat", workspace)`) — see
-`cycls.agent.chat`. Files and share dirs stay on the workspace filesystem
-(they're POSIX-shaped). Path safety guards live here too.
+`cycls.agent.chat`. Files stay on the workspace filesystem (they're POSIX-
+shaped). Public shares are stateless HMAC-signed URLs (`/shared?path=&user=
+&exp=&sig=`) — the signature *is* the proof of access; no server-side share
+record is consulted on read.
 """
-import os, shutil, unicodedata
+import os, shutil, time, unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 
-from cycls.app.db import Workspace, workspace_for
-from cycls.agent import chat, share
+from cycls.app.db import DB, Workspace, subject_for, workspace_for, workspace_for_subject
+from cycls.agent import chat
 
 
 # ---- Path safety ----
@@ -159,63 +161,99 @@ def files_router(ws_dep):
 
 # ---- Share ----
 
-def share_router(ws_dep, volume):
+def share_router(cycls_app, ws_dep, user_dep, volume, bucket):
+    """Live shares — `POST /share` mints a signed URL bound to (chat_id, owner,
+    exp); `/shared/data` and `/shared/file/...` resolve that URL with no auth
+    lookup, only HMAC verification. Owner-side `/share` index is kept for the
+    "your shared chats" UI but is not consulted on read."""
     r = APIRouter()
 
+    SHARE_TTL = 7 * 24 * 3600
+
     @r.post("/share")
-    async def create_share(request: Request, ws: Workspace = ws_dep):
+    async def create_share(request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
         data = await request.json()
-        messages = data.get("messages")
-        if not messages:
-            raise HTTPException(status_code=400, detail="messages required")
-        share_id, _ = await share.create_share(
-            ws, volume,
-            messages=messages,
-            title=data.get("title", ""),
-            author=data.get("author"),
-        )
-        return {"id": share_id, "path": share_id}
+        chat_id = data.get("chat_id") or data.get("id")
+        if not chat_id:
+            raise HTTPException(status_code=400, detail="chat_id required")
+        if (await chat.get_meta(ws, chat_id)) is None:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        url = cycls_app.signed_url(f"chat/{chat_id}", user, ttl=SHARE_TTL)
+        meta = {
+            "id": chat_id,
+            "title": data.get("title", ""),
+            "author": data.get("author"),
+            "sharedAt": datetime.now(timezone.utc).isoformat(),
+            "url": url,
+        }
+        await DB(ws).kv("share").put(chat_id, meta)
+        return meta
 
     @r.get("/share")
     async def list_shares(ws: Workspace = ws_dep):
         items = []
-        async for sid, meta in share.list_shares(ws):
-            items.append({
-                "id": meta.get("id", sid),
-                "title": meta.get("title", ""),
-                "sharedAt": meta.get("sharedAt", ""),
-                "path": meta.get("id", sid),
-            })
+        async for _, meta in DB(ws).kv("share").items():
+            items.append(meta)
         items.sort(key=lambda s: s.get("sharedAt", ""), reverse=True)
         return items
 
-    @r.get("/share/{share_id}")
-    async def get_share(share_id: str):
-        snap = share.read_snapshot(volume, share_id)
-        if snap is None:
-            raise HTTPException(status_code=404, detail="Not found")
-        return snap
-
-    @r.get("/shared-assets/{share_id}/{filename}")
-    async def get_shared_asset(share_id: str, filename: str):
-        p = share.asset_path(volume, share_id, filename)
-        if p is None:
-            raise HTTPException(status_code=404, detail="Not found")
-        return FileResponse(p)
-
-    @r.delete("/share/{share_id}")
-    async def delete_share(share_id: str, ws: Workspace = ws_dep):
-        if not await share.is_owner(ws, share_id):
-            raise HTTPException(status_code=404, detail="Not found")
-        await share.delete_share(ws, volume, share_id)
+    @r.delete("/share/{chat_id}")
+    async def delete_share(chat_id: str, ws: Workspace = ws_dep):
+        """Drop the chat from the owner's share index. Existing signed URLs
+        keep working until their `exp` — for instant revocation, delete the
+        signing key from the bucket and redeploy (rotates all live shares)."""
+        await DB(ws).kv("share").delete(chat_id)
         return {"ok": True}
+
+    @r.get("/shared/data")
+    async def shared_data(path: str, user: str, exp: int, sig: str):
+        if not cycls_app.verify_signed(path, user, exp, sig):
+            raise HTTPException(status_code=403, detail="Invalid or expired link")
+        if not path.startswith("chat/"):
+            raise HTTPException(status_code=400, detail="Unsupported share path")
+        chat_id = path[len("chat/"):]
+        ws = workspace_for_subject(user, volume, bucket)
+        meta = await chat.get_meta(ws, chat_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        share_meta = await DB(ws).kv("share").get(chat_id) or {}
+        raw = await chat.load_messages(ws, chat_id)
+        messages = chat.to_ui_messages(raw)
+        # Mint per-attachment signed URLs with the same expiry, so the public
+        # viewer can load them without re-deriving signatures client-side.
+        remaining = max(60, int(exp) - int(time.time()))
+        for m in messages:
+            for att in m.get("attachments") or []:
+                ap = att.get("path")
+                if ap:
+                    att["url"] = cycls_app.signed_url(f"file/{ap}", user, ttl=remaining)
+        return {
+            "id": chat_id,
+            "title": share_meta.get("title") or meta.get("title", ""),
+            "author": share_meta.get("author"),
+            "sharedAt": share_meta.get("sharedAt"),
+            "messages": messages,
+        }
+
+    @r.get("/shared/file/{file_path:path}")
+    async def shared_file(file_path: str, user: str, exp: int, sig: str):
+        if not cycls_app.verify_signed(f"file/{file_path}", user, exp, sig):
+            raise HTTPException(status_code=403, detail="Invalid or expired link")
+        ws = workspace_for_subject(user, volume, bucket)
+        try:
+            target = resolve_path(ws.root, file_path)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Path traversal denied")
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        return FileResponse(target)
 
     return r
 
 
 # ---- Mount ----
 
-def install_routers(app, required_auth, volume, bucket):
+def install_routers(cycls_app, app, required_auth, volume, bucket):
     """Mount chats, files, and share routers on a FastAPI app. The workspace
     is built once per request via FastAPI's Depends — endpoints don't see
     volume/bucket directly."""
@@ -224,4 +262,4 @@ def install_routers(app, required_auth, volume, bucket):
     ws_dep = Depends(_build_ws)
     app.include_router(chats_router(ws_dep))
     app.include_router(files_router(ws_dep))
-    app.include_router(share_router(ws_dep, volume))
+    app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, bucket))

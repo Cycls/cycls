@@ -4,7 +4,6 @@ from pydantic import BaseModel
 from typing import Optional, Any
 from cycls.app.auth import User, make_validate
 from cycls.app.db import Workspace, workspace_for
-from cycls.agent import share as share_mod
 
 
 class PassMetadata(BaseModel):
@@ -212,30 +211,12 @@ def web(func, config, extra_routers=None):
         from .og import generate as og_generate
         return Response(await og_generate(og_title, config.title or ""), media_type="image/png")
 
-    @app.get("/og/{share_id}.png")
-    async def og_shared_image(share_id: str):
-        from .og import generate as og_generate
-        snap = share_mod.read_snapshot(volume, share_id)
-        if snap:
-            title = snap.get("title") or "Shared conversation"
-            author = snap.get("author") or {}
-            avatars = [u for u in [author.get("org", {}).get("imageUrl"), author.get("imageUrl")] if u]
-            return Response(await og_generate(og_title, title, avatars=avatars), media_type="image/png")
-        return Response(await og_generate(og_title, config.title or ""), media_type="image/png")
-
     # ---- SPA fallback routes (before static mounts) ----
 
     @app.get("/")
     @app.get("/sso-callback")
+    @app.get("/shared")
     async def index():
-        return HTMLResponse(_index_html)
-
-    @app.get("/shared/{share_id:path}")
-    async def shared_page(share_id: str):
-        snap = share_mod.read_snapshot(volume, share_id)
-        if snap:
-            title = snap.get("title") or "Shared conversation"
-            return HTMLResponse(_seo_html(app_title, title).replace("/og.png", f"/og/{share_id}.png"))
         return HTMLResponse(_index_html)
 
     # ---- Static mounts (must be last) ----

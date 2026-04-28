@@ -268,6 +268,108 @@ def test_chat_completions_endpoint_openai_format():
     print("✅ Test passed.")
 
 
+# =============================================================================
+# Signed-URL share flow (live shares, no frozen snapshot)
+# =============================================================================
+
+def _share_test_app(tmp_path):
+    """Mount POST /share + GET /shared/data on a FastAPI app, with a fixed
+    in-process User and a real cycls.App for signing. No live JWT verification."""
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+    from cycls.app.auth import User
+    from cycls.app.db import workspace_for
+    from cycls.agent.web.routers import share_router
+
+    import cycls
+
+    @cycls.app(image={"volume": str(tmp_path)})
+    def svc():
+        return None
+
+    user = User(id="user_test")
+    user_dep = Depends(lambda: user)
+    ws_dep = Depends(lambda: workspace_for(user, tmp_path))
+
+    fapp = FastAPI()
+    fapp.include_router(share_router(svc, ws_dep, user_dep, tmp_path, None))
+    return svc, user, TestClient(fapp)
+
+
+def test_share_router_mint_and_resolve(tmp_path):
+    """POST /share mints a signed URL; GET /shared/data?... returns the chat."""
+    from cycls.agent import chat
+    from cycls.app.db import workspace_for
+    from cycls.app.auth import User
+    import asyncio
+
+    svc, user, client = _share_test_app(tmp_path)
+    ws = workspace_for(user, tmp_path)
+
+    async def seed():
+        await chat.put_meta(ws, "c1", {"id": "c1", "title": "First chat"})
+        await chat.append_messages(ws, "c1", [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello there"},
+        ], 0)
+    asyncio.run(seed())
+
+    r = client.post("/share", json={"chat_id": "c1", "title": "Shared chat"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["id"] == "c1"
+    assert body["url"].startswith("/shared?")
+
+    # The page URL is /shared?...; the SPA derives the data URL by inserting /data.
+    data_url = body["url"].replace("/shared?", "/shared/data?")
+    r2 = client.get(data_url)
+    assert r2.status_code == 200, r2.text
+    data = r2.json()
+    assert data["id"] == "c1"
+    assert data["title"] == "Shared chat"
+    assert [m["content"] for m in data["messages"]] == ["hi", "hello there"]
+
+
+def test_share_router_rejects_tampered_url(tmp_path):
+    from cycls.agent import chat
+    from cycls.app.db import workspace_for
+    from cycls.app.auth import User
+    import asyncio
+
+    svc, user, client = _share_test_app(tmp_path)
+    ws = workspace_for(user, tmp_path)
+    asyncio.run(chat.put_meta(ws, "c1", {"id": "c1", "title": "T"}))
+
+    url = client.post("/share", json={"chat_id": "c1"}).json()["url"]
+    data_url = url.replace("/shared?", "/shared/data?")
+    # Swap chat path — sig no longer matches
+    bad = data_url.replace("path=chat%2Fc1", "path=chat%2Fother")
+    assert client.get(bad).status_code == 403
+
+
+def test_share_router_unknown_chat_404(tmp_path):
+    svc, user, client = _share_test_app(tmp_path)
+    r = client.post("/share", json={"chat_id": "missing"})
+    assert r.status_code == 404
+
+
+def test_share_router_list_and_delete(tmp_path):
+    from cycls.agent import chat
+    from cycls.app.db import workspace_for
+    import asyncio
+
+    svc, user, client = _share_test_app(tmp_path)
+    ws = workspace_for(user, tmp_path)
+    asyncio.run(chat.put_meta(ws, "c1", {"id": "c1", "title": "T"}))
+
+    client.post("/share", json={"chat_id": "c1", "title": "T"})
+    listed = client.get("/share").json()
+    assert [s["id"] for s in listed] == ["c1"]
+
+    client.delete("/share/c1")
+    assert client.get("/share").json() == []
+
+
 def test_sync_agent_function():
     """Tests that sync generator functions work with web app."""
     print("\n--- Running test: test_sync_agent_function ---")
