@@ -121,7 +121,12 @@ def _enc(name, key):
 
 class _BaseKV:
     """Shared get/put/delete/items. Subclasses provide `_handle()` — an async
-    context manager yielding a Db or DbTransaction."""
+    context manager yielding a Db or DbTransaction.
+
+    `put`/`delete` here use the plain (no-options) form supported by both
+    Db and DbTransaction. KV overrides them with non-durable WriteOptions
+    (Db only); _TxKV inherits the plain form because durability is at
+    commit time, not per-op."""
 
     def __init__(self, name):
         self._name = name
