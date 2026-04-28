@@ -27,7 +27,7 @@ image = (cycls.Image()
     .copy(HTML_PATH, "bun.html")
     .apt("curl", "unzip")
     # Install Bun and symlink so it's on PATH for our subprocess.
-    .run("curl -fsSL https://bun.sh/install | bash -s -- --no-modify-path "
+    .run("curl -fsSL https://bun.sh/install | bash "
          "&& ln -sf /root/.bun/bin/bun /usr/local/bin/bun"))
 
 
