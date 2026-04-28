@@ -118,12 +118,17 @@ def test_signed_url_roundtrip_personal(tmp_path):
 
 
 def test_signed_url_roundtrip_org_member(tmp_path):
+    """File paths live in the URL path (so the browser hits the binary route);
+    signature still binds the literal `file/<path>` string."""
     app = _app(tmp_path)
     user = User(id="user_abc", org_id="org_xyz")
     url = app.signed_url("file/notes.md", user, ttl=3600)
-    q = parse_qs(urlparse(url).query)
+    parsed = urlparse(url)
+    assert parsed.path == "/shared/file/notes.md"
+    q = parse_qs(parsed.query)
     assert q["user"] == ["org_xyz/user_abc"]
-    assert app.verify_signed(q["path"][0], q["user"][0], int(q["exp"][0]), q["sig"][0])
+    assert "path" not in q
+    assert app.verify_signed("file/notes.md", q["user"][0], int(q["exp"][0]), q["sig"][0])
 
 
 def test_signed_url_tampering_fails(tmp_path):

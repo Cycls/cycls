@@ -401,14 +401,9 @@ def test_files_sign_mints_signed_url(tmp_path):
     r = client.post("/files/sign", json={"path": "doc.md"})
     assert r.status_code == 200
     url = r.json()["url"]
-    assert url.startswith("/shared?path=file%2Fdoc.md")
+    assert url.startswith("/shared/file/doc.md?")
 
-    # /shared/file/<path> is the actual binary endpoint; SPA strips the prefix
-    file_url = url.replace("/shared?", "/shared/file/doc.md?", 1)
-    # Drop the path= param since file path is already in the URL path
-    import re
-    file_url = re.sub(r"path=file%2F[^&]+&?", "", file_url)
-    r2 = client.get(file_url)
+    r2 = client.get(url)
     assert r2.status_code == 200
     assert r2.content == b"hello world"
 
