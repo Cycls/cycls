@@ -7,7 +7,7 @@ import asyncio
 import pytest
 
 from cycls.app.db import DB
-from cycls.app.workspace import Workspace
+from cycls.app.workspace import workspace_at
 
 
 def _run(coro):
@@ -16,7 +16,7 @@ def _run(coro):
 
 @pytest.fixture
 def workspace(tmp_path):
-    return Workspace(tmp_path, "tenant")
+    return workspace_at("tenant", tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -24,33 +24,33 @@ def workspace(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_workspace_personal_data_path(tmp_path):
-    ws = Workspace(tmp_path, "user")
-    assert ws.data == tmp_path / "user" / ".cycls"
+    ws = workspace_at("user", tmp_path)
+    assert ws.url == f"file://{tmp_path / 'user' / '.cycls'}"
 
 
 def test_workspace_org_data_path(tmp_path):
     """Org members nest under .cycls/{user_id} so a shared mount stays isolated."""
-    ws = Workspace(tmp_path, "org/member_1")
-    assert ws.data == tmp_path / "org" / ".cycls" / "member_1"
+    ws = workspace_at("org/member_1", tmp_path)
+    assert ws.url == f"file://{tmp_path / 'org' / '.cycls' / 'member_1'}"
 
 
 def test_workspace_url_file_fallback(tmp_path):
     """No bucket → file:// to data path."""
-    ws = Workspace(tmp_path, "user")
-    url = ws.url()
+    ws = workspace_at("user", tmp_path)
+    url = ws.url
     assert url.startswith("file://")
     assert url.endswith("/.cycls")
 
 
 def test_workspace_url_with_bucket(tmp_path):
     """bucket=... → object-store URL with tenant-relative path appended."""
-    ws = Workspace(tmp_path, "user", bucket="gs://cycls-ws-myagent")
-    assert ws.url() == "gs://cycls-ws-myagent/user/.cycls"
+    ws = workspace_at("user", tmp_path, bucket="gs://cycls-ws-myagent")
+    assert ws.url == "gs://cycls-ws-myagent/user/.cycls"
 
 
 def test_workspace_url_with_bucket_org(tmp_path):
-    ws = Workspace(tmp_path, "org/member_1", bucket="gs://cycls-ws-myagent")
-    assert ws.url() == "gs://cycls-ws-myagent/org/.cycls/member_1"
+    ws = workspace_at("org/member_1", tmp_path, bucket="gs://cycls-ws-myagent")
+    assert ws.url == "gs://cycls-ws-myagent/org/.cycls/member_1"
 
 
 # ---------------------------------------------------------------------------

@@ -21,7 +21,7 @@ from uuid import uuid4
 
 import cycls
 from cycls.app.auth import User
-from cycls.app.workspace import Workspace, workspace_for
+from cycls.app.workspace import Workspace, workspace_at, workspace_for
 
 HTML_PATH = str(Path(__file__).parent / "auth.html")
 
@@ -56,7 +56,7 @@ def auth_app():
     TTL = 7 * 24 * 3600
 
     # One global user store for the whole deployment.
-    users_ws = Workspace(auth_app.volume, "_users", bucket=auth_app.bucket)
+    users_ws = workspace_at("_users", auth_app.volume, auth_app.bucket)
     users = cycls.DB(users_ws).kv("users")
 
     def issue_token(user_id: str) -> str:

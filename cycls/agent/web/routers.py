@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 
 from cycls.app.db import DB
-from cycls.app.workspace import Workspace, workspace_for
+from cycls.app.workspace import Workspace, workspace_at, workspace_for
 from cycls.agent import chat
 
 
@@ -225,7 +225,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, bucket):
         if not path.startswith("chat/"):
             raise HTTPException(status_code=400, detail="Unsupported share path")
         chat_id = path[len("chat/"):]
-        ws = Workspace(volume, user, bucket=bucket)
+        ws = workspace_at(user, volume, bucket)
         meta = await chat.get_meta(ws, chat_id)
         if meta is None:
             raise HTTPException(status_code=404, detail="Chat not found")
@@ -252,7 +252,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, bucket):
     async def shared_file(file_path: str, user: str, exp: int, sig: str):
         if not cycls_app.verify_signed(f"file/{file_path}", user, exp, sig):
             raise HTTPException(status_code=403, detail="Invalid or expired link")
-        ws = Workspace(volume, user, bucket=bucket)
+        ws = workspace_at(user, volume, bucket)
         try:
             target = resolve_path(ws.root, file_path)
         except ValueError:
