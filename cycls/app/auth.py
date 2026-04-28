@@ -104,7 +104,11 @@ def make_validate(get_jwks_url):
         request: Request,
         bearer: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
     ) -> User:
-        token = bearer.credentials if bearer else request.query_params.get("token")
+        # Prefer the URL-pinned `?token=` over the Authorization header — the
+        # query token is the one the FE explicitly built for this request;
+        # if a stray Bearer is being injected upstream (proxies, service
+        # workers, cross-tab leaks), it shouldn't override.
+        token = request.query_params.get("token") or (bearer.credentials if bearer else None)
         if not token:
             raise HTTPException(401, "Not authenticated", headers={"WWW-Authenticate": "Bearer"})
         url = get_jwks_url()
