@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Local Auth</title>
+<style>
+  :root {
+    --bg:#fafaf9; --surface:#fff; --border:#e7e5e4; --muted:#78716c;
+    --fg:#1c1917; --accent:#0f172a; --soft:#f4f4f5; --err:#b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0c0a09; --surface:#171413; --border:#27241f; --muted:#a8a29e;
+            --fg:#f5f5f4; --accent:#f5f5f4; --soft:#1c1917; --err:#fca5a5; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font: 15px/1.55 -apple-system,system-ui,"Segoe UI",sans-serif;
+    background: var(--bg); color: var(--fg);
+    max-width: 480px; margin: 3em auto; padding: 0 1.25em;
+  }
+  h1 { font-weight: 300; font-size: 1.75em; letter-spacing: -0.02em; margin: 0 0 1em; }
+  .head { display: flex; justify-content: space-between; align-items: baseline; }
+  .who { color: var(--muted); font-size: 0.8em; font-family: ui-monospace, monospace; }
+  input, button {
+    font: inherit; padding: 0.6em 0.85em; border: 1px solid var(--border);
+    border-radius: 8px; background: var(--surface); color: var(--fg);
+    width: 100%; transition: border-color 0.15s, opacity 0.15s;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:hover { opacity: 0.8; }
+  button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  button.ghost { background: transparent; border: none; color: var(--muted);
+                 padding: 0.3em 0.5em; font-size: 0.85em; width: auto; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1.5em;
+  }
+  .row { display: flex; gap: 0.5em; }
+  .row > * { flex: 1; }
+  .stack > * + * { margin-top: 0.7em; }
+  .tabs { display: flex; gap: 0.5em; margin-bottom: 1.25em; border-bottom: 1px solid var(--border); }
+  .tabs button {
+    border: none; border-bottom: 2px solid transparent; border-radius: 0;
+    background: transparent; padding: 0.6em 0.2em; width: auto;
+    color: var(--muted);
+  }
+  .tabs button.active { color: var(--fg); border-bottom-color: var(--accent); }
+  .err { color: var(--err); font-size: 0.85em; margin-top: 0.5em; }
+  .note {
+    border-bottom: 1px solid var(--border); padding: 0.7em 0; font-size: 0.95em;
+  }
+  .note:last-child { border: none; }
+  .meta { color: var(--muted); font-size: 0.75em; margin-top: 0.2em; }
+  .empty { color: var(--muted); text-align: center; padding: 1.5em 0; font-size: 0.85em; }
+</style>
+</head>
+<body>
+<div id="app">Loading…</div>
+
+<script>
+const TOKEN_KEY = "cycls_local_token";
+const EMAIL_KEY = "cycls_local_email";
+
+const el = (tag, props = {}, ...kids) => {
+  const e = Object.assign(document.createElement(tag), props);
+  kids.flat().forEach(k => k != null && e.append(k));
+  return e;
+};
+
+async function api(method, path, body) {
+  const headers = { "Content-Type": "application/json" };
+  const t = localStorage.getItem(TOKEN_KEY);
+  if (t) headers.Authorization = "Bearer " + t;
+  const res = await fetch(path, { method, headers, body: body && JSON.stringify(body) });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => ({}))).detail || res.statusText;
+    throw new Error(detail);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+function renderAuth() {
+  const root = document.getElementById("app");
+  root.innerHTML = "";
+
+  let mode = "login"; // or "signup"
+  const email = el("input", { type: "email", placeholder: "you@example.com", autocomplete: "email" });
+  const password = el("input", { type: "password", placeholder: "••••••••", autocomplete: "current-password" });
+  const errEl = el("div", { className: "err" });
+
+  const submit = el("button", { className: "primary" });
+  const tabs = el("div", { className: "tabs" });
+  const loginTab = el("button", { onclick: () => switchMode("login") }, "Sign in");
+  const signupTab = el("button", { onclick: () => switchMode("signup") }, "Sign up");
+  tabs.append(loginTab, signupTab);
+
+  function switchMode(m) {
+    mode = m;
+    loginTab.classList.toggle("active", m === "login");
+    signupTab.classList.toggle("active", m === "signup");
+    submit.textContent = m === "login" ? "Sign in" : "Create account";
+    password.autocomplete = m === "login" ? "current-password" : "new-password";
+    errEl.textContent = "";
+  }
+  switchMode("login");
+
+  async function go() {
+    errEl.textContent = "";
+    if (!email.value || !password.value) { errEl.textContent = "Email + password required"; return; }
+    submit.disabled = true;
+    try {
+      const r = await api("POST", "/" + mode, { email: email.value, password: password.value });
+      localStorage.setItem(TOKEN_KEY, r.token);
+      localStorage.setItem(EMAIL_KEY, r.email);
+      renderHome();
+    } catch (e) {
+      errEl.textContent = e.message;
+    } finally {
+      submit.disabled = false;
+    }
+  }
+  submit.onclick = go;
+  for (const inp of [email, password]) {
+    inp.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+  }
+
+  root.append(
+    el("h1", {}, "Welcome"),
+    el("div", { className: "card" },
+      tabs,
+      el("div", { className: "stack" }, email, password, submit, errEl),
+    ),
+    el("div", { className: "meta", style: "margin-top: 1em; text-align: center;" },
+      "Self-hosted auth. JWT + scrypt + SlateDB."),
+  );
+}
+
+async function renderHome() {
+  const root = document.getElementById("app");
+  root.innerHTML = "";
+
+  let user;
+  try {
+    user = await api("GET", "/me");
+  } catch {
+    localStorage.removeItem(TOKEN_KEY);
+    return renderAuth();
+  }
+
+  const noteInput = el("input", { placeholder: "write a note…" });
+  const list = el("div");
+
+  async function refresh() {
+    const notes = await api("GET", "/notes");
+    list.innerHTML = "";
+    if (!notes.length) {
+      list.append(el("div", { className: "empty" }, "no notes yet"));
+      return;
+    }
+    notes.sort((a, b) => b.at.localeCompare(a.at));
+    for (const n of notes) {
+      list.append(el("div", { className: "note" },
+        el("div", {}, n.text || "(empty)"),
+        el("div", { className: "meta" }, new Date(n.at).toLocaleString()),
+      ));
+    }
+  }
+  async function add() {
+    const text = noteInput.value.trim();
+    if (!text) return;
+    await api("POST", "/notes", { text });
+    noteInput.value = "";
+    await refresh();
+  }
+  noteInput.addEventListener("keydown", e => { if (e.key === "Enter") add(); });
+
+  root.append(
+    el("div", { className: "head" },
+      el("h1", {}, "Notes"),
+      el("div", {},
+        el("span", { className: "who" }, localStorage.getItem(EMAIL_KEY) || user.id),
+        el("button", { className: "ghost", onclick: () => {
+          localStorage.removeItem(TOKEN_KEY);
+          localStorage.removeItem(EMAIL_KEY);
+          renderAuth();
+        }}, "sign out"),
+      ),
+    ),
+    el("div", { className: "card" },
+      el("div", { className: "stack" }, noteInput, el("button", { className: "primary", onclick: add }, "Add note")),
+    ),
+    el("div", { className: "card", style: "margin-top: 1em;" }, list),
+    el("div", { className: "meta", style: "margin-top: 1em; text-align: center;" },
+      "user_id: " + user.id),
+  );
+
+  await refresh();
+}
+
+if (localStorage.getItem(TOKEN_KEY)) renderHome();
+else renderAuth();
+</script>
+</body>
+</html>
