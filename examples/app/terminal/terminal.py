@@ -79,7 +79,7 @@ def terminal():
     async def run_cmd(body: CmdIn, ws=terminal.workspace):
         ws.root.mkdir(parents=True, exist_ok=True)
         sb = terminal.sandbox.bind(str(ws.root), "/workspace").chdir("/workspace")
-        r = await sb.run(["bash", "-lc", body.cmd])
+        r = await sb.run(["bash", "-c", body.cmd])
         entry = {
             "cmd": body.cmd,
             "output": r.output,
