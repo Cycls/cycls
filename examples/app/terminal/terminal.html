@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Terminal</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #0c0a09; color: #f5f5f4;
+    font: 13px ui-monospace, "SF Mono", Menlo, monospace; }
+  body { display: flex; flex-direction: column; }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.55em 1em; background: #171413;
+    border-bottom: 1px solid #27241f; flex: 0 0 auto;
+  }
+  header strong { font-weight: 500; letter-spacing: 0.02em; }
+  header .who { color: #a8a29e; margin-left: 0.6em; font-size: 0.9em; }
+  header .actions { display: flex; gap: 0.5em; }
+  header button {
+    background: transparent; color: #a8a29e; border: 1px solid #27241f;
+    padding: 0.3em 0.7em; border-radius: 6px; cursor: pointer;
+    font: inherit; transition: color 0.15s, border-color 0.15s;
+  }
+  header button:hover { color: #f5f5f4; border-color: #57534e; }
+  #terminal { flex: 1 1 auto; padding: 0.4em 0.75em; min-height: 0; }
+  .auth { max-width: 360px; margin: 4em auto; padding: 2em; }
+  .err { color: #fca5a5; padding: 1em; }
+  .xterm-viewport::-webkit-scrollbar { width: 8px; }
+  .xterm-viewport::-webkit-scrollbar-thumb { background: #27241f; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div id="root" style="height:100%">Loading…</div>
+
+<script async crossorigin="anonymous"
+  src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js"
+  data-clerk-publishable-key="__CLERK_PK__">
+</script>
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+
+<script>
+const PROMPT = "\x1b[32m$\x1b[0m ";
+const ERR = (m) => "\x1b[31m" + m + "\x1b[0m";
+const nlify = (s) => (s || "").replace(/\r?\n/g, "\r\n");
+
+async function api(method, path, body) {
+  const t = await Clerk.session.getToken();
+  const opts = { method, headers: { Authorization: "Bearer " + t } };
+  if (body !== undefined) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  if (!res.ok) throw new Error(method + " " + path + " → " + res.status);
+  return res.status === 204 ? null : res.json();
+}
+
+function isPrintable(s) {
+  return s.length === 1 && s.charCodeAt(0) >= 32 && s.charCodeAt(0) !== 127;
+}
+
+async function startTerm(user) {
+  const root = document.getElementById("root");
+  root.innerHTML = `
+    <header>
+      <div><strong>terminal</strong><span class="who">${user.id.slice(0, 14)}…</span></div>
+      <div class="actions">
+        <button id="clear">clear history</button>
+        <button id="signout">sign out</button>
+      </div>
+    </header>
+    <div id="terminal"></div>
+  `;
+
+  const term = new Terminal({
+    fontSize: 13,
+    fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
+    theme: { background: "#0c0a09", foreground: "#f5f5f4", cursor: "#f5f5f4",
+             selectionBackground: "#3f3f12" },
+    cursorBlink: true,
+    convertEol: true,
+    scrollback: 5000,
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(document.getElementById("terminal"));
+  fit.fit();
+  window.addEventListener("resize", () => fit.fit());
+
+  const past = await api("GET", "/history");
+  for (const e of past) {
+    term.write(PROMPT + e.cmd + "\r\n");
+    if (e.output) term.write(nlify(e.output));
+    if (e.timed_out) term.write(ERR("[timed out]") + "\r\n");
+  }
+
+  let buf = "";
+  let hist = past.map(e => e.cmd);
+  let hi = hist.length;
+  let busy = false;
+
+  const promptLine = () => { term.write(PROMPT); buf = ""; };
+  const replaceLine = (s) => { term.write("\r\x1b[K" + PROMPT + s); buf = s; };
+
+  promptLine();
+
+  term.onData(async (data) => {
+    if (busy) return;
+    if (data === "\r") {
+      term.write("\r\n");
+      const cmd = buf.trim();
+      if (!cmd) return promptLine();
+      hist.push(cmd); hi = hist.length;
+      busy = true;
+      try {
+        const e = await api("POST", "/run", { cmd });
+        if (e.output) term.write(nlify(e.output));
+        if (e.timed_out) term.write(ERR("[timed out]") + "\r\n");
+      } catch (err) {
+        term.write(ERR(err.message) + "\r\n");
+      } finally {
+        busy = false;
+        promptLine();
+      }
+    } else if (data === "\x7f") {
+      if (buf.length > 0) { buf = buf.slice(0, -1); term.write("\b \b"); }
+    } else if (data === "\x1b[A") {
+      if (hi > 0) { hi--; replaceLine(hist[hi]); }
+    } else if (data === "\x1b[B") {
+      if (hi < hist.length - 1) { hi++; replaceLine(hist[hi]); }
+      else { hi = hist.length; replaceLine(""); }
+    } else if (data === "\x03") {
+      term.write("^C\r\n"); promptLine();
+    } else if (data === "\x0c") {
+      term.write("\x1b[2J\x1b[H"); term.write(PROMPT + buf);
+    } else if (isPrintable(data)) {
+      buf += data; term.write(data);
+    } else if (data.length > 1 && !data.startsWith("\x1b")) {
+      // paste
+      for (const ch of data) if (isPrintable(ch)) { buf += ch; term.write(ch); }
+    }
+  });
+
+  document.getElementById("clear").onclick = async () => {
+    if (!confirm("Clear command history? (Files in /workspace are kept.)")) return;
+    await api("DELETE", "/history");
+    term.clear(); hist = []; hi = 0;
+    promptLine();
+  };
+  document.getElementById("signout").onclick = () => Clerk.signOut().then(boot);
+}
+
+async function boot() {
+  await Clerk.load();
+  const root = document.getElementById("root");
+  if (!Clerk.user) {
+    root.innerHTML = '<div class="auth"></div>';
+    Clerk.mountSignIn(root.firstElementChild);
+    return;
+  }
+  try {
+    const user = await api("GET", "/me");
+    await startTerm(user);
+  } catch (e) {
+    root.innerHTML = '<div class="err">' + e.message + '</div>';
+  }
+}
+
+window.addEventListener("load", () => {
+  const wait = setInterval(() => {
+    if (window.Clerk && window.Terminal && window.FitAddon) {
+      clearInterval(wait); boot();
+    }
+  }, 50);
+});
+</script>
+</body>
+</html>
