@@ -39,7 +39,8 @@ def _read_history(ctx):
 
 def _make_context(ws):
     ctx = types.SimpleNamespace()
-    ctx.workspace = Workspace(Path(ws))
+    ws = Path(ws)
+    ctx.workspace = Workspace(ws.parent, ws.name)
     ctx.chat_id = "test-chat"
     user = types.SimpleNamespace()
     ctx.user = user

@@ -15,9 +15,7 @@ def _run(coro):
 
 @pytest.fixture
 def workspace(tmp_path):
-    ws_root = tmp_path / "tenant"
-    ws_root.mkdir()
-    return Workspace(ws_root)
+    return Workspace(tmp_path, "tenant")
 
 
 # ---------------------------------------------------------------------------
@@ -25,19 +23,19 @@ def workspace(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_workspace_personal_data_path(tmp_path):
-    ws = Workspace(tmp_path / "user")
+    ws = Workspace(tmp_path, "user")
     assert ws.data == tmp_path / "user" / ".cycls"
 
 
 def test_workspace_org_data_path(tmp_path):
     """Org members nest under .cycls/{user_id} so a shared mount stays isolated."""
-    ws = Workspace(tmp_path / "org", user_id="member_1")
+    ws = Workspace(tmp_path, "org/member_1")
     assert ws.data == tmp_path / "org" / ".cycls" / "member_1"
 
 
 def test_workspace_url_file_fallback(tmp_path):
     """No bucket → file:// to data path."""
-    ws = Workspace(tmp_path / "user")
+    ws = Workspace(tmp_path, "user")
     url = ws.url()
     assert url.startswith("file://")
     assert url.endswith("/.cycls")
@@ -45,12 +43,12 @@ def test_workspace_url_file_fallback(tmp_path):
 
 def test_workspace_url_with_bucket(tmp_path):
     """bucket=... → object-store URL with tenant-relative path appended."""
-    ws = Workspace(tmp_path / "user", bucket="gs://cycls-ws-myagent")
+    ws = Workspace(tmp_path, "user", bucket="gs://cycls-ws-myagent")
     assert ws.url() == "gs://cycls-ws-myagent/user/.cycls"
 
 
 def test_workspace_url_with_bucket_org(tmp_path):
-    ws = Workspace(tmp_path / "org", user_id="member_1", bucket="gs://cycls-ws-myagent")
+    ws = Workspace(tmp_path, "org/member_1", bucket="gs://cycls-ws-myagent")
     assert ws.url() == "gs://cycls-ws-myagent/org/.cycls/member_1"
 
 
