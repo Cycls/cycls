@@ -1,5 +1,6 @@
 import { useCallback, useRef } from "react";
 
+
 export function useAuthHeaders() {
   const getTokenRef = useRef<(() => Promise<string | null>) | null>(null);
 
@@ -16,10 +17,5 @@ export function useAuthHeaders() {
     return h;
   }, []);
 
-  const getToken = useCallback(async () => {
-    if (getTokenRef.current) return getTokenRef.current();
-    return null;
-  }, []);
-
-  return { setGetToken, authHeaders, getToken };
+  return { setGetToken, authHeaders };
 }

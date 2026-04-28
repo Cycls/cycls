@@ -77,7 +77,7 @@ export function Chat({
   onClear: () => void;
   onRetry?: () => void;
   onShare?: (title: string) => Promise<string>;
-  onListShares?: () => Promise<{ id: string; title: string; sharedAt: string; path: string }[]>;
+  onListShares?: () => Promise<{ id: string; title: string; sharedAt: string; url: string }[]>;
   onDeleteShare?: (id: string) => Promise<void>;
   onListChats?: () => Promise<{ id: string; title: string; updatedAt: string }[]>;
   onLoadChat?: (id: string) => Promise<void>;
@@ -127,7 +127,7 @@ export function Chat({
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
-  const [shares, setShares] = useState<{ id: string; title: string; sharedAt: string; path: string }[]>([]);
+  const [shares, setShares] = useState<{ id: string; title: string; sharedAt: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
   const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string }[]>([]);
   const [chatsLoading, setChatsLoading] = useState(false);
@@ -763,7 +763,7 @@ export function Chat({
                       <div className="divide-y divide-border">
                         {shares.map((s) => (
                           <div key={s.id} className="group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer"
-                            onClick={() => window.open(`/shared/${s.path}`, "_blank")}
+                            onClick={() => window.open(s.url, "_blank")}
                           >
                             <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
                               <svg className="size-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">

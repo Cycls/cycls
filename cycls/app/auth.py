@@ -101,21 +101,18 @@ def make_validate(get_jwks_url):
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
     def validate(
-        request: Request,
         bearer: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
     ) -> User:
-        # Prefer the URL-pinned `?token=` over the Authorization header — the
-        # query token is the one the FE explicitly built for this request;
-        # if a stray Bearer is being injected upstream (proxies, service
-        # workers, cross-tab leaks), it shouldn't override.
-        token = request.query_params.get("token") or (bearer.credentials if bearer else None)
-        if not token:
+        # Authorization header only. Native browser loads (img/anchor/window.open)
+        # that can't set headers go through HMAC-signed `/shared/...` URLs instead
+        # — see `App.signed_url`.
+        if not bearer:
             raise HTTPException(401, "Not authenticated", headers={"WWW-Authenticate": "Bearer"})
         url = get_jwks_url()
         if not url:
             raise HTTPException(500, "Auth not configured (missing JWKS URL)")
         try:
-            return verify_jwt(token, url)
+            return verify_jwt(bearer.credentials, url)
         except InvalidToken as e:
             raise HTTPException(401, str(e), headers={"WWW-Authenticate": "Bearer"})
 

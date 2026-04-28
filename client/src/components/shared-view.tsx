@@ -11,15 +11,17 @@ interface ShareData {
   messages: Message[];
 }
 
-export function SharedView({ path }: { path: string }) {
+export function SharedView() {
   const [data, setData] = useState<ShareData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`/share/${path}`)
+    // The pasted share URL is `/shared?path=&user=&exp=&sig=` — same params
+    // the SPA hands to the JSON endpoint to prove access.
+    fetch(`/shared/data${window.location.search}`)
       .then((res) => {
-        if (res.status === 403) throw new Error("This share is private");
+        if (res.status === 403) throw new Error("This share has expired");
         if (!res.ok) throw new Error("Share not found");
         return res.json();
       })
@@ -27,7 +29,7 @@ export function SharedView({ path }: { path: string }) {
         setData(d);
         document.title = d.title ? `Cycls | ${d.title}` : "Cycls";
         track("share_viewed", {
-          share_path: path,
+          chat_id: d.id,
           share_url: window.location.href,
           title: d.title,
           author_name: d.author?.name,
@@ -39,13 +41,12 @@ export function SharedView({ path }: { path: string }) {
       .catch((err) => {
         setError(err.message);
         track("share_view_failed", {
-          share_path: path,
           share_url: window.location.href,
           error: err.message,
         });
       })
       .finally(() => setLoading(false));
-  }, [path]);
+  }, []);
 
   if (loading) {
     return (

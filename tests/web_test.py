@@ -370,6 +370,69 @@ def test_share_router_list_and_delete(tmp_path):
     assert client.get("/share").json() == []
 
 
+def test_files_sign_mints_signed_url(tmp_path):
+    """POST /files/sign mints a signed URL to /shared/file/<path>; the URL serves
+    the actual file bytes when GET-ed back."""
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+    from cycls.app.auth import User
+    from cycls.app.db import workspace_for
+    from cycls.agent.web.routers import files_router, share_router
+    import cycls
+
+    @cycls.app(image={"volume": str(tmp_path)})
+    def svc():
+        return None
+
+    user = User(id="user_test")
+    user_dep = Depends(lambda: user)
+    ws_dep = Depends(lambda: workspace_for(user, tmp_path))
+
+    # Seed a file in the user's workspace root
+    ws = workspace_for(user, tmp_path)
+    ws.root.mkdir(parents=True, exist_ok=True)
+    (ws.root / "doc.md").write_text("hello world")
+
+    fapp = FastAPI()
+    fapp.include_router(files_router(svc, ws_dep, user_dep))
+    fapp.include_router(share_router(svc, ws_dep, user_dep, tmp_path, None))
+    client = TestClient(fapp)
+
+    r = client.post("/files/sign", json={"path": "doc.md"})
+    assert r.status_code == 200
+    url = r.json()["url"]
+    assert url.startswith("/shared?path=file%2Fdoc.md")
+
+    # /shared/file/<path> is the actual binary endpoint; SPA strips the prefix
+    file_url = url.replace("/shared?", "/shared/file/doc.md?", 1)
+    # Drop the path= param since file path is already in the URL path
+    import re
+    file_url = re.sub(r"path=file%2F[^&]+&?", "", file_url)
+    r2 = client.get(file_url)
+    assert r2.status_code == 200
+    assert r2.content == b"hello world"
+
+
+def test_make_validate_rejects_query_token(tmp_path):
+    """Regression: `?token=` in the query MUST NOT authenticate (Codespace proxy
+    can inject stray Bearers; URL tokens leak via logs/Referer). Bearer header only."""
+    from cycls.app.auth import make_validate
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+
+    validate = make_validate(lambda: "https://example.invalid/jwks")
+    fapp = FastAPI()
+
+    @fapp.get("/me")
+    def me(user=Depends(validate)):
+        return {"id": user.id}
+
+    client = TestClient(fapp)
+    # Anything in ?token= must be ignored — without an Authorization header, 401.
+    r = client.get("/me?token=anything")
+    assert r.status_code == 401
+
+
 def test_sync_agent_function():
     """Tests that sync generator functions work with web app."""
     print("\n--- Running test: test_sync_agent_function ---")

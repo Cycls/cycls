@@ -84,8 +84,20 @@ def chats_router(ws_dep):
 
 # ---- Files ----
 
-def files_router(ws_dep):
+def files_router(cycls_app, ws_dep, user_dep):
     r = APIRouter()
+
+    @r.post("/files/sign")
+    async def sign_file(request: Request, user: Any = user_dep):
+        """Mint a short-lived signed URL for a file in the caller's workspace.
+        Used when the FE needs a URL the browser can fetch natively (img src,
+        anchor href, window.open) — those don't accept Authorization headers."""
+        data = await request.json()
+        path = data.get("path")
+        if not path:
+            raise HTTPException(status_code=400, detail="path required")
+        ttl = int(data.get("ttl") or 3600)
+        return {"url": cycls_app.signed_url(f"file/{path}", user, ttl=ttl)}
 
     def _safe_path(workspace, rel):
         try:
@@ -261,5 +273,5 @@ def install_routers(cycls_app, app, required_auth, volume, bucket):
         return workspace_for(user, volume, bucket)
     ws_dep = Depends(_build_ws)
     app.include_router(chats_router(ws_dep))
-    app.include_router(files_router(ws_dep))
+    app.include_router(files_router(cycls_app, ws_dep, required_auth))
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, bucket))

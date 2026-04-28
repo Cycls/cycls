@@ -732,9 +732,8 @@ export default function App() {
     register({ theme: isDark ? "dark" : "light", language: lang });
   }, [isDark, lang]);
 
-  const sharedMatch = window.location.pathname.match(/^\/shared\/(.+)/);
-  if (sharedMatch) {
-    return <SharedView path={sharedMatch[1]} />;
+  if (window.location.pathname === "/shared") {
+    return <SharedView />;
   }
 
   if (loading) return null;

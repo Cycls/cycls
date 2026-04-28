@@ -13,7 +13,7 @@ export function useFiles(baseUrl: string = "") {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [path, setPath] = useState("");
   const [loading, setLoading] = useState(false);
-  const { setGetToken, authHeaders, getToken } = useAuthHeaders();
+  const { setGetToken, authHeaders } = useAuthHeaders();
 
   const list = useCallback(async (dir: string = "") => {
     setLoading(true);
@@ -94,10 +94,18 @@ export function useFiles(baseUrl: string = "") {
   }, [baseUrl, authHeaders]);
 
   const openFile = useCallback(async (filePath: string) => {
-    const token = await getToken();
-    if (token) return `${baseUrl}/files/${filePath}?token=${encodeURIComponent(token)}`;
-    return `${baseUrl}/files/${filePath}`;
-  }, [baseUrl, getToken]);
+    // Native browser loads (window.open, anchor href, img src) can't carry an
+    // Authorization header — mint a short-lived HMAC-signed URL instead.
+    const h = { "Content-Type": "application/json", ...(await authHeaders()) };
+    const res = await fetch(`${baseUrl}/files/sign`, {
+      method: "POST",
+      headers: h,
+      body: JSON.stringify({ path: filePath }),
+    });
+    if (!res.ok) return `${baseUrl}/files/${filePath}`;
+    const { url } = await res.json();
+    return `${baseUrl}${url}`;
+  }, [baseUrl, authHeaders]);
 
   return { entries, path, loading, list, upload, mkdir, rename, remove, openFile, setGetToken };
 }
