@@ -106,11 +106,18 @@ class App(Function):
         return key
 
     def signed_url(self, path: str, user, ttl: int = 3600) -> str:
-        """Return a signed `/shared?path=&user=&exp=&sig=` URL granting access
-        to *path* in *user*'s workspace for *ttl* seconds. *user* may be a User
-        object or a precomputed subject string (`subject_for(user)`)."""
+        """Return a signed URL granting access to *path* in *user*'s workspace
+        for *ttl* seconds. The URL shape depends on the path scheme:
+            chat/<id>   → /shared?path=...&user=...&exp=...&sig=...   (SPA page)
+            file/<path> → /shared/file/<path>?user=...&exp=...&sig=... (raw bytes)
+        Either way, the HMAC binds the literal *path* string."""
+        from urllib.parse import quote
         sub = user if isinstance(user, str) else subject_for(user)
         params = signing.sign(path, sub, self.signing_key, ttl=ttl)
+        if path.startswith("file/"):
+            params.pop("path")  # file path lives in the URL, not the query
+            rest = quote(path[len("file/"):], safe="/")
+            return f"/shared/file/{rest}?{signing.query_string(params)}"
         return f"/shared?{signing.query_string(params)}"
 
     def verify_signed(self, path: str, user: str, exp, sig: str) -> bool:
