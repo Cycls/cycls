@@ -29,7 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cycls.app.db import DB
-from cycls.app.workspace import Workspace
+from cycls.app.workspace import workspace_at
 from cycls.agent import chat
 
 
@@ -117,7 +117,7 @@ async def _migrate_tenant(tenant_root, volume, dry_run):
 
     # Personal: .history.jsonl directly in .sessions/
     if any(sessions.glob("*.history.jsonl")):
-        ws = Workspace(tenant_root.parent, tenant_root.name)
+        ws = workspace_at(tenant_root.name, tenant_root.parent)
         await _migrate_chat_logs(ws, sessions, dry_run)
         await _migrate_shares(ws, sessions, volume, dry_run)
         return
@@ -129,13 +129,13 @@ async def _migrate_tenant(tenant_root, volume, dry_run):
             continue
         found_member = True
         print(f" member {member_dir.name}:")
-        ws = Workspace(tenant_root.parent, f"{tenant_root.name}/{member_dir.name}")
+        ws = workspace_at(f"{tenant_root.name}/{member_dir.name}", tenant_root.parent)
         await _migrate_chat_logs(ws, member_dir, dry_run)
         await _migrate_shares(ws, member_dir, volume, dry_run)
 
     # Personal with shares but no chats
     if not found_member and (sessions / "public").is_dir():
-        ws = Workspace(tenant_root.parent, tenant_root.name)
+        ws = workspace_at(tenant_root.name, tenant_root.parent)
         await _migrate_shares(ws, sessions, volume, dry_run)
 
 

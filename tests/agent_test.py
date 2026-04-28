@@ -25,7 +25,7 @@ def _clear_client_cache():
 from cycls.agent.harness.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact, context_window
 from cycls.agent.harness.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path, dispatch
 from cycls.agent.chat import load_messages
-from cycls.app.workspace import Workspace
+from cycls.app.workspace import workspace_at
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +40,7 @@ def _read_history(ctx):
 def _make_context(ws):
     ctx = types.SimpleNamespace()
     ws = Path(ws)
-    ctx.workspace = Workspace(ws.parent, ws.name)
+    ctx.workspace = workspace_at(ws.name, ws.parent)
     ctx.chat_id = "test-chat"
     user = types.SimpleNamespace()
     ctx.user = user

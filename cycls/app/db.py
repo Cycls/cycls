@@ -1,7 +1,7 @@
 """DB — namespaced JSON KV over SlateDB at any URL.
 
 `DB` is orthogonal to tenancy: hand it a URL string or anything with a
-`.url()` method (e.g. a `Workspace`) and you get typed `kv(name)` access.
+`.url` attribute (e.g. a `Workspace`) and you get typed `kv(name)` access.
 The pool keeps one open SlateDB per URL, LRU-evicted at MAX_POOL_SIZE.
 """
 import asyncio, json
@@ -67,10 +67,10 @@ async def _get_pooled(url):
 class DB:
     """Database at a URL. `db.kv(name)` for namespaced JSON; `async with
     db.raw() as slate:` for the raw SlateDB handle. Pass a URL string or
-    anything with a `.url()` method (e.g. a Workspace)."""
+    anything with a `.url` attribute (e.g. a Workspace)."""
 
     def __init__(self, source):
-        self._url = source if isinstance(source, str) else source.url()
+        self._url = source if isinstance(source, str) else source.url
 
     def kv(self, name: str) -> "KV":
         return KV(name, self._url)
