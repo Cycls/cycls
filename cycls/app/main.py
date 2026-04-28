@@ -8,7 +8,7 @@ import uvicorn
 
 from cycls.function import Function, _get_api_key, _get_base_url
 from cycls.app.auth import JWT, make_validate
-from cycls.app.db import subject_for, workspace_for
+from cycls.app.workspace import subject_for, workspace_for
 from cycls.app.sandbox import Sandbox
 from cycls.app import signing
 

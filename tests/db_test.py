@@ -6,7 +6,8 @@ substrate that everything else depends on.
 import asyncio
 import pytest
 
-from cycls.app.db import DB, Workspace
+from cycls.app.db import DB
+from cycls.app.workspace import Workspace
 
 
 def _run(coro):

@@ -1,3 +1,9 @@
+"""DB — namespaced JSON KV over SlateDB at any URL.
+
+`DB` is orthogonal to tenancy: hand it a URL string or anything with a
+`.url()` method (e.g. a `Workspace`) and you get typed `kv(name)` access.
+The pool keeps one open SlateDB per URL, LRU-evicted at MAX_POOL_SIZE.
+"""
 import asyncio, json
 from collections import OrderedDict
 from contextlib import asynccontextmanager
@@ -23,42 +29,6 @@ async def shutdown_pool():
             await db.shutdown()
         except Exception as e:
             print(f"[WARN] db shutdown failed: {e}", flush=True)
-
-
-class Workspace:
-    """Per-tenant root + slatedb data dir under *volume*. *tenant* is `user_id`
-    for personal users or `org_id/user_id` for org members — the same string
-    `subject_for(user)` returns. Signed-URL subjects round-trip through this
-    constructor, so it's the single source of truth for tenant→path mapping."""
-
-    def __init__(self, volume, tenant, bucket=None):
-        self.volume = Path(volume)
-        self.tenant = tenant
-        if "/" in tenant:
-            org_id, user_id = tenant.split("/", 1)
-            self.root = self.volume / org_id
-            self.data = self.root / ".cycls" / user_id
-        else:
-            self.root = self.volume / tenant
-            self.data = self.root / ".cycls"
-        self._bucket = bucket
-
-    def url(self) -> str:
-        if self._bucket:
-            return f"{self._bucket.rstrip('/')}/{self.data.relative_to(self.volume)}"
-        return f"file://{self.data}"
-
-
-def subject_for(user) -> str:
-    """`user_id` for personal users, `org_id/user_id` for org members. The
-    string round-trips through `Workspace(volume, ..., bucket)`."""
-    return f"{user.org_id}/{user.id}" if getattr(user, "org_id", None) else user.id
-
-
-def workspace_for(user, volume, bucket=None):
-    """Build a Workspace for *user* under *volume*. None → /local; org member →
-    /<org>/.cycls/<user>; personal → /<user>/.cycls."""
-    return Workspace(volume, "local" if user is None else subject_for(user), bucket=bucket)
 
 
 async def _build_db(url):
@@ -95,18 +65,19 @@ async def _get_pooled(url):
 
 
 class DB:
-    """Per-workspace database. `db.kv(name)` for namespaced JSON;
-    `async with db.raw() as slate:` for the raw SlateDB handle."""
+    """Database at a URL. `db.kv(name)` for namespaced JSON; `async with
+    db.raw() as slate:` for the raw SlateDB handle. Pass a URL string or
+    anything with a `.url()` method (e.g. a Workspace)."""
 
-    def __init__(self, workspace):
-        self._workspace = workspace
+    def __init__(self, source):
+        self._url = source if isinstance(source, str) else source.url()
 
     def kv(self, name: str) -> "KV":
-        return KV(name, self._workspace)
+        return KV(name, self._url)
 
     @asynccontextmanager
     async def raw(self):
-        yield await _get_pooled(self._workspace.url())
+        yield await _get_pooled(self._url)
 
 
 def _enc(name, key):
@@ -147,13 +118,13 @@ class _BaseKV:
 
 
 class KV(_BaseKV):
-    def __init__(self, name, workspace):
+    def __init__(self, name, url):
         super().__init__(name)
-        self._workspace = workspace
+        self._url = url
 
     @asynccontextmanager
     async def _handle(self):
-        yield await _get_pooled(self._workspace.url())
+        yield await _get_pooled(self._url)
 
     async def put(self, key, value):
         """Non-durable put — WAL fsync deferred. ~100ms/op savings; small
@@ -175,7 +146,7 @@ class KV(_BaseKV):
     async def transaction(self):
         """Atomic multi-op transaction (serializable snapshot isolation).
         Commits on clean exit; rolls back on exception. Non-durable commit."""
-        db = await _get_pooled(self._workspace.url())
+        db = await _get_pooled(self._url)
         txn = await db.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
         try:
             yield _TxKV(self._name, txn)
