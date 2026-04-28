@@ -23,10 +23,9 @@ class App(Function):
 
     def __init__(self, func, name, image=None, memory="1Gi",
                  auth: Optional[JWT] = None, sandbox: Optional[Sandbox] = None):
-        if auth is not None and not isinstance(auth, JWT):
-            raise TypeError(f"auth must be cycls.JWT or None, got {type(auth).__name__}")
-        if sandbox is not None and not isinstance(sandbox, Sandbox):
-            raise TypeError(f"sandbox must be cycls.Sandbox or None, got {type(sandbox).__name__}")
+        for kw, val, t in (("auth", auth, JWT), ("sandbox", sandbox, Sandbox)):
+            if val is not None and not isinstance(val, t):
+                raise TypeError(f"{kw} must be cycls.{t.__name__} or None, got {type(val).__name__}")
         self.user_func = func
         self.memory = memory
         self.prod = False
