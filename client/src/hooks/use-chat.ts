@@ -78,7 +78,7 @@ export function useChat(baseUrl: string = "") {
   const setUIHandler = useCallback((h: UIHandler | null) => {
     uiHandlerRef.current = h;
   }, []);
-  const { setGetToken, authHeaders, getToken } = useAuthHeaders();
+  const { setGetToken, authHeaders } = useAuthHeaders();
 
   const uploadFile = useCallback(
     async (file: File): Promise<Attachment> => {
@@ -386,24 +386,25 @@ export function useChat(baseUrl: string = "") {
   }, []);
 
   const share = useCallback(async (title: string = "", author?: { name: string; imageUrl?: string }) => {
+    const chatId = chatIdRef.current;
+    if (!chatId) throw new Error("No chat to share");
     const headers = { "Content-Type": "application/json", ...(await authHeaders()) };
     const res = await fetch(`${baseUrl}/share`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ messages, title, author }),
+      body: JSON.stringify({ chat_id: chatId, title, author }),
     });
     if (!res.ok) {
       track("share_create_failed", { status: res.status });
       throw new Error(`Share failed: ${res.status}`);
     }
-    const { path } = await res.json();
-    const shareUrl = `${window.location.origin}/shared/${path}`;
+    const { url } = await res.json();
+    const shareUrl = `${window.location.origin}${url}`;
     track("share_created", {
-      share_path: path,
+      chat_id: chatId,
       share_url: shareUrl,
       title,
       message_count: messages.length,
-      chat_id: chatIdRef.current,
     });
     return shareUrl;
   }, [messages, baseUrl, authHeaders]);
@@ -450,25 +451,10 @@ export function useChat(baseUrl: string = "") {
         chat_id: id,
         message_count: loaded.length,
       });
-
-      // Rebuild attachment URLs with fresh token (after render)
-      const token = await getToken();
-      if (token) {
-        let changed = false;
-        for (const m of loaded) {
-          for (const att of m.attachments || []) {
-            if (att.path) {
-              att.url = `${baseUrl}/files/${att.path}?token=${token}`;
-              changed = true;
-            }
-          }
-        }
-        if (changed) setMessages([...loaded]);
-      }
     } finally {
       setChatLoading(false);
     }
-  }, [baseUrl, authHeaders, getToken]);
+  }, [baseUrl, authHeaders]);
 
   const deleteChat = useCallback(async (id: string) => {
     const headers = await authHeaders();
