@@ -71,10 +71,7 @@ def verify_jwt(token, jwks_url):
     """Verify *token* against *jwks_url*; return a User or raise InvalidToken."""
     import jwt as jwtlib
     from jwt import PyJWKClient
-    client = _jwks_clients.get(jwks_url)
-    if client is None:
-        client = PyJWKClient(jwks_url)
-        _jwks_clients[jwks_url] = client
+    client = _jwks_clients.setdefault(jwks_url, PyJWKClient(jwks_url))
     try:
         key = client.get_signing_key_from_jwt(token)
         decoded = jwtlib.decode(token, key.key, algorithms=["RS256"], leeway=10)
@@ -85,19 +82,15 @@ def verify_jwt(token, jwks_url):
     if isinstance(fea, str):
         fea = [f.strip() for f in fea.split(",") if f.strip()]
     return User(
-        id=decoded.get("sub"),
-        org_id=org.get("id"),
-        org_slug=org.get("slg"),
-        org_role=org.get("rol"),
-        org_permissions=org.get("per"),
-        plan=decoded.get("pla"),
-        features=fea,
+        id=decoded.get("sub"), plan=decoded.get("pla"), features=fea,
+        org_id=org.get("id"), org_slug=org.get("slg"),
+        org_role=org.get("rol"), org_permissions=org.get("per"),
     )
 
 
 def make_validate(get_jwks_url):
     """FastAPI Depends factory. `get_jwks_url` resolves the URL lazily on first request."""
-    from fastapi import Depends, HTTPException, Request
+    from fastapi import Depends, HTTPException
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
     def validate(
