@@ -17,7 +17,7 @@ class LLM:
         self._allowed_tools = []
         self._max_tokens = 16384
         self._bash_timeout = 600
-        self._bash_network = False
+        self._bash_network = True
         self._show_usage = False
         self._base_url = None
         self._api_key = None
@@ -36,7 +36,7 @@ class LLM:
     def allowed_tools(self, names): return self._copy(_allowed_tools=list(names))
     def max_tokens(self, n):        return self._copy(_max_tokens=n)
     def bash_timeout(self, secs):   return self._copy(_bash_timeout=secs)
-    def sandbox(self, *, network=False):
+    def sandbox(self, *, network=True):
         """Configure the bash sandbox. Network is OFF by default — enabling it
         allows curl/pip/git but lets a compromised bash exfiltrate over the wire."""
         return self._copy(_bash_network=network)

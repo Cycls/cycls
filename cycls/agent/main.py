@@ -18,7 +18,7 @@ CYCLS_PATH = importlib.resources.files('cycls')
 
 class Agent(App):
     _base_pip = [*App._base_pip, "resvg-py", "anthropic", "openai", "python-dotenv"]
-    _base_apt = [*App._base_apt, "fonts-noto-core", "bubblewrap",
+    _base_apt = [*App._base_apt, "fonts-noto-core",
                  "poppler-utils", "ripgrep", "jq", "curl"]
 
     def __init__(self, func, name, web=None, image=None, memory="1Gi"):

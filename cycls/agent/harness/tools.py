@@ -111,31 +111,21 @@ def _resolve_path(raw_path, workspace):
 # ---- Tool execution ----
 
 async def _exec_bash(command, cwd, timeout=600, network=False):
-    # Network is isolated only when requested off — unshare-net works in nested
-    # containers where --unshare-pid (and its procfs mount) doesn't.
-    net_flags = () if network else ("--unshare-net",)
-    # bwrap itself is visible inside the sandbox's /proc, so its own environ
-    # must be sanitized — --clearenv only affects the child (bash).
+    from cycls.app.sandbox import Sandbox
     path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     lang = os.environ.get("LANG", "C.UTF-8")
-    bwrap_env = {"PATH": path, "LANG": lang}
-    proc = await asyncio.create_subprocess_exec(
-        "bwrap", "--ro-bind", "/", "/", "--bind", cwd, "/workspace",
-        "--ro-bind-try", str(pathlib.Path(cwd) / ".cycls"), "/workspace/.cycls",
-        "--tmpfs", "/app", "--tmpfs", "/tmp", "--dev", "/dev", "--proc", "/proc",
-        *net_flags,
-        "--chdir", "/workspace", "--die-with-parent", "--clearenv",
-        "--setenv", "PATH", path,
-        "--setenv", "HOME", "/workspace", "--setenv", "TERM", "xterm",
-        "--setenv", "LANG", lang,
-        "--", "bash", "-c", command,
-        env=bwrap_env,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    try: stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill(); await proc.wait()
+    sb = (Sandbox()
+          .ro_bind("/", "/")
+          .bind(cwd, "/workspace")
+          .ro_bind_try(str(pathlib.Path(cwd) / ".cycls"), "/workspace/.cycls")
+          .tmpfs("/app").tmpfs("/tmp").dev("/dev").proc("/proc")
+          .network(network).chdir("/workspace").die_with_parent().clearenv()
+          .setenv(PATH=path, HOME="/workspace", TERM="xterm", LANG=lang)
+          .timeout(timeout))
+    result = await sb.run(["bash", "-c", command], env={"PATH": path, "LANG": lang})
+    if result.timed_out:
         return f"Error: Command timed out after {timeout}s"
-    out = stdout.decode(errors="replace") + (stderr.decode(errors="replace") if stderr else "")
+    out = result.output
     if len(out) > MAX_OUTPUT:
         h = MAX_OUTPUT // 2
         out = out[:h] + "\n... (truncated) ...\n" + out[-h:]
