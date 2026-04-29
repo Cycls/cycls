@@ -8,9 +8,9 @@ browser and reopening shows every byte. The whole "agent" is db + workspace
 + sandbox; the framework owns the per-tenant substrate.
 
 Demonstrates:
-  - sandbox=cycls.Sandbox()       configured-once profile, augmented per request
+  - cycls.Sandbox()               immutable builder, augmented per request
   - app.workspace                 per-user fs + db, both gated by Clerk JWT
-  - app.sandbox.bind(...)         immutable builder; route adds the user's mount
+  - sandbox.bind(...)             route adds the user's mount
   - cycls.DB(ws).put("history/<ts>", entry)  chronological history via ISO-timestamp keys
 """
 from datetime import datetime, timezone
@@ -51,7 +51,6 @@ sandbox = (
 @cycls.app(
     image=cycls.Image().copy(HTML_PATH, "terminal.html"),
     auth=cycls.Clerk("cycls.ai"),
-    sandbox=sandbox,
 )
 def terminal():
     from fastapi import FastAPI
@@ -87,7 +86,7 @@ def terminal():
     @app.post("/run")
     async def run_cmd(body: CmdIn, ws=terminal.workspace):
         ws.root.mkdir(parents=True, exist_ok=True)
-        sb = terminal.sandbox.bind(str(ws.root), "/workspace").chdir("/workspace")
+        sb = sandbox.bind(str(ws.root), "/workspace").chdir("/workspace")
         r = await sb.run(["bash", "-c", body.cmd])
         entry = {
             "cmd": body.cmd,
