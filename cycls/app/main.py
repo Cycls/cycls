@@ -9,7 +9,6 @@ import uvicorn
 from cycls.function import Function, _get_api_key, _get_base_url
 from cycls.app.auth import JWT, make_validate
 from cycls.app.tenancy import subject_for, workspace_for
-from cycls.app.sandbox import Sandbox
 from cycls.app import signing
 
 CYCLS_PATH = importlib.resources.files("cycls")
@@ -23,16 +22,14 @@ class App(Function):
     _base_apt = ["bubblewrap"]
 
     def __init__(self, func, name, image=None, memory="1Gi",
-                 auth: Optional[JWT] = None, sandbox: Optional[Sandbox] = None):
-        for kw, val, t in (("auth", auth, JWT), ("sandbox", sandbox, Sandbox)):
-            if val is not None and not isinstance(val, t):
-                raise TypeError(f"{kw} must be cycls.{t.__name__} or None, got {type(val).__name__}")
+                 auth: Optional[JWT] = None):
+        if auth is not None and not isinstance(auth, JWT):
+            raise TypeError(f"auth must be cycls.JWT or None, got {type(auth).__name__}")
         self.user_func = func
         self.memory = memory
         self.prod = False
         self.volume = Path((image or {}).get("volume", "/workspace"))
         self._auth_provider = auth
-        self._sandbox = sandbox
 
         # User code referencing `cycls.DB`, `cycls.Workspace`, `app.auth`,
         # etc. inside the function gets serialized via cloudpickle — which
@@ -86,13 +83,6 @@ class App(Function):
         def _build_ws(user=auth_dep):
             return workspace_for(user, self.volume, base=self.base)
         return Depends(_build_ws)
-
-    @cached_property
-    def sandbox(self) -> Sandbox:
-        """The configured `Sandbox` for running untrusted commands."""
-        if self._sandbox is None:
-            raise RuntimeError("App.sandbox requires sandbox=... on the @cycls.app decorator")
-        return self._sandbox
 
     @cached_property
     def signing_key(self) -> bytes:
