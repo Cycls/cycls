@@ -289,10 +289,10 @@ def _share_test_app(tmp_path):
 
     user = User(id="user_test")
     user_dep = Depends(lambda: user)
-    ws_dep = Depends(lambda: workspace_for(user, tmp_path))
+    ws_dep = Depends(lambda: workspace_for(user, tmp_path, base=f"file://{tmp_path}"))
 
     fapp = FastAPI()
-    fapp.include_router(share_router(svc, ws_dep, user_dep, tmp_path, None))
+    fapp.include_router(share_router(svc, ws_dep, user_dep, tmp_path, f"file://{tmp_path}"))
     return svc, user, TestClient(fapp)
 
 
@@ -304,7 +304,7 @@ def test_share_router_mint_and_resolve(tmp_path):
     import asyncio
 
     svc, user, client = _share_test_app(tmp_path)
-    ws = workspace_for(user, tmp_path)
+    ws = workspace_for(user, tmp_path, base=f"file://{tmp_path}")
 
     async def seed():
         await chat.put_meta(ws, "c1", {"id": "c1", "title": "First chat"})
@@ -337,7 +337,7 @@ def test_share_router_rejects_tampered_url(tmp_path):
     import asyncio
 
     svc, user, client = _share_test_app(tmp_path)
-    ws = workspace_for(user, tmp_path)
+    ws = workspace_for(user, tmp_path, base=f"file://{tmp_path}")
     asyncio.run(chat.put_meta(ws, "c1", {"id": "c1", "title": "T"}))
 
     url = client.post("/share", json={"chat_id": "c1"}).json()["url"]
@@ -359,7 +359,7 @@ def test_share_router_list_and_delete(tmp_path):
     import asyncio
 
     svc, user, client = _share_test_app(tmp_path)
-    ws = workspace_for(user, tmp_path)
+    ws = workspace_for(user, tmp_path, base=f"file://{tmp_path}")
     asyncio.run(chat.put_meta(ws, "c1", {"id": "c1", "title": "T"}))
 
     client.post("/share", json={"chat_id": "c1", "title": "T"})
@@ -386,16 +386,16 @@ def test_files_sign_mints_signed_url(tmp_path):
 
     user = User(id="user_test")
     user_dep = Depends(lambda: user)
-    ws_dep = Depends(lambda: workspace_for(user, tmp_path))
+    ws_dep = Depends(lambda: workspace_for(user, tmp_path, base=f"file://{tmp_path}"))
 
     # Seed a file in the user's workspace root
-    ws = workspace_for(user, tmp_path)
+    ws = workspace_for(user, tmp_path, base=f"file://{tmp_path}")
     ws.root.mkdir(parents=True, exist_ok=True)
     (ws.root / "doc.md").write_text("hello world")
 
     fapp = FastAPI()
     fapp.include_router(files_router(svc, ws_dep, user_dep))
-    fapp.include_router(share_router(svc, ws_dep, user_dep, tmp_path, None))
+    fapp.include_router(share_router(svc, ws_dep, user_dep, tmp_path, f"file://{tmp_path}"))
     client = TestClient(fapp)
 
     r = client.post("/files/sign", json={"path": "doc.md"})

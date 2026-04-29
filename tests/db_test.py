@@ -16,7 +16,7 @@ def _run(coro):
 
 @pytest.fixture
 def workspace(tmp_path):
-    return workspace_at("tenant", tmp_path)
+    return workspace_at("tenant", tmp_path, base=f"file://{tmp_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -24,32 +24,27 @@ def workspace(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_workspace_personal_data_path(tmp_path):
-    ws = workspace_at("user", tmp_path)
-    assert DB(ws)._url == f"file://{tmp_path / 'user' / '.db'}"
+    ws = workspace_at("user", tmp_path, base=f"file://{tmp_path}")
+    assert DB(ws)._url == f"file://{tmp_path}/user/.db"
 
 
 def test_workspace_org_data_path(tmp_path):
-    """Org members nest under .db/{user_id} so a shared mount stays isolated."""
-    ws = workspace_at("org/member_1", tmp_path)
-    assert DB(ws)._url == f"file://{tmp_path / 'org' / '.db' / 'member_1'}"
+    ws = workspace_at("org/member_1", tmp_path, base=f"file://{tmp_path}")
+    assert DB(ws)._url == f"file://{tmp_path}/org/.db/member_1"
 
 
 def test_workspace_url_file_fallback(tmp_path):
-    """No bucket → file:// to data path."""
-    ws = workspace_at("user", tmp_path)
-    url = DB(ws)._url
-    assert url.startswith("file://")
-    assert url.endswith("/.db")
+    ws = workspace_at("user", tmp_path, base=f"file://{tmp_path}")
+    assert DB(ws)._url == f"file://{tmp_path}/user/.db"
 
 
 def test_workspace_url_with_bucket(tmp_path):
-    """bucket=... → object-store URL with tenant-relative path appended."""
-    ws = workspace_at("user", tmp_path, bucket="gs://cycls-ws-myagent")
+    ws = workspace_at("user", tmp_path, base="gs://cycls-ws-myagent")
     assert DB(ws)._url == "gs://cycls-ws-myagent/user/.db"
 
 
 def test_workspace_url_with_bucket_org(tmp_path):
-    ws = workspace_at("org/member_1", tmp_path, bucket="gs://cycls-ws-myagent")
+    ws = workspace_at("org/member_1", tmp_path, base="gs://cycls-ws-myagent")
     assert DB(ws)._url == "gs://cycls-ws-myagent/org/.db/member_1"
 
 

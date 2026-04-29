@@ -174,7 +174,7 @@ def files_router(cycls_app, ws_dep, user_dep):
 
 # ---- Share ----
 
-def share_router(cycls_app, ws_dep, user_dep, volume, bucket):
+def share_router(cycls_app, ws_dep, user_dep, volume, base):
     """Live shares — `POST /share` mints a signed URL bound to (chat_id, owner,
     exp); `/shared/data` and `/shared/file/...` resolve that URL with no auth
     lookup, only HMAC verification. Owner-side `/share` index is kept for the
@@ -225,7 +225,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, bucket):
         if not path.startswith("chat/"):
             raise HTTPException(status_code=400, detail="Unsupported share path")
         chat_id = path[len("chat/"):]
-        ws = workspace_at(user, volume, bucket)
+        ws = workspace_at(user, volume, base=base)
         meta = await chat.get_meta(ws, chat_id)
         if meta is None:
             raise HTTPException(status_code=404, detail="Chat not found")
@@ -252,7 +252,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, bucket):
     async def shared_file(file_path: str, user: str, exp: int, sig: str):
         if not cycls_app.verify_signed(f"file/{file_path}", user, exp, sig):
             raise HTTPException(status_code=403, detail="Invalid or expired link")
-        ws = workspace_at(user, volume, bucket)
+        ws = workspace_at(user, volume, base=base)
         try:
             target = resolve_path(ws.root, file_path)
         except ValueError:
@@ -266,13 +266,10 @@ def share_router(cycls_app, ws_dep, user_dep, volume, bucket):
 
 # ---- Mount ----
 
-def install_routers(cycls_app, app, required_auth, volume, bucket):
-    """Mount chats, files, and share routers on a FastAPI app. The workspace
-    is built once per request via FastAPI's Depends — endpoints don't see
-    volume/bucket directly."""
+def install_routers(cycls_app, app, required_auth, volume, base):
     def _build_ws(user: Any = required_auth):
-        return workspace_for(user, volume, bucket)
+        return workspace_for(user, volume, base=base)
     ws_dep = Depends(_build_ws)
     app.include_router(chats_router(ws_dep))
     app.include_router(files_router(cycls_app, ws_dep, required_auth))
-    app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, bucket))
+    app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))

@@ -56,7 +56,7 @@ def auth_app():
     TTL = 7 * 24 * 3600
 
     # One global user store for the whole deployment.
-    users_ws = workspace_at("_users", auth_app.volume, auth_app.bucket)
+    users_ws = workspace_at("_users", auth_app.volume, base=auth_app.base)
     users = cycls.DB(users_ws).kv("users")
 
     def issue_token(user_id: str) -> str:
@@ -81,7 +81,7 @@ def auth_app():
     auth = Depends(validate)
 
     def _build_ws(user: User = auth) -> Workspace:
-        return workspace_for(user, auth_app.volume, auth_app.bucket)
+        return workspace_for(user, auth_app.volume, base=auth_app.base)
     workspace = Depends(_build_ws)
 
     class AuthIn(BaseModel):
