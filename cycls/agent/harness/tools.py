@@ -115,13 +115,12 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
     path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     lang = os.environ.get("LANG", "C.UTF-8")
     sb = (Sandbox()
-          .ro_bind("/", "/")
           .bind(cwd, "/workspace")
           .ro_bind_try(str(pathlib.Path(cwd) / ".db"), "/workspace/.db")
-          .tmpfs("/app").tmpfs("/tmp").dev("/dev").proc("/proc")
-          .network(network).chdir("/workspace").die_with_parent().clearenv()
-          .setenv(PATH=path, HOME="/workspace", TERM="xterm", LANG=lang)
-          .timeout(timeout))
+          .tmpfs("/app")
+          .chdir("/workspace")
+          .setenv(PATH=path, LANG=lang)
+          .network(network).timeout(timeout))
     result = await sb.run(["bash", "-c", command], env={"PATH": path, "LANG": lang})
     if result.timed_out:
         return f"Error: Command timed out after {timeout}s"

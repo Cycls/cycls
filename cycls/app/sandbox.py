@@ -1,18 +1,31 @@
 """Sandbox — fluent builder over bwrap. Linux-only.
 
-Run untrusted commands inside the container with a restricted namespace.
-Each method appends to a `bwrap` argv and returns a new Sandbox (immutable).
+`Sandbox()` ships with a secure baseline (rootfs ro-bound; /tmp /dev /proc
+set up; env cleared; standard PATH/HOME/TERM/LANG). Chain methods to
+deviate — bwrap honors last flag wins, so subsequent .setenv / .bind /
+.network / .timeout calls override the baseline.
 
     sb = (cycls.Sandbox()
-        .ro_bind("/", "/")
-        .bind("/workspace", "/workspace")
-        .tmpfs("/tmp").dev("/dev").proc("/proc")
-        .chdir("/workspace").network(False)
-        .timeout(30))
+        .bind("/host/x", "/workspace").chdir("/workspace")
+        .network(True).timeout(30))
     result = await sb.run(["python", "-c", code])
 """
 import asyncio
 from typing import Optional
+
+
+_DEFAULT_ARGS = [
+    "--ro-bind", "/", "/",
+    "--tmpfs", "/tmp",
+    "--dev", "/dev",
+    "--proc", "/proc",
+    "--clearenv",
+    "--die-with-parent",
+    "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
+    "--setenv", "HOME", "/workspace",
+    "--setenv", "TERM", "xterm-256color",
+    "--setenv", "LANG", "C.UTF-8",
+]
 
 
 class SandboxResult:
@@ -24,15 +37,14 @@ class SandboxResult:
 
     @property
     def output(self) -> str:
-        """stdout + stderr decoded as text."""
         return self.stdout.decode(errors="replace") + self.stderr.decode(errors="replace")
 
 
 class Sandbox:
     def __init__(self):
-        self._args: list[str] = []
+        self._args: list[str] = list(_DEFAULT_ARGS)
         self._timeout: Optional[float] = None
-        self._network: bool = False  # secure-by-default; opt in via .network()
+        self._network: bool = False
 
     def _copy(self) -> "Sandbox":
         new = Sandbox.__new__(Sandbox)
