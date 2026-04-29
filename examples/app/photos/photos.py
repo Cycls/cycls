@@ -1,9 +1,9 @@
 # uv run cycls run examples/app/photos/photos.py
-"""Photo timeline — per-user gallery on cycls.DB.raw() bytes.
+"""Photo timeline — per-user gallery using JSON + raw bytes in one DB.
 
-Metadata lives in `kv("photos")` (JSON). Image bytes live in raw SlateDB
-under `b"img/{id}"`. Same workspace, two storage shapes — no S3, no
-signed URLs, no separate blob store.
+Metadata at `photos/{id}` (JSON). Image bytes at `b"img/{id}"` via
+db.raw(). Same workspace, two storage shapes — no S3, no signed URLs,
+no separate blob store.
 """
 import json
 from datetime import datetime, timezone
@@ -50,7 +50,7 @@ def photos():
                 "size": len(data),
                 "uploadedAt": datetime.now(timezone.utc).isoformat(),
             }
-            await db.kv("photos").put(pid, meta)
+            await db.put(f"photos/{pid}", meta)
             async with db.raw() as raw:
                 await raw.put_with_options(
                     f"img/{pid}".encode(), data,
@@ -62,14 +62,14 @@ def photos():
 
     @app.get("/photos")
     async def list_photos(ws=photos.workspace):
-        items = [m async for _, m in cycls.DB(ws).kv("photos").items()]
+        items = [m async for _, m in cycls.DB(ws).items(prefix="photos/")]
         items.sort(key=lambda m: m.get("uploadedAt", ""), reverse=True)
         return items
 
     @app.get("/photos/{pid}/raw")
     async def get_raw(pid: str, ws=photos.workspace):
         db = cycls.DB(ws)
-        meta = await db.kv("photos").get(pid)
+        meta = await db.get(f"photos/{pid}")
         if not meta:
             raise HTTPException(404, "not found")
         async with db.raw() as raw:
@@ -81,10 +81,10 @@ def photos():
     @app.delete("/photos/{pid}")
     async def delete_photo(pid: str, ws=photos.workspace):
         db = cycls.DB(ws)
-        async with db.kv("photos").transaction() as t:
-            if not await t.get(pid):
+        async with db.transaction() as t:
+            if not await t.get(f"photos/{pid}"):
                 raise HTTPException(404, "not found")
-            await t.delete(pid)
+            await t.delete(f"photos/{pid}")
         async with db.raw() as raw:
             await raw.delete_with_options(
                 f"img/{pid}".encode(),

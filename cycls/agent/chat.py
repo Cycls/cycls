@@ -1,19 +1,10 @@
-"""Per-chat state — metadata + message log, unified in one KV.
+"""Per-chat state — metadata + message log under one workspace DB.
 
-A chat is metadata + messages. They live in `KV("chat", workspace)` with two
-sub-prefixes:
-
-    meta/{chat_id}           — chat metadata (title, updatedAt, createdAt)
-    log/{chat_id}/{turn:06d} — each message, ordered
-
-list_chats scans `meta/`. load_messages scans `log/{id}/`. delete_chat removes
-both. One KV, one logical concept, prefix-scan ergonomics throughout.
+Keys:
+    chat/meta/{chat_id}           — chat metadata (title, updatedAt, createdAt)
+    chat/log/{chat_id}/{turn:06d} — each message, ordered
 """
 from cycls.app.db import DB
-
-
-def _kv(workspace):
-    return DB(workspace).kv("chat")
 
 
 def _validate(chat_id):
@@ -25,18 +16,18 @@ def _validate(chat_id):
 
 async def get_meta(workspace, chat_id):
     _validate(chat_id)
-    return await _kv(workspace).get(f"meta/{chat_id}")
+    return await DB(workspace).get(f"chat/meta/{chat_id}")
 
 
 async def put_meta(workspace, chat_id, data):
     _validate(chat_id)
-    await _kv(workspace).put(f"meta/{chat_id}", data)
+    await DB(workspace).put(f"chat/meta/{chat_id}", data)
 
 
 async def list_chats(workspace):
     """Yield (chat_id, metadata) for every chat in this workspace."""
-    async for key, data in _kv(workspace).items(prefix="meta/"):
-        yield key[len("meta/"):], data
+    async for key, data in DB(workspace).items(prefix="chat/meta/"):
+        yield key[len("chat/meta/"):], data
 
 
 # ---- Message log ----
@@ -47,7 +38,7 @@ async def load_messages(workspace, chat_id):
     storage, not LLM-shaping."""
     _validate(chat_id)
     messages = []
-    async for _, msg in _kv(workspace).items(prefix=f"log/{chat_id}/"):
+    async for _, msg in DB(workspace).items(prefix=f"chat/log/{chat_id}/"):
         messages.append(msg)
     return messages
 
@@ -58,20 +49,20 @@ async def append_messages(workspace, chat_id, messages, start_idx):
     _validate(chat_id)
     if not messages:
         return
-    async with _kv(workspace).transaction() as t:
+    async with DB(workspace).transaction() as t:
         for offset, msg in enumerate(messages):
-            await t.put(f"log/{chat_id}/{(start_idx + offset):06d}", msg)
+            await t.put(f"chat/log/{chat_id}/{(start_idx + offset):06d}", msg)
 
 
 async def replace_messages(workspace, chat_id, messages):
     """Wipe and rewrite all messages for *chat_id* atomically (used by
     compaction)."""
     _validate(chat_id)
-    async with _kv(workspace).transaction() as t:
-        async for key, _ in t.items(prefix=f"log/{chat_id}/"):
+    async with DB(workspace).transaction() as t:
+        async for key, _ in t.items(prefix=f"chat/log/{chat_id}/"):
             await t.delete(key)
         for i, msg in enumerate(messages):
-            await t.put(f"log/{chat_id}/{i:06d}", msg)
+            await t.put(f"chat/log/{chat_id}/{i:06d}", msg)
 
 
 # ---- Display view ----
@@ -132,7 +123,7 @@ def to_ui_messages(raw):
 async def delete_chat(workspace, chat_id):
     """Atomically delete metadata + all messages for *chat_id*."""
     _validate(chat_id)
-    async with _kv(workspace).transaction() as t:
-        await t.delete(f"meta/{chat_id}")
-        async for key, _ in t.items(prefix=f"log/{chat_id}/"):
+    async with DB(workspace).transaction() as t:
+        await t.delete(f"chat/meta/{chat_id}")
+        async for key, _ in t.items(prefix=f"chat/log/{chat_id}/"):
             await t.delete(key)

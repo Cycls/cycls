@@ -1,12 +1,11 @@
 # uv run cycls run examples/app/notes/notes.py
-"""Notes — per-user search via inverted index in cooperating KVs.
+"""Notes — per-user search via inverted index over a flat DB.
 
-  kv("docs")  → {id, title, body, createdAt}
-  kv("idx")   → {term}/{doc_id} → 1   (inverted index)
+  docs/{doc_id}        → {id, title, body, createdAt}
+  idx/{term}/{doc_id}  → 1   (inverted index)
 
-Write path: doc into "docs", every token into "idx" via a transaction.
-Search: tokenize query, prefix-scan "idx" per term, intersect doc_id
-sets, fetch docs.
+Write path: doc + index entries written atomically in one transaction.
+Search: tokenize query, prefix-scan "idx/{term}/" per term, intersect.
 """
 import re
 from datetime import datetime, timezone
@@ -54,16 +53,15 @@ def notes():
             "body": body.body,
             "createdAt": datetime.now(timezone.utc).isoformat(),
         }
-        db = cycls.DB(ws)
-        await db.kv("docs").put(nid, doc)
-        async with db.kv("idx").transaction() as t:
+        async with cycls.DB(ws).transaction() as t:
+            await t.put(f"docs/{nid}", doc)
             for term in tokenize(doc["title"] + " " + doc["body"]):
-                await t.put(f"{term}/{nid}", 1)
+                await t.put(f"idx/{term}/{nid}", 1)
         return doc
 
     @app.get("/notes")
     async def list_notes(ws=notes.workspace):
-        items = [d async for _, d in cycls.DB(ws).kv("docs").items()]
+        items = [d async for _, d in cycls.DB(ws).items(prefix="docs/")]
         items.sort(key=lambda d: d.get("createdAt", ""), reverse=True)
         return items
 
@@ -75,13 +73,14 @@ def notes():
         db = cycls.DB(ws)
         ids: set[str] | None = None
         for term in terms:
-            hits = {k.split("/", 1)[1] async for k, _ in db.kv("idx").items(prefix=f"{term}/")}
+            prefix = f"idx/{term}/"
+            hits = {k.removeprefix(prefix) async for k, _ in db.items(prefix=prefix)}
             ids = hits if ids is None else ids & hits
             if not ids:
                 return []
         docs = []
         for nid in ids or set():
-            d = await db.kv("docs").get(nid)
+            d = await db.get(f"docs/{nid}")
             if d:
                 docs.append(d)
         docs.sort(key=lambda d: d.get("createdAt", ""), reverse=True)
@@ -90,13 +89,13 @@ def notes():
     @app.delete("/notes/{nid}")
     async def delete_note(nid: str, ws=notes.workspace):
         db = cycls.DB(ws)
-        doc = await db.kv("docs").get(nid)
+        doc = await db.get(f"docs/{nid}")
         if not doc:
             raise HTTPException(404, "not found")
-        async with db.kv("idx").transaction() as t:
+        async with db.transaction() as t:
+            await t.delete(f"docs/{nid}")
             for term in tokenize(doc["title"] + " " + doc["body"]):
-                await t.delete(f"{term}/{nid}")
-        await db.kv("docs").delete(nid)
+                await t.delete(f"idx/{term}/{nid}")
         return {"ok": True}
 
     return app

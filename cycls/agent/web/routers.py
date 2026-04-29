@@ -199,13 +199,13 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             "sharedAt": datetime.now(timezone.utc).isoformat(),
             "url": url,
         }
-        await DB(ws).kv("share").put(chat_id, meta)
+        await DB(ws).put(f"share/{chat_id}", meta)
         return meta
 
     @r.get("/share")
     async def list_shares(ws: Workspace = ws_dep):
         items = []
-        async for _, meta in DB(ws).kv("share").items():
+        async for _, meta in DB(ws).items(prefix="share/"):
             items.append(meta)
         items.sort(key=lambda s: s.get("sharedAt", ""), reverse=True)
         return items
@@ -215,7 +215,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         """Drop the chat from the owner's share index. Existing signed URLs
         keep working until their `exp` — for instant revocation, delete the
         signing key from the bucket and redeploy (rotates all live shares)."""
-        await DB(ws).kv("share").delete(chat_id)
+        await DB(ws).delete(f"share/{chat_id}")
         return {"ok": True}
 
     @r.get("/shared/data")
@@ -229,7 +229,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         meta = await chat.get_meta(ws, chat_id)
         if meta is None:
             raise HTTPException(status_code=404, detail="Chat not found")
-        share_meta = await DB(ws).kv("share").get(chat_id) or {}
+        share_meta = await DB(ws).get(f"share/{chat_id}") or {}
         raw = await chat.load_messages(ws, chat_id)
         messages = chat.to_ui_messages(raw)
         # Mint per-attachment signed URLs with the same expiry, so the public
