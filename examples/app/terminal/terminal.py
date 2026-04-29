@@ -20,30 +20,10 @@ import cycls
 
 HTML_PATH = str(Path(__file__).parent / "terminal.html")
 
-# Security profile shared by every request. Per-request we only add the user's
-# workspace bind on top — the rest (no network, clean env, 10s wall-clock cap)
-# is fixed.
 sandbox = (
     cycls.Sandbox()
-    .ro_bind("/")
-    .tmpfs("/tmp").dev("/dev").proc("/proc")
-    .clearenv()
-    .setenv(
-        # ~/.local/bin first so packages installed by `pip install` (which
-        # auto-falls-back to --user when /usr is ro) put their CLI entry
-        # points on PATH.
-        PATH="/workspace/.local/bin:/usr/local/bin:/usr/bin:/bin",
-        HOME="/workspace",
-        TERM="xterm-256color",
-        LANG="C.UTF-8",
-    )
-    .die_with_parent()
-    # Network on: matches the agent's default. Codespaces-nested Docker can't
-    # bring up loopback in an unshared netns ("RTM_NEWADDR: No child processes"),
-    # and most users want curl/pip/git anyway. Flip to .network(False) in prod
-    # if you want strict egress isolation.
+    .setenv(PATH="/workspace/.local/bin:/usr/local/bin:/usr/bin:/bin")
     .network(True)
-    # Long enough for a fresh `pip install numpy` over a slow link.
     .timeout(120)
 )
 
