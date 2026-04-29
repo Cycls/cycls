@@ -80,9 +80,10 @@ async def super(context):
         return
 
     # Track monthly usage; gate free users at FREE_MONTHLY_LIMIT.
-    usage = cycls.DB(context.workspace).kv("usage")
+    db = cycls.DB(context.workspace)
     month = datetime.now(timezone.utc).strftime("%Y-%m")
-    entry = await usage.get(month, {"count": 0})
+    key = f"usage/{month}"
+    entry = await db.get(key, {"count": 0})
 
     if user.plan == "u:free_user" and entry["count"] >= FREE_MONTHLY_LIMIT and not exempt:
         yield {"type": "text",
@@ -91,7 +92,7 @@ async def super(context):
         return
 
     entry["count"] += 1
-    await usage.put(month, entry)
+    await db.put(key, entry)
 
     async for msg in llm.run(context=context):
         yield msg

@@ -11,7 +11,7 @@ Demonstrates:
   - sandbox=cycls.Sandbox()       configured-once profile, augmented per request
   - app.workspace                 per-user fs + db, both gated by Clerk JWT
   - app.sandbox.bind(...)         immutable builder; route adds the user's mount
-  - cycls.DB(ws).kv("history")    chronological history via ISO-timestamp keys
+  - cycls.DB(ws).put("history/<ts>", entry)  chronological history via ISO-timestamp keys
 """
 from datetime import datetime, timezone
 from pathlib import Path
@@ -72,12 +72,12 @@ def terminal():
 
     @app.get("/history")
     async def history(ws=terminal.workspace):
-        return [e async for _, e in cycls.DB(ws).kv("history").items()]
+        return [e async for _, e in cycls.DB(ws).items(prefix="history/")]
 
     @app.delete("/history")
     async def clear_history(ws=terminal.workspace):
-        async with cycls.DB(ws).kv("history").transaction() as t:
-            async for k, _ in t.items():
+        async with cycls.DB(ws).transaction() as t:
+            async for k, _ in t.items(prefix="history/"):
                 await t.delete(k)
         return {"ok": True}
 
@@ -96,7 +96,7 @@ def terminal():
             "timed_out": r.timed_out,
             "at": datetime.now(timezone.utc).isoformat(),
         }
-        await cycls.DB(ws).kv("history").put(entry["at"], entry)
+        await cycls.DB(ws).put(f"history/{entry['at']}", entry)
         return entry
 
     return app

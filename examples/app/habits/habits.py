@@ -1,15 +1,14 @@
 # uv run cycls run examples/app/habits.py
 # uv run cycls deploy examples/app/habits.py
-"""Habit tracker — the full @cycls.app surface in ~80 lines.
+"""Habit tracker — full @cycls.app surface in ~80 lines.
 
-Demonstrates every capability the app layer exposes:
+Demonstrates:
   - auth=cycls.Clerk(...)            JWT validation, every route protected
   - app.workspace                    per-user Workspace via FastAPI Depends
-  - cycls.DB(ws).kv(name)            namespaced JSON storage
-  - kv.items(prefix=...)             ordered prefix scan
-  - kv.transaction()                 atomic multi-key writes
+  - cycls.DB(ws).put/get/delete      flat JSON KV (key is the full path)
+  - .items(prefix=...)               ordered prefix scan
+  - .transaction()                   atomic multi-key writes
   - cycls.DB(ws).raw()               raw SlateDB for TTL-cached stats
-  - cycls.Image()                    container build config
 
 Routes:
   GET    /me                         the authenticated user (uses app.auth)
@@ -62,30 +61,31 @@ def habits():
             "target_per_week": body.target_per_week,
             "createdAt": datetime.now(timezone.utc).isoformat(),
         }
-        await cycls.DB(ws).kv("habits").put(habit_id, habit)
+        await cycls.DB(ws).put(f"habits/{habit_id}", habit)
         return habit
 
     @app.get("/habits")
     async def list_habits(ws=habits.workspace):
-        return [h async for _, h in cycls.DB(ws).kv("habits").items()]
+        return [h async for _, h in cycls.DB(ws).items(prefix="habits/")]
 
     @app.get("/habits/{habit_id}")
     async def get_habit(habit_id: str, ws=habits.workspace):
         db = cycls.DB(ws)
-        habit = await db.kv("habits").get(habit_id)
+        habit = await db.get(f"habits/{habit_id}")
         if habit is None:
             raise HTTPException(404, "Not found")
-        checkins = [k.split("/", 1)[1] async for k, _ in db.kv("checkins").items(prefix=f"{habit_id}/")]
+        prefix = f"checkins/{habit_id}/"
+        checkins = [k.removeprefix(prefix) async for k, _ in db.items(prefix=prefix)]
         return {**habit, "checkins": checkins}
 
     @app.post("/habits/{habit_id}/check")
     async def check(habit_id: str, ws=habits.workspace):
         db = cycls.DB(ws)
-        if await db.kv("habits").get(habit_id) is None:
+        if await db.get(f"habits/{habit_id}") is None:
             raise HTTPException(404, "Not found")
         today = date.today().isoformat()
-        await db.kv("checkins").put(
-            f"{habit_id}/{today}",
+        await db.put(
+            f"checkins/{habit_id}/{today}",
             {"at": datetime.now(timezone.utc).isoformat()},
         )
         return {"date": today}
@@ -93,28 +93,27 @@ def habits():
     @app.delete("/habits/{habit_id}")
     async def delete_habit(habit_id: str, ws=habits.workspace):
         db = cycls.DB(ws)
-        async with db.kv("habits").transaction() as t:
-            if await t.get(habit_id) is None:
+        async with db.transaction() as t:
+            if await t.get(f"habits/{habit_id}") is None:
                 raise HTTPException(404, "Not found")
-            await t.delete(habit_id)
-        async with db.kv("checkins").transaction() as t:
-            async for k, _ in t.items(prefix=f"{habit_id}/"):
+            await t.delete(f"habits/{habit_id}")
+            async for k, _ in t.items(prefix=f"checkins/{habit_id}/"):
                 await t.delete(k)
         return {"ok": True}
 
     @app.get("/stats")
     async def stats(ws=habits.workspace):
-        # TTL-cached aggregate via raw SlateDB. The cache key sits outside any
-        # KV namespace and expires automatically — no manual invalidation.
+        # TTL-cached aggregate via raw SlateDB. Cache key sits at bytes layer,
+        # outside the JSON key conventions, with built-in TTL expiry.
         db = cycls.DB(ws)
         async with db.raw() as raw:
             cached = await raw.get(b"stats:cache")
             if cached:
                 return json.loads(cached)
             n_habits = 0
-            async for _ in db.kv("habits").items(): n_habits += 1
+            async for _ in db.items(prefix="habits/"): n_habits += 1
             n_checkins = 0
-            async for _ in db.kv("checkins").items(): n_checkins += 1
+            async for _ in db.items(prefix="checkins/"): n_checkins += 1
             result = {
                 "habits": n_habits,
                 "checkins": n_checkins,

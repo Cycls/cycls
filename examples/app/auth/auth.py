@@ -55,9 +55,9 @@ def auth_app():
     ISSUER = "cycls-local"
     TTL = 7 * 24 * 3600
 
-    # One global user store for the whole deployment.
+    # One global user store for the whole deployment. Keys are emails.
     users_ws = workspace_at("_users", auth_app.volume, base=auth_app.base)
-    users = cycls.DB(users_ws).kv("users")
+    users = cycls.DB(users_ws)
 
     def issue_token(user_id: str) -> str:
         return jwtlib.encode(
@@ -125,11 +125,11 @@ def auth_app():
         nid = uuid4().hex[:8]
         note = {"id": nid, "text": data.get("text", ""),
                 "at": datetime.now(timezone.utc).isoformat()}
-        await cycls.DB(ws).kv("notes").put(nid, note)
+        await cycls.DB(ws).put(f"notes/{nid}", note)
         return note
 
     @app.get("/notes")
     async def list_notes(ws=workspace):
-        return [v async for _, v in cycls.DB(ws).kv("notes").items()]
+        return [v async for _, v in cycls.DB(ws).items(prefix="notes/")]
 
     return app

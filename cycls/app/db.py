@@ -1,9 +1,9 @@
-"""DB — namespaced JSON KV over SlateDB at `<base>/<path>`.
+"""DB — JSON KV over SlateDB at `<base>/<path>`. Flat byte-keyed under the
+hood; namespacing (if any) is just a prefix in the caller's key string.
 
 Every op runs inside a SlateDB transaction. Single ops open a 1-op txn
-and commit (non-durable) on the way out; multi-op atomic blocks via
-`kv.transaction()` join one shared txn. One mechanism, atomicity by
-default.
+and commit non-durable on the way out; `db.transaction()` shares one txn
+across many ops. `db.raw()` is the bytes escape hatch.
 """
 import asyncio, json
 from collections import OrderedDict
@@ -62,66 +62,57 @@ async def _get_pooled(url):
 class DB:
     def __init__(self, source, base=None):
         if isinstance(source, str):
-            path = source
+            self._url = source if base is None else f"{base.rstrip('/')}/{source}"
+            self._txn = None
+        elif hasattr(source, "path"):
+            self._url = f"{(base or source.base).rstrip('/')}/{source.path}"
+            self._txn = None
         else:
-            path = source.path
-            base = base or source.base
-        self._url = f"{base.rstrip('/')}/{path}"
-
-    def kv(self, name: str) -> "KV":
-        return KV(name, self._url)
+            self._url = None
+            self._txn = source
 
     @asynccontextmanager
-    async def raw(self):
-        yield await _get_pooled(self._url)
-
-
-def _enc(name, key):
-    return f"{name}/{key}".encode()
-
-
-class KV:
-    def __init__(self, name, source):
-        self._name = name
-        self._source = source  # url string OR a live Transaction
-
-    @asynccontextmanager
-    async def _txn(self):
-        if not isinstance(self._source, str):
-            yield self._source
+    async def _handle(self):
+        if self._txn is not None:
+            yield self._txn
             return
-        db = await _get_pooled(self._source)
-        txn = await db.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
+        slate = await _get_pooled(self._url)
+        txn = await slate.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
         try: yield txn
         except Exception: await txn.rollback(); raise
         else: await txn.commit_with_options(_NON_DURABLE)
 
     async def get(self, key, default=None):
-        async with self._txn() as t:
-            v = await t.get(_enc(self._name, key))
+        async with self._handle() as t:
+            v = await t.get(key.encode())
             return json.loads(v) if v is not None else default
 
     async def put(self, key, value):
-        async with self._txn() as t:
-            await t.put(_enc(self._name, key), json.dumps(value).encode())
+        async with self._handle() as t:
+            await t.put(key.encode(), json.dumps(value).encode())
 
     async def delete(self, key):
-        async with self._txn() as t:
-            await t.delete(_enc(self._name, key))
+        async with self._handle() as t:
+            await t.delete(key.encode())
 
     async def items(self, prefix=None):
-        async with self._txn() as t:
-            it = await t.scan_prefix(_enc(self._name, prefix or ""))
-            strip = len(self._name) + 1
+        async with self._handle() as t:
+            it = await t.scan_prefix((prefix or "").encode())
             while (kv := await it.next()) is not None:
-                yield kv.key.decode()[strip:], json.loads(kv.value)
+                yield kv.key.decode(), json.loads(kv.value)
 
     @asynccontextmanager
     async def transaction(self):
-        if not isinstance(self._source, str):
+        if self._txn is not None:
             raise RuntimeError("nested transactions not supported")
-        db = await _get_pooled(self._source)
-        txn = await db.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
-        try: yield KV(self._name, txn)
+        slate = await _get_pooled(self._url)
+        txn = await slate.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
+        try: yield DB(txn)
         except Exception: await txn.rollback(); raise
         else: await txn.commit_with_options(_NON_DURABLE)
+
+    @asynccontextmanager
+    async def raw(self):
+        if self._url is None:
+            raise RuntimeError("raw() not available inside a transaction")
+        yield await _get_pooled(self._url)
