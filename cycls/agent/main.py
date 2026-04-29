@@ -68,8 +68,8 @@ class Agent(App):
         if self._auth_provider is not None:
             cycls_app = self
             volume = Path(self.config.volume)
-            bucket = self.config.bucket
-            routers.insert(0, lambda app, auth: install_routers(cycls_app, app, auth, volume, bucket))
+            base = self.base
+            routers.insert(0, lambda app, auth: install_routers(cycls_app, app, auth, volume, base))
         return routers
 
     def _prepare_func(self, prod):

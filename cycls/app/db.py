@@ -1,9 +1,9 @@
-"""DB — namespaced JSON KV over SlateDB at any URL.
+"""DB — namespaced JSON KV over SlateDB at `<base>/<path>`.
 
-`DB` accepts either a URL string or a `Workspace`. Workspaces don't know
-how to format URLs — that's done here, since `file://` / `gs://` syntax
-is storage-backend specific. The pool keeps one open SlateDB per URL,
-LRU-evicted at MAX_POOL_SIZE.
+Every op runs inside a SlateDB transaction. Single ops open a 1-op txn
+and commit (non-durable) on the way out; multi-op atomic blocks via
+`kv.transaction()` join one shared txn. One mechanism, atomicity by
+default.
 """
 import asyncio, json
 from collections import OrderedDict
@@ -11,25 +11,25 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from slatedb.uniffi import (
-    DbBuilder, IsolationLevel, ObjectStore,
-    PutOptions, Ttl, WriteOptions,
+    DbBuilder, IsolationLevel, ObjectStore, WriteOptions,
 )
 
 _pool: "OrderedDict[str, object]" = OrderedDict()
 _pool_lock = asyncio.Lock()
 MAX_POOL_SIZE = 100
+_NON_DURABLE = WriteOptions(await_durable=False)
+
+
+async def _safe_shutdown(db):
+    try: await db.shutdown()
+    except Exception as e: print(f"[WARN] db shutdown failed: {e}", flush=True)
 
 
 async def shutdown_pool():
-    """Shut down every pooled Db. Use in test teardown or process exit."""
     async with _pool_lock:
-        items = list(_pool.items())
+        items = list(_pool.values())
         _pool.clear()
-    for _, db in items:
-        try:
-            await db.shutdown()
-        except Exception as e:
-            print(f"[WARN] db shutdown failed: {e}", flush=True)
+    for db in items: await _safe_shutdown(db)
 
 
 async def _build_db(url):
@@ -39,47 +39,34 @@ async def _build_db(url):
 
 
 async def _get_pooled(url):
-    """Pool lookup with LRU. Concurrent misses for the same url may build
-    twice — the loser discards. Cheaper than serializing all opens."""
+    """LRU + double-check lock: concurrent misses on the same url may build
+    twice; loser discards. Cheaper than serializing all opens."""
     cached = _pool.get(url)
     if cached is not None:
         _pool.move_to_end(url)
         return cached
-
     db = await _build_db(url)
-    to_shutdown = []
+    discard = None
     async with _pool_lock:
-        existing = _pool.get(url)
-        if existing is not None:
+        if url in _pool:
             _pool.move_to_end(url)
-            to_shutdown.append(db)
-            db = existing
+            discard, db = db, _pool[url]
         else:
             _pool[url] = db
             if len(_pool) > MAX_POOL_SIZE:
-                _, old = _pool.popitem(last=False)
-                to_shutdown.append(old)
-    for old in to_shutdown:
-        try: await old.shutdown()
-        except Exception as e: print(f"[WARN] db shutdown failed: {e}", flush=True)
+                discard = _pool.popitem(last=False)[1]
+    if discard is not None: await _safe_shutdown(discard)
     return db
 
 
 class DB:
-    """Database at a URL. `db.kv(name)` for namespaced JSON; `async with
-    db.raw() as slate:` for the raw SlateDB handle. Pass a URL string or
-    a Workspace (whose `.bucket` and `.data` get formatted into a URL)."""
-
-    def __init__(self, source):
+    def __init__(self, source, base=None):
         if isinstance(source, str):
-            self._url = source
-            return
-        # Workspace: build the URL from its fields. file:// for local,
-        # `<bucket>/<data-relative-to-volume>` when a bucket is set.
-        if source.bucket:
-            self._url = f"{source.bucket.rstrip('/')}/{source.data.relative_to(source.volume)}"
+            path = source
         else:
-            self._url = f"file://{source.data}"
+            path = source.path
+            base = base or source.base
+        self._url = f"{base.rstrip('/')}/{path}"
 
     def kv(self, name: str) -> "KV":
         return KV(name, self._url)
@@ -93,86 +80,48 @@ def _enc(name, key):
     return f"{name}/{key}".encode()
 
 
-class _BaseKV:
-    """Shared get/put/delete/items. Subclasses provide `_handle()` — an async
-    context manager yielding a Db or DbTransaction.
-
-    `put`/`delete` here use the plain (no-options) form supported by both
-    Db and DbTransaction. KV overrides them with non-durable WriteOptions
-    (Db only); _TxKV inherits the plain form because durability is at
-    commit time, not per-op."""
-
-    def __init__(self, name):
+class KV:
+    def __init__(self, name, source):
         self._name = name
+        self._source = source  # url string OR a live Transaction
+
+    @asynccontextmanager
+    async def _txn(self):
+        if not isinstance(self._source, str):
+            yield self._source
+            return
+        db = await _get_pooled(self._source)
+        txn = await db.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
+        try: yield txn
+        except Exception: await txn.rollback(); raise
+        else: await txn.commit_with_options(_NON_DURABLE)
 
     async def get(self, key, default=None):
-        async with self._handle() as h:
-            v = await h.get(_enc(self._name, key))
+        async with self._txn() as t:
+            v = await t.get(_enc(self._name, key))
             return json.loads(v) if v is not None else default
 
     async def put(self, key, value):
-        async with self._handle() as h:
-            await h.put(_enc(self._name, key), json.dumps(value).encode())
+        async with self._txn() as t:
+            await t.put(_enc(self._name, key), json.dumps(value).encode())
 
     async def delete(self, key):
-        async with self._handle() as h:
-            await h.delete(_enc(self._name, key))
+        async with self._txn() as t:
+            await t.delete(_enc(self._name, key))
 
     async def items(self, prefix=None):
-        async with self._handle() as h:
-            it = await h.scan_prefix(_enc(self._name, prefix or ""))
+        async with self._txn() as t:
+            it = await t.scan_prefix(_enc(self._name, prefix or ""))
             strip = len(self._name) + 1
             while (kv := await it.next()) is not None:
                 yield kv.key.decode()[strip:], json.loads(kv.value)
 
-
-class KV(_BaseKV):
-    def __init__(self, name, url):
-        super().__init__(name)
-        self._url = url
-
-    @asynccontextmanager
-    async def _handle(self):
-        yield await _get_pooled(self._url)
-
-    async def put(self, key, value):
-        """Non-durable put — WAL fsync deferred. ~100ms/op savings; small
-        risk of losing the write on crash before next flush. Acceptable for
-        chat persist, usage counters, share registry."""
-        async with self._handle() as h:
-            await h.put_with_options(
-                _enc(self._name, key),
-                json.dumps(value).encode(),
-                PutOptions(ttl=Ttl.DEFAULT()),
-                WriteOptions(await_durable=False),
-            )
-
-    async def delete(self, key):
-        async with self._handle() as h:
-            await h.delete_with_options(_enc(self._name, key), WriteOptions(await_durable=False))
-
     @asynccontextmanager
     async def transaction(self):
-        """Atomic multi-op transaction (serializable snapshot isolation).
-        Commits on clean exit; rolls back on exception. Non-durable commit."""
-        db = await _get_pooled(self._url)
+        if not isinstance(self._source, str):
+            raise RuntimeError("nested transactions not supported")
+        db = await _get_pooled(self._source)
         txn = await db.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
-        try:
-            yield _TxKV(self._name, txn)
-        except Exception:
-            await txn.rollback()
-            raise
-        else:
-            await txn.commit_with_options(WriteOptions(await_durable=False))
-
-
-class _TxKV(_BaseKV):
-    """Transactional view of a KV — same interface, atomic on commit."""
-
-    def __init__(self, name, txn):
-        super().__init__(name)
-        self._txn = txn
-
-    @asynccontextmanager
-    async def _handle(self):
-        yield self._txn
+        try: yield KV(self._name, txn)
+        except Exception: await txn.rollback(); raise
+        else: await txn.commit_with_options(_NON_DURABLE)

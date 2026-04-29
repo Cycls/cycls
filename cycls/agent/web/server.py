@@ -32,6 +32,10 @@ class Config(BaseModel):
     def bucket(self) -> Optional[str]:
         return f"gs://cycls-ws-{self.name}" if self.prod and self.name else None
 
+    @property
+    def base(self) -> str:
+        return self.bucket or f"file://{self.volume}"
+
 async def openai_encoder(stream):
     try:
         if inspect.isasyncgen(stream):
@@ -113,7 +117,6 @@ def web(func, config, extra_routers=None):
             pass
 
     volume = Path(config.volume)
-    bucket = config.bucket
 
     class Context(BaseModel):
         messages: Any
@@ -131,7 +134,7 @@ def web(func, config, extra_routers=None):
 
         @property
         def workspace(self) -> Workspace:
-            return workspace_for(self.user, volume, bucket)
+            return workspace_for(self.user, volume, base=config.base)
 
     app = FastAPI()
 

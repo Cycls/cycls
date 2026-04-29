@@ -58,9 +58,11 @@ class App(Function):
 
     @property
     def bucket(self) -> Optional[str]:
-        """Object-store URL prefix for SlateDB. `gs://cycls-ws-{name}` in prod,
-        else None (file:// local fallback)."""
         return f"gs://cycls-ws-{self.name}" if self.prod and self.name else None
+
+    @property
+    def base(self) -> str:
+        return self.bucket or f"file://{self.volume}"
 
     # ---- FastAPI Depends instances (lazy) ----
 
@@ -82,7 +84,7 @@ class App(Function):
         from fastapi import Depends
         auth_dep = self.auth
         def _build_ws(user=auth_dep):
-            return workspace_for(user, self.volume, self.bucket)
+            return workspace_for(user, self.volume, base=self.base)
         return Depends(_build_ws)
 
     @cached_property
