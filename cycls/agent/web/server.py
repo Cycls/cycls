@@ -28,7 +28,7 @@ class Config(BaseModel):
         self.prod = prod
 
     @property
-    def base(self) -> str:
+    def storage(self) -> str:
         if self.prod and self.name:
             return f"gs://cycls-ws-{self.name}"
         return f"file://{self.volume}"
@@ -131,7 +131,7 @@ def web(func, config, extra_routers=None, auth=None):
 
         @property
         def workspace(self) -> Workspace:
-            return workspace_for(self.user, volume, base=config.base)
+            return workspace_for(self.user, volume, base=config.storage)
 
     app = FastAPI()
 
