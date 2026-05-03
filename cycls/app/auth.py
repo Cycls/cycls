@@ -88,8 +88,7 @@ def verify_jwt(token, jwks_url):
     )
 
 
-def make_validate(get_jwks_url):
-    """FastAPI Depends factory. `get_jwks_url` resolves the URL lazily on first request."""
+def make_validate(jwks_url):
     from fastapi import Depends, HTTPException
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -101,11 +100,10 @@ def make_validate(get_jwks_url):
         # — see `App.signed_url`.
         if not bearer:
             raise HTTPException(401, "Not authenticated", headers={"WWW-Authenticate": "Bearer"})
-        url = get_jwks_url()
-        if not url:
+        if not jwks_url:
             raise HTTPException(500, "Auth not configured (missing JWKS URL)")
         try:
-            return verify_jwt(bearer.credentials, url)
+            return verify_jwt(bearer.credentials, jwks_url)
         except InvalidToken as e:
             raise HTTPException(401, str(e), headers={"WWW-Authenticate": "Bearer"})
 
