@@ -47,13 +47,10 @@ class Agent(App):
         )
         self.config.name = self.name
 
-    def _sync_config_auth(self, prod):
-        """Mirror provider's resolved-for-mode URLs into Config so
-        server.py's validate and the browser-SDK pk find them."""
+    def _sync_config_pk(self, prod):
         if self._auth_provider is None:
             return
         resolved = self._auth_provider.resolve(prod)
-        self.config.jwks = resolved.get("jwks_url")
         if "pk" in resolved:
             self.config.pk = resolved["pk"]
 
@@ -71,22 +68,24 @@ class Agent(App):
 
     def _prepare_func(self, prod):
         self.prod = prod
-        self._sync_config_auth(prod)
+        self._sync_config_pk(prod)
         self.config.set_prod(prod)
         self.config.public_path = f"cycls/agent/web/themes/{self.theme}"
         user_func, config, name = self.user_func, self.config, self.name
         routers = self._routers()
+        provider = self._auth_provider
         self.func = lambda port: web_serve(
-            user_func, config, name, port, extra_routers=routers)
+            user_func, config, name, port, extra_routers=routers, auth=provider)
 
     def _local(self, port=8080):
         print(f"Starting local server at localhost:{port}")
         self.prod = False
-        self._sync_config_auth(False)
+        self._sync_config_pk(False)
         self.config.set_prod(False)
         self.config.public_path = str(CYCLS_PATH.joinpath(f"agent/web/themes/{self.theme}"))
         import uvicorn
-        uvicorn.run(web(self.user_func, self.config, extra_routers=self._routers()),
+        uvicorn.run(web(self.user_func, self.config, extra_routers=self._routers(),
+                        auth=self._auth_provider),
                     host="0.0.0.0", port=port)
 
 

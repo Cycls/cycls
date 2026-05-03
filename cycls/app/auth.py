@@ -24,6 +24,9 @@ class JWT:
     def resolve(self, prod):
         return {"jwks_url": self.jwks_url if prod else self.dev_jwks_url}
 
+    def claims_to_user(self, decoded) -> "User":
+        return User(id=decoded.get("sub"))
+
 
 _CLERK_DEFAULTS = {
     "jwks_url":     "https://clerk.cycls.ai/.well-known/jwks.json",
@@ -47,15 +50,28 @@ class Clerk(JWT):
     def resolve(self, prod):
         return {**super().resolve(prod), "pk": self.pk if prod else self.dev_pk}
 
+    def claims_to_user(self, decoded) -> "User":
+        org = decoded.get("o") or {}
+        fea = decoded.get("fea")
+        if isinstance(fea, str):
+            fea = [f.strip() for f in fea.split(",") if f.strip()]
+        return User(
+            id=decoded.get("sub"), plan=decoded.get("pla"), features=fea,
+            org_id=org.get("id"), org_slug=org.get("slg"),
+            org_role=org.get("rol"), org_permissions=org.get("per"),
+        )
+
 
 _jwks_clients = {}
 
 
-def validator(jwks_url):
+def validator(provider, prod):
     import jwt as jwtlib
     from jwt import PyJWKClient
     from fastapi import Depends, HTTPException
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+    jwks_url = provider.resolve(prod)["jwks_url"] if provider else None
 
     def validate(
         bearer: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
@@ -73,14 +89,6 @@ def validator(jwks_url):
             decoded = jwtlib.decode(bearer.credentials, key.key, algorithms=["RS256"], leeway=10)
         except Exception as e:
             raise HTTPException(401, str(e), headers={"WWW-Authenticate": "Bearer"})
-        org = decoded.get("o") or {}
-        fea = decoded.get("fea")
-        if isinstance(fea, str):
-            fea = [f.strip() for f in fea.split(",") if f.strip()]
-        return User(
-            id=decoded.get("sub"), plan=decoded.get("pla"), features=fea,
-            org_id=org.get("id"), org_slug=org.get("slg"),
-            org_role=org.get("rol"), org_permissions=org.get("per"),
-        )
+        return provider.claims_to_user(decoded)
 
     return validate
