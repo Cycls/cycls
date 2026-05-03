@@ -16,7 +16,7 @@ HTML_PATH = str(Path(__file__).parent / "photos.html")
 MAX_BYTES = 10 * 1024 * 1024
 
 
-@cycls.app(image=cycls.Image().copy(HTML_PATH, "photos.html"), auth=cycls.Clerk("cycls.ai"))
+@cycls.app(image=cycls.Image().copy(HTML_PATH, "photos.html"), auth=cycls.Clerk())
 def photos():
     from fastapi import FastAPI, File, HTTPException, Response, UploadFile
     from fastapi.responses import HTMLResponse

@@ -29,7 +29,7 @@ import cycls
 HTML_PATH = str(Path(__file__).parent / "habits.html")
 
 
-@cycls.app(image=cycls.Image().copy(HTML_PATH, "habits.html"), auth=cycls.Clerk("cycls.ai"))
+@cycls.app(image=cycls.Image().copy(HTML_PATH, "habits.html"), auth=cycls.Clerk())
 def habits():
     from fastapi import FastAPI, HTTPException
     from fastapi.responses import HTMLResponse

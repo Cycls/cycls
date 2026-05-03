@@ -22,7 +22,7 @@ def tokenize(text: str) -> set[str]:
     return set(TOKEN_RE.findall(text.lower()))
 
 
-@cycls.app(image=cycls.Image().copy(HTML_PATH, "notes.html"), auth=cycls.Clerk("cycls.ai"))
+@cycls.app(image=cycls.Image().copy(HTML_PATH, "notes.html"), auth=cycls.Clerk())
 def notes():
     from fastapi import FastAPI, HTTPException
     from fastapi.responses import HTMLResponse
