@@ -269,18 +269,16 @@ def test_chat_completions_endpoint_openai_format():
 
 
 # =============================================================================
-# Signed-URL share flow (live shares, no frozen snapshot)
+# Token-based share flow (RFC003)
 # =============================================================================
 
 def _share_test_app(tmp_path):
-    """Mount POST /share + GET /shared/data on a FastAPI app, with a fixed
-    in-process User and a real cycls.App for signing. No live JWT verification."""
+    """Mount the token-based share router with a fixed in-process User."""
     from fastapi import Depends, FastAPI
     from fastapi.testclient import TestClient
     from cycls.app.auth import User
     from cycls.app.workspace import workspace_for
     from cycls.agent.web.routers import share_router
-
     import cycls
 
     @cycls.app(image={"volume": str(tmp_path)})
@@ -297,10 +295,9 @@ def _share_test_app(tmp_path):
 
 
 def test_share_router_mint_and_resolve(tmp_path):
-    """POST /share mints a signed URL; GET /shared/data?... returns the chat."""
+    """POST /share mints a token; GET /share/<user>/<token> returns the chat."""
     from cycls.agent import chat
     from cycls.app.workspace import workspace_for
-    from cycls.app.auth import User
     import asyncio
 
     svc, user, client = _share_test_app(tmp_path)
@@ -314,42 +311,29 @@ def test_share_router_mint_and_resolve(tmp_path):
         ], 0)
     asyncio.run(seed())
 
-    r = client.post("/share", json={"chat_id": "c1", "title": "Shared chat"})
+    r = client.post("/share", json={"path": "chat/c1"})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["id"] == "c1"
-    assert body["url"].startswith("/shared?")
+    assert body["path"] == "chat/c1"
+    assert body["audience"] == "public"
+    assert body["url"].startswith("/share/user_test/")
 
-    # The page URL is /shared?...; the SPA derives the data URL by inserting /data.
-    data_url = body["url"].replace("/shared?", "/shared/data?")
-    r2 = client.get(data_url)
+    r2 = client.get(body["url"])
     assert r2.status_code == 200, r2.text
     data = r2.json()
     assert data["id"] == "c1"
-    assert data["title"] == "Shared chat"
+    assert data["title"] == "First chat"
     assert [m["content"] for m in data["messages"]] == ["hi", "hello there"]
 
 
-def test_share_router_rejects_tampered_url(tmp_path):
-    from cycls.agent import chat
-    from cycls.app.workspace import workspace_for
-    from cycls.app.auth import User
-    import asyncio
-
+def test_share_router_rejects_bogus_token(tmp_path):
     svc, user, client = _share_test_app(tmp_path)
-    ws = workspace_for(user, tmp_path, base=f"file://{tmp_path}")
-    asyncio.run(chat.put_meta(ws, "c1", {"id": "c1", "title": "T"}))
-
-    url = client.post("/share", json={"chat_id": "c1"}).json()["url"]
-    data_url = url.replace("/shared?", "/shared/data?")
-    # Swap chat path — sig no longer matches
-    bad = data_url.replace("path=chat%2Fc1", "path=chat%2Fother")
-    assert client.get(bad).status_code == 403
+    assert client.get("/share/user_test/bogus_token").status_code == 403
 
 
 def test_share_router_unknown_chat_404(tmp_path):
     svc, user, client = _share_test_app(tmp_path)
-    r = client.post("/share", json={"chat_id": "missing"})
+    r = client.post("/share", json={"path": "chat/missing"})
     assert r.status_code == 404
 
 
@@ -362,50 +346,32 @@ def test_share_router_list_and_delete(tmp_path):
     ws = workspace_for(user, tmp_path, base=f"file://{tmp_path}")
     asyncio.run(chat.put_meta(ws, "c1", {"id": "c1", "title": "T"}))
 
-    client.post("/share", json={"chat_id": "c1", "title": "T"})
+    body = client.post("/share", json={"path": "chat/c1"}).json()
+    token = body["token"]
+
     listed = client.get("/share").json()
-    assert [s["id"] for s in listed] == ["c1"]
+    assert [s["token"] for s in listed] == [token]
+    assert listed[0]["path"] == "chat/c1"
 
-    client.delete("/share/c1")
+    assert client.delete(f"/share/{token}").status_code == 200
     assert client.get("/share").json() == []
+    # Revoke is real — token stops resolving.
+    assert client.get(body["url"]).status_code == 403
 
 
-def test_files_sign_mints_signed_url(tmp_path):
-    """POST /files/sign mints a signed URL to /shared/file/<path>; the URL serves
-    the actual file bytes when GET-ed back."""
-    from fastapi import Depends, FastAPI
-    from fastapi.testclient import TestClient
-    from cycls.app.auth import User
+def test_share_router_file_share(tmp_path):
+    """File shares serve bytes via the same /share/<user>/<token> URL."""
     from cycls.app.workspace import workspace_for
-    from cycls.agent.web.routers import files_router, share_router
-    import cycls
 
-    @cycls.app(image={"volume": str(tmp_path)})
-    def svc():
-        return None
-
-    user = User(id="user_test")
-    user_dep = Depends(lambda: user)
-    ws_dep = Depends(lambda: workspace_for(user, tmp_path, base=f"file://{tmp_path}"))
-
-    # Seed a file in the user's workspace root
+    svc, user, client = _share_test_app(tmp_path)
     ws = workspace_for(user, tmp_path, base=f"file://{tmp_path}")
     ws.root.mkdir(parents=True, exist_ok=True)
     (ws.root / "doc.md").write_text("hello world")
 
-    fapp = FastAPI()
-    fapp.include_router(files_router(svc, ws_dep, user_dep))
-    fapp.include_router(share_router(svc, ws_dep, user_dep, tmp_path, f"file://{tmp_path}"))
-    client = TestClient(fapp)
-
-    r = client.post("/files/sign", json={"path": "doc.md"})
+    body = client.post("/share", json={"path": "file/doc.md"}).json()
+    r = client.get(body["url"])
     assert r.status_code == 200
-    url = r.json()["url"]
-    assert url.startswith("/shared/file/doc.md?")
-
-    r2 = client.get(url)
-    assert r2.status_code == 200
-    assert r2.content == b"hello world"
+    assert r.content == b"hello world"
 
 
 def test_validator_rejects_query_token(tmp_path):

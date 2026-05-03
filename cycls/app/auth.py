@@ -80,30 +80,35 @@ class GCP(JWT):
 _jwks_clients = {}
 
 
-def validator(provider, prod):
+def authenticate(provider, prod, token: str) -> User:
+    """Decode *token* via *provider*'s JWKS; return a User. Raises on failure."""
     import jwt as jwtlib
     from jwt import PyJWKClient
+    jwks_url = provider.resolve(prod)["jwks_url"] if provider else None
+    if not jwks_url:
+        raise RuntimeError("Auth not configured (missing JWKS URL)")
+    client = _jwks_clients.setdefault(jwks_url, PyJWKClient(jwks_url))
+    key = client.get_signing_key_from_jwt(token)
+    decoded = jwtlib.decode(token, key.key, algorithms=["RS256"], leeway=10)
+    return provider.claims_to_user(decoded)
+
+
+def validator(provider, prod):
     from fastapi import Depends, HTTPException
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-
-    jwks_url = provider.resolve(prod)["jwks_url"] if provider else None
 
     def validate(
         bearer: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
     ) -> User:
         # Authorization header only. Native browser loads (img/anchor/window.open)
-        # that can't set headers go through HMAC-signed `/shared/...` URLs instead
-        # — see `App.signed_url`.
+        # that can't set headers go through opaque /share/<user>/<token> URLs.
         if not bearer:
             raise HTTPException(401, "Not authenticated", headers={"WWW-Authenticate": "Bearer"})
-        if not jwks_url:
-            raise HTTPException(500, "Auth not configured (missing JWKS URL)")
         try:
-            client = _jwks_clients.setdefault(jwks_url, PyJWKClient(jwks_url))
-            key = client.get_signing_key_from_jwt(bearer.credentials)
-            decoded = jwtlib.decode(bearer.credentials, key.key, algorithms=["RS256"], leeway=10)
+            return authenticate(provider, prod, bearer.credentials)
+        except RuntimeError as e:
+            raise HTTPException(500, str(e))
         except Exception as e:
             raise HTTPException(401, str(e), headers={"WWW-Authenticate": "Bearer"})
-        return provider.claims_to_user(decoded)
 
     return validate
