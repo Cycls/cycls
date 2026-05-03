@@ -17,7 +17,12 @@ export default defineConfig({
           (p) => [p, backend]
         )
       ),
-      "/share": { target: backend, bypass: (req) => req.url?.startsWith("/shared/") ? "/index.html" : undefined },
+      // /share/<user>/<token> is the SPA route (serve index.html);
+      // sub-paths (/data, /file/...) and bare /share owner ops go to backend.
+      "/share": {
+        target: backend,
+        bypass: (req) => /^\/share\/[^/]+\/[^/]+$/.test(req.url ?? "") ? "/index.html" : undefined,
+      },
     },
   },
 });
