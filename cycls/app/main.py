@@ -8,7 +8,7 @@ import uvicorn
 
 from cycls.function import Function, _get_api_key, _get_base_url
 from cycls.app.auth import JWT, validator
-from cycls.app.tenancy import subject_for, workspace_for
+from cycls.app.workspace import subject_for, workspace_for
 from cycls.app import signing
 
 CYCLS_PATH = importlib.resources.files("cycls")

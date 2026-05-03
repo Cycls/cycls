@@ -4,7 +4,7 @@ Keys:
     chat/meta/{chat_id}           — chat metadata (title, updatedAt, createdAt)
     chat/log/{chat_id}/{turn:06d} — each message, ordered
 """
-from cycls.app.db import DB
+from cycls.app.workspace import DB
 
 
 def _validate(chat_id):

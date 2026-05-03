@@ -8,7 +8,7 @@ or carry state between tests.
 import asyncio
 import pytest
 
-from cycls.app.db import shutdown_pool
+from cycls.app.workspace import shutdown_pool
 
 
 @pytest.fixture(autouse=True)
