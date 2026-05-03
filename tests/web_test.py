@@ -408,14 +408,14 @@ def test_files_sign_mints_signed_url(tmp_path):
     assert r2.content == b"hello world"
 
 
-def test_make_validate_rejects_query_token(tmp_path):
+def test_validator_rejects_query_token(tmp_path):
     """Regression: `?token=` in the query MUST NOT authenticate (Codespace proxy
     can inject stray Bearers; URL tokens leak via logs/Referer). Bearer header only."""
-    from cycls.app.auth import make_validate
+    from cycls.app.auth import validator
     from fastapi import Depends, FastAPI
     from fastapi.testclient import TestClient
 
-    validate = make_validate("https://example.invalid/jwks")
+    validate = validator("https://example.invalid/jwks")
     fapp = FastAPI()
 
     @fapp.get("/me")

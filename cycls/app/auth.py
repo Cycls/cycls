@@ -51,7 +51,7 @@ class Clerk(JWT):
 _jwks_clients = {}
 
 
-def make_validate(jwks_url):
+def validator(jwks_url):
     import jwt as jwtlib
     from jwt import PyJWKClient
     from fastapi import Depends, HTTPException

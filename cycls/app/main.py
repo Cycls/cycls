@@ -7,7 +7,7 @@ from typing import Optional
 import uvicorn
 
 from cycls.function import Function, _get_api_key, _get_base_url
-from cycls.app.auth import JWT, make_validate
+from cycls.app.auth import JWT, validator
 from cycls.app.tenancy import subject_for, workspace_for
 from cycls.app import signing
 
@@ -57,7 +57,7 @@ class App(Function):
         if self._auth_provider is None:
             raise RuntimeError("App.auth requires auth=... on the @cycls.app decorator")
         from fastapi import Depends
-        return Depends(make_validate(self._auth_provider.resolve(self.prod)["jwks_url"]))
+        return Depends(validator(self._auth_provider.resolve(self.prod)["jwks_url"]))
 
     @cached_property
     def workspace(self):

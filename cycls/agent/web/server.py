@@ -2,7 +2,7 @@ import json, inspect, uuid, os
 from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional, Any
-from cycls.app.auth import User, make_validate
+from cycls.app.auth import User, validator
 from cycls.app.tenancy import Workspace, workspace_for
 
 
@@ -136,7 +136,7 @@ def web(func, config, extra_routers=None):
 
     app = FastAPI()
 
-    validate = make_validate(config.jwks)
+    validate = validator(config.jwks)
     auth = Depends(validate) if config.auth else Depends(lambda: None)
     required_auth = Depends(validate)
 
