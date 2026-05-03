@@ -141,10 +141,6 @@ def test_copy_local_directory():
     Tests that a local directory can be copied into the container.
     """
     print("\n--- Running test: test_copy_local_directory ---")
-    # 1. Define the agent that will analyze the sales data.
-    #    - `pip=["pandas"]`: Installs the pandas library.
-    #    - `copy=["tests/data"]`: Copies the local 'tests/data' directory
-    #      into the container (pytest runs from project root).
     @cycls.function(image=cycls.Image().pip("pandas").copy("tests/data"))
     def analyze_sales():
         import pandas as pd
