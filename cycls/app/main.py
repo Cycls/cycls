@@ -35,13 +35,8 @@ class App(Function):
         image = dict(image or {})
         image["copy"] = {str(CYCLS_PATH): "cycls", **image.get("copy", {})}
 
-        super().__init__(
-            func=func,
-            name=name,
-            image=image,
-            base_url=_get_base_url(),
-            api_key=_get_api_key(),
-        )
+        super().__init__(func=func, name=name, image=image,
+                         base_url=_get_base_url(), api_key=_get_api_key())
 
     def __call__(self, *args, **kwargs):
         return self.user_func(*args, **kwargs)
@@ -52,17 +47,19 @@ class App(Function):
             return f"gs://cycls-ws-{self.name}"
         return f"file://{self.volume}"
 
+    def _require_auth(self):
+        if self._auth_provider is None:
+            raise RuntimeError("Requires auth=... on the @cycls.app decorator")
+
     @cached_property
     def auth(self):
-        if self._auth_provider is None:
-            raise RuntimeError("App.auth requires auth=... on the @cycls.app decorator")
+        self._require_auth()
         from fastapi import Depends
         return Depends(validator(self._auth_provider, self.prod))
 
     @cached_property
     def workspace(self):
-        if self._auth_provider is None:
-            raise RuntimeError("App.workspace requires auth=... on the @cycls.app decorator")
+        self._require_auth()
         from fastapi import Depends
         def _build_ws(user=self.auth):
             return workspace_for(user, self.volume, base=self.base)
