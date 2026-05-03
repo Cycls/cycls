@@ -15,8 +15,6 @@ CYCLS_PATH = importlib.resources.files("cycls")
 
 
 class App(Function):
-    """App extends Function with a blocking ASGI service."""
-
     _base_pip = ["uvicorn[standard]", "slatedb",
                  "fastapi[standard]", "pyjwt", "cryptography"]
     _base_apt = ["bubblewrap"]
@@ -54,11 +52,8 @@ class App(Function):
             return f"gs://cycls-ws-{self.name}"
         return f"file://{self.volume}"
 
-    # ---- FastAPI Depends instances (lazy) ----
-
     @cached_property
     def auth(self):
-        """FastAPI Depends that validates the JWT and yields a User."""
         if self._auth_provider is None:
             raise RuntimeError("App.auth requires auth=... on the @cycls.app decorator")
         from fastapi import Depends
@@ -68,20 +63,16 @@ class App(Function):
 
     @cached_property
     def workspace(self):
-        """FastAPI Depends that yields a per-request `Workspace` for the user."""
         if self._auth_provider is None:
             raise RuntimeError("App.workspace requires auth=... on the @cycls.app decorator")
         from fastapi import Depends
-        auth_dep = self.auth
-        def _build_ws(user=auth_dep):
+        def _build_ws(user=self.auth):
             return workspace_for(user, self.volume, base=self.base)
         return Depends(_build_ws)
 
     @cached_property
     def signing_key(self) -> bytes:
-        """HMAC secret persisted in the deployment's bucket so all pods share
-        it across restarts. First boot generates 32 bytes; subsequent reads
-        return the same key. Delete the file and redeploy to rotate."""
+        """Persisted HMAC secret; rotate by deleting the file and redeploying."""
         path = self.volume / ".cycls" / "signing.key"
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
@@ -91,25 +82,18 @@ class App(Function):
         return key
 
     def signed_url(self, path: str, user, ttl: int = 3600) -> str:
-        """Return a signed URL granting access to *path* in *user*'s workspace
-        for *ttl* seconds. The URL shape depends on the path scheme:
-            chat/<id>   → /shared?path=...&user=...&exp=...&sig=...   (SPA page)
-            file/<path> → /shared/file/<path>?user=...&exp=...&sig=... (raw bytes)
-        Either way, the HMAC binds the literal *path* string."""
+        """`chat/<id>` mints an SPA share link; `file/<path>` mints a raw-bytes URL with the path inlined."""
         from urllib.parse import quote, urlencode
         sub = user if isinstance(user, str) else subject_for(user)
         params = signing.sign(path, sub, self.signing_key, ttl=ttl)
         if path.startswith("file/"):
-            params.pop("path")  # file path lives in the URL, not the query
+            params.pop("path")
             rest = quote(path[len("file/"):], safe="/")
             return f"/shared/file/{rest}?{urlencode(params)}"
         return f"/shared?{urlencode(params)}"
 
     def verify_signed(self, path: str, user: str, exp, sig: str) -> bool:
-        """True if (path, user, exp, sig) is a valid, unexpired signature."""
         return signing.verify(path, user, exp, sig, self.signing_key)
-
-    # ---- Lifecycle ----
 
     def _prepare_func(self, prod):
         self.prod = prod
@@ -117,20 +101,19 @@ class App(Function):
         self.func = lambda port: uvicorn.run(user_func(), host="0.0.0.0", port=port)
 
     def _local(self, port=8080):
-        """Run directly with uvicorn (no Docker)."""
+        """Run uvicorn directly, bypassing Docker."""
         print(f"Starting local server at localhost:{port}")
         self.prod = False
         uvicorn.run(self.user_func(), host="0.0.0.0", port=port)
 
     def local(self, port=8080, watch=True):
-        """Run locally in Docker with file watching by default."""
+        """Run in Docker; reload on file changes unless watch=False."""
         if os.environ.get('_CYCLS_WATCH'):
             watch = False
         self._prepare_func(prod=False)
         self.watch(port=port) if watch else self.run(port=port)
 
     def deploy(self, port=8080):
-        """Deploy to production."""
         if self.api_key is None:
             raise RuntimeError("Missing API key. Set cycls.api_key or CYCLS_API_KEY environment variable.")
         self._prepare_func(prod=True)
