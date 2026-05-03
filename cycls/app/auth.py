@@ -62,6 +62,21 @@ class Clerk(JWT):
         )
 
 
+class GCP(JWT):
+    """GCP Identity Platform / Firebase Auth.
+    Maps `firebase.tenant` → `org_id` so multi-tenant projects share workspace
+    semantics with Clerk orgs (org-shared root, per-user DB)."""
+
+    def __init__(self, project_id, *, jwks_url=None):
+        super().__init__(jwks_url or
+            "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com")
+        self.project_id = project_id
+
+    def claims_to_user(self, decoded) -> "User":
+        tenant = (decoded.get("firebase") or {}).get("tenant")
+        return User(id=decoded.get("sub"), org_id=tenant)
+
+
 _jwks_clients = {}
 
 
