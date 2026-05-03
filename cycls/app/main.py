@@ -42,7 +42,7 @@ class App(Function):
         return self.user_func(*args, **kwargs)
 
     @property
-    def base(self) -> str:
+    def storage(self) -> str:
         if self.prod and self.name:
             return f"gs://cycls-ws-{self.name}"
         return f"file://{self.volume}"
@@ -62,7 +62,7 @@ class App(Function):
         self._require_auth()
         from fastapi import Depends
         def _build_ws(user=self.auth):
-            return workspace_for(user, self.volume, base=self.base)
+            return workspace_for(user, self.volume, base=self.storage)
         return Depends(_build_ws)
 
     @cached_property
