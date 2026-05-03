@@ -97,8 +97,7 @@ class Function:
         self.base_image = f"python:{self.python_version}-slim"
         self.apt = sorted([*self._base_apt, *image.get("apt", [])])
         self.run_commands = list(image.get("run_commands", []))
-        copy = image.get("copy", {})
-        self.copy = {f: f for f in copy} if isinstance(copy, list) else copy
+        self.copy = image.get("copy", {})
         self._base_url = base_url
         self._api_key = api_key
         self.pip = sorted(set([*self._base_pip, *image.get("pip", [])]) | {"cloudpickle"})

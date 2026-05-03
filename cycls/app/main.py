@@ -35,10 +35,7 @@ class App(Function):
         # etc. inside the function gets serialized via cloudpickle — which
         # requires the cycls source to be importable in the container.
         image = dict(image or {})
-        user_copy = image.get("copy", {})
-        if isinstance(user_copy, list):
-            user_copy = {f: f for f in user_copy}
-        image["copy"] = {str(CYCLS_PATH): "cycls", **user_copy}
+        image["copy"] = {str(CYCLS_PATH): "cycls", **image.get("copy", {})}
 
         super().__init__(
             func=func,
@@ -51,15 +48,11 @@ class App(Function):
     def __call__(self, *args, **kwargs):
         return self.user_func(*args, **kwargs)
 
-    # ---- Substrate-derived properties ----
-
-    @property
-    def bucket(self) -> Optional[str]:
-        return f"gs://cycls-ws-{self.name}" if self.prod and self.name else None
-
     @property
     def base(self) -> str:
-        return self.bucket or f"file://{self.volume}"
+        if self.prod and self.name:
+            return f"gs://cycls-ws-{self.name}"
+        return f"file://{self.volume}"
 
     # ---- FastAPI Depends instances (lazy) ----
 
@@ -136,12 +129,12 @@ class App(Function):
         self._prepare_func(prod=False)
         self.watch(port=port) if watch else self.run(port=port)
 
-    def deploy(self, port=8080, memory=None):
+    def deploy(self, port=8080):
         """Deploy to production."""
         if self.api_key is None:
             raise RuntimeError("Missing API key. Set cycls.api_key or CYCLS_API_KEY environment variable.")
         self._prepare_func(prod=True)
-        return super().deploy(port=port, memory=memory or self.memory)
+        return super().deploy(port=port, memory=self.memory)
 
 
 def _make_decorator(cls):

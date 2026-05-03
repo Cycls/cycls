@@ -29,12 +29,10 @@ class Config(BaseModel):
         self.prod = prod
 
     @property
-    def bucket(self) -> Optional[str]:
-        return f"gs://cycls-ws-{self.name}" if self.prod and self.name else None
-
-    @property
     def base(self) -> str:
-        return self.bucket or f"file://{self.volume}"
+        if self.prod and self.name:
+            return f"gs://cycls-ws-{self.name}"
+        return f"file://{self.volume}"
 
 async def openai_encoder(stream):
     try:
