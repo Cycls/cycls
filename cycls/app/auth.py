@@ -17,45 +17,32 @@ class User(BaseModel):
 class JWT:
     """JWT provider with dev/prod URL pairs. dev falls back to prod when omitted."""
 
-    def __init__(self, jwks_url, dev_jwks_url=None, issuer=None, dev_issuer=None):
+    def __init__(self, jwks_url, dev_jwks_url=None):
         self.jwks_url = jwks_url
         self.dev_jwks_url = dev_jwks_url or jwks_url
-        self.issuer = issuer
-        self.dev_issuer = dev_issuer or issuer
 
     def resolve(self, prod):
-        return {
-            "jwks_url": self.jwks_url if prod else self.dev_jwks_url,
-            "issuer": self.issuer if prod else self.dev_issuer,
-        }
+        return {"jwks_url": self.jwks_url if prod else self.dev_jwks_url}
 
 
-_CLERK_APPS = {
-    "cycls.ai": {
-        "jwks_url":     "https://clerk.cycls.ai/.well-known/jwks.json",
-        "dev_jwks_url": "https://select-sloth-58.clerk.accounts.dev/.well-known/jwks.json",
-        "pk":           "pk_live_Y2xlcmsuY3ljbHMuYWkk",
-        "dev_pk":       "pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ",
-    },
+_CLERK_DEFAULTS = {
+    "jwks_url":     "https://clerk.cycls.ai/.well-known/jwks.json",
+    "dev_jwks_url": "https://select-sloth-58.clerk.accounts.dev/.well-known/jwks.json",
+    "pk":           "pk_live_Y2xlcmsuY3ljbHMuYWkk",
+    "dev_pk":       "pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ",
 }
 
 
 class Clerk(JWT):
-    """Clerk provider. Adds publishable keys for the browser SDK.
-    `Clerk("cycls.ai")` uses hosted defaults; pass explicit URLs for a custom app."""
+    """Clerk provider with hosted defaults; pass explicit URLs to override."""
 
-    def __init__(self, app="cycls.ai", *, jwks_url=None, dev_jwks_url=None,
-                 pk=None, dev_pk=None, issuer=None, dev_issuer=None):
-        d = _CLERK_APPS.get(app, {})
+    def __init__(self, *, jwks_url=None, dev_jwks_url=None, pk=None, dev_pk=None):
         super().__init__(
-            jwks_url or d.get("jwks_url"),
-            dev_jwks_url or d.get("dev_jwks_url"),
-            issuer, dev_issuer,
+            jwks_url or _CLERK_DEFAULTS["jwks_url"],
+            dev_jwks_url or _CLERK_DEFAULTS["dev_jwks_url"],
         )
-        if not self.jwks_url:
-            raise ValueError("Clerk requires app='cycls.ai' or an explicit jwks_url")
-        self.pk = pk or d.get("pk")
-        self.dev_pk = dev_pk or d.get("dev_pk")
+        self.pk = pk or _CLERK_DEFAULTS["pk"]
+        self.dev_pk = dev_pk or _CLERK_DEFAULTS["dev_pk"]
 
     def resolve(self, prod):
         return {**super().resolve(prod), "pk": self.pk if prod else self.dev_pk}
@@ -64,11 +51,10 @@ class Clerk(JWT):
 class InvalidToken(Exception): pass
 
 
-_jwks_clients: dict = {}
+_jwks_clients = {}
 
 
 def verify_jwt(token, jwks_url):
-    """Verify *token* against *jwks_url*; return a User or raise InvalidToken."""
     import jwt as jwtlib
     from jwt import PyJWKClient
     client = _jwks_clients.setdefault(jwks_url, PyJWKClient(jwks_url))

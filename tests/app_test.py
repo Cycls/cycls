@@ -53,7 +53,7 @@ def test_app_rejects_non_jwt_auth():
 
 def test_app_accepts_jwt_auth_and_exposes_deps():
     """auth=cycls.Clerk(...) wires app.auth and app.workspace as FastAPI Depends."""
-    @cycls.app(auth=cycls.Clerk("cycls.ai"))
+    @cycls.app(auth=cycls.Clerk())
     def svc():
         from fastapi import FastAPI
         return FastAPI()

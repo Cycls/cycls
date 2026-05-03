@@ -31,7 +31,7 @@ image = (cycls.Image()
          "&& ln -sf /root/.bun/bin/bun /usr/local/bin/bun"))
 
 
-@cycls.app(image=image, auth=cycls.Clerk("cycls.ai"))
+@cycls.app(image=image, auth=cycls.Clerk())
 def bun_app():
     import httpx
     from fastapi import FastAPI, Request, Response, HTTPException

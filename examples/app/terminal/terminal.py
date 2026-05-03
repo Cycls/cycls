@@ -30,7 +30,7 @@ sandbox = (
 
 @cycls.app(
     image=cycls.Image().copy(HTML_PATH, "terminal.html"),
-    auth=cycls.Clerk("cycls.ai"),
+    auth=cycls.Clerk(),
 )
 def terminal():
     from fastapi import FastAPI
