@@ -112,6 +112,7 @@ export function Files({
   onRename,
   onDelete,
   onOpenFile,
+  onShareFile,
 }: {
   entries: FileEntry[];
   path: string;
@@ -122,11 +123,13 @@ export function Files({
   onRename: (from: string, to: string) => Promise<void>;
   onDelete: (path: string) => Promise<void>;
   onOpenFile: (path: string) => Promise<string>;
+  onShareFile?: (path: string) => Promise<string>;
 }) {
   useLang();
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [creatingFolder, setCreatingFolder] = useState(false);
+  const [shareCopied, setShareCopied] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState<string[]>([]);
   const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
@@ -406,6 +409,15 @@ export function Files({
                                 a.download = entry.name;
                                 a.click();
                               });
+                            },
+                          }] : []),
+                          ...(!isDir && onShareFile ? [{
+                            label: shareCopied === entry.name ? t("copied") : t("share"),
+                            onClick: async () => {
+                              const url = await onShareFile(entryPath);
+                              await navigator.clipboard.writeText(url);
+                              setShareCopied(entry.name);
+                              setTimeout(() => setShareCopied(null), 2000);
                             },
                           }] : []),
                           {

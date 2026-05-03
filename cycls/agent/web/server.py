@@ -215,8 +215,11 @@ def web(func, config, extra_routers=None, auth=None):
 
     @app.get("/")
     @app.get("/sso-callback")
-    @app.get("/shared")
     async def index():
+        return HTMLResponse(_index_html)
+
+    @app.get("/share/{user}/{token}")
+    async def share_index(user: str, token: str):
         return HTMLResponse(_index_html)
 
     # ---- Static mounts (must be last) ----

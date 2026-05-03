@@ -191,14 +191,23 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             raise HTTPException(404, "Chat not found")
         token, row = await shares.mint(ws, path,
                                        audience=data.get("audience", "public"),
-                                       ttl=int(data.get("ttl") or shares.DEFAULT_TTL))
+                                       ttl=int(data.get("ttl") or shares.DEFAULT_TTL),
+                                       author=data.get("author"))
         return {"token": token, "url": f"/share/{subject_for(user)}/{token}", **row}
 
     @r.get("/share")
-    async def list_shares(ws: Workspace = ws_dep):
+    async def list_shares(ws: Workspace = ws_dep, user: Any = user_dep):
+        sub = subject_for(user)
         out = []
         async for key, row in DB(ws).items(prefix="share/"):
-            out.append({"token": key[6:], **row})
+            token = key[6:]
+            path = row["path"]
+            if path.startswith("chat/"):
+                meta = await chat.get_meta(ws, path[5:])
+                title = (meta or {}).get("title") or ""
+            else:
+                title = path[5:]  # file path as the display name
+            out.append({"token": token, "url": f"/share/{sub}/{token}", "title": title, **row})
         out.sort(key=lambda s: s["exp"], reverse=True)
         return out
 
@@ -209,13 +218,14 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     # ---- Viewer side ----
 
-    @r.get("/share/{user}/{token}")
+    @r.get("/share/{user}/{token}/data")
     async def resolve_share(
         user: str, token: str,
         bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     ):
         ws_owner, row = await _resolve_or_403(user, token, bearer)
         path = row["path"]
+        common = {"author": row.get("author"), "shared_at": row.get("shared_at")}
         if path.startswith("chat/"):
             chat_id = path[5:]
             meta = await chat.get_meta(ws_owner, chat_id)
@@ -226,8 +236,10 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
                 for att in m.get("attachments") or []:
                     if ap := att.get("path"):
                         att["url"] = f"/share/{user}/{token}/file/{ap}"
-            return {"id": chat_id, "title": meta.get("title", ""), "messages": messages}
-        return _serve_file(ws_owner.root, path[5:])
+            return {"type": "chat", "id": chat_id, "title": meta.get("title", ""),
+                    "messages": messages, **common}
+        return {"type": "file", "path": path[5:],
+                "url": f"/share/{user}/{token}/file/{path[5:]}", **common}
 
     @r.get("/share/{user}/{token}/file/{file_path:path}")
     async def shared_attachment(

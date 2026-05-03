@@ -95,17 +95,31 @@ export function useFiles(baseUrl: string = "") {
 
   const openFile = useCallback(async (filePath: string) => {
     // Native browser loads (window.open, anchor href, img src) can't carry an
-    // Authorization header — mint a short-lived HMAC-signed URL instead.
+    // Authorization header — mint a short-lived share token URL instead.
     const h = { "Content-Type": "application/json", ...(await authHeaders()) };
-    const res = await fetch(`${baseUrl}/files/sign`, {
+    const res = await fetch(`${baseUrl}/share`, {
       method: "POST",
       headers: h,
-      body: JSON.stringify({ path: filePath }),
+      body: JSON.stringify({ path: `file/${filePath}`, ttl: 3600 }),
     });
     if (!res.ok) throw new Error(`Sign failed: ${res.status}`);
     const { url } = await res.json();
-    return `${baseUrl}${url}`;
+    // For file shares, the file bytes live at <url>/file/<path>.
+    return `${baseUrl}${url}/file/${filePath}`;
   }, [baseUrl, authHeaders]);
 
-  return { entries, path, loading, list, upload, mkdir, rename, remove, openFile, setGetToken };
+  const shareFile = useCallback(async (filePath: string) => {
+    const h = { "Content-Type": "application/json", ...(await authHeaders()) };
+    const res = await fetch(`${baseUrl}/share`, {
+      method: "POST",
+      headers: h,
+      body: JSON.stringify({ path: `file/${filePath}` }),
+    });
+    if (!res.ok) throw new Error(`Share failed: ${res.status}`);
+    const { url } = await res.json();
+    track("file_shared", { path: filePath });
+    return `${window.location.origin}${url}`;
+  }, [baseUrl, authHeaders]);
+
+  return { entries, path, loading, list, upload, mkdir, rename, remove, openFile, shareFile, setGetToken };
 }

@@ -77,8 +77,8 @@ export function Chat({
   onClear: () => void;
   onRetry?: () => void;
   onShare?: (title: string) => Promise<string>;
-  onListShares?: () => Promise<{ id: string; title: string; sharedAt: string; url: string }[]>;
-  onDeleteShare?: (id: string) => Promise<void>;
+  onListShares?: () => Promise<{ token: string; title: string; shared_at: string; url: string }[]>;
+  onDeleteShare?: (token: string) => Promise<void>;
   onListChats?: () => Promise<{ id: string; title: string; updatedAt: string }[]>;
   onLoadChat?: (id: string) => Promise<void>;
   onDeleteChat?: (id: string) => Promise<void>;
@@ -109,6 +109,7 @@ export function Chat({
     onRename: (from: string, to: string) => Promise<void>;
     onDelete: (path: string) => Promise<void>;
     onOpenFile: (path: string) => Promise<string>;
+    onShareFile?: (path: string) => Promise<string>;
   };
 }) {
   const lang = useLang();
@@ -127,7 +128,7 @@ export function Chat({
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
-  const [shares, setShares] = useState<{ id: string; title: string; sharedAt: string; url: string }[]>([]);
+  const [shares, setShares] = useState<{ token: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
   const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string }[]>([]);
   const [chatsLoading, setChatsLoading] = useState(false);
@@ -762,7 +763,7 @@ export function Chat({
                     ) : (
                       <div className="divide-y divide-border">
                         {shares.map((s) => (
-                          <div key={s.id} className="group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer"
+                          <div key={s.token} className="group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer"
                             onClick={() => window.open(s.url, "_blank")}
                           >
                             <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
@@ -774,7 +775,7 @@ export function Chat({
                               <span className="text-sm text-foreground truncate block">{s.title || t("untitled")}</span>
                             </div>
                             <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
-                              {formatShortDate(s.sharedAt)}
+                              {formatShortDate(s.shared_at)}
                             </span>
                             {onDeleteShare && (
                               <div className="relative shrink-0">
@@ -782,8 +783,8 @@ export function Chat({
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     setSharesLoading(true);
-                                    onDeleteShare(s.id).then(() => {
-                                      setShares((prev) => prev.filter((x) => x.id !== s.id));
+                                    onDeleteShare(s.token).then(() => {
+                                      setShares((prev) => prev.filter((x) => x.token !== s.token));
                                     }).finally(() => setSharesLoading(false));
                                   }}
                                   className="flex size-7 items-center justify-center rounded-md text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 hover:text-red-500 hover:bg-red-500/10 transition-all cursor-pointer"
