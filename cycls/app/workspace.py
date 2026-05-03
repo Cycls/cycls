@@ -1,18 +1,52 @@
-"""DB — JSON KV over SlateDB at `<base>/<path>`. Flat byte-keyed under the
-hood; namespacing (if any) is just a prefix in the caller's key string.
+"""Workspace — per-tenant `(root, path, base)` + JSON KV over SlateDB.
 
-Every op runs inside a SlateDB transaction. Single ops open a 1-op txn
-and commit non-durable on the way out; `db.transaction()` shares one txn
-across many ops. `db.raw()` is the bytes escape hatch.
+The auth ↔ workspace contract: `subject_for(user)` reads `user.id` and
+optionally `user.org_id`, the only `User` fields workspace logic depends on.
+
+`DB` runs JSON KV at `<base>/<path>`. Flat byte-keyed under the hood;
+namespacing (if any) is just a prefix in the caller's key. Every op is a
+SlateDB transaction (single ops are 1-op txns committed non-durable);
+`db.transaction()` shares one txn across many ops; `db.raw()` is the bytes
+escape hatch.
 """
 import asyncio, json
 from collections import OrderedDict
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from slatedb.uniffi import (
     DbBuilder, IsolationLevel, ObjectStore, WriteOptions,
 )
+
+
+# ---- Tenant shape ----
+
+@dataclass(frozen=True)
+class Workspace:
+    root: Path
+    path: str
+    base: Optional[str] = None
+
+
+def subject_for(user) -> str:
+    return f"{user.org_id}/{user.id}" if getattr(user, "org_id", None) else user.id
+
+
+def workspace_for(user, volume, base=None) -> Workspace:
+    return workspace_at("local" if user is None else subject_for(user), volume, base)
+
+
+def workspace_at(tenant, volume, base=None) -> Workspace:
+    volume = Path(volume)
+    if "/" in tenant:
+        org, user = tenant.split("/", 1)
+        return Workspace(root=volume / org, path=f"{org}/.db/{user}", base=base)
+    return Workspace(root=volume / tenant, path=f"{tenant}/.db", base=base)
+
+
+# ---- KV storage ----
 
 _pool: "OrderedDict[str, object]" = OrderedDict()
 _pool_lock = asyncio.Lock()

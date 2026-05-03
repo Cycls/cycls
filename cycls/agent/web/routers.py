@@ -13,8 +13,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 
-from cycls.app.db import DB
-from cycls.app.tenancy import Workspace, workspace_at, workspace_for
+from cycls.app.workspace import DB, Workspace, workspace_at, workspace_for
 from cycls.agent import chat
 
 
