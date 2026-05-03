@@ -57,7 +57,7 @@ class App(Function):
         if self._auth_provider is None:
             raise RuntimeError("App.auth requires auth=... on the @cycls.app decorator")
         from fastapi import Depends
-        return Depends(validator(self._auth_provider.resolve(self.prod)["jwks_url"]))
+        return Depends(validator(self._auth_provider, self.prod))
 
     @cached_property
     def workspace(self):

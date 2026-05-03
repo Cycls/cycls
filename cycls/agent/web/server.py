@@ -22,7 +22,6 @@ class Config(BaseModel):
     analytics: bool = False
     voice: bool = False
     pk: Optional[str] = None
-    jwks: Optional[str] = None
     volume: str = "/workspace"
 
     def set_prod(self, prod: bool):
@@ -84,7 +83,7 @@ class Messages(list):
     def raw(self):
         return self._raw
 
-def web(func, config, extra_routers=None):
+def web(func, config, extra_routers=None, auth=None):
     from fastapi import FastAPI, Request, HTTPException, Depends
     from fastapi.responses import StreamingResponse
     from fastapi.staticfiles import StaticFiles
@@ -136,7 +135,7 @@ def web(func, config, extra_routers=None):
 
     app = FastAPI()
 
-    validate = validator(config.jwks)
+    validate = validator(auth, config.prod)
     auth = Depends(validate) if config.auth else Depends(lambda: None)
     required_auth = Depends(validate)
 
@@ -235,10 +234,10 @@ def web(func, config, extra_routers=None):
     return app
 
 
-def serve(func, config, name, port, extra_routers=None):
+def serve(func, config, name, port, extra_routers=None, auth=None):
     import uvicorn, logging
     from dotenv import load_dotenv
     load_dotenv()
     logging.getLogger("uvicorn.error").addFilter(lambda r: "0.0.0.0" not in r.getMessage())
     print(f"\n🔨 {name} => http://localhost:{port}\n")
-    uvicorn.run(web(func, config, extra_routers=extra_routers), host="0.0.0.0", port=port)
+    uvicorn.run(web(func, config, extra_routers=extra_routers, auth=auth), host="0.0.0.0", port=port)
