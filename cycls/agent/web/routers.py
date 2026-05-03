@@ -1,19 +1,21 @@
 """HTTP routers for the agent's state surface — chats, files, share.
 
 Chat metadata + message log live in one KV (`KV("chat", workspace)`) — see
-`cycls.agent.chat`. Files stay on the workspace filesystem (they're POSIX-
-shaped). Public shares are stateless HMAC-signed URLs (`/shared?path=&user=
-&exp=&sig=`) — the signature *is* the proof of access; no server-side share
-record is consulted on read.
+`cycls.agent.chat`. Files stay on the workspace filesystem (POSIX-shaped).
+Shares are opaque tokens stored in the owner's workspace at `share/<token>`,
+audience-checked at resolve time. See docs/rfc-003.md.
 """
-import os, shutil, time, unicodedata
+import os, shutil, time, unicodedata, uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 
-from cycls.app.workspace import DB, Workspace, workspace_at, workspace_for
+from cycls.app.workspace import DB, Workspace, workspace_at, workspace_for, subject_for
+from cycls.app import share as shares
+from cycls.app.auth import User
 from cycls.agent import chat
 
 
@@ -86,18 +88,6 @@ def chats_router(ws_dep):
 
 def files_router(cycls_app, ws_dep, user_dep):
     r = APIRouter()
-
-    @r.post("/files/sign")
-    async def sign_file(request: Request, user: Any = user_dep):
-        """Mint a short-lived signed URL for a file in the caller's workspace.
-        Used when the FE needs a URL the browser can fetch natively (img src,
-        anchor href, window.open) — those don't accept Authorization headers."""
-        data = await request.json()
-        path = data.get("path")
-        if not path:
-            raise HTTPException(status_code=400, detail="path required")
-        ttl = int(data.get("ttl") or 3600)
-        return {"url": cycls_app.signed_url(f"file/{path}", user, ttl=ttl)}
 
     def _safe_path(workspace, rel):
         try:
@@ -174,93 +164,136 @@ def files_router(cycls_app, ws_dep, user_dep):
 # ---- Share ----
 
 def share_router(cycls_app, ws_dep, user_dep, volume, base):
-    """Live shares — `POST /share` mints a signed URL bound to (chat_id, owner,
-    exp); `/shared/data` and `/shared/file/...` resolve that URL with no auth
-    lookup, only HMAC verification. Owner-side `/share` index is kept for the
-    "your shared chats" UI but is not consulted on read."""
     r = APIRouter()
+    bearer_scheme = HTTPBearer(auto_error=False)
 
-    SHARE_TTL = 7 * 24 * 3600
+    async def _resolve_or_403(user: str, token: str, bearer):
+        from cycls.app.auth import authenticate
+        ws_owner = workspace_at(user, volume, base=base)
+        requester = None
+        if bearer and cycls_app._auth_provider is not None:
+            try: requester = authenticate(cycls_app._auth_provider, cycls_app.prod, bearer.credentials)
+            except Exception: pass
+        row = await shares.resolve(ws_owner, token, requester=requester)
+        if row is None:
+            raise HTTPException(403, "Invalid, expired, or unauthorized link")
+        return ws_owner, row
+
+    # ---- Owner side ----
 
     @r.post("/share")
     async def create_share(request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
         data = await request.json()
-        chat_id = data.get("chat_id") or data.get("id")
-        if not chat_id:
-            raise HTTPException(status_code=400, detail="chat_id required")
-        if (await chat.get_meta(ws, chat_id)) is None:
-            raise HTTPException(status_code=404, detail="Chat not found")
-        url = cycls_app.signed_url(f"chat/{chat_id}", user, ttl=SHARE_TTL)
-        meta = {
-            "id": chat_id,
-            "title": data.get("title", ""),
-            "author": data.get("author"),
-            "sharedAt": datetime.now(timezone.utc).isoformat(),
-            "url": url,
-        }
-        await DB(ws).put(f"share/{chat_id}", meta)
-        return meta
+        path = data.get("path")
+        if not (path and (path.startswith("chat/") or path.startswith("file/"))):
+            raise HTTPException(400, "path must be 'chat/<id>' or 'file/<path>'")
+        if path.startswith("chat/") and (await chat.get_meta(ws, path[5:])) is None:
+            raise HTTPException(404, "Chat not found")
+        token, row = await shares.mint(ws, path,
+                                       audience=data.get("audience", "public"),
+                                       ttl=int(data.get("ttl") or shares.DEFAULT_TTL))
+        return {"token": token, "url": f"/share/{subject_for(user)}/{token}", **row}
 
     @r.get("/share")
     async def list_shares(ws: Workspace = ws_dep):
-        items = []
-        async for _, meta in DB(ws).items(prefix="share/"):
-            items.append(meta)
-        items.sort(key=lambda s: s.get("sharedAt", ""), reverse=True)
-        return items
+        out = []
+        async for key, row in DB(ws).items(prefix="share/"):
+            out.append({"token": key[6:], **row})
+        out.sort(key=lambda s: s["exp"], reverse=True)
+        return out
 
-    @r.delete("/share/{chat_id}")
-    async def delete_share(chat_id: str, ws: Workspace = ws_dep):
-        """Drop the chat from the owner's share index. Existing signed URLs
-        keep working until their `exp` — for instant revocation, delete the
-        signing key from the bucket and redeploy (rotates all live shares)."""
-        await DB(ws).delete(f"share/{chat_id}")
+    @r.delete("/share/{token}")
+    async def revoke_share(token: str, ws: Workspace = ws_dep):
+        await shares.revoke(ws, token)
         return {"ok": True}
 
-    @r.get("/shared/data")
-    async def shared_data(path: str, user: str, exp: int, sig: str):
-        if not cycls_app.verify_signed(path, user, exp, sig):
-            raise HTTPException(status_code=403, detail="Invalid or expired link")
-        if not path.startswith("chat/"):
-            raise HTTPException(status_code=400, detail="Unsupported share path")
-        chat_id = path[len("chat/"):]
-        ws = workspace_at(user, volume, base=base)
-        meta = await chat.get_meta(ws, chat_id)
-        if meta is None:
-            raise HTTPException(status_code=404, detail="Chat not found")
-        share_meta = await DB(ws).get(f"share/{chat_id}") or {}
-        raw = await chat.load_messages(ws, chat_id)
-        messages = chat.to_ui_messages(raw)
-        # Mint per-attachment signed URLs with the same expiry, so the public
-        # viewer can load them without re-deriving signatures client-side.
-        remaining = max(60, int(exp) - int(time.time()))
-        for m in messages:
-            for att in m.get("attachments") or []:
-                ap = att.get("path")
-                if ap:
-                    att["url"] = cycls_app.signed_url(f"file/{ap}", user, ttl=remaining)
-        return {
-            "id": chat_id,
-            "title": share_meta.get("title") or meta.get("title", ""),
-            "author": share_meta.get("author"),
-            "sharedAt": share_meta.get("sharedAt"),
-            "messages": messages,
-        }
+    # ---- Viewer side ----
 
-    @r.get("/shared/file/{file_path:path}")
-    async def shared_file(file_path: str, user: str, exp: int, sig: str):
-        if not cycls_app.verify_signed(f"file/{file_path}", user, exp, sig):
-            raise HTTPException(status_code=403, detail="Invalid or expired link")
-        ws = workspace_at(user, volume, base=base)
-        try:
-            target = resolve_path(ws.root, file_path)
-        except ValueError:
-            raise HTTPException(status_code=403, detail="Path traversal denied")
-        if not target.is_file():
-            raise HTTPException(status_code=404, detail="File not found")
-        return FileResponse(target)
+    @r.get("/share/{user}/{token}")
+    async def resolve_share(
+        user: str, token: str,
+        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        ws_owner, row = await _resolve_or_403(user, token, bearer)
+        path = row["path"]
+        if path.startswith("chat/"):
+            chat_id = path[5:]
+            meta = await chat.get_meta(ws_owner, chat_id)
+            if meta is None:
+                raise HTTPException(404, "Chat not found")
+            messages = chat.to_ui_messages(await chat.load_messages(ws_owner, chat_id))
+            for m in messages:
+                for att in m.get("attachments") or []:
+                    if ap := att.get("path"):
+                        att["url"] = f"/share/{user}/{token}/file/{ap}"
+            return {"id": chat_id, "title": meta.get("title", ""), "messages": messages}
+        return _serve_file(ws_owner.root, path[5:])
+
+    @r.get("/share/{user}/{token}/file/{file_path:path}")
+    async def shared_attachment(
+        user: str, token: str, file_path: str,
+        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        ws_owner, row = await _resolve_or_403(user, token, bearer)
+        path = row["path"]
+        # Authorize: file_path must be the share's file (file share) or an attachment of its chat.
+        if path.startswith("file/"):
+            if file_path != path[5:]:
+                raise HTTPException(403, "Path not in this share")
+        else:
+            raw = await chat.load_messages(ws_owner, path[5:])
+            allowed = {att.get("path") for m in chat.to_ui_messages(raw)
+                       for att in (m.get("attachments") or []) if att.get("path")}
+            if file_path not in allowed:
+                raise HTTPException(403, "Not an attachment of this share")
+        return _serve_file(ws_owner.root, file_path)
+
+    @r.post("/share/{user}/{token}/fork")
+    async def fork_share(user: str, token: str, forker: Any = user_dep):
+        ws_source = workspace_at(user, volume, base=base)
+        row = await shares.resolve(ws_source, token, requester=forker)
+        if row is None:
+            raise HTTPException(403, "Invalid, expired, or unauthorized link")
+        if not row["path"].startswith("chat/"):
+            raise HTTPException(400, "Only chat shares can be forked")
+        source_id = row["path"][5:]
+        meta = await chat.get_meta(ws_source, source_id)
+        if meta is None:
+            raise HTTPException(404, "Chat not found")
+        raw = await chat.load_messages(ws_source, source_id)
+        ws_fork = workspace_for(forker, volume, base=base)
+        new_id = uuid.uuid4().hex
+        now = datetime.now(timezone.utc).isoformat()
+        await chat.put_meta(ws_fork, new_id, {
+            **{k: v for k, v in meta.items() if k not in ("id", "createdAt", "updatedAt")},
+            "id": new_id, "createdAt": now, "updatedAt": now,
+            "forked_from": f"{user}/{source_id}",
+        })
+        await chat.append_messages(ws_fork, new_id, raw, 0)
+        for m in chat.to_ui_messages(raw):
+            for att in m.get("attachments") or []:
+                if ap := att.get("path"):
+                    try:
+                        src = resolve_path(ws_source.root, ap)
+                        dst = resolve_path(ws_fork.root, ap)
+                        if src.is_file():
+                            dst.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(src, dst)
+                    except Exception:
+                        pass
+        return {"id": new_id}
 
     return r
+
+
+def _serve_file(root, file_path):
+    try:
+        target = resolve_path(root, file_path)
+    except ValueError:
+        raise HTTPException(403, "Path traversal denied")
+    if not target.is_file():
+        raise HTTPException(404, "File not found")
+    return FileResponse(target)
 
 
 # ---- Mount ----

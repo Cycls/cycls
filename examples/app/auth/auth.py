@@ -1,16 +1,17 @@
 # uv run cycls run examples/app/auth/auth.py
 """Clerkless auth — JWT + scrypt + SlateDB. No external services.
 
-Self-issued HS256 JWTs signed by `app.signing_key` (the bucket-persisted
-HMAC the same App uses for signed URLs). User credentials live in a global
-SlateDB at `<volume>/_users/.cycls/`. Per-user workspaces work the same as
-with Clerk — once `validate()` returns a User, `workspace_for(user, ...)`
-gives you the per-tenant fs + db.
+Self-issued HS256 JWTs signed by a per-deployment HMAC secret read from the
+`CYCLS_LOCAL_AUTH_SECRET` env var. User credentials live in a global SlateDB
+at `<volume>/_users/.cycls/`. Per-user workspaces work the same as with
+Clerk — once `validate()` returns a User, `workspace_for(user, ...)` gives
+you the per-tenant fs + db.
 
 Demonstrates that "auth provider" in cycls is really just two functions:
 issue a Bearer token, validate one. Clerk is one provider; this is another;
 they're interchangeable behind the same User contract.
 """
+import os
 import hashlib
 import secrets
 import time
@@ -51,7 +52,7 @@ def auth_app():
 
     app = FastAPI(title="Local Auth")
 
-    SECRET = auth_app.signing_key  # bucket-persisted; survives restarts
+    SECRET = (os.getenv("CYCLS_LOCAL_AUTH_SECRET") or secrets.token_hex(32)).encode()
     ISSUER = "cycls-local"
     TTL = 7 * 24 * 3600
 

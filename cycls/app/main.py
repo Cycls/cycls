@@ -8,8 +8,7 @@ import uvicorn
 
 from cycls.function import Function, _get_api_key, _get_base_url
 from cycls.app.auth import JWT, validator
-from cycls.app.workspace import subject_for, workspace_for
-from cycls.app import signing
+from cycls.app.workspace import workspace_for
 
 CYCLS_PATH = importlib.resources.files("cycls")
 
@@ -64,31 +63,6 @@ class App(Function):
         def _build_ws(user=self.auth):
             return workspace_for(user, self.volume, base=self.storage)
         return Depends(_build_ws)
-
-    @cached_property
-    def signing_key(self) -> bytes:
-        """Persisted HMAC secret; rotate by deleting the file and redeploying."""
-        path = self.volume / ".cycls" / "signing.key"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            return path.read_bytes()
-        key = signing.new_secret()
-        path.write_bytes(key)
-        return key
-
-    def signed_url(self, path: str, user, ttl: int = 3600) -> str:
-        """`chat/<id>` mints an SPA share link; `file/<path>` mints a raw-bytes URL with the path inlined."""
-        from urllib.parse import quote, urlencode
-        sub = user if isinstance(user, str) else subject_for(user)
-        params = signing.sign(path, sub, self.signing_key, ttl=ttl)
-        if path.startswith("file/"):
-            params.pop("path")
-            rest = quote(path[len("file/"):], safe="/")
-            return f"/shared/file/{rest}?{urlencode(params)}"
-        return f"/shared?{urlencode(params)}"
-
-    def verify_signed(self, path: str, user: str, exp, sig: str) -> bool:
-        return signing.verify(path, user, exp, sig, self.signing_key)
 
     def _prepare_func(self, prod):
         self.prod = prod
