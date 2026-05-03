@@ -27,7 +27,7 @@ import { initPostHog, setAgentDomain, track, register } from "./lib/posthog";
 function ChatApp({ config }: { config: AppConfig | null }) {
   const { messages, isStreaming, chatLoading, chatId, send, retry, stop, clear, share, listShares, deleteShare, listChats, loadChat, deleteChat, setGetToken, uploadFile, authHeaders, setUIHandler } =
     useChat();
-  const { entries, path, loading, list, upload, mkdir, rename, remove, openFile, setGetToken: setFilesToken } =
+  const { entries, path, loading, list, upload, mkdir, rename, remove, openFile, shareFile, setGetToken: setFilesToken } =
     useFiles();
   const { getToken, signOut, isLoaded: authLoaded } = useAuth();
   const { user } = useUser();
@@ -158,6 +158,7 @@ function ChatApp({ config }: { config: AppConfig | null }) {
         onRename: rename,
         onDelete: remove,
         onOpenFile: openFile,
+        onShareFile: shareFile,
       }}
     />
   );
@@ -732,7 +733,7 @@ export default function App() {
     register({ theme: isDark ? "dark" : "light", language: lang });
   }, [isDark, lang]);
 
-  if (window.location.pathname === "/shared") {
+  if (window.location.pathname.startsWith("/share/")) {
     return <SharedView />;
   }
 

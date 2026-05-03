@@ -1,15 +1,23 @@
 """Share tokens — opaque random tokens in the owner's workspace, audience-checked at resolve. See RFC003."""
 import secrets
 import time
+from datetime import datetime, timezone
 
 from .workspace import DB
 
 DEFAULT_TTL = 7 * 24 * 3600
 
 
-async def mint(workspace, path, audience="public", ttl=DEFAULT_TTL):
+async def mint(workspace, path, audience="public", ttl=DEFAULT_TTL, author=None):
     token = secrets.token_urlsafe(16)
-    row = {"path": path, "audience": audience, "exp": int(time.time()) + ttl}
+    row = {
+        "path": path,
+        "audience": audience,
+        "exp": int(time.time()) + ttl,
+        "shared_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if author is not None:
+        row["author"] = author
     await DB(workspace).put(f"share/{token}", row)
     return token, row
 

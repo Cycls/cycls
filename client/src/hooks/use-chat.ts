@@ -385,14 +385,14 @@ export function useChat(baseUrl: string = "") {
     window.history.replaceState({}, "", u.toString());
   }, []);
 
-  const share = useCallback(async (title: string = "", author?: { name: string; imageUrl?: string }) => {
+  const share = useCallback(async (title: string = "", author?: { name: string; imageUrl?: string; org?: { name: string; imageUrl?: string } }) => {
     const chatId = chatIdRef.current;
     if (!chatId) throw new Error("No chat to share");
     const headers = { "Content-Type": "application/json", ...(await authHeaders()) };
     const res = await fetch(`${baseUrl}/share`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ chat_id: chatId, title, author }),
+      body: JSON.stringify({ path: `chat/${chatId}`, author }),
     });
     if (!res.ok) {
       track("share_create_failed", { status: res.status });
@@ -416,11 +416,11 @@ export function useChat(baseUrl: string = "") {
     return res.json();
   }, [baseUrl, authHeaders]);
 
-  const deleteShare = useCallback(async (id: string) => {
+  const deleteShare = useCallback(async (token: string) => {
     const headers = await authHeaders();
-    const res = await fetch(`${baseUrl}/share/${id}`, { method: "DELETE", headers });
+    const res = await fetch(`${baseUrl}/share/${token}`, { method: "DELETE", headers });
     if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
-    track("share_deleted", { share_id: id });
+    track("share_deleted", { token });
   }, [baseUrl, authHeaders]);
 
   const listChats = useCallback(async () => {
