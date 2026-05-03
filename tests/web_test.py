@@ -415,7 +415,7 @@ def test_make_validate_rejects_query_token(tmp_path):
     from fastapi import Depends, FastAPI
     from fastapi.testclient import TestClient
 
-    validate = make_validate(lambda: "https://example.invalid/jwks")
+    validate = make_validate("https://example.invalid/jwks")
     fapp = FastAPI()
 
     @fapp.get("/me")

@@ -136,7 +136,7 @@ def web(func, config, extra_routers=None):
 
     app = FastAPI()
 
-    validate = make_validate(lambda: config.jwks)
+    validate = make_validate(config.jwks)
     auth = Depends(validate) if config.auth else Depends(lambda: None)
     required_auth = Depends(validate)
 
