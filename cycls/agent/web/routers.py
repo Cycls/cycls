@@ -14,7 +14,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 
 from cycls.app.workspace import DB, Workspace, workspace_at, workspace_for, subject_for
-from cycls.app import share as shares
+from cycls.agent import share as shares
 from cycls.app.auth import User
 from cycls.agent import chat
 
