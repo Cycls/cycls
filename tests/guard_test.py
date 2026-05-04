@@ -40,9 +40,10 @@ def test_tools_resolve_path_rejects_cycls(tmp_path):
         _resolve_path(".db", tmp_path)
 
 
-def test_bash_sandbox_ro_binds_cycls(tmp_path):
-    """_exec_bash argv must include --ro-bind-try for .cycls so user shell
-    can read its state but any write is blocked by the read-only mount."""
+def test_bash_sandbox_hides_db(tmp_path):
+    """_exec_bash argv must tmpfs-overlay /workspace/.db so the sandboxed shell
+    can't read SlateDB internals (defense in depth; editor tools also reject
+    .db/ via _resolve_path)."""
     mock_proc = MagicMock()
     mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
 
@@ -56,10 +57,11 @@ def test_bash_sandbox_ro_binds_cycls(tmp_path):
         asyncio.run(_exec_bash("echo", str(tmp_path)))
 
     argv = captured["argv"]
-    assert "--ro-bind-try" in argv
-    i = argv.index("--ro-bind-try")
-    assert argv[i + 1] == str(tmp_path / ".db")
-    assert argv[i + 2] == "/workspace/.db"
+    assert "--tmpfs" in argv
+    # Find the --tmpfs entry that hides .db
+    indices = [i for i, a in enumerate(argv) if a == "--tmpfs"]
+    assert any(argv[i + 1] == "/workspace/.db" for i in indices), \
+        f"expected --tmpfs /workspace/.db in argv, got: {argv}"
 
 
 def _capture_bash_exec(tmp_path, **kwargs):
