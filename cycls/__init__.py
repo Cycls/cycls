@@ -5,9 +5,8 @@ except ImportError:
     pass
 
 from .function import function, Function, Image
-from .app import app, App, Clerk, GCP, JWT, User, Sandbox
+from .app import app, App, Clerk, GCP, JWT, User, Sandbox, SandboxResult, DB, Workspace
 from .agent.web import Web
-from .app.workspace import DB, Workspace
 from .agent import LLM, agent, Agent
 
 # Module-level config
