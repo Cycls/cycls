@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import type { FileEntry } from "../hooks/use-files";
 import { t, useLang } from "../lib/i18n";
@@ -129,7 +130,7 @@ export function Files({
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [creatingFolder, setCreatingFolder] = useState(false);
-  const [shareCopied, setShareCopied] = useState<string | null>(null);
+  const [shareToast, setShareToast] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState<string[]>([]);
   const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
@@ -412,12 +413,12 @@ export function Files({
                             },
                           }] : []),
                           ...(!isDir && onShareFile ? [{
-                            label: shareCopied === entry.name ? t("copied") : t("share"),
+                            label: t("share"),
                             onClick: async () => {
                               const url = await onShareFile(entryPath);
                               await navigator.clipboard.writeText(url);
-                              setShareCopied(entry.name);
-                              setTimeout(() => setShareCopied(null), 2000);
+                              setShareToast(entry.name);
+                              setTimeout(() => setShareToast(null), 2500);
                             },
                           }] : []),
                           {
@@ -452,6 +453,24 @@ export function Files({
           </div>
         )}
       </div>
+      {createPortal(
+        <AnimatePresence>
+          {shareToast && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 10 }}
+              className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 rounded-lg border border-border bg-background shadow-lg px-3 py-2 flex items-center gap-2"
+            >
+              <svg className="w-3.5 h-3.5 text-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              <span className="text-xs text-foreground">{t("linkCopied")} <span className="text-muted-foreground">· {shareToast}</span></span>
+            </motion.div>
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
     </div>
   );
 }
