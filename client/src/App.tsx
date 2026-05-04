@@ -101,13 +101,13 @@ function ChatApp({ config }: { config: AppConfig | null }) {
     if (id) loadChat(id).catch(() => stripParam("chat"));
   }, [authLoaded, loadChat, forkShare]);
 
-  const handleShare = async (title: string = "") => {
+  const handleShare = async (title: string = "", audience: string = "public") => {
     const author = user ? {
       name: user.fullName || user.firstName || "",
       imageUrl: user.imageUrl,
       org: organization ? { name: organization.name, imageUrl: organization.imageUrl } : undefined,
     } : undefined;
-    return await share(title, author);
+    return await share(title, audience, author);
   };
 
   const orgs = (userMemberships?.data || []).map((m) => ({
@@ -126,6 +126,7 @@ function ChatApp({ config }: { config: AppConfig | null }) {
       onClear={clear}
       onRetry={retry}
       onShare={handleShare}
+      org={organization ? { id: organization.id, name: organization.name } : null}
       onListShares={listShares}
       onDeleteShare={deleteShare}
       onListChats={listChats}

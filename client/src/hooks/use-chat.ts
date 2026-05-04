@@ -385,14 +385,14 @@ export function useChat(baseUrl: string = "") {
     window.history.replaceState({}, "", u.toString());
   }, []);
 
-  const share = useCallback(async (title: string = "", author?: { name: string; imageUrl?: string; org?: { name: string; imageUrl?: string } }) => {
+  const share = useCallback(async (title: string = "", audience: string = "public", author?: { name: string; imageUrl?: string; org?: { name: string; imageUrl?: string } }) => {
     const chatId = chatIdRef.current;
     if (!chatId) throw new Error("No chat to share");
     const headers = { "Content-Type": "application/json", ...(await authHeaders()) };
     const res = await fetch(`${baseUrl}/share`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ path: `chat/${chatId}`, author }),
+      body: JSON.stringify({ path: `chat/${chatId}`, audience, author }),
     });
     if (!res.ok) {
       track("share_create_failed", { status: res.status });

@@ -46,6 +46,7 @@ export function Chat({
   onClear,
   onRetry,
   onShare,
+  org,
   onListShares,
   onDeleteShare,
   onListChats,
@@ -76,7 +77,8 @@ export function Chat({
   onStop: () => void;
   onClear: () => void;
   onRetry?: () => void;
-  onShare?: (title: string) => Promise<string>;
+  onShare?: (title: string, audience: string) => Promise<string>;
+  org?: { id: string; name: string } | null;
   onListShares?: () => Promise<{ token: string; title: string; shared_at: string; url: string }[]>;
   onDeleteShare?: (token: string) => Promise<void>;
   onListChats?: () => Promise<{ id: string; title: string; updatedAt: string }[]>;
@@ -125,6 +127,7 @@ export function Chat({
   const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats">("files");
   const [shareOpen, setShareOpen] = useState(false);
   const [shareTitle, setShareTitle] = useState("");
+  const [shareAudience, setShareAudience] = useState<string>("public");
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
@@ -334,6 +337,7 @@ export function Chat({
                         if (!shareOpen) {
                           setShareOpen(true);
                           setShareTitle(messages.find((m) => m.role === "user")?.content?.slice(0, 100) || "");
+                          setShareAudience("public");
                           setShareUrl(null);
                           setShareLoading(false);
                           setShareCopied(false);
@@ -359,10 +363,26 @@ export function Chat({
                               </svg>
                               <h3 className="text-sm font-medium text-foreground">{t("shareConversation")}</h3>
                             </div>
-                            <p className="text-xs text-muted-foreground">
-                              {t("anyoneCanView")}
-                            </p>
-                            <p className="mt-3 mb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">{t("title")}</p>
+                            <div className="flex gap-1.5 mt-3 mb-3">
+                              {(["public", ...(org ? [`org:${org.id}`] : [])] as string[]).map((aud) => {
+                                const isOrg = aud.startsWith("org:");
+                                const active = shareAudience === aud;
+                                return (
+                                  <button
+                                    key={aud}
+                                    onClick={() => setShareAudience(aud)}
+                                    className={`text-[11px] px-2.5 py-1 rounded-full transition-colors cursor-pointer ${
+                                      active
+                                        ? "bg-secondary text-foreground"
+                                        : "text-muted-foreground hover:bg-secondary/50"
+                                    }`}
+                                  >
+                                    {isOrg ? `${t("anyoneInOrg")} ${org!.name}` : t("anyoneWithLink")}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <p className="mb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">{t("title")}</p>
                             <input
                               type="text"
                               value={shareTitle}
@@ -416,7 +436,7 @@ export function Chat({
                                 onClick={() => {
                                   setShareLoading(true);
                                   setShareCopied(false);
-                                  onShare(shareTitle).then((url) => {
+                                  onShare(shareTitle, shareAudience).then((url) => {
                                     setShareUrl(url);
                                     setShareLoading(false);
                                   }).catch(() => setShareLoading(false));
