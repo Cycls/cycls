@@ -29,7 +29,7 @@ def test_workspace_personal_data_path(tmp_path):
 
 
 def test_workspace_org_data_path(tmp_path):
-    ws = workspace_at("org/member_1", tmp_path, base=f"file://{tmp_path}")
+    ws = workspace_at("org:member_1", tmp_path, base=f"file://{tmp_path}")
     assert DB(ws)._url == f"file://{tmp_path}/org/.db/member_1"
 
 
@@ -39,7 +39,7 @@ def test_workspace_url_with_bucket(tmp_path):
 
 
 def test_workspace_url_with_bucket_org(tmp_path):
-    ws = workspace_at("org/member_1", tmp_path, base="gs://cycls-ws-myagent")
+    ws = workspace_at("org:member_1", tmp_path, base="gs://cycls-ws-myagent")
     assert DB(ws)._url == "gs://cycls-ws-myagent/org/.db/member_1"
 
 

@@ -80,7 +80,7 @@ def test_subject_personal_user():
 
 
 def test_subject_org_member():
-    assert subject_for(User(id="user_abc", org_id="org_xyz")) == "org_xyz/user_abc"
+    assert subject_for(User(id="user_abc", org_id="org_xyz")) == "org_xyz:user_abc"
 
 
 def test_workspace_for_subject_inverse(tmp_path):

@@ -31,7 +31,9 @@ class Workspace:
 
 
 def subject_for(user) -> str:
-    return f"{user.org_id}/{user.id}" if getattr(user, "org_id", None) else user.id
+    """Tenant identifier. Uses `:` as the org/user separator so the string is
+    URL-path-safe (FastAPI path params reject `/`)."""
+    return f"{user.org_id}:{user.id}" if getattr(user, "org_id", None) else user.id
 
 
 def workspace_for(user, volume, base=None) -> Workspace:
@@ -40,8 +42,8 @@ def workspace_for(user, volume, base=None) -> Workspace:
 
 def workspace_at(tenant, volume, base=None) -> Workspace:
     volume = Path(volume)
-    if "/" in tenant:
-        org, user = tenant.split("/", 1)
+    if ":" in tenant:
+        org, user = tenant.split(":", 1)
         return Workspace(root=volume / org, path=f"{org}/.db/{user}", base=base)
     return Workspace(root=volume / tenant, path=f"{tenant}/.db", base=base)
 
