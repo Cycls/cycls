@@ -3,26 +3,15 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 const backend = "http://localhost:8080";
+const apis = ["/config", "/chat", "/sessions", "/files", "/shared-assets", "/transcribe"];
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  build: {
-    outDir: "../cycls/agent/web/themes/default",
-    emptyOutDir: true,
-  },
+  build: { outDir: "../cycls/agent/web/themes/default", emptyOutDir: true },
   server: {
     proxy: {
-      ...Object.fromEntries(
-        ["/config", "/chat", "/sessions", "/files", "/shared-assets", "/transcribe"].map(
-          (p) => [p, backend]
-        )
-      ),
-      // /share/<user>/<token> is the SPA route (serve index.html);
-      // sub-paths (/data, /file/...) and bare /share owner ops go to backend.
-      "/share": {
-        target: backend,
-        bypass: (req) => /^\/share\/[^/]+\/[^/]+$/.test(req.url ?? "") ? "/index.html" : undefined,
-      },
+      ...Object.fromEntries(apis.map((p) => [p, backend])),
+      "/share": { target: backend, bypass: (r) => r.url?.startsWith("/shared/") ? "/index.html" : undefined },
     },
   },
 });

@@ -316,11 +316,11 @@ def test_share_router_mint_and_resolve(tmp_path):
     body = r.json()
     assert body["path"] == "chat/c1"
     assert body["audience"] == "public"
-    assert body["url"].startswith("/share/user_test/")
+    assert body["url"].startswith("/shared/user_test/")
     assert body["author"] == {"name": "Alice"}
     assert "shared_at" in body
 
-    r2 = client.get(f"{body['url']}/data")
+    r2 = client.get(f"/share/user_test/{body['token']}/data")
     assert r2.status_code == 200, r2.text
     data = r2.json()
     assert data["type"] == "chat"
@@ -360,7 +360,7 @@ def test_share_router_list_and_delete(tmp_path):
     assert client.delete(f"/share/{token}").status_code == 200
     assert client.get("/share").json() == []
     # Revoke is real — token stops resolving.
-    assert client.get(f"{body['url']}/data").status_code == 403
+    assert client.get(f"/share/user_test/{token}/data").status_code == 403
 
 
 def test_share_router_file_share(tmp_path):
@@ -373,7 +373,7 @@ def test_share_router_file_share(tmp_path):
     (ws.root / "doc.md").write_text("hello world")
 
     body = client.post("/share", json={"path": "file/doc.md"}).json()
-    meta = client.get(f"{body['url']}/data").json()
+    meta = client.get(f"/share/user_test/{body['token']}/data").json()
     assert meta["type"] == "file"
     assert meta["path"] == "doc.md"
     r = client.get(meta["url"])
