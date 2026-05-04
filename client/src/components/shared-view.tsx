@@ -105,6 +105,15 @@ export function SharedView() {
           {data.messages.map((msg, i) => (
             <MessageBubble key={i} message={msg} isStreaming={false} />
           ))}
+          <button
+            onClick={() => {
+              const userToken = window.location.pathname.replace(/^\/shared\//, "");
+              window.location.href = `/?fork=${encodeURIComponent(userToken)}`;
+            }}
+            className="mt-6 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          >
+            Continue this conversation →
+          </button>
 
           {/* Footer */}
           <div className="w-full max-w-3xl px-6 pt-8 pb-10">
