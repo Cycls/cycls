@@ -1,6 +1,6 @@
 """Workspace — per-tenant `(root, path, base)` + JSON KV over SlateDB.
 
-The auth ↔ workspace contract: `subject_for(user)` reads `user.id` and
+The auth ↔ workspace contract: `workspace_for(user, ...)` reads `user.id` and
 optionally `user.org_id`, the only `User` fields workspace logic depends on.
 
 `DB` runs JSON KV at `<base>/<path>`. Flat byte-keyed under the hood;
@@ -27,25 +27,28 @@ from slatedb.uniffi import (
 class Workspace:
     root: Path
     path: str
+    subject: str
     base: Optional[str] = None
 
 
-def subject_for(user) -> str:
-    """Tenant identifier. Uses `:` as the org/user separator so the string is
-    URL-path-safe (FastAPI path params reject `/`)."""
-    return f"{user.org_id}:{user.id}" if getattr(user, "org_id", None) else user.id
-
-
 def workspace_for(user, volume, base=None) -> Workspace:
-    return workspace_at("local" if user is None else subject_for(user), volume, base)
+    """User → Workspace. Subject uses `:` as the org/user separator so it's
+    URL-path-safe (FastAPI path params reject `/`)."""
+    if user is None:
+        sub = "local"
+    elif getattr(user, "org_id", None):
+        sub = f"{user.org_id}:{user.id}"
+    else:
+        sub = user.id
+    return workspace_at(sub, volume, base)
 
 
 def workspace_at(tenant, volume, base=None) -> Workspace:
     volume = Path(volume)
     if ":" in tenant:
         org, user = tenant.split(":", 1)
-        return Workspace(root=volume / org, path=f"{org}/.db/{user}", base=base)
-    return Workspace(root=volume / tenant, path=f"{tenant}/.db", base=base)
+        return Workspace(root=volume / org, path=f"{org}/.db/{user}", subject=tenant, base=base)
+    return Workspace(root=volume / tenant, path=f"{tenant}/.db", subject=tenant, base=base)
 
 
 # ---- KV storage ----

@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 
-from cycls.app.workspace import DB, Workspace, workspace_at, workspace_for, subject_for
+from cycls.app.workspace import DB, Workspace, workspace_at, workspace_for
 from cycls.agent import share as shares
 from cycls.app.auth import User
 from cycls.agent import chat
@@ -193,11 +193,10 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
                                        audience=data.get("audience", "public"),
                                        ttl=int(data.get("ttl") or shares.DEFAULT_TTL),
                                        author=data.get("author"))
-        return {"token": token, "url": f"/shared/{subject_for(user)}/{token}", **row}
+        return {"token": token, "url": f"/shared/{ws.subject}/{token}", **row}
 
     @r.get("/share")
-    async def list_shares(ws: Workspace = ws_dep, user: Any = user_dep):
-        sub = subject_for(user)
+    async def list_shares(ws: Workspace = ws_dep):
         out = []
         async for key, row in DB(ws).items(prefix="share/"):
             token = key[6:]
@@ -207,7 +206,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
                 title = (meta or {}).get("title") or ""
             else:
                 title = path[5:]  # file path as the display name
-            out.append({"token": token, "url": f"/shared/{sub}/{token}", "title": title, **row})
+            out.append({"token": token, "url": f"/shared/{ws.subject}/{token}", "title": title, **row})
         out.sort(key=lambda s: s["exp"], reverse=True)
         return out
 
