@@ -3,7 +3,7 @@ import secrets
 import time
 from datetime import datetime, timezone
 
-from .workspace import DB
+from cycls.app.workspace import DB
 
 DEFAULT_TTL = 7 * 24 * 3600
 
