@@ -218,7 +218,7 @@ def web(func, config, extra_routers=None, auth=None):
     async def index():
         return HTMLResponse(_index_html)
 
-    @app.get("/share/{user}/{token}")
+    @app.get("/shared/{user}/{token}")
     async def share_index(user: str, token: str):
         return HTMLResponse(_index_html)
 

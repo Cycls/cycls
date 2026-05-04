@@ -193,7 +193,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
                                        audience=data.get("audience", "public"),
                                        ttl=int(data.get("ttl") or shares.DEFAULT_TTL),
                                        author=data.get("author"))
-        return {"token": token, "url": f"/share/{subject_for(user)}/{token}", **row}
+        return {"token": token, "url": f"/shared/{subject_for(user)}/{token}", **row}
 
     @r.get("/share")
     async def list_shares(ws: Workspace = ws_dep, user: Any = user_dep):
@@ -207,7 +207,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
                 title = (meta or {}).get("title") or ""
             else:
                 title = path[5:]  # file path as the display name
-            out.append({"token": token, "url": f"/share/{sub}/{token}", "title": title, **row})
+            out.append({"token": token, "url": f"/shared/{sub}/{token}", "title": title, **row})
         out.sort(key=lambda s: s["exp"], reverse=True)
         return out
 

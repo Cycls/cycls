@@ -23,8 +23,8 @@ export function SharedView() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // /share/<user>/<token> is the SPA route; data lives at /data.
-    fetch(`${window.location.pathname}/data`)
+    // /shared/<user>/<token> is the SPA route; JSON lives at /share/<user>/<token>/data.
+    fetch(`${window.location.pathname.replace("/shared/", "/share/")}/data`)
       .then((res) => {
         if (res.status === 403) throw new Error("This share has expired");
         if (!res.ok) throw new Error("Share not found");

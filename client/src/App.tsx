@@ -733,7 +733,7 @@ export default function App() {
     register({ theme: isDark ? "dark" : "light", language: lang });
   }, [isDark, lang]);
 
-  if (window.location.pathname.startsWith("/share/")) {
+  if (window.location.pathname.startsWith("/shared/")) {
     return <SharedView />;
   }
 
