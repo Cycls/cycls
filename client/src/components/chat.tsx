@@ -79,7 +79,7 @@ export function Chat({
   onRetry?: () => void;
   onShare?: (title: string, audience: string) => Promise<string>;
   org?: { id: string; name: string } | null;
-  onListShares?: () => Promise<{ token: string; title: string; shared_at: string; url: string }[]>;
+  onListShares?: () => Promise<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>;
   onDeleteShare?: (token: string) => Promise<void>;
   onListChats?: () => Promise<{ id: string; title: string; updatedAt: string }[]>;
   onLoadChat?: (id: string) => Promise<void>;
@@ -131,7 +131,7 @@ export function Chat({
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
-  const [shares, setShares] = useState<{ token: string; title: string; shared_at: string; url: string }[]>([]);
+  const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
   const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string }[]>([]);
   const [chatsLoading, setChatsLoading] = useState(false);
@@ -782,17 +782,27 @@ export function Chat({
                       />
                     ) : (
                       <div className="divide-y divide-border">
-                        {shares.map((s) => (
+                        {shares.map((s) => {
+                          const isChat = s.path.startsWith("chat/");
+                          const audienceLabel = s.audience === "public"
+                            ? t("anyoneWithLink")
+                            : (org && s.audience === `org:${org.id}`) ? org.name : "Org";
+                          return (
                           <div key={s.token} className="group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer"
                             onClick={() => window.open(s.url, "_blank")}
                           >
                             <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
                               <svg className="size-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                                {isChat ? (
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                                ) : (
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                )}
                               </svg>
                             </div>
                             <div className="flex-1 min-w-0">
                               <span className="text-sm text-foreground truncate block">{s.title || t("untitled")}</span>
+                              <span className="text-[10px] text-muted-foreground/70 truncate block">{audienceLabel}</span>
                             </div>
                             <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
                               {formatShortDate(s.shared_at)}
@@ -818,7 +828,8 @@ export function Chat({
                               </div>
                             )}
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
