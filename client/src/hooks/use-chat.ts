@@ -423,6 +423,15 @@ export function useChat(baseUrl: string = "") {
     track("share_deleted", { token });
   }, [baseUrl, authHeaders]);
 
+  const forkShare = useCallback(async (userToken: string) => {
+    const headers = await authHeaders();
+    const res = await fetch(`${baseUrl}/share/${userToken}/fork`, { method: "POST", headers });
+    if (!res.ok) throw new Error(`Fork failed: ${res.status}`);
+    const { id } = await res.json();
+    track("share_forked", { source: userToken, new_chat_id: id });
+    return id as string;
+  }, [baseUrl, authHeaders]);
+
   const listChats = useCallback(async () => {
     const headers = await authHeaders();
     const res = await fetch(`${baseUrl}/chats`, { headers });
@@ -485,6 +494,7 @@ export function useChat(baseUrl: string = "") {
     share,
     listShares,
     deleteShare,
+    forkShare,
     listChats,
     loadChat,
     deleteChat,

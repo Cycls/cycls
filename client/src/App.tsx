@@ -25,7 +25,7 @@ import { usePostHogIdentify } from "./hooks/use-posthog-identify";
 import { initPostHog, setAgentDomain, track, register } from "./lib/posthog";
 
 function ChatApp({ config }: { config: AppConfig | null }) {
-  const { messages, isStreaming, chatLoading, chatId, send, retry, stop, clear, share, listShares, deleteShare, listChats, loadChat, deleteChat, setGetToken, uploadFile, authHeaders, setUIHandler } =
+  const { messages, isStreaming, chatLoading, chatId, send, retry, stop, clear, share, listShares, deleteShare, forkShare, listChats, loadChat, deleteChat, setGetToken, uploadFile, authHeaders, setUIHandler } =
     useChat();
   const { entries, path, loading, list, upload, mkdir, rename, remove, openFile, shareFile, setGetToken: setFilesToken } =
     useFiles();
@@ -78,20 +78,28 @@ function ChatApp({ config }: { config: AppConfig | null }) {
     }
   }, [send]);
 
-  // Restore ?chat=<id> from URL on first load — once Clerk has settled so
-  // authed agents can fetch with credentials. Stale ids get cleared.
+  // Restore ?chat=<id> from URL on first load (once Clerk has settled).
+  // Also handle ?fork=<user>/<token>: mint a deep-copy fork into this user's
+  // workspace and navigate to the new chat. Survives a sign-in round-trip.
   const chatRestored = useRef(false);
   useEffect(() => {
     if (chatRestored.current || !authLoaded) return;
     chatRestored.current = true;
-    const id = new URLSearchParams(window.location.search).get("chat");
-    if (!id) return;
-    loadChat(id).catch(() => {
+    const stripParam = (k: string) => {
       const u = new URL(window.location.href);
-      u.searchParams.delete("chat");
+      u.searchParams.delete(k);
       window.history.replaceState({}, "", u.toString());
-    });
-  }, [authLoaded, loadChat]);
+    };
+    const params = new URLSearchParams(window.location.search);
+    const forkFrom = params.get("fork");
+    if (forkFrom) {
+      stripParam("fork");
+      forkShare(forkFrom).then(loadChat).catch(() => {});
+      return;
+    }
+    const id = params.get("chat");
+    if (id) loadChat(id).catch(() => stripParam("chat"));
+  }, [authLoaded, loadChat, forkShare]);
 
   const handleShare = async (title: string = "") => {
     const author = user ? {
