@@ -116,7 +116,7 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
     lang = os.environ.get("LANG", "C.UTF-8")
     sb = (Sandbox()
           .bind(cwd, "/workspace")
-          .ro_bind_try(str(pathlib.Path(cwd) / ".db"), "/workspace/.db")
+          .tmpfs("/workspace/.db")  # hide cycls state; editor tools also block via _resolve_path
           .tmpfs("/app")
           .chdir("/workspace")
           .setenv(PATH=path, LANG=lang)
