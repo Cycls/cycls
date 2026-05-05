@@ -1,6 +1,10 @@
 """Sandbox — bwrap fluent builder. Sandbox() ships secure-by-default;
-chain methods deviate via last-flag-wins."""
+chain methods deviate via last-flag-wins. network(True) attaches
+slirp4netns with --disable-host-loopback so the sandbox gets internet
+but cannot reach 169.254.169.254 (GCP metadata) or other host loopback."""
 import asyncio
+import json
+import os
 from dataclasses import dataclass, field, replace
 from typing import NamedTuple, Optional
 
@@ -56,21 +60,59 @@ class Sandbox:
         return s
 
     async def run(self, argv: list[str], env: Optional[dict] = None) -> SandboxResult:
-        bwrap_argv = ["bwrap", *self._args]
-        if not self._network:
-            bwrap_argv.append("--unshare-net")
-        bwrap_argv += ["--", *argv]
+        # Always own a fresh netns. network=True attaches slirp4netns with
+        # --disable-host-loopback so 169.254.169.254 (GCP metadata) is blackholed.
+        bwrap_argv = ["bwrap", *self._args, "--unshare-net"]
+        info_r = block_w = None
+        pass_fds: tuple = ()
+        if self._network:
+            info_r, info_w = os.pipe()
+            block_r, block_w = os.pipe()
+            bwrap_argv += ["--info-fd", str(info_w), "--block-fd", str(block_r)]
+            pass_fds = (info_w, block_r)
+
         proc = await asyncio.create_subprocess_exec(
-            *bwrap_argv, env=env,
+            *bwrap_argv, "--", *argv, env=env, pass_fds=pass_fds,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
-        timed_out = False
+        if self._network:
+            os.close(info_w); os.close(block_r)
+
+        slirp = None
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
-        except asyncio.TimeoutError:
-            timed_out = True
-            proc.kill()
-            try: stdout, stderr = await proc.communicate()
-            except Exception: stdout, stderr = b"", b""
-        code = proc.returncode if proc.returncode is not None else -1
-        return SandboxResult(stdout, stderr, code, timed_out)
+            if self._network:
+                slirp = await self._attach_slirp(info_r)
+                os.close(block_w); block_w = None  # unblocks bwrap
+
+            timed_out = False
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
+            except asyncio.TimeoutError:
+                timed_out = True; proc.kill()
+                stdout, stderr = await proc.communicate()
+            code = proc.returncode if proc.returncode is not None else -1
+            return SandboxResult(stdout, stderr, code, timed_out)
+        finally:
+            for fd in (info_r, block_w):
+                if fd is not None:
+                    try: os.close(fd)
+                    except OSError: pass
+            if slirp and slirp.returncode is None: slirp.terminate()
+
+    async def _attach_slirp(self, info_fd: int):
+        loop = asyncio.get_event_loop()
+        info = await loop.run_in_executor(None, os.read, info_fd, 4096)
+        if not info: raise RuntimeError("bwrap closed info-fd before child-pid")
+        pid = json.loads(info.decode())["child-pid"]
+
+        ready_r, ready_w = os.pipe()
+        slirp = await asyncio.create_subprocess_exec(
+            "slirp4netns", "--configure", "--mtu=65520",
+            "--disable-host-loopback", f"--ready-fd={ready_w}",
+            str(pid), "tap0", pass_fds=(ready_w,),
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        os.close(ready_w)
+        try: await loop.run_in_executor(None, os.read, ready_r, 1)
+        finally: os.close(ready_r)
+        return slirp
