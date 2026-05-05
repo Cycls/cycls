@@ -16,7 +16,7 @@ CYCLS_PATH = importlib.resources.files("cycls")
 class App(Function):
     _base_pip = ["uvicorn[standard]", "slatedb",
                  "fastapi[standard]", "pyjwt", "cryptography"]
-    _base_apt = ["bubblewrap"]
+    _base_apt = ["bubblewrap", "slirp4netns"]
 
     def __init__(self, func, name, image=None, memory="1Gi",
                  auth: Optional[JWT] = None):
