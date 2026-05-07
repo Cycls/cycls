@@ -1,6 +1,7 @@
 """Sandbox — bwrap fluent builder. Sandbox() ships secure-by-default;
 chain methods deviate via last-flag-wins."""
 import asyncio
+import importlib.resources
 from dataclasses import dataclass, field, replace
 from typing import NamedTuple, Optional
 
@@ -22,6 +23,16 @@ _DEFAULT_ARGS = [
     "--setenv", "LANG", "C.UTF-8",
 ]
 
+# LD_PRELOAD shim — blocks libc connect() to 169.254.0.0/16 (cloud metadata).
+# Bound into every sandbox via LD_PRELOAD env var. See _blockmeta.c.
+# Bypassable by static binaries / raw syscall — see docs/sandbox-security.md.
+_BLOCKMETA_SO = str(importlib.resources.files("cycls.app.sandbox") / "_blockmeta.so")
+_BLOCKMETA_DST = "/tmp/.blockmeta.so"
+_METADATA_GUARD = [
+    "--ro-bind", _BLOCKMETA_SO, _BLOCKMETA_DST,
+    "--setenv", "LD_PRELOAD", _BLOCKMETA_DST,
+]
+
 
 class SandboxResult(NamedTuple):
     stdout: bytes
@@ -36,7 +47,7 @@ class SandboxResult(NamedTuple):
 
 @dataclass(frozen=True)
 class Sandbox:
-    _args: list = field(default_factory=lambda: list(_DEFAULT_ARGS))
+    _args: list = field(default_factory=lambda: [*_DEFAULT_ARGS, *_METADATA_GUARD])
     _timeout: Optional[float] = None
     _network: bool = False
 
