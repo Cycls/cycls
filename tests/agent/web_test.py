@@ -539,3 +539,29 @@ def test_context_workspace_uses_config_volume():
     assert isinstance(captured["ws"], Workspace)
     assert captured["ws"].root == Path("/tmp/cycls-test-vol/local")  # no auth → 'local'
 
+
+
+# =============================================================================
+# Web router path-guard tests (state files / resolve_path)
+# =============================================================================
+
+from cycls.agent.web.routers import resolve_path
+
+
+def test_state_resolve_path_rejects_cycls(tmp_path):
+    (tmp_path / ".db").mkdir()
+    with pytest.raises(ValueError, match="Reserved path"):
+        resolve_path(tmp_path, ".db")
+    with pytest.raises(ValueError, match="Reserved path"):
+        resolve_path(tmp_path, ".db/usage.json")
+
+
+def test_state_resolve_path_rejects_cycls_nested(tmp_path):
+    (tmp_path / ".db" / "sub").mkdir(parents=True)
+    with pytest.raises(ValueError, match="Reserved path"):
+        resolve_path(tmp_path, ".db/sub/file.json")
+
+
+def test_state_resolve_path_allows_normal(tmp_path):
+    out = resolve_path(tmp_path, "notes.md")
+    assert out == (tmp_path / "notes.md").resolve()

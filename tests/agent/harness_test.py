@@ -1,0 +1,103 @@
+"""Harness tests — _resolve_path escape hardening, build_tools scoping,
+LLM builder plumbing."""
+import pytest
+
+import cycls
+from cycls.agent.harness.tools import _resolve_path, build_tools
+
+
+# ---- _resolve_path escape hardening ----
+
+def test_tools_resolve_path_rejects_cycls(tmp_path):
+    (tmp_path / ".db").mkdir()
+    with pytest.raises(ValueError, match=".db/"):
+        _resolve_path("/workspace/.db/usage.json", tmp_path)
+    with pytest.raises(ValueError, match=".db/"):
+        _resolve_path(".db", tmp_path)
+
+
+def test_resolve_path_rejects_dotdot_escape(tmp_path):
+    """Relative `..` must not escape the workspace root."""
+    with pytest.raises(ValueError, match="escapes workspace"):
+        _resolve_path("../etc/passwd", tmp_path)
+
+
+def test_resolve_path_rejects_workspace_prefix_escape(tmp_path):
+    """`/workspace/../etc/passwd` must not resolve outside the workspace
+    just because it carries the /workspace/ prefix."""
+    with pytest.raises(ValueError, match="escapes workspace"):
+        _resolve_path("/workspace/../etc/passwd", tmp_path)
+
+
+def test_resolve_path_normalizes_absolute_to_workspace(tmp_path):
+    """Absolute paths without /workspace/ prefix are normalized to
+    workspace-relative (documented behavior — not an escape)."""
+    out = _resolve_path("/etc/passwd", tmp_path)
+    assert out == (tmp_path / "etc/passwd").resolve()
+
+
+def test_resolve_path_allows_workspace_prefix(tmp_path):
+    """Paths under /workspace/... resolve to workspace-relative files."""
+    out = _resolve_path("/workspace/notes.md", tmp_path)
+    assert out == (tmp_path / "notes.md").resolve()
+
+
+# ---- build_tools scoping ----
+
+def test_build_tools_empty_allowlist_returns_empty():
+    assert build_tools([], None) == []
+
+
+def test_build_tools_scopes_to_allowlist():
+    """Only tools named in allowed_tools are exposed to the LLM."""
+    tools = build_tools(["Bash"], None)
+    names = {t.get("name") for t in tools}
+    assert "bash" in names
+    assert "read" not in names
+    assert "edit" not in names
+    assert "web_search" not in names
+
+
+def test_build_tools_editor_bundle_has_read_and_edit():
+    tools = build_tools(["Editor"], None)
+    names = {t.get("name") for t in tools}
+    assert names == {"read", "edit"}
+
+
+def test_build_tools_unknown_name_ignored():
+    """Unknown tool names silently drop — don't crash the agent boot."""
+    tools = build_tools(["Bash", "NotARealTool"], None)
+    names = {t.get("name") for t in tools}
+    assert names == {"bash"}
+
+
+def test_build_tools_custom_passthrough():
+    """User-supplied custom tools are normalized and included."""
+    custom = [{"name": "render_image", "description": "x",
+               "inputSchema": {"type": "object"}}]
+    tools = build_tools([], custom)
+    assert len(tools) == 1
+    assert tools[0]["type"] == "custom"
+    assert tools[0]["name"] == "render_image"
+
+
+def test_build_tools_cache_control_on_last():
+    """Last tool gets ephemeral cache_control for prompt-cache efficiency."""
+    tools = build_tools(["Bash", "Editor"], None)
+    assert tools[-1].get("cache_control") == {"type": "ephemeral", "ttl": "1h"}
+    for t in tools[:-1]:
+        assert "cache_control" not in t
+
+
+# ---- LLM builder plumbing ----
+
+def test_llm_sandbox_network_default_on():
+    """Default on for the LLM bash tool; opt out via sandbox(network=False)."""
+    assert cycls.LLM()._bash_network is True
+    assert cycls.LLM().sandbox(network=False)._bash_network is False
+
+
+def test_llm_sandbox_network_kwarg_only():
+    """`network` is keyword-only — prevents accidental positional misuse."""
+    with pytest.raises(TypeError):
+        cycls.LLM().sandbox(True)
