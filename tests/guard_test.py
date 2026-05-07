@@ -171,6 +171,24 @@ _BWRAP_LIVE = _bwrap_live_ok()
 
 
 @pytest.mark.skipif(not _BWRAP_LIVE, reason="bwrap cannot run in this env (needs /workspace mount point)")
+def test_bash_sandbox_blockmeta_so_blocks_metadata_live(tmp_path):
+    """Live: the LD_PRELOAD shim must intercept connect() to 169.254.169.254
+    via libc and return ECONNREFUSED. Catches a future where someone edits
+    _blockmeta.c and forgets to rebuild — stale .so would still bind-mount
+    fine but stop blocking. Without the shim, curl returns 200 (Azure
+    metadata reachable on Codespace) or times out at --max-time 3s."""
+    out = asyncio.run(_exec_bash(
+        "curl -sS --max-time 3 -o /dev/null "
+        "-w 'http=%{http_code} time=%{time_total}' "
+        "http://169.254.169.254/ 2>&1",
+        str(tmp_path), network=True,
+    ))
+    # Shim returns ECONNREFUSED → curl prints "Couldn't connect" / "Connection refused".
+    assert "Couldn't connect" in out or "Connection refused" in out, \
+        f"shim did not block connect() to 169.254.169.254: {out!r}"
+
+
+@pytest.mark.skipif(not _BWRAP_LIVE, reason="bwrap cannot run in this env (needs /workspace mount point)")
 def test_bash_sandbox_bwrap_pid_environ_is_clean_live(tmp_path, monkeypatch):
     """Live: bwrap's own environ (visible in the sandbox's /proc) must not
     leak the parent Python's secrets. We don't --unshare-pid (breaks in
