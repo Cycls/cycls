@@ -26,6 +26,13 @@ def _ephemeralize(messages):
     return messages
 
 
+def _for_api(messages):
+    """Project to API-safe shape — Anthropic rejects unknown top-level
+    keys per message ('Extra inputs are not permitted'), so storage-only
+    sidecars like FE `attachments` must be stripped before send."""
+    return [{k: v for k, v in m.items() if k in ("role", "content")} for m in messages]
+
+
 async def _touch_meta(workspace, chat_id, content):
     """Stamp `updatedAt` for chat-list ordering; on the first turn also derive
     title from the user message and set createdAt. Sole writer of chat meta —
@@ -180,8 +187,14 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     persist = bool(context.chat_id and context.user)
     messages = _ephemeralize(await chat.load_messages(workspace, context.chat_id)) if persist else []
     saved = len(messages)
-    incoming = context.messages.raw[-1].get("content", "")
-    messages.append({"role": "user", "content": await _ingest(incoming, ws)})
+    incoming_msg = context.messages.raw[-1]
+    incoming = incoming_msg.get("content", "")
+    user_msg = {"role": "user", "content": await _ingest(incoming, ws)}
+    # Persist FE attachment metadata as a sidecar — the model sees inlined
+    # base64 in `content`, the FE renders thumbnails from `attachments[]`.
+    if attachments := incoming_msg.get("attachments"):
+        user_msg["attachments"] = attachments
+    messages.append(user_msg)
     if persist:
         try: await _touch_meta(workspace, context.chat_id, incoming)
         except Exception as e: print(f"[WARN] meta touch failed: {e}")
@@ -212,6 +225,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 except Exception as ce:
                     yield {"type": "callout", "callout": f"Compaction failed: {ce}", "style": "warning"}
 
+            kwargs["messages"] = _for_api(messages)
             async with client.messages.stream(**kwargs) as stream:
                 async for event in _iter_stream(stream): yield event
                 response = await stream.get_final_message()

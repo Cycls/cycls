@@ -81,7 +81,7 @@ def to_ui_messages(raw):
         content = msg.get("content")
         if role == "user":
             if isinstance(content, str):
-                out.append({"role": "user", "content": content})
+                ui = {"role": "user", "content": content}
             elif isinstance(content, list):
                 if all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
                     continue  # invisible scaffolding
@@ -89,7 +89,14 @@ def to_ui_messages(raw):
                     b.get("text", "") for b in content
                     if isinstance(b, dict) and b.get("type") == "text"
                 )
-                out.append({"role": "user", "content": text})
+                ui = {"role": "user", "content": text}
+            else:
+                continue
+            # Sidecar attachments for FE display — names/paths/types/sizes
+            # only; image bytes live inline in `content` for the model.
+            if msg.get("attachments"):
+                ui["attachments"] = msg["attachments"]
+            out.append(ui)
         elif role == "assistant":
             if isinstance(content, str):
                 out.append({"role": "assistant", "content": content,
