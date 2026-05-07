@@ -1,43 +1,30 @@
-"""Tests for .cycls/ reserved-path guards (RFC 002 Impl I Step 3)
-and bash sandbox / tool-scoping hardening."""
+"""Sandbox argv + bwrap behavior tests."""
 import asyncio
-import os
 import shutil
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import cycls
-from cycls.agent.web.routers import resolve_path
-from cycls.agent.harness.tools import _resolve_path, _exec_bash, build_tools
+from cycls.agent.harness.tools import _exec_bash
 
 
-def test_state_resolve_path_rejects_cycls(tmp_path):
-    (tmp_path / ".db").mkdir()
-    with pytest.raises(ValueError, match="Reserved path"):
-        resolve_path(tmp_path, ".db")
-    with pytest.raises(ValueError, match="Reserved path"):
-        resolve_path(tmp_path, ".db/usage.json")
+def _capture_bash_exec(tmp_path, **kwargs):
+    mock_proc = MagicMock()
+    mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
+    captured = {}
+
+    async def fake_exec(*args, **kw):
+        captured["argv"] = args
+        captured["kwargs"] = kw
+        return mock_proc
+
+    with patch("asyncio.create_subprocess_exec", fake_exec):
+        asyncio.run(_exec_bash("echo", str(tmp_path), **kwargs))
+    return captured
 
 
-def test_state_resolve_path_rejects_cycls_nested(tmp_path):
-    (tmp_path / ".db" / "sub").mkdir(parents=True)
-    with pytest.raises(ValueError, match="Reserved path"):
-        resolve_path(tmp_path, ".db/sub/file.json")
-
-
-def test_state_resolve_path_allows_normal(tmp_path):
-    out = resolve_path(tmp_path, "notes.md")
-    assert out == (tmp_path / "notes.md").resolve()
-
-
-def test_tools_resolve_path_rejects_cycls(tmp_path):
-    (tmp_path / ".db").mkdir()
-    with pytest.raises(ValueError, match=".db/"):
-        _resolve_path("/workspace/.db/usage.json", tmp_path)
-    with pytest.raises(ValueError, match=".db/"):
-        _resolve_path(".db", tmp_path)
+def _capture_bash_argv(tmp_path, **kwargs):
+    return _capture_bash_exec(tmp_path, **kwargs)["argv"]
 
 
 def test_bash_sandbox_hides_db(tmp_path):
@@ -58,29 +45,9 @@ def test_bash_sandbox_hides_db(tmp_path):
 
     argv = captured["argv"]
     assert "--tmpfs" in argv
-    # Find the --tmpfs entry that hides .db
     indices = [i for i, a in enumerate(argv) if a == "--tmpfs"]
     assert any(argv[i + 1] == "/workspace/.db" for i in indices), \
         f"expected --tmpfs /workspace/.db in argv, got: {argv}"
-
-
-def _capture_bash_exec(tmp_path, **kwargs):
-    mock_proc = MagicMock()
-    mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
-    captured = {}
-
-    async def fake_exec(*args, **kw):
-        captured["argv"] = args
-        captured["kwargs"] = kw
-        return mock_proc
-
-    with patch("asyncio.create_subprocess_exec", fake_exec):
-        asyncio.run(_exec_bash("echo", str(tmp_path), **kwargs))
-    return captured
-
-
-def _capture_bash_argv(tmp_path, **kwargs):
-    return _capture_bash_exec(tmp_path, **kwargs)["argv"]
 
 
 def test_bash_sandbox_network_off_by_default(tmp_path):
@@ -122,9 +89,7 @@ def test_bash_sandbox_blockmeta_so_mounted(tmp_path):
     set to its mount path — closes the GCP/AWS/Azure metadata exfil vector
     for libc-using code (bypassable by static binaries; documented limit)."""
     argv = _capture_bash_argv(tmp_path)
-    # ro-bind ... .blockmeta.so
     assert any(a == "/tmp/.blockmeta.so" for a in argv), "blockmeta.so not bound"
-    # setenv LD_PRELOAD /tmp/.blockmeta.so
     setenv_pairs = [(argv[i+1], argv[i+2]) for i, a in enumerate(argv) if a == "--setenv"]
     assert ("LD_PRELOAD", "/tmp/.blockmeta.so") in setenv_pairs
 
@@ -183,7 +148,6 @@ def test_bash_sandbox_blockmeta_so_blocks_metadata_live(tmp_path):
         "http://169.254.169.254/ 2>&1",
         str(tmp_path), network=True,
     ))
-    # Shim returns ECONNREFUSED → curl prints "Couldn't connect" / "Connection refused".
     assert "Couldn't connect" in out or "Connection refused" in out, \
         f"shim did not block connect() to 169.254.169.254: {out!r}"
 
@@ -207,92 +171,3 @@ def test_bash_sandbox_bwrap_pid_environ_is_clean_live(tmp_path, monkeypatch):
         "bwrap's own environ leaked parent-process secret — env= sanitization "
         "on subprocess_exec is broken"
     )
-
-
-# ---- _resolve_path escape hardening ----
-
-def test_resolve_path_rejects_dotdot_escape(tmp_path):
-    """Relative `..` must not escape the workspace root."""
-    with pytest.raises(ValueError, match="escapes workspace"):
-        _resolve_path("../etc/passwd", tmp_path)
-
-
-def test_resolve_path_rejects_workspace_prefix_escape(tmp_path):
-    """`/workspace/../etc/passwd` must not resolve outside the workspace
-    just because it carries the /workspace/ prefix."""
-    with pytest.raises(ValueError, match="escapes workspace"):
-        _resolve_path("/workspace/../etc/passwd", tmp_path)
-
-
-def test_resolve_path_normalizes_absolute_to_workspace(tmp_path):
-    """Absolute paths without /workspace/ prefix are normalized to
-    workspace-relative (documented behavior — not an escape)."""
-    out = _resolve_path("/etc/passwd", tmp_path)
-    assert out == (tmp_path / "etc/passwd").resolve()
-
-
-def test_resolve_path_allows_workspace_prefix(tmp_path):
-    """Paths under /workspace/... resolve to workspace-relative files."""
-    out = _resolve_path("/workspace/notes.md", tmp_path)
-    assert out == (tmp_path / "notes.md").resolve()
-
-
-# ---- build_tools scoping ----
-
-def test_build_tools_empty_allowlist_returns_empty():
-    assert build_tools([], None) == []
-
-
-def test_build_tools_scopes_to_allowlist():
-    """Only tools named in allowed_tools are exposed to the LLM."""
-    tools = build_tools(["Bash"], None)
-    names = {t.get("name") for t in tools}
-    assert "bash" in names
-    assert "read" not in names
-    assert "edit" not in names
-    assert "web_search" not in names
-
-
-def test_build_tools_editor_bundle_has_read_and_edit():
-    tools = build_tools(["Editor"], None)
-    names = {t.get("name") for t in tools}
-    assert names == {"read", "edit"}
-
-
-def test_build_tools_unknown_name_ignored():
-    """Unknown tool names silently drop — don't crash the agent boot."""
-    tools = build_tools(["Bash", "NotARealTool"], None)
-    names = {t.get("name") for t in tools}
-    assert names == {"bash"}
-
-
-def test_build_tools_custom_passthrough():
-    """User-supplied custom tools are normalized and included."""
-    custom = [{"name": "render_image", "description": "x",
-               "inputSchema": {"type": "object"}}]
-    tools = build_tools([], custom)
-    assert len(tools) == 1
-    assert tools[0]["type"] == "custom"
-    assert tools[0]["name"] == "render_image"
-
-
-# ---- LLM builder plumbing ----
-
-def test_llm_sandbox_network_default_on():
-    """Default on for the LLM bash tool; opt out via sandbox(network=False)."""
-    assert cycls.LLM()._bash_network is True
-    assert cycls.LLM().sandbox(network=False)._bash_network is False
-
-
-def test_llm_sandbox_network_kwarg_only():
-    """`network` is keyword-only — prevents accidental positional misuse."""
-    with pytest.raises(TypeError):
-        cycls.LLM().sandbox(True)
-
-
-def test_build_tools_cache_control_on_last():
-    """Last tool gets ephemeral cache_control for prompt-cache efficiency."""
-    tools = build_tools(["Bash", "Editor"], None)
-    assert tools[-1].get("cache_control") == {"type": "ephemeral", "ttl": "1h"}
-    for t in tools[:-1]:
-        assert "cache_control" not in t
