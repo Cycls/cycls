@@ -78,7 +78,7 @@ function ChatApp({ config }: { config: AppConfig | null }) {
     }
   }, [send]);
 
-  // Restore ?chat=<id> from URL on first load (once Clerk has settled).
+  // Restore ?id=<chat_id> from URL on first load (once Clerk has settled).
   // Also handle ?fork=<user>/<token>: mint a deep-copy fork into this user's
   // workspace and navigate to the new chat. Survives a sign-in round-trip.
   const chatRestored = useRef(false);
@@ -97,8 +97,8 @@ function ChatApp({ config }: { config: AppConfig | null }) {
       forkShare(forkFrom).then(loadChat).catch(() => {});
       return;
     }
-    const id = params.get("chat");
-    if (id) loadChat(id).catch(() => stripParam("chat"));
+    const id = params.get("id");
+    if (id) loadChat(id).catch(() => stripParam("id"));
   }, [authLoaded, loadChat, forkShare]);
 
   const handleShare = async (title: string = "", audience: string = "public") => {

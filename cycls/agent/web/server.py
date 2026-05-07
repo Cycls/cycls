@@ -145,7 +145,7 @@ def web(func, config, extra_routers=None, auth=None):
     async def back(request: Request, user: Optional[User] = auth):
         data = await request.json()
         messages = data.get("messages")
-        chat_id = request.query_params.get("chat") or str(uuid.uuid4())
+        chat_id = request.query_params.get("id") or str(uuid.uuid4())
 
         context = Context(messages=Messages(messages), user=user, chat_id=chat_id, prod=config.prod)
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)

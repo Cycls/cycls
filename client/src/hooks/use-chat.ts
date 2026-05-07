@@ -166,7 +166,7 @@ export function useChat(baseUrl: string = "") {
         const requestMessage = { role: newUserMsg.role, content, parts: newUserMsg.parts };
 
         const url = chatIdRef.current
-          ? `${baseUrl}/chat?chat=${encodeURIComponent(chatIdRef.current)}`
+          ? `${baseUrl}/chat?id=${encodeURIComponent(chatIdRef.current)}`
           : `${baseUrl}/chat`;
         const response = await fetch(url, {
           method: "POST",
@@ -208,7 +208,7 @@ export function useChat(baseUrl: string = "") {
                 setChatId(item.chat_id);
                 // Reflect in browser URL so the chat is bookmarkable/shareable
                 const u = new URL(window.location.href);
-                u.searchParams.set("chat", item.chat_id);
+                u.searchParams.set("id", item.chat_id);
                 window.history.replaceState({}, "", u.toString());
                 continue;
               }
@@ -379,9 +379,9 @@ export function useChat(baseUrl: string = "") {
     setMessages([]);
     setChatId(null);
     chatIdRef.current = null;
-    // Drop ?chat= from URL on clear
+    // Drop ?id= from URL on clear
     const u = new URL(window.location.href);
-    u.searchParams.delete("chat");
+    u.searchParams.delete("id");
     window.history.replaceState({}, "", u.toString());
   }, []);
 
@@ -453,7 +453,7 @@ export function useChat(baseUrl: string = "") {
       setChatId(id);
       chatIdRef.current = id;
       const u = new URL(window.location.href);
-      u.searchParams.set("chat", id);
+      u.searchParams.set("id", id);
       window.history.replaceState({}, "", u.toString());
 
       track("chat_loaded", {
@@ -477,7 +477,7 @@ export function useChat(baseUrl: string = "") {
       setChatId(null);
       chatIdRef.current = null;
       const u = new URL(window.location.href);
-      u.searchParams.delete("chat");
+      u.searchParams.delete("id");
       window.history.replaceState({}, "", u.toString());
     }
   }, [baseUrl, authHeaders]);
