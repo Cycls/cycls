@@ -21,15 +21,20 @@ The agent's Python process holds secrets as env vars (`ANTHROPIC_API_KEY`, `CYCL
 
 ## Current invocation
 
-```python
+```sh
 bwrap --ro-bind / /
-      --bind <cwd> /workspace
-      --ro-bind-try <cwd>/.cycls /workspace/.cycls
-      --tmpfs /app --tmpfs /tmp --dev /dev --proc /proc
-      [--unshare-net]
-      --chdir /workspace --die-with-parent --clearenv
-      --setenv PATH ...  --setenv HOME /workspace
+      --tmpfs /tmp --dev /dev --proc /proc
+      --unshare-user
+      --clearenv --die-with-parent
+      --setenv PATH ... --setenv HOME /workspace
       --setenv TERM xterm --setenv LANG ...
+      --ro-bind <pkg>/_blockmeta.so /tmp/.blockmeta.so   # LD_PRELOAD shim
+      --setenv LD_PRELOAD /tmp/.blockmeta.so
+      --bind <cwd> /workspace
+      --tmpfs /workspace/.db                              # hide SlateDB internals
+      --tmpfs /app                                        # mask provider .env file
+      --chdir /workspace
+      [--unshare-net]                                     # only when network=False
       -- bash -c <command>
 ```
 
@@ -37,15 +42,16 @@ Launched via `asyncio.create_subprocess_exec(..., env={"PATH": ..., "LANG": ...}
 
 Key properties:
 
-- **Network is isolated by default** via `--unshare-net`. Opt in per-agent with `cycls.LLM().sandbox(network=True)` if bash needs `curl` / `pip install` / `git clone`. With network off, even a compromised bash has no egress.
-- **Workspace is the only writable path** (`<cwd>` bound at `/workspace`). The root is read-only; `/app` and `/tmp` are ephemeral tmpfs.
-- **`.cycls/` is read-only** (`--ro-bind-try`) so managed state (usage counters, session metadata) can be read by user commands but not tampered with at the filesystem layer.
+- **Network**: the LLM bash tool defaults to `network=True` (curl/pip/git for the model). When `network=False`, `--unshare-net` + `--unshare-user` gives a fresh netns owned by a fresh userns, so bwrap has caps to bring up `lo` even though Docker drops `CAP_NET_ADMIN` on the outer container. Without `--unshare-user`, loopback setup fails with `RTM_NEWADDR: No child processes`.
+- **Workspace is the only writable path** (`<cwd>` bound at `/workspace`). Root is read-only; `/app` and `/tmp` are ephemeral tmpfs.
+- **`.db/` is hidden** (`--tmpfs /workspace/.db`) so the sandboxed shell can't read SlateDB internals from the workspace volume. Editor tools (`read`, `edit`) also reject `.db/` paths via `_resolve_path`; tmpfs is defense in depth.
+- **Metadata server is blocked** via the LD_PRELOAD shim (`_blockmeta.so`), which intercepts libc `connect()` and rejects `169.254.0.0/16` + IPv6 link-local. See "Cloud credential exposure" below for the threat boundary.
 
 ### Why not `--unshare-all`?
 
 We tried. `--unshare-all` adds PID/IPC/UTS/cgroup unsharing and triggers `--proc /proc` to mount a fresh procfs in the new PID namespace. That fails with `bwrap: Can't mount proc on /newroot/proc: Operation not permitted` in our nested-container runtime — even with `cap_add=SYS_ADMIN`, `seccomp=unconfined`, `apparmor=unconfined` on the outer container. The nested Docker + user namespace chain blocks the procfs mount.
 
-Dropping `--unshare-all` means `/proc` inside the sandbox shows the full container PID tree. That *sounds* bad — bash can see bwrap, Python, every process. But the actual protection is one layer down: bwrap still implicitly `--unshare-user`s, so bash runs in a child user namespace. Every `/proc/<pid>/environ`, `/proc/<pid>/mem`, `/proc/<pid>/root` access requires `PTRACE_MODE_READ_FSCREDS` across the user-namespace boundary, which the kernel denies. See the attack probes below — `cat /proc/*/environ` returns "Permission denied" for every PID except bash's own.
+Dropping `--unshare-all` means `/proc` inside the sandbox shows the full container PID tree. That *sounds* bad — bash can see bwrap, Python, every process. But the actual protection is one layer down: `--unshare-user` puts bash in a child user namespace. Every `/proc/<pid>/environ`, `/proc/<pid>/mem`, `/proc/<pid>/root` access requires `PTRACE_MODE_READ_FSCREDS` across the user-namespace boundary, which the kernel denies. See the attack probes below — `cat /proc/*/environ` returns "Permission denied" for every PID except bash's own.
 
 ## Threat model — attack probes (filesystem & /proc)
 
@@ -65,9 +71,9 @@ We ran a battery of attacker-perspective bash commands from inside the sandbox. 
 | `getent hosts example.com` with `network=False` | Fails | `--unshare-net` — no egress |
 | `curl http://evil` with `network=True` | Works | Explicit opt-in — but see "Cloud credential exposure" below |
 
-## Cloud credential exposure (OPEN — planned fix)
+## Cloud credential exposure (mitigated, with documented threat boundary)
 
-Discovered 2026-04-20. The filesystem and `/proc` isolation above holds, but there's a separate exposure at the cloud-credential layer that bwrap doesn't touch by default.
+The filesystem and `/proc` isolation holds, but the cloud-credential layer needs its own answer because bwrap doesn't touch it by default.
 
 ### The mechanism
 
@@ -78,50 +84,62 @@ curl -H "Metadata-Flavor: Google" \
   http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token
 ```
 
-The metadata server returns a short-lived (~1h) access token for the Cloud Run service account. That token is **bucket-wide** — the SA has read + write on the entire shared workspace bucket, not just the calling tenant's prefix.
+It returns a short-lived (~1h) access token for the Cloud Run service account. That token is **bucket-wide** — the SA has read + write across the agent's whole workspace bucket, including other tenants' prefixes. Stealing it from a sandboxed shell = cross-tenant breach.
 
-### The exposure
+### What we tried (and why they don't work on Cloud Run)
 
-A networked bash (`sandbox(network=True)`) can mint this token and hit the GCS REST API directly, bypassing the filesystem isolation:
+| Approach | Verdict |
+|---|---|
+| `--unshare-net` (kill network entirely) | Closes the vector but breaks `curl`/`pip`/`git` — most agents need internet |
+| `slirp4netns` / `pasta` (user-space TCP/IP into a fresh netns + IP filter) | **Dead path**: both require `/dev/net/tun`. Cloud Run V2 user containers (verified live: kernel 6.9.12, Gen2 microVM) **don't expose `/dev/net/`**. No TUN, no filtered netns. |
+| `iptables` blackhole at container entrypoint | Requires `CAP_NET_ADMIN`. Cloud Run drops it. |
+| Cloud Run VPC egress controls | Don't apply to link-local IPs (169.254/16 routes outside VPC) |
+| Disable metadata server at the platform | No such Cloud Run knob. GKE Workload Identity has metadata hardening; Cloud Run doesn't. |
 
-- **Read** every other tenant's files via `GET /storage/v1/b/{bucket}/o?prefix=<other_user>/`
-- **Write** into any tenant's prefix via `POST /upload/storage/v1/b/{bucket}/o?name=<other_user>/whatever`
-- **Bypass `.cycls/` guard** — the ro-bind and `resolve_path` checks are filesystem-layer; the GCS API doesn't care about them. A malicious prompt could reset its own quota or plant files in other tenants' `.cycls/`.
+The `/dev/net/tun` wall is the load-bearing constraint — it kills every "fresh netns + user-space net stack" approach simultaneously.
 
-This affects **any tenant with `sandbox(network=True)` enabled**. Networked bash is intentionally enabled for many legitimate agents (web scraping, pip installs, API calls) — so this is a real prod exposure, not theoretical.
+### What we shipped: LD_PRELOAD shim
 
-### Why current bwrap controls don't cover it
+`cycls/app/sandbox/_blockmeta.c` (~30 LOC C) intercepts libc `connect()` and returns `ECONNREFUSED` for:
 
-- `--unshare-net` would close it — but also kills all network, including legitimate `curl` / `pip install`. Not acceptable for agents that need internet.
-- Filesystem isolation (`--bind`, `--ro-bind`, `/proc` ptrace) is irrelevant — the attack goes over TCP to a metadata IP, not through the filesystem.
-- `--clearenv` + `env=` on `subprocess_exec` removes ADC-style env-var credentials, but the metadata server doesn't use env vars — it's a network endpoint.
+- `169.254.0.0/16` (IPv4 link-local — covers GCP/AWS/Azure metadata)
+- `fe80::/10` (IPv6 link-local)
+- `fd00:ec2::/32` (AWS-style IPv6 metadata, defensive)
 
-### Fix direction
+The compiled `.so` ships in the cycls Python package (`importlib.resources.files("cycls.app.sandbox") / "_blockmeta.so"`), gets ro-bind-mounted into the bwrap sandbox at `/tmp/.blockmeta.so`, and is loaded via `LD_PRELOAD` env. Every libc-using program (curl, wget, python's socket/requests/urllib, node's http, etc.) gets metadata blocked.
 
-**Selective egress filter via user-space networking.** Keep network enabled in bash, block `169.254.169.254` and `metadata.google.internal` specifically. Two viable paths:
+### Threat boundary (read this carefully)
 
-1. **bwrap + `pasta`** — `pasta` is unprivileged user-space networking (shipped in Debian/Fedora/Alpine). bwrap `--unshare-net` creates a fresh netns, pasta provides filtered connectivity to it with `--deny-out 169.254.169.254`. Bash gets full internet minus metadata. ~10 lines in `harness/tools.py`.
+LD_PRELOAD is a **seatbelt, not a vault**. It covers the realistic threats and is bypassable in narrow ways. We accept the bypass cost because every alternative on Cloud Run is either ineffective or requires architectural rework (per-tenant deploys).
 
-2. **iptables at container entrypoint** — blackhole `169.254.169.254` for the whole container before the framework starts. Requires `CAP_NET_ADMIN` on Cloud Run gen 2. Also blocks the framework's own ADC access, so the framework must cache or proxy tokens before the rule takes effect.
+**Covers** (≥95% of what an LLM-issued shell does):
+- Any program that uses libc `connect()` — curl, wget, python, node, ruby, php
+- DNS-resolved access (`metadata.google.internal` → 169.254.169.254 → libc → blocked)
+- Process exec chains (the shim survives `exec()`)
+- Casual prompt injection asking the LLM to "fetch this URL"
 
-**Pasta path is cleaner** — smaller blast radius, no capability requirement, no framework behavior change. Preferred.
+**Does NOT cover** (documented bypasses):
+- **Static binaries** — Go's default build, `musl-static` curl, anything compiled `-static`. They don't use libc, so `LD_PRELOAD` doesn't load.
+- **Direct `syscall(SYS_connect, ...)`** — `python -c "import ctypes; ctypes.CDLL('libc.so.6').syscall(42, ...)"` calls libc's syscall wrapper, not libc's `connect` symbol.
+- **Inline assembly** — `asm volatile("syscall" : : "a"(42), ...)`.
+- **`unset LD_PRELOAD; curl ...`** — using env-var injection, the sandbox's LD_PRELOAD can be stripped from a child process's env. (Mitigation: `/etc/ld.so.preload` is harder to bypass but requires the file to pre-exist on the host, which our `--ro-bind / /` doesn't allow without extra image-build setup. Future hardening.)
 
-### Application-level defenses (ship alongside)
+All four bypasses require **deliberate adversarial intent** — the LLM, naturally generating code, will not pick them. They matter only if the threat model includes "user actively reads cycls source and crafts bypass code."
 
-- **URL validators in every network-capable tool** — WebSearch, custom fetch tools, anything taking a user-influenced URL. Block hostnames and IPs matching `169.254.*`, `metadata.google.internal`, `*.internal`. One helper function, reused across tools.
-- **Detect and log** — any outbound attempt to `169.254.169.254` from inside a sandbox should surface in audit logs, not just fail silently.
+For the realistic cycls product shape (developer ships an agent for their customers, who use it normally with occasional prompt injection attempts), this shim closes the practical metadata vector. For "deliberately adversarial users with shell access," no SDK-level fix is sufficient — the architectural answer is per-tenant Cloud Run deploys (each tenant's bash steals only their own SA, no cross-tenant leak).
 
 ### What this does NOT change
 
-- The developer's Python handler runs outside bwrap and keeps full ADC by design — they need it for `google-cloud-storage` usage, future `ws.object()` primitive, etc. Developer trust boundary is unchanged.
-- The `.cycls/_migrated` marker, quota writes, and other framework state are still written by trusted framework code with the full-scope token. The scoping is only applied at the boundary where untrusted input reaches.
+- The developer's Python handler runs outside bwrap and keeps full ADC by design — they need it for `slatedb`/GCS calls, future `ws.object()` primitive, etc. Developer trust boundary is unchanged.
+- Framework state writes (share tokens, chat metadata, usage counters) happen via trusted Python code with the full-scope token. Scoping is only applied at the bash-tool boundary where untrusted input reaches.
 
-## What's provably safe in prod (updated)
+## What's provably safe in prod
 
 - **Process env / provider keys** (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) — live in Python's env, unreadable via `/proc/<python_pid>/environ` due to user-NS boundary. `/app/.env` is masked by tmpfs. ✅
-- **CLI/publish secrets** (`CYCLS_API_KEY`, `UV_PUBLISH_TOKEN`) — not shipped into the runtime container at all, thanks to the `.providers.env` split (`Image.copy(".providers.env", ".env")`). They can't leak from a place they never existed. ✅
-- **Cross-tenant filesystem access via `/proc` or mount tricks** — blocked at both layers. ✅
-- **Cross-tenant GCS access via metadata-minted tokens** — **currently exposed for `sandbox(network=True)` agents.** Pasta-based fix planned. ❌
+- **CLI/publish secrets** (`CYCLS_API_KEY`, `UV_PUBLISH_TOKEN`) — not shipped into the runtime container at all, thanks to the `.providers.env` split (`Image.copy(".providers.env", ".env")`). Can't leak from a place they never existed. ✅
+- **SlateDB internals** — `--tmpfs /workspace/.db` masks the workspace's `.db/` so the sandboxed shell can't read the LSM/WAL files. Editor tools also reject `.db/` paths. ✅
+- **Cross-tenant filesystem access via `/proc` or mount tricks** — blocked at both layers (user-NS + bind mount). ✅
+- **Cross-tenant GCS access via metadata-minted tokens** — mitigated for libc-using code via the LD_PRELOAD shim. ⚠️ Bypassable by static binaries / direct syscall / `unset LD_PRELOAD`; see threat boundary above. Fully closing requires per-tenant deploys.
 
 ### Dev-only caveat
 
@@ -152,10 +170,10 @@ When auditing new sandbox changes, test `/proc/1/environ` specifically, not just
 
 ## Testing
 
-Three classes of test in `tests/guard_test.py`:
+Tests split across `tests/app/sandbox_test.py` (sandbox-level) and `tests/agent/harness_test.py` (tool-level):
 
-- **Argv-level (always run):** assert the flags we depend on are present (`--unshare-net` when `network=False`, `--clearenv`, `--die-with-parent`, only safe env via `--setenv`, explicit `env=` on `subprocess_exec`).
-- **Live — process/env (skipped off-container):** actually run bwrap with a planted sentinel env var and verify *bwrap's own* `/proc/<pid>/environ` is clean. Skipped on dev hosts that lack `/workspace` and `/app` mount points.
-- **Live — metadata egress (once pasta ships):** with `sandbox(network=True)`, assert `curl http://169.254.169.254/...` fails (connection refused / timeout) while `curl https://example.com` succeeds. Prevents regression.
+- **Argv-level (always run, in `sandbox_test.py`):** assert the flags we depend on are present — `--unshare-user`, `--unshare-net` when `network=False`, `--clearenv`, `--die-with-parent`, only safe env via `--setenv` (PATH/HOME/TERM/LANG/LD_PRELOAD), explicit `env=` on `subprocess_exec`, `_blockmeta.so` ro-bind + LD_PRELOAD set.
+- **Live — bwrap environ leak (skipped off-container):** plant a sentinel env var, verify *bwrap's own* `/proc/<pid>/environ` is clean. Skipped on hosts where `--ro-bind / /` blocks creating `/workspace`.
+- **Live — metadata block:** with `network=True`, assert `curl http://169.254.169.254/...` fails fast with "Couldn't connect" (libc connect → ECONNREFUSED via shim). Prevents future regressions where someone edits `_blockmeta.c` and forgets to rebuild — stale `.so` would still bind-mount fine but stop blocking.
 
-When touching `_exec_bash`, run all three and — if the live tests skip — bring up a deployed container and verify there.
+When touching the sandbox layer, run all three and — if the live tests skip on your dev host — bring up a deployed container (`docker exec` into the running cycls agent) and verify there.
