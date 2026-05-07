@@ -17,9 +17,5 @@ export function useAuthHeaders() {
     return h;
   }, []);
 
-  const getToken = useCallback(async () => {
-    return getTokenRef.current ? await getTokenRef.current() : null;
-  }, []);
-
-  return { setGetToken, authHeaders, getToken };
+  return { setGetToken, authHeaders };
 }
