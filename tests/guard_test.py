@@ -67,23 +67,16 @@ def test_bash_sandbox_hides_db(tmp_path):
 def _capture_bash_exec(tmp_path, **kwargs):
     mock_proc = MagicMock()
     mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
-    mock_proc.returncode = 0
-    calls = []
+    captured = {}
 
     async def fake_exec(*args, **kw):
-        calls.append({"argv": args, "kwargs": kw})
+        captured["argv"] = args
+        captured["kwargs"] = kw
         return mock_proc
 
-    async def fake_attach(self, info_fd):
-        m = MagicMock(); m.returncode = None
-        m.terminate = MagicMock(); m.wait = AsyncMock(return_value=0)
-        return m
-
-    with patch("asyncio.create_subprocess_exec", fake_exec), \
-         patch("cycls.app.sandbox.Sandbox._attach_slirp", fake_attach):
+    with patch("asyncio.create_subprocess_exec", fake_exec):
         asyncio.run(_exec_bash("echo", str(tmp_path), **kwargs))
-    bwrap = next(c for c in calls if c["argv"][0] == "bwrap")
-    return {"argv": bwrap["argv"], "kwargs": bwrap["kwargs"], "calls": calls}
+    return captured
 
 
 def _capture_bash_argv(tmp_path, **kwargs):
@@ -91,22 +84,20 @@ def _capture_bash_argv(tmp_path, **kwargs):
 
 
 def test_bash_sandbox_network_off_by_default(tmp_path):
-    """Default: --unshare-net + no slirp4netns → empty netns, no egress."""
-    captured = _capture_bash_exec(tmp_path)
-    argv = captured["argv"]
+    """Default: --unshare-user + --unshare-net → fresh userns owns the new
+    netns so bwrap has NET_ADMIN to bring up lo. No host net access."""
+    argv = _capture_bash_argv(tmp_path)
+    assert "--unshare-user" in argv
     assert "--unshare-net" in argv
-    assert "--info-fd" not in argv
-    assert not any(c["argv"][0] == "slirp4netns" for c in captured["calls"])
 
 
 def test_bash_sandbox_network_opt_in(tmp_path):
-    """network=True keeps --unshare-net (we own a fresh netns) and adds
-    --info-fd/--block-fd plumbing so slirp4netns can attach with
-    --disable-host-loopback (blocks 169.254.169.254 metadata server)."""
+    """network=True drops --unshare-net so bash can egress (curl, pip, git)
+    via the host network. Metadata server (169.254.169.254) is reachable
+    in this mode — mitigation tracked separately."""
     argv = _capture_bash_argv(tmp_path, network=True)
-    assert "--unshare-net" in argv
-    assert "--info-fd" in argv
-    assert "--block-fd" in argv
+    assert "--unshare-net" not in argv
+    assert "--unshare-user" in argv
 
 
 def test_bash_sandbox_clearenv(tmp_path):
