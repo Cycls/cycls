@@ -46,23 +46,21 @@ class App(Function):
             return f"gs://cycls-ws-{self.name}"
         return f"file://{self.volume}"
 
-    def _require_auth(self):
+    def _depends(self, fn):
         if self._auth_provider is None:
             raise RuntimeError("Requires auth=... on the @cycls.app decorator")
+        from fastapi import Depends
+        return Depends(fn)
 
     @cached_property
     def auth(self):
-        self._require_auth()
-        from fastapi import Depends
-        return Depends(validator(self._auth_provider, self.prod))
+        return self._depends(validator(self._auth_provider, self.prod))
 
     @cached_property
     def workspace(self):
-        self._require_auth()
-        from fastapi import Depends
         def _build_ws(user=self.auth):
             return workspace_for(user, self.volume, base=self.storage)
-        return Depends(_build_ws)
+        return self._depends(_build_ws)
 
     def _prepare_func(self, prod):
         self.prod = prod

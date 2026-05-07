@@ -1,4 +1,5 @@
 """Auth — JWT/Clerk providers and a FastAPI Depends factory."""
+from functools import lru_cache
 from typing import Optional
 
 from pydantic import BaseModel
@@ -28,24 +29,17 @@ class JWT:
         return User(id=decoded.get("sub"))
 
 
-_CLERK_DEFAULTS = {
-    "jwks_url":     "https://clerk.cycls.ai/.well-known/jwks.json",
-    "dev_jwks_url": "https://select-sloth-58.clerk.accounts.dev/.well-known/jwks.json",
-    "pk":           "pk_live_Y2xlcmsuY3ljbHMuYWkk",
-    "dev_pk":       "pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ",
-}
-
-
 class Clerk(JWT):
     """Clerk provider with hosted defaults; pass explicit URLs to override."""
+    _JWKS     = "https://clerk.cycls.ai/.well-known/jwks.json"
+    _DEV_JWKS = "https://select-sloth-58.clerk.accounts.dev/.well-known/jwks.json"
+    _PK       = "pk_live_Y2xlcmsuY3ljbHMuYWkk"
+    _DEV_PK   = "pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ"
 
     def __init__(self, *, jwks_url=None, dev_jwks_url=None, pk=None, dev_pk=None):
-        super().__init__(
-            jwks_url or _CLERK_DEFAULTS["jwks_url"],
-            dev_jwks_url or _CLERK_DEFAULTS["dev_jwks_url"],
-        )
-        self.pk = pk or _CLERK_DEFAULTS["pk"]
-        self.dev_pk = dev_pk or _CLERK_DEFAULTS["dev_pk"]
+        super().__init__(jwks_url or self._JWKS, dev_jwks_url or self._DEV_JWKS)
+        self.pk = pk or self._PK
+        self.dev_pk = dev_pk or self._DEV_PK
 
     def resolve(self, prod):
         return {**super().resolve(prod), "pk": self.pk if prod else self.dev_pk}
@@ -77,18 +71,19 @@ class GCP(JWT):
         return User(id=decoded.get("sub"), org_id=tenant)
 
 
-_jwks_clients = {}
+@lru_cache(maxsize=8)
+def _jwks_client(url):
+    from jwt import PyJWKClient
+    return PyJWKClient(url)
 
 
 def authenticate(provider, prod, token: str) -> User:
     """Decode *token* via *provider*'s JWKS; return a User. Raises on failure."""
     import jwt as jwtlib
-    from jwt import PyJWKClient
     jwks_url = provider.resolve(prod)["jwks_url"] if provider else None
     if not jwks_url:
         raise RuntimeError("Auth not configured (missing JWKS URL)")
-    client = _jwks_clients.setdefault(jwks_url, PyJWKClient(jwks_url))
-    key = client.get_signing_key_from_jwt(token)
+    key = _jwks_client(jwks_url).get_signing_key_from_jwt(token)
     decoded = jwtlib.decode(token, key.key, algorithms=["RS256"], leeway=10)
     return provider.claims_to_user(decoded)
 
