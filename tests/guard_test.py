@@ -108,12 +108,25 @@ def test_bash_sandbox_clearenv(tmp_path):
 
 
 def test_bash_sandbox_forwards_only_safe_env(tmp_path):
-    """Only PATH / HOME / TERM / LANG may be forwarded via --setenv.
-    Anything else risks leaking a secret the caller forgot to strip."""
+    """Only PATH / HOME / TERM / LANG / LD_PRELOAD may be forwarded via --setenv.
+    LD_PRELOAD is the metadata-block shim path; everything else risks leaking
+    a secret the caller forgot to strip."""
     argv = _capture_bash_argv(tmp_path)
-    safe = {"PATH", "HOME", "TERM", "LANG"}
+    safe = {"PATH", "HOME", "TERM", "LANG", "LD_PRELOAD"}
     forwarded = {argv[i + 1] for i, a in enumerate(argv) if a == "--setenv"}
     assert forwarded <= safe, f"unexpected env forwarded: {forwarded - safe}"
+
+
+def test_bash_sandbox_blockmeta_so_mounted(tmp_path):
+    """The LD_PRELOAD shim must be ro-bound into the sandbox and LD_PRELOAD
+    set to its mount path — closes the GCP/AWS/Azure metadata exfil vector
+    for libc-using code (bypassable by static binaries; documented limit)."""
+    argv = _capture_bash_argv(tmp_path)
+    # ro-bind ... .blockmeta.so
+    assert any(a == "/tmp/.blockmeta.so" for a in argv), "blockmeta.so not bound"
+    # setenv LD_PRELOAD /tmp/.blockmeta.so
+    setenv_pairs = [(argv[i+1], argv[i+2]) for i, a in enumerate(argv) if a == "--setenv"]
+    assert ("LD_PRELOAD", "/tmp/.blockmeta.so") in setenv_pairs
 
 
 def test_bash_sandbox_die_with_parent(tmp_path):
