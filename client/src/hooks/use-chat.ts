@@ -163,7 +163,8 @@ export function useChat(baseUrl: string = "") {
           }
           content = parts;
         }
-        const requestMessage = { role: newUserMsg.role, content, parts: newUserMsg.parts };
+        const requestMessage = { role: newUserMsg.role, content, parts: newUserMsg.parts,
+                                 attachments: newUserMsg.attachments };
 
         const url = chatIdRef.current
           ? `${baseUrl}/chat?id=${encodeURIComponent(chatIdRef.current)}`
@@ -460,6 +461,24 @@ export function useChat(baseUrl: string = "") {
         chat_id: id,
         message_count: loaded.length,
       });
+
+      // Auth on /files/{path} is header-only by design (no ?token= URL
+      // fallback — JWTs in URLs leak through history/logs/Referer). So
+      // <img src> can't load directly. Fetch each attachment with the
+      // bearer header and turn it into a blob URL the browser can render.
+      const refs = loaded.flatMap((m) => (m.attachments || []).filter((a) => a.path));
+      if (refs.length) {
+        await Promise.all(
+          refs.map(async (att) => {
+            try {
+              const r = await fetch(`${baseUrl}/files/${att.path}`, { headers });
+              if (r.ok) att.url = URL.createObjectURL(await r.blob());
+              else console.warn(`attachment fetch ${r.status}: ${att.path}`);
+            } catch (e) { console.warn(`attachment fetch failed: ${att.path}`, e); }
+          }),
+        );
+        setMessages([...loaded]);
+      }
     } finally {
       setChatLoading(false);
     }
