@@ -10,7 +10,6 @@ SlateDB transaction (single ops are 1-op txns committed non-durable);
 escape hatch.
 """
 import asyncio, json
-from collections import OrderedDict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +17,7 @@ from typing import Optional
 
 from slatedb.uniffi import (
     DbBuilder, IsolationLevel, ObjectStore, WriteOptions,
+    Error, CloseReason,
 )
 
 
@@ -53,10 +53,10 @@ def workspace_at(tenant, volume, base=None) -> Workspace:
 
 # ---- KV storage ----
 
-_pool: "OrderedDict[str, object]" = OrderedDict()
+_pool: dict = {}
 _pool_lock = asyncio.Lock()
-MAX_POOL_SIZE = 100
 _NON_DURABLE = WriteOptions(await_durable=False)
+_DURABLE     = WriteOptions(await_durable=True)
 
 
 async def _safe_shutdown(db):
@@ -78,24 +78,32 @@ async def _build_db(url):
 
 
 async def _get_pooled(url):
-    """LRU + double-check lock: concurrent misses on the same url may build
-    twice; loser discards. Cheaper than serializing all opens."""
-    cached = _pool.get(url)
-    if cached is not None:
-        _pool.move_to_end(url)
-        return cached
+    """Open-once cache. Builds happen outside the lock so different urls
+    can build in parallel; same-url racers discard the loser's handle."""
+    if url in _pool: return _pool[url]
     db = await _build_db(url)
-    discard = None
     async with _pool_lock:
         if url in _pool:
-            _pool.move_to_end(url)
-            discard, db = db, _pool[url]
-        else:
-            _pool[url] = db
-            if len(_pool) > MAX_POOL_SIZE:
-                discard = _pool.popitem(last=False)[1]
-    if discard is not None: await _safe_shutdown(discard)
-    return db
+            asyncio.create_task(_safe_shutdown(db))
+            return _pool[url]
+        _pool[url] = db
+        return db
+
+
+def _fence_retry(method):
+    """Retry once on SlateDB writer fence (a newer Cloud Run instance took
+    over the writer role). Pool entry is evicted before retry — reopening
+    makes us the active writer again. items()/transaction() opt out: scan
+    iteration and user-managed txns can't be safely re-run from the middle."""
+    async def wrapped(self, *args, **kwargs):
+        for attempt in range(2):
+            try: return await method(self, *args, **kwargs)
+            except Error.Closed as e:
+                if attempt == 0 and self._txn is None and e.reason == CloseReason.FENCED:
+                    async with _pool_lock: _pool.pop(self._url, None)
+                    continue
+                raise
+    return wrapped
 
 
 class DB:
@@ -111,7 +119,7 @@ class DB:
             self._txn = source
 
     @asynccontextmanager
-    async def _handle(self):
+    async def _handle(self, durable=False):
         if self._txn is not None:
             yield self._txn
             return
@@ -119,19 +127,22 @@ class DB:
         txn = await slate.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
         try: yield txn
         except Exception: await txn.rollback(); raise
-        else: await txn.commit_with_options(_NON_DURABLE)
+        else: await txn.commit_with_options(_DURABLE if durable else _NON_DURABLE)
 
+    @_fence_retry
     async def get(self, key, default=None):
         async with self._handle() as t:
             v = await t.get(key.encode())
             return json.loads(v) if v is not None else default
 
-    async def put(self, key, value):
-        async with self._handle() as t:
+    @_fence_retry
+    async def put(self, key, value, *, durable=False):
+        async with self._handle(durable=durable) as t:
             await t.put(key.encode(), json.dumps(value).encode())
 
-    async def delete(self, key):
-        async with self._handle() as t:
+    @_fence_retry
+    async def delete(self, key, *, durable=False):
+        async with self._handle(durable=durable) as t:
             await t.delete(key.encode())
 
     async def items(self, prefix=None):
