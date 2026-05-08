@@ -1,5 +1,13 @@
-"""Tool schemas, execution, and dispatch."""
+"""Tool schemas, execution, and dispatch.
+
+`Tool` is the foundation primitive — name + description + input_schema, plus
+an optional `raw` for provider-specific built-ins (e.g. web_search). All tools
+(built-in and user-supplied) flow through this shape; `build_tools` projects
+to the Anthropic API format at the boundary."""
 import asyncio, base64, os, pathlib
+from dataclasses import dataclass, field
+from typing import Optional
+
 from . import pdf
 
 MAX_OUTPUT = 30_000
@@ -78,22 +86,36 @@ _EDIT_TOOL = {
     }, "required": ["path", "command"]}
 }
 
-def _to_custom(t):
-    return {"type": "custom", "name": t["name"], "description": t.get("description", ""),
-            "input_schema": t.get("inputSchema", t.get("input_schema", {}))}
+@dataclass(frozen=True)
+class Tool:
+    name: str
+    description: str = ""
+    input_schema: dict = field(default_factory=dict)
+    raw: Optional[dict] = None  # provider-native shape (e.g. web_search server-tool)
 
-_BUILTINS = {
-    "WebSearch": [{"type": "web_search_20250305", "name": "web_search"}],
-    "Bash": [_to_custom(_BASH_TOOL)],
-    "Editor": [_to_custom(_READ_TOOL), _to_custom(_EDIT_TOOL)],
+    def to_anthropic(self) -> dict:
+        return self.raw or {"type": "custom", "name": self.name,
+                            "description": self.description, "input_schema": self.input_schema}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Tool":
+        return cls(name=d["name"], description=d.get("description", ""),
+                   input_schema=d.get("inputSchema", d.get("input_schema", {})))
+
+
+_BUILTINS: dict[str, list[Tool]] = {
+    "WebSearch": [Tool(name="web_search", raw={"type": "web_search_20250305", "name": "web_search"})],
+    "Bash":     [Tool.from_dict(_BASH_TOOL)],
+    "Editor":   [Tool.from_dict(_READ_TOOL), Tool.from_dict(_EDIT_TOOL)],
 }
+
 
 def build_tools(allowed_tools, custom):
     tools = []
     for name in allowed_tools:
-        tools.extend(_BUILTINS.get(name, []))
+        tools.extend(t.to_anthropic() for t in _BUILTINS.get(name, []))
     for t in (custom or []):
-        tools.append(_to_custom(t))
+        tools.append(Tool.from_dict(t).to_anthropic())
     if tools:
         tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}
     return tools

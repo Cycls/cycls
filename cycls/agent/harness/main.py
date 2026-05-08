@@ -5,7 +5,7 @@ from pathlib import Path
 from .. import chat
 from .compact import COMPACT_BUFFER, KEEP_RECENT, compact, context_window
 from .prompts import DEFAULT_SYSTEM
-from .tools import build_tools, dispatch, _exec_read
+from ..tools import build_tools, dispatch, _exec_read
 
 
 def _ephemeralize(messages):
