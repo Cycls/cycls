@@ -63,3 +63,97 @@ def test_user_message_with_text_blocks_only_keeps_text():
         {"type": "text", "text": "this image"},
     ]}]
     assert to_ui_messages(raw) == [{"role": "user", "content": "Look at this image"}]
+
+
+# =============================================================================
+# Load-time repair (_valid_prefix) — trim trailing corrupted state
+# =============================================================================
+
+from cycls.agent.chat import _valid_prefix
+
+
+def test_valid_prefix_empty():
+    assert _valid_prefix([]) == 0
+
+
+def test_valid_prefix_clean_text_pair():
+    msgs = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+    ]
+    assert _valid_prefix(msgs) == 2
+
+
+def test_valid_prefix_dangling_assistant_tool_use():
+    """Most common corruption: assistant emits tool_use, crash before
+    tool_result is persisted. Anthropic rejects the next request — repair
+    by trimming the dangling assistant message."""
+    msgs = [
+        {"role": "user", "content": "do X"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "A", "name": "bash", "input": {"command": "ls"}}
+        ]},
+    ]
+    assert _valid_prefix(msgs) == 1  # trim the dangling assistant
+
+
+def test_valid_prefix_complete_tool_pair():
+    msgs = [
+        {"role": "user", "content": "do X"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "A", "name": "bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "A", "content": "ok"}]},
+    ]
+    assert _valid_prefix(msgs) == 3  # complete pair, all valid
+
+
+def test_valid_prefix_orphaned_tool_result():
+    """User message with tool_result but no preceding assistant tool_use."""
+    msgs = [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "X", "content": "ghost"}
+    ]}]
+    assert _valid_prefix(msgs) == 0
+
+
+def test_valid_prefix_partial_tool_result_set():
+    """Assistant emits two tool_uses, only one tool_result was persisted —
+    Anthropic rejects (all tool_uses must be paired). Trim back."""
+    msgs = [
+        {"role": "user", "content": "do X and Y"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "A", "name": "bash", "input": {}},
+            {"type": "tool_use", "id": "B", "name": "read", "input": {}},
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "A", "content": "ok"},
+            # missing id="B"
+        ]},
+    ]
+    # The user tool_result message has uses != rids, so it's orphaned;
+    # then the assistant has dangling tool_uses; trim both.
+    assert _valid_prefix(msgs) == 1
+
+
+def test_valid_prefix_assistant_with_text_and_tool_use():
+    """Assistant message that mixes text + tool_use is still dangling if no
+    tool_result follows — the tool_use needs pairing regardless of text."""
+    msgs = [
+        {"role": "user", "content": "do X"},
+        {"role": "assistant", "content": [
+            {"type": "text", "text": "Let me check"},
+            {"type": "tool_use", "id": "A", "name": "bash", "input": {}},
+        ]},
+    ]
+    assert _valid_prefix(msgs) == 1
+
+
+def test_valid_prefix_clean_chain_then_dangling():
+    """Long chat with valid history, recent turn corrupted. Repair preserves
+    the prefix, drops only the bad tail."""
+    msgs = [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": [{"type": "text", "text": "ack"}]},
+        {"role": "user", "content": "second"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "X", "name": "bash", "input": {}}]},
+        # crash — no tool_result for X
+    ]
+    assert _valid_prefix(msgs) == 3  # keep first three, drop dangling

@@ -32,14 +32,62 @@ async def list_chats(workspace):
 
 # ---- Message log ----
 
+def _valid_prefix(messages):
+    """Length of the longest valid prefix of *messages*, per Anthropic's
+    pairing rules. Trims trailing corruption (most often a dangling
+    assistant tool_use whose tool_result never persisted — typical after
+    a mid-turn crash or retry). Repairs in-place rather than nuking
+    the whole chat.
+
+    Anthropic rejects:
+      - assistant message with tool_use blocks but no following user
+        message containing matching tool_result blocks
+      - user tool_result blocks without preceding assistant tool_use
+    """
+    n = len(messages)
+    while n > 0:
+        last = messages[n-1]
+        role, content = last.get("role"), last.get("content", [])
+        if role == "user":
+            if isinstance(content, list):
+                results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
+                if results:
+                    # Must be paired with preceding assistant tool_use
+                    if n >= 2 and messages[n-2].get("role") == "assistant":
+                        prev = messages[n-2].get("content", [])
+                        if isinstance(prev, list):
+                            uses = {b.get("id") for b in prev if isinstance(b, dict) and b.get("type") == "tool_use"}
+                            rids = {b.get("tool_use_id") for b in results}
+                            if uses and uses == rids:
+                                return n  # complete pair
+                    n -= 1; continue  # orphaned tool_result
+            return n  # regular user message
+        if role == "assistant":
+            if isinstance(content, list) and any(
+                isinstance(b, dict) and b.get("type") == "tool_use" for b in content
+            ):
+                n -= 1; continue  # dangling tool_use
+            return n  # final response (text only)
+        n -= 1  # unknown role
+    return 0
+
+
 async def load_messages(workspace, chat_id):
-    """All messages for *chat_id* in turn order. Returns raw messages — the
-    harness applies prompt-cache `cache_control` markers itself; this is
-    storage, not LLM-shaping."""
+    """All messages for *chat_id* in turn order. Trims trailing corrupted
+    state if any, persisting the repair so the disk catches up. The harness
+    applies prompt-cache markers itself; this is storage, not LLM-shaping."""
     _validate(chat_id)
     messages = []
-    async for _, msg in DB(workspace).items(prefix=f"chat/log/{chat_id}/"):
-        messages.append(msg)
+    keys = []
+    async for k, msg in DB(workspace).items(prefix=f"chat/log/{chat_id}/"):
+        keys.append(k); messages.append(msg)
+    valid = _valid_prefix(messages)
+    if valid < len(messages):
+        # Persist the repair so subsequent loads stay clean.
+        async with DB(workspace).transaction() as t:
+            for k in keys[valid:]:
+                await t.delete(k)
+        messages = messages[:valid]
     return messages
 
 
