@@ -250,7 +250,12 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 continue
             if response.stop_reason not in ("tool_use", "end_turn"):
                 yield {"type": "callout", "callout": f"Stopped: {response.stop_reason}", "style": "warning"}
-            if response.stop_reason != "tool_use": break
+            if response.stop_reason != "tool_use":
+                # Clean turn end — persist the assistant message atomically
+                # before breaking so the disk reflects only consistent state.
+                if persist:
+                    await chat.append_messages(workspace, context.chat_id, messages[saved:], saved); saved = len(messages)
+                break
 
             blocks = [b for b in response.content if b.type == "tool_use"]
             pairs = [dispatch(b, ws, bash_timeout, handlers, network=bash_network) for b in blocks]
@@ -279,16 +284,24 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 retries += 1
                 delay = _retry_delay(retries, e)
                 yield {"type": "step", "step": f"Rate limited, retrying in {delay:.1f}s... (attempt {retries}/{MAX_RETRIES})"}
-                await asyncio.sleep(delay); continue
+                await asyncio.sleep(delay)
+                # Roll in-memory back to last persisted — exception may have
+                # left a dangling assistant tool_use in messages that the
+                # retried request would otherwise resend mid-pair.
+                del messages[saved:]
+                continue
             if not _recover(e, messages):
+                # Non-recoverable: don't leave orphans on disk. Rollback any
+                # unpersisted partial state before breaking.
+                del messages[saved:]
                 yield {"type": "callout", "callout": str(e), "style": "error"}; break
             if persist:
                 await chat.append_messages(workspace, context.chat_id, messages[saved:], saved); saved = len(messages)
             continue
 
-    # Finalize: save any unsaved messages
-    if persist and saved < len(messages):
-        await chat.append_messages(workspace, context.chat_id, messages[saved:], saved)
+    # All persists happen on clean turn boundaries above — no final cleanup
+    # needed. The load-time repair in chat.load_messages handles any legacy
+    # corruption from before this refactor.
 
     if show_usage and usage[0]:
         p = next((v for k, v in _PRICING.items() if k in model), None)
