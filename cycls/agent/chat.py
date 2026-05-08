@@ -116,60 +116,47 @@ async def replace_messages(workspace, chat_id, messages):
 # ---- Display view ----
 
 def to_ui_messages(raw):
-    """Transform raw API-format messages into the FE-friendly shape:
-    `{role, content: str, parts?: [...]}`. The store keeps Anthropic-API
-    blocks (tool_use, tool_result, thinking, ...) so the model sees a
-    valid history; the FE wants a string `content` plus `parts` for UI.
-
-    Drops user messages whose content is purely tool_result blocks —
-    that's harness scaffolding, not user-visible chat."""
+    """API-format messages → FE shape `{role, content: str, parts?, attachments?}`.
+    Store keeps Anthropic blocks; FE wants a string content (+ parts for
+    assistant). Drops user messages whose content is purely tool_result
+    blocks — harness scaffolding, not user-visible."""
     out = []
     for msg in raw:
-        role = msg.get("role")
-        content = msg.get("content")
+        role, c = msg.get("role"), msg.get("content")
         if role == "user":
-            if isinstance(content, str):
-                ui = {"role": "user", "content": content}
-            elif isinstance(content, list):
-                if all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
-                    continue  # invisible scaffolding
-                text = "".join(
-                    b.get("text", "") for b in content
-                    if isinstance(b, dict) and b.get("type") == "text"
-                )
-                ui = {"role": "user", "content": text}
+            if isinstance(c, list):
+                if all(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
+                    continue
+                text = "".join(b.get("text", "") for b in c
+                               if isinstance(b, dict) and b.get("type") == "text")
+            elif isinstance(c, str):
+                text = c
             else:
                 continue
-            # Sidecar attachments for FE display — names/paths/types/sizes
-            # only; image bytes live inline in `content` for the model.
+            ui = {"role": "user", "content": text}
             if msg.get("attachments"):
                 ui["attachments"] = msg["attachments"]
             out.append(ui)
         elif role == "assistant":
-            if isinstance(content, str):
-                out.append({"role": "assistant", "content": content,
-                            "parts": [{"type": "text", "text": content}]})
-                continue
-            if not isinstance(content, list):
-                continue
-            parts, text_buf = [], []
-            for b in content:
-                if not isinstance(b, dict):
-                    continue
+            if isinstance(c, str):
+                out.append({"role": "assistant", "content": c,
+                            "parts": [{"type": "text", "text": c}]}); continue
+            if not isinstance(c, list): continue
+            parts, texts = [], []
+            for b in c:
+                if not isinstance(b, dict): continue
                 t = b.get("type")
                 if t == "text":
                     parts.append({"type": "text", "text": b.get("text", "")})
-                    text_buf.append(b.get("text", ""))
+                    texts.append(b.get("text", ""))
                 elif t == "thinking":
                     parts.append({"type": "thinking", "thinking": b.get("thinking", "")})
                 elif t == "tool_use":
-                    name = b.get("name", "")
-                    if name == "web_search":
-                        q = (b.get("input") or {}).get("query", "")
-                        parts.append({"type": "step", "step": q, "tool_name": "Web Search"})
-                    else:
-                        parts.append({"type": "step", "step": "", "tool_name": name})
-            out.append({"role": "assistant", "content": "".join(text_buf), "parts": parts})
+                    n = b.get("name", "")
+                    q = (b.get("input") or {}).get("query", "") if n == "web_search" else ""
+                    parts.append({"type": "step", "step": q,
+                                  "tool_name": "Web Search" if n == "web_search" else n})
+            out.append({"role": "assistant", "content": "".join(texts), "parts": parts})
     return out
 
 
