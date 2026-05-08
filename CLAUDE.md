@@ -19,8 +19,15 @@ For a comprehensive walk through the primitives, decorators, CLI, and end-to-end
 # Install dependencies
 uv sync --group test
 
-# Run tests
-uv run pytest tests/ -v -s
+# Run all backend tests (mocked; live tier auto-skipped)
+uv run pytest tests/
+
+# Run live tests against real Anthropic (needs ANTHROPIC_API_KEY)
+set -a && source .providers.env && set +a
+uv run pytest tests/agent/scenarios/test_live.py --live
+
+# Run FE tests (vitest)
+cd client && npm test
 
 # Run example app
 uv run examples/app/app.py
@@ -105,10 +112,47 @@ Yield these from app functions:
 
 ## Testing
 
-Tests require Docker running. Test files:
-- `tests/app_test.py` - App decorator tests
-- `tests/function_test.py` - Function integration tests
-- `tests/web_test.py` - Web server tests
+Three tiers, mirrored to source:
+
+```
+tests/
+├── conftest.py                  # autouse SlateDB pool reset; --live flag
+├── function/                    # Function class + Image
+├── app/                         # App, Sandbox argv, Workspace/DB, fence retry
+├── agent/
+│   ├── agent_test.py            # _run loop, retry, recovery, ingest
+│   ├── chat_test.py             # _valid_prefix unit tests + to_ui_messages
+│   ├── harness_test.py          # tool dispatch, build_tools, LLM builder
+│   ├── pdf_test.py              # PDF page parsing
+│   ├── web_test.py              # FastAPI routes, encoders, Messages
+│   ├── integration_test.py      # Agent on top of App
+│   └── scenarios/
+│       ├── test_load_repair.py  # SlateDB roundtrip + repair invariants
+│       └── test_live.py         # @pytest.mark.live, real Anthropic
+└── client/src/hooks/__tests__/  # vitest — useChat hook
+```
+
+**Mocked tier** (default): no API calls, no docker. Runs in ~80s.
+```bash
+uv run pytest tests/                       # all 168 mocked tests
+uv run pytest tests/agent/ -v              # just agent tests
+uv run pytest tests/agent/scenarios/ -v    # just scenarios
+```
+
+**Live tier** (gated `--live`): hits real Anthropic, costs ~$0.30-0.50/run, takes ~40s.
+Needs `ANTHROPIC_API_KEY` (in `.providers.env` for dev). Skips silently without it.
+```bash
+set -a && source .providers.env && set +a
+uv run pytest tests/agent/scenarios/test_live.py --live -v
+```
+
+**FE tier** (vitest): 9 tests on `useChat` hook (URL plumbing, callback identity stability, attachment blob fetch). Run from `client/`:
+```bash
+cd client && npm test           # one-shot
+cd client && npm run test:watch # interactive
+```
+
+Function tests need Docker running.
 
 ## Publishing
 
