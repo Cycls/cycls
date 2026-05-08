@@ -3,7 +3,7 @@ LLM builder plumbing."""
 import pytest
 
 import cycls
-from cycls.agent.harness.tools import _resolve_path, build_tools
+from cycls.agent.tools import _resolve_path, build_tools
 
 
 # ---- _resolve_path escape hardening ----

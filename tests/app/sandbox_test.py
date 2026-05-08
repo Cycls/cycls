@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cycls.agent.harness.tools import _exec_bash
+from cycls.agent.tools import _exec_bash
 
 
 def _capture_bash_exec(tmp_path, **kwargs):
