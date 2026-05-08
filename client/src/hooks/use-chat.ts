@@ -347,7 +347,10 @@ export function useChat(baseUrl: string = "") {
         // updatedAt + first-turn title during the stream — no FE save needed.
       }
     },
-    [messages, isStreaming, baseUrl, authHeaders],
+    // `messages` is read via messagesRef inside; keeping it out of deps
+    // means `send`'s identity doesn't change on every streamed token
+    // (and downstream `useEffect([send])` callers don't re-fire).
+    [isStreaming, baseUrl, authHeaders],
   );
 
   const retry = useCallback(() => {
@@ -405,10 +408,10 @@ export function useChat(baseUrl: string = "") {
       chat_id: chatId,
       share_url: shareUrl,
       title,
-      message_count: messages.length,
+      message_count: messagesRef.current.length,
     });
     return shareUrl;
-  }, [messages, baseUrl, authHeaders]);
+  }, [baseUrl, authHeaders]);
 
   const listShares = useCallback(async () => {
     const headers = await authHeaders();
