@@ -33,14 +33,17 @@ class Config(BaseModel):
             return f"gs://cycls-ws-{self.name}"
         return f"file://{self.volume}"
 
+async def _aiter(stream):
+    """Unify sync + async streams as a single async iterator."""
+    if inspect.isasyncgen(stream):
+        async for x in stream: yield x
+    else:
+        for x in stream: yield x
+
 async def openai_encoder(stream):
     try:
-        if inspect.isasyncgen(stream):
-            async for msg in stream:
-                if msg: yield f"data: {json.dumps({'choices': [{'delta': {'content': msg}}]})}\n\n"
-        else:
-            for msg in stream:
-                if msg: yield f"data: {json.dumps({'choices': [{'delta': {'content': msg}}]})}\n\n"
+        async for msg in _aiter(stream):
+            if msg: yield f"data: {json.dumps({'choices': [{'delta': {'content': msg}}]})}\n\n"
     except Exception as e:
         yield f"data: {json.dumps({'choices': [{'delta': {'content': f'\n\n[stream failed: {e}]'}}]})}\n\n"
     yield "data: [DONE]\n\n"
@@ -51,15 +54,10 @@ def sse(item):
     return f"data: {json.dumps(item)}\n\n"
 
 async def encoder(stream, chat_id=None):
-    if chat_id:
-        yield sse({"type": "chat_id", "chat_id": chat_id})
+    if chat_id: yield sse({"type": "chat_id", "chat_id": chat_id})
     try:
-        if inspect.isasyncgen(stream):
-            async for item in stream:
-                if msg := sse(item): yield msg
-        else:
-            for item in stream:
-                if msg := sse(item): yield msg
+        async for item in _aiter(stream):
+            if msg := sse(item): yield msg
     except Exception as e:
         yield sse({"type": "callout", "callout": f"Stream failed: {e}", "style": "error"})
     yield "data: [DONE]\n\n"

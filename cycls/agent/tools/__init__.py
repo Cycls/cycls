@@ -157,39 +157,31 @@ async def _exec_read(inp, workspace):
     except ValueError as e: return f"Error: {e}"
     if not path.exists(): return f"Error: {path} does not exist"
     if path.is_dir(): return f"Error: {path} is a directory"
-    ext = path.suffix.lower().lstrip(".")
-    size = path.stat().st_size
+    ext, size = path.suffix.lower().lstrip("."), path.stat().st_size
 
-    # Large PDF → extract page range via pdftoppm
     if ext == "pdf" and size > pdf.EXTRACT_SIZE_THRESHOLD:
-        pages_spec = inp.get("pages")
-        if not pages_spec:
+        if not (pages_spec := inp.get("pages")):
             count = await pdf.page_count(path)
             hint = f"{count} pages" if count else "unknown page count"
-            return (f"Error: PDF is {size//1024//1024}MB ({hint}). "
-                    f"Provide the `pages` parameter, e.g. pages='1-5'. "
+            return (f"Error: PDF is {size//1024//1024}MB ({hint}). Provide pages='1-5'. "
                     f"Max {pdf.MAX_PAGES_PER_READ} pages per read.")
         parsed = pdf.parse_pages(pages_spec)
-        if not parsed:
-            return f"Error: invalid pages '{pages_spec}'. Use format '1-5' or '3'."
+        if not parsed: return f"Error: invalid pages '{pages_spec}'. Use '1-5' or '3'."
         return await pdf.extract(path, *parsed)
 
-    # Other large files → reject
     if size > 3 * 1024 * 1024:
-        return f"Error: file is too large to read (>3 MB). Use bash (head/grep/jq) to extract what you need from `{inp['path']}`."
+        return f"Error: file too large (>3 MB). Use bash (head/grep/jq) on `{inp['path']}`."
 
-    # Small media → native content block
     if ext in _IMAGE_EXTS or ext in _DOC_EXTS:
         kind = "image" if ext in _IMAGE_EXTS else "document"
         mt = ("image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}") if ext in _IMAGE_EXTS else f"application/{ext}"
-        return [{"type": kind, "source": {"type": "base64", "media_type": mt, "data": base64.b64encode(path.read_bytes()).decode()}}]
+        return [{"type": kind, "source": {"type": "base64", "media_type": mt,
+                                          "data": base64.b64encode(path.read_bytes()).decode()}}]
 
-    # Text → line-numbered output
     try: lines = path.read_text().splitlines()
     except UnicodeDecodeError: return f"Error: {path} is a binary file"
     start = max(1, inp.get("offset", 1))
-    limit = inp.get("limit")
-    sliced = lines[start-1 : start-1+limit] if limit else lines[start-1:]
+    sliced = lines[start-1 : start-1 + inp["limit"]] if inp.get("limit") else lines[start-1:]
     return "\n".join(f"{i+start:6}\t{l}" for i, l in enumerate(sliced))
 
 def _exec_edit(inp, workspace):
