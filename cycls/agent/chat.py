@@ -5,6 +5,7 @@ Keys:
     chat/log/{chat_id}/{turn:06d} — each message, ordered
 """
 from cycls.app.workspace import DB
+from cycls.agent.tools import tool_step
 
 
 def _validate(chat_id):
@@ -152,10 +153,7 @@ def to_ui_messages(raw):
                 elif t == "thinking":
                     parts.append({"type": "thinking", "thinking": b.get("thinking", "")})
                 elif t == "tool_use":
-                    n = b.get("name", "")
-                    q = (b.get("input") or {}).get("query", "") if n == "web_search" else ""
-                    parts.append({"type": "step", "step": q,
-                                  "tool_name": "Web Search" if n == "web_search" else n})
+                    parts.append({"type": "step", **tool_step(b.get("name", ""), b.get("input"))})
             out.append({"role": "assistant", "content": "".join(texts), "parts": parts})
     return out
 
