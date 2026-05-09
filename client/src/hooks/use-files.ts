@@ -94,18 +94,13 @@ export function useFiles(baseUrl: string = "") {
   }, [baseUrl, authHeaders]);
 
   const openFile = useCallback(async (filePath: string) => {
-    // Native browser loads (window.open, anchor href, img src) can't carry an
-    // Authorization header — mint a short-lived share token URL instead.
-    const h = { "Content-Type": "application/json", ...(await authHeaders()) };
-    const res = await fetch(`${baseUrl}/share`, {
-      method: "POST",
-      headers: h,
-      body: JSON.stringify({ path: `file/${filePath}`, ttl: 3600 }),
-    });
-    if (!res.ok) throw new Error(`Sign failed: ${res.status}`);
-    const { url } = await res.json();
-    // For file shares, the file bytes live at <url>/file/<path>.
-    return `${baseUrl}${url}/file/${filePath}`;
+    // /files is bearer-only (JWTs in URLs leak via history/logs/Referer), so
+    // <img src> / window.open can't hit it directly. Fetch with auth + return
+    // a blob URL the browser can render in any context.
+    const h = await authHeaders();
+    const res = await fetch(`${baseUrl}/files/${filePath}`, { headers: h });
+    if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
+    return URL.createObjectURL(await res.blob());
   }, [baseUrl, authHeaders]);
 
   const shareFile = useCallback(async (filePath: string) => {
