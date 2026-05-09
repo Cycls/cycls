@@ -61,7 +61,7 @@ llm = (
     .system(SYSTEM)
     # .tools(TOOLS)  # skills+safe_keys
     # .on("render_image", render_image)
-    .allowed_tools(["Bash", "Editor", "WebSearch"])  # "Canvas"
+    .allowed_tools(["Bash", "Editor", "WebSearch", "DataBase"])  # "Canvas"
     # .sandbox(network=False)  # opt out of network access for the LLM bash
     # .show_usage(True)
 )

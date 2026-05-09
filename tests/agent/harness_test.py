@@ -16,6 +16,16 @@ def test_tools_resolve_path_rejects_cycls(tmp_path):
         _resolve_path(".db", tmp_path)
 
 
+def test_tools_resolve_path_rejects_agent_database(tmp_path):
+    """The agent's KV store (.database/) must not be touchable via editor —
+    the agent uses the `database` tool, not raw read/edit on SST files."""
+    (tmp_path / ".database").mkdir()
+    with pytest.raises(ValueError, match=".database/"):
+        _resolve_path("/workspace/.database/manifest", tmp_path)
+    with pytest.raises(ValueError, match=".database/"):
+        _resolve_path(".database", tmp_path)
+
+
 def test_resolve_path_rejects_dotdot_escape(tmp_path):
     """Relative `..` must not escape the workspace root."""
     with pytest.raises(ValueError, match="escapes workspace"):
@@ -62,6 +72,12 @@ def test_build_tools_editor_bundle_has_read_and_edit():
     tools = build_tools(["Editor"], None)
     names = {t.get("name") for t in tools}
     assert names == {"read", "edit"}
+
+
+def test_build_tools_database_exposes_kv_tool():
+    tools = build_tools(["DataBase"], None)
+    names = {t.get("name") for t in tools}
+    assert names == {"database"}
 
 
 def test_build_tools_unknown_name_ignored():

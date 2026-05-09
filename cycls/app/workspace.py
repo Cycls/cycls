@@ -43,12 +43,15 @@ def workspace_for(user, volume, base=None) -> Workspace:
     return workspace_at(sub, volume, base)
 
 
-def workspace_at(tenant, volume, base=None) -> Workspace:
+def workspace_at(tenant, volume, base=None, slot=".db") -> Workspace:
+    """Tenant → Workspace at a given storage slot. `slot` names the DB tree
+    under the tenant's root; default `.db` is the framework chat DB. Callers
+    pick other slots for sibling DB trees (e.g. agent-tool storage)."""
     volume = Path(volume)
     if ":" in tenant:
         org, user = tenant.split(":", 1)
-        return Workspace(root=volume / org, path=f"{org}/.db/{user}", subject=tenant, base=base)
-    return Workspace(root=volume / tenant, path=f"{tenant}/.db", subject=tenant, base=base)
+        return Workspace(root=volume / org, path=f"{org}/{slot}/{user}", subject=tenant, base=base)
+    return Workspace(root=volume / tenant, path=f"{tenant}/{slot}", subject=tenant, base=base)
 
 
 # ---- KV storage ----

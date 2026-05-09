@@ -4,7 +4,7 @@
 an optional `raw` for provider-specific built-ins (e.g. web_search). All tools
 (built-in and user-supplied) flow through this shape; `build_tools` projects
 to the Anthropic API format at the boundary."""
-import asyncio, base64, os, pathlib
+import asyncio, base64, json, os, pathlib
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -61,6 +61,31 @@ _READ_TOOL = {
         "pages": {"type": "string", "description": "Page range for large PDFs, e.g. '1-5' or '3'. Required for PDFs over 3MB. Max 20 pages."},
     }, "required": ["path"]}
 }
+_DATABASE_TOOL = {
+    "name": "database",
+    "description": (
+        "Persistent key-value store scoped to this workspace. Use for state that must "
+        "survive across turns or chat sessions: notes, user preferences, task progress, "
+        "anything you'd otherwise jam into a JSON file. Atomic writes, prefix scans, "
+        "no race conditions. Prefer this over writing JSON files via bash.\n\n"
+        "Commands:\n"
+        "- get:    read a value at `key`. Returns the stored JSON or 'not found'.\n"
+        "- put:    write `value` (any JSON-serializable type) at `key`.\n"
+        "- delete: remove `key`.\n"
+        "- scan:   list all {key, value} pairs whose key starts with `prefix`. "
+        "Empty prefix lists everything.\n\n"
+        "Keys are opaque slash-separated strings — design your own schema. "
+        "Use prefixes to group related data, e.g. `tasks/<id>`, `notes/<topic>`, "
+        "`prefs/<scope>`."
+    ),
+    "inputSchema": {"type": "object", "properties": {
+        "command": {"type": "string", "enum": ["get", "put", "delete", "scan"]},
+        "key": {"type": "string", "description": "Key to operate on (get, put, delete)."},
+        "value": {"description": "Value to store (put only). Any JSON-serializable type."},
+        "prefix": {"type": "string", "description": "Key prefix to list (scan only). Empty = all keys."},
+    }, "required": ["command"]}
+}
+
 _EDIT_TOOL = {
     "name": "edit",
     "description": (
@@ -107,6 +132,7 @@ _BUILTINS: dict[str, list[Tool]] = {
     "WebSearch": [Tool(name="web_search", raw={"type": "web_search_20250305", "name": "web_search"})],
     "Bash":     [Tool.from_dict(_BASH_TOOL)],
     "Editor":   [Tool.from_dict(_READ_TOOL), Tool.from_dict(_EDIT_TOOL)],
+    "DataBase": [Tool.from_dict(_DATABASE_TOOL)],
 }
 
 
@@ -125,9 +151,10 @@ def _resolve_path(raw_path, workspace):
     rel = raw_path.removeprefix("/workspace/").lstrip("/")
     path = (ws / rel).resolve()
     if not path.is_relative_to(ws): raise ValueError("path escapes workspace")
-    reserved = ws / ".db"
-    if path == reserved or path.is_relative_to(reserved):
-        raise ValueError(".db/ is managed by cycls")
+    for name in (".db", ".database"):
+        reserved = ws / name
+        if path == reserved or path.is_relative_to(reserved):
+            raise ValueError(f"{name}/ is managed by cycls")
     return path
 
 # ---- Tool execution ----
@@ -138,7 +165,8 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
     lang = os.environ.get("LANG", "C.UTF-8")
     sb = (Sandbox()
           .bind(cwd, "/workspace")
-          .tmpfs("/workspace/.db")  # hide cycls state; editor tools also block via _resolve_path
+          .tmpfs("/workspace/.db")        # cycls state (chat, shares); editor blocks via _resolve_path
+          .tmpfs("/workspace/.database")  # agent KV store; same blocking
           .tmpfs("/app")
           .chdir("/workspace")
           .setenv(PATH=path, LANG=lang)
@@ -210,6 +238,35 @@ def _exec_edit(inp, workspace):
         return f"Inserted at line {pos} in {path}"
     return f"Error: unknown command {cmd}"
 
+# ---- Database ----
+
+async def _exec_database(inp, workspace):
+    """All returns are strings — Anthropic tool_result.content accepts
+    str or content-blocks (each with a `type`); raw dicts/lists from JSON
+    values would 400. JSON-encode the data ones."""
+    from cycls.app.workspace import workspace_at, DB
+    agent_ws = workspace_at(workspace.subject, workspace.root.parent,
+                            base=workspace.base, slot=".database")
+    db = DB(agent_ws)
+    cmd, key = inp.get("command"), inp.get("key", "")
+    if cmd == "get":
+        v = await db.get(key)
+        return json.dumps(v) if v is not None else f"Error: key {key!r} not found"
+    if cmd == "put":
+        if not key: return "Error: put requires `key`"
+        await db.put(key, inp.get("value"))
+        return f"Stored {key!r}"
+    if cmd == "delete":
+        if not key: return "Error: delete requires `key`"
+        await db.delete(key)
+        return f"Deleted {key!r}"
+    if cmd == "scan":
+        prefix = inp.get("prefix", "")
+        pairs = [{"key": k, "value": v} async for k, v in db.items(prefix=prefix)]
+        return json.dumps(pairs) if pairs else f"No keys with prefix {prefix!r}"
+    return f"Error: unknown command {cmd!r}"
+
+
 # ---- Dispatch ----
 
 def tool_step(name, input):
@@ -220,12 +277,17 @@ def tool_step(name, input):
     if name == "read":     return {"tool_name": "Reading",    "step": inp.get("path", "")}
     if name == "edit":     return {"tool_name": "Editing",    "step": inp.get("path", "")}
     if name == "web_search": return {"tool_name": "Web Search", "step": inp.get("query", "")}
+    if name == "database":
+        cmd = inp.get("command", "")
+        label = inp.get("key") or inp.get("prefix", "")
+        return {"tool_name": "Database", "step": f"{cmd} {label}".strip()}
     return {"tool_name": name, "step": ""}
 
 
-def dispatch(block, ws, timeout, handlers=None, network=False):
+def dispatch(block, workspace, timeout, handlers=None, network=False):
     name, inp = block.name, block.input
     step = {"type": "step", **tool_step(name, inp)}
+    ws = workspace.root
     if name == "bash":
         t = inp.get("timeout"); secs = t / 1000 if t else timeout
         return step, _exec_bash(inp.get("command", ""), ws, timeout=secs, network=network)
@@ -233,6 +295,8 @@ def dispatch(block, ws, timeout, handlers=None, network=False):
         return step, _exec_read(inp, ws)
     if name == "edit":
         return step, asyncio.to_thread(_exec_edit, inp, ws)
+    if name == "database":
+        return step, _exec_database(inp, workspace)
     if handlers and name in handlers:
         return step, handlers[name](inp)
     return {"type": "tool_call", "tool": name, "args": inp}, asyncio.sleep(0, result=f"{name} executed")
