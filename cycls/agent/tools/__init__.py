@@ -212,18 +212,27 @@ def _exec_edit(inp, workspace):
 
 # ---- Dispatch ----
 
+def tool_step(name, input):
+    """The {tool_name, step} pair a tool_use renders as. Single source of
+    truth so live (dispatch) and refetch (chat.to_ui_messages) agree."""
+    inp = input or {}
+    if name == "bash":     return {"tool_name": "Bash",       "step": inp.get("description") or inp.get("command", "")}
+    if name == "read":     return {"tool_name": "Reading",    "step": inp.get("path", "")}
+    if name == "edit":     return {"tool_name": "Editing",    "step": inp.get("path", "")}
+    if name == "web_search": return {"tool_name": "Web Search", "step": inp.get("query", "")}
+    return {"tool_name": name, "step": ""}
+
+
 def dispatch(block, ws, timeout, handlers=None, network=False):
     name, inp = block.name, block.input
+    step = {"type": "step", **tool_step(name, inp)}
     if name == "bash":
-        cmd = inp.get("command", "")
-        step = inp.get("description") or cmd
-        t = inp.get("timeout")
-        secs = t / 1000 if t else timeout
-        return {"type": "step", "tool_name": "Bash", "step": step}, _exec_bash(cmd, ws, timeout=secs, network=network)
+        t = inp.get("timeout"); secs = t / 1000 if t else timeout
+        return step, _exec_bash(inp.get("command", ""), ws, timeout=secs, network=network)
     if name == "read":
-        return {"type": "step", "tool_name": "Reading", "step": inp.get("path", "")}, _exec_read(inp, ws)
+        return step, _exec_read(inp, ws)
     if name == "edit":
-        return {"type": "step", "tool_name": "Editing", "step": inp.get("path", "")}, asyncio.to_thread(_exec_edit, inp, ws)
+        return step, asyncio.to_thread(_exec_edit, inp, ws)
     if handlers and name in handlers:
-        return {"type": "step", "tool_name": name, "step": ""}, handlers[name](inp)
+        return step, handlers[name](inp)
     return {"type": "tool_call", "tool": name, "args": inp}, asyncio.sleep(0, result=f"{name} executed")

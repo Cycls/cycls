@@ -55,6 +55,38 @@ def test_web_search_tool_use_includes_query():
     assert out == [{"role": "assistant", "content": "", "parts": []}]
 
 
+def test_bash_tool_use_preserves_command_on_refetch():
+    """Regression: live dispatch yields step={"tool_name":"Bash","step":<command>};
+    on refetch, to_ui_messages must produce the same shape so the FE shows
+    the command, not an empty step. Both paths route through tool_step()."""
+    raw = [{"role": "assistant", "content": [
+        {"type": "tool_use", "name": "bash", "input": {"command": "ls /workspace"}, "id": "X"},
+    ]}]
+    out = to_ui_messages(raw)
+    assert out == [{"role": "assistant", "content": "",
+                    "parts": [{"type": "step", "tool_name": "Bash", "step": "ls /workspace"}]}]
+
+
+def test_bash_tool_use_prefers_description_over_command():
+    raw = [{"role": "assistant", "content": [
+        {"type": "tool_use", "name": "bash",
+         "input": {"command": "rg foo", "description": "Search for foo"}, "id": "X"},
+    ]}]
+    out = to_ui_messages(raw)
+    assert out[0]["parts"][0]["step"] == "Search for foo"
+
+
+def test_editor_tool_uses_preserve_path_on_refetch():
+    raw = [{"role": "assistant", "content": [
+        {"type": "tool_use", "name": "read", "input": {"path": "src/main.py"}, "id": "A"},
+        {"type": "tool_use", "name": "edit", "input": {"path": "src/main.py", "command": "create"}, "id": "B"},
+    ]}]
+    out = to_ui_messages(raw)
+    parts = out[0]["parts"]
+    assert parts[0] == {"type": "step", "tool_name": "Reading", "step": "src/main.py"}
+    assert parts[1] == {"type": "step", "tool_name": "Editing", "step": "src/main.py"}
+
+
 def test_user_message_with_text_blocks_only_keeps_text():
     """A user message with content as list-of-text-blocks (e.g. from _ingest)
     flattens to a string for display."""
