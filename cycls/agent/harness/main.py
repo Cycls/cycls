@@ -258,7 +258,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 break
 
             blocks = [b for b in response.content if b.type == "tool_use"]
-            pairs = [dispatch(b, ws, bash_timeout, handlers, network=bash_network) for b in blocks]
+            pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network) for b in blocks]
             for step, _ in pairs: yield step
             outputs = await asyncio.gather(*(c for _, c in pairs), return_exceptions=True)
 

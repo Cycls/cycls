@@ -87,6 +87,26 @@ def test_editor_tool_uses_preserve_path_on_refetch():
     assert parts[1] == {"type": "step", "tool_name": "Editing", "step": "src/main.py"}
 
 
+def test_database_tool_use_renders_command_and_key():
+    """Database tool_use renders as 'cmd key' so the FE shows what
+    happened (e.g. 'put tasks/42', 'scan notes/')."""
+    raw = [{"role": "assistant", "content": [
+        {"type": "tool_use", "name": "database",
+         "input": {"command": "put", "key": "tasks/42", "value": {"done": True}}, "id": "X"},
+    ]}]
+    out = to_ui_messages(raw)
+    assert out[0]["parts"][0] == {"type": "step", "tool_name": "Database", "step": "put tasks/42"}
+
+
+def test_database_scan_renders_with_prefix():
+    raw = [{"role": "assistant", "content": [
+        {"type": "tool_use", "name": "database",
+         "input": {"command": "scan", "prefix": "notes/"}, "id": "X"},
+    ]}]
+    out = to_ui_messages(raw)
+    assert out[0]["parts"][0]["step"] == "scan notes/"
+
+
 def test_user_message_with_text_blocks_only_keeps_text():
     """A user message with content as list-of-text-blocks (e.g. from _ingest)
     flattens to a string for display."""
