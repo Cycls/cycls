@@ -17,10 +17,12 @@ import { useSubscription } from "@clerk/clerk-react/experimental";
 import { dark } from "@clerk/themes";
 import { arSA } from "@clerk/localizations";
 import { useLang, setLang, t } from "./lib/i18n";
+import { toggleDark } from "./lib/utils";
 import { Chat } from "./components/chat";
 import { SharedView } from "./components/shared-view";
 import { useChat, AppConfig } from "./hooks/use-chat";
 import { useFiles } from "./hooks/use-files";
+import { useUrlParam } from "./hooks/use-url-param";
 import { usePostHogIdentify } from "./hooks/use-posthog-identify";
 import { initPostHog, setAgentDomain, track, register } from "./lib/posthog";
 
@@ -66,21 +68,11 @@ function ChatApp({ config }: { config: AppConfig | null }) {
     setFilesToken(() => getToken());
   }, [getToken, setGetToken, setFilesToken]);
 
-  // Auto-send ?q= param on first load
-  const qSent = useRef(false);
-  useEffect(() => {
-    if (qSent.current) return;
-    const q = new URLSearchParams(window.location.search).get("q");
-    if (q) {
-      qSent.current = true;
-      window.history.replaceState({}, "", window.location.pathname);
-      send(q, undefined, "url_param");
-    }
-  }, [send]);
+  useUrlParam("q", (q) => send(q, undefined, "url_param"));
 
-  // Restore ?id=<chat_id> from URL on first load (once Clerk has settled).
-  // Also handle ?fork=<user>/<token>: mint a deep-copy fork into this user's
-  // workspace and navigate to the new chat. Survives a sign-in round-trip.
+  // Restore ?id=<chat_id> on first load (once Clerk has settled). Also handle
+  // ?fork=<user>/<token>: mint a deep-copy fork. Mutually exclusive with ?id=,
+  // so kept as one effect rather than two useUrlParam calls.
   const chatRestored = useRef(false);
   useEffect(() => {
     if (chatRestored.current || !authLoaded) return;
@@ -179,17 +171,7 @@ function ChatNoAuth({ config }: { config: AppConfig | null }) {
   const { entries, path, loading, list, upload, mkdir, rename, remove, openFile } =
     useFiles();
 
-  // Auto-send ?q= param on first load
-  const qSent = useRef(false);
-  useEffect(() => {
-    if (qSent.current) return;
-    const q = new URLSearchParams(window.location.search).get("q");
-    if (q) {
-      qSent.current = true;
-      window.history.replaceState({}, "", window.location.pathname);
-      send(q, undefined, "url_param");
-    }
-  }, [send]);
+  useUrlParam("q", (q) => send(q, undefined, "url_param"));
 
   return (
     <Chat
@@ -427,14 +409,6 @@ function CustomSignIn() {
     }
   };
 
-  const toggleDark = () => {
-    document.body.classList.toggle("dark");
-    track("theme_changed", {
-      to: document.body.classList.contains("dark") ? "dark" : "light",
-      source: "sign_in",
-    });
-  };
-
   const inputClass = "w-full rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
   const submitClass = "flex w-full items-center justify-center rounded-xl border border-border bg-background px-4 py-3 text-sm font-medium text-foreground hover:bg-secondary transition-colors disabled:opacity-50 cursor-pointer";
 
@@ -453,7 +427,7 @@ function CustomSignIn() {
           <span className="text-xs font-medium w-4 h-4 flex items-center justify-center">{isAr ? "En" : "عربي"}</span>
         </button>
         <button
-          onClick={toggleDark}
+          onClick={() => toggleDark("sign_in")}
           className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
           aria-label="Toggle theme"
         >
