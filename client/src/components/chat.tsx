@@ -114,7 +114,7 @@ export function Chat({
   const [exploreAgents, setExploreAgents] = useState<PassAgent[]>([]);
   const [exploreLoading, setExploreLoading] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
-  const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats">("files");
+  const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats">(onListChats ? "chats" : "files");
   const [shareOpen, setShareOpen] = useState(false);
   const [shareTitle, setShareTitle] = useState("");
   const [shareAudience, setShareAudience] = useState<string>("public");
@@ -262,10 +262,30 @@ export function Chat({
     setExploreLoading(false);
   };
 
+  // Switch the side panel's active tab and (re)load its data.
+  const selectTab = (tab: "files" | "shares" | "chats") => {
+    setFilesTab(tab);
+    if (tab === "chats" && onListChats) {
+      setChatsLoading(true);
+      onListChats().then((items) => { setChats(items); setChatsLoading(false); }).catch(() => setChatsLoading(false));
+    } else if (tab === "shares" && onListShares) {
+      setSharesLoading(true);
+      onListShares().then((items) => { setShares(items); setSharesLoading(false); }).catch(() => setSharesLoading(false));
+    } else if (tab === "files" && files) {
+      files.onNavigate(files.path);
+    }
+  };
+
+  // Open the panel, keeping the last-active tab unless one is given.
+  const openPanel = (tab?: "files" | "shares" | "chats") => {
+    selectTab(tab ?? filesTab);
+    setFilesOpen(true);
+  };
+
   const inputProps = {
     textareaRef, input, setInput, handleKeyDown, handleSubmit, isStreaming, onStop,
     onOpenFilePicker: uploadFile ? openFilePicker : undefined,
-    onOpenFiles: files ? () => { setFilesOpen(true); setFilesTab("files"); files.onNavigate(files.path); } : undefined,
+    onOpenFiles: files ? () => openPanel("files") : undefined,
     attachments,
     onRemoveFile: removeFile,
     listening, transcribing, startMic, stopMic, cancelMic, voice,
@@ -427,16 +447,7 @@ export function Chat({
                       {onListShares && (
                         <div className="border-t border-border">
                           <button
-                            onClick={() => {
-                              setShareOpen(false);
-                              setFilesTab("shares");
-                              setFilesOpen(true);
-                              setSharesLoading(true);
-                              onListShares().then((items) => {
-                                setShares(items);
-                                setSharesLoading(false);
-                              }).catch(() => setSharesLoading(false));
-                            }}
+                            onClick={() => { setShareOpen(false); openPanel("shares"); }}
                             className="flex w-full items-center justify-between px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors cursor-pointer"
                           >
                             {t("manageShares")}
@@ -477,19 +488,7 @@ export function Chat({
             )}
             {(files || onListChats) && (
               <button
-                onClick={() => {
-                  setFilesOpen(!filesOpen);
-                  if (!filesOpen) {
-                    if (onListChats) {
-                      setFilesTab("chats");
-                      setChatsLoading(true);
-                      onListChats().then((items) => { setChats(items); setChatsLoading(false); }).catch(() => setChatsLoading(false));
-                    } else if (files) {
-                      setFilesTab("files");
-                      files.onNavigate(files.path);
-                    }
-                  }
-                }}
+                onClick={() => filesOpen ? setFilesOpen(false) : openPanel()}
                 className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
                 aria-label="Menu"
               >
@@ -652,11 +651,7 @@ export function Chat({
                 <div className="flex items-center border-b border-border px-4 sm:px-6">
                   {onListChats && (
                     <button
-                      onClick={() => {
-                        setFilesTab("chats");
-                        setChatsLoading(true);
-                        onListChats().then((items) => { setChats(items); setChatsLoading(false); }).catch(() => setChatsLoading(false));
-                      }}
+                      onClick={() => selectTab("chats")}
                       className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "chats" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                     >
                       {t("chats")}
@@ -664,7 +659,7 @@ export function Chat({
                   )}
                   {files && (
                     <button
-                      onClick={() => { setFilesTab("files"); files.onNavigate(files.path); }}
+                      onClick={() => selectTab("files")}
                       className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "files" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                     >
                       {t("files")}
@@ -672,11 +667,7 @@ export function Chat({
                   )}
                   {onListShares && (
                     <button
-                      onClick={() => {
-                        setFilesTab("shares");
-                        setSharesLoading(true);
-                        onListShares().then((items) => { setShares(items); setSharesLoading(false); }).catch(() => setSharesLoading(false));
-                      }}
+                      onClick={() => selectTab("shares")}
                       className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                     >
                       {t("shares")}
