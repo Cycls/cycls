@@ -4,6 +4,7 @@ import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files } from "./files";
 import { Popover } from "./popover";
+import { Icon, Spinner, IconButton } from "./icon";
 import { CyclsLogo } from "./cycls-logo";
 import { LoadingBar } from "./loading-bar";
 import { AttachmentBody } from "./attachment-body";
@@ -310,9 +311,7 @@ export function Chat({
                 className="flex items-center gap-1 text-foreground font-medium capitalize hover:opacity-70 transition-opacity cursor-pointer"
               >
                 {meta?.name || name}
-                <svg className="w-3 h-3 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
+                <Icon name="chevron-down" className="w-3 h-3 text-muted-foreground" />
               </button>
             </div>
           )}
@@ -354,9 +353,7 @@ export function Chat({
                     <Popover open={shareOpen} onClose={() => setShareOpen(false)} className="right-2 top-12 mt-2 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-background shadow-lg overflow-hidden">
                       <div className="px-4 pt-4 pb-3">
                             <div className="flex items-center gap-2 mb-1">
-                              <svg className="w-4 h-4 text-foreground shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                              </svg>
+                              <Icon name="link" className="w-4 h-4 text-foreground shrink-0" />
                               <h3 className="text-sm font-medium text-foreground">{t("shareConversation")}</h3>
                             </div>
                             <div className="flex gap-1.5 mt-3 mb-3">
@@ -392,10 +389,7 @@ export function Chat({
                           <div className="border-t border-border px-4 py-3">
                             {shareLoading ? (
                               <div className="flex items-center justify-center py-2">
-                                <svg className="w-4 h-4 animate-spin text-muted-foreground" viewBox="0 0 24 24" fill="none">
-                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                                </svg>
+                                <Spinner className="w-4 h-4 text-muted-foreground" />
                                 <span className="ml-2 text-xs text-muted-foreground">{t("creatingLink")}</span>
                               </div>
                             ) : shareUrl ? (
@@ -416,15 +410,7 @@ export function Chat({
                                   className="shrink-0 text-muted-foreground hover:text-foreground transition-colors cursor-pointer p-1.5"
                                   aria-label="Copy"
                                 >
-                                  {shareCopied ? (
-                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                    </svg>
-                                  ) : (
-                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                                    </svg>
-                                  )}
+                                  <Icon name={shareCopied ? "check" : "copy"} className="w-3.5 h-3.5" />
                                 </button>
                               </div>
                             ) : (
@@ -451,9 +437,7 @@ export function Chat({
                             className="flex w-full items-center justify-between px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors cursor-pointer"
                           >
                             {t("manageShares")}
-                            <svg className="w-3.5 h-3.5 rtl:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                            </svg>
+                            <Icon name="chevron-right" className="w-3.5 h-3.5 rtl:rotate-180" />
                           </button>
                         </div>
                       )}
@@ -464,15 +448,7 @@ export function Chat({
             )}
             {!user && (
               <>
-                <button
-                  onClick={() => toggleDark("header")}
-                  className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
-                  aria-label="Toggle theme"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-                  </svg>
-                </button>
+                <IconButton name="moon" onClick={() => toggleDark("header")} label="Toggle theme" />
                 <button
                   onClick={() => {
                     const next = isAr ? "en" : "ar";
@@ -679,9 +655,7 @@ export function Chat({
                     className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                     aria-label="Close"
                   >
-                    <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
+                    <Icon name="x" className="size-4" />
                   </button>
                 </div>
               )}
@@ -694,7 +668,7 @@ export function Chat({
                       <LoadingBar />
                     ) : shares.length === 0 ? (
                       <EmptyState
-                        icon={<svg className="size-full" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>}
+                        icon={<Icon name="link" className="size-full" strokeWidth={1.5} />}
                         title={t("noShares")}
                         subtitle={t("noSharesSub")}
                       />
@@ -791,9 +765,7 @@ export function Chat({
                 onClick={() => closePricing("dismiss")}
                 className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                <Icon name="x" className="w-4 h-4" />
               </button>
             </div>
             <div className="px-6 pb-5 overflow-y-auto">
@@ -899,9 +871,7 @@ function InputBox({
                         className="absolute top-0 right-0 z-10 flex size-5 translate-x-1/4 -translate-y-1/4 items-center justify-center rounded-full border-2 border-background bg-foreground text-background transition cursor-pointer"
                         aria-label="Remove file"
                       >
-                        <svg className="size-3" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                        </svg>
+                        <Icon name="x" className="size-3" strokeWidth={2.5} />
                       </button>
                     )}
                   </motion.div>
@@ -1022,7 +992,7 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete }: {
   if (chats.length === 0) {
     return (
       <EmptyState
-        icon={<svg className="size-full" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" /></svg>}
+        icon={<Icon name="list" className="size-full" strokeWidth={1.5} />}
         title={t("noChats")}
         subtitle={t("noChatsSub")}
       />
@@ -1038,9 +1008,7 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete }: {
           onClick={() => onLoad(s.id)}
         >
           <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
-            <svg className="size-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
-            </svg>
+            <Icon name="list" className="size-4 text-muted-foreground" strokeWidth={1.5} />
           </div>
           <span className="flex-1 min-w-0 text-sm text-foreground truncate">{s.title || t("untitled")}</span>
           <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
@@ -1074,9 +1042,7 @@ function AttachMenu({ onOpenFilePicker, onOpenFiles, disabled }: { onOpenFilePic
         className={`flex size-8 items-center justify-center rounded-2xl transition ${disabled ? "text-muted-foreground opacity-30 cursor-not-allowed" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 cursor-pointer"}`}
         aria-label="Attach file"
       >
-        <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
-        </svg>
+        <Icon name="paperclip" className="size-5" />
       </button>
     );
   }
@@ -1090,9 +1056,7 @@ function AttachMenu({ onOpenFilePicker, onOpenFiles, disabled }: { onOpenFilePic
         className={`flex size-8 items-center justify-center rounded-2xl transition ${disabled ? "text-muted-foreground opacity-30 cursor-not-allowed" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 cursor-pointer"}`}
         aria-label="Attach"
       >
-        <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
-        </svg>
+        <Icon name="paperclip" className="size-5" />
       </button>
       {open && (
         <>
@@ -1103,9 +1067,7 @@ function AttachMenu({ onOpenFilePicker, onOpenFiles, disabled }: { onOpenFilePic
                 onClick={(e) => { e.stopPropagation(); setOpen(false); onOpenFilePicker(); }}
                 className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
               >
-                <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-                </svg>
+                <Icon name="upload" className="size-4" />
                 {t("uploadFile")}
               </button>
             )}
@@ -1114,9 +1076,7 @@ function AttachMenu({ onOpenFilePicker, onOpenFiles, disabled }: { onOpenFilePic
                 onClick={(e) => { e.stopPropagation(); setOpen(false); onOpenFiles(); }}
                 className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
               >
-                <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.06-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-                </svg>
+                <Icon name="folder" className="size-4" />
                 {t("browseFiles")}
               </button>
             )}

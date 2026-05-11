@@ -2,6 +2,7 @@ import { useState } from "react";
 import { t } from "../lib/i18n";
 import { toggleDark } from "../lib/utils";
 import { Popover } from "./popover";
+import { Icon } from "./icon";
 
 export interface UserInfo {
   name: string;
@@ -63,9 +64,7 @@ export function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onMana
                   onClick={() => setShowOrgs(false)}
                   className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                 >
-                  <svg className="w-3.5 h-3.5 rtl:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                  </svg>
+                  <Icon name="chevron-left" className="w-3.5 h-3.5 rtl:rotate-180" />
                   {t("back")}
                 </button>
                 <div className="border-t border-border" />
@@ -117,9 +116,7 @@ export function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onMana
                   onClick={() => toggleDark("user_menu")}
                   className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-                  </svg>
+                  <Icon name="moon" />
                   {document.body.classList.contains("dark") ? t("lightMode") : t("darkMode")}
                 </button>
                 <div className="border-t border-border" />
@@ -153,9 +150,7 @@ export function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onMana
                       )}
                       {activeOrg ? activeOrg.name : t("personal")}
                     </span>
-                    <svg className="w-3.5 h-3.5 rtl:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                    </svg>
+                    <Icon name="chevron-right" className="w-3.5 h-3.5 rtl:rotate-180" />
                   </button>
                   </>
                 )}

@@ -3,6 +3,7 @@ import { SignedIn } from "@clerk/clerk-react";
 import { usePlans, useSubscription, CheckoutButton, SubscriptionDetailsButton } from "@clerk/clerk-react/experimental";
 import { t, getLang } from "../lib/i18n";
 import { track } from "../lib/posthog";
+import { Icon } from "./icon";
 
 function formatPrice(money: { amount: number; currencySymbol: string; currency: string }) {
   const value = money.amount / 100;
@@ -94,9 +95,7 @@ export function PricingCards({ payerType = "user", onSelect }: { payerType?: "us
                 <ul className="mb-4 space-y-1.5 flex-1">
                   {plan.features.map(f => (
                     <li key={f.id} className="flex items-start gap-2 text-xs text-muted-foreground">
-                      <svg className="w-3.5 h-3.5 mt-0.5 shrink-0 text-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
+                      <Icon name="check" className="w-3.5 h-3.5 mt-0.5 shrink-0 text-foreground" />
                       {f.name}
                     </li>
                   ))}

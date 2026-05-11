@@ -4,16 +4,10 @@ import { AnimatePresence, motion } from "framer-motion";
 import type { FileEntry } from "../hooks/use-files";
 import { t, useLang } from "../lib/i18n";
 import { LoadingBar } from "./loading-bar";
+import { Icon, Spinner } from "./icon";
 
-// Icons
-function FolderIcon({ className = "size-5" }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.06-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-    </svg>
-  );
-}
-
+const FolderIcon = ({ className = "size-5" }: { className?: string }) =>
+  <Icon name="folder" className={className} strokeWidth={1.5} />;
 
 const IMAGE_EXT = new Set(["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "avif"]);
 function isImage(name: string) {
@@ -258,9 +252,7 @@ export function Files({
               className="absolute inset-0 z-30 flex items-center justify-center bg-background/80 border-2 border-dashed border-accent/40 rounded-lg m-2"
             >
               <div className="text-center">
-                <svg className="size-8 mx-auto mb-2 text-muted-foreground" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-                </svg>
+                <Icon name="upload" className="size-8 mx-auto mb-2 text-muted-foreground" strokeWidth={1.5} />
                 <p className="text-sm text-muted-foreground">Drop files to upload</p>
               </div>
             </motion.div>
@@ -279,9 +271,7 @@ export function Files({
                 onClick={() => navigate(segments.slice(0, -1).join("/"))}
                 className="flex w-full items-center gap-3 px-4 py-2.5 sm:px-6 text-sm text-muted-foreground hover:bg-secondary/50 transition-colors cursor-pointer"
               >
-                <svg className="size-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                </svg>
+                <Icon name="chevron-left" className="size-4 shrink-0" />
                 <span>..</span>
               </button>
             )}
@@ -309,10 +299,7 @@ export function Files({
                   <span className="text-[10px] font-medium text-muted-foreground uppercase">{name.split(".").pop()}</span>
                 </div>
                 <span className="text-sm text-foreground truncate flex-1">{name}</span>
-                <svg className="size-4 animate-spin text-muted-foreground shrink-0" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
+                <Spinner className="size-4 text-muted-foreground shrink-0" />
               </div>
             ))}
 
@@ -445,9 +432,7 @@ export function Files({
               exit={{ opacity: 0, y: 10 }}
               className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 rounded-lg border border-border bg-background shadow-lg px-3 py-2 flex items-center gap-2"
             >
-              <svg className="w-3.5 h-3.5 text-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
+              <Icon name="check" className="w-3.5 h-3.5 text-foreground" />
               <span className="text-xs text-foreground">{t("linkCopied")} <span className="text-muted-foreground">· {shareToast}</span></span>
             </motion.div>
           )}

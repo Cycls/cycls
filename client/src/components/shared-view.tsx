@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { MessageBubble } from "./message";
 import { CyclsLogo } from "./cycls-logo";
+import { IconButton } from "./icon";
 import type { Message } from "../hooks/use-chat";
 import { track } from "../lib/posthog";
 import { toggleDark } from "../lib/utils";
@@ -82,15 +83,7 @@ export function SharedView() {
           <CyclsLogo className="h-5 fill-muted-foreground" />
         </a>
         <div className="flex-1" />
-        <button
-          onClick={() => toggleDark("shared_view")}
-          className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
-          aria-label="Toggle theme"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-          </svg>
-        </button>
+        <IconButton name="moon" onClick={() => toggleDark("shared_view")} label="Toggle theme" />
         </div>
       </header>
 
