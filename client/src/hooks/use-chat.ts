@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from "react";
-import { useAuthHeaders } from "./use-auth-headers";
+import { useApi } from "./use-api";
 import { track } from "../lib/posthog";
 
 export interface Part {
@@ -78,26 +78,7 @@ export function useChat(baseUrl: string = "") {
   const setUIHandler = useCallback((h: UIHandler | null) => {
     uiHandlerRef.current = h;
   }, []);
-  const { setGetToken, authHeaders } = useAuthHeaders();
-
-  // Auth + JSON-aware fetch. Throws Error("HTTP <status>") on non-OK; the
-  // error carries `.status` for callers that need to branch on it.
-  const api = useCallback(async (path: string, init: RequestInit & { json?: unknown } = {}): Promise<Response> => {
-    const { json, headers: rawHeaders, ...rest } = init;
-    const headers: Record<string, string> = { ...(await authHeaders()), ...(rawHeaders as Record<string, string> || {}) };
-    let body = rest.body;
-    if (json !== undefined) {
-      headers["Content-Type"] = "application/json";
-      body = JSON.stringify(json);
-    }
-    const res = await fetch(`${baseUrl}${path}`, { ...rest, headers, body });
-    if (!res.ok) {
-      const err = new Error(`HTTP ${res.status}`) as Error & { status: number };
-      err.status = res.status;
-      throw err;
-    }
-    return res;
-  }, [baseUrl, authHeaders]);
+  const { api, authHeaders, setGetToken } = useApi(baseUrl);
 
   const uploadFile = useCallback(
     async (file: File): Promise<Attachment> => {

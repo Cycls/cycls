@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { cn } from "../../lib/utils";
 
 const styles: Record<string, string> = {
@@ -6,8 +7,6 @@ const styles: Record<string, string> = {
   error: "border-l-red-500 bg-red-500/10",
   success: "border-l-emerald-500 bg-emerald-500/10",
 };
-
-import { memo } from "react";
 
 export const CalloutPart = memo(function CalloutPart({
   callout,

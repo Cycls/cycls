@@ -3,10 +3,10 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { memo, useMemo, useState } from "react";
+import { memo, useMemo } from "react";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
-import { CodeBlock, CodeBlockCode, CodeBlockGroup } from "./code-block";
+import { CodePart } from "./code-part";
 
 function escapeCurrencyDollars(text: string): string {
   return text.replace(/\$\$|\$(?=\d)(?![^$\n]*[\\^_{}][^$\n]*\$)/g, (m) =>
@@ -31,7 +31,7 @@ const markdownComponents = {
     const code = String(children).replace(/\n$/, "");
 
     if (match || code.includes("\n")) {
-      return <MarkdownCodeBlock code={code} language={match?.[1] || "text"} />;
+      return <CodePart code={code} language={match?.[1] || "text"} className="bg-background" />;
     }
 
     return (
@@ -75,36 +75,3 @@ export const TextPart = memo(function TextPart({ text }: { text: string }) {
     </div>
   );
 });
-
-function MarkdownCodeBlock({
-  code,
-  language,
-}: {
-  code: string;
-  language: string;
-}) {
-  const [copied, setCopied] = useState(false);
-
-  const copy = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <CodeBlock className="my-3 bg-background">
-      <CodeBlockGroup className="flex h-9 items-center justify-between px-4">
-        <span className="font-mono text-xs text-muted-foreground">
-          {language}
-        </span>
-        <button
-          onClick={copy}
-          className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-        >
-          {copied ? "Copied!" : "Copy"}
-        </button>
-      </CodeBlockGroup>
-      <CodeBlockCode code={code} language={language} />
-    </CodeBlock>
-  );
-}
