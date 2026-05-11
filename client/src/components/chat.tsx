@@ -2,15 +2,17 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
-import { SignedIn } from "@clerk/clerk-react";
-import { usePlans, useSubscription, CheckoutButton, SubscriptionDetailsButton } from "@clerk/clerk-react/experimental";
 import { MessageBubble } from "./message";
 import { Files } from "./files";
+import { PricingCards } from "./pricing-cards";
+import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import type { Message, Attachment, PassMetadata, UIHandler } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
 import { track } from "../lib/posthog";
+import { toggleDark } from "../lib/utils";
 import { useSpeechRecognition } from "../hooks/use-speech";
+import { useUrlParam } from "../hooks/use-url-param";
 import { SUGGESTIONS } from "./suggestions-data";
 
 interface PassAgent {
@@ -21,21 +23,6 @@ interface PassAgent {
   description_ar?: string;
   link: string;
   icon_svg?: string;
-}
-
-interface PlanInfo {
-  name: string;
-  status: string;
-  periodEnd: Date | null;
-  canceledAt: Date | null;
-  amount?: { amountFormatted: string; currencySymbol: string };
-  planPeriod: string;
-}
-
-interface UserInfo {
-  name: string;
-  email: string;
-  imageUrl?: string;
 }
 
 export function Chat({
@@ -152,20 +139,10 @@ export function Chat({
     });
   }, []);
 
-  useEffect(() => {
-    const plans = new URLSearchParams(window.location.search).get("plans");
-    if (!plans) return;
-    window.history.replaceState({}, "", window.location.pathname);
-    if (plans === "b2c") {
-      openPricing("user", "url_param");
-    } else if (plans === "b2b") {
-      if (activeOrg) {
-        openPricing("organization", "url_param");
-      } else {
-        onCreateOrg?.();
-      }
-    }
-  }, [activeOrg, onCreateOrg, openPricing]);
+  useUrlParam("plans", (plans) => {
+    if (plans === "b2c") openPricing("user", "url_param");
+    else if (plans === "b2b") activeOrg ? openPricing("organization", "url_param") : onCreateOrg?.();
+  });
 
   useEffect(() => {
     if (!setUIHandler) return;
@@ -269,14 +246,6 @@ export function Chat({
 
   const isEmpty = messages.length === 0;
 
-  const toggleDark = () => {
-    document.body.classList.toggle("dark");
-    track("theme_changed", {
-      to: document.body.classList.contains("dark") ? "dark" : "light",
-      source: "header",
-    });
-  };
-
   const openExplore = async () => {
     setExploreOpen(true);
     track("explore_opened", { cached: exploreAgents.length > 0 });
@@ -288,6 +257,17 @@ export function Chat({
       setExploreAgents(data.agents || []);
     } catch { /* silent */ }
     setExploreLoading(false);
+  };
+
+  const inputProps = {
+    textareaRef, input, setInput, handleKeyDown, handleSubmit, isStreaming, onStop,
+    onOpenFilePicker: uploadFile ? openFilePicker : undefined,
+    onOpenFiles: files ? () => { setFilesOpen(true); setFilesTab("files"); files.onNavigate(files.path); } : undefined,
+    attachments,
+    onRemoveFile: removeFile,
+    listening, transcribing, startMic, stopMic, cancelMic, voice,
+    onFilesAdded: uploadFile ? handleFilesAdded : undefined,
+    placeholder: inputPlaceholder,
   };
 
   return (
@@ -481,7 +461,7 @@ export function Chat({
             {!user && (
               <>
                 <button
-                  onClick={toggleDark}
+                  onClick={() => toggleDark("header")}
                   className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
                   aria-label="Toggle theme"
                 >
@@ -616,27 +596,7 @@ export function Chat({
                   {meta.description && <p className="text-base text-muted-foreground max-w-lg">{meta.description}</p>}
                 </motion.div>
               )}
-              <InputBox
-                textareaRef={textareaRef}
-                input={input}
-                setInput={setInput}
-                handleKeyDown={handleKeyDown}
-                handleSubmit={handleSubmit}
-                isStreaming={isStreaming}
-                onStop={onStop}
-                onOpenFilePicker={uploadFile ? openFilePicker : undefined}
-                onOpenFiles={files ? () => { setFilesOpen(true); setFilesTab("files"); files.onNavigate(files.path); } : undefined}
-                attachments={attachments}
-                onRemoveFile={removeFile}
-                listening={listening}
-                transcribing={transcribing}
-                startMic={startMic}
-                stopMic={stopMic}
-                cancelMic={cancelMic}
-                voice={voice}
-                onFilesAdded={uploadFile ? handleFilesAdded : undefined}
-                placeholder={inputPlaceholder}
-              />
+              <InputBox {...inputProps} />
               <div className="relative">
                 <div className="absolute inset-x-0 top-0">
                   <Suggestions
@@ -674,27 +634,7 @@ export function Chat({
             </div>
             <div className="shrink-0 px-6 pb-2 pt-1">
               <div className="max-w-3xl mx-auto">
-                <InputBox
-                  textareaRef={textareaRef}
-                  input={input}
-                  setInput={setInput}
-                  handleKeyDown={handleKeyDown}
-                  handleSubmit={handleSubmit}
-                  isStreaming={isStreaming}
-                  onStop={onStop}
-                  onOpenFilePicker={uploadFile ? openFilePicker : undefined}
-                  onOpenFiles={files ? () => { setFilesOpen(true); setFilesTab("files"); files.onNavigate(files.path); } : undefined}
-                  attachments={attachments}
-                  onRemoveFile={removeFile}
-                  listening={listening}
-                  transcribing={transcribing}
-                  startMic={startMic}
-                  stopMic={stopMic}
-                  cancelMic={cancelMic}
-                  voice={voice}
-                  onFilesAdded={uploadFile ? handleFilesAdded : undefined}
-                  placeholder={inputPlaceholder}
-                />
+                <InputBox {...inputProps} />
               </div>
             </div>
           </>
@@ -892,339 +832,6 @@ export function Chat({
   );
 }
 
-function formatPrice(money: { amount: number; currencySymbol: string; currency: string }) {
-  const value = money.amount / 100;
-  const formatted = new Intl.NumberFormat(getLang() === "ar" ? "ar" : "en-US", {
-    style: "currency",
-    currency: money.currency,
-    minimumFractionDigits: value % 1 === 0 ? 0 : 2,
-  }).format(value);
-  return formatted;
-}
-
-function PricingCards({ payerType = "user", onSelect }: { payerType?: "user" | "organization"; onSelect: () => void }) {
-  const { data: plansData, isLoading } = usePlans({ for: payerType });
-  const { data: sub } = useSubscription({ for: payerType });
-  const [period, setPeriod] = useState<"month" | "annual">("month");
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <div className="size-5 border-2 border-muted-foreground/30 border-t-foreground rounded-full animate-spin" />
-      </div>
-    );
-  }
-
-  const plans = plansData?.filter(p => p.publiclyVisible) ?? [];
-  const hasAnnual = plans.some(p => p.annualFee);
-  const activePlanId = sub?.subscriptionItems?.[0]?.plan?.id;
-
-  return (
-    <div>
-      {hasAnnual && (
-        <div className="flex items-center justify-center gap-1 mb-4 sticky top-0 z-10 bg-background py-1 border-b border-border pb-3">
-          <button
-            onClick={() => setPeriod("month")}
-            className={`px-3 py-1 text-xs rounded-full transition-colors cursor-pointer ${period === "month" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
-          >
-            {t("monthly")}
-          </button>
-          <button
-            onClick={() => setPeriod("annual")}
-            className={`px-3 py-1 text-xs rounded-full transition-colors cursor-pointer ${period === "annual" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
-          >
-            {t("annual")}
-          </button>
-        </div>
-      )}
-      <div className="flex flex-col sm:flex-row gap-3 sm:flex-nowrap">
-        {plans.map(plan => {
-          const isActive = plan.id === activePlanId;
-          const price = period === "annual" && plan.annualMonthlyFee ? plan.annualMonthlyFee : plan.fee;
-          const isFreePlan = !plan.hasBaseFee;
-          return (
-            <div
-              key={plan.id}
-              className={`relative flex flex-col rounded-xl border p-4 w-full sm:w-[320px] sm:shrink-0 ${isActive ? "border-muted-foreground/50 bg-muted/50" : "border-border"}`}
-            >
-              <div className="mb-3">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-semibold text-foreground">{plan.name}</h3>
-                  {isActive && <span className="px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-muted text-muted-foreground">{t("active")}</span>}
-                </div>
-                {plan.description && (
-                  <p className="text-xs text-muted-foreground mt-0.5">{plan.description}</p>
-                )}
-              </div>
-              <div className="mb-4 h-12">
-                {isFreePlan ? (
-                  <span className="text-2xl font-bold text-foreground">{t("free")}</span>
-                ) : (
-                  <>
-                    <div className="flex items-baseline gap-1">
-                      <span className="text-2xl font-bold text-foreground">
-                        {formatPrice(price)}
-                      </span>
-                      <span className="text-xs text-muted-foreground">{t("perMonth")}</span>
-                    </div>
-                    {period === "annual" && plan.annualFee ? (
-                      <p className="text-[10px] text-muted-foreground mt-0.5">
-                        {formatPrice(plan.annualFee)} {t("billedAnnually")}
-                      </p>
-                    ) : plan.freeTrialEnabled && plan.freeTrialDays ? (
-                      <p className="text-[10px] text-muted-foreground mt-0.5">
-                        {plan.freeTrialDays}{t("freeTrialDays")}
-                      </p>
-                    ) : null}
-                  </>
-                )}
-              </div>
-              {plan.features.length > 0 && (
-                <ul className="mb-4 space-y-1.5 flex-1">
-                  {plan.features.map(f => (
-                    <li key={f.id} className="flex items-start gap-2 text-xs text-muted-foreground">
-                      <svg className="w-3.5 h-3.5 mt-0.5 shrink-0 text-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
-                      {f.name}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="mt-auto">
-                {isActive ? (
-                  <SignedIn>
-                    <SubscriptionDetailsButton for={payerType}>
-                      <button
-                        onClick={() => {
-                          track("plan_manage_clicked", {
-                            plan_id: plan.id,
-                            plan_name: plan.name,
-                            payer_type: payerType,
-                          });
-                          onSelect();
-                        }}
-                        className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer"
-                      >
-                        {t("managePlan")}
-                      </button>
-                    </SubscriptionDetailsButton>
-                  </SignedIn>
-                ) : (
-                  <SignedIn>
-                    <CheckoutButton
-                      planId={plan.id}
-                      planPeriod={period}
-                      for={payerType}
-                      onSubscriptionComplete={() => {
-                        track("plan_subscription_completed", {
-                          plan_id: plan.id,
-                          plan_name: plan.name,
-                          plan_period: period,
-                          plan_price: price,
-                          payer_type: payerType,
-                          is_free: isFreePlan,
-                        });
-                        onSelect();
-                      }}
-                    >
-                      <button
-                        onClick={() => {
-                          track("plan_checkout_clicked", {
-                            plan_id: plan.id,
-                            plan_name: plan.name,
-                            plan_period: period,
-                            plan_price: price,
-                            payer_type: payerType,
-                            is_free: isFreePlan,
-                          });
-                          onSelect();
-                        }}
-                        className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer"
-                      >
-                        {isFreePlan ? t("getStarted") : t("subscribe")}
-                      </button>
-                    </CheckoutButton>
-                  </SignedIn>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, activeOrg, orgs, plan, onOpenPlans }: {
-  user: UserInfo;
-  onSignOut?: () => void;
-  onManageAccount?: () => void;
-  onCreateOrg?: () => void;
-  onManageOrg?: () => void;
-  onSwitchOrg?: (orgId: string | null) => void;
-  activeOrg?: { id: string; name: string; imageUrl?: string };
-  orgs?: { id: string; name: string; imageUrl: string }[];
-  plan?: PlanInfo;
-  onOpenPlans?: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [showOrgs, setShowOrgs] = useState(false);
-
-  return (
-    <div className="relative">
-      <button
-        onClick={() => { setOpen(!open); setShowOrgs(false); }}
-        className="flex items-center justify-center rounded-lg hover:opacity-80 transition-opacity cursor-pointer px-1 h-8"
-        aria-label="Profile"
-      >
-        <div className="flex items-center -space-x-2">
-          {activeOrg?.imageUrl && (
-            <div
-              className="size-6 rounded-full bg-secondary shrink-0 ring-2 ring-background"
-              style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }}
-            />
-          )}
-          <div
-            className="size-6 rounded-full bg-secondary text-foreground flex items-center justify-center text-xs font-medium select-none ring-2 ring-background"
-            style={user.imageUrl ? { backgroundImage: `url(${user.imageUrl})`, backgroundSize: "cover" } : undefined}
-          >
-            {!user.imageUrl && (user.name?.charAt(0) || user.email?.charAt(0) || "?")}
-          </div>
-        </div>
-      </button>
-      {open && createPortal(
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => { setOpen(false); setShowOrgs(false); }} />
-          <div className="fixed right-2 top-12 z-50 mt-2 w-56 rounded-lg border border-border bg-background shadow-lg">
-            {showOrgs ? (
-              <>
-                <button
-                  onClick={() => setShowOrgs(false)}
-                  className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                >
-                  <svg className="w-3.5 h-3.5 rtl:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                  </svg>
-                  {t("back")}
-                </button>
-                <div className="border-t border-border" />
-                <div className="py-1">
-                  <button
-                    onClick={() => { onSwitchOrg?.(null); setShowOrgs(false); }}
-                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors cursor-pointer ${!activeOrg ? "text-foreground bg-secondary/60" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80"}`}
-                  >
-                    {t("personal")}
-                  </button>
-                  {(orgs || []).map((org) => (
-                    <button
-                      key={org.id}
-                      onClick={() => { onSwitchOrg?.(org.id); setShowOrgs(false); }}
-                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors cursor-pointer ${activeOrg?.id === org.id ? "text-foreground bg-secondary/60" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80"}`}
-                    >
-                      {org.name}
-                    </button>
-                  ))}
-                </div>
-                {onCreateOrg && (
-                  <>
-                    <div className="border-t border-border" />
-                    <button
-                      onClick={() => { setOpen(false); setShowOrgs(false); onCreateOrg(); }}
-                      className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                    >
-                      {t("createOrg")}
-                    </button>
-                  </>
-                )}
-              </>
-            ) : (
-              <>
-                <div className="flex items-center gap-2.5 px-3 py-2.5">
-                  <div
-                    className="size-8 rounded-full bg-secondary text-foreground flex items-center justify-center text-sm font-medium select-none shrink-0"
-                    style={user.imageUrl ? { backgroundImage: `url(${user.imageUrl})`, backgroundSize: "cover" } : undefined}
-                  >
-                    {!user.imageUrl && (user.name?.charAt(0) || user.email?.charAt(0) || "?")}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate">{user.name}</p>
-                    <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-                  </div>
-                </div>
-                <div className="border-t border-border" />
-                <button
-                  onClick={() => {
-                    document.body.classList.toggle("dark");
-                    track("theme_changed", {
-                      to: document.body.classList.contains("dark") ? "dark" : "light",
-                      source: "user_menu",
-                    });
-                  }}
-                  className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-                  </svg>
-                  {document.body.classList.contains("dark") ? t("lightMode") : t("darkMode")}
-                </button>
-                <div className="border-t border-border" />
-                <p className="px-3 pt-2 pb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">{t("account")}</p>
-                {plan && onOpenPlans && (
-                  <button
-                    onClick={() => { setOpen(false); onOpenPlans(); }}
-                    className="flex w-full items-center justify-between px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                  >
-                    {t("plans")}
-                    <span className="text-[10px] text-muted-foreground/60">{plan.name}</span>
-                  </button>
-                )}
-                <button
-                  onClick={() => { setOpen(false); activeOrg && onManageOrg ? onManageOrg() : onManageAccount?.(); }}
-                  className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                >
-                  {activeOrg ? t("manageOrg") : t("manageAccount")}
-                </button>
-                {onSwitchOrg && (
-                  <>
-                  <div className="border-t border-border" />
-                  <p className="px-3 pt-2 pb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">{t("organization")}</p>
-                  <button
-                    onClick={() => setShowOrgs(true)}
-                    className="flex w-full items-center justify-between px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                  >
-                    <span className="flex items-center gap-2 truncate">
-                      {activeOrg?.imageUrl && (
-                        <div className="size-4 rounded-full shrink-0" style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }} />
-                      )}
-                      {activeOrg ? activeOrg.name : t("personal")}
-                    </span>
-                    <svg className="w-3.5 h-3.5 rtl:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                    </svg>
-                  </button>
-                  </>
-                )}
-                {onSignOut && (
-                  <>
-                    <div className="border-t border-border" />
-                    <button
-                      onClick={() => { setOpen(false); onSignOut(); }}
-                      className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                    >
-                      {t("signOut")}
-                    </button>
-                  </>
-                )}
-              </>
-            )}
-          </div>
-        </>,
-        document.body
-      )}
-    </div>
-  );
-}
 
 function InputBox({
   textareaRef,
