@@ -58,8 +58,6 @@ def workspace_at(tenant, volume, base=None, slot=".db") -> Workspace:
 
 _pool: dict = {}
 _pool_lock = asyncio.Lock()
-_NON_DURABLE = WriteOptions(await_durable=False)
-_DURABLE     = WriteOptions(await_durable=True)
 
 
 async def _safe_shutdown(db):
@@ -113,13 +111,16 @@ class DB:
     def __init__(self, source, base=None):
         if isinstance(source, str):
             self._url = source if base is None else f"{base.rstrip('/')}/{source}"
-            self._txn = None
-        elif hasattr(source, "path"):
-            self._url = f"{(base or source.base).rstrip('/')}/{source.path}"
-            self._txn = None
         else:
-            self._url = None
-            self._txn = source
+            self._url = f"{(base or source.base).rstrip('/')}/{source.path}"
+        self._txn = None
+
+    @classmethod
+    def _in_txn(cls, txn):
+        self = cls.__new__(cls)
+        self._url = None
+        self._txn = txn
+        return self
 
     @asynccontextmanager
     async def _handle(self, durable=False):
@@ -130,7 +131,7 @@ class DB:
         txn = await slate.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
         try: yield txn
         except Exception: await txn.rollback(); raise
-        else: await txn.commit_with_options(_DURABLE if durable else _NON_DURABLE)
+        else: await txn.commit_with_options(WriteOptions(await_durable=durable))
 
     @_fence_retry
     async def get(self, key, default=None):
@@ -160,9 +161,9 @@ class DB:
             raise RuntimeError("nested transactions not supported")
         slate = await _get_pooled(self._url)
         txn = await slate.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
-        try: yield DB(txn)
+        try: yield DB._in_txn(txn)
         except Exception: await txn.rollback(); raise
-        else: await txn.commit_with_options(_NON_DURABLE)
+        else: await txn.commit_with_options(WriteOptions(await_durable=False))
 
     @asynccontextmanager
     async def raw(self):
