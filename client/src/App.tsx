@@ -412,6 +412,35 @@ function CustomSignIn() {
   const inputClass = "w-full rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
   const submitClass = "flex w-full items-center justify-center rounded-xl border border-border bg-background px-4 py-3 text-sm font-medium text-foreground hover:bg-secondary transition-colors disabled:opacity-50 cursor-pointer";
 
+  type Field = { type: string; placeholder: string; value: string; set: (v: string) => void; autoComplete: string };
+  const fields: Record<string, Field> = {
+    email:        { type: "email",    placeholder: t("email"),            value: email,       set: setEmail,       autoComplete: "email" },
+    passwordIn:   { type: "password", placeholder: t("password"),         value: password,    set: setPassword,    autoComplete: "current-password" },
+    passwordUp:   { type: "password", placeholder: t("password"),         value: password,    set: setPassword,    autoComplete: "new-password" },
+    newPassword:  { type: "password", placeholder: t("newPassword"),      value: newPassword, set: setNewPassword, autoComplete: "new-password" },
+    code:         { type: "text",     placeholder: t("verificationCode"), value: code,        set: setCode,        autoComplete: "one-time-code" },
+  };
+
+  const renderForm = (fs: Field[], submit: string, handler: (e: React.FormEvent) => Promise<void>, opts?: { captcha?: boolean; below?: React.ReactNode }) => (
+    <form onSubmit={handler} className="space-y-3">
+      {fs.map((f, i) => (
+        <input
+          key={i}
+          type={f.type}
+          placeholder={f.placeholder}
+          value={f.value}
+          onChange={(e) => f.set(e.target.value)}
+          className={inputClass}
+          required
+          autoComplete={f.autoComplete}
+        />
+      ))}
+      {opts?.captcha && <div id="clerk-captcha" />}
+      <button type="submit" disabled={!!isLoading} className={submitClass}>{submit}</button>
+      {opts?.below}
+    </form>
+  );
+
   return (
     <div className="flex h-dvh w-full flex-col bg-background">
       <div className="fixed top-0 right-0 p-4 flex items-center gap-1" dir="ltr">
@@ -521,142 +550,12 @@ function CustomSignIn() {
 
             {/* Email/password forms */}
             <div className="mt-6">
-              {mode === "sign-in" && step === "form" && (
-                <form onSubmit={handleSignIn} className="space-y-3">
-                  <input
-                    type="email"
-                    placeholder={t("email")}
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className={inputClass}
-                    required
-                    autoComplete="email"
-                  />
-                  <input
-                    type="password"
-                    placeholder={t("password")}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className={inputClass}
-                    required
-                    autoComplete="current-password"
-                  />
-                  <button type="submit" disabled={!!isLoading} className={submitClass}>
-                    {t("signIn")}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => switchMode("forgot-password")}
-                    className="w-full text-center text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                  >
-                    {t("forgotPassword")}
-                  </button>
-                </form>
-              )}
-
-              {mode === "sign-in" && step === "verify" && (
-                <form onSubmit={handleSignInVerify} className="space-y-3">
-                  <input
-                    type="text"
-                    placeholder={t("verificationCode")}
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    className={inputClass}
-                    required
-                    autoComplete="one-time-code"
-                  />
-                  <button type="submit" disabled={!!isLoading} className={submitClass}>
-                    {t("signIn")}
-                  </button>
-                </form>
-              )}
-
-              {mode === "sign-up" && step === "form" && (
-                <form onSubmit={handleSignUp} className="space-y-3">
-                  <input
-                    type="email"
-                    placeholder={t("email")}
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className={inputClass}
-                    required
-                    autoComplete="email"
-                  />
-                  <input
-                    type="password"
-                    placeholder={t("password")}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className={inputClass}
-                    required
-                    autoComplete="new-password"
-                  />
-                  <div id="clerk-captcha" />
-                  <button type="submit" disabled={!!isLoading} className={submitClass}>
-                    {t("signUp")}
-                  </button>
-                </form>
-              )}
-
-              {mode === "sign-up" && step === "verify" && (
-                <form onSubmit={handleSignUpVerify} className="space-y-3">
-                  <input
-                    type="text"
-                    placeholder={t("verificationCode")}
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    className={inputClass}
-                    required
-                    autoComplete="one-time-code"
-                  />
-                  <button type="submit" disabled={!!isLoading} className={submitClass}>
-                    {t("signUp")}
-                  </button>
-                </form>
-              )}
-
-              {mode === "forgot-password" && step === "form" && (
-                <form onSubmit={handleForgotPassword} className="space-y-3">
-                  <input
-                    type="email"
-                    placeholder={t("email")}
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className={inputClass}
-                    required
-                    autoComplete="email"
-                  />
-                  <button type="submit" disabled={!!isLoading} className={submitClass}>
-                    {t("sendCode")}
-                  </button>
-                </form>
-              )}
-
-              {mode === "forgot-password" && step === "verify" && (
-                <form onSubmit={handleResetVerify} className="space-y-3">
-                  <input
-                    type="text"
-                    placeholder={t("verificationCode")}
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    className={inputClass}
-                    required
-                    autoComplete="one-time-code"
-                  />
-                  <input
-                    type="password"
-                    placeholder={t("newPassword")}
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    className={inputClass}
-                    required
-                    autoComplete="new-password"
-                  />
-                  <button type="submit" disabled={!!isLoading} className={submitClass}>
-                    {t("resetPassword")}
-                  </button>
-                </form>
-              )}
+              {mode === "sign-in"        && step === "form"   && renderForm([fields.email, fields.passwordIn], t("signIn"),        handleSignIn,       { below: <button type="button" onClick={() => switchMode("forgot-password")} className="w-full text-center text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer">{t("forgotPassword")}</button> })}
+              {mode === "sign-in"        && step === "verify" && renderForm([fields.code],                     t("signIn"),        handleSignInVerify)}
+              {mode === "sign-up"        && step === "form"   && renderForm([fields.email, fields.passwordUp], t("signUp"),        handleSignUp,       { captcha: true })}
+              {mode === "sign-up"        && step === "verify" && renderForm([fields.code],                     t("signUp"),        handleSignUpVerify)}
+              {mode === "forgot-password" && step === "form"  && renderForm([fields.email],                    t("sendCode"),      handleForgotPassword)}
+              {mode === "forgot-password" && step === "verify"&& renderForm([fields.code, fields.newPassword], t("resetPassword"), handleResetVerify)}
             </div>
 
             {/* Mode toggle links */}

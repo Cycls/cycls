@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { createPortal } from "react-dom";
 import { t } from "../lib/i18n";
 import { toggleDark } from "../lib/utils";
+import { Popover } from "./popover";
 
 export interface UserInfo {
   name: string;
@@ -55,10 +55,8 @@ export function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onMana
           </div>
         </div>
       </button>
-      {open && createPortal(
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => { setOpen(false); setShowOrgs(false); }} />
-          <div className="fixed right-2 top-12 z-50 mt-2 w-56 rounded-lg border border-border bg-background shadow-lg">
+      <Popover open={open} onClose={() => { setOpen(false); setShowOrgs(false); }} className="right-2 top-12 mt-2 w-56 rounded-lg border border-border bg-background shadow-lg">
+        <div>
             {showOrgs ? (
               <>
                 <button
@@ -174,10 +172,8 @@ export function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onMana
                 )}
               </>
             )}
-          </div>
-        </>,
-        document.body
-      )}
+        </div>
+      </Popover>
     </div>
   );
 }
