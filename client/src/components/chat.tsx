@@ -4,10 +4,11 @@ import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files } from "./files";
 import { Popover } from "./popover";
-import { Icon, Spinner, IconButton } from "./icon";
+import { Icon, IconButton } from "./icon";
 import { CyclsLogo } from "./cycls-logo";
 import { LoadingBar } from "./loading-bar";
-import { AttachmentBody } from "./attachment-body";
+import { InputBox } from "./input-box";
+import { ShareDialog } from "./share-dialog";
 import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import type { Message, Attachment, PassMetadata, UIHandler } from "../hooks/use-chat";
@@ -117,11 +118,6 @@ export function Chat({
   const [filesOpen, setFilesOpen] = useState(false);
   const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats">(onListChats ? "chats" : "files");
   const [shareOpen, setShareOpen] = useState(false);
-  const [shareTitle, setShareTitle] = useState("");
-  const [shareAudience, setShareAudience] = useState<string>("public");
-  const [shareUrl, setShareUrl] = useState<string | null>(null);
-  const [shareLoading, setShareLoading] = useState(false);
-  const [shareCopied, setShareCopied] = useState(false);
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
   const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string }[]>([]);
@@ -329,20 +325,9 @@ export function Chat({
                   </svg>
                 </button>
                 {onShare && !isStreaming && (
-                  <div className="relative">
+                  <>
                     <button
-                      onClick={() => {
-                        if (!shareOpen) {
-                          setShareOpen(true);
-                          setShareTitle(messages.find((m) => m.role === "user")?.content?.slice(0, 100) || "");
-                          setShareAudience("public");
-                          setShareUrl(null);
-                          setShareLoading(false);
-                          setShareCopied(false);
-                        } else {
-                          setShareOpen(false);
-                        }
-                      }}
+                      onClick={() => setShareOpen((o) => !o)}
                       className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
                       aria-label="Share"
                     >
@@ -350,99 +335,16 @@ export function Chat({
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                       </svg>
                     </button>
-                    <Popover open={shareOpen} onClose={() => setShareOpen(false)} className="right-2 top-12 mt-2 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-background shadow-lg overflow-hidden">
-                      <div className="px-4 pt-4 pb-3">
-                            <div className="flex items-center gap-2 mb-1">
-                              <Icon name="link" className="w-4 h-4 text-foreground shrink-0" />
-                              <h3 className="text-sm font-medium text-foreground">{t("shareConversation")}</h3>
-                            </div>
-                            <div className="flex gap-1.5 mt-3 mb-3">
-                              {(["public", ...(org ? [`org:${org.id}`] : [])] as string[]).map((aud) => {
-                                const isOrg = aud.startsWith("org:");
-                                const active = shareAudience === aud;
-                                return (
-                                  <button
-                                    key={aud}
-                                    onClick={() => setShareAudience(aud)}
-                                    className={`text-[11px] px-2.5 py-1 rounded-full transition-colors cursor-pointer ${
-                                      active
-                                        ? "bg-secondary text-foreground"
-                                        : "text-muted-foreground hover:bg-secondary/50"
-                                    }`}
-                                  >
-                                    {isOrg ? `${t("anyoneInOrg")} ${org!.name}` : t("anyoneWithLink")}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                            <p className="mb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">{t("title")}</p>
-                            <input
-                              type="text"
-                              value={shareTitle}
-                              onChange={(e) => setShareTitle(e.target.value)}
-                              placeholder={t("untitled")}
-                              dir="auto"
-                              className="w-full rounded-md border border-border bg-secondary/50 px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
-                            />
-                          </div>
-
-                          <div className="border-t border-border px-4 py-3">
-                            {shareLoading ? (
-                              <div className="flex items-center justify-center py-2">
-                                <Spinner className="w-4 h-4 text-muted-foreground" />
-                                <span className="ml-2 text-xs text-muted-foreground">{t("creatingLink")}</span>
-                              </div>
-                            ) : shareUrl ? (
-                              <div className="flex items-center gap-2">
-                                <input
-                                  type="text"
-                                  readOnly
-                                  value={shareUrl}
-                                  className="flex-1 min-w-0 rounded-md border border-border bg-secondary/50 px-2.5 py-1.5 text-xs text-foreground select-all focus:outline-none"
-                                  onFocus={(e) => e.target.select()}
-                                />
-                                <button
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(shareUrl);
-                                    setShareCopied(true);
-                                    setTimeout(() => setShareCopied(false), 2000);
-                                  }}
-                                  className="shrink-0 text-muted-foreground hover:text-foreground transition-colors cursor-pointer p-1.5"
-                                  aria-label="Copy"
-                                >
-                                  <Icon name={shareCopied ? "check" : "copy"} className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={() => {
-                                  setShareLoading(true);
-                                  setShareCopied(false);
-                                  onShare(shareTitle, shareAudience).then((url) => {
-                                    setShareUrl(url);
-                                    setShareLoading(false);
-                                  }).catch(() => setShareLoading(false));
-                                }}
-                                className="w-full rounded-md border border-border bg-secondary hover:bg-secondary/80 text-foreground py-2 text-xs font-medium transition-colors cursor-pointer"
-                              >
-                                {t("createLink")}
-                              </button>
-                            )}
-                          </div>
-
-                      {onListShares && (
-                        <div className="border-t border-border">
-                          <button
-                            onClick={() => { setShareOpen(false); openPanel("shares"); }}
-                            className="flex w-full items-center justify-between px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors cursor-pointer"
-                          >
-                            {t("manageShares")}
-                            <Icon name="chevron-right" className="w-3.5 h-3.5 rtl:rotate-180" />
-                          </button>
-                        </div>
-                      )}
-                    </Popover>
-                  </div>
+                    {shareOpen && (
+                      <ShareDialog
+                        onClose={() => setShareOpen(false)}
+                        defaultTitle={messages.find((m) => m.role === "user")?.content?.slice(0, 100) || ""}
+                        org={org}
+                        onShare={onShare}
+                        onManageShares={onListShares ? () => { setShareOpen(false); openPanel("shares"); } : undefined}
+                      />
+                    )}
+                  </>
                 )}
               </>
             )}
@@ -779,193 +681,6 @@ export function Chat({
 }
 
 
-function InputBox({
-  textareaRef,
-  input,
-  setInput,
-  handleKeyDown,
-  handleSubmit,
-  isStreaming,
-  onStop,
-  onOpenFilePicker,
-  onOpenFiles,
-  attachments,
-  onRemoveFile,
-  listening,
-  transcribing,
-  startMic,
-  stopMic,
-  cancelMic,
-  voice,
-  onFilesAdded,
-  placeholder,
-}: {
-  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
-  input: string;
-  setInput: (v: string) => void;
-  handleKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  handleSubmit: (overrideText?: string) => void;
-  isStreaming: boolean;
-  onStop: () => void;
-  onOpenFilePicker?: () => void;
-  onOpenFiles?: () => void;
-  attachments?: Attachment[];
-  onRemoveFile?: (index: number) => void;
-  listening: boolean;
-  transcribing: boolean;
-  startMic: () => void;
-  stopMic: () => void;
-  cancelMic: () => void;
-  voice?: boolean;
-  onFilesAdded?: (files: File[]) => void;
-  placeholder?: string;
-}) {
-  const [dragOver, setDragOver] = useState(false);
-
-  return (
-    <motion.div
-      layoutId="chat-input"
-      className={`border bg-background rounded-3xl p-2 shadow-sm cursor-text ${dragOver ? "border-primary" : "border-border"}`}
-      onClick={() => textareaRef.current?.focus()}
-      transition={{ type: "spring", stiffness: 200, damping: 25 }}
-      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        setDragOver(false);
-        if (onFilesAdded && e.dataTransfer.files.length) {
-          onFilesAdded(Array.from(e.dataTransfer.files));
-        }
-      }}
-    >
-      {/* File previews */}
-      <AnimatePresence initial={false}>
-        {attachments && attachments.length > 0 && (
-          <motion.div
-            key="files-list"
-            initial={{ height: 0 }}
-            animate={{ height: "auto" }}
-            exit={{ height: 0 }}
-            transition={{ type: "spring", duration: 0.2, bounce: 0 }}
-            className="overflow-hidden"
-          >
-            <div className="flex flex-row overflow-x-auto px-2 pt-3 pb-2 gap-2">
-              <AnimatePresence initial={false}>
-                {attachments.map((file, index) => (
-                  <motion.div
-                    key={file.name + index}
-                    initial={{ width: 0, opacity: 0 }}
-                    animate={{ width: 180, opacity: 1 }}
-                    exit={{ width: 0, opacity: 0 }}
-                    transition={{ type: "spring", duration: 0.2, bounce: 0 }}
-                    className="relative shrink-0"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <div className={`flex w-full items-center gap-3 rounded-2xl p-2 pr-3 transition-colors border ${file.status === "error" ? "border-red-400/60 bg-red-50 dark:bg-red-950/20" : "border-border bg-background hover:bg-secondary/50"}`}>
-                      <AttachmentBody attachment={file} />
-                    </div>
-                    {onRemoveFile && (
-                      <button
-                        type="button"
-                        onClick={() => onRemoveFile(index)}
-                        className="absolute top-0 right-0 z-10 flex size-5 translate-x-1/4 -translate-y-1/4 items-center justify-center rounded-full border-2 border-background bg-foreground text-background transition cursor-pointer"
-                        aria-label="Remove file"
-                      >
-                        <Icon name="x" className="size-3" strokeWidth={2.5} />
-                      </button>
-                    )}
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Textarea */}
-      <textarea
-        ref={textareaRef}
-        dir={input ? "auto" : getLang() === "ar" ? "rtl" : "ltr"}
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder || t("sendMessage")}
-        rows={1}
-        className="w-full min-h-[44px] max-h-[240px] resize-none bg-transparent px-3 py-2.5 text-foreground placeholder:text-muted-foreground focus:outline-none overflow-y-auto"
-      />
-
-      {/* Actions row: paperclip left, send right */}
-      <div className="flex items-center justify-between px-1 pt-1" dir="ltr">
-        <div className="relative flex items-center gap-0.5">
-          {(onOpenFilePicker || onOpenFiles) && (
-            <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} disabled={isStreaming} />
-          )}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              const next = getLang() === "en" ? "ar" : "en";
-              setLang(next);
-              track("language_changed", { to: next, source: "composer" });
-            }}
-            className="flex h-8 items-center justify-center rounded-full px-2.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition cursor-pointer text-xs font-semibold"
-            aria-label="Toggle language"
-          >
-            {getLang() === "en" ? "عربي" : "En"}
-          </button>
-        </div>
-        <div className="flex items-center gap-1">
-          {voice && <MicButton listening={listening} transcribing={transcribing} disabled={isStreaming} onStart={startMic} onStop={stopMic} onCancel={cancelMic}  />}
-          {isStreaming ? (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onStop(); }}
-              className="flex size-8 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 transition cursor-pointer"
-              aria-label="Stop"
-            >
-              <svg className="size-5" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="6" y="6" width="12" height="12" rx="2" />
-              </svg>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); handleSubmit(); }}
-              disabled={!input.trim() || attachments?.some((a) => a.status === "uploading")}
-              className="flex size-8 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 disabled:opacity-30 transition cursor-pointer"
-              aria-label="Send"
-            >
-              {/* ArrowUp */}
-              <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 12l7-7 7 7M12 5v14" />
-              </svg>
-            </button>
-          )}
-        </div>
-      </div>
-    </motion.div>
-  );
-}
-
-function MicButton({ listening, transcribing, disabled, onStart, onStop, onCancel }: { listening: boolean; transcribing: boolean; disabled: boolean; onStart: () => void; onStop: () => void; onCancel: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={(e) => { e.stopPropagation(); transcribing ? onCancel() : listening ? onStop() : onStart(); }}
-      disabled={disabled && !transcribing}
-      className={`flex size-8 items-center justify-center rounded-full transition ${disabled && !listening && !transcribing ? "text-muted-foreground opacity-30 cursor-not-allowed" : listening ? "bg-foreground text-background animate-pulse cursor-pointer" : transcribing ? "text-muted-foreground hover:text-foreground cursor-pointer" : "text-muted-foreground hover:text-foreground hover:bg-secondary cursor-pointer"}`}
-      aria-label={listening ? "Stop recording" : transcribing ? "Cancel transcription" : "Start recording"}
-    >
-      <svg className={`size-5${transcribing ? " animate-pulse [animation-duration:0.9s]" : ""}`} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 01-14 0v-2" />
-        <line x1="12" y1="19" x2="12" y2="23" strokeLinecap="round" />
-        <line x1="8" y1="23" x2="16" y2="23" strokeLinecap="round" />
-      </svg>
-    </button>
-  );
-}
-
 function EmptyState({ icon, title, subtitle }: { icon: React.ReactNode; title: string; subtitle: string }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
@@ -1027,63 +742,6 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete }: {
         </div>
       ))}
     </div>
-  );
-}
-
-function AttachMenu({ onOpenFilePicker, onOpenFiles, disabled }: { onOpenFilePicker?: () => void; onOpenFiles?: () => void; disabled?: boolean }) {
-  const [open, setOpen] = useState(false);
-
-  if (onOpenFilePicker && !onOpenFiles) {
-    return (
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); onOpenFilePicker(); }}
-        disabled={disabled}
-        className={`flex size-8 items-center justify-center rounded-2xl transition ${disabled ? "text-muted-foreground opacity-30 cursor-not-allowed" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 cursor-pointer"}`}
-        aria-label="Attach file"
-      >
-        <Icon name="paperclip" className="size-5" />
-      </button>
-    );
-  }
-
-  return (
-    <>
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); if (!disabled) setOpen(!open); }}
-        disabled={disabled}
-        className={`flex size-8 items-center justify-center rounded-2xl transition ${disabled ? "text-muted-foreground opacity-30 cursor-not-allowed" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 cursor-pointer"}`}
-        aria-label="Attach"
-      >
-        <Icon name="paperclip" className="size-5" />
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 bottom-full z-50 mb-2 w-44 rounded-lg border border-border bg-background shadow-lg py-1">
-            {onOpenFilePicker && (
-              <button
-                onClick={(e) => { e.stopPropagation(); setOpen(false); onOpenFilePicker(); }}
-                className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-              >
-                <Icon name="upload" className="size-4" />
-                {t("uploadFile")}
-              </button>
-            )}
-            {onOpenFiles && (
-              <button
-                onClick={(e) => { e.stopPropagation(); setOpen(false); onOpenFiles(); }}
-                className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-              >
-                <Icon name="folder" className="size-4" />
-                {t("browseFiles")}
-              </button>
-            )}
-          </div>
-        </>
-      )}
-    </>
   );
 }
 
