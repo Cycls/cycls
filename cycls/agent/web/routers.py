@@ -9,7 +9,7 @@ import os, shutil, time, unicodedata, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
-from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, Request, Response, HTTPException, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 
@@ -56,8 +56,10 @@ def chats_router(ws_dep):
     @r.get("/chats/{chat_id}")
     async def get_chat(chat_id: str, ws: Workspace = ws_dep):
         meta = await chat.get_meta(ws, chat_id)
+        # 204 (not 404) for a missing chat: the FE auto-restores `?id=` on
+        # cold load, and a stale id is normal — 404s clutter the dev console.
         if meta is None:
-            raise HTTPException(status_code=404, detail="Chat not found")
+            return Response(status_code=204)
         raw = await chat.load_messages(ws, chat_id)
         return {**meta, "messages": chat.to_ui_messages(raw)}
 
