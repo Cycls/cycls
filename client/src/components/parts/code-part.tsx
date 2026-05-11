@@ -1,12 +1,15 @@
 import { memo, useState } from "react";
+import { cn } from "../../lib/utils";
 import { CodeBlock, CodeBlockCode, CodeBlockGroup } from "./code-block";
 
 export const CodePart = memo(function CodePart({
   code,
   language,
+  className,
 }: {
   code: string;
   language?: string;
+  className?: string;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -17,7 +20,7 @@ export const CodePart = memo(function CodePart({
   };
 
   return (
-    <CodeBlock className="my-3">
+    <CodeBlock className={cn("my-3", className)}>
       <CodeBlockGroup className="flex h-9 items-center justify-between px-4">
         <span className="font-mono text-xs text-muted-foreground">
           {language || "code"}
