@@ -296,118 +296,59 @@ function CustomSignIn() {
     }
   };
 
-  const handleSignIn = async (e: React.FormEvent) => {
+  const runAuth = async (e: React.FormEvent, failMsg: string, op: () => Promise<void>) => {
     e.preventDefault();
     try {
       setIsLoading("form");
       setError("");
-      track("sign_in_attempted", { method: "password", step: "form" });
-      const result = await signIn!.create({ identifier: email, password });
-      if (result.status === "complete") {
-        await setActive!({ session: result.createdSessionId });
-      } else if (result.status === "needs_first_factor") {
-        setStep("verify");
-      }
+      await op();
     } catch (err: unknown) {
       const clerkErr = err as { errors?: { message: string }[] };
-      setError(clerkErr.errors?.[0]?.message || "Sign in failed");
+      setError(clerkErr.errors?.[0]?.message || failMsg);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleSignInVerify = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      setIsLoading("form");
-      setError("");
-      track("sign_in_attempted", { method: "email_code", step: "verify" });
-      const result = await signIn!.attemptFirstFactor({ strategy: "email_code", code });
-      if (result.status === "complete") {
-        await setActive!({ session: result.createdSessionId });
-      }
-    } catch (err: unknown) {
-      const clerkErr = err as { errors?: { message: string }[] };
-      setError(clerkErr.errors?.[0]?.message || "Verification failed");
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const handleSignIn = (e: React.FormEvent) => runAuth(e, "Sign in failed", async () => {
+    track("sign_in_attempted", { method: "password", step: "form" });
+    const result = await signIn!.create({ identifier: email, password });
+    if (result.status === "complete") await setActive!({ session: result.createdSessionId });
+    else if (result.status === "needs_first_factor") setStep("verify");
+  });
 
-  const handleSignUp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      setIsLoading("form");
-      setError("");
-      track("sign_up_attempted", { method: "password", step: "form" });
-      const result = await signUp!.create({ emailAddress: email, password });
-      if (result.status === "complete") {
-        await setSignUpActive!({ session: result.createdSessionId });
-      } else {
-        await signUp!.prepareEmailAddressVerification({ strategy: "email_code" });
-        setStep("verify");
-      }
-    } catch (err: unknown) {
-      const clerkErr = err as { errors?: { message: string }[] };
-      setError(clerkErr.errors?.[0]?.message || "Sign up failed");
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const handleSignInVerify = (e: React.FormEvent) => runAuth(e, "Verification failed", async () => {
+    track("sign_in_attempted", { method: "email_code", step: "verify" });
+    const result = await signIn!.attemptFirstFactor({ strategy: "email_code", code });
+    if (result.status === "complete") await setActive!({ session: result.createdSessionId });
+  });
 
-  const handleSignUpVerify = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      setIsLoading("form");
-      setError("");
-      track("sign_up_attempted", { method: "email_code", step: "verify" });
-      const result = await signUp!.attemptEmailAddressVerification({ code });
-      if (result.status === "complete") {
-        await setSignUpActive!({ session: result.createdSessionId });
-      }
-    } catch (err: unknown) {
-      const clerkErr = err as { errors?: { message: string }[] };
-      setError(clerkErr.errors?.[0]?.message || "Verification failed");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleForgotPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      setIsLoading("form");
-      setError("");
-      await signIn!.create({ strategy: "reset_password_email_code", identifier: email });
+  const handleSignUp = (e: React.FormEvent) => runAuth(e, "Sign up failed", async () => {
+    track("sign_up_attempted", { method: "password", step: "form" });
+    const result = await signUp!.create({ emailAddress: email, password });
+    if (result.status === "complete") {
+      await setSignUpActive!({ session: result.createdSessionId });
+    } else {
+      await signUp!.prepareEmailAddressVerification({ strategy: "email_code" });
       setStep("verify");
-    } catch (err: unknown) {
-      const clerkErr = err as { errors?: { message: string }[] };
-      setError(clerkErr.errors?.[0]?.message || "Reset failed");
-    } finally {
-      setIsLoading(false);
     }
-  };
+  });
 
-  const handleResetVerify = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      setIsLoading("form");
-      setError("");
-      const result = await signIn!.attemptFirstFactor({
-        strategy: "reset_password_email_code",
-        code,
-        password: newPassword,
-      });
-      if (result.status === "complete") {
-        await setActive!({ session: result.createdSessionId });
-      }
-    } catch (err: unknown) {
-      const clerkErr = err as { errors?: { message: string }[] };
-      setError(clerkErr.errors?.[0]?.message || "Reset failed");
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const handleSignUpVerify = (e: React.FormEvent) => runAuth(e, "Verification failed", async () => {
+    track("sign_up_attempted", { method: "email_code", step: "verify" });
+    const result = await signUp!.attemptEmailAddressVerification({ code });
+    if (result.status === "complete") await setSignUpActive!({ session: result.createdSessionId });
+  });
+
+  const handleForgotPassword = (e: React.FormEvent) => runAuth(e, "Reset failed", async () => {
+    await signIn!.create({ strategy: "reset_password_email_code", identifier: email });
+    setStep("verify");
+  });
+
+  const handleResetVerify = (e: React.FormEvent) => runAuth(e, "Reset failed", async () => {
+    const result = await signIn!.attemptFirstFactor({ strategy: "reset_password_email_code", code, password: newPassword });
+    if (result.status === "complete") await setActive!({ session: result.createdSessionId });
+  });
 
   const inputClass = "w-full rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
   const submitClass = "flex w-full items-center justify-center rounded-xl border border-border bg-background px-4 py-3 text-sm font-medium text-foreground hover:bg-secondary transition-colors disabled:opacity-50 cursor-pointer";

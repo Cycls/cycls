@@ -80,6 +80,25 @@ export function useChat(baseUrl: string = "") {
   }, []);
   const { setGetToken, authHeaders } = useAuthHeaders();
 
+  // Auth + JSON-aware fetch. Throws Error("HTTP <status>") on non-OK; the
+  // error carries `.status` for callers that need to branch on it.
+  const api = useCallback(async (path: string, init: RequestInit & { json?: unknown } = {}): Promise<Response> => {
+    const { json, headers: rawHeaders, ...rest } = init;
+    const headers: Record<string, string> = { ...(await authHeaders()), ...(rawHeaders as Record<string, string> || {}) };
+    let body = rest.body;
+    if (json !== undefined) {
+      headers["Content-Type"] = "application/json";
+      body = JSON.stringify(json);
+    }
+    const res = await fetch(`${baseUrl}${path}`, { ...rest, headers, body });
+    if (!res.ok) {
+      const err = new Error(`HTTP ${res.status}`) as Error & { status: number };
+      err.status = res.status;
+      throw err;
+    }
+    return res;
+  }, [baseUrl, authHeaders]);
+
   const uploadFile = useCallback(
     async (file: File): Promise<Attachment> => {
       const h = await authHeaders();
@@ -392,15 +411,12 @@ export function useChat(baseUrl: string = "") {
   const share = useCallback(async (title: string = "", audience: string = "public", author?: { name: string; imageUrl?: string; org?: { name: string; imageUrl?: string } }) => {
     const chatId = chatIdRef.current;
     if (!chatId) throw new Error("No chat to share");
-    const headers = { "Content-Type": "application/json", ...(await authHeaders()) };
-    const res = await fetch(`${baseUrl}/share`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ path: `chat/${chatId}`, audience, author }),
-    });
-    if (!res.ok) {
-      track("share_create_failed", { status: res.status });
-      throw new Error(`Share failed: ${res.status}`);
+    let res: Response;
+    try {
+      res = await api("/share", { method: "POST", json: { path: `chat/${chatId}`, audience, author } });
+    } catch (err) {
+      track("share_create_failed", { status: (err as Error & { status?: number }).status });
+      throw err;
     }
     const { url } = await res.json();
     const shareUrl = `${window.location.origin}${url}`;
@@ -411,46 +427,32 @@ export function useChat(baseUrl: string = "") {
       message_count: messagesRef.current.length,
     });
     return shareUrl;
-  }, [baseUrl, authHeaders]);
+  }, [api]);
 
   const listShares = useCallback(async () => {
-    const headers = await authHeaders();
-    const res = await fetch(`${baseUrl}/share`, { headers });
-    if (!res.ok) return [];
-    return res.json();
-  }, [baseUrl, authHeaders]);
+    try { return await (await api("/share")).json(); } catch { return []; }
+  }, [api]);
 
   const deleteShare = useCallback(async (token: string) => {
-    const headers = await authHeaders();
-    const res = await fetch(`${baseUrl}/share/${token}`, { method: "DELETE", headers });
-    if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+    await api(`/share/${token}`, { method: "DELETE" });
     track("share_deleted", { token });
-  }, [baseUrl, authHeaders]);
+  }, [api]);
 
   const forkShare = useCallback(async (userToken: string) => {
-    const headers = await authHeaders();
-    const res = await fetch(`${baseUrl}/share/${userToken}/fork`, { method: "POST", headers });
-    if (!res.ok) throw new Error(`Fork failed: ${res.status}`);
-    const { id } = await res.json();
+    const { id } = await (await api(`/share/${userToken}/fork`, { method: "POST" })).json();
     track("share_forked", { source: userToken, new_chat_id: id });
     return id as string;
-  }, [baseUrl, authHeaders]);
+  }, [api]);
 
   const listChats = useCallback(async () => {
-    const headers = await authHeaders();
-    const res = await fetch(`${baseUrl}/chats`, { headers });
-    if (!res.ok) return [];
-    return res.json();
-  }, [baseUrl, authHeaders]);
+    try { return await (await api("/chats")).json(); } catch { return []; }
+  }, [api]);
 
   const loadChat = useCallback(async (id: string) => {
     abortRef.current?.abort();
     setChatLoading(true);
     try {
-      const headers = await authHeaders();
-      const res = await fetch(`${baseUrl}/chats/${id}`, { headers });
-      if (!res.ok) throw new Error(`Load failed: ${res.status}`);
-      const chat = await res.json();
+      const chat = await (await api(`/chats/${id}`)).json();
       const loaded: Message[] = chat.messages || [];
 
       setMessages(loaded);
@@ -460,10 +462,7 @@ export function useChat(baseUrl: string = "") {
       u.searchParams.set("id", id);
       window.history.replaceState({}, "", u.toString());
 
-      track("chat_loaded", {
-        chat_id: id,
-        message_count: loaded.length,
-      });
+      track("chat_loaded", { chat_id: id, message_count: loaded.length });
 
       // Auth on /files/{path} is header-only by design (no ?token= URL
       // fallback — JWTs in URLs leak through history/logs/Referer). So
@@ -471,28 +470,21 @@ export function useChat(baseUrl: string = "") {
       // bearer header and turn it into a blob URL the browser can render.
       const refs = loaded.flatMap((m) => (m.attachments || []).filter((a) => a.path));
       if (refs.length) {
-        await Promise.all(
-          refs.map(async (att) => {
-            try {
-              const r = await fetch(`${baseUrl}/files/${att.path}`, { headers });
-              if (r.ok) att.url = URL.createObjectURL(await r.blob());
-              else console.warn(`attachment fetch ${r.status}: ${att.path}`);
-            } catch (e) { console.warn(`attachment fetch failed: ${att.path}`, e); }
-          }),
-        );
+        await Promise.all(refs.map(async (att) => {
+          try {
+            att.url = URL.createObjectURL(await (await api(`/files/${att.path}`)).blob());
+          } catch (e) { console.warn(`attachment fetch failed: ${att.path}`, e); }
+        }));
         setMessages([...loaded]);
       }
     } finally {
       setChatLoading(false);
     }
-  }, [baseUrl, authHeaders]);
+  }, [api]);
 
   const deleteChat = useCallback(async (id: string) => {
-    const headers = await authHeaders();
-    const res = await fetch(`${baseUrl}/chats/${id}`, { method: "DELETE", headers });
-    if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+    await api(`/chats/${id}`, { method: "DELETE" });
     track("chat_deleted", { chat_id: id });
-    // If we deleted the current chat, clear it
     if (chatIdRef.current === id) {
       abortRef.current?.abort();
       setMessages([]);
@@ -502,7 +494,7 @@ export function useChat(baseUrl: string = "") {
       u.searchParams.delete("id");
       window.history.replaceState({}, "", u.toString());
     }
-  }, [baseUrl, authHeaders]);
+  }, [api]);
 
   return {
     messages,
