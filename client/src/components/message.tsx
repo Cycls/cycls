@@ -8,6 +8,7 @@ import { TablePart } from "./parts/table-part";
 import { CalloutPart } from "./parts/callout-part";
 import { ImagePart } from "./parts/image-part";
 import { StepPart } from "./parts/step-part";
+import { AttachmentBody } from "./attachment-body";
 import { cn } from "../lib/utils";
 
 function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: () => void) {
@@ -109,25 +110,7 @@ export function MessageBubble({
                   rel="noopener noreferrer"
                   className="border border-border bg-background hover:bg-secondary/50 flex items-center gap-3 rounded-2xl p-2 pr-3 transition-colors cursor-pointer"
                 >
-                  <div className="bg-secondary flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg">
-                    {att.type.startsWith("image/") ? (
-                      <img
-                        src={att.url}
-                        alt={att.name}
-                        className="size-full object-cover"
-                      />
-                    ) : (
-                      <span className="text-[10px] font-medium text-muted-foreground uppercase">
-                        {att.name.split(".").pop()}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex flex-col overflow-hidden min-w-0">
-                    <span className="truncate text-xs font-medium text-foreground max-w-[120px]">{att.name}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {(att.size / 1024).toFixed(1)} kB
-                    </span>
-                  </div>
+                  <AttachmentBody attachment={att} />
                 </a>
               ))}
             </div>
