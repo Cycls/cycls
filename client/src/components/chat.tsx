@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { createPortal } from "react-dom";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files } from "./files";
+import { Popover } from "./popover";
 import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import type { Message, Attachment, PassMetadata, UIHandler } from "../hooks/use-chat";
@@ -332,11 +332,8 @@ export function Chat({
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                       </svg>
                     </button>
-                    {shareOpen && createPortal(
-                      <>
-                        <div className="fixed inset-0 z-40" onClick={() => setShareOpen(false)} />
-                        <div className="fixed right-2 top-12 z-50 mt-2 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-background shadow-lg overflow-hidden">
-                          <div className="px-4 pt-4 pb-3">
+                    <Popover open={shareOpen} onClose={() => setShareOpen(false)} className="right-2 top-12 mt-2 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-background shadow-lg overflow-hidden">
+                      <div className="px-4 pt-4 pb-3">
                             <div className="flex items-center gap-2 mb-1">
                               <svg className="w-4 h-4 text-foreground shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
@@ -428,32 +425,29 @@ export function Chat({
                             )}
                           </div>
 
-                          {onListShares && (
-                            <div className="border-t border-border">
-                              <button
-                                onClick={() => {
-                                  setShareOpen(false);
-                                  setFilesTab("shares");
-                                  setFilesOpen(true);
-                                  setSharesLoading(true);
-                                  onListShares().then((items) => {
-                                    setShares(items);
-                                    setSharesLoading(false);
-                                  }).catch(() => setSharesLoading(false));
-                                }}
-                                className="flex w-full items-center justify-between px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors cursor-pointer"
-                              >
-                                {t("manageShares")}
-                                <svg className="w-3.5 h-3.5 rtl:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                </svg>
-                              </button>
-                            </div>
-                          )}
+                      {onListShares && (
+                        <div className="border-t border-border">
+                          <button
+                            onClick={() => {
+                              setShareOpen(false);
+                              setFilesTab("shares");
+                              setFilesOpen(true);
+                              setSharesLoading(true);
+                              onListShares().then((items) => {
+                                setShares(items);
+                                setSharesLoading(false);
+                              }).catch(() => setSharesLoading(false));
+                            }}
+                            className="flex w-full items-center justify-between px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors cursor-pointer"
+                          >
+                            {t("manageShares")}
+                            <svg className="w-3.5 h-3.5 rtl:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                            </svg>
+                          </button>
                         </div>
-                      </>,
-                      document.body
-                    )}
+                      )}
+                    </Popover>
                   </div>
                 )}
               </>
@@ -511,52 +505,48 @@ export function Chat({
       </header>
 
       {/* Explore agents dropdown */}
-      {exploreOpen && createPortal(
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setExploreOpen(false)} />
-          <div className="fixed left-4 sm:left-6 top-12 z-50 mt-1 w-72 rounded-lg border border-border bg-background shadow-lg overflow-hidden" dir={isAr ? "rtl" : "ltr"}>
-            <div className="px-3 py-2 border-b border-border">
-              <p className="text-xs font-medium text-muted-foreground">{t("explore")}</p>
-            </div>
-            {exploreLoading ? (
-              <div className="flex items-center justify-center py-6">
-                <div className="size-4 border-2 border-muted-foreground/30 border-t-foreground rounded-full animate-spin" />
-              </div>
-            ) : (
-              <div className="max-h-80 overflow-y-auto py-1">
-                {exploreAgents.map((agent) => {
-                  const agentTitle = (isAr && agent.title_ar) || agent.title;
-                  const agentDesc = (isAr && agent.description_ar) || agent.description;
-                  const href = agent.link.startsWith("http") ? agent.link : `https://${agent.link}`;
-                  return (
-                    <a
-                      key={agent.slug}
-                      href={href}
-                      onClick={() => track("explore_agent_clicked", {
-                        agent_slug: agent.slug,
-                        agent_title: agent.title,
-                        agent_link: href,
-                      })}
-                      className="flex items-start gap-3 px-3 py-2.5 text-sm hover:bg-secondary/80 transition-colors cursor-pointer"
-                    >
-                      {agent.icon_svg ? (
-                        <div className="size-8 shrink-0 rounded-md overflow-hidden" dangerouslySetInnerHTML={{ __html: agent.icon_svg }} />
-                      ) : (
-                        <div className="size-8 shrink-0 rounded-md bg-secondary" />
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium text-foreground truncate">{agentTitle}</p>
-                        <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{agentDesc}</p>
-                      </div>
-                    </a>
-                  );
-                })}
-              </div>
-            )}
+      <Popover open={exploreOpen} onClose={() => setExploreOpen(false)} className="left-4 sm:left-6 top-12 mt-1 w-72 rounded-lg border border-border bg-background shadow-lg overflow-hidden">
+        <div dir={isAr ? "rtl" : "ltr"}>
+          <div className="px-3 py-2 border-b border-border">
+            <p className="text-xs font-medium text-muted-foreground">{t("explore")}</p>
           </div>
-        </>,
-        document.body
-      )}
+          {exploreLoading ? (
+            <div className="flex items-center justify-center py-6">
+              <div className="size-4 border-2 border-muted-foreground/30 border-t-foreground rounded-full animate-spin" />
+            </div>
+          ) : (
+            <div className="max-h-80 overflow-y-auto py-1">
+              {exploreAgents.map((agent) => {
+                const agentTitle = (isAr && agent.title_ar) || agent.title;
+                const agentDesc = (isAr && agent.description_ar) || agent.description;
+                const href = agent.link.startsWith("http") ? agent.link : `https://${agent.link}`;
+                return (
+                  <a
+                    key={agent.slug}
+                    href={href}
+                    onClick={() => track("explore_agent_clicked", {
+                      agent_slug: agent.slug,
+                      agent_title: agent.title,
+                      agent_link: href,
+                    })}
+                    className="flex items-start gap-3 px-3 py-2.5 text-sm hover:bg-secondary/80 transition-colors cursor-pointer"
+                  >
+                    {agent.icon_svg ? (
+                      <div className="size-8 shrink-0 rounded-md overflow-hidden" dangerouslySetInnerHTML={{ __html: agent.icon_svg }} />
+                    ) : (
+                      <div className="size-8 shrink-0 rounded-md bg-secondary" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-foreground truncate">{agentTitle}</p>
+                      <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{agentDesc}</p>
+                    </div>
+                  </a>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </Popover>
 
       {/* Spacer for fixed header */}
       <div className="shrink-0 h-12" />
@@ -787,46 +777,42 @@ export function Chat({
           </>
         )}
       </AnimatePresence>
-      {pricingFor && createPortal(
-        <>
-          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => closePricing("backdrop")} />
-          <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none" dir="ltr">
-            <div className="pointer-events-auto fixed top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] flex flex-col rounded-xl border border-border bg-background shadow-xl sm:relative sm:inset-auto sm:w-auto sm:max-h-[90vh] sm:rounded-2xl">
-              <div className="flex items-center justify-between px-6 pt-5 pb-3">
-                <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
-                  {pricingFor === "organization" ? (
-                    activeOrg ? (
-                      <>
-                        <span>{t("orgPlansFor")}</span>
-                        <span className="inline-flex items-center gap-1.5 text-sm font-medium bg-secondary text-foreground rounded-lg px-2.5 py-1">
-                          {activeOrg.imageUrl && (
-                            <div
-                              className="size-4 rounded-full bg-secondary shrink-0"
-                              style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }}
-                            />
-                          )}
-                          {activeOrg.name}
-                        </span>
-                      </>
-                    ) : t("orgPlans")
-                  ) : t("personalPlans")}
-                </h2>
-                <button
-                  onClick={() => closePricing("dismiss")}
-                  className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-              <div className="px-6 pb-5 overflow-y-auto">
-                <PricingCards payerType={pricingFor} onSelect={() => closePricing("select")} />
-              </div>
+      {pricingFor && (
+        <Popover open onClose={() => closePricing("backdrop")} dim className="inset-0 flex items-center justify-center pointer-events-none">
+          <div dir="ltr" className="pointer-events-auto fixed top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] flex flex-col rounded-xl border border-border bg-background shadow-xl sm:relative sm:inset-auto sm:w-auto sm:max-h-[90vh] sm:rounded-2xl">
+            <div className="flex items-center justify-between px-6 pt-5 pb-3">
+              <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
+                {pricingFor === "organization" ? (
+                  activeOrg ? (
+                    <>
+                      <span>{t("orgPlansFor")}</span>
+                      <span className="inline-flex items-center gap-1.5 text-sm font-medium bg-secondary text-foreground rounded-lg px-2.5 py-1">
+                        {activeOrg.imageUrl && (
+                          <div
+                            className="size-4 rounded-full bg-secondary shrink-0"
+                            style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }}
+                          />
+                        )}
+                        {activeOrg.name}
+                      </span>
+                    </>
+                  ) : t("orgPlans")
+                ) : t("personalPlans")}
+              </h2>
+              <button
+                onClick={() => closePricing("dismiss")}
+                className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="px-6 pb-5 overflow-y-auto">
+              <PricingCards payerType={pricingFor} onSelect={() => closePricing("select")} />
             </div>
           </div>
-        </>,
-        document.body
+        </Popover>
       )}
     </div>
   );
