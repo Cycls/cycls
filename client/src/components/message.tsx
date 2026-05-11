@@ -9,6 +9,7 @@ import { CalloutPart } from "./parts/callout-part";
 import { ImagePart } from "./parts/image-part";
 import { StepPart } from "./parts/step-part";
 import { AttachmentBody } from "./attachment-body";
+import { Icon } from "./icon";
 import { cn } from "../lib/utils";
 
 function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: () => void) {
@@ -164,35 +165,7 @@ export function MessageBubble({
               aria-label="Copy"
               type="button"
             >
-              {copied ? (
-                <svg
-                  className="w-3.5 h-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M5 13l4 4L19 7"
-                  />
-                </svg>
-              ) : (
-                <svg
-                  className="w-3.5 h-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                  />
-                </svg>
-              )}
+              <Icon name={copied ? "check" : "copy"} className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
