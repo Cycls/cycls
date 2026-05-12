@@ -19,9 +19,8 @@ pays its client warmup at process start.
 """
 import json
 
-from .events import TextDelta, Thinking, Step, Heartbeat, Turn
-
-_HEARTBEAT_EVERY = 10  # input_json_delta events between heartbeats — keeps SSE/UDP flows warm
+from .events import TextDelta, Thinking, Step, ToolStart, ToolArgs, Turn
+from ..tools import tool_step
 
 _CONTEXT_WINDOWS = {
     "claude-sonnet-4-6": 1_000_000,
@@ -68,7 +67,7 @@ class AnthropicProvider:
             kwargs["extra_body"] = {"mcp_servers": [s._spec() for s in mcp_servers]}
             kwargs["extra_headers"] = {"anthropic-beta": "mcp-client-2025-04-04"}
 
-        search_idx, search_buf, deltas = None, "", 0
+        tool_idx, search_idx, search_buf = {}, None, ""  # content-block index → tool_use id; the web_search block
         async with self._client.messages.stream(**kwargs) as stream:
             async for ev in stream:
                 if ev.type == "content_block_start":
@@ -79,6 +78,11 @@ class AnthropicProvider:
                         # Anthropic ran this server-side; surface it as a step.
                         server = getattr(cb, "server_name", None) or "mcp"
                         yield Step("", tool=f"{server} · {cb.name}")
+                    elif cb.type == "tool_use":
+                        # The model has committed to a tool call — tell the UI now,
+                        # before the (maybe huge) arguments stream in.
+                        tool_idx[ev.index] = cb.id
+                        yield ToolStart(cb.id, tool_step(cb.name, {})["tool_name"])
                 elif ev.type == "content_block_delta":
                     d = ev.delta
                     if d.type == "thinking_delta":
@@ -88,9 +92,8 @@ class AnthropicProvider:
                     elif d.type == "input_json_delta":
                         if ev.index == search_idx:
                             search_buf += d.partial_json
-                        deltas += 1
-                        if deltas % _HEARTBEAT_EVERY == 0:
-                            yield Heartbeat()
+                        elif ev.index in tool_idx:
+                            yield ToolArgs(tool_idx[ev.index], d.partial_json)
                 elif ev.type == "content_block_stop" and ev.index == search_idx:
                     try:
                         q = json.loads(search_buf).get("query", "")

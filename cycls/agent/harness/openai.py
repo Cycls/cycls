@@ -8,8 +8,9 @@ Anthropic shape; the translators below convert it on the way in.
 """
 import json
 
-from .events import TextDelta, Thinking, Turn
+from .events import TextDelta, Thinking, ToolStart, ToolArgs, Turn
 from .providers import context_window
+from ..tools import tool_step
 
 
 def _to_messages(messages):
@@ -121,12 +122,21 @@ class OpenAIProvider:
             if (r := getattr(d, "reasoning", None) or getattr(d, "reasoning_content", None)):
                 yield Thinking(r)
             for tc in (d.tool_calls or []):
-                slot = calls.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+                slot = calls.setdefault(tc.index, {"id": "", "name": "", "args": "", "started": False})
                 if tc.id:
                     slot["id"] = tc.id
+                arg_chunk = ""
                 if tc.function:
                     slot["name"] += tc.function.name or ""
-                    slot["args"] += tc.function.arguments or ""
+                    arg_chunk = tc.function.arguments or ""
+                    slot["args"] += arg_chunk
+                if not slot["started"] and slot["id"] and slot["name"]:
+                    slot["started"] = True
+                    yield ToolStart(slot["id"], tool_step(slot["name"], {})["tool_name"])
+                    if slot["args"]:
+                        yield ToolArgs(slot["id"], slot["args"])
+                elif slot["started"] and arg_chunk:
+                    yield ToolArgs(slot["id"], arg_chunk)
             if ch.finish_reason:
                 stop = "tool_use" if ch.finish_reason == "tool_calls" else "end_turn"
 
