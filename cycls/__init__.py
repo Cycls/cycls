@@ -7,7 +7,7 @@ except ImportError:
 from .function import function, Function, Image
 from .app import app, App, Clerk, GCP, JWT, User, Sandbox, SandboxResult, DB, Workspace
 from .agent.web import Web
-from .agent import LLM, agent, Agent
+from .agent import LLM, MCP, agent, Agent
 
 # Module-level config
 api_key = None

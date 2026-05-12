@@ -117,3 +117,30 @@ def test_llm_sandbox_network_kwarg_only():
     """`network` is keyword-only — prevents accidental positional misuse."""
     with pytest.raises(TypeError):
         cycls.LLM().sandbox(True)
+
+
+# ---- cycls.MCP ----
+
+def test_mcp_builder_immutable_and_fluent():
+    base = cycls.MCP("https://example.com/mcp")
+    named = base.name("github").token("ghp_x").allow("create_issue", "list_issues")
+    assert (base._name, base._token, base._allow) == (None, None, None)  # original untouched
+    assert named._url == "https://example.com/mcp"
+    assert named._name == "github"
+    assert named._token == "ghp_x"
+    assert named._allow == ["create_issue", "list_issues"]
+
+
+def test_mcp_spec_shape():
+    assert cycls.MCP("https://x/mcp")._spec() == {"type": "url", "url": "https://x/mcp", "name": "mcp"}
+    assert cycls.MCP("https://x/mcp").name("gh").token("t").allow("a")._spec() == {
+        "type": "url", "url": "https://x/mcp", "name": "gh",
+        "authorization_token": "t", "tool_configuration": {"allowed_tools": ["a"]},
+    }
+
+
+def test_llm_mcp_accumulates():
+    a, b = cycls.MCP("https://a/mcp"), cycls.MCP("https://b/mcp")
+    assert cycls.LLM().mcp(a).mcp(b)._mcp == [a, b]
+    assert cycls.LLM().mcp(a, b)._mcp == [a, b]
+    assert cycls.LLM()._mcp == []  # original untouched
