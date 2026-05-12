@@ -22,7 +22,8 @@ def _clear_client_cache():
     _harness_main._clients.clear()
     yield
     _harness_main._clients.clear()
-from cycls.agent.harness.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact, context_window
+from cycls.agent.harness.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact
+from cycls.agent.harness.providers import context_window
 from cycls.agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path, dispatch
 from cycls.agent.chat import load_messages
 from cycls.app.workspace import workspace_at
