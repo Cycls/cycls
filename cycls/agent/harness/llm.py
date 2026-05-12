@@ -4,6 +4,12 @@ Holds all settings that define how an agent runs: model, system prompt, tools,
 allowed builtins, token limits, provider credentials, runtime knobs. Call
 `.run(context=...)` to execute the loop — `context` is the only runtime input.
 
+`.run` yields typed `Event`s (see `cycls.agent.harness.events`): the agent body
+`to_ui`s them through, or pattern-matches first to hook the loop. `.loop(fn)`
+swaps in a different loop entirely (the building blocks — `make_provider`,
+`Session`, `build_tools`, `dispatch`, `compact`, `events` — live in
+`cycls.agent.harness`).
+
 Everything else lives on the builder. State is where you built it, not where
 you invoked it.
 """
@@ -23,6 +29,7 @@ class LLM:
         self._api_key = None
         self._handlers = {}
         self._mcp = []
+        self._loop = None
 
     def _copy(self, **updates):
         new = LLM.__new__(LLM)
@@ -55,10 +62,19 @@ class LLM:
         run server-side via the Anthropic MCP connector — anthropic/* only."""
         return self._copy(_mcp=[*self._mcp, *servers])
 
+    def loop(self, fn):
+        """Run a custom loop instead of the built-in one. `fn` is an async
+        generator with the default loop's signature (context, system, tools,
+        allowed_tools, model, max_tokens, ..., handlers, mcp_servers) that
+        yields `Event`s. Building blocks live in `cycls.agent.harness`:
+        `default_loop`, `make_provider`, `Session`, `build_tools`, `dispatch`,
+        `compact`, `events`."""
+        return self._copy(_loop=fn)
+
     # ---- Execution ----
 
     async def run(self, *, context, client=None):
-        """Run the agent loop with this LLM's configuration.
+        """Run the agent loop with this LLM's configuration, yielding `Event`s.
 
         `context` is the per-invocation input (messages, user, session).
         `client` is a test-only seam for injecting a mocked provider.
@@ -66,7 +82,8 @@ class LLM:
         if self._model is None:
             raise ValueError("LLM.model(...) is required before .run()")
         from .main import _run
-        async for msg in _run(
+        loop = self._loop or _run
+        async for ev in loop(
             context=context,
             system=self._system,
             tools=self._tools,
@@ -82,4 +99,4 @@ class LLM:
             handlers=self._handlers,
             mcp_servers=self._mcp,
         ):
-            yield msg
+            yield ev

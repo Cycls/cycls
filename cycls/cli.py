@@ -145,8 +145,8 @@ llm = (
 
 @cycls.agent(image=image, web=web)
 async def {name}(context):
-    async for msg in llm.run(context=context):
-        yield msg
+    async for ev in llm.run(context=context):
+        yield cycls.to_ui(ev)
 '''
 
 

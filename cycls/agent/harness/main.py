@@ -3,8 +3,9 @@
 The loop owns one decision: alternate model turns and tool execution until the
 model stops. Everything else is a collaborator — `make_provider` (the wire),
 `Session` (the message log + its persistence), `compact` (context budget),
-`dispatch`/`build_tools` (the tools), `to_ui` (the FE projection). The loop just
-drives them.
+`dispatch`/`build_tools` (the tools). It yields typed `Event`s (see
+`harness.events`); `LLM.run` is what its caller consumes, and the agent body
+`to_ui`s them through (or pattern-matches first to hook the loop).
 """
 import asyncio, json, random, time
 from pathlib import Path
@@ -13,7 +14,7 @@ from .compact import COMPACT_BUFFER, KEEP_RECENT, compact
 from .prompts import DEFAULT_SYSTEM
 from .providers import make_provider
 from .events import (Turn, Usage, Retrying, Compacting, CompactionFailed,
-                     OutputLimitHit, StoppedUnexpectedly, TimedOut, Failed, to_ui)
+                     OutputLimitHit, StoppedUnexpectedly, TimedOut, Failed, Raw)
 from ..tools import build_tools, dispatch, _exec_read
 
 
@@ -129,18 +130,18 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     while True:
         try:
             if tokens_since_compact > window - COMPACT_BUFFER and len(messages) > KEEP_RECENT:
-                yield to_ui(Compacting())
+                yield Compacting()
                 try:
                     await session.rewrite(await compact(provider.complete, messages))
                     tokens_since_compact = 0
                 except Exception as ce:
-                    yield to_ui(CompactionFailed(str(ce)))
+                    yield CompactionFailed(str(ce))
 
             turn = None
             async for ev in _stream_with_retry(provider, messages=messages, system=system_text,
                                                tools=tools_list, max_tokens=max_tokens, mcp_servers=mcp_servers):
                 if isinstance(ev, Turn): turn = ev
-                else: yield to_ui(ev)
+                else: yield ev
 
             usage[0] += turn.input; usage[1] += turn.output; usage[2] += turn.cached; usage[3] += turn.cache_create
             tokens_since_compact = turn.input + turn.cached + turn.cache_create
@@ -153,27 +154,27 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 messages.append({"role": "user", "content": (
                     [{"type": "tool_result", "tool_use_id": i, "content": msg, "is_error": True} for i in ids]
                     if ids else msg)})
-                yield to_ui(OutputLimitHit(recovery, 3))
+                yield OutputLimitHit(recovery, 3)
                 continue
             if turn.stop_reason not in ("tool_use", "end_turn"):
-                yield to_ui(StoppedUnexpectedly(turn.stop_reason))
+                yield StoppedUnexpectedly(turn.stop_reason)
             if turn.stop_reason != "tool_use":
                 await session.checkpoint(); break
 
             blocks = [b for b in turn.content if isinstance(b, dict) and b.get("type") == "tool_use"]
             pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network) for b in blocks]
-            for step, _ in pairs: yield step
+            for step, _ in pairs: yield Raw(step)
             outputs = await asyncio.gather(*(c for _, c in pairs), return_exceptions=True)
 
             results = []
             for block, out in zip(blocks, outputs):
                 if isinstance(out, BaseException): out = f"Error: {out}"
                 if isinstance(out, str) and "timed out" in out:
-                    yield to_ui(TimedOut(out))
+                    yield TimedOut(out)
                 # Custom-handler results flow through the stream for the body to see
                 # (UI rendering) AND serialize into tool_result for the model (data).
                 if handlers and block["name"] in handlers and not isinstance(out, BaseException):
-                    yield out
+                    yield Raw(out)
                     content = out if isinstance(out, str) else json.dumps(out, default=str)
                 else:
                     content = out
@@ -188,10 +189,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             # on; otherwise surface the error and stop.
             if not _recover(e, messages):
                 session.rollback()
-                yield to_ui(Failed(str(e))); break
+                yield Failed(str(e)); break
             await session.checkpoint(); continue
 
     if show_usage and usage[0]:
         p = next((v for k, v in _PRICING.items() if k in bare_model), None)
         cost = (usage[0]*p[0] + usage[1]*p[1] + usage[2]*p[2] + usage[3]*p[3]) / 1_000_000 if p else None
-        yield to_ui(Usage(usage[0], usage[1], usage[2], usage[3], cost, time.monotonic() - t0))
+        yield Usage(usage[0], usage[1], usage[2], usage[3], cost, time.monotonic() - t0)

@@ -24,7 +24,8 @@ def _clear_client_cache():
     _providers._clients.clear()
 from cycls.agent.harness.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact
 from cycls.agent.harness.providers import context_window
-from cycls.agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path, dispatch
+from cycls.agent.harness.events import to_ui
+from cycls.agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path
 from cycls.agent.sessions import load_messages
 from cycls.app.workspace import workspace_at
 
@@ -106,10 +107,9 @@ class FakeStream:
 
 
 async def _drain(gen):
-    items = []
-    async for item in gen:
-        items.append(item)
-    return items
+    """Drain the loop's typed events into the FE-shaped dicts/strings the
+    agent body would yield — `_run` emits Events, the body to_ui's them."""
+    return [to_ui(ev) async for ev in gen]
 
 
 def _mock_anthropic(client):
