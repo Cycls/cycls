@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import type { FileEntry } from "../hooks/use-files";
 import { t, useLang } from "../lib/i18n";
 import { LoadingBar } from "./loading-bar";
 import { Icon, Spinner } from "./icon";
+import type { FilesPanelProps } from "./chat";
 
 const FolderIcon = ({ className = "size-5" }: { className?: string }) =>
   <Icon name="folder" className={className} strokeWidth={1.5} />;
@@ -98,34 +98,12 @@ function InlineInput({ initial, onSubmit, onCancel }: {
   );
 }
 
-export function Files({
-  entries,
-  path,
-  loading,
-  onNavigate,
-  onUpload,
-  onMkdir,
-  onRename,
-  onDelete,
-  onOpenFile,
-  onShareFile,
-}: {
-  entries: FileEntry[];
-  path: string;
-  loading: boolean;
-  onNavigate: (dir: string) => void;
-  onUpload: (dir: string, file: File) => Promise<void>;
-  onMkdir: (dir: string, name: string) => Promise<void>;
-  onRename: (from: string, to: string) => Promise<void>;
-  onDelete: (path: string) => Promise<void>;
-  onOpenFile: (path: string) => Promise<string>;
-  onShareFile?: (path: string) => Promise<string>;
-}) {
+export function Files({ entries, path, loading, onNavigate, onUpload, onMkdir, onRename, onDelete, onOpenFile, onShareFile, org }: FilesPanelProps) {
   useLang();
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [creatingFolder, setCreatingFolder] = useState(false);
-  const [shareToast, setShareToast] = useState<string | null>(null);
+  const [shareToast, setShareToast] = useState<{ name: string; failed?: boolean } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState<string[]>([]);
   const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
@@ -168,6 +146,17 @@ export function Files({
     setDragging(false);
     if (e.dataTransfer.files.length) handleUpload(e.dataTransfer.files);
   }, [handleUpload]);
+
+  const shareEntry = useCallback(async (entryPath: string, name: string, audience: string) => {
+    if (!onShareFile) return;
+    try {
+      await navigator.clipboard.writeText(await onShareFile(entryPath, audience));
+      setShareToast({ name });
+    } catch {
+      setShareToast({ name, failed: true });
+    }
+    setTimeout(() => setShareToast(null), 2500);
+  }, [onShareFile]);
 
   const sorted = [...entries].sort((a, b) => {
     if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
@@ -382,15 +371,10 @@ export function Files({
                               });
                             },
                           }] : []),
-                          ...(!isDir && onShareFile ? [{
-                            label: t("share"),
-                            onClick: async () => {
-                              const url = await onShareFile(entryPath);
-                              await navigator.clipboard.writeText(url);
-                              setShareToast(entry.name);
-                              setTimeout(() => setShareToast(null), 2500);
-                            },
-                          }] : []),
+                          ...(!isDir && onShareFile ? [
+                            { label: t("share"), onClick: () => shareEntry(entryPath, entry.name, "public") },
+                            ...(org ? [{ label: t("shareWithOrg").replace("{org}", org.name), onClick: () => shareEntry(entryPath, entry.name, `org:${org.id}`) }] : []),
+                          ] : []),
                           {
                             label: t("rename"),
                             onClick: () => setRenaming(entry.name),
@@ -432,8 +416,9 @@ export function Files({
               exit={{ opacity: 0, y: 10 }}
               className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 rounded-lg border border-border bg-background shadow-lg px-3 py-2 flex items-center gap-2"
             >
-              <Icon name="check" className="w-3.5 h-3.5 text-foreground" />
-              <span className="text-xs text-foreground">{t("linkCopied")} <span className="text-muted-foreground">· {shareToast}</span></span>
+              {shareToast.failed
+                ? <span className="text-xs text-foreground">{t("shareFailed")} <span className="text-muted-foreground">· {shareToast.name}</span></span>
+                : <><Icon name="check" className="w-3.5 h-3.5 text-foreground" /><span className="text-xs text-foreground">{t("linkCopied")} <span className="text-muted-foreground">· {shareToast.name}</span></span></>}
             </motion.div>
           )}
         </AnimatePresence>,

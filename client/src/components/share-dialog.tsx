@@ -17,6 +17,7 @@ export function ShareDialog({ onClose, defaultTitle, org, onShare, onManageShare
   const [url, setUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   return (
     <Popover open onClose={onClose} className="right-2 top-12 mt-2 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-background shadow-lg overflow-hidden">
@@ -71,16 +72,19 @@ export function ShareDialog({ onClose, defaultTitle, org, onShare, onManageShare
             </button>
           </div>
         ) : (
-          <button
-            onClick={() => {
-              setLoading(true);
-              setCopied(false);
-              onShare(title, audience).then((u) => { setUrl(u); setLoading(false); }).catch(() => setLoading(false));
-            }}
-            className="w-full rounded-md border border-border bg-secondary hover:bg-secondary/80 text-foreground py-2 text-xs font-medium transition-colors cursor-pointer"
-          >
-            {t("createLink")}
-          </button>
+          <>
+            <button
+              onClick={() => {
+                setLoading(true);
+                setFailed(false);
+                onShare(title, audience).then((u) => { setUrl(u); setLoading(false); }).catch(() => { setFailed(true); setLoading(false); });
+              }}
+              className="w-full rounded-md border border-border bg-secondary hover:bg-secondary/80 text-foreground py-2 text-xs font-medium transition-colors cursor-pointer"
+            >
+              {t("createLink")}
+            </button>
+            {failed && <p className="mt-2 text-center text-[11px] text-red-500">{t("shareFailed")}</p>}
+          </>
         )}
       </div>
 

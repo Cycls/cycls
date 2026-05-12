@@ -390,6 +390,12 @@ export function useChat(baseUrl: string = "") {
     window.history.replaceState({}, "", u.toString());
   }, []);
 
+  // Replace the conversation with a single system message — used to show fork
+  // progress / errors on a fresh page load (the chat is empty at that point).
+  const notify = useCallback((part: Part) => {
+    setMessages([{ role: "assistant", content: "", parts: [part] }]);
+  }, []);
+
   const share = useCallback(async (title: string = "", audience: string = "public", author?: { name: string; imageUrl?: string; org?: { name: string; imageUrl?: string } }) => {
     const chatId = chatIdRef.current;
     if (!chatId) throw new Error("No chat to share");
@@ -487,6 +493,7 @@ export function useChat(baseUrl: string = "") {
     retry,
     stop,
     clear,
+    notify,
     share,
     listShares,
     deleteShare,

@@ -193,7 +193,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             raise HTTPException(404, "Chat not found")
         token, row = await shares.mint(ws, path,
                                        audience=data.get("audience", "public"),
-                                       ttl=int(data.get("ttl") or shares.DEFAULT_TTL),
+                                       ttl=data.get("ttl"),
                                        author=data.get("author"))
         return {"token": token, "url": f"/shared/{ws.subject}/{token}", **row}
 
@@ -209,7 +209,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             else:
                 title = path[5:]  # file path as the display name
             out.append({"token": token, "url": f"/shared/{ws.subject}/{token}", "title": title, **row})
-        out.sort(key=lambda s: s["exp"], reverse=True)
+        out.sort(key=lambda s: s["shared_at"], reverse=True)
         return out
 
     @r.delete("/share/{token}")

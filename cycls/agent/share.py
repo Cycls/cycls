@@ -5,17 +5,18 @@ from datetime import datetime, timezone
 
 from cycls.app.workspace import DB
 
-DEFAULT_TTL = 7 * 24 * 3600
 
-
-async def mint(workspace, path, audience="public", ttl=DEFAULT_TTL, author=None):
+async def mint(workspace, path, audience="public", ttl=None, author=None):
+    """ttl in seconds; None (the default) = the share never expires — revoke
+    explicitly via `revoke()`. Pass an int for a short-lived link."""
     token = secrets.token_urlsafe(16)
     row = {
         "path": path,
         "audience": audience,
-        "exp": int(time.time()) + ttl,
         "shared_at": datetime.now(timezone.utc).isoformat(),
     }
+    if ttl is not None:
+        row["exp"] = int(time.time()) + int(ttl)
     if author is not None:
         row["author"] = author
     # Durable: a lost share token = silent UX failure (link 404s forever).
@@ -25,7 +26,7 @@ async def mint(workspace, path, audience="public", ttl=DEFAULT_TTL, author=None)
 
 async def resolve(workspace, token, requester=None):
     row = await DB(workspace).get(f"share/{token}")
-    if not row or row["exp"] < time.time():
+    if not row or ("exp" in row and row["exp"] < time.time()):
         return None
     aud = row.get("audience", "public")
     if aud == "public":

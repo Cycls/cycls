@@ -65,9 +65,9 @@ export function useFiles(baseUrl: string = "") {
     return URL.createObjectURL(await (await api(`/files/${filePath}`)).blob());
   }, [api]);
 
-  const shareFile = useCallback(async (filePath: string) => {
-    const { url } = await (await api("/share", { method: "POST", json: { path: `file/${filePath}` } })).json();
-    track("file_shared", { path: filePath });
+  const shareFile = useCallback(async (filePath: string, audience: string = "public") => {
+    const { url } = await (await api("/share", { method: "POST", json: { path: `file/${filePath}`, audience } })).json();
+    track("file_shared", { path: filePath, audience });
     return `${window.location.origin}${url}`;
   }, [api]);
 

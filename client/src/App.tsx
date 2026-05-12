@@ -27,7 +27,7 @@ import { useUrlParam } from "./hooks/use-url-param";
 import { usePostHogIdentify } from "./hooks/use-posthog-identify";
 import { initPostHog, setAgentDomain, track, register } from "./lib/posthog";
 
-function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean): FilesPanelProps {
+function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org?: { id: string; name: string } | null): FilesPanelProps {
   return {
     entries: f.entries, path: f.path, loading: f.loading,
     onNavigate: f.list,
@@ -37,6 +37,7 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean): Fi
     onDelete: f.remove,
     onOpenFile: f.openFile,
     onShareFile: withShare ? f.shareFile : undefined,
+    org: org ?? null,
   };
 }
 
@@ -98,7 +99,10 @@ function ChatApp({ config }: { config: AppConfig | null }) {
     const forkFrom = params.get("fork");
     if (forkFrom) {
       stripParam("fork");
-      chat.forkShare(forkFrom).then(chat.loadChat).catch(() => {});
+      chat.notify({ type: "status", status: "Forking conversation…" });
+      chat.forkShare(forkFrom).then(chat.loadChat).catch(() =>
+        chat.notify({ type: "callout", callout: "Couldn't open this conversation — the share link may have been removed.", style: "error" }),
+      );
       return;
     }
     const id = params.get("id");
@@ -142,7 +146,7 @@ function ChatApp({ config }: { config: AppConfig | null }) {
     <Chat
       chat={chat}
       onShare={handleShare}
-      files={filesPanelProps(files, true)}
+      files={filesPanelProps(files, true, organization ? { id: organization.id, name: organization.name } : null)}
       account={account}
       config={config}
     />
@@ -156,7 +160,7 @@ function ChatNoAuth({ config }: { config: AppConfig | null }) {
   return <Chat chat={chat} files={filesPanelProps(files, false)} config={config} />;
 }
 
-const PERSIST_KEYS = ["q", "plans"] as const;
+const PERSIST_KEYS = ["q", "plans", "fork"] as const;
 const ssKey = (k: string) => `cycls_${k}`;
 
 function stashParams() {
