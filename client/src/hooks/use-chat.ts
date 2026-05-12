@@ -499,3 +499,5 @@ export function useChat(baseUrl: string = "") {
     setUIHandler,
   };
 }
+
+export type ChatApi = ReturnType<typeof useChat>;

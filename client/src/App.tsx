@@ -19,7 +19,7 @@ import { arSA } from "@clerk/localizations";
 import { useLang, setLang, t } from "./lib/i18n";
 import { toggleDark } from "./lib/utils";
 import { IconButton } from "./components/icon";
-import { Chat } from "./components/chat";
+import { Chat, type AccountInfo, type FilesPanelProps } from "./components/chat";
 import { SharedView } from "./components/shared-view";
 import { useChat, AppConfig } from "./hooks/use-chat";
 import { useFiles } from "./hooks/use-files";
@@ -27,11 +27,22 @@ import { useUrlParam } from "./hooks/use-url-param";
 import { usePostHogIdentify } from "./hooks/use-posthog-identify";
 import { initPostHog, setAgentDomain, track, register } from "./lib/posthog";
 
+function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean): FilesPanelProps {
+  return {
+    entries: f.entries, path: f.path, loading: f.loading,
+    onNavigate: f.list,
+    onUpload: f.upload,
+    onMkdir: f.mkdir,
+    onRename: f.rename,
+    onDelete: f.remove,
+    onOpenFile: f.openFile,
+    onShareFile: withShare ? f.shareFile : undefined,
+  };
+}
+
 function ChatApp({ config }: { config: AppConfig | null }) {
-  const { messages, isStreaming, chatLoading, chatId, send, retry, stop, clear, share, listShares, deleteShare, forkShare, listChats, loadChat, deleteChat, setGetToken, uploadFile, authHeaders, setUIHandler } =
-    useChat();
-  const { entries, path, loading, list, upload, mkdir, rename, remove, openFile, shareFile, setGetToken: setFilesToken } =
-    useFiles();
+  const chat = useChat();
+  const files = useFiles();
   const { getToken, signOut, isLoaded: authLoaded } = useAuth();
   const { user } = useUser();
   const clerk = useClerk();
@@ -65,11 +76,11 @@ function ChatApp({ config }: { config: AppConfig | null }) {
   );
 
   useEffect(() => {
-    setGetToken(() => getToken());
-    setFilesToken(() => getToken());
-  }, [getToken, setGetToken, setFilesToken]);
+    chat.setGetToken(() => getToken());
+    files.setGetToken(() => getToken());
+  }, [getToken, chat, files]);
 
-  useUrlParam("q", (q) => send(q, undefined, "url_param"));
+  useUrlParam("q", (q) => chat.send(q, undefined, "url_param"));
 
   // Restore ?id=<chat_id> on first load (once Clerk has settled). Also handle
   // ?fork=<user>/<token>: mint a deep-copy fork. Mutually exclusive with ?id=,
@@ -87,12 +98,12 @@ function ChatApp({ config }: { config: AppConfig | null }) {
     const forkFrom = params.get("fork");
     if (forkFrom) {
       stripParam("fork");
-      forkShare(forkFrom).then(loadChat).catch(() => {});
+      chat.forkShare(forkFrom).then(chat.loadChat).catch(() => {});
       return;
     }
     const id = params.get("id");
-    if (id) loadChat(id).catch(() => stripParam("id"));
-  }, [authLoaded, loadChat, forkShare]);
+    if (id) chat.loadChat(id).catch(() => stripParam("id"));
+  }, [authLoaded, chat]);
 
   const handleShare = async (title: string = "", audience: string = "public") => {
     const author = user ? {
@@ -100,102 +111,49 @@ function ChatApp({ config }: { config: AppConfig | null }) {
       imageUrl: user.imageUrl,
       org: organization ? { name: organization.name, imageUrl: organization.imageUrl } : undefined,
     } : undefined;
-    return await share(title, audience, author);
+    return await chat.share(title, audience, author);
   };
 
-  const orgs = (userMemberships?.data || []).map((m) => ({
-    id: m.organization.id,
-    name: m.organization.name,
-    imageUrl: m.organization.imageUrl,
-  }));
+  const account: AccountInfo = {
+    user: {
+      name: user?.fullName || user?.firstName || "",
+      email: user?.primaryEmailAddress?.emailAddress || "",
+      imageUrl: user?.imageUrl,
+    },
+    plan: subItem ? {
+      name: subItem.plan.name,
+      status: subItem.status,
+      periodEnd: subItem.periodEnd,
+      canceledAt: subItem.canceledAt,
+      amount: subItem.amount,
+      planPeriod: subItem.planPeriod,
+    } : undefined,
+    org: organization ? { id: organization.id, name: organization.name } : null,
+    activeOrg: organization ? { id: organization.id, name: organization.name, imageUrl: organization.imageUrl } : undefined,
+    orgs: (userMemberships?.data || []).map((m) => ({ id: m.organization.id, name: m.organization.name, imageUrl: m.organization.imageUrl })),
+    onSignOut: () => signOut(),
+    onManageAccount: () => clerk.openUserProfile(),
+    onCreateOrg: () => clerk.openCreateOrganization(),
+    onManageOrg: () => clerk.openOrganizationProfile(),
+    onSwitchOrg: (orgId: string | null) => { setActive?.({ organization: orgId || null }); chat.clear(); },
+  };
 
   return (
     <Chat
-      messages={messages}
-      isStreaming={isStreaming}
-      chatLoading={chatLoading}
-      onSend={send}
-      onStop={stop}
-      onClear={clear}
-      onRetry={retry}
+      chat={chat}
       onShare={handleShare}
-      org={organization ? { id: organization.id, name: organization.name } : null}
-      onListShares={listShares}
-      onDeleteShare={deleteShare}
-      onListChats={listChats}
-      onLoadChat={loadChat}
-      onDeleteChat={deleteChat}
-      chatId={chatId}
-      onSignOut={() => signOut()}
-      onManageAccount={() => clerk.openUserProfile()}
-      onCreateOrg={() => clerk.openCreateOrganization()}
-      onManageOrg={() => clerk.openOrganizationProfile()}
-      onSwitchOrg={(orgId) => { setActive?.({ organization: orgId || null }); clear(); }}
-      activeOrg={organization ? { id: organization.id, name: organization.name, imageUrl: organization.imageUrl } : undefined}
-      orgs={orgs}
-      plan={subscription?.subscriptionItems?.[0] ? {
-        name: subscription.subscriptionItems[0].plan.name,
-        status: subscription.subscriptionItems[0].status,
-        periodEnd: subscription.subscriptionItems[0].periodEnd,
-        canceledAt: subscription.subscriptionItems[0].canceledAt,
-        amount: subscription.subscriptionItems[0].amount,
-        planPeriod: subscription.subscriptionItems[0].planPeriod,
-      } : undefined}
-      name={config?.name}
-      passMetadata={config?.pass_metadata}
-      user={user ? {
-        name: user.fullName || user.firstName || "",
-        email: user.primaryEmailAddress?.emailAddress || "",
-        imageUrl: user.imageUrl,
-      } : undefined}
-      uploadFile={uploadFile}
-      authHeaders={authHeaders}
-      voice={config?.voice}
-      setUIHandler={setUIHandler}
-      files={{
-        entries, path, loading,
-        onNavigate: list,
-        onUpload: upload,
-        onMkdir: mkdir,
-        onRename: rename,
-        onDelete: remove,
-        onOpenFile: openFile,
-        onShareFile: shareFile,
-      }}
+      files={filesPanelProps(files, true)}
+      account={account}
+      config={config}
     />
   );
 }
 
 function ChatNoAuth({ config }: { config: AppConfig | null }) {
-  const { messages, isStreaming, send, retry, stop, clear, uploadFile } =
-    useChat();
-  const { entries, path, loading, list, upload, mkdir, rename, remove, openFile } =
-    useFiles();
-
-  useUrlParam("q", (q) => send(q, undefined, "url_param"));
-
-  return (
-    <Chat
-      messages={messages}
-      isStreaming={isStreaming}
-      onSend={send}
-      onStop={stop}
-      onClear={clear}
-      onRetry={retry}
-      name={config?.name}
-      passMetadata={config?.pass_metadata}
-      uploadFile={uploadFile}
-      files={{
-        entries, path, loading,
-        onNavigate: list,
-        onUpload: upload,
-        onMkdir: mkdir,
-        onRename: rename,
-        onDelete: remove,
-        onOpenFile: openFile,
-      }}
-    />
-  );
+  const chat = useChat();
+  const files = useFiles();
+  useUrlParam("q", (q) => chat.send(q, undefined, "url_param"));
+  return <Chat chat={chat} files={filesPanelProps(files, false)} config={config} />;
 }
 
 const PERSIST_KEYS = ["q", "plans"] as const;
