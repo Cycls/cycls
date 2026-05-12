@@ -11,7 +11,7 @@ import { InputBox } from "./input-box";
 import { ShareDialog } from "./share-dialog";
 import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
-import type { Message, Attachment, PassMetadata, UIHandler } from "../hooks/use-chat";
+import type { Attachment, ChatApi, AppConfig } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
 import { track } from "../lib/posthog";
@@ -30,82 +30,43 @@ interface PassAgent {
   icon_svg?: string;
 }
 
-export function Chat({
-  messages,
-  isStreaming,
-  onSend,
-  onStop,
-  onClear,
-  onRetry,
-  onShare,
-  org,
-  onListShares,
-  onDeleteShare,
-  onListChats,
-  onLoadChat,
-  onDeleteChat,
-  chatId,
-  chatLoading,
-  onSignOut,
-  onManageAccount,
-  onCreateOrg,
-  onManageOrg,
-  onSwitchOrg,
-  activeOrg,
-  orgs,
-  plan,
-  name,
-  passMetadata,
-  user,
-  uploadFile,
-  authHeaders,
-  voice,
-  files,
-  setUIHandler,
-}: {
-  messages: Message[];
-  isStreaming: boolean;
-  onSend: (text: string, attachments?: Attachment[], origin?: string) => void;
-  onStop: () => void;
-  onClear: () => void;
-  onRetry?: () => void;
-  onShare?: (title: string, audience: string) => Promise<string>;
+export interface AccountInfo {
+  user: UserInfo;
+  plan?: PlanInfo;
   org?: { id: string; name: string } | null;
-  onListShares?: () => Promise<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>;
-  onDeleteShare?: (token: string) => Promise<void>;
-  onListChats?: () => Promise<{ id: string; title: string; updatedAt: string }[]>;
-  onLoadChat?: (id: string) => Promise<void>;
-  onDeleteChat?: (id: string) => Promise<void>;
-  chatId?: string | null;
-  chatLoading?: boolean;
-  onSignOut?: () => void;
-  onManageAccount?: () => void;
-  onCreateOrg?: () => void;
-  onManageOrg?: () => void;
-  onSwitchOrg?: (orgId: string | null) => void;
   activeOrg?: { id: string; name: string; imageUrl?: string };
   orgs?: { id: string; name: string; imageUrl: string }[];
-  plan?: PlanInfo;
-  name?: string;
-  passMetadata?: { en: PassMetadata; ar: PassMetadata };
-  user?: UserInfo;
-  uploadFile?: (file: File) => Promise<Attachment>;
-  authHeaders?: () => Promise<Record<string, string>>;
-  voice?: boolean;
-  setUIHandler?: (h: UIHandler | null) => void;
-  files?: {
-    entries: FileEntry[];
-    path: string;
-    loading: boolean;
-    onNavigate: (dir: string) => void;
-    onUpload: (dir: string, file: File) => Promise<void>;
-    onMkdir: (dir: string, name: string) => Promise<void>;
-    onRename: (from: string, to: string) => Promise<void>;
-    onDelete: (path: string) => Promise<void>;
-    onOpenFile: (path: string) => Promise<string>;
-    onShareFile?: (path: string) => Promise<string>;
-  };
+  onSignOut: () => void;
+  onManageAccount: () => void;
+  onCreateOrg: () => void;
+  onManageOrg: () => void;
+  onSwitchOrg: (orgId: string | null) => void;
+}
+
+export interface FilesPanelProps {
+  entries: FileEntry[];
+  path: string;
+  loading: boolean;
+  onNavigate: (dir: string) => void;
+  onUpload: (dir: string, file: File) => Promise<void>;
+  onMkdir: (dir: string, name: string) => Promise<void>;
+  onRename: (from: string, to: string) => Promise<void>;
+  onDelete: (path: string) => Promise<void>;
+  onOpenFile: (path: string) => Promise<string>;
+  onShareFile?: (path: string) => Promise<string>;
+}
+
+export function Chat({ chat, onShare, files, account, config }: {
+  chat: ChatApi;
+  onShare?: (title: string, audience: string) => Promise<string>;
+  files?: FilesPanelProps;
+  account?: AccountInfo | null;
+  config?: AppConfig | null;
 }) {
+  const { messages, isStreaming, chatLoading, chatId, send: onSend, retry: onRetry, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, uploadFile, authHeaders, setUIHandler } = chat;
+  const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg } = account ?? ({} as Partial<AccountInfo>);
+  const { name, pass_metadata: passMetadata, voice } = config ?? {};
+
   const lang = useLang();
   const isAr = lang === "ar";
   const meta = passMetadata?.[isAr ? "ar" : "en"];
@@ -116,7 +77,7 @@ export function Chat({
   const [exploreAgents, setExploreAgents] = useState<PassAgent[]>([]);
   const [exploreLoading, setExploreLoading] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
-  const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats">(onListChats ? "chats" : "files");
+  const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats">(account ? "chats" : "files");
   const [shareOpen, setShareOpen] = useState(false);
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
@@ -281,12 +242,12 @@ export function Chat({
 
   const inputProps = {
     textareaRef, input, setInput, handleKeyDown, handleSubmit, isStreaming, onStop,
-    onOpenFilePicker: uploadFile ? openFilePicker : undefined,
+    onOpenFilePicker: openFilePicker,
     onOpenFiles: files ? () => openPanel("files") : undefined,
     attachments,
     onRemoveFile: removeFile,
     listening, transcribing, startMic, stopMic, cancelMic, voice,
-    onFilesAdded: uploadFile ? handleFilesAdded : undefined,
+    onFilesAdded: handleFilesAdded,
     placeholder: inputPlaceholder,
   };
 
@@ -341,7 +302,7 @@ export function Chat({
                         defaultTitle={messages.find((m) => m.role === "user")?.content?.slice(0, 100) || ""}
                         org={org}
                         onShare={onShare}
-                        onManageShares={onListShares ? () => { setShareOpen(false); openPanel("shares"); } : undefined}
+                        onManageShares={account ? () => { setShareOpen(false); openPanel("shares"); } : undefined}
                       />
                     )}
                   </>
@@ -364,7 +325,7 @@ export function Chat({
                 </button>
               </>
             )}
-            {(files || onListChats) && (
+            {(files || account) && (
               <button
                 onClick={() => filesOpen ? setFilesOpen(false) : openPanel()}
                 className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
@@ -428,20 +389,18 @@ export function Chat({
       <div className="shrink-0 h-12" />
 
       {/* Stable file input — lives outside LayoutGroup so it survives remounts */}
-      {uploadFile && (
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            if (e.target.files?.length) {
-              handleFilesAdded(Array.from(e.target.files));
-              e.target.value = "";
-            }
-          }}
-        />
-      )}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files?.length) {
+            handleFilesAdded(Array.from(e.target.files));
+            e.target.value = "";
+          }
+        }}
+      />
 
       <LayoutGroup>
         <LoadingBar active={chatLoading} />
@@ -525,9 +484,9 @@ export function Chat({
               className="fixed top-1 right-1 bottom-1 z-50 w-[calc(100%-0.5rem)] sm:w-[480px] rounded-xl border border-border bg-background flex flex-col overflow-hidden"
             >
               {/* Tab bar */}
-              {(files || onListShares || onListChats) && (
+              {(files || account) && (
                 <div className="flex items-center border-b border-border px-4 sm:px-6">
-                  {onListChats && (
+                  {account && (
                     <button
                       onClick={() => selectTab("chats")}
                       className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "chats" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
@@ -543,7 +502,7 @@ export function Chat({
                       {t("files")}
                     </button>
                   )}
-                  {onListShares && (
+                  {account && (
                     <button
                       onClick={() => selectTab("shares")}
                       className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
