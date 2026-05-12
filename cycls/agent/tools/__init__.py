@@ -267,38 +267,46 @@ async def _exec_database(inp, workspace):
     return f"Error: unknown command {cmd!r}"
 
 
-# ---- Dispatch ----
+# ---- Registry & dispatch ----
+#
+# One entry per harness tool: (run, step). `run(inp, workspace, *, timeout,
+# network)` returns the awaitable result, or is None for tools that execute
+# elsewhere (web_search runs server-side; it's here only for the UI label).
+# `step(inp)` renders the {tool_name, step} line, shared by the live dispatch
+# path and the refetch path (to_ui_messages) so they agree.
+
+def _run_bash(inp, workspace, *, timeout, network):
+    t = inp.get("timeout")
+    return _exec_bash(inp.get("command", ""), workspace.root, timeout=t / 1000 if t else timeout, network=network)
+
+_TOOLS = {
+    "bash":       (_run_bash,
+                   lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
+    "read":       (lambda inp, ws, **_: _exec_read(inp, ws.root),
+                   lambda inp: {"tool_name": "Reading", "step": inp.get("path", "")}),
+    "edit":       (lambda inp, ws, **_: asyncio.to_thread(_exec_edit, inp, ws.root),
+                   lambda inp: {"tool_name": "Editing", "step": inp.get("path", "")}),
+    "database":   (lambda inp, ws, **_: _exec_database(inp, ws),
+                   lambda inp: {"tool_name": "Database",
+                                "step": f"{inp.get('command', '')} {inp.get('key') or inp.get('prefix', '')}".strip()}),
+    "web_search": (None,
+                   lambda inp: {"tool_name": "Web Search", "step": inp.get("query", "")}),
+}
+
 
 def tool_step(name, input):
-    """The {tool_name, step} pair a tool_use renders as. Single source of
-    truth so live (dispatch) and refetch (chat.to_ui_messages) agree."""
     inp = input or {}
-    if name == "bash":     return {"tool_name": "Bash",       "step": inp.get("description") or inp.get("command", "")}
-    if name == "read":     return {"tool_name": "Reading",    "step": inp.get("path", "")}
-    if name == "edit":     return {"tool_name": "Editing",    "step": inp.get("path", "")}
-    if name == "web_search": return {"tool_name": "Web Search", "step": inp.get("query", "")}
-    if name == "database":
-        cmd = inp.get("command", "")
-        label = inp.get("key") or inp.get("prefix", "")
-        return {"tool_name": "Database", "step": f"{cmd} {label}".strip()}
-    return {"tool_name": name, "step": ""}
+    entry = _TOOLS.get(name)
+    return entry[1](inp) if entry else {"tool_name": name, "step": ""}
 
 
 def dispatch(block, workspace, timeout, handlers=None, network=False):
     """*block* is a tool_use content block (dict): {type, id, name, input}.
     Returns (step_event_dict, awaitable_result)."""
     name, inp = block["name"], block.get("input") or {}
-    step = {"type": "step", **tool_step(name, inp)}
-    ws = workspace.root
-    if name == "bash":
-        t = inp.get("timeout"); secs = t / 1000 if t else timeout
-        return step, _exec_bash(inp.get("command", ""), ws, timeout=secs, network=network)
-    if name == "read":
-        return step, _exec_read(inp, ws)
-    if name == "edit":
-        return step, asyncio.to_thread(_exec_edit, inp, ws)
-    if name == "database":
-        return step, _exec_database(inp, workspace)
+    entry = _TOOLS.get(name)
+    if entry and entry[0]:
+        return {"type": "step", **entry[1](inp)}, entry[0](inp, workspace, timeout=timeout, network=network)
     if handlers and name in handlers:
-        return step, handlers[name](inp)
+        return {"type": "step", **tool_step(name, inp)}, handlers[name](inp)
     return {"type": "tool_call", "tool": name, "args": inp}, asyncio.sleep(0, result=f"{name} executed")
