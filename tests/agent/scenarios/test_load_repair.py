@@ -7,7 +7,7 @@ scenario starts fresh."""
 import asyncio
 from pathlib import Path
 
-from cycls.agent import chat
+from cycls.agent import sessions as chat
 from cycls.app.workspace import workspace_at
 
 

@@ -1,9 +1,9 @@
 """HTTP routers for the agent's state surface — chats, files, share.
 
-Chat metadata + message log live in one KV (`KV("chat", workspace)`) — see
-`cycls.agent.chat`. Files stay on the workspace filesystem (POSIX-shaped).
-Shares are opaque tokens stored in the owner's workspace at `share/<token>`,
-audience-checked at resolve time. See docs/rfc-003.md.
+Chat metadata + message log live in the workspace DB — see `cycls.agent.sessions`.
+Files stay on the workspace filesystem (POSIX-shaped). Shares are opaque tokens
+stored in the owner's workspace at `share/<token>`, audience-checked at resolve
+time. See docs/rfc-003.md.
 """
 import os, shutil, time, unicodedata, uuid
 from datetime import datetime, timezone
@@ -15,8 +15,48 @@ from fastapi.responses import FileResponse
 
 from cycls.app.workspace import DB, Workspace, workspace_at, workspace_for
 from cycls.agent import share as shares
-from cycls.app.auth import User
-from cycls.agent import chat
+from cycls.agent import sessions
+from cycls.agent.tools import tool_step
+
+
+def to_ui_messages(raw):
+    """Stored API-format messages → FE shape `{role, content: str, parts?, attachments?}`.
+    Store keeps Anthropic blocks; the FE wants string content (+ parts for the
+    assistant). Drops user messages whose content is purely tool_result blocks —
+    harness scaffolding, not user-visible."""
+    out = []
+    for msg in raw:
+        role, c = msg.get("role"), msg.get("content")
+        if role == "user":
+            if isinstance(c, list):
+                if all(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
+                    continue
+                text = "".join(b.get("text", "") for b in c
+                               if isinstance(b, dict) and b.get("type") == "text")
+            elif isinstance(c, str):
+                text = c
+            else:
+                continue
+            ui = {"role": "user", "content": text}
+            if msg.get("attachments"):
+                ui["attachments"] = msg["attachments"]
+            out.append(ui)
+        elif role == "assistant":
+            if isinstance(c, str):
+                out.append({"role": "assistant", "content": c, "parts": [{"type": "text", "text": c}]}); continue
+            if not isinstance(c, list): continue
+            parts, texts = [], []
+            for b in c:
+                if not isinstance(b, dict): continue
+                t = b.get("type")
+                if t == "text":
+                    parts.append({"type": "text", "text": b.get("text", "")}); texts.append(b.get("text", ""))
+                elif t == "thinking":
+                    parts.append({"type": "thinking", "thinking": b.get("thinking", "")})
+                elif t == "tool_use":
+                    parts.append({"type": "step", **tool_step(b.get("name", ""), b.get("input"))})
+            out.append({"role": "assistant", "content": "".join(texts), "parts": parts})
+    return out
 
 
 # ---- Path safety ----
@@ -44,7 +84,7 @@ def chats_router(ws_dep):
     @r.get("/chats")
     async def list_chats(ws: Workspace = ws_dep):
         items = []
-        async for cid, data in chat.list_chats(ws):
+        async for cid, data in sessions.list_chats(ws):
             items.append({
                 "id": data.get("id", cid),
                 "title": data.get("title", ""),
@@ -55,32 +95,32 @@ def chats_router(ws_dep):
 
     @r.get("/chats/{chat_id}")
     async def get_chat(chat_id: str, ws: Workspace = ws_dep):
-        meta = await chat.get_meta(ws, chat_id)
+        meta = await sessions.get_meta(ws, chat_id)
         # 204 (not 404) for a missing chat: the FE auto-restores `?id=` on
         # cold load, and a stale id is normal — 404s clutter the dev console.
         if meta is None:
             return Response(status_code=204)
-        raw = await chat.load_messages(ws, chat_id)
-        return {**meta, "messages": chat.to_ui_messages(raw)}
+        raw = await sessions.load_messages(ws, chat_id)
+        return {**meta, "messages": to_ui_messages(raw)}
 
     @r.put("/chats/{chat_id}")
     async def put_chat(chat_id: str, request: Request, ws: Workspace = ws_dep):
         data = await request.json()
         data["id"] = chat_id
         data["updatedAt"] = datetime.now(timezone.utc).isoformat()
-        existing = (await chat.get_meta(ws, chat_id)) or {}
+        existing = (await sessions.get_meta(ws, chat_id)) or {}
         if "createdAt" not in data:
             data["createdAt"] = existing.get("createdAt", data["updatedAt"])
         # Drop "messages" if FE accidentally sends it — that's not metadata.
         data.pop("messages", None)
-        await chat.put_meta(ws, chat_id, data)
+        await sessions.put_meta(ws, chat_id, data)
         return data
 
     @r.delete("/chats/{chat_id}")
     async def delete_chat(chat_id: str, ws: Workspace = ws_dep):
-        if (await chat.get_meta(ws, chat_id)) is None:
+        if (await sessions.get_meta(ws, chat_id)) is None:
             raise HTTPException(status_code=404, detail="Chat not found")
-        await chat.delete_chat(ws, chat_id)
+        await sessions.delete_chat(ws, chat_id)
         return {"ok": True}
 
     return r
@@ -189,7 +229,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         path = data.get("path")
         if not (path and (path.startswith("chat/") or path.startswith("file/"))):
             raise HTTPException(400, "path must be 'chat/<id>' or 'file/<path>'")
-        if path.startswith("chat/") and (await chat.get_meta(ws, path[5:])) is None:
+        if path.startswith("chat/") and (await sessions.get_meta(ws, path[5:])) is None:
             raise HTTPException(404, "Chat not found")
         token, row = await shares.mint(ws, path,
                                        audience=data.get("audience", "public"),
@@ -204,7 +244,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             token = key[6:]
             path = row["path"]
             if path.startswith("chat/"):
-                meta = await chat.get_meta(ws, path[5:])
+                meta = await sessions.get_meta(ws, path[5:])
                 title = (meta or {}).get("title") or ""
             else:
                 title = path[5:]  # file path as the display name
@@ -229,10 +269,10 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         common = {"author": row.get("author"), "shared_at": row.get("shared_at")}
         if path.startswith("chat/"):
             chat_id = path[5:]
-            meta = await chat.get_meta(ws_owner, chat_id)
+            meta = await sessions.get_meta(ws_owner, chat_id)
             if meta is None:
                 raise HTTPException(404, "Chat not found")
-            messages = chat.to_ui_messages(await chat.load_messages(ws_owner, chat_id))
+            messages = to_ui_messages(await sessions.load_messages(ws_owner, chat_id))
             for m in messages:
                 for att in m.get("attachments") or []:
                     if ap := att.get("path"):
@@ -254,8 +294,8 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             if file_path != path[5:]:
                 raise HTTPException(403, "Path not in this share")
         else:
-            raw = await chat.load_messages(ws_owner, path[5:])
-            allowed = {att.get("path") for m in chat.to_ui_messages(raw)
+            raw = await sessions.load_messages(ws_owner, path[5:])
+            allowed = {att.get("path") for m in to_ui_messages(raw)
                        for att in (m.get("attachments") or []) if att.get("path")}
             if file_path not in allowed:
                 raise HTTPException(403, "Not an attachment of this share")
@@ -270,20 +310,20 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         if not row["path"].startswith("chat/"):
             raise HTTPException(400, "Only chat shares can be forked")
         source_id = row["path"][5:]
-        meta = await chat.get_meta(ws_source, source_id)
+        meta = await sessions.get_meta(ws_source, source_id)
         if meta is None:
             raise HTTPException(404, "Chat not found")
-        raw = await chat.load_messages(ws_source, source_id)
+        raw = await sessions.load_messages(ws_source, source_id)
         ws_fork = workspace_for(forker, volume, base=base)
         new_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
-        await chat.put_meta(ws_fork, new_id, {
+        await sessions.put_meta(ws_fork, new_id, {
             **{k: v for k, v in meta.items() if k not in ("id", "createdAt", "updatedAt")},
             "id": new_id, "createdAt": now, "updatedAt": now,
             "forked_from": f"{user}/{source_id}",
         })
-        await chat.append_messages(ws_fork, new_id, raw, 0)
-        for m in chat.to_ui_messages(raw):
+        await sessions.append_messages(ws_fork, new_id, raw, 0)
+        for m in to_ui_messages(raw):
             for att in m.get("attachments") or []:
                 if ap := att.get("path"):
                     try:
