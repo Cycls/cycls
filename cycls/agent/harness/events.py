@@ -1,14 +1,18 @@
 """Typed loop events.
 
-The loop emits these instead of raw dicts; `to_ui(event)` projects each one to
-the shape the FE renders. A consumer (the agent function body) can pattern-match
-on the typed events to hook into the loop, or just `to_ui` them through:
+`LLM.run` (and any `.loop(fn)`) yields these; `to_ui(event)` projects each one
+to the shape the FE renders. The agent body pattern-matches to hook the loop, or
+just `to_ui`s them through:
 
     async for ev in llm.run(context=context):
         match ev:
-            case ToolCall("bash", inp): audit(inp); yield to_ui(ev)
-            case Failed(msg):           page_ops(msg); yield to_ui(ev)
-            case _:                     yield to_ui(ev)
+            case Step(query, "Web Search"): log_search(query)
+            case Failed(msg):               page_ops(msg)
+            case _:                         pass
+        yield to_ui(ev)
+
+`Callout` and `ToolCall` aren't emitted by the built-in loop but `to_ui` knows
+them, so a custom `.loop(fn)` can yield them too.
 """
 from dataclasses import dataclass
 from typing import Optional

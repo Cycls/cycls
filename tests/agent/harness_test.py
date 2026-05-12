@@ -1,5 +1,6 @@
 """Harness tests — _resolve_path escape hardening, build_tools scoping,
 LLM builder plumbing."""
+import asyncio
 import pytest
 
 import cycls
@@ -144,3 +145,29 @@ def test_llm_mcp_accumulates():
     assert cycls.LLM().mcp(a).mcp(b)._mcp == [a, b]
     assert cycls.LLM().mcp(a, b)._mcp == [a, b]
     assert cycls.LLM()._mcp == []  # original untouched
+
+
+# ---- LLM.loop ----
+
+def test_llm_loop_default_is_none():
+    assert cycls.LLM()._loop is None
+
+
+def test_llm_loop_runs_custom_loop():
+    """A custom loop replaces the built-in; .run yields whatever it yields,
+    threaded the same kwargs the default loop gets."""
+    async def my_loop(*, context, model, **kw):
+        yield cycls.events.TextDelta(model)
+        yield cycls.events.Callout("done", "success")
+
+    llm = cycls.LLM().model("anthropic/claude-x").loop(my_loop)
+
+    async def go():
+        return [cycls.to_ui(ev) async for ev in llm.run(context=object())]
+
+    assert asyncio.run(go()) == ["anthropic/claude-x", {"type": "callout", "callout": "done", "style": "success"}]
+
+
+def test_harness_kit_exposes_building_blocks():
+    from cycls.agent.harness import default_loop, make_provider, Session, build_tools, dispatch, compact, events, to_ui
+    assert callable(default_loop) and callable(make_provider) and callable(build_tools)

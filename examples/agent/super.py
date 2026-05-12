@@ -95,8 +95,8 @@ async def super(context):
     entry["count"] += 1
     await db.put(key, entry)
 
-    async for msg in llm.run(context=context):
-        yield msg
+    async for ev in llm.run(context=context):
+        yield cycls.to_ui(ev)
 
 
 # uv run examples/agent/super.py

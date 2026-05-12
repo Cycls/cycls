@@ -41,10 +41,11 @@ def _ctx(tmp_path, prompt, *, persist=False):
 
 
 async def _collect(llm, ctx):
-    events = []
+    from cycls.agent.harness.events import to_ui
+    out = []
     async for ev in llm.run(context=ctx):
-        events.append(ev)
-    return events
+        out.append(to_ui(ev))
+    return out
 
 
 def _text_of(events):
