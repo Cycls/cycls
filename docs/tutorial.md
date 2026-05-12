@@ -30,8 +30,8 @@ llm = (
 
 @cycls.agent()
 async def hello(context):
-    async for msg in llm.run(context=context):
-        yield msg
+    async for ev in llm.run(context=context):
+        yield cycls.to_ui(ev)
 ```
 
 Run it:
@@ -71,8 +71,8 @@ llm = (
 
 @cycls.agent(image=image, web=web)
 async def my_agent(context):
-    async for msg in llm.run(context=context):
-        yield msg
+    async for ev in llm.run(context=context):
+        yield cycls.to_ui(ev)
 ```
 
 - **`cycls.Image`** — container build config (pip, apt, copy, run commands, volume)
@@ -277,8 +277,8 @@ llm = (
     .show_usage(True)
 )
 
-async for msg in llm.run(context=context):
-    yield msg
+async for ev in llm.run(context=context):
+    yield cycls.to_ui(ev)
 ```
 
 | Method | Purpose |
@@ -294,8 +294,24 @@ async for msg in llm.run(context=context):
 | `.show_usage(bool)` | Print cost + token usage at end of run |
 | `.base_url(url)` | Custom endpoint (Groq, vLLM, HUMAIN, self-hosted) |
 | `.api_key(key)` | Override API key |
+| `.loop(fn)` | Replace the built-in loop (see *Hooking the loop* below) |
 
 The Bash tool runs inside a `bubblewrap` sandbox with the workspace bound at `/workspace` and a sanitized environ. Network is off by default — enabling it allows outbound calls but means a prompt-injected bash could exfiltrate anything it can read. See [docs/sandbox-security.md](sandbox-security.md) for the full threat model.
+
+### Hooking the loop
+
+`llm.run()` yields *typed events* (`cycls.events` — `TextDelta`, `Thinking`, `Step`, `Usage`, `Failed`, `Compacting`, …). The body `to_ui`s them through; pattern-match first to react:
+
+```python
+async for ev in llm.run(context=context):
+    match ev:
+        case cycls.events.Step(query, "Web Search"): log_search(query)
+        case cycls.events.Failed(msg):               alert_ops(msg)
+        case _: pass
+    yield cycls.to_ui(ev)
+```
+
+Need more than a hook? `.loop(fn)` swaps the loop entirely — `fn` is an async generator with the default loop's signature that yields events. The building blocks live in `cycls.agent.harness`: `default_loop`, `make_provider`, `Session` (the message log + persistence), `build_tools`, `dispatch`, `compact`, `events`.
 
 ### Multi-provider
 
@@ -432,8 +448,8 @@ async def my_agent(context):
         entry["count"] += 1
         usage[month] = entry
 
-    async for msg in llm.run(context=context):
-        yield msg
+    async for ev in llm.run(context=context):
+        yield cycls.to_ui(ev)
 ```
 
 `cycls.Dict("name")` is a persistent JSON-backed dict scoped to the surrounding `with context.workspace():` block. The `.cycls/` directory is framework-managed — user tools (Bash, Editor, files API) can read it but cannot write to it, so the quota cannot be tampered with from inside the agent.
@@ -450,8 +466,8 @@ from fastapi import Depends
 
 @cycls.agent(web=cycls.Web().auth(cycls.Clerk()))
 async def my_agent(context):
-    async for msg in llm.run(context=context):
-        yield msg
+    async for ev in llm.run(context=context):
+        yield cycls.to_ui(ev)
 
 
 @my_agent.server.api_route("/webhook", methods=["POST"])

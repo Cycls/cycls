@@ -53,10 +53,19 @@ cycls/
 │   └── web.py              # cycls.Web fluent builder
 └── agent/
     ├── main.py             # Agent class + @cycls.agent decorator
-    ├── harness/            # LLM runtime (loop, tools, providers, compaction, prompts, pdf)
-    │   └── llm.py          # cycls.LLM fluent builder
-    ├── state/              # history I/O + sessions/files/share routers
-    └── web/                # FastAPI chat server, OG images, themes
+    ├── sessions.py         # per-chat persistence (DB) + Session (the loop's message log)
+    ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
+    ├── share.py            # share tokens (mint / resolve / revoke)
+    ├── tools/              # tool schemas + execution + dispatch registry (+ pdf.py)
+    ├── harness/            # the managed LLM loop and the kit a custom loop needs
+    │   ├── llm.py          # cycls.LLM fluent builder (.loop(fn) swaps the loop)
+    │   ├── main.py         # the default loop (_run) + retry/recover
+    │   ├── providers.py    # make_provider + AnthropicProvider (one streaming interface)
+    │   ├── openai.py       # OpenAIProvider — Chat Completions on the same interface
+    │   ├── events.py       # typed loop events + to_ui (FE projection)
+    │   ├── compact.py      # context compaction (microcompact + partial)
+    │   └── prompts.py      # system + compaction prompts
+    └── web/                # FastAPI chat server, state routers, OG images, themes
 ```
 
 ## Core Architecture
@@ -120,21 +129,23 @@ tests/
 ├── function/                    # Function class + Image
 ├── app/                         # App, Sandbox argv, Workspace/DB, fence retry
 ├── agent/
-│   ├── agent_test.py            # _run loop, retry, recovery, ingest
-│   ├── chat_test.py             # _valid_prefix unit tests + to_ui_messages
-│   ├── harness_test.py          # tool dispatch, build_tools, LLM builder
+│   ├── agent_test.py            # _run loop, retry, recovery, ingest, exec/_resolve_path
+│   ├── chat_test.py             # to_ui_messages (FE projection) + _valid_prefix repair
+│   ├── harness_test.py          # build_tools, _resolve_path, LLM builder (incl. .loop)
+│   ├── events_test.py           # to_ui wire shapes for the typed events
 │   ├── pdf_test.py              # PDF page parsing
 │   ├── web_test.py              # FastAPI routes, encoders, Messages
 │   ├── integration_test.py      # Agent on top of App
 │   └── scenarios/
 │       ├── test_load_repair.py  # SlateDB roundtrip + repair invariants
+│       ├── test_database.py     # the `database` tool over the agent KV
 │       └── test_live.py         # @pytest.mark.live, real Anthropic
 └── client/src/hooks/__tests__/  # vitest — useChat hook
 ```
 
-**Mocked tier** (default): no API calls, no docker. Runs in ~80s.
+**Mocked tier** (default): no API calls, no docker. Runs in ~85s.
 ```bash
-uv run pytest tests/                       # all 168 mocked tests
+uv run pytest tests/                       # all 193 mocked tests
 uv run pytest tests/agent/ -v              # just agent tests
 uv run pytest tests/agent/scenarios/ -v    # just scenarios
 ```
