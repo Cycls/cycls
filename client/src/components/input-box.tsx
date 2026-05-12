@@ -134,7 +134,8 @@ export function InputBox({
               setLang(next);
               track("language_changed", { to: next, source: "composer" });
             }}
-            className="flex h-8 items-center justify-center rounded-full px-2.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition cursor-pointer text-xs font-semibold"
+            disabled={isStreaming}
+            className={`flex h-8 items-center justify-center rounded-full px-2.5 transition text-xs font-semibold ${isStreaming ? "text-muted-foreground opacity-30 cursor-not-allowed" : "text-muted-foreground hover:text-foreground hover:bg-secondary cursor-pointer"}`}
             aria-label="Toggle language"
           >
             {getLang() === "en" ? "عربي" : "En"}
