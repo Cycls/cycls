@@ -1,12 +1,21 @@
-"""LLM provider — wraps a model client behind one streaming interface.
+"""LLM providers — each wraps a vendor client behind one streaming interface.
 
-`Provider.stream(...)` yields typed loop events as content arrives, then a
-final `Turn` carrying the assistant's content blocks (storage shape), the stop
-reason, and token usage. `Provider.complete(...)` is the non-streaming one-shot
-(used by compaction). Today there is one wire shape — the Anthropic Messages
-API — and the non-Anthropic OpenAI adapter (`cycls.agent.harness.openai`)
-mimics it, so a single `Provider` class drives both. A later split gives
-OpenAI/Google/etc. their own providers that emit these same events directly.
+A provider exposes:
+
+    .model                              the bare model name
+    .context_window                     token budget for that model
+    .stream(messages, system, tools, max_tokens, mcp_servers=None)
+                                        async-iterates loop events as content
+                                        arrives, then yields exactly one `Turn`
+                                        (assistant content blocks in storage
+                                        shape + stop_reason + token usage)
+    .complete(messages, system, max_tokens) -> str
+                                        non-streaming one-shot (used by compaction)
+
+`make_provider("vendor/model", ...)` picks the right one. The loop's message and
+tool shape is the Anthropic Messages shape; non-Anthropic providers translate it
+(see `cycls.agent.harness.openai`). `AnthropicProvider` lives here; `prewarm()`
+pays its client warmup at process start.
 """
 import json
 
@@ -37,10 +46,7 @@ def _for_api(messages):
     return [{k: v for k, v in m.items() if k in ("role", "content")} for m in messages]
 
 
-class Provider:
-    """Wraps a client with the Anthropic Messages API shape (or the OpenAI
-    adapter that mimics it)."""
-
+class AnthropicProvider:
     def __init__(self, client, model):
         self._client = client
         self.model = model
@@ -50,7 +56,6 @@ class Provider:
         return context_window(self.model)
 
     async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None):
-        """Yield content events as they arrive, then exactly one `Turn`."""
         kwargs = {
             "model": self.model,
             "max_tokens": max_tokens,
@@ -71,7 +76,7 @@ class Provider:
                     if cb.type == "server_tool_use" and cb.name == "web_search":
                         search_idx, search_buf = ev.index, ""
                     elif cb.type == "mcp_tool_use":
-                        # Anthropic ran this server-side; just surface it as a step.
+                        # Anthropic ran this server-side; surface it as a step.
                         server = getattr(cb, "server_name", None) or "mcp"
                         yield Step("", tool=f"{server} · {cb.name}")
                 elif ev.type == "content_block_delta":
@@ -104,8 +109,49 @@ class Provider:
         )
 
     async def complete(self, *, messages, system, max_tokens):
-        """Non-streaming one-shot — returns the response text. Used by compaction."""
         r = await self._client.messages.create(
             model=self.model, max_tokens=max_tokens,
             system=[{"type": "text", "text": system}], messages=messages)
         return r.content[0].text
+
+
+# ---- Client routing ----
+
+_clients: dict = {}  # vendor → reused SDK client. Construction is ~1s (httpx +
+                     # TLS warmup); reuse is safe across requests.
+
+
+def _client_for(vendor, *, base_url, api_key):
+    if vendor in _clients:
+        return _clients[vendor]
+    if vendor == "anthropic":
+        import anthropic
+        c = anthropic.AsyncAnthropic(**({"api_key": api_key} if api_key else {}))
+    else:
+        import openai
+        c = openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
+    _clients[vendor] = c
+    return c
+
+
+def prewarm():
+    """Pay the Anthropic client's httpx + TLS warmup now (process start)."""
+    _client_for("anthropic", base_url=None, api_key=None)
+
+
+def make_provider(model, *, client=None, base_url=None, api_key=None):
+    """Build the provider for a `vendor/model` string. `anthropic/*` goes
+    native; everything else (openai, groq, humain, vllm, local) goes through the
+    OpenAI Chat Completions provider — the lingua franca of every non-Anthropic
+    vendor. Pass `client` to use a pre-built SDK client."""
+    if "/" not in model:
+        raise ValueError(
+            f"model must be `vendor/model` (e.g. `anthropic/claude-sonnet-4-6`, "
+            f"`openai/gpt-5.4`, `groq/llama-3.3-70b`); got {model!r}"
+        )
+    vendor, name = model.split("/", 1)
+    sdk = client or _client_for(vendor, base_url=base_url, api_key=api_key)
+    if vendor == "anthropic":
+        return AnthropicProvider(sdk, name)
+    from .openai import OpenAIProvider
+    return OpenAIProvider(sdk, name)

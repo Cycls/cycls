@@ -5,7 +5,7 @@ from pathlib import Path
 from .. import chat
 from .compact import COMPACT_BUFFER, KEEP_RECENT, compact
 from .prompts import DEFAULT_SYSTEM
-from .providers import Provider
+from .providers import make_provider
 from .events import Turn, Usage, to_ui
 from ..tools import build_tools, dispatch, _exec_read
 
@@ -46,35 +46,6 @@ async def _touch_meta(workspace, chat_id, content):
         if title:
             meta["title"] = title
     await chat.put_meta(workspace, chat_id, meta)
-
-# ---- Client routing ----
-
-_clients: dict = {}  # provider → reused client. Anthropic construction is
-                     # ~1s (httpx + TLS warmup); reuse is safe across requests.
-
-
-def _make_client(model, base_url=None, api_key=None):
-    """Pick the provider client from a `provider/model` string. Anthropic
-    routes native; everything else (openai, groq, humain, vllm, local) routes
-    through the OpenAI Chat Completions adapter — the lingua franca of every
-    non-Anthropic provider."""
-    if "/" not in model:
-        raise ValueError(
-            f"model must be `provider/model` (e.g. `anthropic/claude-sonnet-4-6`, "
-            f"`openai/gpt-5.4`, `groq/llama-3.3-70b`); got {model!r}"
-        )
-    provider = model.split("/", 1)[0]
-    if provider in _clients:
-        return _clients[provider]
-    if provider == "anthropic":
-        import anthropic
-        client = anthropic.AsyncAnthropic(**({"api_key": api_key} if api_key else {}))
-    else:
-        from .openai import AsyncOpenAI
-        client = AsyncOpenAI(base_url=base_url, api_key=api_key)
-    _clients[provider] = client
-    return client
-
 
 # ---- Config ----
 
@@ -150,7 +121,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                base_url=None, api_key=None, handlers=None, mcp_servers=None):
     t0 = time.monotonic()
     bare_model = model.split("/", 1)[1]
-    provider = Provider(client or _make_client(model, base_url=base_url, api_key=api_key), bare_model)
+    provider = make_provider(model, client=client, base_url=base_url, api_key=api_key)
     workspace = context.workspace
     ws = workspace.root
     Path(ws).mkdir(parents=True, exist_ok=True)

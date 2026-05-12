@@ -11,17 +11,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cycls.agent.harness import main as _harness_main
+from cycls.agent.harness import providers as _providers
 from cycls.agent.harness.main import _run, MAX_RETRIES, _is_retryable, _ingest, _recover
 
 
 @pytest.fixture(autouse=True)
 def _clear_client_cache():
-    """The harness caches one client per provider. Tests patch the anthropic
+    """The harness caches one SDK client per vendor. Tests patch the anthropic
     module per-test, so the cache must be reset between them."""
-    _harness_main._clients.clear()
+    _providers._clients.clear()
     yield
-    _harness_main._clients.clear()
+    _providers._clients.clear()
 from cycls.agent.harness.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact
 from cycls.agent.harness.providers import context_window
 from cycls.agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path, dispatch
