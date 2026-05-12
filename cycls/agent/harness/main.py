@@ -12,7 +12,8 @@ from ..sessions import Session
 from .compact import COMPACT_BUFFER, KEEP_RECENT, compact
 from .prompts import DEFAULT_SYSTEM
 from .providers import make_provider
-from .events import Turn, Usage, to_ui
+from .events import (Turn, Usage, Retrying, Compacting, CompactionFailed,
+                     OutputLimitHit, StoppedUnexpectedly, TimedOut, Failed, to_ui)
 from ..tools import build_tools, dispatch, _exec_read
 
 
@@ -80,6 +81,27 @@ def _recover(e, messages):
         return True
     return False
 
+async def _stream_with_retry(provider, *, messages, system, tools, max_tokens, mcp_servers):
+    """`provider.stream` with exponential backoff on overload / rate-limit:
+    yields the provider's events; on a retryable error yields a `Retrying` step
+    and tries again (up to `MAX_RETRIES`), otherwise propagates. A stream that
+    fails after some deltas re-emits them on retry — accepted; the model output
+    is regenerated, stored history isn't touched until the turn completes."""
+    attempt = 0
+    while True:
+        try:
+            async for ev in provider.stream(messages=messages, system=system, tools=tools,
+                                            max_tokens=max_tokens, mcp_servers=mcp_servers):
+                yield ev
+            return
+        except Exception as e:
+            attempt += 1
+            if not (_is_retryable(e) and attempt <= MAX_RETRIES):
+                raise
+            delay = _retry_delay(attempt, e)
+            yield Retrying(attempt, MAX_RETRIES, delay)
+            await asyncio.sleep(delay)
+
 # ---- Agent ----
 
 async def _run(*, context, system="", tools=None, allowed_tools=[],
@@ -102,25 +124,24 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     tools_list = build_tools(allowed_tools, tools or [])
     window = provider.context_window
     usage = [0, 0, 0, 0]  # in, out, cached, cache_create
-    tokens_since_compact = retries = recovery = 0
+    tokens_since_compact = recovery = 0
 
     while True:
         try:
             if tokens_since_compact > window - COMPACT_BUFFER and len(messages) > KEEP_RECENT:
-                yield {"type": "step", "step": "Compacting context..."}
+                yield to_ui(Compacting())
                 try:
                     await session.rewrite(await compact(provider.complete, messages))
                     tokens_since_compact = 0
                 except Exception as ce:
-                    yield {"type": "callout", "callout": f"Compaction failed: {ce}", "style": "warning"}
+                    yield to_ui(CompactionFailed(str(ce)))
 
             turn = None
-            async for ev in provider.stream(messages=messages, system=system_text, tools=tools_list,
-                                            max_tokens=max_tokens, mcp_servers=mcp_servers):
+            async for ev in _stream_with_retry(provider, messages=messages, system=system_text,
+                                               tools=tools_list, max_tokens=max_tokens, mcp_servers=mcp_servers):
                 if isinstance(ev, Turn): turn = ev
                 else: yield to_ui(ev)
 
-            retries = 0
             usage[0] += turn.input; usage[1] += turn.output; usage[2] += turn.cached; usage[3] += turn.cache_create
             tokens_since_compact = turn.input + turn.cached + turn.cache_create
             messages.append({"role": "assistant", "content": turn.content})
@@ -132,10 +153,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 messages.append({"role": "user", "content": (
                     [{"type": "tool_result", "tool_use_id": i, "content": msg, "is_error": True} for i in ids]
                     if ids else msg)})
-                yield {"type": "step", "step": f"Output limit hit, continuing... ({recovery}/3)"}
+                yield to_ui(OutputLimitHit(recovery, 3))
                 continue
             if turn.stop_reason not in ("tool_use", "end_turn"):
-                yield {"type": "callout", "callout": f"Stopped: {turn.stop_reason}", "style": "warning"}
+                yield to_ui(StoppedUnexpectedly(turn.stop_reason))
             if turn.stop_reason != "tool_use":
                 await session.checkpoint(); break
 
@@ -148,7 +169,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             for block, out in zip(blocks, outputs):
                 if isinstance(out, BaseException): out = f"Error: {out}"
                 if isinstance(out, str) and "timed out" in out:
-                    yield {"type": "callout", "callout": out, "style": "warning"}
+                    yield to_ui(TimedOut(out))
                 # Custom-handler results flow through the stream for the body to see
                 # (UI rendering) AND serialize into tool_result for the model (data).
                 if handlers and block["name"] in handlers and not isinstance(out, BaseException):
@@ -161,17 +182,13 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             await session.checkpoint()
 
         except Exception as e:
-            if _is_retryable(e) and retries < MAX_RETRIES:
-                retries += 1
-                delay = _retry_delay(retries, e)
-                yield {"type": "step", "step": f"Rate limited, retrying in {delay:.1f}s... (attempt {retries}/{MAX_RETRIES})"}
-                await asyncio.sleep(delay)
-                # An exception may have left a dangling assistant tool_use the
-                # retried request would resend mid-pair — drop the unsaved tail.
-                session.rollback(); continue
+            # Retries (overload / rate-limit) already happened inside
+            # _stream_with_retry; what reaches here is fatal. If the model left a
+            # dangling tool_use, inject error tool_results and let the loop carry
+            # on; otherwise surface the error and stop.
             if not _recover(e, messages):
                 session.rollback()
-                yield {"type": "callout", "callout": str(e), "style": "error"}; break
+                yield to_ui(Failed(str(e))); break
             await session.checkpoint(); continue
 
     if show_usage and usage[0]:
