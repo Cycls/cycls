@@ -151,7 +151,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 recovery += 1
                 ids = [b["id"] for b in turn.content if isinstance(b, dict) and b.get("type") == "tool_use"]
                 msg = "Cut off by output limit. Resume — break remaining work into smaller pieces."
-                messages.append({"role": "user", "content": (
+                messages.append({"role": "user", "internal": True, "content": (
                     [{"type": "tool_result", "tool_use_id": i, "content": msg, "is_error": True} for i in ids]
                     if ids else msg)})
                 yield OutputLimitHit(recovery, 3)

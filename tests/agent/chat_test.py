@@ -117,6 +117,47 @@ def test_user_message_with_text_blocks_only_keeps_text():
     assert to_ui_messages(raw) == [{"role": "user", "content": "Look at this image"}]
 
 
+def test_consecutive_assistant_messages_merge_into_one_turn():
+    """A turn is several assistant/tool-result round-trips on disk; the UI shows
+    one bubble — same as the live stream — so steps don't split across bubbles."""
+    raw = [
+        {"role": "user", "content": "do stuff"},
+        {"role": "assistant", "content": [{"type": "tool_use", "name": "bash", "input": {"command": "ls"}, "id": "1"}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "1", "content": "ok"}]},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "name": "read", "input": {"path": "a.py"}, "id": "2"},
+            {"type": "tool_use", "name": "read", "input": {"path": "b.py"}, "id": "3"},
+        ]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "2", "content": "..."},
+                                     {"type": "tool_result", "tool_use_id": "3", "content": "..."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Done."}]},
+    ]
+    out = to_ui_messages(raw)
+    assert [m["role"] for m in out] == ["user", "assistant"]
+    assert [p["type"] for p in out[1]["parts"]] == ["step", "step", "step", "text"]
+    assert out[1]["content"] == "Done."
+    # A real user message between assistants is NOT merged — that's a new turn.
+    out2 = to_ui_messages(raw + [{"role": "user", "content": "more"},
+                                 {"role": "assistant", "content": [{"type": "text", "text": "Sure."}]}])
+    assert [m["role"] for m in out2] == ["user", "assistant", "user", "assistant"]
+
+
+def test_internal_messages_are_dropped():
+    """Compaction summaries and the output-limit resume prompt are tagged
+    `internal` — model scaffolding, never shown to the user."""
+    raw = [
+        {"role": "user", "internal": True, "content": "This session continues from a previous conversation. ..."},
+        {"role": "assistant", "internal": True, "content": "Understood. I have the full context."},
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "cut off"}]},
+        {"role": "user", "internal": True, "content": "Cut off by output limit. Resume — ..."},
+        {"role": "assistant", "content": [{"type": "text", "text": "...continued."}]},
+    ]
+    out = to_ui_messages(raw)
+    assert [m["role"] for m in out] == ["user", "assistant"]
+    assert out[1]["content"] == "cut off...continued."  # the two halves merged across the dropped resume prompt
+
+
 # =============================================================================
 # Load-time repair (_valid_prefix) — trim trailing corrupted state
 # =============================================================================
