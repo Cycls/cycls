@@ -229,8 +229,8 @@ def web(func, config, extra_routers=None, auth=None):
 
     # Pay the ~1s anthropic httpx + TLS warmup at startup, not first request.
     try:
-        from cycls.agent.harness.main import _make_client
-        _make_client("anthropic/_prewarm")
+        from cycls.agent.harness.providers import prewarm
+        prewarm()
     except Exception as e:
         print(f"[WARN] anthropic prewarm failed: {e}", flush=True)
     return app
