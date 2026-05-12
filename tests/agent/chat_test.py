@@ -1,5 +1,5 @@
-"""Tests for cycls.agent.chat.to_ui_messages — raw API → FE shape converter."""
-from cycls.agent.chat import to_ui_messages
+"""Tests for to_ui_messages — stored API messages → FE shape converter."""
+from cycls.agent.web.routers import to_ui_messages
 
 
 def test_passes_through_string_user_content():
@@ -121,7 +121,7 @@ def test_user_message_with_text_blocks_only_keeps_text():
 # Load-time repair (_valid_prefix) — trim trailing corrupted state
 # =============================================================================
 
-from cycls.agent.chat import _valid_prefix
+from cycls.agent.sessions import _valid_prefix
 
 
 def test_valid_prefix_empty():

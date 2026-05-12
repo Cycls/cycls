@@ -25,7 +25,7 @@ def _clear_client_cache():
 from cycls.agent.harness.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact
 from cycls.agent.harness.providers import context_window
 from cycls.agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path, dispatch
-from cycls.agent.chat import load_messages
+from cycls.agent.sessions import load_messages
 from cycls.app.workspace import workspace_at
 
 
@@ -137,7 +137,7 @@ def _history_tool_ids(history):
 @pytest.fixture
 def agent_env(tmp_path):
     """Create workspace + context for agent tests. Returns (ws, ctx) — the
-    chat log lives in `KV("chat", workspace)` keyed under `log/{chat_id}/`."""
+    chat log lives in the workspace DB keyed under `chat/log/{chat_id}/`."""
     ws_root = tmp_path / "tenant"
     ws_root.mkdir()
     ws = str(ws_root)
