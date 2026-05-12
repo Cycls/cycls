@@ -124,8 +124,13 @@ async def _iter_stream(stream):
     json_deltas = 0
     async for ev in stream:
         if ev.type == "content_block_start":
-            if ev.content_block.type == "server_tool_use" and ev.content_block.name == "web_search":
+            cb = ev.content_block
+            if cb.type == "server_tool_use" and cb.name == "web_search":
                 search_idx, search_buf = ev.index, ""
+            elif cb.type == "mcp_tool_use":
+                # Anthropic ran this server-side; just surface it as a step.
+                server = getattr(cb, "server_name", None) or "mcp"
+                yield {"type": "step", "step": "", "tool_name": f"{server} · {cb.name}"}
         elif ev.type == "content_block_delta":
             d = ev.delta
             if d.type == "thinking_delta": yield {"type": "thinking", "thinking": d.thinking}
@@ -176,7 +181,7 @@ def _recover(e, messages):
 async def _run(*, context, system="", tools=None, allowed_tools=[],
                model="anthropic/claude-sonnet-4-20250514", max_tokens=64000,
                bash_timeout=600, bash_network=True, show_usage=False, client=None,
-               base_url=None, api_key=None, handlers=None):
+               base_url=None, api_key=None, handlers=None, mcp_servers=None):
     t0 = time.monotonic()
     if client is None:
         client = _make_client(model, base_url=base_url, api_key=api_key)
@@ -208,6 +213,11 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                      "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
         "thinking": {"type": "adaptive"},
     }
+    if mcp_servers:
+        # Server-side MCP via the Anthropic connector — Anthropic does the
+        # connecting + tool calls; results arrive as mcp_tool_use blocks.
+        kwargs["extra_body"] = {"mcp_servers": [s._spec() for s in mcp_servers]}
+        kwargs["extra_headers"] = {"anthropic-beta": "mcp-client-2025-04-04"}
     usage = [0, 0, 0, 0]  # in, out, cached, cache_create
     tokens_since_compact = 0
     retries = 0

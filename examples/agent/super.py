@@ -62,6 +62,7 @@ llm = (
     # .tools(TOOLS)  # skills+safe_keys
     # .on("render_image", render_image)
     .allowed_tools(["Bash", "Editor", "WebSearch", "DataBase"])  # "Canvas"
+    # .mcp(cycls.MCP("https://figma-mcp.example/mcp").name("figma").token(os.environ["FIGMA_TOKEN"]))  # remote MCP, anthropic/* only
     # .sandbox(network=False)  # opt out of network access for the LLM bash
     # .show_usage(True)
 )

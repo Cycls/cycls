@@ -22,6 +22,7 @@ class LLM:
         self._base_url = None
         self._api_key = None
         self._handlers = {}
+        self._mcp = []
 
     def _copy(self, **updates):
         new = LLM.__new__(LLM)
@@ -49,6 +50,11 @@ class LLM:
         event) and packaged as the tool_result sent back to the model."""
         return self._copy(_handlers={**self._handlers, name: handler})
 
+    def mcp(self, *servers):
+        """Connect to one or more remote MCP servers (cycls.MCP). Their tools
+        run server-side via the Anthropic MCP connector — anthropic/* only."""
+        return self._copy(_mcp=[*self._mcp, *servers])
+
     # ---- Execution ----
 
     async def run(self, *, context, client=None):
@@ -74,5 +80,6 @@ class LLM:
             base_url=self._base_url,
             api_key=self._api_key,
             handlers=self._handlers,
+            mcp_servers=self._mcp,
         ):
             yield msg
