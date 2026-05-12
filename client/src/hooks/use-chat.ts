@@ -56,6 +56,7 @@ export interface AppConfig {
   voice?: boolean;
   pk?: string;
   analytics?: boolean;
+  suggestions?: boolean;
 }
 
 export function useChat(baseUrl: string = "") {

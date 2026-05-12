@@ -65,7 +65,7 @@ export function Chat({ chat, onShare, files, account, config }: {
 }) {
   const { messages, isStreaming, chatLoading, chatId, send: onSend, retry: onRetry, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, uploadFile, authHeaders, setUIHandler } = chat;
   const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg } = account ?? ({} as Partial<AccountInfo>);
-  const { name, pass_metadata: passMetadata, voice } = config ?? {};
+  const { name, pass_metadata: passMetadata, voice, suggestions } = config ?? {};
 
   const lang = useLang();
   const isAr = lang === "ar";
@@ -420,15 +420,17 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </motion.div>
               )}
               <InputBox {...inputProps} />
-              <div className="relative">
-                <div className="absolute inset-x-0 top-0">
-                  <Suggestions
-                    onSelect={(text) => handleSubmit(text, "suggestion")}
-                    onPreview={(text) => setInput(text)}
-                    input={input}
-                  />
+              {suggestions && (
+                <div className="relative">
+                  <div className="absolute inset-x-0 top-0">
+                    <Suggestions
+                      onSelect={(text) => handleSubmit(text, "suggestion")}
+                      onPreview={(text) => setInput(text)}
+                      input={input}
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         ) : (

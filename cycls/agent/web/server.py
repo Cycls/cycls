@@ -20,6 +20,7 @@ class Config(BaseModel):
     auth: bool = False
     cms: Optional[str] = None
     analytics: bool = False
+    suggestions: bool = False
     voice: bool = False
     pk: Optional[str] = None
     volume: str = "/workspace"

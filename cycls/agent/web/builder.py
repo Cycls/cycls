@@ -20,6 +20,7 @@ class Web:
         self._theme: str = "default"
         self._cms: Optional[str] = None
         self._analytics: bool = False
+        self._suggestions: bool = False
         self._copy_public: List[str] = []
 
     def _copy(self, **updates):
@@ -50,6 +51,10 @@ class Web:
 
     def analytics(self, on: bool = True):
         return self._copy(_analytics=on)
+
+    def suggestions(self, on: bool = True):
+        """Show the prompt-starter suggestions on the empty-chat screen. Off by default."""
+        return self._copy(_suggestions=on)
 
     def copy_public(self, *files: str):
         return self._copy(_copy_public=list(files))
