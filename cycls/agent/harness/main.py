@@ -1,10 +1,12 @@
-"""Agent loop — streams Claude tool-use turns with sandboxed execution."""
+"""Agent loop — streams provider tool-use turns with sandboxed execution."""
 import asyncio, json, random, time
 from datetime import datetime, timezone
 from pathlib import Path
 from .. import chat
-from .compact import COMPACT_BUFFER, KEEP_RECENT, compact, context_window
+from .compact import COMPACT_BUFFER, KEEP_RECENT, compact
 from .prompts import DEFAULT_SYSTEM
+from .providers import Provider
+from .events import Turn, Usage, to_ui
 from ..tools import build_tools, dispatch, _exec_read
 
 
@@ -24,13 +26,6 @@ def _ephemeralize(messages):
         elif isinstance(c, list) and c:
             c[-1]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
     return messages
-
-
-def _for_api(messages):
-    """Project to API-safe shape — Anthropic rejects unknown top-level
-    keys per message ('Extra inputs are not permitted'), so storage-only
-    sidecars like FE `attachments` must be stripped before send."""
-    return [{k: v for k, v in m.items() if k in ("role", "content")} for m in messages]
 
 
 async def _touch_meta(workspace, chat_id, content):
@@ -117,35 +112,6 @@ async def _ingest(content, workspace):
         out.append(block)
     return out
 
-# ---- Stream ----
-
-async def _iter_stream(stream):
-    search_idx, search_buf = None, ""
-    json_deltas = 0
-    async for ev in stream:
-        if ev.type == "content_block_start":
-            cb = ev.content_block
-            if cb.type == "server_tool_use" and cb.name == "web_search":
-                search_idx, search_buf = ev.index, ""
-            elif cb.type == "mcp_tool_use":
-                # Anthropic ran this server-side; just surface it as a step.
-                server = getattr(cb, "server_name", None) or "mcp"
-                yield {"type": "step", "step": "", "tool_name": f"{server} · {cb.name}"}
-        elif ev.type == "content_block_delta":
-            d = ev.delta
-            if d.type == "thinking_delta": yield {"type": "thinking", "thinking": d.thinking}
-            elif d.type == "text_delta": yield d.text
-            elif d.type == "input_json_delta":
-                if ev.index == search_idx: search_buf += d.partial_json
-                json_deltas += 1
-                # Keep the SSE/UDP flow warm while tool input streams silently — else QUIC middleboxes reap the idle flow.
-                if json_deltas % 10 == 0: yield {"type": "ui", "ui": "heartbeat"}
-        elif ev.type == "content_block_stop":
-            if ev.index == search_idx:
-                try: q = json.loads(search_buf).get("query", "")
-                except Exception: q = ""
-                yield {"type": "step", "step": q, "tool_name": "Web Search"}; search_idx = None
-
 # ---- Retry & Recovery ----
 
 def _is_retryable(e):
@@ -183,9 +149,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                bash_timeout=600, bash_network=True, show_usage=False, client=None,
                base_url=None, api_key=None, handlers=None, mcp_servers=None):
     t0 = time.monotonic()
-    if client is None:
-        client = _make_client(model, base_url=base_url, api_key=api_key)
-    model = model.split("/", 1)[1]
+    bare_model = model.split("/", 1)[1]
+    provider = Provider(client or _make_client(model, base_url=base_url, api_key=api_key), bare_model)
     workspace = context.workspace
     ws = workspace.root
     Path(ws).mkdir(parents=True, exist_ok=True)
@@ -204,20 +169,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         try: await _touch_meta(workspace, context.chat_id, incoming)
         except Exception as e: print(f"[WARN] meta touch failed: {e}")
 
-    window = context_window(model)
-    kwargs = {
-        "model": model, "max_tokens": max_tokens,
-        "tools": build_tools(allowed_tools, tools or []),
-        "messages": messages,
-        "system": [{"type": "text", "text": DEFAULT_SYSTEM + ("\n\n" + system if system else ""),
-                     "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
-        "thinking": {"type": "adaptive"},
-    }
-    if mcp_servers:
-        # Server-side MCP via the Anthropic connector — Anthropic does the
-        # connecting + tool calls; results arrive as mcp_tool_use blocks.
-        kwargs["extra_body"] = {"mcp_servers": [s._spec() for s in mcp_servers]}
-        kwargs["extra_headers"] = {"anthropic-beta": "mcp-client-2025-04-04"}
+    system_text = DEFAULT_SYSTEM + ("\n\n" + system if system else "")
+    tools_list = build_tools(allowed_tools, tools or [])
+    window = provider.context_window
     usage = [0, 0, 0, 0]  # in, out, cached, cache_create
     tokens_since_compact = 0
     retries = 0
@@ -228,26 +182,24 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             if tokens_since_compact > window - COMPACT_BUFFER and len(messages) > KEEP_RECENT:
                 yield {"type": "step", "step": "Compacting context..."}
                 try:
-                    messages[:] = await compact(client, model, messages)
+                    messages[:] = await compact(provider.complete, messages)
                     tokens_since_compact = 0
                     if persist:
                         await chat.replace_messages(workspace, context.chat_id, messages); saved = len(messages)
                 except Exception as ce:
                     yield {"type": "callout", "callout": f"Compaction failed: {ce}", "style": "warning"}
 
-            kwargs["messages"] = _for_api(messages)
-            async with client.messages.stream(**kwargs) as stream:
-                async for event in _iter_stream(stream): yield event
-                response = await stream.get_final_message()
+            turn = None
+            async for ev in provider.stream(messages=messages, system=system_text, tools=tools_list,
+                                            max_tokens=max_tokens, mcp_servers=mcp_servers):
+                if isinstance(ev, Turn): turn = ev
+                else: yield to_ui(ev)
 
             retries = 0
-            u = response.usage
-            usage[0] += u.input_tokens; usage[1] += u.output_tokens
-            usage[2] += u.cache_read_input_tokens or 0; usage[3] += u.cache_creation_input_tokens or 0
-            tokens_since_compact = u.input_tokens + (u.cache_read_input_tokens or 0) + (u.cache_creation_input_tokens or 0)
-            messages.append({"role": "assistant",
-                            "content": [b.model_dump(exclude_none=True) for b in response.content]})
-            if response.stop_reason == "max_tokens" and recovery < 3:
+            usage[0] += turn.input; usage[1] += turn.output; usage[2] += turn.cached; usage[3] += turn.cache_create
+            tokens_since_compact = turn.input + turn.cached + turn.cache_create
+            messages.append({"role": "assistant", "content": turn.content})
+            if turn.stop_reason == "max_tokens" and recovery < 3:
                 recovery += 1
                 ids = [b["id"] for b in (messages[-1].get("content") or [])
                        if isinstance(b, dict) and b.get("type") == "tool_use"]
@@ -258,16 +210,16 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 )})
                 yield {"type": "step", "step": f"Output limit hit, continuing... ({recovery}/3)"}
                 continue
-            if response.stop_reason not in ("tool_use", "end_turn"):
-                yield {"type": "callout", "callout": f"Stopped: {response.stop_reason}", "style": "warning"}
-            if response.stop_reason != "tool_use":
+            if turn.stop_reason not in ("tool_use", "end_turn"):
+                yield {"type": "callout", "callout": f"Stopped: {turn.stop_reason}", "style": "warning"}
+            if turn.stop_reason != "tool_use":
                 # Clean turn end — persist the assistant message atomically
                 # before breaking so the disk reflects only consistent state.
                 if persist:
                     await chat.append_messages(workspace, context.chat_id, messages[saved:], saved); saved = len(messages)
                 break
 
-            blocks = [b for b in response.content if b.type == "tool_use"]
+            blocks = [b for b in turn.content if isinstance(b, dict) and b.get("type") == "tool_use"]
             pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network) for b in blocks]
             for step, _ in pairs: yield step
             outputs = await asyncio.gather(*(c for _, c in pairs), return_exceptions=True)
@@ -279,12 +231,12 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     yield {"type": "callout", "callout": out, "style": "warning"}
                 # Custom-handler results flow through the stream for the body to see
                 # (UI rendering) AND serialize into tool_result for the model (data).
-                if handlers and block.name in handlers and not isinstance(out, BaseException):
+                if handlers and block["name"] in handlers and not isinstance(out, BaseException):
                     yield out
                     content = out if isinstance(out, str) else json.dumps(out, default=str)
                 else:
                     content = out
-                results.append({"type": "tool_result", "tool_use_id": block.id, "content": content})
+                results.append({"type": "tool_result", "tool_use_id": block["id"], "content": content})
             messages.append({"role": "user", "content": results})
             if persist:
                 await chat.append_messages(workspace, context.chat_id, messages[saved:], saved); saved = len(messages)
@@ -314,15 +266,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     # corruption from before this refactor.
 
     if show_usage and usage[0]:
-        p = next((v for k, v in _PRICING.items() if k in model), None)
-        elapsed = time.monotonic() - t0
-        m, s = divmod(int(elapsed), 60)
-        t = f"{m}m {s}s" if m else f"{s}s"
-        parts = [f"in: {usage[0]:,}", f"out: {usage[1]:,}", f"cached: {usage[2]:,}", f"cache-create: {usage[3]:,}"]
-        if p:
-            cost = (usage[0] * p[0] + usage[1] * p[1] + usage[2] * p[2] + usage[3] * p[3]) / 1_000_000
-            parts.append(f"cost: ${cost:.4f}")
-        parts.append(f"time: {t}")
-        yield "\n\n*" + " · ".join(parts) + "*"
+        p = next((v for k, v in _PRICING.items() if k in bare_model), None)
+        cost = (usage[0]*p[0] + usage[1]*p[1] + usage[2]*p[2] + usage[3]*p[3]) / 1_000_000 if p else None
+        yield to_ui(Usage(usage[0], usage[1], usage[2], usage[3], cost, time.monotonic() - t0))
 
 

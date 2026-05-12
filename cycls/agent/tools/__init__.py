@@ -285,7 +285,9 @@ def tool_step(name, input):
 
 
 def dispatch(block, workspace, timeout, handlers=None, network=False):
-    name, inp = block.name, block.input
+    """*block* is a tool_use content block (dict): {type, id, name, input}.
+    Returns (step_event_dict, awaitable_result)."""
+    name, inp = block["name"], block.get("input") or {}
     step = {"type": "step", **tool_step(name, inp)}
     ws = workspace.root
     if name == "bash":

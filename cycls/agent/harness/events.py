@@ -94,11 +94,24 @@ class Usage:
     cost: Optional[float]
     elapsed: float
 
+@dataclass(frozen=True)
+class Turn:
+    """A completed assistant turn — the last event a provider stream emits.
+    Loop-internal: the loop consumes it to advance state and never forwards it
+    (to_ui raises on it). `content` is assistant content blocks in storage shape;
+    `stop_reason` is the API stop reason; the rest is this turn's token usage."""
+    content: list
+    stop_reason: str
+    input: int = 0
+    output: int = 0
+    cached: int = 0
+    cache_create: int = 0
+
 
 Event = (
     TextDelta | Thinking | Step | Callout | ToolCall | Heartbeat | Raw
     | Compacting | CompactionFailed | Retrying | OutputLimitHit
-    | StoppedUnexpectedly | TimedOut | Failed | Usage
+    | StoppedUnexpectedly | TimedOut | Failed | Usage | Turn
 )
 
 
