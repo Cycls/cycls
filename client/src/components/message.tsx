@@ -53,7 +53,6 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
         <StepPart
           key={index}
           step={part.step || ""}
-          args={part.args}
           toolName={part.tool_name}
           isStreaming={isStreaming}
         />

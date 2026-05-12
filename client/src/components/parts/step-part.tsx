@@ -1,27 +1,15 @@
 import { memo } from "react";
 import { cn } from "../../lib/utils";
 
-// While a tool call's input is still streaming we only have partial JSON; show
-// a tail of it as a live "typing" preview until the resolved detail (path,
-// command, …) arrives.
-function preview(args?: string) {
-  if (!args) return "";
-  const tail = args.length > 48 ? "…" + args.slice(-48) : args;
-  return tail.replace(/\s+/g, " ").trim();
-}
-
 export const StepPart = memo(function StepPart({
   step,
-  args,
   toolName,
   isStreaming,
 }: {
   step: string;
-  args?: string;
   toolName?: string;
   isStreaming?: boolean;
 }) {
-  const detail = step || preview(args);
   return (
     <div className="flex items-center gap-2 py-1 text-sm text-muted-foreground">
       <div
@@ -47,16 +35,16 @@ export const StepPart = memo(function StepPart({
         {toolName ? (
           <>
             <span className="font-semibold text-foreground">{toolName}</span>
-            {detail && (
+            {step && (
               <>
                 <span className="text-foreground">(</span>
-                {detail}
+                {step}
                 <span className="text-foreground">)</span>
               </>
             )}
           </>
         ) : (
-          detail
+          step
         )}
       </span>
     </div>
