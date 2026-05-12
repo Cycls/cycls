@@ -20,19 +20,22 @@ from cycls.agent.tools import tool_step
 
 
 def to_ui_messages(raw):
-    """Stored API-format messages → FE shape `{role, content: str, parts?, attachments?}`.
-    Store keeps Anthropic blocks; the FE wants string content (+ parts for the
-    assistant). Drops user messages whose content is purely tool_result blocks —
-    harness scaffolding, not user-visible."""
+    """Stored API messages → FE shape `{role, content: str, parts?, attachments?}`.
+    Drops harness scaffolding — messages tagged `internal` (compaction summary,
+    output-limit resume prompt) and user messages that are purely tool_result —
+    and merges consecutive assistant messages: a model turn is several
+    assistant/tool-result round-trips on disk but one bubble in the UI, the same
+    shape the live stream produces."""
     out = []
     for msg in raw:
         role, c = msg.get("role"), msg.get("content")
+        if msg.get("internal"):
+            continue
         if role == "user":
             if isinstance(c, list):
                 if all(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
                     continue
-                text = "".join(b.get("text", "") for b in c
-                               if isinstance(b, dict) and b.get("type") == "text")
+                text = "".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
             elif isinstance(c, str):
                 text = c
             else:
@@ -42,12 +45,11 @@ def to_ui_messages(raw):
                 ui["attachments"] = msg["attachments"]
             out.append(ui)
         elif role == "assistant":
-            if isinstance(c, str):
-                out.append({"role": "assistant", "content": c, "parts": [{"type": "text", "text": c}]}); continue
-            if not isinstance(c, list): continue
+            blocks = c if isinstance(c, list) else [{"type": "text", "text": c}] if isinstance(c, str) else []
             parts, texts = [], []
-            for b in c:
-                if not isinstance(b, dict): continue
+            for b in blocks:
+                if not isinstance(b, dict):
+                    continue
                 t = b.get("type")
                 if t == "text":
                     parts.append({"type": "text", "text": b.get("text", "")}); texts.append(b.get("text", ""))
@@ -55,7 +57,10 @@ def to_ui_messages(raw):
                     parts.append({"type": "thinking", "thinking": b.get("thinking", "")})
                 elif t == "tool_use":
                     parts.append({"type": "step", "id": b.get("id"), **tool_step(b.get("name", ""), b.get("input"))})
-            out.append({"role": "assistant", "content": "".join(texts), "parts": parts})
+            if out and out[-1]["role"] == "assistant":
+                out[-1]["content"] += "".join(texts); out[-1]["parts"] += parts
+            else:
+                out.append({"role": "assistant", "content": "".join(texts), "parts": parts})
     return out
 
 

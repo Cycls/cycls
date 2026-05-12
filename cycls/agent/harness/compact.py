@@ -38,6 +38,6 @@ async def compact(complete, messages):
     m = re.search(r"<summary>([\s\S]*?)</summary>", raw)
     summary = m.group(1).strip() if m else raw.strip()
     return [
-        {"role": "user", "content": "This session continues from a previous conversation. Summary of earlier work:\n\n" + summary},
-        {"role": "assistant", "content": "Understood. I have the full context. Recent messages follow."},
+        {"role": "user", "internal": True, "content": "This session continues from a previous conversation. Summary of earlier work:\n\n" + summary},
+        {"role": "assistant", "internal": True, "content": "Understood. I have the full context. Recent messages follow."},
         *recent]
