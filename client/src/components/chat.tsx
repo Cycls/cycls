@@ -53,7 +53,8 @@ export interface FilesPanelProps {
   onRename: (from: string, to: string) => Promise<void>;
   onDelete: (path: string) => Promise<void>;
   onOpenFile: (path: string) => Promise<string>;
-  onShareFile?: (path: string) => Promise<string>;
+  onShareFile?: (path: string, audience: string) => Promise<string>;
+  org?: { id: string; name: string } | null;
 }
 
 export function Chat({ chat, onShare, files, account, config }: {
