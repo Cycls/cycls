@@ -64,7 +64,7 @@ def test_bash_tool_use_preserves_command_on_refetch():
     ]}]
     out = to_ui_messages(raw)
     assert out == [{"role": "assistant", "content": "",
-                    "parts": [{"type": "step", "tool_name": "Bash", "step": "ls /workspace"}]}]
+                    "parts": [{"type": "step", "id": "X", "tool_name": "Bash", "step": "ls /workspace"}]}]
 
 
 def test_bash_tool_use_prefers_description_over_command():
@@ -83,8 +83,8 @@ def test_editor_tool_uses_preserve_path_on_refetch():
     ]}]
     out = to_ui_messages(raw)
     parts = out[0]["parts"]
-    assert parts[0] == {"type": "step", "tool_name": "Reading", "step": "src/main.py"}
-    assert parts[1] == {"type": "step", "tool_name": "Editing", "step": "src/main.py"}
+    assert parts[0] == {"type": "step", "id": "A", "tool_name": "Reading", "step": "src/main.py"}
+    assert parts[1] == {"type": "step", "id": "B", "tool_name": "Editing", "step": "src/main.py"}
 
 
 def test_database_tool_use_renders_command_and_key():
@@ -95,7 +95,7 @@ def test_database_tool_use_renders_command_and_key():
          "input": {"command": "put", "key": "tasks/42", "value": {"done": True}}, "id": "X"},
     ]}]
     out = to_ui_messages(raw)
-    assert out[0]["parts"][0] == {"type": "step", "tool_name": "Database", "step": "put tasks/42"}
+    assert out[0]["parts"][0] == {"type": "step", "id": "X", "tool_name": "Database", "step": "put tasks/42"}
 
 
 def test_database_scan_renders_with_prefix():

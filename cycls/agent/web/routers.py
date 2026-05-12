@@ -54,7 +54,7 @@ def to_ui_messages(raw):
                 elif t == "thinking":
                     parts.append({"type": "thinking", "thinking": b.get("thinking", "")})
                 elif t == "tool_use":
-                    parts.append({"type": "step", **tool_step(b.get("name", ""), b.get("input"))})
+                    parts.append({"type": "step", "id": b.get("id"), **tool_step(b.get("name", ""), b.get("input"))})
             out.append({"role": "assistant", "content": "".join(texts), "parts": parts})
     return out
 

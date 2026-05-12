@@ -13,6 +13,9 @@ export interface Part {
   row?: string[];
   step?: string;
   tool_name?: string;
+  id?: string;       // tool-call id — threads ToolStart → step_arg → final step
+  args?: string;     // accumulated tool-call input (partial JSON), for the live preview
+  delta?: string;    // a step_arg chunk on the wire (not stored)
   status?: string;
   callout?: string;
   style?: string;
@@ -227,8 +230,24 @@ export function useChat(baseUrl: string = "") {
                 continue;
               }
 
-              // Same type as current? Merge
-              if (currentPart && currentPart.type === type) {
+              // Tool-call argument stream — fold the partial JSON into the
+              // step it belongs to (a live preview of what the model is writing).
+              if (type === "step_arg" && item.id) {
+                const t = parts.find((p) => p.type === "step" && p.id === item.id);
+                if (t) t.args = (t.args || "") + (item.delta || "");
+              } else if (type === "step" && item.id) {
+                // Tool-call step — thread by id so ToolStart, its arg chunks,
+                // and the final detail all land on one line, not three.
+                const existing = parts.find((p) => p.type === "step" && p.id === item.id);
+                if (existing) {
+                  Object.assign(existing, item);
+                  currentPart = existing;
+                } else {
+                  currentPart = { ...item };
+                  parts.push(currentPart);
+                }
+              } else if (currentPart && currentPart.type === type) {
+                // Same type as current? Merge
                 if (item.row && currentPart.rows) {
                   currentPart.rows.push(item.row);
                 } else if (

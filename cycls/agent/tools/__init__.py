@@ -302,11 +302,12 @@ def tool_step(name, input):
 
 def dispatch(block, workspace, timeout, handlers=None, network=False):
     """*block* is a tool_use content block (dict): {type, id, name, input}.
-    Returns (step_event_dict, awaitable_result)."""
-    name, inp = block["name"], block.get("input") or {}
+    Returns (step_event_dict, awaitable_result). The step carries the block's
+    `id` so the FE can fold it into the `ToolStart`/`ToolArgs` it already showed."""
+    bid, name, inp = block["id"], block["name"], block.get("input") or {}
     entry = _TOOLS.get(name)
     if entry and entry[0]:
-        return {"type": "step", **entry[1](inp)}, entry[0](inp, workspace, timeout=timeout, network=network)
+        return {"type": "step", "id": bid, **entry[1](inp)}, entry[0](inp, workspace, timeout=timeout, network=network)
     if handlers and name in handlers:
-        return {"type": "step", **tool_step(name, inp)}, handlers[name](inp)
-    return {"type": "tool_call", "tool": name, "args": inp}, asyncio.sleep(0, result=f"{name} executed")
+        return {"type": "step", "id": bid, **tool_step(name, inp)}, handlers[name](inp)
+    return {"type": "tool_call", "id": bid, "tool": name, "args": inp}, asyncio.sleep(0, result=f"{name} executed")

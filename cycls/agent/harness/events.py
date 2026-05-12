@@ -35,6 +35,23 @@ class Step:
     tool: Optional[str] = None
 
 @dataclass(frozen=True)
+class ToolStart:
+    """The model has committed to a tool call — emitted the moment its block
+    opens, before the (possibly large) arguments stream in. `id` threads the
+    later `ToolArgs` chunks and the post-execution step to the same UI element;
+    `tool` is the display name."""
+    id: str
+    tool: str
+
+@dataclass(frozen=True)
+class ToolArgs:
+    """A chunk of a tool call's input as it streams (partial JSON). The FE
+    appends `delta` to the call identified by `id` — a live preview of, e.g.,
+    a file being written."""
+    id: str
+    delta: str
+
+@dataclass(frozen=True)
 class Callout:
     text: str
     style: str = "info"  # info | warning | error | success
@@ -45,10 +62,6 @@ class ToolCall:
     generically and (today) the model is told it 'executed'."""
     name: str
     input: dict
-
-@dataclass(frozen=True)
-class Heartbeat:
-    """Keep the SSE/UDP flow warm during a silent stretch (streaming tool input)."""
 
 @dataclass(frozen=True)
 class Raw:
@@ -113,7 +126,7 @@ class Turn:
 
 
 Event = (
-    TextDelta | Thinking | Step | Callout | ToolCall | Heartbeat | Raw
+    TextDelta | Thinking | Step | ToolStart | ToolArgs | Callout | ToolCall | Raw
     | Compacting | CompactionFailed | Retrying | OutputLimitHit
     | StoppedUnexpectedly | TimedOut | Failed | Usage | Turn
 )
@@ -127,9 +140,10 @@ def to_ui(ev: Event):
         case TextDelta(text):              return text
         case Thinking(text):               return {"type": "thinking", "thinking": text}
         case Step(label, tool):            return {"type": "step", "step": label, **({"tool_name": tool} if tool else {})}
+        case ToolStart(id, tool):          return {"type": "step", "id": id, "tool_name": tool, "step": ""}
+        case ToolArgs(id, delta):          return {"type": "step_arg", "id": id, "delta": delta}
         case Callout(text, style):         return {"type": "callout", "callout": text, "style": style}
         case ToolCall(name, inp):          return {"type": "tool_call", "tool": name, "args": inp}
-        case Heartbeat():                  return {"type": "ui", "ui": "heartbeat"}
         case Raw(payload):                 return payload
         case Compacting():                 return {"type": "step", "step": "Compacting context..."}
         case CompactionFailed(error):      return {"type": "callout", "callout": f"Compaction failed: {error}", "style": "warning"}
