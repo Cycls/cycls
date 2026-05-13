@@ -22,7 +22,7 @@ def _clear_client_cache():
     _providers._clients.clear()
     yield
     _providers._clients.clear()
-from cycls.agent.harness.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact
+from cycls.agent.harness.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact, compact
 from cycls.agent.harness.providers import context_window
 from cycls.agent.harness.events import to_ui
 from cycls.agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path
@@ -687,6 +687,34 @@ def test_no_compaction_when_under_threshold(agent_env):
     history = _read_history(ctx)
     roles = [m["role"] for m in history]
     assert roles == ["user", "assistant"]
+
+
+def test_compact_returns_internal_summary_pair_plus_recent():
+    """compact() runs `complete`, parses <summary>, strips <analysis>, and
+    returns [user(summary, internal), assistant(understood, internal), *recent].
+    `complete` is called with the OLD slice + a summary-request user message."""
+    old = [{"role": "user", "content": "older q"},
+           {"role": "assistant", "content": [{"type": "text", "text": "older a"}]}]
+    recent = [{"role": "user", "content": f"q{i}"} for i in range(KEEP_RECENT)]
+    messages = old + recent
+
+    seen = {}
+    async def fake_complete(*, messages, system, max_tokens):
+        seen["messages"], seen["system"], seen["max_tokens"] = messages, system, max_tokens
+        return "<analysis>scratch work</analysis><summary>User asked about X.</summary>"
+
+    result = asyncio.run(compact(fake_complete, messages))
+
+    assert [m["role"] for m in result[:2]] == ["user", "assistant"]
+    assert result[0].get("internal") is True and result[1].get("internal") is True
+    assert "User asked about X." in result[0]["content"]
+    assert "scratch work" not in result[0]["content"]  # <analysis> stripped
+    assert "Understood" in result[1]["content"]
+    assert result[2:] == recent  # recent slice passes through verbatim
+
+    assert seen["max_tokens"] == 16384
+    assert seen["messages"][-1]["role"] == "user"
+    assert "summary" in seen["messages"][-1]["content"].lower()
 
 
 def test_compaction_failure_still_saves_history(agent_env):
