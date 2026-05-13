@@ -4,7 +4,7 @@ import asyncio
 import pytest
 
 import cycls
-from cycls.agent.tools import _resolve_path, build_tools
+from cycls.agent.tools import _resolve_path, build_tools, vendor_skips
 
 
 # ---- _resolve_path escape hardening ----
@@ -96,6 +96,26 @@ def test_build_tools_custom_passthrough():
     assert len(tools) == 1
     assert tools[0]["type"] == "custom"
     assert tools[0]["name"] == "render_image"
+
+
+def test_build_tools_filters_anthropic_only_on_other_vendors():
+    """WebSearch is Anthropic-side only — skipped silently when vendor is openai."""
+    tools = build_tools(["WebSearch", "Bash"], None, vendor="openai")
+    names = {t.get("name") for t in tools}
+    assert "web_search" not in names
+    assert "bash" in names
+
+
+def test_build_tools_keeps_anthropic_only_for_anthropic():
+    tools = build_tools(["WebSearch", "Bash"], None, vendor="anthropic")
+    names = {t.get("name") for t in tools}
+    assert names == {"web_search", "bash"}
+
+
+def test_vendor_skips_returns_anthropic_only_names():
+    assert vendor_skips(["WebSearch", "Bash"], "openai") == ["WebSearch"]
+    assert vendor_skips(["WebSearch", "Bash"], "anthropic") == []
+    assert vendor_skips(["WebSearch", "Bash"], None) == []
 
 
 def test_build_tools_cache_control_on_last():

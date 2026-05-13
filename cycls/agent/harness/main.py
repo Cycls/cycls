@@ -14,8 +14,8 @@ from .compact import COMPACT_BUFFER, KEEP_RECENT, compact
 from .prompts import DEFAULT_SYSTEM
 from .providers import make_provider
 from .events import (Turn, Usage, Retrying, Compacting, CompactionFailed,
-                     StoppedUnexpectedly, TimedOut, Failed, Raw)
-from ..tools import build_tools, dispatch, _exec_read
+                     StoppedUnexpectedly, TimedOut, Failed, Callout, Raw)
+from ..tools import build_tools, dispatch, _exec_read, vendor_skips
 
 
 # ---- Config ----
@@ -100,7 +100,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                base_url=None, api_key=None, handlers=None, mcp_servers=None,
                thinking="adaptive"):
     t0 = time.monotonic()
-    bare_model = model.split("/", 1)[1]
+    vendor, bare_model = model.split("/", 1)
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key)
     workspace = context.workspace
     Path(workspace.root).mkdir(parents=True, exist_ok=True)
@@ -112,7 +112,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     messages = session.messages
 
     system_text = DEFAULT_SYSTEM + ("\n\n" + system if system else "")
-    tools_list = build_tools(allowed_tools, tools or [])
+    for skipped in vendor_skips(allowed_tools, vendor):
+        yield Callout(f"`{skipped}` is Anthropic-only; skipped on `{vendor}/*` models.", "warning")
+    tools_list = build_tools(allowed_tools, tools or [], vendor=vendor)
     window = provider.context_window
     usage = [0, 0, 0, 0]  # in, out, cached, cache_create
     tokens_since_compact = 0
