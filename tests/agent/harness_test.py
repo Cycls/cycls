@@ -118,6 +118,52 @@ def test_vendor_skips_returns_anthropic_only_names():
     assert vendor_skips(["WebSearch", "Bash"], None) == []
 
 
+def test_openai_to_messages_degrades_image_in_tool_result():
+    """OpenAI tool messages are text-only — image/document blocks inside a
+    tool_result get a text stub + the kinds are reported so the loop can warn."""
+    from cycls.agent.harness.openai import _to_messages
+    raw = [
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": [
+                {"type": "text", "text": "page 1: "},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "..."}},
+            ]},
+        ]},
+    ]
+    out, dropped = _to_messages(raw)
+    assert dropped == {"image"}
+    tool_msg = out[0]
+    assert tool_msg["role"] == "tool"
+    assert "page 1: " in tool_msg["content"]
+    assert "[image content not viewable on this provider]" in tool_msg["content"]
+
+
+def test_openai_to_messages_degrades_document_in_tool_result():
+    from cycls.agent.harness.openai import _to_messages
+    raw = [
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": [
+                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "..."}},
+            ]},
+        ]},
+    ]
+    out, dropped = _to_messages(raw)
+    assert dropped == {"document"}
+    assert "[document content not viewable on this provider]" in out[0]["content"]
+
+
+def test_openai_to_messages_no_drops_when_text_only():
+    from cycls.agent.harness.openai import _to_messages
+    raw = [
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "plain text"},
+        ]},
+    ]
+    out, dropped = _to_messages(raw)
+    assert dropped == set()
+    assert out[0]["content"] == "plain text"
+
+
 def test_build_tools_cache_control_on_last():
     """Last tool gets ephemeral cache_control for prompt-cache efficiency."""
     tools = build_tools(["Bash", "Editor"], None)
