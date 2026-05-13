@@ -8,15 +8,41 @@ Anthropic shape; the translators below convert it on the way in.
 """
 import json
 
-from .events import TextDelta, Thinking, ToolStart, ToolArgs, Turn
+from .events import TextDelta, Thinking, ToolStart, ToolArgs, Turn, Callout
 from .providers import context_window
 from ..tools import tool_step
 
 
+def _tool_result_content(content):
+    """Render a tool_result's content blocks into the text-only form OpenAI
+    tool messages accept. Returns (text, dropped_kinds). Image/document blocks
+    can't be carried in OpenAI tool messages — surface them as text stubs so the
+    model knows something was elided, and report the kinds so the caller can
+    warn the user."""
+    if isinstance(content, str):
+        return content, set()
+    if not isinstance(content, list):
+        return json.dumps(content), set()
+    parts, dropped = [], set()
+    for x in content:
+        if not isinstance(x, dict):
+            continue
+        t = x.get("type")
+        if t == "text":
+            parts.append(x.get("text", ""))
+        elif t in ("image", "document"):
+            dropped.add(t)
+            parts.append(f"[{t} content not viewable on this provider]")
+    return "".join(parts), dropped
+
+
 def _to_messages(messages):
-    """Anthropic messages → OpenAI messages. tool_result blocks become
-    role=tool messages; assistant tool_use blocks become assistant.tool_calls."""
-    out = []
+    """Anthropic messages → OpenAI messages. Returns (messages, dropped_kinds).
+    tool_result blocks become role=tool messages; assistant tool_use blocks
+    become assistant.tool_calls. Image/document blocks inside tool_results get a
+    text stub (OpenAI tool messages are text-only) and the kinds are returned
+    so the caller can warn — no simulation, no follow-up-user trick."""
+    out, dropped = [], set()
     for m in messages:
         role, content = m["role"], m.get("content", "")
         if isinstance(content, str):
@@ -33,12 +59,9 @@ def _to_messages(messages):
                         parts.append({"type": "image_url", "image_url": {
                             "url": f"data:{src['media_type']};base64,{src['data']}"}})
                 elif t == "tool_result":
-                    c = b.get("content")
-                    if isinstance(c, list):
-                        c = "".join(x.get("text", "") for x in c if isinstance(x, dict))
-                    if not isinstance(c, str):
-                        c = json.dumps(c)
-                    tools.append({"role": "tool", "tool_call_id": b["tool_use_id"], "content": c})
+                    text, d = _tool_result_content(b.get("content"))
+                    dropped |= d
+                    tools.append({"role": "tool", "tool_call_id": b["tool_use_id"], "content": text})
             out.extend(tools)
             if parts:
                 out.append({"role": "user", "content": parts})
@@ -55,7 +78,7 @@ def _to_messages(messages):
             if calls:
                 msg["tool_calls"] = calls
             out.append(msg)
-    return out
+    return out, dropped
 
 
 def _to_system(system):
@@ -79,10 +102,10 @@ def _to_tools(tools):
 
 
 def _prepend_system(messages, system):
-    out = _to_messages(messages)
+    out, dropped = _to_messages(messages)
     if (s := _to_system(system)):
         out.insert(0, {"role": "system", "content": s})
-    return out
+    return out, dropped
 
 
 class OpenAIProvider:
@@ -95,17 +118,22 @@ class OpenAIProvider:
         return context_window(self.model)
 
     async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None, thinking=None):
+        oa_messages, dropped = _prepend_system(messages, system)
+        for kind in sorted(dropped):
+            yield Callout(f"`{kind}` content in tool results isn't viewable on this provider — the model sees a text stub.", "warning")
+        if mcp_servers:
+            yield Callout("MCP servers are Anthropic-only — ignored on this provider.", "warning")
         kwargs = {
             "model": self.model,
-            "messages": _prepend_system(messages, system),
+            "messages": oa_messages,
             "max_completion_tokens": max_tokens,
             "stream": True, "stream_options": {"include_usage": True},
         }
         if (oa_tools := _to_tools(tools)):
             kwargs["tools"] = oa_tools
-        # `thinking` / `cache_control` / `mcp_servers` have no Chat Completions
-        # equivalent — silently dropped (the `thinking` kwarg is accepted just
-        # so the loop's signature is provider-agnostic).
+        # `thinking` / `cache_control` have no Chat Completions equivalent —
+        # silently dropped (the `thinking` kwarg is accepted just so the loop's
+        # signature is provider-agnostic).
 
         text, calls, stop, usage = [], {}, "end_turn", None
         async for chunk in await self._client.chat.completions.create(**kwargs):
@@ -153,7 +181,7 @@ class OpenAIProvider:
                    output=(usage.completion_tokens if usage else 0))
 
     async def complete(self, *, messages, system, max_tokens):
+        oa_messages, _ = _prepend_system(messages, system)  # internal: no UI to warn into
         r = await self._client.chat.completions.create(
-            model=self.model, max_completion_tokens=max_tokens,
-            messages=_prepend_system(messages, system))
+            model=self.model, max_completion_tokens=max_tokens, messages=oa_messages)
         return r.choices[0].message.content or ""
