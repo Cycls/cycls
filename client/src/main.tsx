@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
 import { initPostHog, setAgentDomain } from "./lib/posthog";
+import { ToastProvider } from "./lib/toast";
 
 // Default to system preferences
 if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
@@ -23,6 +24,8 @@ if (inlinedConfig?.analytics) {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <ToastProvider>
+      <App />
+    </ToastProvider>
   </StrictMode>,
 );
