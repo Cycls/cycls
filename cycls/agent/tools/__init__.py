@@ -1,13 +1,9 @@
-"""Tool schemas, execution, and dispatch.
-
-`Tool` is the foundation primitive — name + description + input_schema, plus
-an optional `raw` for provider-specific built-ins (e.g. web_search). All tools
-(built-in and user-supplied) flow through this shape; `build_tools` projects
-to the Anthropic API format at the boundary."""
+"""Tool schemas, execution, and dispatch. Each built-in is stored in Anthropic
+API shape (`type` / `name` / `description` / `input_schema`) and registered in
+`_BUILTINS`; `build_tools` emits them as-is plus a `cache_control` marker on the
+last. User-supplied custom tools come through `_normalize_tool` (accepts the
+camelCase `inputSchema` form too)."""
 import asyncio, base64, json, os, pathlib
-from dataclasses import dataclass, field
-from typing import Optional
-
 from . import pdf
 
 MAX_OUTPUT = 30_000
@@ -15,8 +11,8 @@ MAX_OUTPUT = 30_000
 _IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
 _DOC_EXTS = {"pdf"}
 
-# Custom tool schemas
 _BASH_TOOL = {
+    "type": "custom",
     "name": "bash",
     "description": (
         "Execute a shell command in the workspace sandbox.\n\n"
@@ -32,7 +28,7 @@ _BASH_TOOL = {
         "- Avoid destructive commands (`rm -rf`) unless the user explicitly asks.\n"
         "- When issuing multiple independent commands, send multiple bash tool calls in parallel rather than chaining with &&."
     ),
-    "inputSchema": {"type": "object", "properties": {
+    "input_schema": {"type": "object", "properties": {
         "command": {"type": "string", "description": "The shell command to execute."},
         "timeout": {"type": "integer", "description": "Timeout in milliseconds (default: 600000, max: 600000)."},
         "description": {"type": "string", "description": "Short 5-10 word active-voice summary of what this command does (shown in the UI). Example: 'List files in current directory', 'Run pytest suite'."},
@@ -40,6 +36,7 @@ _BASH_TOOL = {
 }
 
 _READ_TOOL = {
+    "type": "custom",
     "name": "read",
     "description": (
         "Read a file from the workspace.\n\n"
@@ -54,7 +51,7 @@ _READ_TOOL = {
         "- If you need to read a file the user mentioned, always use this tool — assume the path is valid.\n"
         "- It is okay to read a file that does not exist; an error will be returned."
     ),
-    "inputSchema": {"type": "object", "properties": {
+    "input_schema": {"type": "object", "properties": {
         "path": {"type": "string", "description": "Relative path to read (e.g. src/main.py)"},
         "offset": {"type": "integer", "description": "Start line, 1-indexed (default: 1)"},
         "limit": {"type": "integer", "description": "Max lines to read. Omit to read entire file."},
@@ -62,6 +59,7 @@ _READ_TOOL = {
     }, "required": ["path"]}
 }
 _DATABASE_TOOL = {
+    "type": "custom",
     "name": "database",
     "description": (
         "Persistent key-value store scoped to this workspace. Use for state that must "
@@ -78,7 +76,7 @@ _DATABASE_TOOL = {
         "Use prefixes to group related data, e.g. `tasks/<id>`, `notes/<topic>`, "
         "`prefs/<scope>`."
     ),
-    "inputSchema": {"type": "object", "properties": {
+    "input_schema": {"type": "object", "properties": {
         "command": {"type": "string", "enum": ["get", "put", "delete", "scan"]},
         "key": {"type": "string", "description": "Key to operate on (get, put, delete)."},
         "value": {"description": "Value to store (put only). Any JSON-serializable type."},
@@ -87,6 +85,7 @@ _DATABASE_TOOL = {
 }
 
 _EDIT_TOOL = {
+    "type": "custom",
     "name": "edit",
     "description": (
         "Edit or create files in the workspace.\n\n"
@@ -101,7 +100,7 @@ _EDIT_TOOL = {
         "- create: Create a new file with file_text as content.\n"
         "- insert: Insert new_str at insert_line."
     ),
-    "inputSchema": {"type": "object", "properties": {
+    "input_schema": {"type": "object", "properties": {
         "path": {"type": "string", "description": "Relative path to edit"},
         "command": {"type": "string", "enum": ["str_replace", "create", "insert"]},
         "old_str": {"type": "string", "description": "Exact string to replace (must be unique in file)"},
@@ -111,37 +110,26 @@ _EDIT_TOOL = {
     }, "required": ["path", "command"]}
 }
 
-@dataclass(frozen=True)
-class Tool:
-    name: str
-    description: str = ""
-    input_schema: dict = field(default_factory=dict)
-    raw: Optional[dict] = None  # provider-native shape (e.g. web_search server-tool)
-
-    def to_anthropic(self) -> dict:
-        return self.raw or {"type": "custom", "name": self.name,
-                            "description": self.description, "input_schema": self.input_schema}
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "Tool":
-        return cls(name=d["name"], description=d.get("description", ""),
-                   input_schema=d.get("inputSchema", d.get("input_schema", {})))
-
-
-_BUILTINS: dict[str, list[Tool]] = {
-    "WebSearch": [Tool(name="web_search", raw={"type": "web_search_20250305", "name": "web_search"})],
-    "Bash":     [Tool.from_dict(_BASH_TOOL)],
-    "Editor":   [Tool.from_dict(_READ_TOOL), Tool.from_dict(_EDIT_TOOL)],
-    "DataBase": [Tool.from_dict(_DATABASE_TOOL)],
+_BUILTINS = {
+    "WebSearch": [{"type": "web_search_20250305", "name": "web_search"}],
+    "Bash":     [_BASH_TOOL],
+    "Editor":   [_READ_TOOL, _EDIT_TOOL],
+    "DataBase": [_DATABASE_TOOL],
 }
 
 
+def _normalize_tool(spec):
+    """User-supplied custom tool → Anthropic shape. Accepts `inputSchema` too."""
+    if spec.get("type"):  # already provider-native (web_search, etc.)
+        return spec
+    return {"type": "custom", "name": spec["name"],
+            "description": spec.get("description", ""),
+            "input_schema": spec.get("inputSchema", spec.get("input_schema", {}))}
+
+
 def build_tools(allowed_tools, custom):
-    tools = []
-    for name in allowed_tools:
-        tools.extend(t.to_anthropic() for t in _BUILTINS.get(name, []))
-    for t in (custom or []):
-        tools.append(Tool.from_dict(t).to_anthropic())
+    tools = [t for name in allowed_tools for t in _BUILTINS.get(name, [])]
+    tools += [_normalize_tool(t) for t in (custom or [])]
     if tools:
         tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}
     return tools
