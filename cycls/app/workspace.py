@@ -131,13 +131,13 @@ def _fence_retry(method):
         for attempt in range(2):
             try: return await method(self, *args, **kwargs)
             except Error.Closed as e:
-                _log("closed", op=method.__name__, url=self._url, reason=str(e.reason), attempt=attempt)
+                _log("closed", method=method.__name__, url=self._url, reason=str(e.reason), attempt=attempt)
                 if attempt == 0 and self._txn is None and e.reason == CloseReason.FENCED:
                     async with _pool_lock:
                         popped = _pool.pop(self._url, None)
                     _log("fence-evict", url=self._url, had_entry=bool(popped))
                     continue
-                _log("closed-giveup", op=method.__name__, url=self._url)
+                _log("closed-giveup", method=method.__name__, url=self._url)
                 raise
     return wrapped
 
