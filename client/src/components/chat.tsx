@@ -405,7 +405,7 @@ export function Chat({ chat, onShare, files, account, config }: {
 
       <LayoutGroup>
         <LoadingBar active={chatLoading} />
-        {isEmpty ? (
+        {!chatLoading && (isEmpty ? (
           <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16 pt-40 sm:pt-0">
             <div className="relative max-w-3xl w-full">
               {meta && (
@@ -464,7 +464,7 @@ export function Chat({ chat, onShare, files, account, config }: {
               </div>
             </div>
           </>
-        )}
+        ))}
       </LayoutGroup>
 
       {/* Files / Shares / Sessions panel */}
