@@ -2,7 +2,7 @@
 the loop emitting typed events instead of dicts must not change the wire format."""
 from cycls.agent.harness.events import (
     TextDelta, Thinking, Step, ToolStart, ToolArgs, Callout, ToolCall, Raw,
-    Compacting, CompactionFailed, Retrying, OutputLimitHit,
+    Compacting, CompactionFailed, Retrying,
     StoppedUnexpectedly, TimedOut, Failed, Usage, to_ui,
 )
 
@@ -23,7 +23,6 @@ def test_to_ui_lifecycle_shapes():
     assert to_ui(Compacting()) == {"type": "step", "step": "Compacting context..."}
     assert to_ui(CompactionFailed("boom")) == {"type": "callout", "callout": "Compaction failed: boom", "style": "warning"}
     assert to_ui(Retrying(3, 10, 1.5)) == {"type": "step", "step": "Rate limited, retrying in 1.5s... (attempt 3/10)"}
-    assert to_ui(OutputLimitHit(2, 3)) == {"type": "step", "step": "Output limit hit, continuing... (2/3)"}
     assert to_ui(StoppedUnexpectedly("refusal")) == {"type": "callout", "callout": "Stopped: refusal", "style": "warning"}
     assert to_ui(TimedOut("Error: Command timed out after 600s")) == {"type": "callout", "callout": "Error: Command timed out after 600s", "style": "warning"}
     assert to_ui(Failed("connection reset")) == {"type": "callout", "callout": "connection reset", "style": "error"}

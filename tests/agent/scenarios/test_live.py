@@ -201,22 +201,20 @@ def test_multiturn_tool_chain_real(tmp_path):
 
 
 @pytest.mark.live
-def test_max_tokens_recovery_chain_real(tmp_path):
-    """Force the model to hit max_tokens with a long output ask + tight
-    cap, verify the harness's synthetic recovery message fires (`Output
-    limit hit, continuing...`) and the loop continues into another turn."""
+def test_max_tokens_stops_cleanly_real(tmp_path):
+    """When the model hits max_tokens, the loop ends the turn with a
+    `Stopped: max_tokens` callout — no auto-retry (pi-style). Partial output is
+    preserved in the stream; the user re-sends to continue if they want."""
     _, ctx = _ctx(tmp_path,
-        "Count from 1 to 200. List each number on its own line, no skipping. "
-        "Continue exactly where you left off if interrupted.")
+        "Count from 1 to 200. List each number on its own line, no skipping.")
     llm = cycls.LLM().model(SONNET).max_tokens(80)  # ~150 tokens worth of digits
     events = asyncio.run(_collect(llm, ctx))
 
-    recovery_steps = [s for s in _steps(events)
-                      if "Output limit" in s.get("step", "")]
-    assert recovery_steps, (
-        f"max_tokens recovery never fired; "
-        f"got {len(_steps(events))} steps: {_steps(events)!r}"
-    )
+    callouts = [c for c in events if isinstance(c, dict) and c.get("type") == "callout"]
+    assert any("max_tokens" in c.get("callout", "") for c in callouts), \
+        f"expected `Stopped: max_tokens` callout; got callouts={callouts!r}"
+    # Partial output was preserved in the stream (the digits the model managed to emit).
+    assert _text_of(events).strip(), f"no partial text preserved; events={events!r}"
 
 
 @pytest.mark.live
