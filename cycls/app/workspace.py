@@ -9,7 +9,7 @@ SlateDB transaction (single ops are 1-op txns committed non-durable);
 `db.transaction()` shares one txn across many ops; `db.raw()` is the bytes
 escape hatch.
 """
-import asyncio, json
+import asyncio, json, os, uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +19,20 @@ from slatedb.uniffi import (
     DbBuilder, IsolationLevel, ObjectStore, WriteOptions,
     Error, CloseReason,
 )
+
+
+# ---- Debug instrumentation (fence-war forensics) ----
+
+DEBUG = False  # flip True to dump every pool/begin/commit/fence event
+
+_REV = os.environ.get("K_REVISION", "local")[-12:]
+_PID = uuid.uuid4().hex[:6]
+_INSTANCE = f"{_REV}/{_PID}"
+
+def _log(op, **kv):
+    if not DEBUG: return
+    extras = " ".join(f"{k}={v}" for k, v in kv.items())
+    print(f"[SLATE/{_INSTANCE}] {op} {extras}", flush=True)
 
 
 # ---- Tenant shape ----
@@ -73,22 +87,40 @@ async def shutdown_pool():
 
 
 async def _build_db(url):
+    _log("build-start", url=url)
     if url.startswith("file://"):
         Path(url[7:]).mkdir(parents=True, exist_ok=True)
-    return await DbBuilder("db", ObjectStore.resolve(url)).build()
+    db = await DbBuilder("db", ObjectStore.resolve(url)).build()
+    _log("build-done", url=url)
+    return db
 
 
 async def _get_pooled(url):
     """Open-once cache. Builds happen outside the lock so different urls
     can build in parallel; same-url racers discard the loser's handle."""
-    if url in _pool: return _pool[url]
+    if url in _pool:
+        _log("pool-hit", url=url)
+        return _pool[url]
+    _log("pool-miss", url=url)
     db = await _build_db(url)
     async with _pool_lock:
         if url in _pool:
+            _log("pool-race-loser", url=url)
             asyncio.create_task(_safe_shutdown(db))
             return _pool[url]
         _pool[url] = db
+        _log("pool-insert", url=url, size=len(_pool))
         return db
+
+
+async def _evict_on_fence(url, e):
+    """Pool eviction without retry — for paths that can't be safely re-run
+    (scan iterators, user-managed transactions). One stuck-fenced handle in
+    the pool poisons every subsequent request until eviction."""
+    if e.reason == CloseReason.FENCED:
+        async with _pool_lock:
+            popped = _pool.pop(url, None)
+        _log("fence-evict", url=url, had_entry=bool(popped), via="opt-out-path")
 
 
 def _fence_retry(method):
@@ -100,9 +132,13 @@ def _fence_retry(method):
         for attempt in range(2):
             try: return await method(self, *args, **kwargs)
             except Error.Closed as e:
+                _log("closed", op=method.__name__, url=self._url, reason=str(e.reason), attempt=attempt)
                 if attempt == 0 and self._txn is None and e.reason == CloseReason.FENCED:
-                    async with _pool_lock: _pool.pop(self._url, None)
+                    async with _pool_lock:
+                        popped = _pool.pop(self._url, None)
+                    _log("fence-evict", url=self._url, had_entry=bool(popped))
                     continue
+                _log("closed-giveup", op=method.__name__, url=self._url)
                 raise
     return wrapped
 
@@ -128,10 +164,15 @@ class DB:
             yield self._txn
             return
         slate = await _get_pooled(self._url)
+        _log("begin", url=self._url, durable=durable)
         txn = await slate.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
         try: yield txn
-        except Exception: await txn.rollback(); raise
-        else: await txn.commit_with_options(WriteOptions(await_durable=durable))
+        except Exception:
+            _log("rollback", url=self._url)
+            await txn.rollback(); raise
+        else:
+            await txn.commit_with_options(WriteOptions(await_durable=durable))
+            _log("commit", url=self._url, durable=durable)
 
     @_fence_retry
     async def get(self, key, default=None):
@@ -150,20 +191,44 @@ class DB:
             await t.delete(key.encode())
 
     async def items(self, prefix=None):
-        async with self._handle() as t:
-            it = await t.scan_prefix((prefix or "").encode())
-            while (kv := await it.next()) is not None:
-                yield kv.key.decode(), json.loads(kv.value)
+        _log("scan-start", url=self._url, prefix=prefix)
+        try:
+            async with self._handle() as t:
+                it = await t.scan_prefix((prefix or "").encode())
+                while (kv := await it.next()) is not None:
+                    yield kv.key.decode(), json.loads(kv.value)
+        except Error.Closed as e:
+            _log("scan-closed", url=self._url, reason=str(e.reason))
+            await _evict_on_fence(self._url, e)
+            raise
 
     @asynccontextmanager
     async def transaction(self):
         if self._txn is not None:
             raise RuntimeError("nested transactions not supported")
         slate = await _get_pooled(self._url)
-        txn = await slate.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
+        _log("txn-begin", url=self._url)
+        try:
+            txn = await slate.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
+        except Error.Closed as e:
+            _log("txn-begin-closed", url=self._url, reason=str(e.reason))
+            await _evict_on_fence(self._url, e)
+            raise
         try: yield DB._in_txn(txn)
-        except Exception: await txn.rollback(); raise
-        else: await txn.commit_with_options(WriteOptions(await_durable=False))
+        except Exception as e:
+            _log("txn-rollback", url=self._url)
+            await txn.rollback()
+            if isinstance(e, Error.Closed):
+                await _evict_on_fence(self._url, e)
+            raise
+        else:
+            try:
+                await txn.commit_with_options(WriteOptions(await_durable=False))
+                _log("txn-commit", url=self._url)
+            except Error.Closed as e:
+                _log("txn-commit-closed", url=self._url, reason=str(e.reason))
+                await _evict_on_fence(self._url, e)
+                raise
 
     @asynccontextmanager
     async def raw(self):
