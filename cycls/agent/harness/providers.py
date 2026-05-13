@@ -54,15 +54,20 @@ class AnthropicProvider:
     def context_window(self):
         return context_window(self.model)
 
-    async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None):
+    async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None, thinking="adaptive"):
         kwargs = {
             "model": self.model,
             "max_tokens": max_tokens,
             "tools": tools,
             "messages": _for_api(messages),
             "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
-            "thinking": {"type": "adaptive"},
         }
+        # `thinking`: int → explicit budget; "adaptive" → adaptive (auto-disabled
+        # on Haiku, which 400s on adaptive); None or anything else → omitted.
+        if isinstance(thinking, int):
+            kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking}
+        elif thinking == "adaptive" and "haiku" not in self.model:
+            kwargs["thinking"] = {"type": "adaptive"}
         if mcp_servers:
             kwargs["extra_body"] = {"mcp_servers": [s._spec() for s in mcp_servers]}
             kwargs["extra_headers"] = {"anthropic-beta": "mcp-client-2025-04-04"}

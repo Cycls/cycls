@@ -71,7 +71,7 @@ def _retry_delay(attempt, error=None):
     jitter = random.random() * 0.25 * base
     return (base + jitter) / 1000
 
-async def _stream_with_retry(provider, *, messages, system, tools, max_tokens, mcp_servers):
+async def _stream_with_retry(provider, *, messages, system, tools, max_tokens, mcp_servers, thinking):
     """`provider.stream` with exponential backoff on overload / rate-limit:
     yields the provider's events; on a retryable error yields a `Retrying` step
     and tries again (up to `MAX_RETRIES`), otherwise propagates. A stream that
@@ -81,7 +81,7 @@ async def _stream_with_retry(provider, *, messages, system, tools, max_tokens, m
     while True:
         try:
             async for ev in provider.stream(messages=messages, system=system, tools=tools,
-                                            max_tokens=max_tokens, mcp_servers=mcp_servers):
+                                            max_tokens=max_tokens, mcp_servers=mcp_servers, thinking=thinking):
                 yield ev
             return
         except Exception as e:
@@ -97,7 +97,8 @@ async def _stream_with_retry(provider, *, messages, system, tools, max_tokens, m
 async def _run(*, context, system="", tools=None, allowed_tools=[],
                model="anthropic/claude-sonnet-4-20250514", max_tokens=64000,
                bash_timeout=600, bash_network=True, show_usage=False, client=None,
-               base_url=None, api_key=None, handlers=None, mcp_servers=None):
+               base_url=None, api_key=None, handlers=None, mcp_servers=None,
+               thinking="adaptive"):
     t0 = time.monotonic()
     bare_model = model.split("/", 1)[1]
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key)
@@ -128,7 +129,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
             turn = None
             async for ev in _stream_with_retry(provider, messages=messages, system=system_text,
-                                               tools=tools_list, max_tokens=max_tokens, mcp_servers=mcp_servers):
+                                               tools=tools_list, max_tokens=max_tokens,
+                                               mcp_servers=mcp_servers, thinking=thinking):
                 if isinstance(ev, Turn): turn = ev
                 else: yield ev
 

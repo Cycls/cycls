@@ -20,11 +20,8 @@ import cycls
 from cycls.app.workspace import workspace_at
 
 
-# All live tests use Sonnet — the harness hardcodes
-# `thinking={"type": "adaptive"}` which Haiku doesn't support
-# (returns 400 "adaptive thinking is not supported on this model").
-# Making thinking conditional is a separate harness fix.
 SONNET = "anthropic/claude-sonnet-4-6"
+HAIKU = "anthropic/claude-haiku-4-5-20251001"
 
 
 def _ctx(tmp_path, prompt, *, persist=False):
@@ -198,6 +195,17 @@ def test_multiturn_tool_chain_real(tmp_path):
     assert len(msgs) >= 4, f"multi-turn persistence dropped messages: {len(msgs)}"
     # Last must be assistant — clean turn boundary
     assert msgs[-1]["role"] == "assistant"
+
+
+@pytest.mark.live
+def test_haiku_works_without_adaptive_thinking(tmp_path):
+    """Haiku doesn't support `thinking={"type":"adaptive"}` — the provider
+    auto-disables it on `haiku` model names. Verifies that holds against the
+    real API (Haiku used to 400 here with the hardcoded adaptive)."""
+    _, ctx = _ctx(tmp_path, "say hi in one word")
+    llm = cycls.LLM().model(HAIKU).max_tokens(20)
+    events = asyncio.run(_collect(llm, ctx))
+    assert _text_of(events).strip(), f"no text from Haiku; events={events!r}"
 
 
 @pytest.mark.live
