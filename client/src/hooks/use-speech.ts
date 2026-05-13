@@ -74,9 +74,7 @@ export function useSpeechRecognition({
         const t0 = Date.now();
         try {
           const headers = authHeadersRef.current ? await authHeadersRef.current() : {};
-          const token = headers["Authorization"]?.replace("Bearer ", "");
-          const url = token ? `/transcribe?token=${encodeURIComponent(token)}` : "/transcribe";
-          const res = await fetch(url, { method: "POST", body: form, signal: controller.signal });
+          const res = await fetch("/transcribe", { method: "POST", body: form, headers, signal: controller.signal });
           if (res.ok) {
             const data = await res.json();
             const text = data.text || "";
