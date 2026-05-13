@@ -88,7 +88,7 @@ export function useSpeechRecognition({
             onEnd(text);
           } else {
             track("mic_transcription_failed", { status: res.status });
-            toastError(`POST /transcribe · HTTP ${res.status}`);
+            toastError(res.statusText || `HTTP ${res.status}`);
             onEnd("");
           }
         } catch {
