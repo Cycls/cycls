@@ -44,15 +44,15 @@ def test_assistant_blocks_become_parts():
     assert msg["parts"][2]["tool_name"] == "Bash"
 
 
-def test_web_search_tool_use_includes_query():
+def test_web_search_tool_use_renders_as_step():
+    """`server_tool_use` blocks render as steps on refetch with the same
+    {tool_name: "Web Search", step: query} shape the live provider yields."""
     raw = [{"role": "assistant", "content": [
         {"type": "server_tool_use", "name": "web_search", "input": {"query": "rust async"}, "id": "1"},
     ]}]
-    # server_tool_use isn't tool_use — currently dropped. This is desired:
-    # web_search results render as steps via the streaming path; on reload
-    # they'd need their own handling. For now ensure no crash.
     out = to_ui_messages(raw)
-    assert out == [{"role": "assistant", "content": "", "parts": []}]
+    assert out == [{"role": "assistant", "content": "",
+                    "parts": [{"type": "step", "tool_name": "Web Search", "step": "rust async"}]}]
 
 
 def test_bash_tool_use_preserves_command_on_refetch():

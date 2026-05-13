@@ -57,6 +57,11 @@ def to_ui_messages(raw):
                     parts.append({"type": "thinking", "thinking": b.get("thinking", "")})
                 elif t == "tool_use":
                     parts.append({"type": "step", "id": b.get("id"), **tool_step(b.get("name", ""), b.get("input"))})
+                elif t == "server_tool_use":
+                    # Server-side tools (web_search etc.) run Anthropic-side. The live
+                    # provider stream yields a Step for these at content_block_stop;
+                    # mirror it on refetch so search history doesn't vanish on reload.
+                    parts.append({"type": "step", **tool_step(b.get("name", ""), b.get("input"))})
             if out and out[-1]["role"] == "assistant":
                 out[-1]["content"] += "".join(texts); out[-1]["parts"] += parts
             else:
