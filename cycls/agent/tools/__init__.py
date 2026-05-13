@@ -117,6 +117,17 @@ _BUILTINS = {
     "DataBase": [_DATABASE_TOOL],
 }
 
+# Built-ins that only work on certain vendors. The loop warns + `build_tools`
+# skips when the active vendor doesn't match.
+_ANTHROPIC_ONLY = frozenset({"WebSearch"})
+
+
+def vendor_skips(allowed_tools, vendor):
+    """Names from `allowed_tools` that the active `vendor` can't run."""
+    if vendor in (None, "anthropic"):
+        return []
+    return [n for n in allowed_tools if n in _ANTHROPIC_ONLY]
+
 
 def _normalize_tool(spec):
     """User-supplied custom tool → Anthropic shape. Accepts `inputSchema` too."""
@@ -127,8 +138,10 @@ def _normalize_tool(spec):
             "input_schema": spec.get("inputSchema", spec.get("input_schema", {}))}
 
 
-def build_tools(allowed_tools, custom):
-    tools = [t for name in allowed_tools for t in _BUILTINS.get(name, [])]
+def build_tools(allowed_tools, custom, vendor=None):
+    skipped = set(vendor_skips(allowed_tools, vendor))
+    tools = [t for name in allowed_tools if name not in skipped
+             for t in _BUILTINS.get(name, [])]
     tools += [_normalize_tool(t) for t in (custom or [])]
     if tools:
         tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}
