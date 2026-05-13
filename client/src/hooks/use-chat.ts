@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from "react";
-import { useApi } from "./use-api";
+import { useApi, reasonOf } from "./use-api";
 import { track } from "../lib/posthog";
 import { useToast } from "../lib/toast";
 
@@ -105,7 +105,7 @@ export function useChat(baseUrl: string = "") {
           file_size: file.size,
           status: res.status,
         });
-        toastError(res.statusText || `HTTP ${res.status}`);
+        toastError(await reasonOf(res));
         throw new Error(`Upload failed: ${res.status}`);
       }
       track("file_uploaded", {

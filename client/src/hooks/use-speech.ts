@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { track } from "../lib/posthog";
 import { useToast } from "../lib/toast";
+import { reasonOf } from "./use-api";
 
 export function useSpeechRecognition({
   onEnd,
@@ -88,7 +89,7 @@ export function useSpeechRecognition({
             onEnd(text);
           } else {
             track("mic_transcription_failed", { status: res.status });
-            toastError(res.statusText || `HTTP ${res.status}`);
+            toastError(await reasonOf(res));
             onEnd("");
           }
         } catch {
