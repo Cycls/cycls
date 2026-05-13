@@ -94,7 +94,7 @@ class OpenAIProvider:
     def context_window(self):
         return context_window(self.model)
 
-    async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None):
+    async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None, thinking=None):
         kwargs = {
             "model": self.model,
             "messages": _prepend_system(messages, system),
@@ -104,7 +104,8 @@ class OpenAIProvider:
         if (oa_tools := _to_tools(tools)):
             kwargs["tools"] = oa_tools
         # `thinking` / `cache_control` / `mcp_servers` have no Chat Completions
-        # equivalent — silently dropped.
+        # equivalent — silently dropped (the `thinking` kwarg is accepted just
+        # so the loop's signature is provider-agnostic).
 
         text, calls, stop, usage = [], {}, "end_turn", None
         async for chunk in await self._client.chat.completions.create(**kwargs):

@@ -30,6 +30,7 @@ class LLM:
         self._handlers = {}
         self._mcp = []
         self._loop = None
+        self._thinking = "adaptive"
 
     def _copy(self, **updates):
         new = LLM.__new__(LLM)
@@ -61,6 +62,13 @@ class LLM:
         """Connect to one or more remote MCP servers (cycls.MCP). Their tools
         run server-side via the Anthropic MCP connector — anthropic/* only."""
         return self._copy(_mcp=[*self._mcp, *servers])
+
+    def thinking(self, spec):
+        """Set the model's thinking budget. `"adaptive"` (default) lets the
+        model decide — auto-disabled on models that don't support it (Haiku).
+        Pass an int for an explicit budget in tokens, or None to disable.
+        Anthropic-only — OpenAI providers ignore this."""
+        return self._copy(_thinking=spec)
 
     def loop(self, fn):
         """Run a custom loop instead of the built-in one. `fn` is an async
@@ -98,5 +106,6 @@ class LLM:
             api_key=self._api_key,
             handlers=self._handlers,
             mcp_servers=self._mcp,
+            thinking=self._thinking,
         ):
             yield ev
