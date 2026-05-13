@@ -22,6 +22,7 @@ from cycls.app.workspace import workspace_at
 
 SONNET = "anthropic/claude-sonnet-4-6"
 HAIKU = "anthropic/claude-haiku-4-5-20251001"
+OPENAI = "openai/gpt-4o-mini"
 
 
 def _ctx(tmp_path, prompt, *, persist=False):
@@ -195,6 +196,40 @@ def test_multiturn_tool_chain_real(tmp_path):
     assert len(msgs) >= 4, f"multi-turn persistence dropped messages: {len(msgs)}"
     # Last must be assistant — clean turn boundary
     assert msgs[-1]["role"] == "assistant"
+
+
+@pytest.mark.live
+def test_openai_basic_real(tmp_path):
+    """OpenAI is a first-class provider: basic chat + a real tool call work
+    end-to-end. Pins the OpenAIProvider's stream/translation path against the
+    real Chat Completions API."""
+    ws_root, ctx = _ctx(tmp_path,
+        "Run `cat /workspace/marker.txt` via bash and tell me exactly what it contains. "
+        "Only quote the file content, no commentary.")
+    (ws_root / "marker.txt").write_text("orange octopus")
+
+    llm = cycls.LLM().model(OPENAI).allowed_tools(["Bash"]).max_tokens(500)
+    events = asyncio.run(_collect(llm, ctx))
+
+    assert any(s.get("tool_name") == "Bash" for s in _steps(events)), \
+        f"OpenAI didn't use bash; steps: {_steps(events)!r}"
+    text = _text_of(events).lower()
+    assert "orange octopus" in text, f"expected 'orange octopus' in: {text!r}"
+
+
+@pytest.mark.live
+def test_openai_websearch_skipped_with_warning(tmp_path):
+    """`WebSearch` is Anthropic-only. On OpenAI, the loop emits a Callout
+    warning before the turn and the tool isn't registered with the model."""
+    _, ctx = _ctx(tmp_path, "say hi in one word")
+    llm = cycls.LLM().model(OPENAI).allowed_tools(["WebSearch"]).max_tokens(20)
+    events = asyncio.run(_collect(llm, ctx))
+
+    callouts = [c for c in events if isinstance(c, dict) and c.get("type") == "callout"]
+    assert any("WebSearch" in c.get("callout", "") and "Anthropic-only" in c.get("callout", "")
+               for c in callouts), f"expected WebSearch skip callout; got {callouts!r}"
+    # And the model still produced a normal response.
+    assert _text_of(events).strip(), f"no text from OpenAI; events={events!r}"
 
 
 @pytest.mark.live
