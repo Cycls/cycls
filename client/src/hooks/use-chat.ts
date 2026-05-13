@@ -105,7 +105,7 @@ export function useChat(baseUrl: string = "") {
           file_size: file.size,
           status: res.status,
         });
-        toastError(`PUT /files/${uploadPath} · HTTP ${res.status}`);
+        toastError(res.statusText || `HTTP ${res.status}`);
         throw new Error(`Upload failed: ${res.status}`);
       }
       track("file_uploaded", {

@@ -22,7 +22,7 @@ export function useApi(baseUrl: string = "") {
     if (!res.ok) {
       const err = new Error(`HTTP ${res.status}`) as Error & { status: number };
       err.status = res.status;
-      if (!silent) error(`${rest.method || "GET"} ${path} · HTTP ${res.status}`);
+      if (!silent) error(res.statusText || `HTTP ${res.status}`);
       throw err;
     }
     return res;
