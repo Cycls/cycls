@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { t, useLang } from "../lib/i18n";
 import { LoadingBar } from "./loading-bar";
 import { Icon, Spinner } from "./icon";
+import { ShareDialog } from "./share-dialog";
 import type { FilesPanelProps } from "./chat";
 
 const FolderIcon = ({ className = "size-5" }: { className?: string }) =>
@@ -103,7 +103,7 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onMkdir, o
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [creatingFolder, setCreatingFolder] = useState(false);
-  const [shareToast, setShareToast] = useState<{ name: string; failed?: boolean } | null>(null);
+  const [shareDialog, setShareDialog] = useState<{ path: string; name: string } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState<string[]>([]);
   const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
@@ -146,17 +146,6 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onMkdir, o
     setDragging(false);
     if (e.dataTransfer.files.length) handleUpload(e.dataTransfer.files);
   }, [handleUpload]);
-
-  const shareEntry = useCallback(async (entryPath: string, name: string, audience: string) => {
-    if (!onShareFile) return;
-    try {
-      await navigator.clipboard.writeText(await onShareFile(entryPath, audience));
-      setShareToast({ name });
-    } catch {
-      setShareToast({ name, failed: true });
-    }
-    setTimeout(() => setShareToast(null), 2500);
-  }, [onShareFile]);
 
   const sorted = [...entries].sort((a, b) => {
     if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
@@ -372,8 +361,7 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onMkdir, o
                             },
                           }] : []),
                           ...(!isDir && onShareFile ? [
-                            { label: t("share"), onClick: () => shareEntry(entryPath, entry.name, "public") },
-                            ...(org ? [{ label: t("shareWithOrg").replace("{org}", org.name), onClick: () => shareEntry(entryPath, entry.name, `org:${org.id}`) }] : []),
+                            { label: t("share"), onClick: () => setShareDialog({ path: entryPath, name: entry.name }) },
                           ] : []),
                           {
                             label: t("rename"),
@@ -407,22 +395,14 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onMkdir, o
           </div>
         )}
       </div>
-      {createPortal(
-        <AnimatePresence>
-          {shareToast && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 10 }}
-              className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 rounded-lg border border-border bg-background shadow-lg px-3 py-2 flex items-center gap-2"
-            >
-              {shareToast.failed
-                ? <span className="text-xs text-foreground">{t("shareFailed")} <span className="text-muted-foreground">· {shareToast.name}</span></span>
-                : <><Icon name="check" className="w-3.5 h-3.5 text-foreground" /><span className="text-xs text-foreground">{t("linkCopied")} <span className="text-muted-foreground">· {shareToast.name}</span></span></>}
-            </motion.div>
-          )}
-        </AnimatePresence>,
-        document.body
+      {shareDialog && onShareFile && (
+        <ShareDialog
+          onClose={() => setShareDialog(null)}
+          mode="file"
+          defaultTitle={shareDialog.name}
+          org={org}
+          onShare={(_t, audience) => onShareFile(shareDialog.path, audience)}
+        />
       )}
     </div>
   );

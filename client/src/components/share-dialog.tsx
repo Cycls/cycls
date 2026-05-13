@@ -5,9 +5,10 @@ import { Icon, Spinner } from "./icon";
 
 // Mounted only while open (parent conditionally renders it), so the form
 // state resets to fresh each time the dialog is opened.
-export function ShareDialog({ onClose, defaultTitle, org, onShare, onManageShares }: {
+export function ShareDialog({ onClose, mode = "chat", defaultTitle = "", org, onShare, onManageShares }: {
   onClose: () => void;
-  defaultTitle: string;
+  mode?: "chat" | "file";
+  defaultTitle?: string;
   org?: { id: string; name: string } | null;
   onShare: (title: string, audience: string) => Promise<string>;
   onManageShares?: () => void;
@@ -24,8 +25,13 @@ export function ShareDialog({ onClose, defaultTitle, org, onShare, onManageShare
       <div className="px-4 pt-4 pb-3">
         <div className="flex items-center gap-2 mb-1">
           <Icon name="link" className="w-4 h-4 text-foreground shrink-0" />
-          <h3 className="text-sm font-medium text-foreground">{t("shareConversation")}</h3>
+          <h3 className="text-sm font-medium text-foreground">
+            {mode === "file" ? t("shareFile") : t("shareConversation")}
+          </h3>
         </div>
+        {mode === "file" && defaultTitle && (
+          <p className="mb-3 truncate text-[11px] text-muted-foreground" dir="auto">{defaultTitle}</p>
+        )}
         <div className="flex gap-1.5 mt-3 mb-3">
           {(["public", ...(org ? [`org:${org.id}`] : [])] as string[]).map((aud) => (
             <button
@@ -37,15 +43,19 @@ export function ShareDialog({ onClose, defaultTitle, org, onShare, onManageShare
             </button>
           ))}
         </div>
-        <p className="mb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">{t("title")}</p>
-        <input
-          type="text"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder={t("untitled")}
-          dir="auto"
-          className="w-full rounded-md border border-border bg-secondary/50 px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
-        />
+        {mode === "chat" && (
+          <>
+            <p className="mb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">{t("title")}</p>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder={t("untitled")}
+              dir="auto"
+              className="w-full rounded-md border border-border bg-secondary/50 px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
+            />
+          </>
+        )}
       </div>
 
       <div className="border-t border-border px-4 py-3">
