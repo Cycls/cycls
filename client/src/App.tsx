@@ -41,6 +41,21 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
   };
 }
 
+function ChatAppKeyed({ config }: { config: AppConfig | null }) {
+  const { organization, isLoaded } = useOrganization();
+  const orgKey = organization?.id || "personal";
+  const prevKey = useRef(orgKey);
+  useEffect(() => {
+    if (prevKey.current !== orgKey) {
+      // ?id / ?fork point at the previous tenant — drop them on org switch.
+      window.history.replaceState({}, "", window.location.pathname);
+      prevKey.current = orgKey;
+    }
+  }, [orgKey]);
+  if (!isLoaded) return null;
+  return <ChatApp key={orgKey} config={config} />;
+}
+
 function ChatApp({ config }: { config: AppConfig | null }) {
   const chat = useChat();
   const files = useFiles();
@@ -139,7 +154,7 @@ function ChatApp({ config }: { config: AppConfig | null }) {
     onManageAccount: () => clerk.openUserProfile(),
     onCreateOrg: () => clerk.openCreateOrganization(),
     onManageOrg: () => clerk.openOrganizationProfile(),
-    onSwitchOrg: (orgId: string | null) => { setActive?.({ organization: orgId || null }); chat.clear(); },
+    onSwitchOrg: (orgId: string | null) => setActive?.({ organization: orgId || null }),
   };
 
   return (
@@ -559,7 +574,7 @@ export default function App() {
   return (
     <ClerkProvider publishableKey={clerkKey} appearance={{ baseTheme: isDark ? dark : undefined }} localization={lang === "ar" ? arSA : undefined}>
       <SignedIn>
-        <ChatApp config={config} />
+        <ChatAppKeyed config={config} />
       </SignedIn>
       <SignedOut>
         <CustomSignIn />
