@@ -71,17 +71,6 @@ def _retry_delay(attempt, error=None):
     jitter = random.random() * 0.25 * base
     return (base + jitter) / 1000
 
-def _recover(e, messages):
-    last = messages[-1] if messages else {}
-    content = last.get("content", [])
-    if not isinstance(content, list): return False
-    if last.get("role") == "assistant" and any(b.get("type") == "tool_use" for b in content):
-        messages.append({"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": b["id"], "content": f"Error: {e}"}
-            for b in content if b.get("type") == "tool_use"]})
-        return True
-    return False
-
 async def _stream_with_retry(provider, *, messages, system, tools, max_tokens, mcp_servers):
     """`provider.stream` with exponential backoff on overload / rate-limit:
     yields the provider's events; on a retryable error yields a `Retrying` step
@@ -184,13 +173,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
         except Exception as e:
             # Retries (overload / rate-limit) already happened inside
-            # _stream_with_retry; what reaches here is fatal. If the model left a
-            # dangling tool_use, inject error tool_results and let the loop carry
-            # on; otherwise surface the error and stop.
-            if not _recover(e, messages):
-                session.rollback()
-                yield Failed(str(e)); break
-            await session.checkpoint(); continue
+            # _stream_with_retry; what reaches here is fatal. Surface and stop —
+            # _valid_prefix trims any dangling tool_use on next load.
+            session.rollback()
+            yield Failed(str(e)); break
 
     if show_usage and usage[0]:
         p = next((v for k, v in _PRICING.items() if k in bare_model), None)
