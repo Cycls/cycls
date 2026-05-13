@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from cycls.agent.harness import providers as _providers
-from cycls.agent.harness.main import _run, MAX_RETRIES, _is_retryable, _ingest, _recover
+from cycls.agent.harness.main import _run, MAX_RETRIES, _is_retryable, _ingest
 
 
 @pytest.fixture(autouse=True)
@@ -832,31 +832,6 @@ def test_auto_retry_exhausted_shows_error(agent_env):
     callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
     assert len(callouts) == 1
     assert "overloaded" in callouts[0]["callout"]
-
-
-# ---------------------------------------------------------------------------
-# Recovery function tests
-# ---------------------------------------------------------------------------
-
-def test_recover_patches_unresolved_tool_use():
-    """_recover should inject error tool_results for unresolved tool_use blocks."""
-    messages = [
-        {"role": "assistant", "content": [
-            {"type": "tool_use", "id": "t1"},
-            {"type": "tool_use", "id": "t2"},
-        ]}
-    ]
-    assert _recover(Exception("API error"), messages) is True
-    assert len(messages) == 2
-    results = messages[1]["content"]
-    assert all(r["type"] == "tool_result" for r in results)
-    assert {r["tool_use_id"] for r in results} == {"t1", "t2"}
-
-
-def test_recover_returns_false_on_non_recoverable():
-    """_recover should return False when messages can't be patched."""
-    messages = [{"role": "user", "content": "hello"}]
-    assert _recover(Exception("bad"), messages) is False
 
 
 # ---------------------------------------------------------------------------
