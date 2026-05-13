@@ -86,11 +86,6 @@ class Retrying:
     delay: float
 
 @dataclass(frozen=True)
-class OutputLimitHit:
-    attempt: int
-    of: int
-
-@dataclass(frozen=True)
 class StoppedUnexpectedly:
     reason: str
 
@@ -127,7 +122,7 @@ class Turn:
 
 Event = (
     TextDelta | Thinking | Step | ToolStart | ToolArgs | Callout | ToolCall | Raw
-    | Compacting | CompactionFailed | Retrying | OutputLimitHit
+    | Compacting | CompactionFailed | Retrying
     | StoppedUnexpectedly | TimedOut | Failed | Usage | Turn
 )
 
@@ -148,7 +143,6 @@ def to_ui(ev: Event):
         case Compacting():                 return {"type": "step", "step": "Compacting context..."}
         case CompactionFailed(error):      return {"type": "callout", "callout": f"Compaction failed: {error}", "style": "warning"}
         case Retrying(attempt, of, delay): return {"type": "step", "step": f"Rate limited, retrying in {delay:.1f}s... (attempt {attempt}/{of})"}
-        case OutputLimitHit(attempt, of):  return {"type": "step", "step": f"Output limit hit, continuing... ({attempt}/{of})"}
         case StoppedUnexpectedly(reason):  return {"type": "callout", "callout": f"Stopped: {reason}", "style": "warning"}
         case TimedOut(message):            return {"type": "callout", "callout": message, "style": "warning"}
         case Failed(error):                return {"type": "callout", "callout": error, "style": "error"}

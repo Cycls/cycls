@@ -14,7 +14,7 @@ from .compact import COMPACT_BUFFER, KEEP_RECENT, compact
 from .prompts import DEFAULT_SYSTEM
 from .providers import make_provider
 from .events import (Turn, Usage, Retrying, Compacting, CompactionFailed,
-                     OutputLimitHit, StoppedUnexpectedly, TimedOut, Failed, Raw)
+                     StoppedUnexpectedly, TimedOut, Failed, Raw)
 from ..tools import build_tools, dispatch, _exec_read
 
 
@@ -125,7 +125,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     tools_list = build_tools(allowed_tools, tools or [])
     window = provider.context_window
     usage = [0, 0, 0, 0]  # in, out, cached, cache_create
-    tokens_since_compact = recovery = 0
+    tokens_since_compact = 0
 
     while True:
         try:
@@ -147,15 +147,15 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             tokens_since_compact = turn.input + turn.cached + turn.cache_create
             messages.append({"role": "assistant", "content": turn.content})
 
-            if turn.stop_reason == "max_tokens" and recovery < 3:
-                recovery += 1
+            if turn.stop_reason == "max_tokens":
+                # Don't auto-retry — that's papering over an anti-pattern. But
+                # pair any dangling tool_use blocks with error tool_results so
+                # the stored history stays API-valid for the next user turn.
                 ids = [b["id"] for b in turn.content if isinstance(b, dict) and b.get("type") == "tool_use"]
-                msg = "Cut off by output limit. Resume — break remaining work into smaller pieces."
-                messages.append({"role": "user", "internal": True, "content": (
-                    [{"type": "tool_result", "tool_use_id": i, "content": msg, "is_error": True} for i in ids]
-                    if ids else msg)})
-                yield OutputLimitHit(recovery, 3)
-                continue
+                if ids:
+                    messages.append({"role": "user", "content": [
+                        {"type": "tool_result", "tool_use_id": i, "content": "Cut off by output limit.", "is_error": True}
+                        for i in ids]})
             if turn.stop_reason not in ("tool_use", "end_turn"):
                 yield StoppedUnexpectedly(turn.stop_reason)
             if turn.stop_reason != "tool_use":
