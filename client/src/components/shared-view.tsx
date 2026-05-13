@@ -20,21 +20,37 @@ interface ChatShare {
 // File shares redirect to the raw URL — no SPA chrome, browser handles rendering.
 interface FileShare { type: "file"; url: string }
 
-export function SharedView() {
+export function SharedView({ getToken }: { getToken?: () => Promise<string | null> } = {}) {
   const [data, setData] = useState<ChatShare | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     // /shared/<user>/<token> is the SPA route; JSON lives at /share/<user>/<token>/data.
-    fetch(`${window.location.pathname.replace("/shared/", "/share/")}/data`)
-      .then((res) => {
-        if (res.status === 403) throw new Error("This share has expired");
+    // Org-scoped shares need the viewer's bearer so the backend can match `audience: "org:<id>"`
+    // against the requester's org_id. Public shares ignore the bearer.
+    (async () => {
+      try {
+        const headers: Record<string, string> = {};
+        if (getToken) {
+          const token = await getToken();
+          if (token) headers.Authorization = `Bearer ${token}`;
+        }
+        const res = await fetch(
+          `${window.location.pathname.replace("/shared/", "/share/")}/data`,
+          { headers },
+        );
+        if (res.status === 403) throw new Error("This share is private or expired");
         if (!res.ok) throw new Error("Share not found");
-        return res.json() as Promise<ChatShare | FileShare>;
-      })
-      .then((d) => {
-        if (d.type === "file") { window.location.replace(d.url); return; }
+        const d = (await res.json()) as ChatShare | FileShare;
+        if (d.type === "file") {
+          // Browser redirects drop the Authorization header, so org file shares
+          // would 403. Fetch with our bearer and hand the browser a blob URL.
+          const fileRes = await fetch(d.url, { headers });
+          if (!fileRes.ok) throw new Error("This share is private or expired");
+          window.location.replace(URL.createObjectURL(await fileRes.blob()));
+          return;
+        }
         setData(d);
         document.title = d.title ? `Cycls | ${d.title}` : "Cycls";
         track("share_viewed", {
@@ -46,16 +62,15 @@ export function SharedView() {
           message_count: d.messages?.length || 0,
           referrer: document.referrer || null,
         });
-      })
-      .catch((err) => {
-        setError(err.message);
-        track("share_view_failed", {
-          share_url: window.location.href,
-          error: err.message,
-        });
-      })
-      .finally(() => setLoading(false));
-  }, []);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(msg);
+        track("share_view_failed", { share_url: window.location.href, error: msg });
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [getToken]);
 
   if (loading) {
     return (

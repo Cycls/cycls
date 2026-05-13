@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useDarkMode } from "./hooks/use-dark-mode";
 import {
   AuthenticateWithRedirectCallback,
@@ -178,6 +178,22 @@ function popParams(): string {
     if (v) { params.set(k, v); sessionStorage.removeItem(ssKey(k)); }
   }
   return params.toString() ? `/?${params}` : "/";
+}
+
+function SharedViewAuthed() {
+  const { getToken, isLoaded } = useAuth();
+  // Share URL: /shared/<subject>/<token>. Subject is `<org_id>:<user_id>` for
+  // org-context owners, plain `<user_id>` otherwise. Mint the viewer's token
+  // for the share's org so the audience check passes regardless of which org
+  // the viewer currently has active.
+  const subject = window.location.pathname.split("/")[2] || "";
+  const orgId = subject.includes(":") ? subject.split(":")[0] : null;
+  const fetchToken = useCallback(async () => {
+    try { return await getToken(orgId ? { organizationId: orgId } : undefined); }
+    catch { return null; }
+  }, [getToken, orgId]);
+  if (!isLoaded) return null;
+  return <SharedView getToken={fetchToken} />;
 }
 
 function SSOCallback() {
@@ -511,13 +527,22 @@ export default function App() {
     register({ theme: isDark ? "dark" : "light", language: lang });
   }, [isDark, lang]);
 
+  const clerkKey = config?.auth ? (import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || config?.pk) : null;
+
   if (window.location.pathname.startsWith("/shared/")) {
-    return <SharedView />;
+    if (loading) return null;
+    // Org-scoped shares need the viewer's bearer (see shared-view.tsx). Wrap
+    // in ClerkProvider so signed-in viewers can attach a token; anonymous
+    // visitors still see public shares without auth.
+    if (!clerkKey) return <SharedView />;
+    return (
+      <ClerkProvider publishableKey={clerkKey} appearance={{ baseTheme: isDark ? dark : undefined }}>
+        <SharedViewAuthed />
+      </ClerkProvider>
+    );
   }
 
   if (loading) return null;
-
-  const clerkKey = config?.auth ? (import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || config?.pk) : null;
 
   if (!clerkKey) {
     return <ChatNoAuth config={config} />;
