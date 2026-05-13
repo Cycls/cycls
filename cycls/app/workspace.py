@@ -23,7 +23,7 @@ from slatedb.uniffi import (
 
 # ---- Debug instrumentation (fence-war forensics) ----
 
-DEBUG = False  # flip True to dump every pool/begin/commit/fence event
+DEBUG = True  # flip True to dump every pool/begin/commit/fence event
 
 _REV = os.environ.get("K_REVISION", "local")[-12:]
 _PID = uuid.uuid4().hex[:6]
@@ -72,6 +72,7 @@ def workspace_at(tenant, volume, base=None, slot=".db") -> Workspace:
 
 _pool: dict = {}
 _pool_lock = asyncio.Lock()
+_url_locks: dict = {}
 
 
 async def _safe_shutdown(db):
@@ -96,18 +97,16 @@ async def _build_db(url):
 
 
 async def _get_pooled(url):
-    """Open-once cache. Builds happen outside the lock so different urls
-    can build in parallel; same-url racers discard the loser's handle."""
     if url in _pool:
         _log("pool-hit", url=url)
         return _pool[url]
     _log("pool-miss", url=url)
-    db = await _build_db(url)
-    async with _pool_lock:
+    lock = _url_locks.setdefault(url, asyncio.Lock())
+    async with lock:
         if url in _pool:
-            _log("pool-race-loser", url=url)
-            asyncio.create_task(_safe_shutdown(db))
+            _log("pool-wait-resolved", url=url)
             return _pool[url]
+        db = await _build_db(url)
         _pool[url] = db
         _log("pool-insert", url=url, size=len(_pool))
         return db
