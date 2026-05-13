@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef } from "react";
 import { useApi } from "./use-api";
 import { track } from "../lib/posthog";
+import { useToast } from "../lib/toast";
 
 export interface Part {
   type: string;
@@ -83,6 +84,7 @@ export function useChat(baseUrl: string = "") {
     uiHandlerRef.current = h;
   }, []);
   const { api, authHeaders, setGetToken } = useApi(baseUrl);
+  const { error: toastError } = useToast();
 
   const uploadFile = useCallback(
     async (file: File): Promise<Attachment> => {
@@ -103,6 +105,7 @@ export function useChat(baseUrl: string = "") {
           file_size: file.size,
           status: res.status,
         });
+        toastError(`PUT /files/${uploadPath} · HTTP ${res.status}`);
         throw new Error(`Upload failed: ${res.status}`);
       }
       track("file_uploaded", {
@@ -113,7 +116,7 @@ export function useChat(baseUrl: string = "") {
       });
       return { name: file.name, size: file.size, type: file.type, url: "", path: uploadPath };
     },
-    [baseUrl, authHeaders],
+    [baseUrl, authHeaders, toastError],
   );
 
   const send = useCallback(

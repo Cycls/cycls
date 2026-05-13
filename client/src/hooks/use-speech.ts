@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { track } from "../lib/posthog";
+import { useToast } from "../lib/toast";
 
 export function useSpeechRecognition({
   onEnd,
@@ -8,6 +9,7 @@ export function useSpeechRecognition({
   onEnd: (text: string) => void;
   authHeaders?: () => Promise<Record<string, string>>;
 }) {
+  const { error: toastError } = useToast();
   const [listening, setListening] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -86,6 +88,7 @@ export function useSpeechRecognition({
             onEnd(text);
           } else {
             track("mic_transcription_failed", { status: res.status });
+            toastError(`POST /transcribe · HTTP ${res.status}`);
             onEnd("");
           }
         } catch {
