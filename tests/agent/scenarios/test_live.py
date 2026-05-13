@@ -234,3 +234,51 @@ def test_long_bash_output_truncation_real(tmp_path):
     assert any(s.get("tool_name") == "Bash" for s in _steps(events))
     text = _text_of(events).lower()
     assert "truncat" in text, f"model didn't see truncation marker: {text!r}"
+
+
+@pytest.mark.live
+def test_compaction_real_roundtrip(tmp_path):
+    """Force compaction by shrinking the buffers, then verify the loop
+    summarizes real prior content and continues to produce a response.
+    Exercises `provider.complete`, the `<summary>` regex, replace_messages, the
+    `internal` flag, and the post-compact turn — none of which the mocked tests
+    actually run end-to-end."""
+    from unittest.mock import patch
+    from cycls.agent import sessions
+
+    _, ctx = _ctx(tmp_path, "what's 2+2? one word.", persist=True)
+
+    # Pre-populate text-only history (no tool calls — keeps Anthropic's
+    # tool_use/tool_result pairing rules out of the picture for this scenario).
+    prior = [
+        {"role": "user", "content": "your name?"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Cycls."}]},
+        {"role": "user", "content": "capital of france?"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Paris."}]},
+        {"role": "user", "content": "of germany?"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Berlin."}]},
+    ]
+    asyncio.run(sessions.append_messages(ctx.workspace, ctx.chat_id, prior, 0))
+
+    llm = cycls.LLM().model(SONNET)
+
+    # COMPACT_BUFFER huge ⇒ threshold negative ⇒ compaction fires immediately.
+    # main.KEEP_RECENT=1 ⇒ the `len(messages) > KEEP_RECENT` guard passes.
+    # compact.KEEP_RECENT=1 ⇒ recent = the just-added user msg, so the
+    # post-compact list `[summary_user, understood_assistant, new_user]` stays
+    # role-alternating (Anthropic rejects two consecutive assistants).
+    with patch("cycls.agent.harness.main.COMPACT_BUFFER", 999_999_999), \
+         patch("cycls.agent.harness.main.KEEP_RECENT", 1), \
+         patch("cycls.agent.harness.compact.KEEP_RECENT", 1):
+        events = asyncio.run(_collect(llm, ctx))
+
+    assert any(isinstance(e, dict) and e.get("step") == "Compacting context..." for e in events), \
+        f"expected Compacting step; got {events!r}"
+
+    # History rewritten to the internal summary pair + the post-compact turn.
+    msgs = asyncio.run(sessions.load_messages(ctx.workspace, ctx.chat_id))
+    assert msgs[0]["role"] == "user" and msgs[0].get("internal") is True
+    assert msgs[0]["content"].startswith("This session continues from a previous conversation.")
+    assert msgs[1]["role"] == "assistant" and msgs[1].get("internal") is True
+    # Real response came back.
+    assert _text_of(events).strip(), f"no post-compact text; events={events!r}"
