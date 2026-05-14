@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from slatedb.uniffi import (
-    DbBuilder, IsolationLevel, ObjectStore, WriteOptions,
+    DbBuilder, IsolationLevel, ObjectStore, Settings, WriteOptions,
     Error, CloseReason,
 )
 
@@ -87,12 +87,30 @@ async def shutdown_pool():
     for db in items: await _safe_shutdown(db)
 
 
+def _tuned_settings():
+    s = Settings.default()
+    s.set("l0_max_ssts", "3")
+    s.set("compactor_options.poll_interval", '"1s"')
+    return s
+
+
 async def _build_db(url):
-    _log("build-start", url=url)
+    import time
+    t0 = time.monotonic()
     if url.startswith("file://"):
         Path(url[7:]).mkdir(parents=True, exist_ok=True)
-    db = await DbBuilder("db", ObjectStore.resolve(url)).build()
-    _log("build-done", url=url)
+    t_mkdir = time.monotonic()
+    store = ObjectStore.resolve(url)
+    t_resolve = time.monotonic()
+    builder = DbBuilder("db", store)
+    builder.with_settings(_tuned_settings())
+    db = await builder.build()
+    t_build = time.monotonic()
+    _log("build", url=url,
+         mkdir_ms=f"{(t_mkdir-t0)*1000:.0f}",
+         resolve_ms=f"{(t_resolve-t_mkdir)*1000:.0f}",
+         build_ms=f"{(t_build-t_resolve)*1000:.0f}",
+         total_ms=f"{(t_build-t0)*1000:.0f}")
     return db
 
 
