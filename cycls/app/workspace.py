@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import Optional
 
 from slatedb.uniffi import (
-    DbBuilder, IsolationLevel, ObjectStore, Settings, WriteOptions,
-    Error, CloseReason,
+    DbBuilder, IsolationLevel, LogCallback, LogLevel, ObjectStore, Settings,
+    WriteOptions, Error, CloseReason, init_logging,
 )
 
 
@@ -33,6 +33,18 @@ def _log(op, **kv):
     if not DEBUG: return
     extras = " ".join(f"{k}={v}" for k, v in kv.items())
     print(f"[SLATE/{_INSTANCE}] {op} {extras}", flush=True)
+
+
+class _SlateLog(LogCallback):
+    def log(self, record):
+        if not DEBUG: return
+        _log(record.target or "slate", level=record.level.name, msg=record.message)
+
+
+try:
+    init_logging(LogLevel.DEBUG, _SlateLog())
+except Exception as e:
+    print(f"[WARN] slate logging init failed: {e}", flush=True)
 
 
 # ---- Tenant shape ----
