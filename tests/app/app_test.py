@@ -37,7 +37,7 @@ def test_app_pip_merged_with_base():
         return None
 
     assert "httpx" in svc.pip
-    assert any("uvicorn" in p for p in svc.pip)
+    assert any("hypercorn" in p for p in svc.pip)
 
 
 def test_app_rejects_non_jwt_auth():

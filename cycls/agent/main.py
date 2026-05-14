@@ -9,9 +9,9 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
-from cycls.app.main import App, _make_decorator
+from cycls.app.main import App, _make_decorator, _serve
 from .web.routers import install_routers
-from .web import Web, web, serve as web_serve, Config
+from .web import Web, web, Config
 
 CYCLS_PATH = importlib.resources.files('cycls')
 
@@ -75,8 +75,14 @@ class Agent(App):
         user_func, config, name = self.user_func, self.config, self.name
         routers = self._routers()
         provider = self._auth_provider
-        self.func = lambda port: web_serve(
-            user_func, config, name, port, extra_routers=routers, auth=provider)
+
+        def runner(port):
+            from dotenv import load_dotenv
+            load_dotenv()
+            print(f"\n🔨 {name} => http://localhost:{port}\n")
+            _serve(web(user_func, config, extra_routers=routers, auth=provider), port)
+
+        self.func = runner
 
     def _local(self, port=8080):
         print(f"Starting local server at localhost:{port}")

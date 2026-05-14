@@ -1,10 +1,9 @@
+import asyncio
 import importlib.resources
 import os
 from functools import cached_property
 from pathlib import Path
 from typing import Optional
-
-import uvicorn
 
 from cycls.function import Function, _get_api_key, _get_base_url
 from cycls.app.auth import JWT, validator
@@ -13,8 +12,17 @@ from cycls.app.workspace import workspace_for
 CYCLS_PATH = importlib.resources.files("cycls")
 
 
+def _serve(app, port):
+    from hypercorn.asyncio import serve
+    from hypercorn.config import Config
+    config = Config()
+    config.bind = [f"0.0.0.0:{port}"]
+    config.alpn_protocols = ["h2", "http/1.1"]
+    asyncio.run(serve(app, config))
+
+
 class App(Function):
-    _base_pip = ["uvicorn[standard]", "slatedb",
+    _base_pip = ["hypercorn", "slatedb",
                  "fastapi[standard]", "pyjwt", "cryptography"]
     _base_apt = ["bubblewrap"]
 
@@ -65,13 +73,12 @@ class App(Function):
     def _prepare_func(self, prod):
         self.prod = prod
         user_func = self.user_func
-        self.func = lambda port: uvicorn.run(user_func(), host="0.0.0.0", port=port)
+        self.func = lambda port: _serve(user_func(), port)
 
     def _local(self, port=8080):
-        """Run uvicorn directly, bypassing Docker."""
         print(f"Starting local server at localhost:{port}")
         self.prod = False
-        uvicorn.run(self.user_func(), host="0.0.0.0", port=port)
+        _serve(self.user_func(), port)
 
     def local(self, port=8080, watch=True):
         """Run in Docker; reload on file changes unless watch=False."""
