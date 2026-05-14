@@ -234,12 +234,3 @@ def web(func, config, extra_routers=None, auth=None):
     except Exception as e:
         print(f"[WARN] anthropic prewarm failed: {e}", flush=True)
     return app
-
-
-def serve(func, config, name, port, extra_routers=None, auth=None):
-    import uvicorn, logging
-    from dotenv import load_dotenv
-    load_dotenv()
-    logging.getLogger("uvicorn.error").addFilter(lambda r: "0.0.0.0" not in r.getMessage())
-    print(f"\n🔨 {name} => http://localhost:{port}\n")
-    uvicorn.run(web(func, config, extra_routers=extra_routers, auth=auth), host="0.0.0.0", port=port)

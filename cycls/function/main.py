@@ -473,6 +473,8 @@ CMD ["python", "entrypoint.py"]
                     "source_object": upload_data["object_name"],
                     "port": port,
                     "memory": memory,
+                    "use_http2": "true",
+                    "session_affinity": "true",
                 },
                 headers={"X-API-Key": self.api_key},
                 timeout=9000,
