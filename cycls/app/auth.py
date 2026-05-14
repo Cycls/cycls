@@ -95,8 +95,6 @@ def validator(provider, prod):
     def validate(
         bearer: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
     ) -> User:
-        # Authorization header only. Native browser loads (img/anchor/window.open)
-        # that can't set headers go through opaque /share/<user>/<token> URLs.
         if not bearer:
             raise HTTPException(401, "Not authenticated", headers={"WWW-Authenticate": "Bearer"})
         try:

@@ -36,9 +36,6 @@ class App(Function):
         self.volume = Path((image or {}).get("volume", "/workspace"))
         self._auth_provider = auth
 
-        # User code referencing `cycls.DB`, `cycls.Workspace`, `app.auth`,
-        # etc. inside the function gets serialized via cloudpickle — which
-        # requires the cycls source to be importable in the container.
         image = dict(image or {})
         image["copy"] = {str(CYCLS_PATH): "cycls", **image.get("copy", {})}
 
