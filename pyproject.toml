@@ -1,7 +1,7 @@
 [project]
 name = "cycls"
 version = "0.0.2.127"
-description = "Distribute Intelligence"
+description = "Single process, per-tenant, serverless, and stateful AI agent runtime."
 authors = [{ name = "Mohammed J. AlRujayi", email = "mj@cycls.com" }]
 readme = "README.md"
 requires-python = ">=3.10"
