@@ -45,13 +45,10 @@ function ChatAppKeyed({ config }: { config: AppConfig | null }) {
   const { organization, isLoaded } = useOrganization();
   const orgKey = organization?.id || "personal";
   const prevKey = useRef(orgKey);
-  useEffect(() => {
-    if (prevKey.current !== orgKey) {
-      // ?id / ?fork point at the previous tenant — drop them on org switch.
-      window.history.replaceState({}, "", window.location.pathname);
-      prevKey.current = orgKey;
-    }
-  }, [orgKey]);
+  if (prevKey.current !== orgKey) {
+    window.history.replaceState({}, "", window.location.pathname);
+    prevKey.current = orgKey;
+  }
   if (!isLoaded) return null;
   return <ChatApp key={orgKey} config={config} />;
 }
