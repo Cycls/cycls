@@ -15,7 +15,7 @@ from .prompts import DEFAULT_SYSTEM
 from .providers import make_provider
 from .events import (Turn, Usage, Retrying, Compacting, CompactionFailed,
                      StoppedUnexpectedly, TimedOut, Failed, Callout, Raw,
-                     TextDelta, Thinking)
+                     TextDelta)
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips
 
 
@@ -131,7 +131,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     yield CompactionFailed(str(ce))
 
             turn = None
-            partial_text, partial_thinking = "", ""
+            partial_text = ""
             try:
                 async for ev in _stream_with_retry(provider, messages=messages, system=system_text,
                                                    tools=tools_list, max_tokens=max_tokens,
@@ -139,14 +139,12 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     if isinstance(ev, Turn): turn = ev
                     else:
                         if isinstance(ev, TextDelta): partial_text += ev.text
-                        elif isinstance(ev, Thinking): partial_thinking += ev.text
                         yield ev
             except (GeneratorExit, asyncio.CancelledError):
-                if partial_text or partial_thinking:
-                    parts = []
-                    if partial_thinking: parts.append({"type": "thinking", "thinking": partial_thinking})
-                    if partial_text: parts.append({"type": "text", "text": partial_text + "\n\n[…]"})
-                    messages.append({"role": "assistant", "content": parts})
+                if partial_text:
+                    messages.append({"role": "assistant", "content": [
+                        {"type": "text", "text": partial_text + "\n\n[…]"}
+                    ]})
                     try: await asyncio.shield(session.checkpoint())
                     except BaseException: pass
                 raise
