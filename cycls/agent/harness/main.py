@@ -14,7 +14,8 @@ from .compact import COMPACT_BUFFER, KEEP_RECENT, compact
 from .prompts import DEFAULT_SYSTEM
 from .providers import make_provider
 from .events import (Turn, Usage, Retrying, Compacting, CompactionFailed,
-                     StoppedUnexpectedly, TimedOut, Failed, Callout, Raw)
+                     StoppedUnexpectedly, TimedOut, Failed, Callout, Raw,
+                     TextDelta, Thinking)
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips
 
 
@@ -130,11 +131,25 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     yield CompactionFailed(str(ce))
 
             turn = None
-            async for ev in _stream_with_retry(provider, messages=messages, system=system_text,
-                                               tools=tools_list, max_tokens=max_tokens,
-                                               mcp_servers=mcp_servers, thinking=thinking):
-                if isinstance(ev, Turn): turn = ev
-                else: yield ev
+            partial_text, partial_thinking = "", ""
+            try:
+                async for ev in _stream_with_retry(provider, messages=messages, system=system_text,
+                                                   tools=tools_list, max_tokens=max_tokens,
+                                                   mcp_servers=mcp_servers, thinking=thinking):
+                    if isinstance(ev, Turn): turn = ev
+                    else:
+                        if isinstance(ev, TextDelta): partial_text += ev.text
+                        elif isinstance(ev, Thinking): partial_thinking += ev.text
+                        yield ev
+            except (GeneratorExit, asyncio.CancelledError):
+                if partial_text or partial_thinking:
+                    parts = []
+                    if partial_thinking: parts.append({"type": "thinking", "thinking": partial_thinking})
+                    if partial_text: parts.append({"type": "text", "text": partial_text + "\n\n[…]"})
+                    messages.append({"role": "assistant", "content": parts})
+                    try: await asyncio.shield(session.checkpoint())
+                    except BaseException: pass
+                raise
 
             usage[0] += turn.input; usage[1] += turn.output; usage[2] += turn.cached; usage[3] += turn.cache_create
             tokens_since_compact = turn.input + turn.cached + turn.cache_create
