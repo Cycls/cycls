@@ -1,10 +1,10 @@
-"""End-to-end scenarios for the DataBase tool — real SlateDB roundtrip,
+"""End-to-end scenarios for the DataBase tool — real engine roundtrip,
 isolated from the framework chat DB.
 
 `_exec_database` always returns a string (Anthropic's tool_result.content
 rejects raw dicts/lists), so get/scan results come back JSON-encoded.
 
-The conftest.py at tests/ resets the SlateDB pool between tests so each
+The conftest.py at tests/ resets the engine pool between tests so each
 scenario starts fresh.
 """
 import asyncio, json
@@ -76,7 +76,7 @@ def test_unknown_command_returns_error(tmp_path):
 
 def test_database_isolated_from_chat_db(tmp_path):
     """Hard isolation: writing to the agent DB must not affect the chat DB
-    (different SlateDB tree at .database/ vs .db/)."""
+    (different storage tree at .database/ vs .db/)."""
     ws = _ws(tmp_path)
     # Write via agent tool
     _run(_exec_database({"command": "put", "key": "shared", "value": "agent-only"}, ws))

@@ -2,7 +2,7 @@
 
 These plant state directly via chat.append_messages, then verify that
 chat.load_messages trims trailing corruption AND persists the cleanup.
-The conftest.py at tests/ resets the SlateDB pool between tests so each
+The conftest.py at tests/ resets the engine pool between tests so each
 scenario starts fresh."""
 import asyncio
 from pathlib import Path

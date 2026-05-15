@@ -1,9 +1,8 @@
 """Shared test fixtures.
 
-The SlateDB pool keeps Db handles alive across requests for performance.
-For tests, we want isolation — each test uses a fresh tmp_path, and we
-don't want stale handles holding open files that block tmp_path cleanup
-or carry state between tests.
+The engine pool keeps backend handles alive across requests. For tests we
+want isolation — each test uses a fresh tmp_path and starts from a clean
+pool so handles don't leak state or hold open resources between tests.
 """
 import asyncio
 import os

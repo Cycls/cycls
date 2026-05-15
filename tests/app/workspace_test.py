@@ -1,6 +1,6 @@
-"""Tests for cycls.DB — async JSON KV over SlateDB at any URL.
+"""Tests for cycls.DB — async JSON KV over object storage at any URL.
 
-Each test opens a real SlateDB at a tmp path. Slow-ish but exercises the
+Each test opens a real DB at a tmp path (file:// backend), exercising the
 substrate that everything else depends on.
 """
 import asyncio
@@ -194,42 +194,5 @@ def test_transaction_atomic_prefix_delete_then_rewrite(workspace):
         items = sorted([(k, v) async for k, v in db.items(prefix="log/")])
         assert items == [("log/0", "new0")]
     _run(t())
-
-
-# ---------------------------------------------------------------------------
-# Multi-writer fence + auto-retry
-# ---------------------------------------------------------------------------
-
-def test_db_recovers_from_writer_fence(tmp_path):
-    """When a newer SlateDB writer fences our pooled handle (e.g. a sibling
-    Cloud Run instance just opened the same DB), the next get/put/delete
-    must evict the stale pool entry and retry once — succeeding as the new
-    active writer. Without this, the pool ping-pongs into livelock."""
-    from slatedb.uniffi import DbBuilder, IsolationLevel, ObjectStore
-    from cycls.app.workspace import _pool
-
-    url = f"file://{tmp_path}/db"
-    (tmp_path / "db").mkdir()
-    db = DB(url)
-
-    async def t():
-        await db.put("k1", "v1")
-        assert url in _pool, "pool entry not established"
-
-        # Sibling opens directly (bypasses our pool) → bumps the writer
-        # epoch, fencing our pooled handle.
-        sibling = await DbBuilder("db", ObjectStore.resolve(url)).build()
-        st = await sibling.begin(IsolationLevel.SERIALIZABLE_SNAPSHOT)
-        await st.put(b"by_sibling", b'"x"')
-        await st.commit()
-
-        # Retry must catch Error.Closed/FENCED, evict, reopen as the new
-        # writer, and succeed — not raise up to the caller. (k1 may or may
-        # not survive the fence — depends on durability; see _NON_DURABLE.
-        # Retry's contract is "next op doesn't error", not data recovery.)
-        await db.put("k2", "v2")
-        assert await db.get("k2") == "v2"
-
-        await sibling.shutdown()
 
     _run(t())
