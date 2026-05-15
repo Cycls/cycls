@@ -22,8 +22,7 @@ def _serve(app, port):
 
 
 class App(Function):
-    _base_pip = ["hypercorn", "slatedb",
-                 "fastapi[standard]", "pyjwt", "cryptography"]
+    _base_pip = ["hypercorn", "fastapi[standard]", "pyjwt", "cryptography"]
     _base_apt = ["bubblewrap"]
 
     def __init__(self, func, name, image=None, memory="1Gi",

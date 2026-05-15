@@ -29,7 +29,7 @@ def _capture_bash_argv(tmp_path, **kwargs):
 
 def test_bash_sandbox_hides_db(tmp_path):
     """_exec_bash argv must tmpfs-overlay /workspace/.db so the sandboxed shell
-    can't read SlateDB internals (defense in depth; editor tools also reject
+    can't read DB internals (defense in depth; editor tools also reject
     .db/ via _resolve_path)."""
     mock_proc = MagicMock()
     mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))

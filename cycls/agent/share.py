@@ -19,8 +19,7 @@ async def mint(workspace, path, audience="public", ttl=None, author=None):
         row["exp"] = int(time.time()) + int(ttl)
     if author is not None:
         row["author"] = author
-    # Durable: a lost share token = silent UX failure (link 404s forever).
-    await DB(workspace).put(f"share/{token}", row, durable=True)
+    await DB(workspace).put(f"share/{token}", row)
     return token, row
 
 
@@ -37,5 +36,4 @@ async def resolve(workspace, token, requester=None):
 
 
 async def revoke(workspace, token):
-    # Durable: a lost revoke = stale share remains live (mild security issue).
-    await DB(workspace).delete(f"share/{token}", durable=True)
+    await DB(workspace).delete(f"share/{token}")

@@ -22,7 +22,6 @@ test = [
     "pytest>=8.0.0",
     "requests>=2.31.0",
     "python-multipart>=0.0.6",
-    "slatedb>=0.9.0",
     "anthropic>=0.40.0",  # for --live tests against the real API
     "openai>=1.0.0",      # for --live tests against the real OpenAI API
 ]
