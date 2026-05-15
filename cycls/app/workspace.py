@@ -145,7 +145,10 @@ class _GCSStore:
     async def write(self, key, data, meta=None):
         headers = {"Content-Type": "application/json"}
         if meta:
-            for k, v in meta.items(): headers[f"x-goog-meta-{k}"] = str(v)
+            # Percent-encode values: HTTP headers are ASCII-only, but titles
+            # can contain non-ASCII (e.g. Arabic). Without this, the header
+            # silently drops or corrupts and the metadata roundtrips empty.
+            for k, v in meta.items(): headers[f"x-goog-meta-{k}"] = quote(str(v), safe="")
         r = await self._req("POST",
             f"{self._STORAGE}/upload/storage/v1/b/{self.bucket}/o?uploadType=media&name={self._obj(key)}",
             headers=headers, content=data)
@@ -178,7 +181,9 @@ class _GCSStore:
         return [self._key_of(it["name"]) for it in await self._list(prefix, "items(name),nextPageToken")]
 
     async def list_metas(self, prefix):
-        return [(self._key_of(it["name"]), it.get("metadata") or {})
+        from urllib.parse import unquote
+        return [(self._key_of(it["name"]),
+                 {k: unquote(v) for k, v in (it.get("metadata") or {}).items()})
                 for it in await self._list(prefix, "items(name,metadata),nextPageToken")]
 
 
