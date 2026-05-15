@@ -5,6 +5,7 @@ Keys:
     chat/meta/{chat_id}           — chat metadata (title, updatedAt, createdAt)
     chat/log/{chat_id}/{turn:06d} — each message, ordered
 """
+import asyncio
 from datetime import datetime, timezone
 
 from cycls.app.workspace import DB
@@ -126,23 +127,24 @@ async def append_messages(workspace, chat_id, messages, start_idx):
 
 
 async def replace_messages(workspace, chat_id, messages):
-    """Wipe and rewrite all messages for *chat_id* atomically (used by
-    compaction)."""
+    """Wipe and rewrite all messages for *chat_id* (used by compaction)."""
     _validate(chat_id)
-    async with DB(workspace).transaction() as t:
-        async for key, _ in t.items(prefix=f"chat/log/{chat_id}/"):
-            await t.delete(key)
-        for i, msg in enumerate(messages):
-            await t.put(f"chat/log/{chat_id}/{i:06d}", msg)
+    db = DB(workspace)
+    await db.delete_prefix(f"chat/log/{chat_id}/")
+    await asyncio.gather(*[
+        db.put(f"chat/log/{chat_id}/{i:06d}", msg)
+        for i, msg in enumerate(messages)
+    ])
 
 
 async def delete_chat(workspace, chat_id):
-    """Atomically delete metadata + all messages for *chat_id*."""
+    """Delete metadata + all messages for *chat_id*."""
     _validate(chat_id)
-    async with DB(workspace).transaction() as t:
-        await t.delete(f"chat/meta/{chat_id}")
-        async for key, _ in t.items(prefix=f"chat/log/{chat_id}/"):
-            await t.delete(key)
+    db = DB(workspace)
+    await asyncio.gather(
+        db.delete(f"chat/meta/{chat_id}"),
+        db.delete_prefix(f"chat/log/{chat_id}/"),
+    )
 
 
 # ---- Session ----

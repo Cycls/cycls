@@ -95,6 +95,14 @@ class _FileStore:
             self._path(key, ".meta").unlink(missing_ok=True)
         await asyncio.to_thread(_do)
 
+    async def remove_prefix(self, prefix):
+        def _do():
+            target = self.root / prefix
+            if target.is_dir():
+                import shutil
+                shutil.rmtree(target)
+        await asyncio.to_thread(_do)
+
     async def _walk(self, prefix, with_meta):
         def _do():
             if not self.root.exists(): return []
@@ -150,6 +158,10 @@ class _GCSStore:
         r = await self._req("DELETE", f"{self._STORAGE}/storage/v1/b/{self.bucket}/o/{self._obj(key)}")
         if r.status_code not in (200, 204, 404): r.raise_for_status()
 
+    async def remove_prefix(self, prefix):
+        keys = await self.list_keys(prefix)
+        await asyncio.gather(*[self.remove(k) for k in keys])
+
     async def _list(self, prefix, fields):
         items, page_token = [], None
         while True:
@@ -204,6 +216,11 @@ class DB:
             self._buffer[key] = _DELETED
             return
         await self._store.remove(key)
+
+    async def delete_prefix(self, prefix):
+        if self._buffer is not None:
+            raise NotImplementedError("delete_prefix not supported inside transactions")
+        await self._store.remove_prefix(prefix)
 
     async def items(self, prefix=None):
         p = prefix or ""
