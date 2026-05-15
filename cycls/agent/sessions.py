@@ -24,13 +24,17 @@ async def get_meta(workspace, chat_id):
 
 async def put_meta(workspace, chat_id, data):
     _validate(chat_id)
-    await DB(workspace).put(f"chat/meta/{chat_id}", data)
+    # Stash list-view fields as object custom-metadata so `list_chats` can
+    # enumerate (title, updatedAt) via a single GCS LIST — no per-chat GETs.
+    list_meta = {"title": data.get("title", ""), "updatedAt": data.get("updatedAt", "")}
+    await DB(workspace).put(f"chat/meta/{chat_id}", data, meta=list_meta)
 
 
 async def list_chats(workspace):
-    """Yield (chat_id, metadata) for every chat in this workspace."""
-    async for key, data in DB(workspace).items(prefix="chat/meta/"):
-        yield key[len("chat/meta/"):], data
+    """Yield (chat_id, {title, updatedAt}) for every chat — backed by GCS
+    custom-metadata so this is 1 LIST regardless of chat count."""
+    async for key, meta in DB(workspace).index(prefix="chat/meta/"):
+        yield key[len("chat/meta/"):], meta
 
 
 async def touch_meta(workspace, chat_id, content):
