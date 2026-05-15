@@ -64,23 +64,24 @@ _DATABASE_TOOL = {
     "description": (
         "Persistent key-value store scoped to this workspace. Use for state that must "
         "survive across turns or chat sessions: notes, user preferences, task progress, "
-        "anything you'd otherwise jam into a JSON file. Atomic writes, prefix scans, "
-        "no race conditions. Prefer this over writing JSON files via bash.\n\n"
+        "anything you'd otherwise jam into a JSON file. Atomic per-key writes, prefix "
+        "scans. Prefer this over writing JSON files via bash.\n\n"
         "Commands:\n"
-        "- get:    read a value at `key`. Returns the stored JSON or 'not found'.\n"
-        "- put:    write `value` (any JSON-serializable type) at `key`.\n"
-        "- delete: remove `key`.\n"
-        "- scan:   list all {key, value} pairs whose key starts with `prefix`. "
-        "Empty prefix lists everything.\n\n"
-        "Keys are opaque slash-separated strings — design your own schema. "
-        "Use prefixes to group related data, e.g. `tasks/<id>`, `notes/<topic>`, "
-        "`prefs/<scope>`."
+        "- get:           read a value at `key`. Returns the stored JSON or 'not found'.\n"
+        "- put:           write `value` (any JSON-serializable type) at `key`.\n"
+        "- delete:        remove `key`.\n"
+        "- delete_prefix: remove every key starting with `prefix`. Requires non-empty prefix.\n"
+        "- scan:          list {key, value} pairs whose key starts with `prefix`. "
+        "Truncates at `limit` (default 100) so a huge prefix won't blow the context.\n\n"
+        "Keys are slash-separated strings (e.g. `tasks/<id>`, `notes/<topic>`). "
+        "Cannot start with `/` or contain `..` segments."
     ),
     "input_schema": {"type": "object", "properties": {
-        "command": {"type": "string", "enum": ["get", "put", "delete", "scan"]},
+        "command": {"type": "string", "enum": ["get", "put", "delete", "delete_prefix", "scan"]},
         "key": {"type": "string", "description": "Key to operate on (get, put, delete)."},
         "value": {"description": "Value to store (put only). Any JSON-serializable type."},
-        "prefix": {"type": "string", "description": "Key prefix to list (scan only). Empty = all keys."},
+        "prefix": {"type": "string", "description": "Key prefix (scan, delete_prefix). Empty allowed for scan only."},
+        "limit": {"type": "integer", "description": "Max results returned by scan (default 100)."},
     }, "required": ["command"]}
 }
 
@@ -241,6 +242,16 @@ def _exec_edit(inp, workspace):
 
 # ---- Database ----
 
+def _validate_db_key(key):
+    """Reject keys that would escape the workspace on local backend or
+    create surprising paths. GCS would tolerate them as literal names,
+    but the file:// dev backend resolves `..` segments."""
+    if not key:
+        raise ValueError("key required")
+    if key.startswith("/") or any(seg in ("", "..") for seg in key.split("/")):
+        raise ValueError(f"invalid key: {key!r} (cannot start with '/' or contain '..' segments)")
+
+
 async def _exec_database(inp, workspace):
     """All returns are strings — Anthropic tool_result.content accepts
     str or content-blocks (each with a `type`); raw dicts/lists from JSON
@@ -250,22 +261,41 @@ async def _exec_database(inp, workspace):
                             base=workspace.base, slot=".database")
     db = DB(agent_ws)
     cmd, key = inp.get("command"), inp.get("key", "")
-    if cmd == "get":
-        v = await db.get(key)
-        return json.dumps(v) if v is not None else f"Error: key {key!r} not found"
-    if cmd == "put":
-        if not key: return "Error: put requires `key`"
-        await db.put(key, inp.get("value"))
-        return f"Stored {key!r}"
-    if cmd == "delete":
-        if not key: return "Error: delete requires `key`"
-        await db.delete(key)
-        return f"Deleted {key!r}"
-    if cmd == "scan":
-        prefix = inp.get("prefix", "")
-        pairs = [{"key": k, "value": v} async for k, v in db.items(prefix=prefix)]
-        return json.dumps(pairs) if pairs else f"No keys with prefix {prefix!r}"
-    return f"Error: unknown command {cmd!r}"
+    try:
+        if cmd == "get":
+            _validate_db_key(key)
+            v = await db.get(key)
+            return json.dumps(v) if v is not None else f"Error: key {key!r} not found"
+        if cmd == "put":
+            _validate_db_key(key)
+            await db.put(key, inp.get("value"))
+            return f"Stored {key!r}"
+        if cmd == "delete":
+            _validate_db_key(key)
+            await db.delete(key)
+            return f"Deleted {key!r}"
+        if cmd == "delete_prefix":
+            prefix = inp.get("prefix", "")
+            if not prefix:
+                return "Error: delete_prefix requires a non-empty `prefix`"
+            await db.delete_prefix(prefix)
+            return f"Deleted all keys under {prefix!r}"
+        if cmd == "scan":
+            prefix = inp.get("prefix", "")
+            limit = max(1, int(inp.get("limit", 100)))
+            pairs, truncated = [], False
+            async for k, v in db.items(prefix=prefix):
+                if len(pairs) >= limit:
+                    truncated = True
+                    break
+                pairs.append({"key": k, "value": v})
+            if not pairs:
+                return f"No keys with prefix {prefix!r}"
+            result = json.dumps(pairs)
+            return f"{result}\n[truncated at {limit}; use a narrower prefix or higher limit]" if truncated else result
+        return f"Error: unknown command {cmd!r}"
+    except ValueError as e:
+        return f"Error: {e}"
 
 
 # ---- Registry & dispatch ----

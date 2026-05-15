@@ -98,3 +98,36 @@ def test_database_value_can_be_complex_json(tmp_path):
     _run(_exec_database({"command": "put", "key": "k", "value": val}, ws))
     out = _run(_exec_database({"command": "get", "key": "k"}, ws))
     assert json.loads(out) == val
+
+
+def test_database_rejects_path_traversal_keys(tmp_path):
+    ws = _ws(tmp_path)
+    for bad in ("../escape", "foo/../bar", "/abs", "a//b", ""):
+        out = _run(_exec_database({"command": "put", "key": bad, "value": "x"}, ws))
+        assert "Error:" in out, f"expected rejection for key={bad!r}, got {out!r}"
+
+
+def test_database_delete_prefix_wipes_all_under(tmp_path):
+    ws = _ws(tmp_path)
+    for k in ("notes/a", "notes/b", "notes/sub/c", "tasks/keep"):
+        _run(_exec_database({"command": "put", "key": k, "value": k}, ws))
+    out = _run(_exec_database({"command": "delete_prefix", "prefix": "notes/"}, ws))
+    assert "Deleted all keys" in out
+    out = _run(_exec_database({"command": "scan", "prefix": ""}, ws))
+    assert json.loads(out.split("\n")[0]) == [{"key": "tasks/keep", "value": "tasks/keep"}]
+
+
+def test_database_delete_prefix_requires_prefix(tmp_path):
+    ws = _ws(tmp_path)
+    out = _run(_exec_database({"command": "delete_prefix", "prefix": ""}, ws))
+    assert "Error:" in out and "prefix" in out
+
+
+def test_database_scan_truncates_at_limit(tmp_path):
+    ws = _ws(tmp_path)
+    for i in range(5):
+        _run(_exec_database({"command": "put", "key": f"item/{i}", "value": i}, ws))
+    out = _run(_exec_database({"command": "scan", "prefix": "item/", "limit": 2}, ws))
+    head, _, tail = out.partition("\n")
+    assert len(json.loads(head)) == 2
+    assert "truncated" in tail
