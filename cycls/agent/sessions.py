@@ -99,31 +99,30 @@ def _valid_prefix(messages):
 
 async def load_messages(workspace, chat_id):
     """All messages for *chat_id* in turn order. Trims trailing corrupted
-    state if any, persisting the repair so the disk catches up. The harness
-    applies prompt-cache markers itself; this is storage, not LLM-shaping."""
+    state if any, persisting the repair so the disk catches up."""
     _validate(chat_id)
-    messages, keys = [], []
-    async for k, msg in DB(workspace).items(prefix=f"chat/log/{chat_id}/"):
-        keys.append(k); messages.append(msg)
+    db = DB(workspace)
+    messages = [msg async for _, msg in db.items(prefix=f"chat/log/{chat_id}/")]
     valid = _valid_prefix(messages)
     if valid < len(messages):
-        # Persist the repair so subsequent loads stay clean.
-        async with DB(workspace).transaction() as t:
-            for k in keys[valid:]:
-                await t.delete(k)
+        await asyncio.gather(*[
+            db.delete(f"chat/log/{chat_id}/{i:06d}")
+            for i in range(valid, len(messages))
+        ])
         messages = messages[:valid]
     return messages
 
 
 async def append_messages(workspace, chat_id, messages, start_idx):
-    """Append *messages* starting at turn index *start_idx*. Single open
-    via transaction so a 3-message turn doesn't pay 3× the open cost."""
+    """Append *messages* starting at turn index *start_idx*."""
     _validate(chat_id)
     if not messages:
         return
-    async with DB(workspace).transaction() as t:
-        for offset, msg in enumerate(messages):
-            await t.put(f"chat/log/{chat_id}/{(start_idx + offset):06d}", msg)
+    db = DB(workspace)
+    await asyncio.gather(*[
+        db.put(f"chat/log/{chat_id}/{(start_idx + i):06d}", msg)
+        for i, msg in enumerate(messages)
+    ])
 
 
 async def replace_messages(workspace, chat_id, messages):
