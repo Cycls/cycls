@@ -5,7 +5,6 @@ per-key metadata; `db.index(prefix)` enumerates names+meta cheaply
 (GCS `x-goog-meta-*` headers; local `.meta` sidecars).
 """
 import asyncio, json, os
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -31,8 +30,6 @@ def workspace_at(tenant, volume, base=None, slot=".db"):
     path = f"{org}/{slot}/{user}" if user else f"{org}/{slot}"
     return Workspace(Path(volume) / org, path, tenant, base)
 
-
-_DELETED = object()
 
 _METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
 _gcs_client = None
@@ -195,61 +192,29 @@ class DB:
     def __init__(self, workspace, base=None):
         self._url = f"{(base or workspace.base).rstrip('/')}/{workspace.path}"
         self._store = _store(self._url)
-        self._buffer = None
 
     async def get(self, key, default=None):
-        if self._buffer is not None and key in self._buffer:
-            v = self._buffer[key]
-            return default if v is _DELETED else v
         data = await self._store.read(key)
         return json.loads(data) if data is not None else default
 
     async def put(self, key, value, *, meta=None):
-        if self._buffer is not None:
-            if meta is not None: raise NotImplementedError("meta not supported inside transactions")
-            self._buffer[key] = value
-            return
         await self._store.write(key, json.dumps(value).encode(), meta=meta)
 
     async def delete(self, key):
-        if self._buffer is not None:
-            self._buffer[key] = _DELETED
-            return
         await self._store.remove(key)
 
     async def delete_prefix(self, prefix):
-        if self._buffer is not None:
-            raise NotImplementedError("delete_prefix not supported inside transactions")
         await self._store.remove_prefix(prefix)
 
     async def items(self, prefix=None):
-        p = prefix or ""
-        keys = await self._store.list_keys(p)
+        keys = await self._store.list_keys(prefix or "")
         async def _fetch(k):
             data = await self._store.read(k)
             return None if data is None else (k, json.loads(data))
         results = await asyncio.gather(*[_fetch(k) for k in keys])
-        merged = dict(r for r in results if r is not None)
-        if self._buffer is not None:
-            for k, v in self._buffer.items():
-                if v is _DELETED: merged.pop(k, None)
-                elif not p or k.startswith(p): merged[k] = v
-        for k in sorted(merged): yield k, merged[k]
+        for k, v in sorted(r for r in results if r is not None):
+            yield k, v
 
     async def index(self, prefix=None):
         for k, m in sorted(await self._store.list_metas(prefix or "")):
             yield k, m
-
-    @asynccontextmanager
-    async def transaction(self):
-        if self._buffer is not None: raise RuntimeError("nested transactions not supported")
-        self._buffer = {}
-        try: yield self
-        except Exception:
-            self._buffer = None
-            raise
-        buf, self._buffer = self._buffer, None
-        async def _apply(k, v):
-            if v is _DELETED: await self._store.remove(k)
-            else: await self._store.write(k, json.dumps(v).encode())
-        await asyncio.gather(*[_apply(k, v) for k, v in buf.items()])
