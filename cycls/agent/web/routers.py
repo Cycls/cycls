@@ -249,17 +249,20 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.get("/share")
     async def list_shares(ws: Workspace = ws_dep):
+        # Two LIST calls regardless of N: share index + chat-title index.
+        db = DB(ws)
+        chat_titles = {k[len("chat/meta/"):]: m.get("title", "")
+                       async for k, m in db.index(prefix="chat/meta/")}
         out = []
-        async for key, row in DB(ws).items(prefix="share/"):
+        async for key, meta in db.index(prefix="share/"):
             token = key[6:]
-            path = row["path"]
+            path = meta.get("path", "")
             if path.startswith("chat/"):
-                meta = await sessions.get_meta(ws, path[5:])
-                title = (meta or {}).get("title") or ""
+                title = chat_titles.get(path[5:], "")
             else:
-                title = path[5:]  # file path as the display name
-            out.append({"token": token, "url": f"/shared/{ws.subject}/{token}", "title": title, **row})
-        out.sort(key=lambda s: s["shared_at"], reverse=True)
+                title = path[5:]
+            out.append({"token": token, "url": f"/shared/{ws.subject}/{token}", "title": title, **meta})
+        out.sort(key=lambda s: s.get("shared_at", ""), reverse=True)
         return out
 
     @r.delete("/share/{token}")
