@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 import cycls
-from cycls.app.workspace import workspace_at
+from cycls.app.workspace import workspace
 
 
 SONNET = "anthropic/claude-sonnet-4-6"
@@ -30,7 +30,7 @@ def _ctx(tmp_path, prompt, *, persist=False):
     ws_root = tmp_path / "tenant"
     ws_root.mkdir(exist_ok=True)
     ctx = types.SimpleNamespace()
-    ctx.workspace = workspace_at(ws_root.name, ws_root.parent,
+    ctx.workspace = workspace(ws_root.name, ws_root.parent,
                                  base=f"file://{ws_root.parent}")
     ctx.chat_id = "live-test" if persist else None
     ctx.user = types.SimpleNamespace() if persist else None

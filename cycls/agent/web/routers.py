@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Request, Response, HTTPException, Upload
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 
-from cycls.app.workspace import DB, Workspace, workspace_at, workspace_for
+from cycls.app.workspace import DB, Workspace, workspace
 from cycls.agent import state
 from cycls.agent.tools import tool_step
 
@@ -218,7 +218,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     async def _resolve_or_403(user: str, token: str, bearer):
         from cycls.app.auth import authenticate
-        ws_owner = workspace_at(user, volume, base=base)
+        ws_owner = workspace(user, volume, base=base)
         requester = None
         if bearer and cycls_app._auth_provider is not None:
             try: requester = authenticate(cycls_app._auth_provider, cycls_app.prod, bearer.credentials)
@@ -314,7 +314,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.post("/share/{user}/{token}/fork")
     async def fork_share(user: str, token: str, forker: Any = user_dep):
-        ws_source = workspace_at(user, volume, base=base)
+        ws_source = workspace(user, volume, base=base)
         row = await state.resolve(ws_source, token, requester=forker)
         if row is None:
             raise HTTPException(403, "Invalid, expired, or unauthorized link")
@@ -325,7 +325,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         if meta is None:
             raise HTTPException(404, "Chat not found")
         raw = await state.load_messages(ws_source, source_id)
-        ws_fork = workspace_for(forker, volume, base=base)
+        ws_fork = workspace(forker, volume, base=base)
         new_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
         await state.put_meta(ws_fork, new_id, {
@@ -364,7 +364,7 @@ def _serve_file(root, file_path):
 
 def install_routers(cycls_app, app, required_auth, volume, base):
     def _build_ws(user: Any = required_auth):
-        return workspace_for(user, volume, base=base)
+        return workspace(user, volume, base=base)
     ws_dep = Depends(_build_ws)
     app.include_router(chats_router(ws_dep))
     app.include_router(files_router(cycls_app, ws_dep, required_auth))

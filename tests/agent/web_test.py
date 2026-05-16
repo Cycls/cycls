@@ -277,7 +277,7 @@ def _share_test_app(tmp_path):
     from fastapi import Depends, FastAPI
     from fastapi.testclient import TestClient
     from cycls.app.auth import User
-    from cycls.app.workspace import workspace_for
+    from cycls.app.workspace import workspace
     from cycls.agent.web.routers import share_router
     import cycls
 
@@ -287,7 +287,7 @@ def _share_test_app(tmp_path):
 
     user = User(id="user_test")
     user_dep = Depends(lambda: user)
-    ws_dep = Depends(lambda: workspace_for(user, tmp_path, base=f"file://{tmp_path}"))
+    ws_dep = Depends(lambda: workspace(user, tmp_path, base=f"file://{tmp_path}"))
 
     fapp = FastAPI()
     fapp.include_router(share_router(svc, ws_dep, user_dep, tmp_path, f"file://{tmp_path}"))
@@ -297,11 +297,11 @@ def _share_test_app(tmp_path):
 def test_share_router_mint_and_resolve(tmp_path):
     """POST /share mints a token; GET /share/<user>/<token>/data returns the chat."""
     from cycls.agent import state as chat
-    from cycls.app.workspace import workspace_for
+    from cycls.app.workspace import workspace
     import asyncio
 
     svc, user, client = _share_test_app(tmp_path)
-    ws = workspace_for(user, tmp_path, base=f"file://{tmp_path}")
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
 
     async def seed():
         await chat.put_meta(ws, "c1", {"id": "c1", "title": "First chat"})
@@ -343,11 +343,11 @@ def test_share_router_unknown_chat_404(tmp_path):
 
 def test_share_router_list_and_delete(tmp_path):
     from cycls.agent import state as chat
-    from cycls.app.workspace import workspace_for
+    from cycls.app.workspace import workspace
     import asyncio
 
     svc, user, client = _share_test_app(tmp_path)
-    ws = workspace_for(user, tmp_path, base=f"file://{tmp_path}")
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
     asyncio.run(chat.put_meta(ws, "c1", {"id": "c1", "title": "T"}))
 
     body = client.post("/share", json={"path": "chat/c1"}).json()
@@ -365,10 +365,10 @@ def test_share_router_list_and_delete(tmp_path):
 
 def test_share_router_file_share(tmp_path):
     """File shares: /data returns metadata pointing at /file/<path>; /file/<path> serves bytes."""
-    from cycls.app.workspace import workspace_for
+    from cycls.app.workspace import workspace
 
     svc, user, client = _share_test_app(tmp_path)
-    ws = workspace_for(user, tmp_path, base=f"file://{tmp_path}")
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
     ws.root.mkdir(parents=True, exist_ok=True)
     (ws.root / "doc.md").write_text("hello world")
 

@@ -2,7 +2,7 @@
 import cycls
 from cycls.app import App
 from cycls.app.auth import User
-from cycls.app.workspace import workspace_at, workspace_for
+from cycls.app.workspace import workspace
 
 
 def test_app_decorator_returns_app():
@@ -76,16 +76,16 @@ def test_app_no_auth_means_deps_raise():
 
 
 def test_workspace_subject_personal(tmp_path):
-    assert workspace_for(User(id="user_abc"), tmp_path).subject == "user_abc"
+    assert workspace(User(id="user_abc"), tmp_path).subject == "user_abc"
 
 
 def test_workspace_subject_org_member(tmp_path):
-    assert workspace_for(User(id="user_abc", org_id="org_xyz"), tmp_path).subject == "org_xyz:user_abc"
+    assert workspace(User(id="user_abc", org_id="org_xyz"), tmp_path).subject == "org_xyz:user_abc"
 
 
-def test_workspace_for_at_round_trip(tmp_path):
-    """`workspace_at(ws.subject)` reproduces `workspace_for(u)`."""
+def test_workspace_round_trip(tmp_path):
+    """`workspace(ws.subject)` reproduces `workspace(user)`."""
     for u in [User(id="user_abc"), User(id="user_abc", org_id="org_xyz")]:
-        ws_a = workspace_for(u, tmp_path)
-        ws_b = workspace_at(ws_a.subject, tmp_path)
+        ws_a = workspace(u, tmp_path)
+        ws_b = workspace(ws_a.subject, tmp_path)
         assert ws_a == ws_b

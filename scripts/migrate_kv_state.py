@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from cycls.app.workspace import workspace_at
+from cycls.app.workspace import workspace
 from cycls.agent import chat
 
 
@@ -80,7 +80,7 @@ async def _migrate_tenant(tenant_root, base, dry_run):
 
     # Personal: .history.jsonl files directly in .sessions/
     if any(sessions.glob("*.history.jsonl")):
-        ws = workspace_at(tenant_root.name, volume, base=base)
+        ws = workspace(tenant_root.name, volume, base=base)
         await _migrate_chat_logs(ws, sessions, dry_run)
         return
 
@@ -90,7 +90,7 @@ async def _migrate_tenant(tenant_root, base, dry_run):
         if not member_dir.is_dir() or member_dir.name == "public":
             continue
         print(f" member {member_dir.name}:")
-        ws = workspace_at(f"{tenant_root.name}:{member_dir.name}", volume, base=base)
+        ws = workspace(f"{tenant_root.name}:{member_dir.name}", volume, base=base)
         await _migrate_chat_logs(ws, member_dir, dry_run)
 
 

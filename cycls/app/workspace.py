@@ -17,17 +17,15 @@ class Workspace:
     base: str | None = None
 
 
-def workspace_for(user, volume, base=None):
-    sub = ("local" if user is None
-           else f"{user.org_id}:{user.id}" if getattr(user, "org_id", None)
-           else user.id)
-    return workspace_at(sub, volume, base)
-
-
-def workspace_at(tenant, volume, base=None, slot=".db"):
-    org, _, user = tenant.partition(":")
+def workspace(target, volume, base=None, slot=".db"):
+    """Derive a Workspace from a User, a subject string, or None (anonymous)."""
+    sub = ("local" if target is None
+           else target if isinstance(target, str)
+           else f"{target.org_id}:{target.id}" if getattr(target, "org_id", None)
+           else target.id)
+    org, _, user = sub.partition(":")
     path = f"{org}/{slot}/{user}" if user else f"{org}/{slot}"
-    return Workspace(Path(volume) / org, path, tenant, base)
+    return Workspace(Path(volume) / org, path, sub, base)
 
 
 _METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"

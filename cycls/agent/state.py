@@ -10,7 +10,7 @@ Keys:
 import asyncio, json
 from datetime import datetime, timezone
 
-from cycls.app.workspace import DB, workspace_at
+from cycls.app.workspace import DB, workspace
 
 
 # ---- Chat metadata ----
@@ -235,12 +235,11 @@ def _validate_db_key(key):
         raise ValueError(f"invalid key: {key!r}")
 
 
-async def _exec_database(inp, workspace):
+async def _exec_database(inp, ws):
     """All returns are strings — Anthropic tool_result.content accepts
     str or content-blocks (each with a `type`); raw dicts/lists from JSON
     values would 400. JSON-encode the data ones."""
-    agent_ws = workspace_at(workspace.subject, workspace.root.parent,
-                            base=workspace.base, slot=".database")
+    agent_ws = workspace(ws.subject, ws.root.parent, base=ws.base, slot=".database")
     db = DB(agent_ws)
     cmd, key = inp.get("command"), inp.get("key", "")
     try:
