@@ -124,7 +124,8 @@ class _GCSStore:
         self.bucket = bucket
         self.prefix = (prefix.rstrip("/") + "/") if prefix else ""
 
-    def _obj(self, key): return quote(f"{self.prefix}{key}.json", safe="")
+    def _name(self, key): return f"{self.prefix}{key}.json"
+    def _obj(self, key): return quote(self._name(key), safe="")
 
     async def _req(self, method, url, **kw):
         kw.setdefault("headers", {}).update(await _gcs_auth())
@@ -137,13 +138,18 @@ class _GCSStore:
         return r.content
 
     async def write(self, key, data, meta=None):
-        headers = {"Content-Type": "application/json"}
-        # Percent-encode: x-goog-meta-* headers are ASCII-only on the wire.
-        if meta:
-            for k, v in meta.items(): headers[f"x-goog-meta-{k}"] = quote(str(v), safe="")
+        # Multipart upload: metadata JSON + object body. uploadType=media
+        # silently drops x-goog-meta-* headers; only multipart/resumable
+        # persist custom metadata. Bonus: UTF-8 in JSON body is native.
+        info = {"name": self._name(key)}
+        if meta: info["metadata"] = {k: str(v) for k, v in meta.items()}
+        b = "cycls"
+        body = (f"--{b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
+                + json.dumps(info)
+                + f"\r\n--{b}\r\nContent-Type: application/json\r\n\r\n").encode() + data + f"\r\n--{b}--\r\n".encode()
         r = await self._req("POST",
-            f"{self._STORAGE}/upload/storage/v1/b/{self.bucket}/o?uploadType=media&name={self._obj(key)}",
-            headers=headers, content=data)
+            f"{self._STORAGE}/upload/storage/v1/b/{self.bucket}/o?uploadType=multipart",
+            headers={"Content-Type": f"multipart/related; boundary={b}"}, content=body)
         r.raise_for_status()
 
     async def remove(self, key):
@@ -173,9 +179,8 @@ class _GCSStore:
         return [it["name"][p:n] for it in await self._list(prefix, "items(name),nextPageToken")]
 
     async def list_metas(self, prefix):
-        from urllib.parse import unquote
         p, n = len(self.prefix), -len(".json")
-        return [(it["name"][p:n], {k: unquote(v) for k, v in (it.get("metadata") or {}).items()})
+        return [(it["name"][p:n], it.get("metadata") or {})
                 for it in await self._list(prefix, "items(name,metadata),nextPageToken")]
 
 
