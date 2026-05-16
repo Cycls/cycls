@@ -105,9 +105,8 @@ class _FileStore:
                 key = str(p.relative_to(self.root).with_suffix("")).replace(os.sep, "/")
                 if not key.startswith(prefix): continue
                 if with_meta:
-                    try: meta = json.loads(p.with_suffix(".meta").read_text())
-                    except (FileNotFoundError, json.JSONDecodeError): meta = {}
-                    out.append((key, meta))
+                    mp = p.with_suffix(".meta")
+                    out.append((key, json.loads(mp.read_text()) if mp.exists() else {}))
                 else:
                     out.append(key)
             return out
@@ -139,10 +138,8 @@ class _GCSStore:
 
     async def write(self, key, data, meta=None):
         headers = {"Content-Type": "application/json"}
+        # Percent-encode: x-goog-meta-* headers are ASCII-only on the wire.
         if meta:
-            # Percent-encode values: HTTP headers are ASCII-only, but titles
-            # can contain non-ASCII (e.g. Arabic). Without this, the header
-            # silently drops or corrupts and the metadata roundtrips empty.
             for k, v in meta.items(): headers[f"x-goog-meta-{k}"] = quote(str(v), safe="")
         r = await self._req("POST",
             f"{self._STORAGE}/upload/storage/v1/b/{self.bucket}/o?uploadType=media&name={self._obj(key)}",
@@ -171,15 +168,14 @@ class _GCSStore:
             if not page_token: break
         return items
 
-    def _key_of(self, name): return name[len(self.prefix):-len(".json")]
-
     async def list_keys(self, prefix):
-        return [self._key_of(it["name"]) for it in await self._list(prefix, "items(name),nextPageToken")]
+        p, n = len(self.prefix), -len(".json")
+        return [it["name"][p:n] for it in await self._list(prefix, "items(name),nextPageToken")]
 
     async def list_metas(self, prefix):
         from urllib.parse import unquote
-        return [(self._key_of(it["name"]),
-                 {k: unquote(v) for k, v in (it.get("metadata") or {}).items()})
+        p, n = len(self.prefix), -len(".json")
+        return [(it["name"][p:n], {k: unquote(v) for k, v in (it.get("metadata") or {}).items()})
                 for it in await self._list(prefix, "items(name,metadata),nextPageToken")]
 
 
