@@ -8,11 +8,11 @@ import asyncio
 from pathlib import Path
 
 from cycls.agent import state as chat
-from cycls.app.workspace import workspace_at
+from cycls.app.workspace import workspace
 
 
 def _ws(tmp_path):
-    return workspace_at("tenant", tmp_path, base=f"file://{tmp_path}")
+    return workspace("tenant", tmp_path, base=f"file://{tmp_path}")
 
 
 def _run(coro):

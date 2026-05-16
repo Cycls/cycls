@@ -10,11 +10,11 @@ scenario starts fresh.
 import asyncio, json
 
 from cycls.agent.tools import _exec_database
-from cycls.app.workspace import workspace_at, DB
+from cycls.app.workspace import workspace, DB
 
 
 def _ws(tmp_path):
-    return workspace_at("tenant", tmp_path, base=f"file://{tmp_path}")
+    return workspace("tenant", tmp_path, base=f"file://{tmp_path}")
 
 
 def _run(coro):

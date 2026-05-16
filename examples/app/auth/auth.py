@@ -4,7 +4,7 @@
 Self-issued HS256 JWTs signed by a per-deployment HMAC secret read from the
 `CYCLS_LOCAL_AUTH_SECRET` env var. User credentials live in a global workspace
 at `<volume>/_users/.cycls/`. Per-user workspaces work the same as with
-Clerk — once `validate()` returns a User, `workspace_for(user, ...)` gives
+Clerk — once `validate()` returns a User, `workspace(user, ...)` gives
 you the per-tenant fs + db.
 
 Demonstrates that "auth provider" in cycls is really just two functions:
@@ -21,7 +21,7 @@ from typing import Optional
 from uuid import uuid4
 
 import cycls
-from cycls.app import User, Workspace, workspace_at, workspace_for
+from cycls.app import User, Workspace, workspace
 
 HTML_PATH = str(Path(__file__).parent / "auth.html")
 
@@ -56,7 +56,7 @@ def auth_app():
     TTL = 7 * 24 * 3600
 
     # One global user store for the whole deployment. Keys are emails.
-    users_ws = workspace_at("_users", auth_app.volume, base=auth_app.storage)
+    users_ws = workspace("_users", auth_app.volume, base=auth_app.storage)
     users = cycls.DB(users_ws)
 
     def issue_token(user_id: str) -> str:
@@ -81,8 +81,8 @@ def auth_app():
     auth = Depends(validate)
 
     def _build_ws(user: User = auth) -> Workspace:
-        return workspace_for(user, auth_app.volume, base=auth_app.storage)
-    workspace = Depends(_build_ws)
+        return workspace(user, auth_app.volume, base=auth_app.storage)
+    ws_dep = Depends(_build_ws)
 
     class AuthIn(BaseModel):
         email: str
@@ -120,7 +120,7 @@ def auth_app():
 
     # Demo route — exercises the per-tenant workspace to show end-to-end isolation.
     @app.post("/notes")
-    async def add_note(request: Request, ws=workspace):
+    async def add_note(request: Request, ws=ws_dep):
         data = await request.json()
         nid = uuid4().hex[:8]
         note = {"id": nid, "text": data.get("text", ""),
@@ -129,7 +129,7 @@ def auth_app():
         return note
 
     @app.get("/notes")
-    async def list_notes(ws=workspace):
+    async def list_notes(ws=ws_dep):
         return [v async for _, v in cycls.DB(ws).items(prefix="notes/")]
 
     return app

@@ -3,7 +3,7 @@ from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional, Any
 from cycls.app.auth import User, validator
-from cycls.app.workspace import Workspace, workspace_for
+from cycls.app.workspace import Workspace, workspace
 
 
 class PassMetadata(BaseModel):
@@ -130,7 +130,7 @@ def web(func, config, extra_routers=None, auth=None):
 
         @property
         def workspace(self) -> Workspace:
-            return workspace_for(self.user, volume, base=config.storage)
+            return workspace(self.user, volume, base=config.storage)
 
     app = FastAPI()
 

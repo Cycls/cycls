@@ -7,7 +7,7 @@ from typing import Optional
 
 from cycls.function import Function, _get_api_key, _get_base_url
 from cycls.app.auth import JWT, validator
-from cycls.app.workspace import workspace_for
+from cycls.app.workspace import workspace
 
 CYCLS_PATH = importlib.resources.files("cycls")
 
@@ -65,7 +65,7 @@ class App(Function):
     @cached_property
     def workspace(self):
         def _build_ws(user=self.auth):
-            return workspace_for(user, self.volume, base=self.storage)
+            return workspace(user, self.volume, base=self.storage)
         return self._depends(_build_ws)
 
     def _prepare_func(self, prod):
