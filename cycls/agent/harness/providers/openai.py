@@ -10,8 +10,16 @@ import json
 
 from .. import events
 from ..events import Turn
-from . import context_window
 from ...tools import tool_step
+
+
+_WINDOWS = {
+    "gpt-5":  400_000,
+    "gpt-4o": 128_000,
+    "gpt-4":  128_000,
+    "o1":     200_000,
+    "o3":     200_000,
+}
 
 
 class OpenAIProvider:
@@ -21,7 +29,10 @@ class OpenAIProvider:
 
     @property
     def context_window(self):
-        return context_window(self.model)
+        """Exact match first, then longest family prefix in the name; 128k default
+        (covers most modern Chat-Completions-compatible models)."""
+        if self.model in _WINDOWS: return _WINDOWS[self.model]
+        return next((v for k, v in _WINDOWS.items() if k in self.model), 128_000)
 
     @staticmethod
     def _tool_result_text(content):

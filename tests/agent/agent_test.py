@@ -23,7 +23,8 @@ def _clear_client_cache():
     yield
     _providers._clients.clear()
 from cycls.agent.harness.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact, compact
-from cycls.agent.harness.providers import context_window
+from cycls.agent.harness.providers.anthropic import AnthropicProvider
+from cycls.agent.harness.providers.openai import OpenAIProvider
 from cycls.agent.harness.events import to_ui
 from cycls.agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path
 from cycls.agent.state import load_messages
@@ -645,7 +646,7 @@ def test_compaction_triggers_when_approaching_window(agent_env):
     """When input tokens approach context window and enough messages exist, compaction fires."""
     ws, ctx = agent_env
 
-    window = context_window("claude-sonnet-4-20250514")
+    window = AnthropicProvider(None, "claude-sonnet-4-20250514").context_window
     high_usage = _usage(inp=window - COMPACT_BUFFER + 1)
 
     # Build enough tool rounds to exceed KEEP_RECENT messages
@@ -721,7 +722,7 @@ def test_compaction_failure_still_saves_history(agent_env):
     """If compaction API call fails, the conversation must still be saved."""
     ws, ctx = agent_env
 
-    window = context_window("claude-sonnet-4-20250514")
+    window = AnthropicProvider(None, "claude-sonnet-4-20250514").context_window
     high_usage = _usage(inp=window - COMPACT_BUFFER + 1)
 
     round1 = _make_response([_tool_use_block("t1")], stop_reason="tool_use", usage=high_usage)
@@ -838,16 +839,26 @@ def test_auto_retry_exhausted_shows_error(agent_env):
 # Context window tests
 # ---------------------------------------------------------------------------
 
-def test_context_window_family_models():
-    assert context_window("claude-sonnet-4-20250514") == 200_000
-    assert context_window("claude-opus-4-20250514") == 200_000
-    assert context_window("claude-haiku-3-5-20241022") == 200_000
+def test_anthropic_context_window_family_models():
+    assert AnthropicProvider(None, "claude-sonnet-4-20250514").context_window == 200_000
+    assert AnthropicProvider(None, "claude-opus-4-20250514").context_window == 200_000
+    assert AnthropicProvider(None, "claude-haiku-3-5-20241022").context_window == 200_000
 
 
-def test_context_window_1m_variants():
-    assert context_window("claude-opus-4-6[1m]") == 1_000_000
-    assert context_window("claude-sonnet-4-6[1m]") == 1_000_000
+def test_anthropic_context_window_1m_variants():
+    assert AnthropicProvider(None, "claude-opus-4-6[1m]").context_window == 1_000_000
+    assert AnthropicProvider(None, "claude-sonnet-4-6[1m]").context_window == 1_000_000
 
 
-def test_context_window_unknown_model():
-    assert context_window("gpt-4o") == 200_000
+def test_anthropic_context_window_unknown_defaults_200k():
+    assert AnthropicProvider(None, "future-model-name").context_window == 200_000
+
+
+def test_openai_context_window_gpt4o():
+    assert OpenAIProvider(None, "gpt-4o").context_window == 128_000
+
+
+def test_openai_context_window_unknown_defaults_128k():
+    """Chat-Completions endpoints (Groq, vLLM, etc.) default to 128k —
+    covers most modern Chat-Completions-compatible models."""
+    assert OpenAIProvider(None, "llama-3.3-70b").context_window == 128_000

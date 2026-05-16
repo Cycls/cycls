@@ -8,7 +8,7 @@ identity `to_ui` for back-compat).
 """
 from .llm import LLM
 from .main import _run as default_loop
-from .providers import make_provider, AnthropicProvider, context_window
+from .providers import make_provider, AnthropicProvider
 from .compact import compact
 from . import events
 from .events import to_ui
