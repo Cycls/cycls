@@ -131,3 +131,16 @@ def test_database_scan_truncates_at_limit(tmp_path):
     head, _, tail = out.partition("\n")
     assert len(json.loads(head)) == 2
     assert "truncated" in tail
+
+
+def test_database_delete_prefix_empty_raises(tmp_path):
+    from cycls.app.workspace import DB
+    ws = _ws(tmp_path)
+    async def t():
+        db = DB(ws)
+        try:
+            await db.delete_prefix("")
+            assert False, "expected ValueError"
+        except ValueError as e:
+            assert "non-empty prefix" in str(e)
+    _run(t())

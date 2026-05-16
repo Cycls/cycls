@@ -283,14 +283,12 @@ async def _exec_database(inp, workspace):
         if cmd == "scan":
             prefix = inp.get("prefix", "")
             limit = max(1, int(inp.get("limit", 100)))
-            pairs, truncated = [], False
-            async for k, v in db.items(prefix=prefix):
-                if len(pairs) >= limit:
-                    truncated = True
-                    break
-                pairs.append({"key": k, "value": v})
-            if not pairs:
-                return f"No keys with prefix {prefix!r}"
+            # Fetch limit+1 to detect truncation; slice keys in items() so we
+            # don't waste GETs on the discarded tail.
+            pairs = [{"key": k, "value": v} async for k, v in db.items(prefix=prefix, limit=limit + 1)]
+            truncated = len(pairs) > limit
+            if truncated: pairs = pairs[:limit]
+            if not pairs: return f"No keys with prefix {prefix!r}"
             result = json.dumps(pairs)
             return f"{result}\n[truncated at {limit}; use a narrower prefix or higher limit]" if truncated else result
         return f"Error: unknown command {cmd!r}"
