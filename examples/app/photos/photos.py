@@ -1,11 +1,10 @@
 # uv run cycls run examples/app/photos/photos.py
-"""Photo timeline — per-user gallery using JSON + raw bytes in one DB.
+"""Photo timeline — per-user gallery, metadata in DB, bytes on the workspace fs.
 
-Metadata at `photos/{id}` (JSON). Image bytes at `b"img/{id}"` via
-db.raw(). Same workspace, two storage shapes — no S3, no signed URLs,
-no separate blob store.
+Metadata at `photos/{id}` (JSON, in the workspace DB). Image bytes at
+`<ws.root>/photos/{id}` (filesystem, gcsfuse-backed in prod). Two storage
+shapes in one workspace — no S3, no signed URLs, no separate blob store.
 """
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -20,7 +19,6 @@ MAX_BYTES = 10 * 1024 * 1024
 def photos():
     from fastapi import FastAPI, File, HTTPException, Response, UploadFile
     from fastapi.responses import HTMLResponse
-    from slatedb.uniffi import PutOptions, Ttl, WriteOptions
 
     app = FastAPI(title="Photos")
 
@@ -33,6 +31,11 @@ def photos():
     @app.get("/me")
     async def me(user=photos.auth):
         return user
+
+    def _img_path(ws, pid):
+        d = ws.root / "photos"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / pid
 
     @app.post("/photos")
     async def upload(files: list[UploadFile] = File(...), ws=photos.workspace):
@@ -51,12 +54,7 @@ def photos():
                 "uploadedAt": datetime.now(timezone.utc).isoformat(),
             }
             await db.put(f"photos/{pid}", meta)
-            async with db.raw() as raw:
-                await raw.put_with_options(
-                    f"img/{pid}".encode(), data,
-                    PutOptions(ttl=Ttl.DEFAULT()),
-                    WriteOptions(await_durable=False),
-                )
+            _img_path(ws, pid).write_bytes(data)
             results.append(meta)
         return results
 
@@ -68,28 +66,21 @@ def photos():
 
     @app.get("/photos/{pid}/raw")
     async def get_raw(pid: str, ws=photos.workspace):
-        db = cycls.DB(ws)
-        meta = await db.get(f"photos/{pid}")
+        meta = await cycls.DB(ws).get(f"photos/{pid}")
         if not meta:
             raise HTTPException(404, "not found")
-        async with db.raw() as raw:
-            data = await raw.get(f"img/{pid}".encode())
-        if data is None:
+        path = _img_path(ws, pid)
+        if not path.exists():
             raise HTTPException(404, "not found")
-        return Response(content=bytes(data), media_type=meta.get("mime", "application/octet-stream"))
+        return Response(content=path.read_bytes(), media_type=meta.get("mime", "application/octet-stream"))
 
     @app.delete("/photos/{pid}")
     async def delete_photo(pid: str, ws=photos.workspace):
         db = cycls.DB(ws)
-        async with db.transaction() as t:
-            if not await t.get(f"photos/{pid}"):
-                raise HTTPException(404, "not found")
-            await t.delete(f"photos/{pid}")
-        async with db.raw() as raw:
-            await raw.delete_with_options(
-                f"img/{pid}".encode(),
-                WriteOptions(await_durable=False),
-            )
+        if not await db.get(f"photos/{pid}"):
+            raise HTTPException(404, "not found")
+        await db.delete(f"photos/{pid}")
+        _img_path(ws, pid).unlink(missing_ok=True)
         return {"ok": True}
 
     return app

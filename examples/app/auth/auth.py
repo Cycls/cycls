@@ -1,8 +1,8 @@
 # uv run cycls run examples/app/auth/auth.py
-"""Clerkless auth — JWT + scrypt + SlateDB. No external services.
+"""Clerkless auth — JWT + scrypt + workspace DB. No external services.
 
 Self-issued HS256 JWTs signed by a per-deployment HMAC secret read from the
-`CYCLS_LOCAL_AUTH_SECRET` env var. User credentials live in a global SlateDB
+`CYCLS_LOCAL_AUTH_SECRET` env var. User credentials live in a global workspace
 at `<volume>/_users/.cycls/`. Per-user workspaces work the same as with
 Clerk — once `validate()` returns a User, `workspace_for(user, ...)` gives
 you the per-tenant fs + db.

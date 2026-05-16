@@ -4,10 +4,10 @@
   docs/{doc_id}        → {id, title, body, createdAt}
   idx/{term}/{doc_id}  → 1   (inverted index)
 
-Write path: doc + index entries written atomically in one transaction.
+Write path: doc + index entries written in parallel via asyncio.gather.
 Search: tokenize query, prefix-scan "idx/{term}/" per term, intersect.
 """
-import re
+import asyncio, re
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -53,10 +53,11 @@ def notes():
             "body": body.body,
             "createdAt": datetime.now(timezone.utc).isoformat(),
         }
-        async with cycls.DB(ws).transaction() as t:
-            await t.put(f"docs/{nid}", doc)
-            for term in tokenize(doc["title"] + " " + doc["body"]):
-                await t.put(f"idx/{term}/{nid}", 1)
+        db = cycls.DB(ws)
+        await asyncio.gather(
+            db.put(f"docs/{nid}", doc),
+            *[db.put(f"idx/{term}/{nid}", 1) for term in tokenize(doc["title"] + " " + doc["body"])],
+        )
         return doc
 
     @app.get("/notes")
@@ -92,10 +93,10 @@ def notes():
         doc = await db.get(f"docs/{nid}")
         if not doc:
             raise HTTPException(404, "not found")
-        async with db.transaction() as t:
-            await t.delete(f"docs/{nid}")
-            for term in tokenize(doc["title"] + " " + doc["body"]):
-                await t.delete(f"idx/{term}/{nid}")
+        await asyncio.gather(
+            db.delete(f"docs/{nid}"),
+            *[db.delete(f"idx/{term}/{nid}") for term in tokenize(doc["title"] + " " + doc["body"])],
+        )
         return {"ok": True}
 
     return app

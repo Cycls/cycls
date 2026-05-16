@@ -7,8 +7,8 @@ container, multi-tenancy, auth, and workspace mounting.
 
 The proxy stamps `X-Workspace: <user's ws.root>` on every forwarded
 request so the TypeScript handler can read/write per-tenant files
-without re-implementing auth or tenancy. Same Clerk JWT, same SlateDB-
-adjacent gcsfuse workspace, just a different runtime in the middle.
+without re-implementing auth or tenancy. Same Clerk JWT, same gcsfuse
+workspace, just a different runtime in the middle.
 """
 import asyncio
 import os

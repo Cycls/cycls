@@ -7,8 +7,7 @@ Demonstrates:
   - app.workspace                    per-user Workspace via FastAPI Depends
   - cycls.DB(ws).put/get/delete      flat JSON KV (key is the full path)
   - .items(prefix=...)               ordered prefix scan
-  - .transaction()                   atomic multi-key writes
-  - cycls.DB(ws).raw()               raw SlateDB for TTL-cached stats
+  - db.delete("prefix/")             trailing-slash subtree delete
 
 Routes:
   GET    /me                         the authenticated user (uses app.auth)
@@ -16,10 +15,10 @@ Routes:
   GET    /habits                     list this user's habits
   GET    /habits/{id}                habit + recent check-ins
   POST   /habits/{id}/check          check in for today
-  DELETE /habits/{id}                atomic delete (habit + all check-ins)
-  GET    /stats                      cross-habit stats (TTL-cached for 5 min)
+  DELETE /habits/{id}                delete habit + all check-ins
+  GET    /stats                      cross-habit counts
 """
-import json
+import asyncio
 from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -34,7 +33,6 @@ def habits():
     from fastapi import FastAPI, HTTPException
     from fastapi.responses import HTMLResponse
     from pydantic import BaseModel
-    from slatedb.uniffi import PutOptions, Ttl, WriteOptions
 
     app = FastAPI(title="Habits")
 
@@ -93,38 +91,23 @@ def habits():
     @app.delete("/habits/{habit_id}")
     async def delete_habit(habit_id: str, ws=habits.workspace):
         db = cycls.DB(ws)
-        async with db.transaction() as t:
-            if await t.get(f"habits/{habit_id}") is None:
-                raise HTTPException(404, "Not found")
-            await t.delete(f"habits/{habit_id}")
-            async for k, _ in t.items(prefix=f"checkins/{habit_id}/"):
-                await t.delete(k)
+        if await db.get(f"habits/{habit_id}") is None:
+            raise HTTPException(404, "Not found")
+        await asyncio.gather(
+            db.delete(f"habits/{habit_id}"),
+            db.delete(f"checkins/{habit_id}/"),
+        )
         return {"ok": True}
 
     @app.get("/stats")
     async def stats(ws=habits.workspace):
-        # TTL-cached aggregate via raw SlateDB. Cache key sits at bytes layer,
-        # outside the JSON key conventions, with built-in TTL expiry.
         db = cycls.DB(ws)
-        async with db.raw() as raw:
-            cached = await raw.get(b"stats:cache")
-            if cached:
-                return json.loads(cached)
-            n_habits = 0
-            async for _ in db.items(prefix="habits/"): n_habits += 1
-            n_checkins = 0
-            async for _ in db.items(prefix="checkins/"): n_checkins += 1
-            result = {
-                "habits": n_habits,
-                "checkins": n_checkins,
-                "computed_at": datetime.now(timezone.utc).isoformat(),
-            }
-            await raw.put_with_options(
-                b"stats:cache",
-                json.dumps(result).encode(),
-                PutOptions(ttl=Ttl.EXPIRE_AFTER_TICKS(5 * 60 * 1000)),  # 5 min
-                WriteOptions(await_durable=False),
-            )
-            return result
+        n_habits = sum(1 async for _ in db.items(prefix="habits/"))
+        n_checkins = sum(1 async for _ in db.items(prefix="checkins/"))
+        return {
+            "habits": n_habits,
+            "checkins": n_checkins,
+            "computed_at": datetime.now(timezone.utc).isoformat(),
+        }
 
     return app
