@@ -23,17 +23,17 @@ def microcompact(messages):
                 block["content"] = "[Old tool result cleared]"
 
 
-async def compact(complete, messages):
+async def compact(provider, messages):
     """Partial compaction: summarize the old messages, keep the recent ones
-    verbatim. `complete(messages=, system=, max_tokens=) -> str` is the
-    provider's non-streaming one-shot. Returns the new messages list."""
+    verbatim. Uses the provider's non-streaming `complete`, clamped to its
+    `max_output` so the summary fits whatever the model can emit."""
     microcompact(messages)
     keep = min(len(messages), KEEP_RECENT)
     old = messages[:-keep] if keep else messages
     recent = messages[-keep:] if keep else []
-    raw = await complete(
+    raw = await provider.complete(
         messages=old + [{"role": "user", "content": _SUMMARY_REQUEST}],
-        system=COMPACT_SYSTEM, max_tokens=16384)
+        system=COMPACT_SYSTEM, max_tokens=min(provider.max_output, 16384))
     raw = re.sub(r"<analysis>[\s\S]*?</analysis>", "", raw)
     m = re.search(r"<summary>([\s\S]*?)</summary>", raw)
     summary = m.group(1).strip() if m else raw.strip()

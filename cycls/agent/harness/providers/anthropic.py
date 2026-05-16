@@ -19,6 +19,19 @@ _WINDOWS = {
     "claude-haiku":      200_000,
 }
 
+_MAX_OUTPUT = {
+    "claude-sonnet-4-6": 64_000,
+    "claude-opus-4-6":   64_000,
+    "claude-sonnet":     64_000,   # 4.x with extended
+    "claude-opus":       32_000,
+    "claude-haiku":      8_192,
+}
+
+
+def _lookup(table, model, default):
+    if model in table: return table[model]
+    return next((v for k, v in table.items() if k in model), default)
+
 
 class AnthropicProvider:
     def __init__(self, client, model):
@@ -27,9 +40,11 @@ class AnthropicProvider:
 
     @property
     def context_window(self):
-        """Exact match first, then longest family prefix in the name; 200k default."""
-        if self.model in _WINDOWS: return _WINDOWS[self.model]
-        return next((v for k, v in _WINDOWS.items() if k in self.model), 200_000)
+        return _lookup(_WINDOWS, self.model, 200_000)
+
+    @property
+    def max_output(self):
+        return _lookup(_MAX_OUTPUT, self.model, 8_192)
 
     def _to_messages(self, messages):
         """Drop FE-only sidecars; Anthropic rejects unknown top-level message keys."""

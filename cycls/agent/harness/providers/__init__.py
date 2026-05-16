@@ -50,7 +50,8 @@ class Message(TypedDict):
 
 class Provider(Protocol):
     model: str
-    context_window: int
+    context_window: int    # model's input token budget
+    max_output: int        # model's output token cap
 
     def stream(self, *, messages: list[Message], system: str, tools: list[dict],
                max_tokens: int, mcp_servers=None, thinking=None) -> AsyncIterator:

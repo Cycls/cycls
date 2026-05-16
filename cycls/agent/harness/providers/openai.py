@@ -21,6 +21,19 @@ _WINDOWS = {
     "o3":     200_000,
 }
 
+_MAX_OUTPUT = {
+    "gpt-5":  128_000,
+    "gpt-4o": 16_384,
+    "gpt-4":  8_192,
+    "o1":     100_000,
+    "o3":     100_000,
+}
+
+
+def _lookup(table, model, default):
+    if model in table: return table[model]
+    return next((v for k, v in table.items() if k in model), default)
+
 
 class OpenAIProvider:
     def __init__(self, client, model):
@@ -29,10 +42,11 @@ class OpenAIProvider:
 
     @property
     def context_window(self):
-        """Exact match first, then longest family prefix in the name; 128k default
-        (covers most modern Chat-Completions-compatible models)."""
-        if self.model in _WINDOWS: return _WINDOWS[self.model]
-        return next((v for k, v in _WINDOWS.items() if k in self.model), 128_000)
+        return _lookup(_WINDOWS, self.model, 128_000)
+
+    @property
+    def max_output(self):
+        return _lookup(_MAX_OUTPUT, self.model, 16_384)
 
     @staticmethod
     def _tool_result_text(content):
