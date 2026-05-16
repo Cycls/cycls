@@ -57,12 +57,6 @@ async def _gcs_auth():
     return {"Authorization": f"Bearer {_gcs_token}"}
 
 
-async def shutdown_pool():
-    global _gcs_client, _gcs_token
-    if _gcs_client: await _gcs_client.aclose()
-    _gcs_client = _gcs_token = None
-
-
 class _FileStore:
     def __init__(self, url):
         self.root = Path(url[7:])

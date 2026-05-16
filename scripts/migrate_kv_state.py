@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from cycls.app.workspace import workspace_at, shutdown_pool
+from cycls.app.workspace import workspace_at
 from cycls.agent import chat
 
 
@@ -117,10 +117,6 @@ async def main():
         if tenant_root.name in ("shared", ".cycls", ".db"):
             continue
         await _migrate_tenant(tenant_root, args.base, dry_run=args.dry_run)
-
-    # Flush all SlateDB handles before exit — writes are non-durable by
-    # default; without this, in-memory state is lost when the script exits.
-    await shutdown_pool()
 
     if args.dry_run:
         print("\n(dry run — no changes written)")

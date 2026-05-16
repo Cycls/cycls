@@ -1,21 +1,7 @@
-"""Shared test fixtures.
-
-The engine pool keeps backend handles alive across requests. For tests we
-want isolation — each test uses a fresh tmp_path and starts from a clean
-pool so handles don't leak state or hold open resources between tests.
-"""
-import asyncio
+"""Shared test fixtures."""
 import os
 
 import pytest
-
-from cycls.app.workspace import shutdown_pool
-
-
-@pytest.fixture(autouse=True)
-def _isolate_db_pool():
-    yield
-    asyncio.run(shutdown_pool())
 
 
 # ---- Live LLM tests ----
