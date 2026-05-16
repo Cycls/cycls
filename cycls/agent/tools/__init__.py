@@ -58,6 +58,7 @@ _READ_TOOL = {
         "pages": {"type": "string", "description": "Page range for large PDFs, e.g. '1-5' or '3'. Required for PDFs over 3MB. Max 20 pages."},
     }, "required": ["path"]}
 }
+
 _DATABASE_TOOL = {
     "type": "custom",
     "name": "database",
@@ -69,11 +70,10 @@ _DATABASE_TOOL = {
         "Commands:\n"
         "- get:    read a value at `key`. Returns the stored JSON or 'not found'.\n"
         "- put:    write `value` (any JSON-serializable type) at `key`.\n"
-        "- delete: remove `key`.\n"
+        "- delete: remove `key`. Trailing slash wipes a namespace (`notes/` removes everything under it).\n"
         "- scan:   list {key, value} pairs whose key starts with `prefix`. "
         "Truncates at `limit` (default 100) so a huge prefix won't blow the context.\n\n"
-        "Keys are slash-separated strings (e.g. `tasks/<id>`, `notes/<topic>`). "
-        "Cannot start with `/` or contain `..` segments."
+        "Keys are slash-separated (e.g. `tasks/<id>`). Cannot start with `/` or contain `..`."
     ),
     "input_schema": {"type": "object", "properties": {
         "command": {"type": "string", "enum": ["get", "put", "delete", "scan"]},
@@ -242,13 +242,12 @@ def _exec_edit(inp, workspace):
 # ---- Database ----
 
 def _validate_db_key(key):
-    """Reject keys that would escape the workspace on local backend or
-    create surprising paths. GCS would tolerate them as literal names,
-    but the file:// dev backend resolves `..` segments."""
-    if not key:
-        raise ValueError("key required")
-    if key.startswith("/") or any(seg in ("", "..") for seg in key.split("/")):
-        raise ValueError(f"invalid key: {key!r} (cannot start with '/' or contain '..' segments)")
+    """Allow trailing slash (= subtree marker for delete); reject empty,
+    leading '/', '..' segments, and empty middle segments."""
+    if not key: raise ValueError("key required")
+    parts = key.split("/")
+    if key.startswith("/") or ".." in parts or "" in parts[:-1]:
+        raise ValueError(f"invalid key: {key!r}")
 
 
 async def _exec_database(inp, workspace):
