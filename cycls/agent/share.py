@@ -19,7 +19,7 @@ async def mint(workspace, path, audience="public", ttl=None, author=None):
         row["exp"] = int(time.time()) + int(ttl)
     if author is not None:
         row["author"] = author
-    await DB(workspace).put(f"share/{token}", row, meta={k: str(v) for k, v in row.items()})
+    await DB(workspace).put(f"share/{token}", row, meta=row)
     return token, row
 
 

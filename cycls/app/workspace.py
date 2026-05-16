@@ -93,6 +93,7 @@ class _FileStore:
         await asyncio.to_thread(_do)
 
     async def remove_prefix(self, prefix):
+        if not prefix: raise ValueError("remove_prefix requires non-empty prefix")
         def _do():
             target = self.root / prefix
             if target.is_dir():
@@ -159,6 +160,7 @@ class _GCSStore:
         if r.status_code not in (200, 204, 404): r.raise_for_status()
 
     async def remove_prefix(self, prefix):
+        if not prefix: raise ValueError("remove_prefix requires non-empty prefix")
         keys = await self.list_keys(prefix)
         await asyncio.gather(*[self.remove(k) for k in keys])
 
@@ -195,8 +197,7 @@ def _store(url):
 
 class DB:
     def __init__(self, workspace, base=None):
-        self._url = f"{(base or workspace.base).rstrip('/')}/{workspace.path}"
-        self._store = _store(self._url)
+        self._store = _store(f"{(base or workspace.base).rstrip('/')}/{workspace.path}")
 
     async def get(self, key, default=None):
         data = await self._store.read(key)
@@ -211,14 +212,14 @@ class DB:
     async def delete_prefix(self, prefix):
         await self._store.remove_prefix(prefix)
 
-    async def items(self, prefix=None):
-        keys = await self._store.list_keys(prefix or "")
+    async def items(self, prefix=None, limit=None):
+        keys = sorted(await self._store.list_keys(prefix or ""))
+        if limit is not None: keys = keys[:limit]
         async def _fetch(k):
             data = await self._store.read(k)
             return None if data is None else (k, json.loads(data))
-        results = await asyncio.gather(*[_fetch(k) for k in keys])
-        for k, v in sorted(r for r in results if r is not None):
-            yield k, v
+        for r in await asyncio.gather(*[_fetch(k) for k in keys]):
+            if r is not None: yield r
 
     async def index(self, prefix=None):
         for k, m in sorted(await self._store.list_metas(prefix or "")):
