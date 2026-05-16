@@ -227,10 +227,4 @@ def web(func, config, extra_routers=None, auth=None):
         app.mount("/public", StaticFiles(directory="public", html=True))
     app.mount("/", StaticFiles(directory=config.public_path))
 
-    # Pay the ~1s anthropic httpx + TLS warmup at startup, not first request.
-    try:
-        from cycls.agent.harness.providers import prewarm
-        prewarm()
-    except Exception as e:
-        print(f"[WARN] anthropic prewarm failed: {e}", flush=True)
     return app
