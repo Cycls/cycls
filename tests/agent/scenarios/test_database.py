@@ -107,22 +107,6 @@ def test_database_rejects_path_traversal_keys(tmp_path):
         assert "Error:" in out, f"expected rejection for key={bad!r}, got {out!r}"
 
 
-def test_database_delete_prefix_wipes_all_under(tmp_path):
-    ws = _ws(tmp_path)
-    for k in ("notes/a", "notes/b", "notes/sub/c", "tasks/keep"):
-        _run(_exec_database({"command": "put", "key": k, "value": k}, ws))
-    out = _run(_exec_database({"command": "delete_prefix", "prefix": "notes/"}, ws))
-    assert "Deleted all keys" in out
-    out = _run(_exec_database({"command": "scan", "prefix": ""}, ws))
-    assert json.loads(out.split("\n")[0]) == [{"key": "tasks/keep", "value": "tasks/keep"}]
-
-
-def test_database_delete_prefix_requires_prefix(tmp_path):
-    ws = _ws(tmp_path)
-    out = _run(_exec_database({"command": "delete_prefix", "prefix": ""}, ws))
-    assert "Error:" in out and "prefix" in out
-
-
 def test_database_scan_truncates_at_limit(tmp_path):
     ws = _ws(tmp_path)
     for i in range(5):
@@ -133,14 +117,31 @@ def test_database_scan_truncates_at_limit(tmp_path):
     assert "truncated" in tail
 
 
-def test_database_delete_prefix_empty_raises(tmp_path):
+def test_db_delete_rejects_dangerous_targets(tmp_path):
+    """DB.delete is polymorphic (trailing slash = subtree). The agent tool's
+    key validator already blocks dangerous shapes, but DB.delete is also
+    used from framework code (sessions.py) and must defend itself."""
     from cycls.app.workspace import DB
     ws = _ws(tmp_path)
     async def t():
         db = DB(ws)
-        try:
-            await db.delete_prefix("")
-            assert False, "expected ValueError"
-        except ValueError as e:
-            assert "non-empty prefix" in str(e)
+        for bad in ("", "/", "/abs", "../escape", "foo/../bar"):
+            try:
+                await db.delete(bad)
+                assert False, f"expected ValueError for {bad!r}"
+            except ValueError: pass
+    _run(t())
+
+
+def test_db_delete_subtree_via_trailing_slash(tmp_path):
+    """db.delete('prefix/') wipes the subtree; db.delete('key') deletes the leaf."""
+    from cycls.app.workspace import DB
+    ws = _ws(tmp_path)
+    async def t():
+        db = DB(ws)
+        for k in ("notes/a", "notes/b", "notes/sub/c", "tasks/keep"):
+            await db.put(k, k)
+        await db.delete("notes/")
+        remaining = sorted([k async for k, _ in db.items()])
+        assert remaining == ["tasks/keep"]
     _run(t())

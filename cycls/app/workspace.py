@@ -206,11 +206,15 @@ class DB:
     async def put(self, key, value, *, meta=None):
         await self._store.write(key, json.dumps(value).encode(), meta=meta)
 
-    async def delete(self, key):
-        await self._store.remove(key)
-
-    async def delete_prefix(self, prefix):
-        await self._store.remove_prefix(prefix)
+    async def delete(self, target):
+        """Trailing slash → subtree delete (`chat/log/abc/`).
+        Otherwise → leaf delete (`chat/meta/abc`)."""
+        if not target or target == "/" or target.startswith("/") or ".." in target.split("/"):
+            raise ValueError(f"invalid delete target: {target!r}")
+        if target.endswith("/"):
+            await self._store.remove_prefix(target)
+        else:
+            await self._store.remove(target)
 
     async def items(self, prefix=None, limit=None):
         keys = sorted(await self._store.list_keys(prefix or ""))
