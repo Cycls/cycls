@@ -1,8 +1,7 @@
 """Workspace + DB — per-tenant JSON KV over object storage.
 
-`file://` (dev) and `gs://` (prod). `db.put(k, v, meta=...)` carries
-per-key metadata; `db.index(prefix)` enumerates names+meta cheaply
-(GCS `x-goog-meta-*` headers; local `.meta` sidecars).
+`file://` (dev) and `gs://` (prod). `db.put(k, v, meta=...)` attaches
+per-key metadata; `db.index(prefix)` enumerates names+meta in one call.
 """
 import asyncio, json, os
 from dataclasses import dataclass
@@ -138,18 +137,18 @@ class _GCSStore:
         return r.content
 
     async def write(self, key, data, meta=None):
-        # Multipart upload: metadata JSON + object body. uploadType=media
-        # silently drops x-goog-meta-* headers; only multipart/resumable
-        # persist custom metadata. Bonus: UTF-8 in JSON body is native.
         info = {"name": self._name(key)}
         if meta: info["metadata"] = {k: str(v) for k, v in meta.items()}
-        b = "cycls"
-        body = (f"--{b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
-                + json.dumps(info)
-                + f"\r\n--{b}\r\nContent-Type: application/json\r\n\r\n").encode() + data + f"\r\n--{b}--\r\n".encode()
+        body = b"\r\n".join([
+            b"--cycls", b"Content-Type: application/json; charset=UTF-8", b"",
+            json.dumps(info).encode(),
+            b"--cycls", b"Content-Type: application/json", b"",
+            data,
+            b"--cycls--", b"",
+        ])
         r = await self._req("POST",
             f"{self._STORAGE}/upload/storage/v1/b/{self.bucket}/o?uploadType=multipart",
-            headers={"Content-Type": f"multipart/related; boundary={b}"}, content=body)
+            headers={"Content-Type": "multipart/related; boundary=cycls"}, content=body)
         r.raise_for_status()
 
     async def remove(self, key):
@@ -202,8 +201,6 @@ class DB:
         await self._store.write(key, json.dumps(value).encode(), meta=meta)
 
     async def delete(self, target):
-        """Trailing slash → subtree delete (`chat/log/abc/`).
-        Otherwise → leaf delete (`chat/meta/abc`)."""
         if not target or target == "/" or target.startswith("/") or ".." in target.split("/"):
             raise ValueError(f"invalid delete target: {target!r}")
         if target.endswith("/"):
