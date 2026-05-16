@@ -55,9 +55,7 @@ def terminal():
 
     @app.delete("/history")
     async def clear_history(ws=terminal.workspace):
-        async with cycls.DB(ws).transaction() as t:
-            async for k, _ in t.items(prefix="history/"):
-                await t.delete(k)
+        await cycls.DB(ws).delete("history/")
         return {"ok": True}
 
     class CmdIn(BaseModel):
