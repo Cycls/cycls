@@ -14,77 +14,6 @@ from . import context_window
 from ...tools import tool_step
 
 
-def _tool_result_text(content):
-    """Anthropic tool_result content → OpenAI tool-message text (text-only).
-    Returns (text, dropped_kinds) so the caller can warn about elided blocks."""
-    if isinstance(content, str): return content, set()
-    if not isinstance(content, list): return json.dumps(content), set()
-    parts, dropped = [], set()
-    for x in content:
-        if not isinstance(x, dict): continue
-        t = x.get("type")
-        if t == "text": parts.append(x.get("text", ""))
-        elif t in ("image", "document"):
-            dropped.add(t)
-            parts.append(f"[{t} content not viewable on this provider]")
-    return "".join(parts), dropped
-
-
-def _to_oai(messages, system):
-    """cycls Messages → OpenAI Chat Completions messages, prepending system.
-    Returns (messages, dropped_kinds_in_tool_results)."""
-    out, dropped = [], set()
-    for m in messages:
-        role, content = m["role"], m.get("content", "")
-        if isinstance(content, str):
-            out.append({"role": role, "content": content})
-        elif role == "user":
-            parts, tools = [], []
-            for b in content:
-                t = b.get("type")
-                if t == "text":
-                    parts.append({"type": "text", "text": b["text"]})
-                elif t == "image":
-                    src = b.get("source", {})
-                    if src.get("type") == "base64":
-                        parts.append({"type": "image_url", "image_url": {
-                            "url": f"data:{src['media_type']};base64,{src['data']}"}})
-                elif t == "tool_result":
-                    text, d = _tool_result_text(b.get("content"))
-                    dropped |= d
-                    tools.append({"role": "tool", "tool_call_id": b["tool_use_id"], "content": text})
-            out.extend(tools)
-            if parts:
-                out.append({"role": "user", "content": parts})
-        elif role == "assistant":
-            text, calls = "", []
-            for b in content:
-                t = b.get("type")
-                if t == "text":
-                    text += b.get("text", "")
-                elif t == "tool_use":
-                    calls.append({"id": b["id"], "type": "function", "function": {
-                        "name": b["name"], "arguments": json.dumps(b.get("input", {}))}})
-            msg = {"role": "assistant", "content": text or None}
-            if calls: msg["tool_calls"] = calls
-            out.append(msg)
-    s = system if isinstance(system, str) else (
-        "\n\n".join(s.get("text", "") for s in system if isinstance(s, dict))
-        if isinstance(system, list) else "")
-    if s: out.insert(0, {"role": "system", "content": s})
-    return out, dropped
-
-
-def _to_oai_tools(tools):
-    """cycls/Anthropic tools → OpenAI functions. Drops Anthropic server tools."""
-    return [
-        {"type": "function", "function": {
-            "name": t["name"], "description": t.get("description", ""),
-            "parameters": t.get("input_schema", {"type": "object", "properties": {}})}}
-        for t in (tools or []) if not t.get("type", "").startswith("web_search")
-    ]
-
-
 class OpenAIProvider:
     def __init__(self, client, model):
         self._client = client
@@ -94,19 +23,88 @@ class OpenAIProvider:
     def context_window(self):
         return context_window(self.model)
 
+    @staticmethod
+    def _tool_result_text(content):
+        """tool_result content → text-only string (OpenAI tool messages are
+        text-only). Returns (text, dropped_kinds) so callers can warn."""
+        if isinstance(content, str): return content, set()
+        if not isinstance(content, list): return json.dumps(content), set()
+        parts, dropped = [], set()
+        for x in content:
+            if not isinstance(x, dict): continue
+            t = x.get("type")
+            if t == "text": parts.append(x.get("text", ""))
+            elif t in ("image", "document"):
+                dropped.add(t)
+                parts.append(f"[{t} content not viewable on this provider]")
+        return "".join(parts), dropped
+
+    def _to_messages(self, messages, system):
+        """cycls Messages → OpenAI Chat Completions messages, prepending system.
+        Returns (api_messages, dropped_kinds_in_tool_results)."""
+        out, dropped = [], set()
+        for m in messages:
+            role, content = m["role"], m.get("content", "")
+            if isinstance(content, str):
+                out.append({"role": role, "content": content})
+            elif role == "user":
+                parts, tools = [], []
+                for b in content:
+                    t = b.get("type")
+                    if t == "text":
+                        parts.append({"type": "text", "text": b["text"]})
+                    elif t == "image":
+                        src = b.get("source", {})
+                        if src.get("type") == "base64":
+                            parts.append({"type": "image_url", "image_url": {
+                                "url": f"data:{src['media_type']};base64,{src['data']}"}})
+                    elif t == "tool_result":
+                        text, d = self._tool_result_text(b.get("content"))
+                        dropped |= d
+                        tools.append({"role": "tool", "tool_call_id": b["tool_use_id"], "content": text})
+                out.extend(tools)
+                if parts:
+                    out.append({"role": "user", "content": parts})
+            elif role == "assistant":
+                text, calls = "", []
+                for b in content:
+                    t = b.get("type")
+                    if t == "text":
+                        text += b.get("text", "")
+                    elif t == "tool_use":
+                        calls.append({"id": b["id"], "type": "function", "function": {
+                            "name": b["name"], "arguments": json.dumps(b.get("input", {}))}})
+                msg = {"role": "assistant", "content": text or None}
+                if calls: msg["tool_calls"] = calls
+                out.append(msg)
+        s = system if isinstance(system, str) else (
+            "\n\n".join(s.get("text", "") for s in system if isinstance(s, dict))
+            if isinstance(system, list) else "")
+        if s: out.insert(0, {"role": "system", "content": s})
+        return out, dropped
+
+    def _to_tools(self, tools):
+        """cycls tools → OpenAI functions. Drops Anthropic server tools."""
+        return [
+            {"type": "function", "function": {
+                "name": t["name"], "description": t.get("description", ""),
+                "parameters": t.get("input_schema", {"type": "object", "properties": {}})}}
+            for t in (tools or []) if not t.get("type", "").startswith("web_search")
+        ]
+
     async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None, thinking=None):
-        oa_messages, dropped = _to_oai(messages, system)
+        api_messages, dropped = self._to_messages(messages, system)
         for kind in sorted(dropped):
             yield events.callout(f"`{kind}` content in tool results isn't viewable on this provider — the model sees a text stub.", "warning")
         if mcp_servers:
             yield events.callout("MCP servers are Anthropic-only — ignored on this provider.", "warning")
 
         kwargs = {
-            "model": self.model, "messages": oa_messages,
+            "model": self.model, "messages": api_messages,
             "max_completion_tokens": max_tokens,
             "stream": True, "stream_options": {"include_usage": True},
         }
-        if (oa_tools := _to_oai_tools(tools)): kwargs["tools"] = oa_tools
+        if (api_tools := self._to_tools(tools)): kwargs["tools"] = api_tools
 
         text_buf, calls, stop, usage = [], {}, "end_turn", None
         async for chunk in await self._client.chat.completions.create(**kwargs):
@@ -146,7 +144,7 @@ class OpenAIProvider:
                    output=(usage.completion_tokens if usage else 0))
 
     async def complete(self, *, messages, system, max_tokens):
-        oa_messages, _ = _to_oai(messages, system)
+        api_messages, _ = self._to_messages(messages, system)
         r = await self._client.chat.completions.create(
-            model=self.model, max_completion_tokens=max_tokens, messages=oa_messages)
+            model=self.model, max_completion_tokens=max_tokens, messages=api_messages)
         return r.choices[0].message.content or ""

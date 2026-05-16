@@ -1,9 +1,8 @@
 """Anthropic Messages provider.
 
-Translation is near-identity: cycls Message shape *is* the Anthropic JSON
-shape, so messages pass through (only storage-only sidecars stripped).
-Output Turn carries content blocks in the same shape — sessions.py can
-persist them directly without conversion.
+cycls Message shape IS Anthropic's JSON shape, so translation is near-identity:
+strip storage-only sidecars on the way out; output Turn content blocks pass
+through to sessions.py for direct persistence.
 """
 import json
 
@@ -11,11 +10,6 @@ from .. import events
 from ..events import Turn
 from . import context_window
 from ...tools import tool_step
-
-
-def _strip_sidecars(messages):
-    """Anthropic rejects unknown top-level keys per message — drop FE-only fields."""
-    return [{k: v for k, v in m.items() if k in ("role", "content")} for m in messages]
 
 
 class AnthropicProvider:
@@ -27,12 +21,20 @@ class AnthropicProvider:
     def context_window(self):
         return context_window(self.model)
 
+    def _to_messages(self, messages):
+        """Drop FE-only sidecars; Anthropic rejects unknown top-level message keys."""
+        return [{k: v for k, v in m.items() if k in ("role", "content")} for m in messages]
+
+    def _to_tools(self, tools):
+        """cycls tools are Anthropic-shape; pass through."""
+        return tools or []
+
     async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None, thinking="adaptive"):
         kwargs = {
             "model": self.model,
             "max_tokens": max_tokens,
-            "tools": tools,
-            "messages": _strip_sidecars(messages),
+            "tools": self._to_tools(tools),
+            "messages": self._to_messages(messages),
             "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
         }
         if isinstance(thinking, int):
