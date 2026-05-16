@@ -2,7 +2,7 @@
 import cycls
 from cycls.app import App
 from cycls.app.auth import User
-from cycls.app.workspace import workspace
+from cycls.app.db import workspace
 
 
 def test_app_decorator_returns_app():

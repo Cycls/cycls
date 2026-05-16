@@ -6,8 +6,8 @@ substrate that everything else depends on.
 import asyncio
 import pytest
 
-from cycls.app.workspace import DB
-from cycls.app.workspace import workspace as make_ws
+from cycls.app import db
+from cycls.app.db import DB
 
 
 def _run(coro):
@@ -16,7 +16,7 @@ def _run(coro):
 
 @pytest.fixture
 def workspace(tmp_path):
-    return make_ws("tenant", tmp_path, base=f"file://{tmp_path}")
+    return db.workspace("tenant", tmp_path, base=f"file://{tmp_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -24,23 +24,23 @@ def workspace(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_workspace_personal_data_path(tmp_path):
-    ws = make_ws("user", tmp_path, base=f"file://{tmp_path}")
+    ws = db.workspace("user", tmp_path, base=f"file://{tmp_path}")
     assert ws.path == "user/.db"
 
 
 def test_workspace_org_data_path(tmp_path):
-    ws = make_ws("org:member_1", tmp_path, base=f"file://{tmp_path}")
+    ws = db.workspace("org:member_1", tmp_path, base=f"file://{tmp_path}")
     assert ws.path == "org/.db/member_1"
 
 
 def test_workspace_url_with_bucket(tmp_path):
-    ws = make_ws("user", tmp_path, base="gs://cycls-ws-myagent")
+    ws = db.workspace("user", tmp_path, base="gs://cycls-ws-myagent")
     assert ws.path == "user/.db"
     assert ws.base == "gs://cycls-ws-myagent"
 
 
 def test_workspace_url_with_bucket_org(tmp_path):
-    ws = make_ws("org:member_1", tmp_path, base="gs://cycls-ws-myagent")
+    ws = db.workspace("org:member_1", tmp_path, base="gs://cycls-ws-myagent")
     assert ws.path == "org/.db/member_1"
     assert ws.base == "gs://cycls-ws-myagent"
 

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Request, Response, HTTPException, Upload
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 
-from cycls.app.workspace import DB, Workspace, workspace
+from cycls.app.db import DB, Workspace, workspace
 from cycls.agent import state
 from cycls.agent.tools import tool_step
 

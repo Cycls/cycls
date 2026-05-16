@@ -27,7 +27,7 @@ from cycls.agent.harness.providers import context_window
 from cycls.agent.harness.events import to_ui
 from cycls.agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path
 from cycls.agent.state import load_messages
-from cycls.app.workspace import workspace
+from cycls.app.db import workspace
 
 
 # ---------------------------------------------------------------------------

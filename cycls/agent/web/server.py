@@ -3,7 +3,7 @@ from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional, Any
 from cycls.app.auth import User, validator
-from cycls.app.workspace import Workspace, workspace
+from cycls.app.db import Workspace, workspace
 
 
 class PassMetadata(BaseModel):
