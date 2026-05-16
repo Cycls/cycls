@@ -11,5 +11,5 @@ from .providers import make_provider, AnthropicProvider, context_window
 from .compact import compact
 from . import events
 from .events import to_ui
-from ..sessions import Session
+from ..state import Session
 from ..tools import build_tools, dispatch

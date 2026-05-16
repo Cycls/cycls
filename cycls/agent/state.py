@@ -1,22 +1,24 @@
-"""Per-chat persistence — metadata + message log under one workspace DB,
-plus `Session`, the stateful handle the loop writes through.
+"""Agent state primitives — chat (meta + log + Session), shares, and the
+LLM-facing database tool. All built on cycls.app.workspace.DB.
 
 Keys:
-    chat/meta/{chat_id}           — chat metadata (title, updatedAt, createdAt)
-    chat/log/{chat_id}/{turn:06d} — each message, ordered
+    chat/meta/{id}           — chat metadata (title, updatedAt, createdAt)
+    chat/log/{id}/{turn:06d} — each message, ordered
+    share/{token}            — opaque share tokens (RFC003)
+    <.database/ slot>        — agent-controlled KV exposed to the LLM
 """
-import asyncio
+import asyncio, json, secrets, time
 from datetime import datetime, timezone
 
-from cycls.app.workspace import DB
+from cycls.app.workspace import DB, workspace_at
 
+
+# ---- Chat metadata ----
 
 def _validate(chat_id):
     if "/" in chat_id:
         raise ValueError(f"Invalid chat id (contains slash): {chat_id}")
 
-
-# ---- Metadata ----
 
 async def get_meta(workspace, chat_id):
     _validate(chat_id)
@@ -25,8 +27,6 @@ async def get_meta(workspace, chat_id):
 
 async def put_meta(workspace, chat_id, data):
     _validate(chat_id)
-    # Stash list-view fields as object custom-metadata so `list_chats` can
-    # enumerate (title, updatedAt) via a single GCS LIST — no per-chat GETs.
     list_meta = {"title": data.get("title", ""), "updatedAt": data.get("updatedAt", "")}
     await DB(workspace).put(f"chat/meta/{chat_id}", data, meta=list_meta)
 
@@ -55,7 +55,7 @@ async def touch_meta(workspace, chat_id, content):
     await put_meta(workspace, chat_id, meta)
 
 
-# ---- Message log ----
+# ---- Chat message log ----
 
 def _valid_prefix(messages):
     """Length of the longest valid prefix of *messages*, per Anthropic's
@@ -77,7 +77,6 @@ def _valid_prefix(messages):
             if isinstance(content, list):
                 results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
                 if results:
-                    # Must be paired with preceding assistant tool_use
                     if n >= 2 and messages[n-2].get("role") == "assistant":
                         prev = messages[n-2].get("content", [])
                         if isinstance(prev, list):
@@ -187,8 +186,6 @@ class Session:
     async def add_user(self, content, *, attachments=None):
         msg = {"role": "user", "content": content}
         if attachments:
-            # FE attachment metadata, stored as a sidecar: the model sees inlined
-            # base64 in `content`, the FE renders thumbnails from `attachments[]`.
             msg["attachments"] = attachments
         self.messages.append(msg)
         if self.chat_id:
@@ -211,3 +208,84 @@ class Session:
     def rollback(self):
         """Drop any tail not yet flushed by `checkpoint()`."""
         del self.messages[self._saved:]
+
+
+# ---- Share tokens (RFC003) ----
+
+async def mint(workspace, path, audience="public", ttl=None, author=None):
+    """ttl in seconds; None (the default) = the share never expires — revoke
+    explicitly via `revoke()`. Pass an int for a short-lived link."""
+    token = secrets.token_urlsafe(16)
+    row = {
+        "path": path,
+        "audience": audience,
+        "shared_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if ttl is not None:
+        row["exp"] = int(time.time()) + int(ttl)
+    if author is not None:
+        row["author"] = author
+    await DB(workspace).put(f"share/{token}", row, meta=row)
+    return token, row
+
+
+async def resolve(workspace, token, requester=None):
+    row = await DB(workspace).get(f"share/{token}")
+    if not row or ("exp" in row and row["exp"] < time.time()):
+        return None
+    aud = row.get("audience", "public")
+    if aud == "public":
+        return row
+    if aud.startswith("org:") and getattr(requester, "org_id", None) == aud[4:]:
+        return row
+    return None
+
+
+async def revoke(workspace, token):
+    await DB(workspace).delete(f"share/{token}")
+
+
+# ---- Agent KV (LLM-facing tool) ----
+
+def _validate_db_key(key):
+    """Allow trailing slash (= subtree marker for delete); reject empty,
+    leading '/', '..' segments, and empty middle segments."""
+    if not key: raise ValueError("key required")
+    parts = key.split("/")
+    if key.startswith("/") or ".." in parts or "" in parts[:-1]:
+        raise ValueError(f"invalid key: {key!r}")
+
+
+async def _exec_database(inp, workspace):
+    """All returns are strings — Anthropic tool_result.content accepts
+    str or content-blocks (each with a `type`); raw dicts/lists from JSON
+    values would 400. JSON-encode the data ones."""
+    agent_ws = workspace_at(workspace.subject, workspace.root.parent,
+                            base=workspace.base, slot=".database")
+    db = DB(agent_ws)
+    cmd, key = inp.get("command"), inp.get("key", "")
+    try:
+        if cmd == "get":
+            _validate_db_key(key)
+            v = await db.get(key)
+            return json.dumps(v) if v is not None else f"Error: key {key!r} not found"
+        if cmd == "put":
+            _validate_db_key(key)
+            await db.put(key, inp.get("value"))
+            return f"Stored {key!r}"
+        if cmd == "delete":
+            _validate_db_key(key)
+            await db.delete(key)
+            return f"Deleted {key!r}"
+        if cmd == "scan":
+            prefix = inp.get("prefix", "")
+            limit = max(1, int(inp.get("limit", 100)))
+            pairs = [{"key": k, "value": v} async for k, v in db.items(prefix=prefix, limit=limit + 1)]
+            truncated = len(pairs) > limit
+            if truncated: pairs = pairs[:limit]
+            if not pairs: return f"No keys with prefix {prefix!r}"
+            result = json.dumps(pairs)
+            return f"{result}\n[truncated at {limit}; use a narrower prefix or higher limit]" if truncated else result
+        return f"Error: unknown command {cmd!r}"
+    except ValueError as e:
+        return f"Error: {e}"

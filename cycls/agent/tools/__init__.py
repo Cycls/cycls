@@ -5,6 +5,7 @@ last. User-supplied custom tools come through `_normalize_tool` (accepts the
 camelCase `inputSchema` form too)."""
 import asyncio, base64, json, os, pathlib
 from . import pdf
+from ..state import _exec_database
 
 MAX_OUTPUT = 30_000
 
@@ -238,55 +239,6 @@ def _exec_edit(inp, workspace):
         path.write_text("".join(lines))
         return f"Inserted at line {pos} in {path}"
     return f"Error: unknown command {cmd}"
-
-# ---- Database ----
-
-def _validate_db_key(key):
-    """Allow trailing slash (= subtree marker for delete); reject empty,
-    leading '/', '..' segments, and empty middle segments."""
-    if not key: raise ValueError("key required")
-    parts = key.split("/")
-    if key.startswith("/") or ".." in parts or "" in parts[:-1]:
-        raise ValueError(f"invalid key: {key!r}")
-
-
-async def _exec_database(inp, workspace):
-    """All returns are strings — Anthropic tool_result.content accepts
-    str or content-blocks (each with a `type`); raw dicts/lists from JSON
-    values would 400. JSON-encode the data ones."""
-    from cycls.app.workspace import workspace_at, DB
-    agent_ws = workspace_at(workspace.subject, workspace.root.parent,
-                            base=workspace.base, slot=".database")
-    db = DB(agent_ws)
-    cmd, key = inp.get("command"), inp.get("key", "")
-    try:
-        if cmd == "get":
-            _validate_db_key(key)
-            v = await db.get(key)
-            return json.dumps(v) if v is not None else f"Error: key {key!r} not found"
-        if cmd == "put":
-            _validate_db_key(key)
-            await db.put(key, inp.get("value"))
-            return f"Stored {key!r}"
-        if cmd == "delete":
-            _validate_db_key(key)
-            await db.delete(key)
-            return f"Deleted {key!r}"
-        if cmd == "scan":
-            prefix = inp.get("prefix", "")
-            limit = max(1, int(inp.get("limit", 100)))
-            # Fetch limit+1 to detect truncation; slice keys in items() so we
-            # don't waste GETs on the discarded tail.
-            pairs = [{"key": k, "value": v} async for k, v in db.items(prefix=prefix, limit=limit + 1)]
-            truncated = len(pairs) > limit
-            if truncated: pairs = pairs[:limit]
-            if not pairs: return f"No keys with prefix {prefix!r}"
-            result = json.dumps(pairs)
-            return f"{result}\n[truncated at {limit}; use a narrower prefix or higher limit]" if truncated else result
-        return f"Error: unknown command {cmd!r}"
-    except ValueError as e:
-        return f"Error: {e}"
-
 
 # ---- Registry & dispatch ----
 #

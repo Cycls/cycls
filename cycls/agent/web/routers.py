@@ -1,9 +1,7 @@
 """HTTP routers for the agent's state surface — chats, files, share.
 
-Chat metadata + message log live in the workspace DB — see `cycls.agent.sessions`.
-Files stay on the workspace filesystem (POSIX-shaped). Shares are opaque tokens
-stored in the owner's workspace at `share/<token>`, audience-checked at resolve
-time. See docs/rfc-003.md.
+Chat metadata + message log and shares live in the workspace DB — see
+`cycls.agent.state`. Files stay on the workspace filesystem (POSIX-shaped).
 """
 import os, shutil, time, unicodedata, uuid
 from datetime import datetime, timezone
@@ -14,8 +12,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 
 from cycls.app.workspace import DB, Workspace, workspace_at, workspace_for
-from cycls.agent import share as shares
-from cycls.agent import sessions
+from cycls.agent import state
 from cycls.agent.tools import tool_step
 
 
@@ -94,7 +91,7 @@ def chats_router(ws_dep):
     @r.get("/chats")
     async def list_chats(ws: Workspace = ws_dep):
         items = []
-        async for cid, data in sessions.list_chats(ws):
+        async for cid, data in state.list_chats(ws):
             items.append({
                 "id": data.get("id", cid),
                 "title": data.get("title", ""),
@@ -105,12 +102,12 @@ def chats_router(ws_dep):
 
     @r.get("/chats/{chat_id}")
     async def get_chat(chat_id: str, ws: Workspace = ws_dep):
-        meta = await sessions.get_meta(ws, chat_id)
+        meta = await state.get_meta(ws, chat_id)
         # 204 (not 404) for a missing chat: the FE auto-restores `?id=` on
         # cold load, and a stale id is normal — 404s clutter the dev console.
         if meta is None:
             return Response(status_code=204)
-        raw = await sessions.load_messages(ws, chat_id)
+        raw = await state.load_messages(ws, chat_id)
         return {**meta, "messages": to_ui_messages(raw)}
 
     @r.put("/chats/{chat_id}")
@@ -118,19 +115,19 @@ def chats_router(ws_dep):
         data = await request.json()
         data["id"] = chat_id
         data["updatedAt"] = datetime.now(timezone.utc).isoformat()
-        existing = (await sessions.get_meta(ws, chat_id)) or {}
+        existing = (await state.get_meta(ws, chat_id)) or {}
         if "createdAt" not in data:
             data["createdAt"] = existing.get("createdAt", data["updatedAt"])
         # Drop "messages" if FE accidentally sends it — that's not metadata.
         data.pop("messages", None)
-        await sessions.put_meta(ws, chat_id, data)
+        await state.put_meta(ws, chat_id, data)
         return data
 
     @r.delete("/chats/{chat_id}")
     async def delete_chat(chat_id: str, ws: Workspace = ws_dep):
-        if (await sessions.get_meta(ws, chat_id)) is None:
+        if (await state.get_meta(ws, chat_id)) is None:
             raise HTTPException(status_code=404, detail="Chat not found")
-        await sessions.delete_chat(ws, chat_id)
+        await state.delete_chat(ws, chat_id)
         return {"ok": True}
 
     return r
@@ -226,7 +223,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         if bearer and cycls_app._auth_provider is not None:
             try: requester = authenticate(cycls_app._auth_provider, cycls_app.prod, bearer.credentials)
             except Exception: pass
-        row = await shares.resolve(ws_owner, token, requester=requester)
+        row = await state.resolve(ws_owner, token, requester=requester)
         if row is None:
             raise HTTPException(403, "Invalid, expired, or unauthorized link")
         return ws_owner, row
@@ -239,9 +236,9 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         path = data.get("path")
         if not (path and (path.startswith("chat/") or path.startswith("file/"))):
             raise HTTPException(400, "path must be 'chat/<id>' or 'file/<path>'")
-        if path.startswith("chat/") and (await sessions.get_meta(ws, path[5:])) is None:
+        if path.startswith("chat/") and (await state.get_meta(ws, path[5:])) is None:
             raise HTTPException(404, "Chat not found")
-        token, row = await shares.mint(ws, path,
+        token, row = await state.mint(ws, path,
                                        audience=data.get("audience", "public"),
                                        ttl=data.get("ttl"),
                                        author=data.get("author"))
@@ -267,7 +264,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.delete("/share/{token}")
     async def revoke_share(token: str, ws: Workspace = ws_dep):
-        await shares.revoke(ws, token)
+        await state.revoke(ws, token)
         return {"ok": True}
 
     # ---- Viewer side ----
@@ -282,10 +279,10 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         common = {"author": row.get("author"), "shared_at": row.get("shared_at")}
         if path.startswith("chat/"):
             chat_id = path[5:]
-            meta = await sessions.get_meta(ws_owner, chat_id)
+            meta = await state.get_meta(ws_owner, chat_id)
             if meta is None:
                 raise HTTPException(404, "Chat not found")
-            messages = to_ui_messages(await sessions.load_messages(ws_owner, chat_id))
+            messages = to_ui_messages(await state.load_messages(ws_owner, chat_id))
             for m in messages:
                 for att in m.get("attachments") or []:
                     if ap := att.get("path"):
@@ -307,7 +304,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             if file_path != path[5:]:
                 raise HTTPException(403, "Path not in this share")
         else:
-            raw = await sessions.load_messages(ws_owner, path[5:])
+            raw = await state.load_messages(ws_owner, path[5:])
             allowed = {att.get("path") for m in to_ui_messages(raw)
                        for att in (m.get("attachments") or []) if att.get("path")}
             if file_path not in allowed:
@@ -317,25 +314,25 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
     @r.post("/share/{user}/{token}/fork")
     async def fork_share(user: str, token: str, forker: Any = user_dep):
         ws_source = workspace_at(user, volume, base=base)
-        row = await shares.resolve(ws_source, token, requester=forker)
+        row = await state.resolve(ws_source, token, requester=forker)
         if row is None:
             raise HTTPException(403, "Invalid, expired, or unauthorized link")
         if not row["path"].startswith("chat/"):
             raise HTTPException(400, "Only chat shares can be forked")
         source_id = row["path"][5:]
-        meta = await sessions.get_meta(ws_source, source_id)
+        meta = await state.get_meta(ws_source, source_id)
         if meta is None:
             raise HTTPException(404, "Chat not found")
-        raw = await sessions.load_messages(ws_source, source_id)
+        raw = await state.load_messages(ws_source, source_id)
         ws_fork = workspace_for(forker, volume, base=base)
         new_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
-        await sessions.put_meta(ws_fork, new_id, {
+        await state.put_meta(ws_fork, new_id, {
             **{k: v for k, v in meta.items() if k not in ("id", "createdAt", "updatedAt")},
             "id": new_id, "createdAt": now, "updatedAt": now,
             "forked_from": f"{user}/{source_id}",
         })
-        await sessions.append_messages(ws_fork, new_id, raw, 0)
+        await state.append_messages(ws_fork, new_id, raw, 0)
         for m in to_ui_messages(raw):
             for att in m.get("attachments") or []:
                 if ap := att.get("path"):

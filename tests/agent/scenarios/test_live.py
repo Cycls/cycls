@@ -134,7 +134,7 @@ def test_persisted_chat_loads_clean_after_real_turn(tmp_path):
     persisted history is _valid_prefix-clean (no orphans). This is
     the ultimate end-to-end pin: real model + real persistence +
     load-time repair invariants all converge."""
-    from cycls.agent import sessions as chat
+    from cycls.agent import state as chat
 
     _, ctx = _ctx(tmp_path, "Say 'ack' and stop.", persist=True)
     llm = cycls.LLM().model(SONNET).max_tokens(50)
@@ -176,7 +176,7 @@ def test_multiturn_tool_chain_real(tmp_path):
     """Two-tool sequential workflow in one _run: create → read.
     Pins multi-turn dispatch + persist-per-turn boundaries with real model.
     Each turn should land cleanly on disk."""
-    from cycls.agent import sessions as chat
+    from cycls.agent import state as chat
 
     ws_root, ctx = _ctx(tmp_path,
         "Use the editor to create a file `data.txt` with the exact content "
@@ -285,7 +285,7 @@ def test_compaction_real_roundtrip(tmp_path):
     `internal` flag, and the post-compact turn — none of which the mocked tests
     actually run end-to-end."""
     from unittest.mock import patch
-    from cycls.agent import sessions
+    from cycls.agent import state as sessions
 
     _, ctx = _ctx(tmp_path, "what's 2+2? one word.", persist=True)
 

@@ -162,7 +162,7 @@ def test_internal_messages_are_dropped():
 # Load-time repair (_valid_prefix) — trim trailing corrupted state
 # =============================================================================
 
-from cycls.agent.sessions import _valid_prefix
+from cycls.agent.state import _valid_prefix
 
 
 def test_valid_prefix_empty():
