@@ -129,7 +129,7 @@ async def replace_messages(workspace, chat_id, messages):
     """Wipe and rewrite all messages for *chat_id* (used by compaction)."""
     _validate(chat_id)
     db = DB(workspace)
-    await db.delete_prefix(f"chat/log/{chat_id}/")
+    await db.delete(f"chat/log/{chat_id}/")
     await asyncio.gather(*[
         db.put(f"chat/log/{chat_id}/{i:06d}", msg)
         for i, msg in enumerate(messages)
@@ -142,7 +142,7 @@ async def delete_chat(workspace, chat_id):
     db = DB(workspace)
     await asyncio.gather(
         db.delete(f"chat/meta/{chat_id}"),
-        db.delete_prefix(f"chat/log/{chat_id}/"),
+        db.delete(f"chat/log/{chat_id}/"),
     )
 
 

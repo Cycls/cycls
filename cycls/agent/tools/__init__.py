@@ -67,20 +67,19 @@ _DATABASE_TOOL = {
         "anything you'd otherwise jam into a JSON file. Atomic per-key writes, prefix "
         "scans. Prefer this over writing JSON files via bash.\n\n"
         "Commands:\n"
-        "- get:           read a value at `key`. Returns the stored JSON or 'not found'.\n"
-        "- put:           write `value` (any JSON-serializable type) at `key`.\n"
-        "- delete:        remove `key`.\n"
-        "- delete_prefix: remove every key starting with `prefix`. Requires non-empty prefix.\n"
-        "- scan:          list {key, value} pairs whose key starts with `prefix`. "
+        "- get:    read a value at `key`. Returns the stored JSON or 'not found'.\n"
+        "- put:    write `value` (any JSON-serializable type) at `key`.\n"
+        "- delete: remove `key`.\n"
+        "- scan:   list {key, value} pairs whose key starts with `prefix`. "
         "Truncates at `limit` (default 100) so a huge prefix won't blow the context.\n\n"
         "Keys are slash-separated strings (e.g. `tasks/<id>`, `notes/<topic>`). "
         "Cannot start with `/` or contain `..` segments."
     ),
     "input_schema": {"type": "object", "properties": {
-        "command": {"type": "string", "enum": ["get", "put", "delete", "delete_prefix", "scan"]},
+        "command": {"type": "string", "enum": ["get", "put", "delete", "scan"]},
         "key": {"type": "string", "description": "Key to operate on (get, put, delete)."},
         "value": {"description": "Value to store (put only). Any JSON-serializable type."},
-        "prefix": {"type": "string", "description": "Key prefix (scan, delete_prefix). Empty allowed for scan only."},
+        "prefix": {"type": "string", "description": "Key prefix (scan only). Empty = all keys."},
         "limit": {"type": "integer", "description": "Max results returned by scan (default 100)."},
     }, "required": ["command"]}
 }
@@ -274,12 +273,6 @@ async def _exec_database(inp, workspace):
             _validate_db_key(key)
             await db.delete(key)
             return f"Deleted {key!r}"
-        if cmd == "delete_prefix":
-            prefix = inp.get("prefix", "")
-            if not prefix:
-                return "Error: delete_prefix requires a non-empty `prefix`"
-            await db.delete_prefix(prefix)
-            return f"Deleted all keys under {prefix!r}"
         if cmd == "scan":
             prefix = inp.get("prefix", "")
             limit = max(1, int(inp.get("limit", 100)))
