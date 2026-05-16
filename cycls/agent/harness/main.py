@@ -184,11 +184,13 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             messages.append({"role": "user", "content": results})
             await session.checkpoint()
 
-        except Exception as e:
+        except Exception:
             # Retries already happened inside _stream_with_retry; this is fatal.
+            # Rollback, then re-raise so the encoder owns the user-facing
+            # callout + structured log (with error_id) in one place.
             # _valid_prefix trims any dangling tool_use on next load.
             session.rollback()
-            yield events.callout(str(e), "error"); break
+            raise
 
     if show_usage and usage_total[0]:
         p = next((v for k, v in _PRICING.items() if k in bare_model), None)

@@ -54,13 +54,20 @@ def sse(item):
     if not isinstance(item, dict): item = {"type": "text", "text": item}
     return f"data: {json.dumps(item)}\n\n"
 
-async def encoder(stream, chat_id=None):
+async def encoder(stream, *, chat_id=None, user_id=None):
     if chat_id: yield sse({"type": "chat_id", "chat_id": chat_id})
     try:
         async for item in _aiter(stream):
             if msg := sse(item): yield msg
     except Exception as e:
-        yield sse({"type": "callout", "callout": f"Stream failed: {e}", "style": "error"})
+        import traceback
+        error_id = uuid.uuid4().hex[:8]
+        print(json.dumps({"level": "error", "error_id": error_id, "message": str(e),
+                          "stack": traceback.format_exc(),
+                          "user_id": user_id, "chat_id": chat_id}), flush=True)
+        yield sse({"type": "callout",
+                   "callout": f"Something went wrong. Reference: `{error_id}`",
+                   "style": "error"})
     yield "data: [DONE]\n\n"
 
 class Messages(list):
@@ -152,7 +159,7 @@ def web(func, config, extra_routers=None, auth=None):
         if request.url.path == "/chat/completions":
             stream = openai_encoder(stream)
         else:
-            stream = encoder(stream, chat_id=chat_id)
+            stream = encoder(stream, chat_id=chat_id, user_id=getattr(user, "id", None))
         return StreamingResponse(stream, media_type="text/event-stream")
 
     @app.get("/config")

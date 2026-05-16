@@ -112,8 +112,8 @@ def cmd_logs(args):
     cursor = None
     while True:
         body = {"deployment_name": args.name, "limit": 100}
-        if cursor:
-            body["since"] = cursor
+        if cursor: body["since"] = cursor
+        if args.query: body["query"] = args.query
         data = _api("POST", "/v1/deployment/logs", json=body).json()
         for log in data.get("logs", []):
             ts = log.get("timestamp", "")
@@ -121,8 +121,7 @@ def cmd_logs(args):
             msg = log.get("message", "")
             print(f"{ts}  [{sev}]  {msg}")
         cursor = data.get("cursor")
-        if not args.follow:
-            return
+        if not args.follow: return
         time.sleep(2)
 
 
@@ -196,6 +195,8 @@ def main():
     p = sub.add_parser("logs", help="Fetch logs from a deployed agent")
     p.add_argument("name", help="Agent name")
     p.add_argument("-f", "--follow", action="store_true", help="Tail logs (poll every 2s)")
+    p.add_argument("-q", "--query", default=None,
+                   help='GCP Cloud Logging filter, e.g. \'jsonPayload.kind="fatal"\'')
     p.set_defaults(func=cmd_logs)
 
     p = sub.add_parser("init", help="Scaffold a starter agent file")

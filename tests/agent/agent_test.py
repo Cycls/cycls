@@ -189,12 +189,10 @@ def test_history_survives_crash_after_first_tool_round(agent_env):
 
     with _mock_anthropic(mock_client), \
          patch("cycls.agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
-        items = asyncio.run(_drain(_run(context=ctx)))
-
-    # Should have gotten an error callout
-    callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
-    assert len(callouts) == 1
-    assert "Lost connection" in callouts[0]["callout"]
+        # Harness re-raises after rollback; the encoder owns the user-facing
+        # callout + structured log. Test asserts on the raised exception.
+        with pytest.raises(ConnectionError, match="Lost connection"):
+            asyncio.run(_drain(_run(context=ctx)))
 
     # Round 1 messages survived on disk
     history = _read_history(ctx)
@@ -585,12 +583,9 @@ def test_api_400_after_tool_results_shows_error(agent_env):
     (Path(ws) / "big.pdf").write_bytes(b"%PDF-1.4" + b"\x00" * 20)
 
     with _mock_anthropic(mock_client):
-        items = asyncio.run(_drain(_run(context=ctx)))
-
-    # Error should surface since recovery doesn't handle post-tool_result errors
-    callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
-    assert len(callouts) == 1
-    assert "content too large" in callouts[0]["callout"]
+        # Harness re-raises; encoder owns user-facing rendering.
+        with pytest.raises(Exception, match="content too large"):
+            asyncio.run(_drain(_run(context=ctx)))
 
 
 # ---------------------------------------------------------------------------
@@ -830,11 +825,8 @@ def test_auto_retry_exhausted_shows_error(agent_env):
 
     with _mock_anthropic(mock_client), \
          patch("asyncio.sleep", new_callable=lambda: AsyncMock(return_value=None)):
-        items = asyncio.run(_drain(_run(context=ctx)))
-
-    callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
-    assert len(callouts) == 1
-    assert "overloaded" in callouts[0]["callout"]
+        with pytest.raises(Exception, match="overloaded"):
+            asyncio.run(_drain(_run(context=ctx)))
 
 
 # ---------------------------------------------------------------------------
