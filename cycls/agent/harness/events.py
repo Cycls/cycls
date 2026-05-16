@@ -1,117 +1,73 @@
-"""Typed loop events.
+"""Loop events — dict factories in the FE's render shape.
 
-`LLM.run` (and any `.loop(fn)`) yields these; `to_ui(event)` projects each one
-to the shape the FE renders. The agent body pattern-matches to hook the loop, or
-just `to_ui`s them through:
+The loop yields these directly; the agent body just passes them through
+(`cycls.to_ui` is identity, kept for backwards compat). Match on `ev["type"]`:
 
     async for ev in llm.run(context=context):
-        match ev:
-            case Step(query, "Web Search"): log_search(query)
-            case Failed(msg):               page_ops(msg)
-            case _:                         pass
-        yield to_ui(ev)
+        if isinstance(ev, dict) and ev.get("type") == "callout" and ev.get("style") == "error":
+            page_ops(ev["callout"])
+        yield ev
 
-`Callout` and `ToolCall` aren't emitted by the built-in loop but `to_ui` knows
-them, so a custom `.loop(fn)` can yield them too.
+Bare strings (text deltas, the usage footer) pass through as-is — the SSE
+encoder handles both strings and dicts.
+
+A `Turn` is loop-internal — content + stop_reason + usage. Tagged so the
+loop can distinguish it from forward-bound events; never reaches the body.
 """
 from dataclasses import dataclass
-from typing import Optional
 
 
-# ---- Streamed content ----
+# ---- Forward-bound events (the body sees these) ----
 
-@dataclass(frozen=True)
-class TextDelta:
-    text: str
-
-@dataclass(frozen=True)
-class Thinking:
-    text: str
-
-@dataclass(frozen=True)
-class Step:
-    """A progress line. `tool` is set when the step is a recognized tool call."""
-    label: str
-    tool: Optional[str] = None
-
-@dataclass(frozen=True)
-class ToolStart:
-    """The model has committed to a tool call — emitted the moment its block
-    opens, before the (possibly large) arguments stream in. `id` threads the
-    later `ToolArgs` chunks and the post-execution step to the same UI element;
-    `tool` is the display name."""
-    id: str
-    tool: str
-
-@dataclass(frozen=True)
-class ToolArgs:
-    """A chunk of a tool call's input as it streams (partial JSON). The FE
-    appends `delta` to the call identified by `id` — a live preview of, e.g.,
-    a file being written."""
-    id: str
-    delta: str
-
-@dataclass(frozen=True)
-class Callout:
-    text: str
-    style: str = "info"  # info | warning | error | success
-
-@dataclass(frozen=True)
-class ToolCall:
-    """An unrecognized tool the harness can't run itself — the FE renders it
-    generically and (today) the model is told it 'executed'."""
-    name: str
-    input: dict
-
-@dataclass(frozen=True)
-class Raw:
-    """A payload already in FE shape — e.g. a custom tool handler's return value.
-    Passed through `to_ui` untouched."""
-    payload: object
+def text(s: str) -> str:
+    """Plain text delta — passed through as a bare string."""
+    return s
 
 
-# ---- Loop lifecycle (rendered as steps/callouts by default; hookable) ----
+def thinking(s: str) -> dict:
+    return {"type": "thinking", "thinking": s}
 
-@dataclass(frozen=True)
-class Compacting: ...
 
-@dataclass(frozen=True)
-class CompactionFailed:
-    error: str
+def step(label: str, *, tool: str | None = None, id: str | None = None) -> dict:
+    out = {"type": "step", "step": label}
+    if tool: out["tool_name"] = tool
+    if id: out["id"] = id
+    return out
 
-@dataclass(frozen=True)
-class Retrying:
-    attempt: int
-    of: int
-    delay: float
 
-@dataclass(frozen=True)
-class StoppedUnexpectedly:
-    reason: str
+def tool_args(id: str, delta: str) -> dict:
+    """Live preview chunk for a tool call's input as it streams."""
+    return {"type": "step_arg", "id": id, "delta": delta}
 
-@dataclass(frozen=True)
-class TimedOut:
-    message: str
 
-@dataclass(frozen=True)
-class Failed:
-    error: str
+def callout(message: str, style: str = "info") -> dict:
+    """info | warning | error | success."""
+    return {"type": "callout", "callout": message, "style": style}
 
-@dataclass(frozen=True)
-class Usage:
-    input: int
-    output: int
-    cached: int
-    cache_create: int
-    cost: Optional[float]
-    elapsed: float
+
+def tool_call(name: str, inp: dict) -> dict:
+    """Unrecognized tool — the FE renders it generically."""
+    return {"type": "tool_call", "tool": name, "args": inp}
+
+
+def usage(input: int, output: int, cached: int, cache_create: int,
+          cost: float | None, elapsed: float) -> str:
+    parts = [f"in: {input:,}", f"out: {output:,}",
+             f"cached: {cached:,}", f"cache-create: {cache_create:,}"]
+    if cost is not None:
+        parts.append(f"cost: ${cost:.4f}")
+    m, s = divmod(int(elapsed), 60)
+    parts.append(f"time: {f'{m}m {s}s' if m else f'{s}s'}")
+    return "\n\n*" + " · ".join(parts) + "*"
+
+
+# ---- Loop-internal: the assistant turn ----
 
 @dataclass(frozen=True)
 class Turn:
-    """A completed assistant turn — the last event a provider stream emits.
-    Loop-internal: the loop consumes it to advance state and never forwards it
-    (to_ui raises on it). `content` is assistant content blocks in storage shape;
-    `stop_reason` is the API stop reason; the rest is this turn's token usage."""
+    """A completed assistant turn — last event a provider stream emits.
+    Loop-internal: never forwarded. `content` is assistant content blocks in
+    storage shape; the rest is this turn's token usage."""
     content: list
     stop_reason: str
     input: int = 0
@@ -120,37 +76,9 @@ class Turn:
     cache_create: int = 0
 
 
-Event = (
-    TextDelta | Thinking | Step | ToolStart | ToolArgs | Callout | ToolCall | Raw
-    | Compacting | CompactionFailed | Retrying
-    | StoppedUnexpectedly | TimedOut | Failed | Usage | Turn
-)
+# ---- Back-compat ----
 
-
-def to_ui(ev: Event):
-    """Project a loop event to the dict/string shape the FE renders. Bare
-    strings (text deltas, the usage footer) pass through as-is — the SSE
-    encoder handles both strings and dicts."""
-    match ev:
-        case TextDelta(text):              return text
-        case Thinking(text):               return {"type": "thinking", "thinking": text}
-        case Step(label, tool):            return {"type": "step", "step": label, **({"tool_name": tool} if tool else {})}
-        case ToolStart(id, tool):          return {"type": "step", "id": id, "tool_name": tool, "step": ""}
-        case ToolArgs(id, delta):          return {"type": "step_arg", "id": id, "delta": delta}
-        case Callout(text, style):         return {"type": "callout", "callout": text, "style": style}
-        case ToolCall(name, inp):          return {"type": "tool_call", "tool": name, "args": inp}
-        case Raw(payload):                 return payload
-        case Compacting():                 return {"type": "step", "step": "Compacting context..."}
-        case CompactionFailed(error):      return {"type": "callout", "callout": f"Compaction failed: {error}", "style": "warning"}
-        case Retrying(attempt, of, delay): return {"type": "step", "step": f"Rate limited, retrying in {delay:.1f}s... (attempt {attempt}/{of})"}
-        case StoppedUnexpectedly(reason):  return {"type": "callout", "callout": f"Stopped: {reason}", "style": "warning"}
-        case TimedOut(message):            return {"type": "callout", "callout": message, "style": "warning"}
-        case Failed(error):                return {"type": "callout", "callout": error, "style": "error"}
-        case Usage(inp, out, cached, cc, cost, elapsed):
-            parts = [f"in: {inp:,}", f"out: {out:,}", f"cached: {cached:,}", f"cache-create: {cc:,}"]
-            if cost is not None:
-                parts.append(f"cost: ${cost:.4f}")
-            m, s = divmod(int(elapsed), 60)
-            parts.append(f"time: {f'{m}m {s}s' if m else f'{s}s'}")
-            return "\n\n*" + " · ".join(parts) + "*"
-    raise TypeError(f"unhandled event: {ev!r}")
+def to_ui(ev):
+    """Identity — events are already in UI shape. Kept so examples
+    `yield cycls.to_ui(ev)` still work after the dict-event migration."""
+    return ev

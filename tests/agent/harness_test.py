@@ -121,7 +121,7 @@ def test_vendor_skips_returns_anthropic_only_names():
 def test_openai_to_messages_degrades_image_in_tool_result():
     """OpenAI tool messages are text-only — image/document blocks inside a
     tool_result get a text stub + the kinds are reported so the loop can warn."""
-    from cycls.agent.harness.openai import _to_messages
+    from cycls.agent.harness.providers import _to_oai
     raw = [
         {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": [
@@ -130,7 +130,7 @@ def test_openai_to_messages_degrades_image_in_tool_result():
             ]},
         ]},
     ]
-    out, dropped = _to_messages(raw)
+    out, dropped = _to_oai(raw, "")
     assert dropped == {"image"}
     tool_msg = out[0]
     assert tool_msg["role"] == "tool"
@@ -139,7 +139,7 @@ def test_openai_to_messages_degrades_image_in_tool_result():
 
 
 def test_openai_to_messages_degrades_document_in_tool_result():
-    from cycls.agent.harness.openai import _to_messages
+    from cycls.agent.harness.providers import _to_oai
     raw = [
         {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": [
@@ -147,19 +147,19 @@ def test_openai_to_messages_degrades_document_in_tool_result():
             ]},
         ]},
     ]
-    out, dropped = _to_messages(raw)
+    out, dropped = _to_oai(raw, "")
     assert dropped == {"document"}
     assert "[document content not viewable on this provider]" in out[0]["content"]
 
 
 def test_openai_to_messages_no_drops_when_text_only():
-    from cycls.agent.harness.openai import _to_messages
+    from cycls.agent.harness.providers import _to_oai
     raw = [
         {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": "plain text"},
         ]},
     ]
-    out, dropped = _to_messages(raw)
+    out, dropped = _to_oai(raw, "")
     assert dropped == set()
     assert out[0]["content"] == "plain text"
 
@@ -223,8 +223,8 @@ def test_llm_loop_runs_custom_loop():
     """A custom loop replaces the built-in; .run yields whatever it yields,
     threaded the same kwargs the default loop gets."""
     async def my_loop(*, context, model, **kw):
-        yield cycls.events.TextDelta(model)
-        yield cycls.events.Callout("done", "success")
+        yield cycls.events.text(model)
+        yield cycls.events.callout("done", "success")
 
     llm = cycls.LLM().model("anthropic/claude-x").loop(my_loop)
 
