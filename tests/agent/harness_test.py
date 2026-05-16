@@ -121,7 +121,7 @@ def test_vendor_skips_returns_anthropic_only_names():
 def test_openai_to_messages_degrades_image_in_tool_result():
     """OpenAI tool messages are text-only — image/document blocks inside a
     tool_result get a text stub + the kinds are reported so the loop can warn."""
-    from cycls.agent.harness.providers import _to_oai
+    from cycls.agent.harness.providers.openai import _to_oai
     raw = [
         {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": [
@@ -139,7 +139,7 @@ def test_openai_to_messages_degrades_image_in_tool_result():
 
 
 def test_openai_to_messages_degrades_document_in_tool_result():
-    from cycls.agent.harness.providers import _to_oai
+    from cycls.agent.harness.providers.openai import _to_oai
     raw = [
         {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": [
@@ -153,7 +153,7 @@ def test_openai_to_messages_degrades_document_in_tool_result():
 
 
 def test_openai_to_messages_no_drops_when_text_only():
-    from cycls.agent.harness.providers import _to_oai
+    from cycls.agent.harness.providers.openai import _to_oai
     raw = [
         {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": "plain text"},
