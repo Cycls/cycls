@@ -3,7 +3,8 @@
 `LLM` configures and runs the default loop. To plug your own (`LLM().loop(fn)`),
 compose these: `default_loop` (the built-in), `make_provider` (the wire),
 `Session` (the message log + persistence), `build_tools`/`dispatch` (the tools),
-`compact` (context budget), and the `events` module (typed loop events + `to_ui`).
+`compact` (context budget), and the `events` module (dict event factories +
+identity `to_ui` for back-compat).
 """
 from .llm import LLM
 from .main import _run as default_loop
