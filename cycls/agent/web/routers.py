@@ -3,7 +3,7 @@
 Chat metadata + message log and shares live in the workspace DB — see
 `cycls.agent.state`. Files stay on the workspace filesystem (POSIX-shaped).
 """
-import os, shutil, time, unicodedata, uuid
+import os, secrets, shutil, time, unicodedata, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -238,10 +238,11 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             raise HTTPException(400, "path must be 'chat/<id>' or 'file/<path>'")
         if path.startswith("chat/") and (await state.get_meta(ws, path[5:])) is None:
             raise HTTPException(404, "Chat not found")
-        token, row = await state.mint(ws, path,
-                                       audience=data.get("audience", "public"),
-                                       ttl=data.get("ttl"),
-                                       author=data.get("author"))
+        token = secrets.token_urlsafe(16)
+        row = {"path": path, "audience": data.get("audience", "public"),
+               "shared_at": datetime.now(timezone.utc).isoformat()}
+        if (author := data.get("author")) is not None: row["author"] = author
+        await DB(ws).put(f"share/{token}", row, meta=row)
         return {"token": token, "url": f"/shared/{ws.subject}/{token}", **row}
 
     @r.get("/share")
@@ -264,7 +265,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.delete("/share/{token}")
     async def revoke_share(token: str, ws: Workspace = ws_dep):
-        await state.revoke(ws, token)
+        await DB(ws).delete(f"share/{token}")
         return {"ok": True}
 
     # ---- Viewer side ----

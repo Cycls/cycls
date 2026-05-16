@@ -7,7 +7,7 @@ Keys:
     share/{token}            — opaque share tokens (RFC003)
     <.database/ slot>        — agent-controlled KV exposed to the LLM
 """
-import asyncio, json, secrets, time
+import asyncio, json
 from datetime import datetime, timezone
 
 from cycls.app.workspace import DB, workspace_at
@@ -212,26 +212,9 @@ class Session:
 
 # ---- Share tokens (RFC003) ----
 
-async def mint(workspace, path, audience="public", ttl=None, author=None):
-    """ttl in seconds; None (the default) = the share never expires — revoke
-    explicitly via `revoke()`. Pass an int for a short-lived link."""
-    token = secrets.token_urlsafe(16)
-    row = {
-        "path": path,
-        "audience": audience,
-        "shared_at": datetime.now(timezone.utc).isoformat(),
-    }
-    if ttl is not None:
-        row["exp"] = int(time.time()) + int(ttl)
-    if author is not None:
-        row["author"] = author
-    await DB(workspace).put(f"share/{token}", row, meta=row)
-    return token, row
-
-
 async def resolve(workspace, token, requester=None):
     row = await DB(workspace).get(f"share/{token}")
-    if not row or ("exp" in row and row["exp"] < time.time()):
+    if not row:
         return None
     aud = row.get("audience", "public")
     if aud == "public":
@@ -239,10 +222,6 @@ async def resolve(workspace, token, requester=None):
     if aud.startswith("org:") and getattr(requester, "org_id", None) == aud[4:]:
         return row
     return None
-
-
-async def revoke(workspace, token):
-    await DB(workspace).delete(f"share/{token}")
 
 
 # ---- Agent KV (LLM-facing tool) ----
