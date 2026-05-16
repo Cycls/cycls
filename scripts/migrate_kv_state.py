@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from cycls.app.workspace import workspace
+from cycls.app.db import workspace
 from cycls.agent import chat
 
 

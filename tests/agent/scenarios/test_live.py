@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 import cycls
-from cycls.app.workspace import workspace
+from cycls.app.db import workspace
 
 
 SONNET = "anthropic/claude-sonnet-4-6"

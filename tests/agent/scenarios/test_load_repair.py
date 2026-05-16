@@ -8,7 +8,7 @@ import asyncio
 from pathlib import Path
 
 from cycls.agent import state as chat
-from cycls.app.workspace import workspace
+from cycls.app.db import workspace
 
 
 def _ws(tmp_path):

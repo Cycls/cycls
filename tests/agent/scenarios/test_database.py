@@ -10,7 +10,7 @@ scenario starts fresh.
 import asyncio, json
 
 from cycls.agent.tools import _exec_database
-from cycls.app.workspace import workspace, DB
+from cycls.app.db import workspace, DB
 
 
 def _ws(tmp_path):
@@ -121,7 +121,7 @@ def test_db_delete_rejects_dangerous_targets(tmp_path):
     """DB.delete is polymorphic (trailing slash = subtree). The agent tool's
     key validator already blocks dangerous shapes, but DB.delete is also
     used from framework code (sessions.py) and must defend itself."""
-    from cycls.app.workspace import DB
+    from cycls.app.db import DB
     ws = _ws(tmp_path)
     async def t():
         db = DB(ws)
@@ -135,7 +135,7 @@ def test_db_delete_rejects_dangerous_targets(tmp_path):
 
 def test_db_delete_subtree_via_trailing_slash(tmp_path):
     """db.delete('prefix/') wipes the subtree; db.delete('key') deletes the leaf."""
-    from cycls.app.workspace import DB
+    from cycls.app.db import DB
     ws = _ws(tmp_path)
     async def t():
         db = DB(ws)

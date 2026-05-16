@@ -7,7 +7,7 @@ from typing import Optional
 
 from cycls.function import Function, _get_api_key, _get_base_url
 from cycls.app.auth import JWT, validator
-from cycls.app.workspace import workspace
+from cycls.app.db import workspace
 
 CYCLS_PATH = importlib.resources.files("cycls")
 
