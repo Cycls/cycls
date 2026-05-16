@@ -18,6 +18,8 @@ def _serve(app, port):
     config = Config()
     config.bind = [f"0.0.0.0:{port}"]
     config.alpn_protocols = ["h2", "http/1.1"]
+    config.accesslog = "-"  # access logs to stdout (hypercorn defaults to none)
+    config.access_log_format = '%(s)s %(r)s'  # status + request line; drop UA/referer noise
     asyncio.run(serve(app, config))
 
 
