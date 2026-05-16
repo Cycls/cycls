@@ -9,7 +9,7 @@ model stops. Everything else is a collaborator — `make_provider` (the wire),
 """
 import asyncio, json, random, time
 from pathlib import Path
-from ..sessions import Session
+from ..state import Session
 from .compact import COMPACT_BUFFER, KEEP_RECENT, compact
 from .prompts import DEFAULT_SYSTEM
 from .providers import make_provider

@@ -296,7 +296,7 @@ def _share_test_app(tmp_path):
 
 def test_share_router_mint_and_resolve(tmp_path):
     """POST /share mints a token; GET /share/<user>/<token>/data returns the chat."""
-    from cycls.agent import sessions as chat
+    from cycls.agent import state as chat
     from cycls.app.workspace import workspace_for
     import asyncio
 
@@ -342,7 +342,7 @@ def test_share_router_unknown_chat_404(tmp_path):
 
 
 def test_share_router_list_and_delete(tmp_path):
-    from cycls.agent import sessions as chat
+    from cycls.agent import state as chat
     from cycls.app.workspace import workspace_for
     import asyncio
 

@@ -53,9 +53,8 @@ cycls/
 │   └── web.py              # cycls.Web fluent builder
 └── agent/
     ├── main.py             # Agent class + @cycls.agent decorator
-    ├── sessions.py         # per-chat persistence (DB) + Session (the loop's message log)
+    ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
-    ├── share.py            # share tokens (mint / resolve / revoke)
     ├── tools/              # tool schemas + execution + dispatch registry (+ pdf.py)
     ├── harness/            # the managed LLM loop and the kit a custom loop needs
     │   ├── llm.py          # cycls.LLM fluent builder (.loop(fn) swaps the loop)
