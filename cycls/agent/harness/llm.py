@@ -21,7 +21,7 @@ class LLM:
         self._system = ""
         self._tools = []
         self._allowed_tools = []
-        self._max_tokens = 16384
+        self._max_tokens = None   # None = use provider's max_output
         self._bash_timeout = 600
         self._bash_network = True
         self._show_usage = False

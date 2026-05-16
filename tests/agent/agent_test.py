@@ -700,11 +700,13 @@ def test_compact_returns_internal_summary_pair_plus_recent():
     messages = old + recent
 
     seen = {}
-    async def fake_complete(*, messages, system, max_tokens):
-        seen["messages"], seen["system"], seen["max_tokens"] = messages, system, max_tokens
-        return "<analysis>scratch work</analysis><summary>User asked about X.</summary>"
+    class FakeProvider:
+        max_output = 64_000
+        async def complete(self, *, messages, system, max_tokens):
+            seen["messages"], seen["system"], seen["max_tokens"] = messages, system, max_tokens
+            return "<analysis>scratch work</analysis><summary>User asked about X.</summary>"
 
-    result = asyncio.run(compact(fake_complete, messages))
+    result = asyncio.run(compact(FakeProvider(), messages))
 
     assert [m["role"] for m in result[:2]] == ["user", "assistant"]
     assert result[0].get("internal") is True and result[1].get("internal") is True
@@ -713,7 +715,7 @@ def test_compact_returns_internal_summary_pair_plus_recent():
     assert "Understood" in result[1]["content"]
     assert result[2:] == recent  # recent slice passes through verbatim
 
-    assert seen["max_tokens"] == 16384
+    assert seen["max_tokens"] == 16384  # clamped to min(provider.max_output, 16384)
     assert seen["messages"][-1]["role"] == "user"
     assert "summary" in seen["messages"][-1]["content"].lower()
 
