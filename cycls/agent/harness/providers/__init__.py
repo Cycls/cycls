@@ -6,7 +6,6 @@ wire format. Adding a new provider = one file conforming to `Provider`.
 
 Public API:
     make_provider("vendor/model", ...) → Provider
-    context_window(model) → int
     Provider                # the protocol
     Message, Block, Text, Thinking, Image, ToolUse, ToolResult    # cycls shape
 """
@@ -61,24 +60,6 @@ class Provider(Protocol):
     async def complete(self, *, messages: list[Message], system: str, max_tokens: int) -> str:
         """Non-streaming one-shot (used by compaction)."""
         ...
-
-
-# ---- Context windows ----
-
-_CONTEXT_WINDOWS = {
-    "claude-sonnet-4-6": 1_000_000,
-    "claude-opus-4-6":   1_000_000,
-    "claude-sonnet":     200_000,
-    "claude-opus":       200_000,
-    "claude-haiku":      200_000,
-}
-
-
-def context_window(model: str) -> int:
-    """Token budget for a bare model name. Exact match first, then longest
-    family prefix that occurs in the name; 200k if unknown."""
-    if model in _CONTEXT_WINDOWS: return _CONTEXT_WINDOWS[model]
-    return next((v for k, v in _CONTEXT_WINDOWS.items() if k in model), 200_000)
 
 
 # ---- Client routing ----

@@ -8,8 +8,16 @@ import json
 
 from .. import events
 from ..events import Turn
-from . import context_window
 from ...tools import tool_step
+
+
+_WINDOWS = {
+    "claude-sonnet-4-6": 1_000_000,
+    "claude-opus-4-6":   1_000_000,
+    "claude-sonnet":     200_000,
+    "claude-opus":       200_000,
+    "claude-haiku":      200_000,
+}
 
 
 class AnthropicProvider:
@@ -19,7 +27,9 @@ class AnthropicProvider:
 
     @property
     def context_window(self):
-        return context_window(self.model)
+        """Exact match first, then longest family prefix in the name; 200k default."""
+        if self.model in _WINDOWS: return _WINDOWS[self.model]
+        return next((v for k, v in _WINDOWS.items() if k in self.model), 200_000)
 
     def _to_messages(self, messages):
         """Drop FE-only sidecars; Anthropic rejects unknown top-level message keys."""
