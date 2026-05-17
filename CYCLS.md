@@ -180,6 +180,32 @@ Per-chat aggregate is also persisted in the chat index (`chat/{id}/index.cost`)
 and surfaced via the `GET /chats` payload, so the sidebar can show
 "this chat: $X.YZ" without re-reading turns.
 
+## `cycls cost <name>`
+
+Aggregate cost across the same `level=usage` log stream.
+
+```bash
+cycls cost super-stage
+# super-stage  $0.027126  (4 turns, 24h)
+
+cycls cost super-stage --since 7d
+cycls cost super-stage --by user
+# user_xxx  $0.022826  (3 turns)
+# user_yyy  $0.004300  (1 turns)
+
+cycls cost super-stage --by chat
+cycls cost super-stage --by model
+```
+
+### Flags
+
+- `-s, --since DURATION` — `30m`, `24h`, `7d` (default: `24h`). Translated
+  to an absolute timestamp filter client-side.
+- `-b, --by user|chat|model` — group rows by `user_id`, `chat_id`, or `model`.
+
+`--since` is also available on `cycls logs` for the same client-side
+timestamp translation.
+
 ## `cycls version`
 
 Print the installed cycls version.

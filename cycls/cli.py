@@ -108,12 +108,30 @@ def cmd_rm(args):
     print(resp.json().get("detail", "deleted"))
 
 
+def _parse_since(s):
+    """'30m' / '24h' / '7d' → absolute RFC-3339 UTC timestamp N units ago.
+    Cloud Logging timestamp comparisons need absolute values."""
+    if not s: return None
+    import re
+    from datetime import datetime, timedelta, timezone
+    m = re.fullmatch(r"(\d+)([smhd])", s)
+    if not m: sys.exit(f"Error: invalid --since '{s}' (use e.g. 30m, 24h, 7d)")
+    mult = {"s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+    when = datetime.now(timezone.utc) - timedelta(seconds=int(m.group(1)) * mult)
+    return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _join_query(*parts):
+    return " AND ".join(p for p in parts if p)
+
+
 def cmd_logs(args):
+    query = _join_query(args.query, f'timestamp >= "{_parse_since(args.since)}"' if args.since else None)
     cursor = None
     while True:
         body = {"deployment_name": args.name, "limit": 100}
         if cursor: body["since"] = cursor
-        if args.query: body["query"] = args.query
+        if query: body["query"] = query
         data = _api("POST", "/v1/deployment/logs", json=body).json()
         for log in data.get("logs", []):
             ts = log.get("timestamp", "")
@@ -123,6 +141,45 @@ def cmd_logs(args):
         cursor = data.get("cursor")
         if not args.follow: return
         time.sleep(2)
+
+
+def cmd_cost(args):
+    """Aggregate `level=usage` entries in Cloud Logging — total or grouped
+    by user / chat / model. Pulls via /v1/deployment/logs, sums locally."""
+    import json
+    since = args.since or "24h"
+    query = _join_query('jsonPayload.level="usage"', f'timestamp >= "{_parse_since(since)}"')
+    cursor, entries = None, []
+    while True:
+        body = {"deployment_name": args.name, "limit": 1000, "query": query}
+        if cursor: body["since"] = cursor
+        data = _api("POST", "/v1/deployment/logs", json=body).json()
+        for log in data.get("logs", []):
+            msg = log.get("message", "")
+            if isinstance(msg, dict): entries.append(msg); continue
+            try: entries.append(json.loads(msg))
+            except (json.JSONDecodeError, TypeError): pass
+        cursor = data.get("cursor")
+        if not cursor or not data.get("logs"): break
+
+    if not entries:
+        print(f"No usage in last {since}.")
+        return
+
+    total = sum(float(e.get("cost", 0)) for e in entries)
+    if not args.by:
+        print(f"{args.name}  ${total:.6f}  ({len(entries)} turns, {since})")
+        return
+
+    field = {"user": "user_id", "chat": "chat_id", "model": "model"}[args.by]
+    groups = {}
+    for e in entries:
+        key = e.get(field) or "(none)"
+        g = groups.setdefault(key, [0.0, 0])
+        g[0] += float(e.get("cost", 0)); g[1] += 1
+    width = max(len(str(k)) for k in groups)
+    for key, (cost, turns) in sorted(groups.items(), key=lambda kv: -kv[1][0]):
+        print(f"{key:<{width}}  ${cost:.6f}  ({turns} turns)")
 
 
 _STARTER_TEMPLATE = '''import cycls
@@ -197,7 +254,15 @@ def main():
     p.add_argument("-f", "--follow", action="store_true", help="Tail logs (poll every 2s)")
     p.add_argument("-q", "--query", default=None,
                    help='GCP Cloud Logging filter, e.g. \'jsonPayload.kind="fatal"\'')
+    p.add_argument("-s", "--since", default=None,
+                   help="Time window: 30m, 24h, 7d. Translated to an absolute timestamp filter.")
     p.set_defaults(func=cmd_logs)
+
+    p = sub.add_parser("cost", help="Show spend on a deployed agent")
+    p.add_argument("name", help="Agent name")
+    p.add_argument("-s", "--since", default=None, help="Time window: 30m, 24h, 7d (default: 24h)")
+    p.add_argument("-b", "--by", choices=["user", "chat", "model"], help="Group results by this dimension")
+    p.set_defaults(func=cmd_cost)
 
     p = sub.add_parser("init", help="Scaffold a starter agent file")
     p.add_argument("name", nargs="?", help="Agent name (default: my_agent)")
