@@ -33,7 +33,7 @@ function formatDate(iso: string) {
 }
 
 // Dropdown menu
-function DropdownMenu({ items, onClose }: {
+export function DropdownMenu({ items, onClose }: {
   items: { label: string; danger?: boolean; onClick: () => void }[];
   onClose: () => void;
 }) {
@@ -59,8 +59,8 @@ function DropdownMenu({ items, onClose }: {
   );
 }
 
-// Rename / New folder inline dialog
-function InlineInput({ initial, onSubmit, onCancel }: {
+// Rename / New folder inline dialog. Exported for reuse in ChatsPanel.
+export function InlineInput({ initial, onSubmit, onCancel }: {
   initial: string;
   onSubmit: (value: string) => void;
   onCancel: () => void;
@@ -399,9 +399,9 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onMkdir, o
         <ShareDialog
           onClose={() => setShareDialog(null)}
           mode="file"
-          defaultTitle={shareDialog.name}
+          subtitle={shareDialog.name}
           org={org}
-          onShare={(_t, audience) => onShareFile(shareDialog.path, audience)}
+          onShare={(audience) => onShareFile(shareDialog.path, audience)}
         />
       )}
     </div>
