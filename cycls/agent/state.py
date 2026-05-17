@@ -51,6 +51,17 @@ async def list_chats(workspace):
         yield key.split("/")[1], meta
 
 
+async def add_cost(workspace, chat_id, delta):
+    """Increment the chat's running cost total (USD). Stored as a stringified
+    decimal in the index so it rides on the str:str meta contract."""
+    if delta <= 0: return
+    _validate(chat_id)
+    existing = (await get_meta(workspace, chat_id)) or {}
+    current = float(existing.get("cost") or 0)
+    existing["cost"] = f"{current + delta:.6f}"
+    await put_meta(workspace, chat_id, existing)
+
+
 async def touch_meta(workspace, chat_id, content):
     """Stamp `updatedAt` for chat-list ordering; on the first turn also derive
     title from the user message and set createdAt. Sole writer of chat meta —

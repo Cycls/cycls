@@ -142,6 +142,41 @@ exhaustion, compaction failure, tool timeouts) are visible to the user
 in the chat but NOT structured-logged — they're known/handled, not QA
 signals. The encoder logs only what's truly unexpected.
 
+### Cost logging
+
+Each model turn also emits a structured `level=usage` line to Cloud Logging.
+Same `--query` mechanism, queryable per-user / per-chat / per-model / time
+range.
+
+| Field | Values |
+|---|---|
+| `source` | `"agent"` |
+| `level` | `"usage"` |
+| `model` | bare model id (e.g. `claude-sonnet-4-20250514`) |
+| `user_id` | tenant user id (or null for anonymous) |
+| `chat_id` | the chat where the turn happened (or null) |
+| `input` / `output` / `cached` / `cache_create` | token counts |
+| `cost` | USD for this turn (float, 6 dp) |
+| `at` | ISO timestamp |
+
+```bash
+# Every turn's cost
+cycls logs super-stage --query 'jsonPayload.level="usage"'
+
+# One user's spend in the last hour
+cycls logs super-stage --query 'jsonPayload.level="usage" AND jsonPayload.user_id="user_xxx" AND timestamp >= "1h ago"'
+
+# Spend per model (then pipe to jq to sum)
+cycls logs super-stage --query 'jsonPayload.level="usage" AND jsonPayload.model="claude-sonnet-4-20250514"'
+
+# Most expensive chats
+cycls logs super-stage --query 'jsonPayload.level="usage" AND jsonPayload.cost > 0.10'
+```
+
+Per-chat aggregate is also persisted in the chat index (`chat/{id}/index.cost`)
+and surfaced via the `GET /chats` payload, so the sidebar can show
+"this chat: $X.YZ" without re-reading turns.
+
 ## `cycls version`
 
 Print the installed cycls version.

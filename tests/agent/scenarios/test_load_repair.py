@@ -126,6 +126,32 @@ def test_empty_chat_no_crash(tmp_path):
     assert loaded == []
 
 
+def test_add_cost_accumulates_on_chat_index(tmp_path):
+    """add_cost sums deltas into the chat index's `cost` field; survives
+    interleaving with other meta edits (rename, favorite)."""
+    ws = _ws(tmp_path)
+    cid = "test"
+    _run(chat.put_meta(ws, cid, {"id": cid, "title": "Hi"}))
+    _run(chat.add_cost(ws, cid, 0.0125))
+    _run(chat.add_cost(ws, cid, 0.0075))
+    meta = _run(chat.get_meta(ws, cid))
+    assert meta["cost"] == "0.020000"
+    # A rename in between must not lose the accumulated cost.
+    _run(chat.put_meta(ws, cid, {**meta, "title": "Renamed"}))
+    _run(chat.add_cost(ws, cid, 0.001))
+    meta = _run(chat.get_meta(ws, cid))
+    assert meta["title"] == "Renamed"
+    assert meta["cost"] == "0.021000"
+
+
+def test_add_cost_skips_zero_and_anonymous(tmp_path):
+    """Zero delta is a no-op (no PUT). Missing chat is also a no-op-ish —
+    add_cost on a missing chat creates the index with just the cost field."""
+    ws = _ws(tmp_path)
+    _run(chat.add_cost(ws, "test", 0))   # zero delta → no-op
+    assert _run(chat.get_meta(ws, "test")) is None
+
+
 def test_attachment_sidecar_survives_repair(tmp_path):
     """Attachments are stored as a sidecar on user messages. Repair
     operates on content shape, must not strip the sidecar from clean
