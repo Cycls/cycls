@@ -143,12 +143,36 @@ def cmd_logs(args):
         time.sleep(2)
 
 
+def _month_window(spec):
+    """`spec` is True (= current month) or 'YYYY-MM'. Returns (start, end, label)."""
+    import re
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    if spec is True:
+        year, mo = now.year, now.month
+    else:
+        m = re.fullmatch(r"(\d{4})-(\d{2})", spec)
+        if not m: sys.exit(f"Error: invalid --month '{spec}' (use YYYY-MM)")
+        year, mo = int(m.group(1)), int(m.group(2))
+    start = datetime(year, mo, 1, tzinfo=timezone.utc)
+    end = datetime(year + 1, 1, 1, tzinfo=timezone.utc) if mo == 12 else datetime(year, mo + 1, 1, tzinfo=timezone.utc)
+    fmt = lambda d: d.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return fmt(start), fmt(end), f"{year:04d}-{mo:02d}"
+
+
 def cmd_cost(args):
     """Aggregate `level=usage` entries in Cloud Logging — total or grouped
     by user / chat / model. Pulls via /v1/deployment/logs, sums locally."""
     import json
-    since = args.since or "24h"
-    query = _join_query('jsonPayload.level="usage"', f'timestamp >= "{_parse_since(since)}"')
+    if args.month is not None and args.since:
+        sys.exit("Error: --month and --since are mutually exclusive")
+    if args.month is not None:
+        start, end, label = _month_window(args.month)
+        query = _join_query('jsonPayload.level="usage"',
+                            f'timestamp >= "{start}"', f'timestamp < "{end}"')
+    else:
+        label = args.since or "24h"
+        query = _join_query('jsonPayload.level="usage"', f'timestamp >= "{_parse_since(label)}"')
     cursor, entries = None, []
     while True:
         body = {"deployment_name": args.name, "limit": 1000, "query": query}
@@ -163,12 +187,12 @@ def cmd_cost(args):
         if not cursor or not data.get("logs"): break
 
     if not entries:
-        print(f"No usage in last {since}.")
+        print(f"No usage in {label}.")
         return
 
     total = sum(float(e.get("cost", 0)) for e in entries)
     if not args.by:
-        print(f"{args.name}  ${total:.6f}  ({len(entries)} turns, {since})")
+        print(f"{args.name}  ${total:.6f}  ({len(entries)} turns, {label})")
         return
 
     field = {"user": "user_id", "chat": "chat_id", "model": "model"}[args.by]
@@ -261,6 +285,8 @@ def main():
     p = sub.add_parser("cost", help="Show spend on a deployed agent")
     p.add_argument("name", help="Agent name")
     p.add_argument("-s", "--since", default=None, help="Time window: 30m, 24h, 7d (default: 24h)")
+    p.add_argument("-m", "--month", nargs="?", const=True, default=None, metavar="YYYY-MM",
+                   help="Calendar month window (no value = current month). Mutually exclusive with --since.")
     p.add_argument("-b", "--by", choices=["user", "chat", "model"], help="Group results by this dimension")
     p.set_defaults(func=cmd_cost)
 
