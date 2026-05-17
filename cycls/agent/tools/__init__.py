@@ -1,8 +1,7 @@
 """Tool schemas, execution, and dispatch. Each built-in is stored in Anthropic
 API shape (`type` / `name` / `description` / `input_schema`) and registered in
-`_BUILTINS`; `build_tools` emits them as-is plus a `cache_control` marker on the
-last. User-supplied custom tools come through `_normalize_tool` (accepts the
-camelCase `inputSchema` form too)."""
+`_BUILTINS`; `build_tools` emits them as-is. User-supplied custom tools come
+through `_normalize_tool` (accepts the camelCase `inputSchema` form too)."""
 import asyncio, base64, json, os, pathlib
 from . import pdf
 from ..state import _exec_database
@@ -140,12 +139,12 @@ def _normalize_tool(spec):
 
 
 def build_tools(allowed_tools, custom, vendor=None):
+    """Provider-neutral list. The Anthropic provider attaches a `cache_control`
+    breakpoint to the last tool at request time."""
     skipped = set(vendor_skips(allowed_tools, vendor))
     tools = [t for name in allowed_tools if name not in skipped
              for t in _BUILTINS.get(name, [])]
     tools += [_normalize_tool(t) for t in (custom or [])]
-    if tools:
-        tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}
     return tools
 
 def _resolve_path(raw_path, workspace):
