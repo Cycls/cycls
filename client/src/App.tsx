@@ -121,7 +121,7 @@ function ChatApp({ config }: { config: AppConfig | null }) {
     if (id) chat.loadChat(id).catch(() => stripParam("id"));
   }, [authLoaded, chat]);
 
-  const handleShare = async (title: string = "", audience: string = "public") => {
+  const handleShare = async (audience: string = "public") => {
     const authorFields = user ? {
       author_name: user.fullName || user.firstName || "",
       author_image_url: user.imageUrl,
@@ -130,7 +130,7 @@ function ChatApp({ config }: { config: AppConfig | null }) {
         author_org_image_url: organization.imageUrl,
       }),
     } : {};
-    return await chat.share(title, audience, authorFields);
+    return await chat.share(audience, authorFields);
   };
 
   const account: AccountInfo = {

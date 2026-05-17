@@ -418,7 +418,7 @@ export function useChat(baseUrl: string = "") {
     setMessages([{ role: "assistant", content: "", parts: [part] }]);
   }, []);
 
-  const share = useCallback(async (title: string = "", audience: string = "public", authorFields: {
+  const share = useCallback(async (audience: string = "public", authorFields: {
     author_name?: string;
     author_image_url?: string;
     author_org_name?: string;
@@ -438,7 +438,6 @@ export function useChat(baseUrl: string = "") {
     track("share_created", {
       chat_id: chatId,
       share_url: shareUrl,
-      title,
       message_count: messagesRef.current.length,
     });
     return shareUrl;
@@ -511,6 +510,17 @@ export function useChat(baseUrl: string = "") {
     }
   }, [api]);
 
+  const renameChat = useCallback(async (id: string, title: string) => {
+    await api(`/chats/${id}`, { method: "PUT", json: { title } });
+    track("chat_renamed", { chat_id: id });
+  }, [api]);
+
+  const setFavorite = useCallback(async (id: string, on: boolean) => {
+    const favoritedAt = on ? new Date().toISOString() : null;
+    await api(`/chats/${id}`, { method: "PUT", json: { favoritedAt } });
+    track("chat_favorited", { chat_id: id, on });
+  }, [api]);
+
   return {
     messages,
     isStreaming,
@@ -528,6 +538,8 @@ export function useChat(baseUrl: string = "") {
     listChats,
     loadChat,
     deleteChat,
+    renameChat,
+    setFavorite,
     setGetToken,
     uploadFile,
     authHeaders,

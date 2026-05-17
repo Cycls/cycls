@@ -96,6 +96,7 @@ def chats_router(ws_dep):
                 "id": data.get("id", cid),
                 "title": data.get("title", ""),
                 "updatedAt": data.get("updatedAt", ""),
+                "favoritedAt": data.get("favoritedAt", ""),
             })
         items.sort(key=lambda s: s.get("updatedAt", ""), reverse=True)
         return items
@@ -112,16 +113,19 @@ def chats_router(ws_dep):
 
     @r.put("/chats/{chat_id}")
     async def put_chat(chat_id: str, request: Request, ws: Workspace = ws_dep):
-        data = await request.json()
-        data["id"] = chat_id
-        data["updatedAt"] = datetime.now(timezone.utc).isoformat()
+        """Partial update — merges into existing meta. Send `field: null` to remove a key."""
+        patch = await request.json()
+        patch.pop("messages", None)
         existing = (await state.get_meta(ws, chat_id)) or {}
-        if "createdAt" not in data:
-            data["createdAt"] = existing.get("createdAt", data["updatedAt"])
-        # Drop "messages" if FE accidentally sends it — that's not metadata.
-        data.pop("messages", None)
-        await state.put_meta(ws, chat_id, data)
-        return data
+        merged = {**existing}
+        for k, v in patch.items():
+            if v is None: merged.pop(k, None)
+            else: merged[k] = v
+        merged["id"] = chat_id
+        merged["updatedAt"] = datetime.now(timezone.utc).isoformat()
+        merged.setdefault("createdAt", merged["updatedAt"])
+        await state.put_meta(ws, chat_id, merged)
+        return merged
 
     @r.delete("/chats/{chat_id}")
     async def delete_chat(chat_id: str, ws: Workspace = ws_dep):

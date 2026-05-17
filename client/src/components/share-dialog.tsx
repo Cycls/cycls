@@ -5,15 +5,14 @@ import { Icon, Spinner } from "./icon";
 
 // Mounted only while open (parent conditionally renders it), so the form
 // state resets to fresh each time the dialog is opened.
-export function ShareDialog({ onClose, mode = "chat", defaultTitle = "", org, onShare, onManageShares }: {
+export function ShareDialog({ onClose, mode = "chat", subtitle = "", org, onShare, onManageShares }: {
   onClose: () => void;
   mode?: "chat" | "file";
-  defaultTitle?: string;
+  subtitle?: string;
   org?: { id: string; name: string } | null;
-  onShare: (title: string, audience: string) => Promise<string>;
+  onShare: (audience: string) => Promise<string>;
   onManageShares?: () => void;
 }) {
-  const [title, setTitle] = useState(defaultTitle);
   const [audience, setAudience] = useState("public");
   const [url, setUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -29,10 +28,10 @@ export function ShareDialog({ onClose, mode = "chat", defaultTitle = "", org, on
             {mode === "file" ? t("shareFile") : t("shareConversation")}
           </h3>
         </div>
-        {mode === "file" && defaultTitle && (
-          <p className="mb-3 truncate text-[11px] text-muted-foreground" dir="auto">{defaultTitle}</p>
+        {mode === "file" && subtitle && (
+          <p className="mb-3 truncate text-[11px] text-muted-foreground" dir="auto">{subtitle}</p>
         )}
-        <div className="flex gap-1.5 mt-3 mb-3">
+        <div className="flex gap-1.5 mt-3">
           {(["public", ...(org ? [`org:${org.id}`] : [])] as string[]).map((aud) => (
             <button
               key={aud}
@@ -43,19 +42,6 @@ export function ShareDialog({ onClose, mode = "chat", defaultTitle = "", org, on
             </button>
           ))}
         </div>
-        {mode === "chat" && (
-          <>
-            <p className="mb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">{t("title")}</p>
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder={t("untitled")}
-              dir="auto"
-              className="w-full rounded-md border border-border bg-secondary/50 px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
-            />
-          </>
-        )}
       </div>
 
       <div className="border-t border-border px-4 py-3">
@@ -87,7 +73,7 @@ export function ShareDialog({ onClose, mode = "chat", defaultTitle = "", org, on
               onClick={() => {
                 setLoading(true);
                 setFailed(false);
-                onShare(title, audience).then((u) => { setUrl(u); setLoading(false); }).catch(() => { setFailed(true); setLoading(false); });
+                onShare(audience).then((u) => { setUrl(u); setLoading(false); }).catch(() => { setFailed(true); setLoading(false); });
               }}
               className="w-full rounded-md border border-border bg-secondary hover:bg-secondary/80 text-foreground py-2 text-xs font-medium transition-colors cursor-pointer"
             >

@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
-import { Files } from "./files";
+import { Files, InlineInput, DropdownMenu } from "./files";
 import { Popover } from "./popover";
 import { Icon, IconButton } from "./icon";
 import { CyclsLogo } from "./cycls-logo";
@@ -59,12 +59,12 @@ export interface FilesPanelProps {
 
 export function Chat({ chat, onShare, files, account, config }: {
   chat: ChatApi;
-  onShare?: (title: string, audience: string) => Promise<string>;
+  onShare?: (audience: string) => Promise<string>;
   files?: FilesPanelProps;
   account?: AccountInfo | null;
   config?: AppConfig | null;
 }) {
-  const { messages, isStreaming, chatLoading, chatId, send: onSend, retry: onRetry, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, uploadFile, authHeaders, setUIHandler } = chat;
+  const { messages, isStreaming, chatLoading, chatId, send: onSend, retry: onRetry, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, setUIHandler } = chat;
   const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions } = config ?? {};
 
@@ -82,7 +82,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   const [shareOpen, setShareOpen] = useState(false);
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
-  const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string }[]>([]);
+  const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string; favoritedAt?: string }[]>([]);
   const [chatsLoading, setChatsLoading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -300,7 +300,6 @@ export function Chat({ chat, onShare, files, account, config }: {
                     {shareOpen && (
                       <ShareDialog
                         onClose={() => setShareOpen(false)}
-                        defaultTitle={messages.find((m) => m.role === "user")?.content?.slice(0, 100) || ""}
                         org={org}
                         onShare={onShare}
                         onManageShares={account ? () => { setShareOpen(false); openPanel("shares"); } : undefined}
@@ -597,6 +596,14 @@ export function Chat({ chat, onShare, files, account, config }: {
                   activeId={chatId}
                   onLoad={(id) => { onLoadChat?.(id); if (window.innerWidth < 640) setFilesOpen(false); }}
                   onDelete={(id) => { setChatsLoading(true); onDeleteChat?.(id).then(() => setChats((prev) => prev.filter((x) => x.id !== id))).finally(() => setChatsLoading(false)); }}
+                  onRename={async (id, title) => {
+                    await onRenameChat?.(id, title);
+                    setChats((prev) => prev.map((x) => x.id === id ? { ...x, title } : x));
+                  }}
+                  onToggleFavorite={async (id, on) => {
+                    await onSetFavorite?.(id, on);
+                    setChats((prev) => prev.map((x) => x.id === id ? { ...x, favoritedAt: on ? new Date().toISOString() : "" } : x));
+                  }}
                 />
               ) : null}
             </motion.div>
@@ -657,13 +664,19 @@ function formatShortDate(iso: string) {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function ChatsPanel({ chats, loading, activeId, onLoad, onDelete }: {
-  chats: { id: string; title: string; updatedAt: string }[];
+function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onToggleFavorite }: {
+  chats: { id: string; title: string; updatedAt: string; favoritedAt?: string }[];
   loading: boolean;
   activeId?: string | null;
   onLoad: (id: string) => void;
   onDelete: (id: string) => void;
+  onRename: (id: string, title: string) => Promise<void>;
+  onToggleFavorite: (id: string, on: boolean) => Promise<void>;
 }) {
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState<string | null>(null);
+
   if (loading) return <LoadingBar />;
 
   if (chats.length === 0) {
@@ -676,34 +689,88 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete }: {
     );
   }
 
+  const visible = favoritesOnly ? chats.filter((c) => c.favoritedAt) : chats;
+
   return (
-    <div className="flex-1 overflow-y-auto divide-y divide-border">
-      {chats.map((s) => (
-        <div
-          key={s.id}
-          className={`group flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer ${activeId === s.id ? "bg-secondary/30" : ""}`}
-          onClick={() => onLoad(s.id)}
+    <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex items-center gap-2 px-4 sm:px-6 py-2 border-b border-border">
+        <button
+          onClick={() => setFavoritesOnly((v) => !v)}
+          className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors cursor-pointer ${favoritesOnly ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary/50"}`}
+          aria-label="Favorites only"
         >
-          <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
-            <Icon name="list" className="size-4 text-muted-foreground" strokeWidth={1.5} />
-          </div>
-          <span className="flex-1 min-w-0 text-sm text-foreground truncate">{s.title || t("untitled")}</span>
-          <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
-            {s.updatedAt ? formatShortDate(s.updatedAt) : ""}
-          </span>
-          <button
-            onClick={(e) => { e.stopPropagation(); onDelete(s.id); }}
-            className="flex size-7 items-center justify-center rounded-md text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 hover:text-red-500 hover:bg-red-500/10 transition-all cursor-pointer"
-            aria-label="Delete chat"
-          >
-            <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" strokeLinecap="round">
-              <circle cx="12" cy="12" r="9" strokeWidth={1.5} />
-              <path d="M8 12h8" />
-            </svg>
-          </button>
-        </div>
-      ))}
+          <Star filled={favoritesOnly} className="size-3.5" />
+          {t("favorites")}
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto divide-y divide-border">
+        {visible.map((s) => {
+          const isFav = !!s.favoritedAt;
+          return (
+            <div
+              key={s.id}
+              className={`group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer ${activeId === s.id ? "bg-secondary/30" : ""}`}
+              onClick={() => onLoad(s.id)}
+            >
+              <button
+                onClick={(e) => { e.stopPropagation(); onToggleFavorite(s.id, !isFav); }}
+                className={`flex size-7 shrink-0 items-center justify-center rounded-md transition-colors cursor-pointer ${isFav ? "text-yellow-500" : "text-muted-foreground/40 hover:text-yellow-500"}`}
+                aria-label={isFav ? "Unfavorite" : "Favorite"}
+              >
+                <Star filled={isFav} className="size-4" />
+              </button>
+              <div className="flex-1 min-w-0">
+                {renaming === s.id ? (
+                  <InlineInput
+                    initial={s.title || ""}
+                    onSubmit={async (newTitle) => {
+                      setRenaming(null);
+                      if (newTitle !== s.title) await onRename(s.id, newTitle);
+                    }}
+                    onCancel={() => setRenaming(null)}
+                  />
+                ) : (
+                  <span className="text-sm text-foreground truncate block">{s.title || t("untitled")}</span>
+                )}
+              </div>
+              <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
+                {s.updatedAt ? formatShortDate(s.updatedAt) : ""}
+              </span>
+              <div className="relative shrink-0">
+                <button
+                  onClick={(e) => { e.stopPropagation(); setMenuOpen(menuOpen === s.id ? null : s.id); }}
+                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 hover:text-foreground hover:bg-secondary transition-all cursor-pointer"
+                  aria-label="Actions"
+                >
+                  <svg className="size-4" fill="currentColor" viewBox="0 0 24 24">
+                    <circle cx="12" cy="5" r="1.5" />
+                    <circle cx="12" cy="12" r="1.5" />
+                    <circle cx="12" cy="19" r="1.5" />
+                  </svg>
+                </button>
+                {menuOpen === s.id && (
+                  <DropdownMenu
+                    onClose={() => setMenuOpen(null)}
+                    items={[
+                      { label: t("rename"), onClick: () => setRenaming(s.id) },
+                      { label: t("delete"), danger: true, onClick: () => onDelete(s.id) },
+                    ]}
+                  />
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
+  );
+}
+
+function Star({ filled, className }: { filled: boolean; className?: string }) {
+  return (
+    <svg className={className} fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+    </svg>
   );
 }
 
