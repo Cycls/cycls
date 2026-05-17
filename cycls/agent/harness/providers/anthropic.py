@@ -33,6 +33,13 @@ def _lookup(table, model, default):
     return next((v for k, v in table.items() if k in model), default)
 
 
+# Cache breakpoint applied to system prompt, last tool, and last user-message
+# tail block. Three of Anthropic's four available breakpoints; each marks the
+# END of a cacheable prefix. ttl 1h matches the persistence we want for chat
+# sessions (5min is the free default — wire a knob if turns straddle 5min).
+_CACHE = {"type": "ephemeral", "ttl": "1h"}
+
+
 class AnthropicProvider:
     def __init__(self, client, model):
         self._client = client
@@ -47,12 +54,24 @@ class AnthropicProvider:
         return _lookup(_MAX_OUTPUT, self.model, 8_192)
 
     def _to_messages(self, messages):
-        """Drop FE-only sidecars; Anthropic rejects unknown top-level message keys."""
-        return [{k: v for k, v in m.items() if k in ("role", "content")} for m in messages]
+        """Drop FE-only sidecars; attach `cache_control` to the last user
+        message's tail block so the entire conversation prefix is cacheable."""
+        out = [{k: v for k, v in m.items() if k in ("role", "content")} for m in messages]
+        for i in range(len(out) - 1, -1, -1):
+            if out[i]["role"] != "user": continue
+            c = out[i]["content"]
+            if isinstance(c, str):
+                out[i]["content"] = [{"type": "text", "text": c, "cache_control": _CACHE}]
+            elif isinstance(c, list) and c:
+                out[i]["content"] = [*c[:-1], {**c[-1], "cache_control": _CACHE}]
+            break
+        return out
 
     def _to_tools(self, tools):
-        """cycls tools are Anthropic-shape; pass through."""
-        return tools or []
+        """Attach `cache_control` to the last tool so the entire tool-definition
+        block is cacheable."""
+        if not tools: return []
+        return [*tools[:-1], {**tools[-1], "cache_control": _CACHE}]
 
     async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None, thinking="adaptive"):
         kwargs = {
@@ -60,7 +79,7 @@ class AnthropicProvider:
             "max_tokens": max_tokens,
             "tools": self._to_tools(tools),
             "messages": self._to_messages(messages),
-            "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+            "system": [{"type": "text", "text": system, "cache_control": _CACHE}],
         }
         if isinstance(thinking, int):
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking}

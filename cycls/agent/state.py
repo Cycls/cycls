@@ -160,20 +160,16 @@ async def delete_chat(workspace, chat_id):
 # ---- Session ----
 
 def _ephemeralize(messages):
-    """Strip stale cache_control markers; tag the last message ephemeral so
-    prompt caching keeps the prior context warm and the new turn is fresh."""
+    """Strip any persisted `cache_control` markers from history. The provider
+    re-applies cache breakpoints fresh each turn (system + last tool + last
+    user message); persisted markers would risk exceeding Anthropic's 4-
+    breakpoint cap."""
     for msg in messages:
         c = msg.get("content")
         if isinstance(c, list):
             for b in c:
                 if isinstance(b, dict):
                     b.pop("cache_control", None)
-    if messages:
-        c = messages[-1].get("content")
-        if isinstance(c, str):
-            messages[-1]["content"] = [{"type": "text", "text": c, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
-        elif isinstance(c, list) and c:
-            c[-1]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
     return messages
 
 

@@ -164,12 +164,36 @@ def test_openai_to_messages_no_drops_when_text_only():
     assert out[0]["content"] == "plain text"
 
 
-def test_build_tools_cache_control_on_last():
-    """Last tool gets ephemeral cache_control for prompt-cache efficiency."""
+def test_build_tools_no_provider_specific_markers():
+    """`build_tools` is provider-neutral — no `cache_control` (Anthropic-only)
+    leaks in; the AnthropicProvider attaches it at request time."""
     tools = build_tools(["Bash", "Editor"], None)
-    assert tools[-1].get("cache_control") == {"type": "ephemeral", "ttl": "1h"}
-    for t in tools[:-1]:
+    for t in tools:
         assert "cache_control" not in t
+
+
+def test_anthropic_provider_caches_last_tool_and_last_user_message():
+    """AnthropicProvider attaches cache_control to the last tool and the last
+    user message's tail block — the three breakpoints (system + tools + last
+    user) make the entire static prefix cacheable per turn."""
+    from cycls.agent.harness.providers.anthropic import AnthropicProvider
+    p = AnthropicProvider(None, "claude-sonnet-4-20250514")
+
+    tools = [{"name": "a", "description": "", "input_schema": {}},
+             {"name": "b", "description": "", "input_schema": {}}]
+    out_tools = p._to_tools(tools)
+    assert "cache_control" not in out_tools[0]
+    assert out_tools[-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+    msgs = [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": [{"type": "text", "text": "ack"}]},
+        {"role": "user", "content": [{"type": "text", "text": "second"}]},
+    ]
+    out_msgs = p._to_messages(msgs)
+    # Last user message's tail block carries cache_control; earlier user does not.
+    assert out_msgs[-1]["content"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert "cache_control" not in str(out_msgs[0])
 
 
 # ---- LLM builder plumbing ----
