@@ -1,15 +1,9 @@
 """Workspace + DB — per-tenant JSON KV over object storage.
 
-`file://` (dev) and `gs://` (prod). `db.put(k, v, meta=...)` attaches
-ride-along metadata used by `db.scan()` to enumerate names+meta in one
-LIST round-trip. `db.scan(prefix=)` filters by key prefix; `db.scan(glob=)`
-filters by glob pattern (GCS `matchGlob`, Python `pathlib.glob`).
-
-On GCS, `meta` is stored as custom-metadata and travels back on LIST
-without a body fetch. On the local filesystem, `meta` is ignored — the
-body IS the canonical content and scan reads it directly (cheap on disk).
-Callers should put scan-time display fields in the body either way; on
-GCS, also mirror them via `meta=` so they ride back on LIST.
+`file://` (dev) and `gs://` (prod). `db.scan(...)` is the 1-round-trip
+listing path: GCS uses LIST + custom-meta; FS uses `pathlib.glob` + body
+reads (no metadata channel locally). `meta=` on `db.put` is a GCS-only
+perf hint — body is canonical on FS.
 """
 import asyncio, json, os
 from dataclasses import dataclass
@@ -93,39 +87,27 @@ class _FileStore:
                 shutil.rmtree(target)
         await asyncio.to_thread(_do)
 
+    def _walk(self, *, prefix=None, glob=None):
+        """Yield (key, path) for matching .json files."""
+        if not self.root.exists(): return
+        if glob is not None:
+            paths = self.root.glob(f"{glob}.json")
+        else:
+            target = self.root / (prefix or "")
+            paths = (target if target.is_dir() else self.root).rglob("*.json")
+        for p in paths:
+            key = str(p.relative_to(self.root).with_suffix("")).replace(os.sep, "/")
+            if prefix and not key.startswith(prefix): continue
+            yield key, p
+
     async def list_keys(self, *, prefix=None, glob=None):
-        def _do():
-            if not self.root.exists(): return []
-            if glob is not None:
-                paths = self.root.glob(f"{glob}.json")
-            else:
-                target = self.root / (prefix or "")
-                search = target if target.is_dir() else self.root
-                paths = search.rglob("*.json")
-            out = []
-            for p in paths:
-                key = str(p.relative_to(self.root).with_suffix("")).replace(os.sep, "/")
-                if prefix and not key.startswith(prefix): continue
-                out.append(key)
-            return out
-        return await asyncio.to_thread(_do)
+        return await asyncio.to_thread(lambda: [k for k, _ in self._walk(prefix=prefix, glob=glob)])
 
     async def list_metas(self, *, prefix=None, glob=None):
-        """Return (key, body) pairs. On FS the body is the canonical meta;
-        the `meta=` arg passed to write() is intentionally ignored."""
         def _do():
-            if not self.root.exists(): return []
-            if glob is not None:
-                paths = self.root.glob(f"{glob}.json")
-            else:
-                target = self.root / (prefix or "")
-                search = target if target.is_dir() else self.root
-                paths = search.rglob("*.json")
             out = []
-            for p in paths:
-                key = str(p.relative_to(self.root).with_suffix("")).replace(os.sep, "/")
-                if prefix and not key.startswith(prefix): continue
-                try: out.append((key, json.loads(p.read_bytes())))
+            for k, p in self._walk(prefix=prefix, glob=glob):
+                try: out.append((k, json.loads(p.read_bytes())))
                 except (json.JSONDecodeError, FileNotFoundError): pass
             return out
         return await asyncio.to_thread(_do)
@@ -224,7 +206,7 @@ class DB:
         await self._store.write(key, json.dumps(value).encode(), meta=meta)
 
     async def delete(self, target):
-        if not target or target == "/" or target.startswith("/") or ".." in target.split("/"):
+        if not target or target.startswith("/") or ".." in target.split("/"):
             raise ValueError(f"invalid delete target: {target!r}")
         if target.endswith("/"):
             await self._store.remove_prefix(target)
@@ -241,13 +223,7 @@ class DB:
             if r is not None: yield r
 
     async def scan(self, *, prefix=None, glob=None):
-        """Enumerate (key, meta) pairs in one LIST round-trip.
-
-        `prefix=` selects all keys starting with the prefix.
-        `glob=` selects keys matching a glob pattern (`*` matches non-`/`).
-        On GCS, `meta` is the object's custom-metadata; on FS it's the
-        parsed body. Callers should keep their scan-time fields in the
-        body and (on GCS) also pass them as `meta=` to put().
-        """
+        """Yield (key, meta) — `meta` is GCS custom-meta or, on FS, the body.
+        `glob` uses `*` to match non-`/`."""
         for k, m in sorted(await self._store.list_metas(prefix=prefix, glob=glob)):
             yield k, m
