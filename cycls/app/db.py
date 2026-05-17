@@ -1,7 +1,15 @@
 """Workspace + DB — per-tenant JSON KV over object storage.
 
 `file://` (dev) and `gs://` (prod). `db.put(k, v, meta=...)` attaches
-per-key metadata; `db.index(prefix)` enumerates names+meta in one call.
+ride-along metadata used by `db.scan()` to enumerate names+meta in one
+LIST round-trip. `db.scan(prefix=)` filters by key prefix; `db.scan(glob=)`
+filters by glob pattern (GCS `matchGlob`, Python `pathlib.glob`).
+
+On GCS, `meta` is stored as custom-metadata and travels back on LIST
+without a body fetch. On the local filesystem, `meta` is ignored — the
+body IS the canonical content and scan reads it directly (cheap on disk).
+Callers should put scan-time display fields in the body either way; on
+GCS, also mirror them via `meta=` so they ride back on LIST.
 """
 import asyncio, json, os
 from dataclasses import dataclass
@@ -58,7 +66,7 @@ class _FileStore:
     def __init__(self, url):
         self.root = Path(url[7:])
 
-    def _path(self, key, ext=".json"): return self.root / f"{key}{ext}"
+    def _path(self, key): return self.root / f"{key}.json"
 
     async def read(self, key):
         def _do():
@@ -68,20 +76,13 @@ class _FileStore:
 
     async def write(self, key, data, meta=None):
         def _do():
-            p, mp = self._path(key), self._path(key, ".meta")
+            p = self._path(key)
             p.parent.mkdir(parents=True, exist_ok=True)
             tmp = p.with_suffix(".json.tmp"); tmp.write_bytes(data); tmp.replace(p)
-            if meta is not None:
-                mt = mp.with_suffix(".meta.tmp"); mt.write_text(json.dumps(meta)); mt.replace(mp)
-            else:
-                mp.unlink(missing_ok=True)
         await asyncio.to_thread(_do)
 
     async def remove(self, key):
-        def _do():
-            self._path(key).unlink(missing_ok=True)
-            self._path(key, ".meta").unlink(missing_ok=True)
-        await asyncio.to_thread(_do)
+        await asyncio.to_thread(lambda: self._path(key).unlink(missing_ok=True))
 
     async def remove_prefix(self, prefix):
         if not prefix: raise ValueError("remove_prefix requires non-empty prefix")
@@ -92,25 +93,42 @@ class _FileStore:
                 shutil.rmtree(target)
         await asyncio.to_thread(_do)
 
-    async def _walk(self, prefix, with_meta):
+    async def list_keys(self, *, prefix=None, glob=None):
         def _do():
             if not self.root.exists(): return []
-            target = self.root / prefix
-            search = target if target.is_dir() else self.root
+            if glob is not None:
+                paths = self.root.glob(f"{glob}.json")
+            else:
+                target = self.root / (prefix or "")
+                search = target if target.is_dir() else self.root
+                paths = search.rglob("*.json")
             out = []
-            for p in search.rglob("*.json"):
+            for p in paths:
                 key = str(p.relative_to(self.root).with_suffix("")).replace(os.sep, "/")
-                if not key.startswith(prefix): continue
-                if with_meta:
-                    mp = p.with_suffix(".meta")
-                    out.append((key, json.loads(mp.read_text()) if mp.exists() else {}))
-                else:
-                    out.append(key)
+                if prefix and not key.startswith(prefix): continue
+                out.append(key)
             return out
         return await asyncio.to_thread(_do)
 
-    async def list_keys(self, prefix): return await self._walk(prefix, False)
-    async def list_metas(self, prefix): return await self._walk(prefix, True)
+    async def list_metas(self, *, prefix=None, glob=None):
+        """Return (key, body) pairs. On FS the body is the canonical meta;
+        the `meta=` arg passed to write() is intentionally ignored."""
+        def _do():
+            if not self.root.exists(): return []
+            if glob is not None:
+                paths = self.root.glob(f"{glob}.json")
+            else:
+                target = self.root / (prefix or "")
+                search = target if target.is_dir() else self.root
+                paths = search.rglob("*.json")
+            out = []
+            for p in paths:
+                key = str(p.relative_to(self.root).with_suffix("")).replace(os.sep, "/")
+                if prefix and not key.startswith(prefix): continue
+                try: out.append((key, json.loads(p.read_bytes())))
+                except (json.JSONDecodeError, FileNotFoundError): pass
+            return out
+        return await asyncio.to_thread(_do)
 
 
 class _GCSStore:
@@ -136,7 +154,7 @@ class _GCSStore:
 
     async def write(self, key, data, meta=None):
         info = {"name": self._name(key)}
-        if meta: info["metadata"] = {k: str(v) for k, v in meta.items()}
+        if meta: info["metadata"] = meta
         body = b"\r\n".join([
             b"--cycls", b"Content-Type: application/json; charset=UTF-8", b"",
             json.dumps(info).encode(),
@@ -155,13 +173,17 @@ class _GCSStore:
 
     async def remove_prefix(self, prefix):
         if not prefix: raise ValueError("remove_prefix requires non-empty prefix")
-        keys = await self.list_keys(prefix)
+        keys = await self.list_keys(prefix=prefix)
         await asyncio.gather(*[self.remove(k) for k in keys])
 
-    async def _list(self, prefix, fields):
+    async def _list(self, fields, *, prefix=None, glob=None):
         items, page_token = [], None
         while True:
-            params = {"prefix": f"{self.prefix}{prefix}", "fields": fields}
+            params = {"fields": fields}
+            if glob is not None:
+                params["matchGlob"] = f"{self.prefix}{glob}.json"
+            else:
+                params["prefix"] = f"{self.prefix}{prefix or ''}"
             if page_token: params["pageToken"] = page_token
             r = await self._req("GET", f"{self._STORAGE}/storage/v1/b/{self.bucket}/o", params=params)
             r.raise_for_status()
@@ -171,14 +193,14 @@ class _GCSStore:
             if not page_token: break
         return items
 
-    async def list_keys(self, prefix):
+    async def list_keys(self, *, prefix=None, glob=None):
         p, n = len(self.prefix), -len(".json")
-        return [it["name"][p:n] for it in await self._list(prefix, "items(name),nextPageToken")]
+        return [it["name"][p:n] for it in await self._list("items(name),nextPageToken", prefix=prefix, glob=glob)]
 
-    async def list_metas(self, prefix):
+    async def list_metas(self, *, prefix=None, glob=None):
         p, n = len(self.prefix), -len(".json")
         return [(it["name"][p:n], it.get("metadata") or {})
-                for it in await self._list(prefix, "items(name,metadata),nextPageToken")]
+                for it in await self._list("items(name,metadata),nextPageToken", prefix=prefix, glob=glob)]
 
 
 def _store(url):
@@ -196,6 +218,9 @@ class DB:
         return json.loads(data) if data is not None else default
 
     async def put(self, key, value, *, meta=None):
+        if meta:
+            bad = [(k, type(v).__name__) for k, v in meta.items() if not isinstance(v, str)]
+            if bad: raise TypeError(f"meta values must be str; got non-string: {bad}")
         await self._store.write(key, json.dumps(value).encode(), meta=meta)
 
     async def delete(self, target):
@@ -206,8 +231,8 @@ class DB:
         else:
             await self._store.remove(target)
 
-    async def items(self, prefix=None, limit=None):
-        keys = sorted(await self._store.list_keys(prefix or ""))
+    async def items(self, *, prefix=None, glob=None, limit=None):
+        keys = sorted(await self._store.list_keys(prefix=prefix, glob=glob))
         if limit is not None: keys = keys[:limit]
         async def _fetch(k):
             data = await self._store.read(k)
@@ -215,6 +240,14 @@ class DB:
         for r in await asyncio.gather(*[_fetch(k) for k in keys]):
             if r is not None: yield r
 
-    async def index(self, prefix=None):
-        for k, m in sorted(await self._store.list_metas(prefix or "")):
+    async def scan(self, *, prefix=None, glob=None):
+        """Enumerate (key, meta) pairs in one LIST round-trip.
+
+        `prefix=` selects all keys starting with the prefix.
+        `glob=` selects keys matching a glob pattern (`*` matches non-`/`).
+        On GCS, `meta` is the object's custom-metadata; on FS it's the
+        parsed body. Callers should keep their scan-time fields in the
+        body and (on GCS) also pass them as `meta=` to put().
+        """
+        for k, m in sorted(await self._store.list_metas(prefix=prefix, glob=glob)):
             yield k, m

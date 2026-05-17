@@ -1,13 +1,22 @@
-"""Agent state primitives — chat (meta + log + Session), shares, and the
+"""Agent state primitives — chat (index + turns + Session), shares, and the
 LLM-facing database tool. All built on cycls.app.db.DB.
 
+Chat layout — one folder per chat:
+    chat/{id}/index           — chat metadata (title, updatedAt, createdAt)
+    chat/{id}/{turn:06d}      — one file per message, ordered
+
+The `index` file is the sidebar's enumeration target: `db.scan(glob=
+"chat/*/index")` returns one entry per chat in a single LIST round-trip.
+Delete is a single subtree wipe of `chat/{id}/` — catches the index AND
+every turn in one operation.
+
 Keys:
-    chat/meta/{id}           — chat metadata (title, updatedAt, createdAt)
-    chat/log/{id}/{turn:06d} — each message, ordered
-    share/{token}            — opaque share tokens (RFC003)
-    <.database/ slot>        — agent-controlled KV exposed to the LLM
+    chat/{id}/index           — chat metadata (sidebar target)
+    chat/{id}/{turn:06d}      — turns
+    share/{token}             — opaque share tokens (RFC003)
+    <.database/ slot>         — agent-controlled KV exposed to the LLM
 """
-import asyncio, json
+import asyncio, json, re
 from datetime import datetime, timezone
 
 from cycls.app.db import DB, workspace
@@ -15,27 +24,31 @@ from cycls.app.db import DB, workspace
 
 # ---- Chat metadata ----
 
+# Whitelist: alphanumeric + `_` / `-`. Rejects path separators, glob metachars
+# (`*?[]{}`), dot-prefixed names, unicode tricks. UUIDs fit comfortably.
+_CHAT_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
 def _validate(chat_id):
-    if "/" in chat_id:
-        raise ValueError(f"Invalid chat id (contains slash): {chat_id}")
+    if not _CHAT_ID.match(chat_id or ""):
+        raise ValueError(f"Invalid chat id: {chat_id!r}")
 
 
 async def get_meta(workspace, chat_id):
     _validate(chat_id)
-    return await DB(workspace).get(f"chat/meta/{chat_id}")
+    return await DB(workspace).get(f"chat/{chat_id}/index")
 
 
 async def put_meta(workspace, chat_id, data):
     _validate(chat_id)
-    list_meta = {"title": data.get("title", ""), "updatedAt": data.get("updatedAt", "")}
-    await DB(workspace).put(f"chat/meta/{chat_id}", data, meta=list_meta)
+    await DB(workspace).put(f"chat/{chat_id}/index", data, meta=data)
 
 
 async def list_chats(workspace):
-    """Yield (chat_id, {title, updatedAt}) for every chat — backed by GCS
-    custom-metadata so this is 1 LIST regardless of chat count."""
-    async for key, meta in DB(workspace).index(prefix="chat/meta/"):
-        yield key[len("chat/meta/"):], meta
+    """Yield (chat_id, {title, updatedAt}) for every chat. One LIST via
+    GCS matchGlob; one glob+read on local FS."""
+    async for key, meta in DB(workspace).scan(glob="chat/*/index"):
+        yield key.split("/")[1], meta
 
 
 async def touch_meta(workspace, chat_id, content):
@@ -101,11 +114,12 @@ async def load_messages(workspace, chat_id):
     state if any, persisting the repair so the disk catches up."""
     _validate(chat_id)
     db = DB(workspace)
-    messages = [msg async for _, msg in db.items(prefix=f"chat/log/{chat_id}/")]
+    # Glob `[0-9]*` selects turn files (000000, 000001, ...) — index excluded.
+    messages = [msg async for _, msg in db.items(glob=f"chat/{chat_id}/[0-9]*")]
     valid = _valid_prefix(messages)
     if valid < len(messages):
         await asyncio.gather(*[
-            db.delete(f"chat/log/{chat_id}/{i:06d}")
+            db.delete(f"chat/{chat_id}/{i:06d}")
             for i in range(valid, len(messages))
         ])
         messages = messages[:valid]
@@ -119,30 +133,28 @@ async def append_messages(workspace, chat_id, messages, start_idx):
         return
     db = DB(workspace)
     await asyncio.gather(*[
-        db.put(f"chat/log/{chat_id}/{(start_idx + i):06d}", msg)
+        db.put(f"chat/{chat_id}/{(start_idx + i):06d}", msg)
         for i, msg in enumerate(messages)
     ])
 
 
 async def replace_messages(workspace, chat_id, messages):
-    """Wipe and rewrite all messages for *chat_id* (used by compaction)."""
+    """Wipe and rewrite all messages for *chat_id* (used by compaction).
+    Preserves the index file — only turns are rewritten."""
     _validate(chat_id)
     db = DB(workspace)
-    await db.delete(f"chat/log/{chat_id}/")
+    turn_keys = [k async for k, _ in db.scan(glob=f"chat/{chat_id}/[0-9]*")]
+    await asyncio.gather(*(db.delete(k) for k in turn_keys))
     await asyncio.gather(*[
-        db.put(f"chat/log/{chat_id}/{i:06d}", msg)
+        db.put(f"chat/{chat_id}/{i:06d}", msg)
         for i, msg in enumerate(messages)
     ])
 
 
 async def delete_chat(workspace, chat_id):
-    """Delete metadata + all messages for *chat_id*."""
+    """Delete the chat — index and all turns in one subtree wipe."""
     _validate(chat_id)
-    db = DB(workspace)
-    await asyncio.gather(
-        db.delete(f"chat/meta/{chat_id}"),
-        db.delete(f"chat/log/{chat_id}/"),
-    )
+    await DB(workspace).delete(f"chat/{chat_id}/")
 
 
 # ---- Session ----

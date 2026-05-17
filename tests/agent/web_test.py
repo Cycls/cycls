@@ -311,13 +311,19 @@ def test_share_router_mint_and_resolve(tmp_path):
         ], 0)
     asyncio.run(seed())
 
-    r = client.post("/share", json={"path": "chat/c1", "author": {"name": "Alice"}})
+    r = client.post("/share", json={
+        "path": "chat/c1",
+        "author_name": "Alice", "author_image_url": "https://example.com/a.png",
+        "author_org_name": "Acme",
+    })
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["path"] == "chat/c1"
     assert body["audience"] == "public"
     assert body["url"].startswith("/shared/user_test/")
-    assert body["author"] == {"name": "Alice"}
+    assert body["author_name"] == "Alice"
+    assert body["author_image_url"] == "https://example.com/a.png"
+    assert body["author_org_name"] == "Acme"
     assert "shared_at" in body
 
     r2 = client.get(f"/share/user_test/{body['token']}/data")
@@ -326,7 +332,9 @@ def test_share_router_mint_and_resolve(tmp_path):
     assert data["type"] == "chat"
     assert data["id"] == "c1"
     assert data["title"] == "First chat"
-    assert data["author"] == {"name": "Alice"}
+    assert data["author_name"] == "Alice"
+    assert data["author_image_url"] == "https://example.com/a.png"
+    assert data["author_org_name"] == "Acme"
     assert [m["content"] for m in data["messages"]] == ["hi", "hello there"]
 
 

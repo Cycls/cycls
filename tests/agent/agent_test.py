@@ -138,7 +138,7 @@ def _history_tool_ids(history):
 @pytest.fixture
 def agent_env(tmp_path):
     """Create workspace + context for agent tests. Returns (ws, ctx) — the
-    chat log lives in the workspace DB keyed under `chat/log/{chat_id}/`."""
+    chat lives in the workspace DB keyed under `chat/{chat_id}/`."""
     ws_root = tmp_path / "tenant"
     ws_root.mkdir()
     ws = str(ws_root)

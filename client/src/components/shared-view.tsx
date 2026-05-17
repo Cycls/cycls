@@ -6,13 +6,14 @@ import type { Message } from "../hooks/use-chat";
 import { track } from "../lib/posthog";
 import { toggleDark } from "../lib/utils";
 
-type Author = { name: string; imageUrl?: string; org?: { name: string; imageUrl?: string } };
-
 interface ChatShare {
   type: "chat";
   id: string;
   title: string;
-  author?: Author;
+  author_name?: string;
+  author_image_url?: string;
+  author_org_name?: string;
+  author_org_image_url?: string;
   shared_at?: string;
   messages: Message[];
 }
@@ -57,8 +58,8 @@ export function SharedView({ getToken }: { getToken?: () => Promise<string | nul
           chat_id: d.id,
           share_url: window.location.href,
           title: d.title,
-          author_name: d.author?.name,
-          org_name: d.author?.org?.name,
+          author_name: d.author_name,
+          org_name: d.author_org_name,
           message_count: d.messages?.length || 0,
           referrer: document.referrer || null,
         });
@@ -107,7 +108,14 @@ export function SharedView({ getToken }: { getToken?: () => Promise<string | nul
       <div className="relative flex-1 overflow-y-auto scrollbar-none">
         <div className="pointer-events-none sticky top-0 z-10 h-6 -mb-6 bg-[linear-gradient(to_bottom,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
         <div className="flex w-full flex-col items-center py-4">
-          <ShareChrome title={data.title} author={data.author} sharedAt={data.shared_at} />
+          <ShareChrome
+            title={data.title}
+            authorName={data.author_name}
+            authorImageUrl={data.author_image_url}
+            authorOrgName={data.author_org_name}
+            authorOrgImageUrl={data.author_org_image_url}
+            sharedAt={data.shared_at}
+          />
           {data.messages.map((msg, i) => (
             <MessageBubble key={i} message={msg} isStreaming={false} />
           ))}
@@ -137,43 +145,62 @@ export function SharedView({ getToken }: { getToken?: () => Promise<string | nul
 }
 
 
-function ShareChrome({ title, author, sharedAt }: { title?: string; author?: Author; sharedAt?: string }) {
-  if (!title && !author && !sharedAt) return null;
+function ShareChrome({
+  title,
+  authorName,
+  authorImageUrl,
+  authorOrgName,
+  authorOrgImageUrl,
+  sharedAt,
+}: {
+  title?: string;
+  authorName?: string;
+  authorImageUrl?: string;
+  authorOrgName?: string;
+  authorOrgImageUrl?: string;
+  sharedAt?: string;
+}) {
+  const hasAuthor = !!(authorName || authorImageUrl || authorOrgName || authorOrgImageUrl);
+  if (!title && !hasAuthor && !sharedAt) return null;
   return (
     <div className="w-full max-w-3xl px-6 py-10 text-center">
       {title && <h1 className="text-xl font-medium tracking-tight text-foreground">{title}</h1>}
       <div className="flex items-center justify-center gap-2 mt-3">
-        {author && (
+        {hasAuthor && (
           <div className="flex items-center -space-x-3">
-            {author.org?.imageUrl && (
+            {authorOrgImageUrl && (
               <div className="relative group">
                 <div
                   className="size-6 rounded-full bg-secondary shrink-0 ring-2 ring-background"
-                  style={{ backgroundImage: `url(${author.org.imageUrl})`, backgroundSize: "cover" }}
+                  style={{ backgroundImage: `url(${authorOrgImageUrl})`, backgroundSize: "cover" }}
                 />
-                <div className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity delay-300 z-50">
-                  <div className="rounded-lg border border-border bg-background px-3 py-2 shadow-lg text-xs whitespace-nowrap">
-                    <p className="font-medium text-foreground">{author.org.name}</p>
+                {authorOrgName && (
+                  <div className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity delay-300 z-50">
+                    <div className="rounded-lg border border-border bg-background px-3 py-2 shadow-lg text-xs whitespace-nowrap">
+                      <p className="font-medium text-foreground">{authorOrgName}</p>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             )}
-            {author.imageUrl && (
+            {authorImageUrl && (
               <div className="relative group">
                 <div
                   className="size-6 rounded-full bg-secondary shrink-0 ring-2 ring-background"
-                  style={{ backgroundImage: `url(${author.imageUrl})`, backgroundSize: "cover" }}
+                  style={{ backgroundImage: `url(${authorImageUrl})`, backgroundSize: "cover" }}
                 />
-                <div className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity delay-300 z-50">
-                  <div className="rounded-lg border border-border bg-background px-3 py-2 shadow-lg text-xs whitespace-nowrap">
-                    <p className="font-medium text-foreground">{author.name}</p>
+                {authorName && (
+                  <div className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity delay-300 z-50">
+                    <div className="rounded-lg border border-border bg-background px-3 py-2 shadow-lg text-xs whitespace-nowrap">
+                      <p className="font-medium text-foreground">{authorName}</p>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             )}
           </div>
         )}
-        {author && <span className="text-xs text-muted-foreground">·</span>}
+        {hasAuthor && <span className="text-xs text-muted-foreground">·</span>}
         {sharedAt && (
           <span className="text-xs text-muted-foreground">
             {new Date(sharedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}

@@ -241,18 +241,20 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         token = secrets.token_urlsafe(16)
         row = {"path": path, "audience": data.get("audience", "public"),
                "shared_at": datetime.now(timezone.utc).isoformat()}
-        if (author := data.get("author")) is not None: row["author"] = author
+        # Author fields are flat str:str so the row stays meta-eligible (O(1) scan).
+        for k in ("author_name", "author_image_url", "author_org_name", "author_org_image_url"):
+            if (v := data.get(k)): row[k] = v
         await DB(ws).put(f"share/{token}", row, meta=row)
         return {"token": token, "url": f"/shared/{ws.subject}/{token}", **row}
 
     @r.get("/share")
     async def list_shares(ws: Workspace = ws_dep):
-        # Two LIST calls regardless of N: share index + chat-title index.
+        # Two LIST calls regardless of N: shares + chat indexes.
         db = DB(ws)
-        chat_titles = {k[len("chat/meta/"):]: m.get("title", "")
-                       async for k, m in db.index(prefix="chat/meta/")}
+        chat_titles = {k.split("/")[1]: m.get("title", "")
+                       async for k, m in db.scan(glob="chat/*/index")}
         out = []
-        async for key, meta in db.index(prefix="share/"):
+        async for key, meta in db.scan(prefix="share/"):
             token = key[6:]
             path = meta.get("path", "")
             if path.startswith("chat/"):
@@ -277,7 +279,9 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
     ):
         ws_owner, row = await _resolve_or_403(user, token, bearer)
         path = row["path"]
-        common = {"author": row.get("author"), "shared_at": row.get("shared_at")}
+        common = {k: row[k] for k in
+                  ("shared_at", "author_name", "author_image_url", "author_org_name", "author_org_image_url")
+                  if k in row}
         if path.startswith("chat/"):
             chat_id = path[5:]
             meta = await state.get_meta(ws_owner, chat_id)
