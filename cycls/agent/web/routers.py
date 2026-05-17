@@ -97,6 +97,7 @@ def chats_router(ws_dep):
                 "title": data.get("title", ""),
                 "updatedAt": data.get("updatedAt", ""),
                 "favoritedAt": data.get("favoritedAt", ""),
+                "cost": data.get("cost", "0"),
             })
         items.sort(key=lambda s: s.get("updatedAt", ""), reverse=True)
         return items

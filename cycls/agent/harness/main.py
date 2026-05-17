@@ -6,8 +6,10 @@ body forwards as-is. `Turn` is loop-internal (the last event a provider
 stream emits) — never reaches the body.
 """
 import asyncio, json, random, time
+from datetime import datetime, timezone
 from pathlib import Path
 
+from .. import state
 from ..state import Session
 from . import events
 from .events import Turn
@@ -30,6 +32,13 @@ _PRICING = {
     "claude-opus":   (15, 75, 1.50, 18.75),
     "claude-haiku":  (0.80, 4, 0.08, 1),
 }
+
+
+def _cost(model, in_, out, cached, cache_create):
+    """USD for one turn (or aggregate). Unknown model → 0."""
+    p = next((v for k, v in _PRICING.items() if k in model), None)
+    if not p: return 0.0
+    return (in_ * p[0] + out * p[1] + cached * p[2] + cache_create * p[3]) / 1_000_000
 
 
 # ---- Ingest ----
@@ -98,6 +107,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key)
     if max_tokens is None: max_tokens = provider.max_output
     workspace = context.workspace
+    user_id = getattr(getattr(context, "user", None), "id", None)
     Path(workspace.root).mkdir(parents=True, exist_ok=True)
 
     session = await Session.open(context)
@@ -148,7 +158,29 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             usage_total[2] += turn.cached
             usage_total[3] += turn.cache_create
             tokens_since_compact = turn.input + turn.cached + turn.cache_create
-            messages.append({"role": "assistant", "content": turn.content})
+            turn_cost = _cost(bare_model, turn.input, turn.output, turn.cached, turn.cache_create)
+            now = datetime.now(timezone.utc).isoformat()
+            messages.append({"role": "assistant", "content": turn.content, "usage": {
+                "model": bare_model,
+                "input": turn.input, "output": turn.output,
+                "cached": turn.cached, "cache_create": turn.cache_create,
+                "cost": f"{turn_cost:.6f}",
+                "at": now,
+            }})
+            # Structured Cloud Logging entry — queryable via `cycls logs --query
+            # 'jsonPayload.level="usage"'`. Mirrors the QA error logging shape.
+            print(json.dumps({
+                "source": "agent", "level": "usage",
+                "model": bare_model,
+                "user_id": user_id, "chat_id": session.chat_id,
+                "input": turn.input, "output": turn.output,
+                "cached": turn.cached, "cache_create": turn.cache_create,
+                "cost": round(turn_cost, 6),
+                "at": now,
+            }), flush=True)
+            if session.chat_id:
+                try: await state.add_cost(workspace, session.chat_id, turn_cost)
+                except Exception as e: print(f"[WARN] add_cost failed: {e}")
 
             if turn.stop_reason == "max_tokens":
                 # Pair any dangling tool_use blocks with error tool_results so
@@ -193,6 +225,5 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             raise
 
     if show_usage and usage_total[0]:
-        p = next((v for k, v in _PRICING.items() if k in bare_model), None)
-        cost = (usage_total[0]*p[0] + usage_total[1]*p[1] + usage_total[2]*p[2] + usage_total[3]*p[3]) / 1_000_000 if p else None
+        cost = _cost(bare_model, *usage_total) or None
         yield events.usage(usage_total[0], usage_total[1], usage_total[2], usage_total[3], cost, time.monotonic() - t0)
