@@ -122,12 +122,15 @@ function ChatApp({ config }: { config: AppConfig | null }) {
   }, [authLoaded, chat]);
 
   const handleShare = async (title: string = "", audience: string = "public") => {
-    const author = user ? {
-      name: user.fullName || user.firstName || "",
-      imageUrl: user.imageUrl,
-      org: organization ? { name: organization.name, imageUrl: organization.imageUrl } : undefined,
-    } : undefined;
-    return await chat.share(title, audience, author);
+    const authorFields = user ? {
+      author_name: user.fullName || user.firstName || "",
+      author_image_url: user.imageUrl,
+      ...(organization && {
+        author_org_name: organization.name,
+        author_org_image_url: organization.imageUrl,
+      }),
+    } : {};
+    return await chat.share(title, audience, authorFields);
   };
 
   const account: AccountInfo = {

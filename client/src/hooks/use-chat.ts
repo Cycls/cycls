@@ -418,12 +418,17 @@ export function useChat(baseUrl: string = "") {
     setMessages([{ role: "assistant", content: "", parts: [part] }]);
   }, []);
 
-  const share = useCallback(async (title: string = "", audience: string = "public", author?: { name: string; imageUrl?: string; org?: { name: string; imageUrl?: string } }) => {
+  const share = useCallback(async (title: string = "", audience: string = "public", authorFields: {
+    author_name?: string;
+    author_image_url?: string;
+    author_org_name?: string;
+    author_org_image_url?: string;
+  } = {}) => {
     const chatId = chatIdRef.current;
     if (!chatId) throw new Error("No chat to share");
     let res: Response;
     try {
-      res = await api("/share", { method: "POST", json: { path: `chat/${chatId}`, audience, author } });
+      res = await api("/share", { method: "POST", json: { path: `chat/${chatId}`, audience, ...authorFields } });
     } catch (err) {
       track("share_create_failed", { status: (err as Error & { status?: number }).status });
       throw err;
