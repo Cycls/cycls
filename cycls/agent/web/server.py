@@ -62,8 +62,8 @@ async def encoder(stream, *, chat_id=None, user_id=None):
     except Exception as e:
         import traceback
         error_id = uuid.uuid4().hex[:8]
-        print(json.dumps({"level": "error", "error_id": error_id, "message": str(e),
-                          "stack": traceback.format_exc(),
+        print(json.dumps({"source": "agent", "level": "error", "error_id": error_id,
+                          "message": str(e), "stack": traceback.format_exc(),
                           "user_id": user_id, "chat_id": chat_id}), flush=True)
         yield sse({"type": "callout",
                    "callout": f"Something went wrong. Reference: `{error_id}`",

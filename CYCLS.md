@@ -99,6 +99,7 @@ When a user reports that reference, grep that id in the logs.
 
 | Field | Values |
 |---|---|
+| `source` | `"agent"` — emitted by the agent runtime (vs platform components) |
 | `level` | `"error"` |
 | `error_id` | short hex id, also shown to the user in the callout |
 | `message` | `str(exception)` (full, untruncated) |
@@ -111,7 +112,10 @@ Filter via `jsonPayload.<field>`.
 ### Query examples
 
 ```bash
-# All structured errors
+# All agent errors
+cycls logs super-stage --query 'jsonPayload.source="agent"'
+
+# All structured errors (any source)
 cycls logs super-stage --query 'jsonPayload.level="error"'
 
 # Lookup a specific error the user pasted
