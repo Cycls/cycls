@@ -1,6 +1,6 @@
 # cycls CLI
 
-Single command: `cycls`. Subcommands: `init`, `run`, `deploy`, `ls`, `rm`, `logs`, `version`.
+Single command: `cycls`. Subcommands: `init`, `run`, `deploy`, `ls`, `rm`, `logs`, `cost`, `version`.
 
 ```bash
 cycls <subcommand> [args]
@@ -9,6 +9,10 @@ cycls <subcommand> [args]
 Auth (for any command that hits the cloud): set `CYCLS_API_KEY` env var, or
 `cycls.api_key = "..."` in Python. `CYCLS_BASE_URL` overrides the default
 `https://api.cycls.ai`.
+
+Contributors working inside this repo invoke the in-tree CLI via
+`uv run cycls <subcommand>`. End users with `cycls` installed from PyPI
+call it directly.
 
 ## `cycls init [name]`
 
