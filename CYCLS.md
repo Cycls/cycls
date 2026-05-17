@@ -201,7 +201,14 @@ cycls cost super-stage --by model
 
 - `-s, --since DURATION` — `30m`, `24h`, `7d` (default: `24h`). Translated
   to an absolute timestamp filter client-side.
+- `-m, --month [YYYY-MM]` — calendar-month window. No value = current month.
+  Mutually exclusive with `--since`.
 - `-b, --by user|chat|model` — group rows by `user_id`, `chat_id`, or `model`.
+
+```bash
+cycls cost super-stage --month --by user      # this month, per user
+cycls cost super-stage --month 2026-04        # April 2026 total
+```
 
 `--since` is also available on `cycls logs` for the same client-side
 timestamp translation.
