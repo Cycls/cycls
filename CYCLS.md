@@ -127,8 +127,10 @@ cycls logs super-stage --query 'jsonPayload.user_id="user_2yY1NGlkgUtCgYiPLSHQUr
 # Everything that happened in one chat
 cycls logs super-stage --query 'jsonPayload.chat_id="abc-123"'
 
-# Errors in the last hour
-cycls logs super-stage --query 'jsonPayload.level="error" AND timestamp >= "1h ago"'
+# Errors in the last hour (Cloud Logging needs an absolute RFC-3339 timestamp;
+# compute it client-side)
+SINCE=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)
+cycls logs super-stage --query "jsonPayload.level=\"error\" AND timestamp >= \"$SINCE\""
 ```
 
 `-f` works with `-q` — the filter is reapplied on every poll.
@@ -163,8 +165,9 @@ range.
 # Every turn's cost
 cycls logs super-stage --query 'jsonPayload.level="usage"'
 
-# One user's spend in the last hour
-cycls logs super-stage --query 'jsonPayload.level="usage" AND jsonPayload.user_id="user_xxx" AND timestamp >= "1h ago"'
+# One user's spend in the last hour (compute the timestamp client-side)
+SINCE=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)
+cycls logs super-stage --query "jsonPayload.level=\"usage\" AND jsonPayload.user_id=\"user_xxx\" AND timestamp >= \"$SINCE\""
 
 # Spend per model (then pipe to jq to sum)
 cycls logs super-stage --query 'jsonPayload.level="usage" AND jsonPayload.model="claude-sonnet-4-20250514"'
