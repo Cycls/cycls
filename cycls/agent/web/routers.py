@@ -113,7 +113,9 @@ def chats_router(ws_dep):
 
     @r.put("/chats/{chat_id}")
     async def put_chat(chat_id: str, request: Request, ws: Workspace = ws_dep):
-        """Partial update — merges into existing meta. Send `field: null` to remove a key."""
+        """Partial update — merges into existing meta. Send `field: null` to remove a key.
+        `updatedAt` is NOT bumped on metadata edits (rename, favorite, …) — it tracks
+        message activity only, owned by `touch_meta` on new messages."""
         patch = await request.json()
         patch.pop("messages", None)
         existing = (await state.get_meta(ws, chat_id)) or {}
@@ -121,9 +123,10 @@ def chats_router(ws_dep):
         for k, v in patch.items():
             if v is None: merged.pop(k, None)
             else: merged[k] = v
+        now = datetime.now(timezone.utc).isoformat()
         merged["id"] = chat_id
-        merged["updatedAt"] = datetime.now(timezone.utc).isoformat()
-        merged.setdefault("createdAt", merged["updatedAt"])
+        merged.setdefault("createdAt", now)
+        merged.setdefault("updatedAt", now)
         await state.put_meta(ws, chat_id, merged)
         return merged
 
