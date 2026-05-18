@@ -41,6 +41,15 @@ def _cost(model, in_, out, cached, cache_create):
     return (in_ * p[0] + out * p[1] + cached * p[2] + cache_create * p[3]) / 1_000_000
 
 
+async def _timed(coro):
+    """Run a coroutine, return (result_or_exception, elapsed_ms)."""
+    t0 = time.monotonic()
+    try:
+        return await coro, int((time.monotonic() - t0) * 1000)
+    except BaseException as e:
+        return e, int((time.monotonic() - t0) * 1000)
+
+
 # ---- Ingest ----
 
 async def _ingest(content, workspace):
@@ -198,16 +207,30 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             blocks = [b for b in turn.content if isinstance(b, dict) and b.get("type") == "tool_use"]
             pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network) for b in blocks]
             for step, _ in pairs: yield step
-            outputs = await asyncio.gather(*(c for _, c in pairs), return_exceptions=True)
+            timed = await asyncio.gather(*(_timed(c) for _, c in pairs))
 
             results = []
-            for block, out in zip(blocks, outputs):
-                if isinstance(out, BaseException): out = f"Error: {out}"
+            for block, (out, ms) in zip(blocks, timed):
+                ok = not isinstance(out, BaseException)
+                # Structured tool-call log — shape only (tool, ms, ok, output
+                # size), no raw args/output (those may contain user data; the
+                # full content already lives in tool_use / tool_result blocks
+                # on the chat).
+                print(json.dumps({
+                    "source": "agent", "level": "tool_call",
+                    "model": bare_model,
+                    "user_id": user_id, "chat_id": session.chat_id,
+                    "tool": block["name"],
+                    "ms": ms, "ok": ok,
+                    "output_bytes": len(out) if isinstance(out, (str, bytes)) else None,
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }), flush=True)
+                if not ok: out = f"Error: {out}"
                 if isinstance(out, str) and "timed out" in out:
                     yield events.callout(out, "warning")
                 # Custom-handler results flow through the stream for the body to see
                 # (UI rendering) AND serialize into tool_result for the model (data).
-                if handlers and block["name"] in handlers and not isinstance(out, BaseException):
+                if handlers and block["name"] in handlers and ok:
                     yield out
                     content = out if isinstance(out, str) else json.dumps(out, default=str)
                 else:

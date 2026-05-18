@@ -256,7 +256,7 @@ Logging's Log Analytics view. Structured SDK emissions land in `json_payload`.
 | `severity` | STRING | |
 | `log_name` | STRING | |
 | `resource.labels` | JSON | use `JSON_VALUE(resource.labels, '$.service_name')` for the deployment |
-| `json_payload` | JSON | structured: `level`, `kind`, `error_id`, `message`, `stack`, `user_id`, `chat_id`, `model`, `input`, `output`, `cached`, `cache_create`, `cost`, `at`, … |
+| `json_payload` | JSON | structured fields by `level`: `error` (`error_id`, `message`, `stack`), `usage` (`model`, `input`, `output`, `cached`, `cache_create`, `cost`), `tool_call` (`tool`, `ms`, `ok`, `output_bytes`). All share `user_id`, `chat_id`, `at`. |
 | `text_payload` | STRING | plain stdout/stderr |
 
 **`billing`** — per-SKU per-day cost rows for your deployments.
@@ -305,6 +305,24 @@ SELECT resource.name AS deploy, ROUND(SUM(cost), 4) AS usd
 FROM billing
 WHERE usage_start_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
 GROUP BY deploy ORDER BY usd DESC
+
+-- Tool-call latency percentiles per tool (last 7 days)
+SELECT JSON_VALUE(json_payload, '$.tool') AS tool,
+       APPROX_QUANTILES(CAST(JSON_VALUE(json_payload, '$.ms') AS INT64), 100)[OFFSET(50)] AS p50_ms,
+       APPROX_QUANTILES(CAST(JSON_VALUE(json_payload, '$.ms') AS INT64), 100)[OFFSET(95)] AS p95_ms,
+       COUNT(*) AS calls
+FROM logs
+WHERE JSON_VALUE(json_payload, '$.level') = 'tool_call'
+  AND timestamp > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+GROUP BY tool ORDER BY p95_ms DESC
+
+-- Tool reliability (success rate per tool)
+SELECT JSON_VALUE(json_payload, '$.tool') AS tool,
+       COUNTIF(JSON_VALUE(json_payload, '$.ok') = 'true') / COUNT(*) AS success_rate,
+       COUNT(*) AS calls
+FROM logs
+WHERE JSON_VALUE(json_payload, '$.level') = 'tool_call'
+GROUP BY tool
 
 -- Pipe to jq / scripts
 cycls sql -f reports/cost.sql --json | jq '.[] | select(.usd > 1.0)'
