@@ -145,6 +145,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
             turn = None
             partial_text = ""
+            turn_t0 = time.monotonic()
             try:
                 async for ev in _stream_with_retry(provider, messages=messages, system=system_text,
                                                    tools=tools_list, max_tokens=max_tokens,
@@ -162,6 +163,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     except BaseException: pass
                 raise
 
+            turn_ms = int((time.monotonic() - turn_t0) * 1000)
             usage_total[0] += turn.input
             usage_total[1] += turn.output
             usage_total[2] += turn.cached
@@ -174,6 +176,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 "input": turn.input, "output": turn.output,
                 "cached": turn.cached, "cache_create": turn.cache_create,
                 "cost": f"{turn_cost:.6f}",
+                "ms": turn_ms,
                 "at": now,
             }})
             # Structured Cloud Logging entry — queryable via `cycls logs --query
@@ -185,6 +188,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 "input": turn.input, "output": turn.output,
                 "cached": turn.cached, "cache_create": turn.cache_create,
                 "cost": round(turn_cost, 6),
+                "ms": turn_ms,
                 "at": now,
             }), flush=True)
             if session.chat_id:

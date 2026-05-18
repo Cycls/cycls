@@ -256,7 +256,7 @@ Logging's Log Analytics view. Structured SDK emissions land in `json_payload`.
 | `severity` | STRING | |
 | `log_name` | STRING | |
 | `resource.labels` | JSON | use `JSON_VALUE(resource.labels, '$.service_name')` for the deployment |
-| `json_payload` | JSON | structured fields by `level`: `error` (`error_id`, `message`, `stack`), `usage` (`model`, `input`, `output`, `cached`, `cache_create`, `cost`), `tool_call` (`tool`, `ms`, `ok`, `output_bytes`). All share `user_id`, `chat_id`, `at`. |
+| `json_payload` | JSON | structured fields by `level`: `error` (`error_id`, `message`, `stack`), `usage` (`model`, `input`, `output`, `cached`, `cache_create`, `cost`, `ms`), `tool_call` (`tool`, `ms`, `ok`, `output_bytes`). All share `user_id`, `chat_id`, `at`. |
 | `text_payload` | STRING | plain stdout/stderr |
 
 **`billing`** — per-SKU per-day cost rows for your deployments.
