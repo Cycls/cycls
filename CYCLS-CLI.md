@@ -324,6 +324,13 @@ FROM logs
 WHERE JSON_VALUE(json_payload, '$.level') = 'tool_call'
 GROUP BY tool
 
+-- Per-turn duration (avg / median / p95)
+SELECT ROUND(AVG(CAST(JSON_VALUE(json_payload, '$.ms') AS INT64)), 0) AS avg_ms,
+       APPROX_QUANTILES(CAST(JSON_VALUE(json_payload, '$.ms') AS INT64), 100)[OFFSET(50)] AS median_ms,
+       APPROX_QUANTILES(CAST(JSON_VALUE(json_payload, '$.ms') AS INT64), 100)[OFFSET(95)] AS p95_ms
+FROM logs
+WHERE JSON_VALUE(json_payload, '$.level') = 'usage'
+
 -- Pipe to jq / scripts
 cycls sql -f reports/cost.sql --json | jq '.[] | select(.usd > 1.0)'
 ```
@@ -346,5 +353,5 @@ Print the installed cycls version.
 
 ```bash
 cycls version
-# cycls 0.0.2.127
+# cycls 0.0.2.129
 ```i
