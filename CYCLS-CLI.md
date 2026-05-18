@@ -217,6 +217,111 @@ cycls cost super-stage --month 2026-04        # April 2026 total
 `--since` is also available on `cycls logs` for the same client-side
 timestamp translation.
 
+## `cycls sql [QUERY]`
+
+Run SQL across all your deployment data — logs and infrastructure billing
+— in one query. Two tables, both scoped automatically to the deployments
+your API key owns.
+
+```bash
+cycls sql 'SELECT resource.name AS deploy, ROUND(SUM(cost), 4) AS usd
+           FROM billing
+           WHERE usage_start_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+           GROUP BY deploy ORDER BY usd DESC'
+```
+
+### Query sources
+
+```bash
+cycls sql 'SELECT ...'    # positional
+cycls sql -f q.sql        # from file
+cycls sql -                # from stdin
+cat q.sql | cycls sql      # also stdin (auto-detected when piped)
+```
+
+### Output
+
+Default: aligned table on a TTY, JSON when piped. Override with `--format
+table|json|csv` or the `--json` shortcut. Empty results print `(0 rows)`
+to stderr and exit 0.
+
+### Tables
+
+**`logs`** — all log entries for your deployments. Same shape as Cloud
+Logging's Log Analytics view. Structured SDK emissions land in `json_payload`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `timestamp` | TIMESTAMP | |
+| `severity` | STRING | |
+| `log_name` | STRING | |
+| `resource.labels` | JSON | use `JSON_VALUE(resource.labels, '$.service_name')` for the deployment |
+| `json_payload` | JSON | structured: `level`, `kind`, `error_id`, `message`, `stack`, `user_id`, `chat_id`, `model`, `input`, `output`, `cached`, `cache_create`, `cost`, `at`, … |
+| `text_payload` | STRING | plain stdout/stderr |
+
+**`billing`** — per-SKU per-day cost rows for your deployments.
+
+| Column | Type | Notes |
+|---|---|---|
+| `usage_start_time`, `usage_end_time` | TIMESTAMP | |
+| `service.description` | STRING | always `"Cloud Run"` |
+| `sku.description` | STRING | `"CPU Allocation Time"`, `"Memory Allocation"`, … |
+| `cost` | FLOAT64 | in `currency` |
+| `currency` | STRING | usually `"USD"` |
+| `resource.name` | STRING | deployment name directly (e.g. `"super-stage"`) |
+
+### Examples
+
+```sql
+-- Count error entries in the last 24h
+SELECT COUNT(*) FROM logs
+WHERE JSON_VALUE(json_payload, '$.level') = 'error'
+  AND timestamp > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
+
+-- Top error kinds for one deployment
+SELECT JSON_VALUE(json_payload, '$.kind') AS kind, COUNT(*) AS n
+FROM logs
+WHERE JSON_VALUE(resource.labels, '$.service_name') = 'super-stage'
+  AND JSON_VALUE(json_payload, '$.level') = 'error'
+GROUP BY kind ORDER BY n DESC LIMIT 10
+
+-- LLM spend per user this month
+SELECT JSON_VALUE(json_payload, '$.user_id')                 AS user_id,
+       SUM(CAST(JSON_VALUE(json_payload, '$.cost') AS FLOAT64)) AS spend,
+       COUNT(*)                                              AS turns
+FROM logs
+WHERE JSON_VALUE(json_payload, '$.level') = 'usage'
+  AND timestamp > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+GROUP BY user_id ORDER BY spend DESC
+
+-- All errors for one chat
+SELECT timestamp, json_payload
+FROM logs
+WHERE JSON_VALUE(json_payload, '$.chat_id') = 'abc-123'
+ORDER BY timestamp
+
+-- Cost per deployment over the last 30 days
+SELECT resource.name AS deploy, ROUND(SUM(cost), 4) AS usd
+FROM billing
+WHERE usage_start_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+GROUP BY deploy ORDER BY usd DESC
+
+-- Pipe to jq / scripts
+cycls sql -f reports/cost.sql --json | jq '.[] | select(.usd > 1.0)'
+```
+
+### Caveats
+
+- The first `cycls sql` call after a deployment is created can take 5–10s
+  (lazy server-side setup). Subsequent calls are normal latency.
+- A per-query cap on scanned bytes is enforced server-side; oversized
+  queries fail with a clear error. Add `LIMIT` or narrower predicates.
+- Errors from the underlying SQL engine are surfaced verbatim — they're
+  actionable.
+
+`cycls cost` is the friendly shortcut for the common cost question;
+`cycls sql` is the escape hatch when the canned slicing isn't enough.
+
 ## `cycls version`
 
 Print the installed cycls version.
