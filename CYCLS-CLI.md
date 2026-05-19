@@ -41,7 +41,7 @@ instances. Use `::name` to pick.
 
 ## `cycls deploy <file>`
 
-Build and push to Cycls Cloud (Cloud Run + per-tenant GCS workspace).
+Build and push to Cycls Cloud (managed runtime + per-tenant object-storage workspace).
 
 ```bash
 cycls deploy notes.py
@@ -71,7 +71,7 @@ cycls rm notes
 cycls rm notes -y
 ```
 
-Doesn't delete the bucket — workspace state survives. Re-deploy with the
+Doesn't delete the workspace storage — state survives. Re-deploy with the
 same name to pick it back up.
 
 ## `cycls logs <name>`
@@ -88,13 +88,13 @@ cycls logs super-stage
 ### Flags
 
 - `-f, --follow` — tail logs, polling every 2 seconds.
-- `-q, --query QUERY` — filter using **GCP Cloud Logging query syntax**.
+- `-q, --query QUERY` — filter using the log backend's **structured query syntax**.
   Passes through to the backend's `filter=` argument.
 
 ### `--query` is the QA mechanism
 
 When the agent stream fails with an unhandled exception, the SSE encoder
-emits one structured JSON line to stdout (captured by Cloud Logging) AND
+emits one structured JSON line to stdout (captured by the log backend) AND
 shows the user a clean message with the `error_id` reference:
 
 > Something went wrong. Reference: `abc12345`
@@ -131,15 +131,13 @@ cycls logs super-stage --query 'jsonPayload.user_id="user_2yY1NGlkgUtCgYiPLSHQUr
 # Everything that happened in one chat
 cycls logs super-stage --query 'jsonPayload.chat_id="abc-123"'
 
-# Errors in the last hour (Cloud Logging needs an absolute RFC-3339 timestamp;
+# Errors in the last hour (the log backend needs an absolute RFC-3339 timestamp;
 # compute it client-side)
 SINCE=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)
 cycls logs super-stage --query "jsonPayload.level=\"error\" AND timestamp >= \"$SINCE\""
 ```
 
 `-f` works with `-q` — the filter is reapplied on every poll.
-
-Full query syntax: https://cloud.google.com/logging/docs/view/logging-query-language
 
 ### What's NOT logged
 
@@ -150,7 +148,7 @@ signals. The encoder logs only what's truly unexpected.
 
 ### Cost logging
 
-Each model turn also emits a structured `level=usage` line to Cloud Logging.
+Each model turn also emits a structured `level=usage` line to the log backend.
 Same `--query` mechanism, queryable per-user / per-chat / per-model / time
 range.
 
@@ -264,8 +262,8 @@ Logging's Log Analytics view. Structured SDK emissions land in `json_payload`.
 | Column | Type | Notes |
 |---|---|---|
 | `usage_start_time`, `usage_end_time` | TIMESTAMP | |
-| `service.description` | STRING | always `"Cloud Run"` |
-| `sku.description` | STRING | `"CPU Allocation Time"`, `"Memory Allocation"`, … |
+| `service.description` | STRING | compute service identifier |
+| `sku.description` | STRING | per-resource SKU (CPU time, memory, …) |
 | `cost` | FLOAT64 | in `currency` |
 | `currency` | STRING | usually `"USD"` |
 | `resource.name` | STRING | deployment name directly (e.g. `"super-stage"`) |
@@ -293,6 +291,29 @@ FROM logs
 WHERE JSON_VALUE(json_payload, '$.level') = 'usage'
   AND timestamp > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
 GROUP BY user_id ORDER BY spend DESC
+
+-- Per-user engagement (turns, distinct chats, span, spend)
+SELECT JSON_VALUE(json_payload, '$.user_id')                 AS user_id,
+       COUNT(*)                                              AS turns,
+       COUNT(DISTINCT JSON_VALUE(json_payload, '$.chat_id')) AS chats,
+       MIN(timestamp)                                        AS first_seen,
+       MAX(timestamp)                                        AS last_seen,
+       ROUND(SUM(CAST(JSON_VALUE(json_payload, '$.cost') AS FLOAT64)), 4) AS usd
+FROM logs
+WHERE JSON_VALUE(resource.labels, '$.service_name') = 'super-stage'
+  AND JSON_VALUE(json_payload, '$.level') = 'usage'
+GROUP BY user_id ORDER BY turns DESC
+
+-- Per-chat breakdown (turns, span, spend) — find the heavy sessions
+SELECT JSON_VALUE(json_payload, '$.chat_id') AS chat_id,
+       JSON_VALUE(json_payload, '$.user_id') AS user_id,
+       COUNT(*)                              AS turns,
+       MIN(timestamp)                        AS first,
+       MAX(timestamp)                        AS last,
+       ROUND(SUM(CAST(JSON_VALUE(json_payload, '$.cost') AS FLOAT64)), 4) AS usd
+FROM logs
+WHERE JSON_VALUE(json_payload, '$.level') = 'usage'
+GROUP BY chat_id, user_id ORDER BY usd DESC
 
 -- All errors for one chat
 SELECT timestamp, json_payload
