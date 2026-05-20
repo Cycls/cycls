@@ -31,8 +31,9 @@ async def compact(provider, messages):
     keep = min(len(messages), KEEP_RECENT)
     old = messages[:-keep] if keep else messages
     recent = messages[-keep:] if keep else []
+    from ..state import normalize
     raw = await provider.complete(
-        messages=old + [{"role": "user", "content": _SUMMARY_REQUEST}],
+        messages=normalize(old) + [{"role": "user", "content": _SUMMARY_REQUEST}],
         system=COMPACT_SYSTEM, max_tokens=min(provider.max_output, 16384))
     raw = re.sub(r"<analysis>[\s\S]*?</analysis>", "", raw)
     m = re.search(r"<summary>([\s\S]*?)</summary>", raw)

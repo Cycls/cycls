@@ -98,10 +98,11 @@ def test_long_chat_preserves_clean_prefix_drops_corrupted_tail(tmp_path):
     assert loaded[-1]["content"] == "third"
 
 
-def test_partial_tool_result_set_trimmed_to_clean(tmp_path):
-    """Two tool_uses, one tool_result missing — Anthropic rejects the
-    pair (must be complete). Repair drops the partial pair entirely,
-    trimming back to the user message that triggered the turn."""
+def test_partial_tool_result_set_repaired_surgically(tmp_path):
+    """Two tool_uses, one tool_result missing. Strip just the unpaired
+    tool_use from the assistant — the paired tool_use + its tool_result
+    survive. User keeps the half of the turn that completed instead of
+    losing the whole turn."""
     ws = _ws(tmp_path)
     cid = "test"
     _run(chat.append_messages(ws, cid, [
@@ -116,8 +117,13 @@ def test_partial_tool_result_set_trimmed_to_clean(tmp_path):
         ]},
     ], 0))
     loaded = _run(chat.load_messages(ws, cid))
-    assert len(loaded) == 1
-    assert loaded[0]["content"] == "do X and Y"
+    assert len(loaded) == 3
+    assert loaded[1]["content"] == [
+        {"type": "tool_use", "id": "A", "name": "bash", "input": {}}
+    ]
+    assert loaded[2]["content"] == [
+        {"type": "tool_result", "tool_use_id": "A", "content": "ok"}
+    ]
 
 
 def test_empty_chat_no_crash(tmp_path):

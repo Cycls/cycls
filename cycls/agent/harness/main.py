@@ -147,7 +147,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             partial_text = ""
             turn_t0 = time.monotonic()
             try:
-                async for ev in _stream_with_retry(provider, messages=messages, system=system_text,
+                async for ev in _stream_with_retry(provider, messages=state.normalize(messages), system=system_text,
                                                    tools=tools_list, max_tokens=max_tokens,
                                                    mcp_servers=mcp_servers, thinking=thinking):
                     if isinstance(ev, Turn): turn = ev
@@ -211,7 +211,15 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             blocks = [b for b in turn.content if isinstance(b, dict) and b.get("type") == "tool_use"]
             pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network) for b in blocks]
             for step, _ in pairs: yield step
-            timed = await asyncio.gather(*(_timed(c) for _, c in pairs))
+            # Heartbeat every 15s while tools run — keeps intermediate
+            # proxies from severing the SSE stream during long silent tool
+            # executions.
+            tasks = [asyncio.create_task(_timed(c)) for _, c in pairs]
+            while True:
+                _, pending = await asyncio.wait(tasks, timeout=15.0, return_when=asyncio.ALL_COMPLETED)
+                if not pending: break
+                yield {"type": "ping"}
+            timed = [t.result() for t in tasks]
 
             results = []
             for block, (out, ms) in zip(blocks, timed):
@@ -230,8 +238,6 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     "at": datetime.now(timezone.utc).isoformat(),
                 }), flush=True)
                 if not ok: out = f"Error: {out}"
-                if isinstance(out, str) and "timed out" in out:
-                    yield events.callout(out, "warning")
                 # Custom-handler results flow through the stream for the body to see
                 # (UI rendering) AND serialize into tool_result for the model (data).
                 if handlers and block["name"] in handlers and ok:
@@ -247,7 +253,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             # Retries already happened inside _stream_with_retry; this is fatal.
             # Rollback, then re-raise so the encoder owns the user-facing
             # callout + structured log (with error_id) in one place.
-            # _valid_prefix trims any dangling tool_use on next load.
+            # `normalize` sanitizes any dangling tool_use on next send.
             session.rollback()
             raise
 

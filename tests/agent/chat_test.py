@@ -159,57 +159,58 @@ def test_internal_messages_are_dropped():
 
 
 # =============================================================================
-# Load-time repair (_valid_prefix) — trim trailing corrupted state
+# normalize — single safety net enforcing provider API pairing invariants
 # =============================================================================
 
-from cycls.agent.state import _valid_prefix
+from cycls.agent.state import normalize
 
 
-def test_valid_prefix_empty():
-    assert _valid_prefix([]) == 0
+def test_normalize_empty():
+    assert normalize([]) == []
 
 
-def test_valid_prefix_clean_text_pair():
+def test_normalize_clean_text_pair_unchanged():
     msgs = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
     ]
-    assert _valid_prefix(msgs) == 2
+    assert normalize(msgs) == msgs
 
 
-def test_valid_prefix_dangling_assistant_tool_use():
+def test_normalize_drops_dangling_assistant_tool_use():
     """Most common corruption: assistant emits tool_use, crash before
-    tool_result is persisted. Anthropic rejects the next request — repair
-    by trimming the dangling assistant message."""
+    tool_result is persisted. Strip the dangling block — drops the
+    assistant message entirely if nothing else remains."""
     msgs = [
         {"role": "user", "content": "do X"},
         {"role": "assistant", "content": [
             {"type": "tool_use", "id": "A", "name": "bash", "input": {"command": "ls"}}
         ]},
     ]
-    assert _valid_prefix(msgs) == 1  # trim the dangling assistant
+    assert normalize(msgs) == [{"role": "user", "content": "do X"}]
 
 
-def test_valid_prefix_complete_tool_pair():
+def test_normalize_preserves_complete_tool_pair():
     msgs = [
         {"role": "user", "content": "do X"},
         {"role": "assistant", "content": [{"type": "tool_use", "id": "A", "name": "bash", "input": {}}]},
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "A", "content": "ok"}]},
     ]
-    assert _valid_prefix(msgs) == 3  # complete pair, all valid
+    assert normalize(msgs) == msgs
 
 
-def test_valid_prefix_orphaned_tool_result():
-    """User message with tool_result but no preceding assistant tool_use."""
+def test_normalize_drops_orphaned_tool_result():
+    """User message with tool_result but no preceding assistant tool_use → drop."""
     msgs = [{"role": "user", "content": [
         {"type": "tool_result", "tool_use_id": "X", "content": "ghost"}
     ]}]
-    assert _valid_prefix(msgs) == 0
+    assert normalize(msgs) == []
 
 
-def test_valid_prefix_partial_tool_result_set():
-    """Assistant emits two tool_uses, only one tool_result was persisted —
-    Anthropic rejects (all tool_uses must be paired). Trim back."""
+def test_normalize_strips_partial_tool_result_set():
+    """Assistant emits two tool_uses, only one tool_result persisted. Drop
+    the unpaired tool_use from the assistant; keep the paired one with its
+    result."""
     msgs = [
         {"role": "user", "content": "do X and Y"},
         {"role": "assistant", "content": [
@@ -218,17 +219,18 @@ def test_valid_prefix_partial_tool_result_set():
         ]},
         {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "A", "content": "ok"},
-            # missing id="B"
         ]},
     ]
-    # The user tool_result message has uses != rids, so it's orphaned;
-    # then the assistant has dangling tool_uses; trim both.
-    assert _valid_prefix(msgs) == 1
+    out = normalize(msgs)
+    assert len(out) == 3
+    assert out[1]["content"] == [{"type": "tool_use", "id": "A", "name": "bash", "input": {}}]
+    assert out[2]["content"] == [{"type": "tool_result", "tool_use_id": "A", "content": "ok"}]
 
 
-def test_valid_prefix_assistant_with_text_and_tool_use():
-    """Assistant message that mixes text + tool_use is still dangling if no
-    tool_result follows — the tool_use needs pairing regardless of text."""
+def test_normalize_keeps_text_when_tool_use_stripped():
+    """Assistant message with text + dangling tool_use → keep the text,
+    drop the tool_use. Don't lose the assistant's prose just because
+    one block was unpaired."""
     msgs = [
         {"role": "user", "content": "do X"},
         {"role": "assistant", "content": [
@@ -236,17 +238,171 @@ def test_valid_prefix_assistant_with_text_and_tool_use():
             {"type": "tool_use", "id": "A", "name": "bash", "input": {}},
         ]},
     ]
-    assert _valid_prefix(msgs) == 1
+    assert normalize(msgs) == [
+        {"role": "user", "content": "do X"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Let me check"}]},
+    ]
 
 
-def test_valid_prefix_clean_chain_then_dangling():
-    """Long chat with valid history, recent turn corrupted. Repair preserves
-    the prefix, drops only the bad tail."""
+def test_normalize_preserves_history_drops_dangling_tail():
+    """Long chat with valid history, recent turn corrupted. Preserve the
+    prefix, drop only the bad tail."""
     msgs = [
         {"role": "user", "content": "first"},
         {"role": "assistant", "content": [{"type": "text", "text": "ack"}]},
         {"role": "user", "content": "second"},
         {"role": "assistant", "content": [{"type": "tool_use", "id": "X", "name": "bash", "input": {}}]},
-        # crash — no tool_result for X
     ]
-    assert _valid_prefix(msgs) == 3  # keep first three, drop dangling
+    assert normalize(msgs) == msgs[:3]
+
+
+def test_normalize_strips_orphaned_server_tool_use():
+    """The exact reproduction of error 7f6bc577: assistant message has a
+    web_search server_tool_use without its paired web_search_tool_result
+    in the same content list. Anthropic 400s on the next replay. Strip
+    the orphaned server_tool_use."""
+    msgs = [
+        {"role": "user", "content": "search the web"},
+        {"role": "assistant", "content": [
+            {"type": "text", "text": "Searching."},
+            {"type": "server_tool_use", "id": "srvtoolu_01",
+             "name": "web_search", "input": {"query": "cats"}},
+            # missing the web_search_tool_result that Anthropic would have emitted
+        ]},
+    ]
+    out = normalize(msgs)
+    assert out == [
+        {"role": "user", "content": "search the web"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Searching."}]},
+    ]
+
+
+def test_normalize_preserves_paired_server_tool_use():
+    msgs = [
+        {"role": "user", "content": "search"},
+        {"role": "assistant", "content": [
+            {"type": "server_tool_use", "id": "srvtoolu_01",
+             "name": "web_search", "input": {"query": "cats"}},
+            {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01",
+             "content": [{"type": "web_search_result", "url": "...", "title": "..."}]},
+            {"type": "text", "text": "Done."},
+        ]},
+    ]
+    assert normalize(msgs) == msgs
+
+
+def test_normalize_strips_orphaned_server_result():
+    """Server-side result block without a matching server_tool_use → drop."""
+    msgs = [
+        {"role": "user", "content": "x"},
+        {"role": "assistant", "content": [
+            {"type": "text", "text": "hi"},
+            {"type": "web_search_tool_result", "tool_use_id": "nothing",
+             "content": []},
+        ]},
+    ]
+    assert normalize(msgs) == [
+        {"role": "user", "content": "x"},
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+    ]
+
+
+def test_normalize_strips_mid_history_corruption():
+    """Crucially, normalize is not trailing-only — corruption in the middle
+    of a long chat gets caught too. Otherwise it lives forever."""
+    msgs = [
+        {"role": "user", "content": "one"},
+        {"role": "assistant", "content": [
+            {"type": "server_tool_use", "id": "srv_a",
+             "name": "web_search", "input": {}},
+            # orphan — no result block in same message
+            {"type": "text", "text": "first answer"},
+        ]},
+        {"role": "user", "content": "two"},
+        {"role": "assistant", "content": [{"type": "text", "text": "second answer"}]},
+    ]
+    out = normalize(msgs)
+    assert out == [
+        {"role": "user", "content": "one"},
+        {"role": "assistant", "content": [{"type": "text", "text": "first answer"}]},
+        {"role": "user", "content": "two"},
+        {"role": "assistant", "content": [{"type": "text", "text": "second answer"}]},
+    ]
+
+
+def test_normalize_cascading_drop_takes_user_result_with_it():
+    """If stripping leaves the assistant empty (so the assistant message is
+    dropped), the next user's tool_result becomes orphaned too — cascade."""
+    msgs = [
+        {"role": "user", "content": "do X"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "A", "name": "bash", "input": {}},
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "WRONG", "content": "mismatched"},
+        ]},
+    ]
+    # tool_use A isn't paired (next message's tool_result points to WRONG).
+    # Assistant becomes empty → dropped. User's tool_result now has no prior
+    # tool_use anywhere → orphaned → dropped.
+    assert normalize(msgs) == [{"role": "user", "content": "do X"}]
+
+
+def test_normalize_mixed_client_and_server_in_one_message():
+    """Both kinds of tool blocks in one assistant message: keep paired,
+    drop unpaired, independently."""
+    msgs = [
+        {"role": "user", "content": "do many things"},
+        {"role": "assistant", "content": [
+            {"type": "text", "text": "Working."},
+            {"type": "server_tool_use", "id": "srv_a",
+             "name": "web_search", "input": {}},
+            {"type": "web_search_tool_result", "tool_use_id": "srv_a", "content": []},
+            {"type": "server_tool_use", "id": "srv_b",
+             "name": "web_search", "input": {}},
+            # srv_b has no result → orphan
+            {"type": "tool_use", "id": "cli_a", "name": "bash", "input": {}},
+            {"type": "tool_use", "id": "cli_b", "name": "bash", "input": {}},
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "cli_a", "content": "ok"},
+            # cli_b has no result → orphan
+        ]},
+    ]
+    out = normalize(msgs)
+    assert out[1]["content"] == [
+        {"type": "text", "text": "Working."},
+        {"type": "server_tool_use", "id": "srv_a", "name": "web_search", "input": {}},
+        {"type": "web_search_tool_result", "tool_use_id": "srv_a", "content": []},
+        {"type": "tool_use", "id": "cli_a", "name": "bash", "input": {}},
+    ]
+    assert out[2]["content"] == [
+        {"type": "tool_result", "tool_use_id": "cli_a", "content": "ok"},
+    ]
+
+
+def test_normalize_string_content_passes_through():
+    """Plain string user content (no blocks to validate) is untouched."""
+    msgs = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+        {"role": "user", "content": "thanks"},
+    ]
+    assert normalize(msgs) == msgs
+
+
+def test_normalize_is_idempotent():
+    """normalize(normalize(x)) == normalize(x) — the safety net is stable
+    under repeated application (matters for the on-load + on-send model)."""
+    msgs = [
+        {"role": "user", "content": "search"},
+        {"role": "assistant", "content": [
+            {"type": "server_tool_use", "id": "srv_orphan",
+             "name": "web_search", "input": {}},
+            {"type": "text", "text": "ans"},
+            {"type": "tool_use", "id": "cli_orphan", "name": "bash", "input": {}},
+        ]},
+    ]
+    once = normalize(msgs)
+    twice = normalize(once)
+    assert once == twice
