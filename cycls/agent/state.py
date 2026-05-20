@@ -81,60 +81,115 @@ async def touch_meta(workspace, chat_id, content):
 
 # ---- Chat message log ----
 
-def _valid_prefix(messages):
-    """Length of the longest valid prefix of *messages*, per Anthropic's
-    pairing rules. Trims trailing corruption (most often a dangling
-    assistant tool_use whose tool_result never persisted — typical after
-    a mid-turn crash or retry). Repairs in-place rather than nuking
-    the whole chat.
+def normalize(messages):
+    """Return a copy of *messages* that satisfies all provider API pairing
+    invariants. Strips blocks/messages that can't be repaired in place.
+    The single safety net — runs at load time and before every provider
+    send, so the API never sees a half-written turn regardless of how
+    persistence got there.
 
-    Anthropic rejects:
-      - assistant message with tool_use blocks but no following user
-        message containing matching tool_result blocks
-      - user tool_result blocks without preceding assistant tool_use
+    Invariants enforced:
+      1. Assistant `tool_use` (client-side) blocks must be paired with a
+         matching `tool_result` in the next user message.
+      2. User `tool_result` blocks must point to a `tool_use` in the prior
+         assistant message.
+      3. Assistant `server_tool_use` blocks must have a matching
+         `*_tool_result` block in the same content list (server-side
+         tools like web_search return both blocks within one turn).
+
+    Messages that become empty after stripping are dropped entirely.
     """
+    out = []
     n = len(messages)
-    while n > 0:
-        last = messages[n-1]
-        role, content = last.get("role"), last.get("content", [])
-        if role == "user":
-            if isinstance(content, list):
-                results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
-                if results:
-                    if n >= 2 and messages[n-2].get("role") == "assistant":
-                        prev = messages[n-2].get("content", [])
-                        if isinstance(prev, list):
-                            uses = {b.get("id") for b in prev if isinstance(b, dict) and b.get("type") == "tool_use"}
-                            rids = {b.get("tool_use_id") for b in results}
-                            if uses and uses == rids:
-                                return n  # complete pair
-                    n -= 1; continue  # orphaned tool_result
-            return n  # regular user message
+    for i, m in enumerate(messages):
+        role = m.get("role")
+        content = m.get("content")
+
         if role == "assistant":
-            if isinstance(content, list) and any(
-                isinstance(b, dict) and b.get("type") == "tool_use" for b in content
-            ):
-                n -= 1; continue  # dangling tool_use
-            return n  # final response (text only)
-        n -= 1  # unknown role
-    return 0
+            if not isinstance(content, list):
+                out.append(m); continue
+            next_msg = messages[i+1] if i+1 < n else None
+            new_content = _normalize_assistant_blocks(content, next_msg)
+            if new_content:
+                out.append({**m, "content": new_content})
+            continue
+
+        if role == "user":
+            if not isinstance(content, list):
+                out.append(m); continue
+            prior = out[-1] if out else None
+            new_content = _normalize_user_blocks(content, prior)
+            if new_content:
+                out.append({**m, "content": new_content})
+            continue
+
+        # Unknown role: drop
+    return out
+
+
+def _normalize_assistant_blocks(blocks, next_msg):
+    # Server-side pairing (intra-message): server_tool_use ↔ *_tool_result
+    server_uses = {b["id"] for b in blocks
+                   if isinstance(b, dict) and b.get("type") == "server_tool_use" and "id" in b}
+    server_results = {b.get("tool_use_id") for b in blocks
+                      if isinstance(b, dict)
+                      and isinstance(b.get("type"), str)
+                      and b["type"].endswith("_tool_result")
+                      and b["type"] != "tool_result"}
+    paired_server = server_uses & server_results
+
+    # Client-side pairing: assistant tool_use ↔ tool_result in NEXT user message
+    next_result_ids = set()
+    if next_msg and next_msg.get("role") == "user":
+        nc = next_msg.get("content")
+        if isinstance(nc, list):
+            next_result_ids = {b.get("tool_use_id") for b in nc
+                               if isinstance(b, dict) and b.get("type") == "tool_result"}
+    client_uses = {b["id"] for b in blocks
+                   if isinstance(b, dict) and b.get("type") == "tool_use" and "id" in b}
+    paired_client = client_uses & next_result_ids
+
+    def keep(b):
+        if not isinstance(b, dict): return True
+        t = b.get("type")
+        if t == "tool_use": return b.get("id") in paired_client
+        if t == "server_tool_use": return b.get("id") in paired_server
+        if isinstance(t, str) and t.endswith("_tool_result") and t != "tool_result":
+            return b.get("tool_use_id") in paired_server
+        return True
+
+    return [b for b in blocks if keep(b)]
+
+
+def _normalize_user_blocks(blocks, prior):
+    prior_use_ids = set()
+    if prior and prior.get("role") == "assistant":
+        pc = prior.get("content")
+        if isinstance(pc, list):
+            prior_use_ids = {b["id"] for b in pc
+                             if isinstance(b, dict) and b.get("type") == "tool_use" and "id" in b}
+
+    def keep(b):
+        if not isinstance(b, dict): return True
+        if b.get("type") == "tool_result":
+            return b.get("tool_use_id") in prior_use_ids
+        return True
+
+    return [b for b in blocks if keep(b)]
 
 
 async def load_messages(workspace, chat_id):
-    """All messages for *chat_id* in turn order. Trims trailing corrupted
-    state if any, persisting the repair so the disk catches up."""
+    """All messages for *chat_id* in turn order, normalized to satisfy provider
+    pairing invariants. Persists the repair via full rewrite so disk catches
+    up with whatever `normalize` produced."""
     _validate(chat_id)
     db = DB(workspace)
     # Glob `[0-9]*` selects turn files (000000, 000001, ...) — index excluded.
     messages = [msg async for _, msg in db.items(glob=f"chat/{chat_id}/[0-9]*")]
-    valid = _valid_prefix(messages)
-    if valid < len(messages):
-        await asyncio.gather(*[
-            db.delete(f"chat/{chat_id}/{i:06d}")
-            for i in range(valid, len(messages))
-        ])
-        messages = messages[:valid]
-    return messages
+    normalized = normalize(messages)
+    if normalized != messages:
+        await replace_messages(workspace, chat_id, normalized)
+    return normalized
 
 
 async def append_messages(workspace, chat_id, messages, start_idx):
