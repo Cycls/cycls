@@ -8,11 +8,40 @@ import { renderHook, act } from "@testing-library/react";
 import { describe, test, expect, beforeEach, vi } from "vitest";
 import { useChat } from "../use-chat";
 
+// send() fires posthog events; stub them so tests don't touch analytics.
+vi.mock("../lib/posthog", () => ({ track: vi.fn() }));
+
 
 beforeEach(() => {
   // Reset the URL between tests so each one sees a clean ?id=/?fork= state.
   window.history.replaceState({}, "", "/");
 });
+
+// Count fetches to /chat (ignore auth / file calls).
+function countChatPosts(fetchMock: ReturnType<typeof vi.fn>): number {
+  return fetchMock.mock.calls.filter(
+    (c) => typeof c[0] === "string" && c[0].includes("/chat"),
+  ).length;
+}
+
+// A Response whose stream emits `chunks` then throws `err` on the next read —
+// models a connection dropped mid/post-stream.
+function streamThenError(chunks: string[], err: Error): any {
+  let i = 0;
+  return {
+    ok: true,
+    body: {
+      getReader: () => ({
+        read: async () => {
+          if (i < chunks.length) {
+            return { done: false, value: new TextEncoder().encode(chunks[i++]) };
+          }
+          throw err;
+        },
+      }),
+    },
+  };
+}
 
 
 describe("clear()", () => {
@@ -93,6 +122,48 @@ describe("callback identity stability (rfc-004 d2e7103)", () => {
     const loadBefore = result.current.loadChat;
     act(() => result.current.clear());
     expect(result.current.loadChat).toBe(loadBefore);
+  });
+});
+
+
+describe("auto-retry gating — never resubmit a turn the server received", () => {
+  test("mid-stream drop does NOT resubmit (bytes already flowed)", async () => {
+    // Stream one SSE line, then the connection dies. The server has the
+    // message and may have completed the turn — resubmitting would double-run.
+    const fetchMock = vi.fn(async () =>
+      streamThenError(
+        [`data: ${JSON.stringify({ type: "text", text: "hi" })}\n\n`],
+        new TypeError("network error"),
+      ),
+    );
+    global.fetch = fetchMock as any;
+
+    const { result } = renderHook(() => useChat("http://api.test"));
+    await act(async () => {
+      await result.current.send("hello");
+    });
+
+    expect(countChatPosts(fetchMock)).toBe(1); // no auto-retry
+    // Partial streamed content is left intact; no misleading error callout.
+    const msgs = result.current.messages;
+    const last = msgs[msgs.length - 1];
+    expect(last?.parts?.some((p: any) => p.type === "text" && p.text === "hi")).toBe(true);
+    expect(last?.parts?.some((p: any) => p.type === "callout" && p.style === "error")).toBe(false);
+  });
+
+  test("pre-stream failure DOES auto-retry once (request never reached server)", async () => {
+    // fetch rejects before any response — safe to retry, the turn never ran.
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError("failed to fetch");
+    });
+    global.fetch = fetchMock as any;
+
+    const { result } = renderHook(() => useChat("http://api.test"));
+    await act(async () => {
+      await result.current.send("hello");
+    });
+
+    expect(countChatPosts(fetchMock)).toBe(2); // original + one retry
   });
 });
 
