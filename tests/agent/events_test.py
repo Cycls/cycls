@@ -21,11 +21,6 @@ def test_lifecycle_messages():
     assert events.callout("connection reset", "error") == {"type": "callout", "callout": "connection reset", "style": "error"}
 
 
-def test_usage_footer():
-    assert events.usage(1000, 200, 5000, 800, 0.0123, 65) == "\n\n*in: 1,000 · out: 200 · cached: 5,000 · cache-create: 800 · cost: $0.0123 · time: 1m 5s*"
-    assert events.usage(10, 20, 0, 0, None, 9) == "\n\n*in: 10 · out: 20 · cached: 0 · cache-create: 0 · time: 9s*"
-
-
 def test_to_ui_is_identity():
     """`to_ui` is back-compat shim — events are already in UI shape."""
     ev = events.callout("hello")

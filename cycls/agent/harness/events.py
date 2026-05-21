@@ -50,17 +50,6 @@ def tool_call(name: str, inp: dict) -> dict:
     return {"type": "tool_call", "tool": name, "args": inp}
 
 
-def usage(input: int, output: int, cached: int, cache_create: int,
-          cost: float | None, elapsed: float) -> str:
-    parts = [f"in: {input:,}", f"out: {output:,}",
-             f"cached: {cached:,}", f"cache-create: {cache_create:,}"]
-    if cost is not None:
-        parts.append(f"cost: ${cost:.4f}")
-    m, s = divmod(int(elapsed), 60)
-    parts.append(f"time: {f'{m}m {s}s' if m else f'{s}s'}")
-    return "\n\n*" + " · ".join(parts) + "*"
-
-
 # ---- Loop-internal: the assistant turn ----
 
 @dataclass(frozen=True)
