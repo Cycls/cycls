@@ -145,6 +145,8 @@ export function useChat(baseUrl: string = "") {
       // Store for retry
       lastRequestRef.current = { text, attachments, origin };
 
+      let receivedData = false;
+
       const doFetch = async () => {
         const controller = new AbortController();
         abortRef.current = controller;
@@ -196,6 +198,7 @@ export function useChat(baseUrl: string = "") {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          receivedData = true;
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
@@ -322,10 +325,10 @@ export function useChat(baseUrl: string = "") {
       try {
         await doFetch();
       } catch (err) {
-        if ((err as Error).name !== "AbortError") {
-          // Auto-retry once after a brief delay
+        // Only retry a pre-stream failure; once bytes flowed the server has
+        // the turn and resubmitting would double-run it.
+        if ((err as Error).name !== "AbortError" && !receivedData) {
           try {
-            // Reset assistant message for retry
             setMessages((prev) => {
               const updated = [...prev];
               const last = updated[updated.length - 1];
@@ -342,7 +345,6 @@ export function useChat(baseUrl: string = "") {
                 error_message: (retryErr as Error).message,
                 chat_id: chatIdRef.current,
               });
-              // Both attempts failed — show error with retry button
               setMessages((prev) => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];

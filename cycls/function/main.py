@@ -473,6 +473,7 @@ CMD ["python", "entrypoint.py"]
                     "source_object": upload_data["object_name"],
                     "port": port,
                     "memory": memory,
+                    "timeout": 1200,
                     "use_http2": "true",
                     "session_affinity": "true",
                 },
