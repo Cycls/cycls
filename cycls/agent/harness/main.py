@@ -108,10 +108,9 @@ async def _stream_with_retry(provider, **kw):
 
 async def _run(*, context, system="", tools=None, allowed_tools=[],
                model="anthropic/claude-sonnet-4-20250514", max_tokens=None,
-               bash_timeout=600, bash_network=True, show_usage=False, client=None,
+               bash_timeout=600, bash_network=True, client=None,
                base_url=None, api_key=None, handlers=None, mcp_servers=None,
                thinking="adaptive"):
-    t0 = time.monotonic()
     vendor, bare_model = model.split("/", 1)
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key)
     if max_tokens is None: max_tokens = provider.max_output
@@ -130,7 +129,6 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         yield events.callout(f"`{skipped}` is Anthropic-only; skipped on `{vendor}/*` models.", "warning")
     tools_list = build_tools(allowed_tools, tools or [], vendor=vendor)
     window = provider.context_window
-    usage_total = [0, 0, 0, 0]  # in, out, cached, cache_create
     tokens_since_compact = 0
 
     while True:
@@ -164,10 +162,6 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 raise
 
             turn_ms = int((time.monotonic() - turn_t0) * 1000)
-            usage_total[0] += turn.input
-            usage_total[1] += turn.output
-            usage_total[2] += turn.cached
-            usage_total[3] += turn.cache_create
             tokens_since_compact = turn.input + turn.cached + turn.cache_create
             turn_cost = _cost(bare_model, turn.input, turn.output, turn.cached, turn.cache_create)
             now = datetime.now(timezone.utc).isoformat()
@@ -256,7 +250,3 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             # `normalize` sanitizes any dangling tool_use on next send.
             session.rollback()
             raise
-
-    if show_usage and usage_total[0]:
-        cost = _cost(bare_model, *usage_total) or None
-        yield events.usage(usage_total[0], usage_total[1], usage_total[2], usage_total[3], cost, time.monotonic() - t0)
