@@ -1,6 +1,6 @@
 [project]
 name = "cycls"
-version = "0.0.2.130"
+version = "0.0.2.131"
 description = "Single process, per-tenant, serverless, and stateful AI agent runtime."
 authors = [{ name = "Mohammed J. AlRujayi", email = "mj@cycls.com" }]
 readme = "README.md"
