@@ -116,6 +116,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     if max_tokens is None: max_tokens = provider.max_output
     workspace = context.workspace
     user_id = getattr(getattr(context, "user", None), "id", None)
+    org_id = getattr(getattr(context, "user", None), "org_id", None)
     Path(workspace.root).mkdir(parents=True, exist_ok=True)
 
     session = await Session.open(context)
@@ -178,7 +179,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             print(json.dumps({
                 "source": "agent", "level": "usage",
                 "model": bare_model,
-                "user_id": user_id, "chat_id": session.chat_id,
+                "user_id": user_id, "org_id": org_id, "chat_id": session.chat_id,
                 "input": turn.input, "output": turn.output,
                 "cached": turn.cached, "cache_create": turn.cache_create,
                 "cost": round(turn_cost, 6),
@@ -225,7 +226,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 print(json.dumps({
                     "source": "agent", "level": "tool_call",
                     "model": bare_model,
-                    "user_id": user_id, "chat_id": session.chat_id,
+                    "user_id": user_id, "org_id": org_id, "chat_id": session.chat_id,
                     "tool": block["name"],
                     "ms": ms, "ok": ok,
                     "output_bytes": len(out) if isinstance(out, (str, bytes)) else None,
