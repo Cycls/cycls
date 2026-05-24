@@ -14,6 +14,7 @@ from ..state import Session
 from . import events
 from .events import Turn
 from .compact import COMPACT_BUFFER, KEEP_RECENT, compact
+from ..logs import log
 from .prompts import DEFAULT_SYSTEM
 from .providers import make_provider
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips
@@ -115,8 +116,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key)
     if max_tokens is None: max_tokens = provider.max_output
     workspace = context.workspace
-    user_id = getattr(getattr(context, "user", None), "id", None)
-    org_id = getattr(getattr(context, "user", None), "org_id", None)
+    user = getattr(context, "user", None)
     Path(workspace.root).mkdir(parents=True, exist_ok=True)
 
     session = await Session.open(context)
@@ -174,18 +174,11 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 "ms": turn_ms,
                 "at": now,
             }})
-            # Structured Cloud Logging entry — queryable via `cycls logs --query
-            # 'jsonPayload.level="usage"'`. Mirrors the QA error logging shape.
-            print(json.dumps({
-                "source": "agent", "level": "usage",
-                "model": bare_model,
-                "user_id": user_id, "org_id": org_id, "chat_id": session.chat_id,
-                "input": turn.input, "output": turn.output,
-                "cached": turn.cached, "cache_create": turn.cache_create,
-                "cost": round(turn_cost, 6),
-                "ms": turn_ms,
-                "at": now,
-            }), flush=True)
+            log("usage", user=user, chat_id=session.chat_id,
+                model=bare_model,
+                input=turn.input, output=turn.output,
+                cached=turn.cached, cache_create=turn.cache_create,
+                cost=round(turn_cost, 6), ms=turn_ms)
             if session.chat_id:
                 try: await state.add_cost(workspace, session.chat_id, turn_cost)
                 except Exception as e: print(f"[WARN] add_cost failed: {e}")
@@ -219,19 +212,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             results = []
             for block, (out, ms) in zip(blocks, timed):
                 ok = not isinstance(out, BaseException)
-                # Structured tool-call log — shape only (tool, ms, ok, output
-                # size), no raw args/output (those may contain user data; the
-                # full content already lives in tool_use / tool_result blocks
-                # on the chat).
-                print(json.dumps({
-                    "source": "agent", "level": "tool_call",
-                    "model": bare_model,
-                    "user_id": user_id, "org_id": org_id, "chat_id": session.chat_id,
-                    "tool": block["name"],
-                    "ms": ms, "ok": ok,
-                    "output_bytes": len(out) if isinstance(out, (str, bytes)) else None,
-                    "at": datetime.now(timezone.utc).isoformat(),
-                }), flush=True)
+                log("tool_call", user=user, chat_id=session.chat_id,
+                    model=bare_model, tool=block["name"], ms=ms, ok=ok,
+                    output_bytes=len(out) if isinstance(out, (str, bytes)) else None)
                 if not ok: out = f"Error: {out}"
                 # Custom-handler results flow through the stream for the body to see
                 # (UI rendering) AND serialize into tool_result for the model (data).
