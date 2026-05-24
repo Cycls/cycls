@@ -75,6 +75,7 @@ async def super(context):
 
     # b2b: free orgs blocked (no compute, no tracking)
     if user.plan == "o:free_org" and not exempt:
+        cycls.log("cap_hit", user=user, chat_id=context.chat_id, kind="org_free")
         yield {"type": "text", "text": "🔒 This workspace needs a paid plan."}
         yield {"type": "ui", "action": "open_plan_modal"}
         return
@@ -86,6 +87,8 @@ async def super(context):
     entry = await db.get(key, {"count": 0})
 
     if user.plan == "u:free_user" and entry["count"] >= FREE_MONTHLY_LIMIT and not exempt:
+        cycls.log("cap_hit", user=user, chat_id=context.chat_id,
+                  kind="user_free_monthly", count=entry["count"], limit=FREE_MONTHLY_LIMIT)
         yield {"type": "text",
                "text": f"🚨 Free tier limit reached ({FREE_MONTHLY_LIMIT}/mo). Upgrade for unlimited."}
         yield {"type": "ui", "action": "open_plan_modal"}

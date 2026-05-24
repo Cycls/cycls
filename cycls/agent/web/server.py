@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import Optional, Any
 from cycls.app.auth import User, validator
 from cycls.app.db import Workspace, workspace
+from cycls.agent.logs import log
 
 
 class PassMetadata(BaseModel):
@@ -54,7 +55,7 @@ def sse(item):
     if not isinstance(item, dict): item = {"type": "text", "text": item}
     return f"data: {json.dumps(item)}\n\n"
 
-async def encoder(stream, *, chat_id=None, user_id=None, org_id=None):
+async def encoder(stream, *, chat_id=None, user=None):
     if chat_id: yield sse({"type": "chat_id", "chat_id": chat_id})
     try:
         async for item in _aiter(stream):
@@ -62,9 +63,8 @@ async def encoder(stream, *, chat_id=None, user_id=None, org_id=None):
     except Exception as e:
         import traceback
         error_id = uuid.uuid4().hex[:8]
-        print(json.dumps({"source": "agent", "level": "error", "error_id": error_id,
-                          "message": str(e), "stack": traceback.format_exc(),
-                          "user_id": user_id, "org_id": org_id, "chat_id": chat_id}), flush=True)
+        log("error", user=user, chat_id=chat_id,
+            error_id=error_id, message=str(e), stack=traceback.format_exc())
         yield sse({"type": "callout",
                    "callout": f"Something went wrong. Reference: `{error_id}`",
                    "style": "error"})
@@ -159,7 +159,7 @@ def web(func, config, extra_routers=None, auth=None):
         if request.url.path == "/chat/completions":
             stream = openai_encoder(stream)
         else:
-            stream = encoder(stream, chat_id=chat_id, user_id=getattr(user, "id", None), org_id=getattr(user, "org_id", None))
+            stream = encoder(stream, chat_id=chat_id, user=user)
         return StreamingResponse(stream, media_type="text/event-stream")
 
     @app.get("/config")
