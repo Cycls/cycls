@@ -15,6 +15,8 @@ from cycls.app.db import DB, Workspace, workspace
 from cycls.agent import state
 from cycls.agent.tools import tool_step
 
+DEFAULT_MAX_UPLOAD_MB = 512   # per-file upload cap when not configured
+
 
 def to_ui_messages(raw):
     """Stored API messages → FE shape `{role, content: str, parts?, attachments?}`.
@@ -145,6 +147,7 @@ def chats_router(ws_dep):
 
 def files_router(cycls_app, ws_dep, user_dep):
     r = APIRouter()
+    max_bytes = (getattr(getattr(cycls_app, "config", None), "max_upload", None) or DEFAULT_MAX_UPLOAD_MB) * 1024 * 1024
 
     def _safe_path(workspace, rel):
         try:
@@ -157,13 +160,24 @@ def files_router(cycls_app, ws_dep, user_dep):
         target = _safe_path(ws.root, request.query_params.get("path", ""))
         if not target.is_dir():
             return []
-        # recursive=1 → flat list of every file under `target` with paths
-        # relative to the workspace root (for the composer's @-mention search).
-        # Skips hidden dirs/files (incl. the reserved .db/.database trees).
+        # recursive=1 → flat list of every file and folder under `target` with
+        # paths relative to the workspace root (for @-mention search and the
+        # "Move to…" picker). Skips hidden dirs/files (incl. .db/.database).
         if request.query_params.get("recursive") is not None:
             items = []
             for root, dirs, files in os.walk(target):
                 dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+                for d in dirs:
+                    full = Path(root) / d
+                    items.append({
+                        "name": d,
+                        "path": str(full.relative_to(ws.root)),
+                        "type": "directory",
+                        "size": 0,
+                        "modified": datetime.fromtimestamp(full.stat().st_mtime, tz=timezone.utc).isoformat(),
+                    })
+                    if len(items) >= 2000:
+                        return items
                 for fn in sorted(files):
                     if fn.startswith("."):
                         continue
@@ -195,6 +209,8 @@ def files_router(cycls_app, ws_dep, user_dep):
     @r.get("/files/{path:path}")
     async def get_file(path: str, request: Request, ws: Workspace = ws_dep):
         file_path = _safe_path(ws.root, path)
+        if file_path.is_dir():
+            return _zip_dir(file_path)   # folders download as <name>.zip
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
         if request.query_params.get("download") is not None:
@@ -205,7 +221,22 @@ def files_router(cycls_app, ws_dep, user_dep):
     async def put_file(path: str, request: Request, file: UploadFile = File(...), ws: Workspace = ws_dep):
         file_path = _safe_path(ws.root, path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_bytes(await file.read())
+        # Stream to a .part temp in 1 MB chunks (flat app memory regardless of
+        # size), enforce a cap, then rename — so a failed upload can't corrupt an
+        # existing file. Works on local FS and the gcsfuse workspace mount.
+        tmp = file_path.with_name(file_path.name + ".part")
+        size = 0
+        try:
+            with open(tmp, "wb") as out:
+                while chunk := await file.read(1 << 20):
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise HTTPException(413, f"File exceeds the {max_bytes // (1024 * 1024)} MB limit")
+                    out.write(chunk)
+            tmp.replace(file_path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
         return {"ok": True}
 
     @r.patch("/files/{path:path}")
@@ -391,6 +422,21 @@ def _serve_file(root, file_path):
     if not target.is_file():
         raise HTTPException(404, "File not found")
     return FileResponse(target)
+
+
+def _zip_dir(dir_path):
+    """Stream a directory back as a .zip (skips hidden/.db entries). Built to a
+    temp file, then served and cleaned up — avoids holding it all in memory."""
+    import zipfile, tempfile
+    from starlette.background import BackgroundTask
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    tmp.close()
+    with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in dir_path.rglob("*"):
+            if f.is_file() and not any(p.startswith(".") for p in f.relative_to(dir_path).parts):
+                zf.write(f, f.relative_to(dir_path.parent))   # keep the folder as the top dir
+    return FileResponse(tmp.name, filename=f"{dir_path.name}.zip", media_type="application/zip",
+                        background=BackgroundTask(lambda: os.unlink(tmp.name)))
 
 
 # ---- Mount ----

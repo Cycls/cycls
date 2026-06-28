@@ -1,9 +1,9 @@
 """Workspace + DB — per-tenant JSON KV over object storage.
 
 `file://` (dev) and `gs://` (prod). `db.scan(...)` is the 1-round-trip
-listing path: GCS uses LIST + custom-meta; FS uses `pathlib.glob` + body
-reads (no metadata channel locally). `meta=` on `db.put` is a GCS-only
-perf hint — body is canonical on FS.
+listing path: object storage uses LIST + custom-meta; FS uses `pathlib.glob`
++ body reads (no metadata channel locally). `meta=` on `db.put` is an
+object-storage-only perf hint — body is canonical on FS.
 """
 import asyncio, json, os
 from dataclasses import dataclass
@@ -223,7 +223,7 @@ class DB:
             if r is not None: yield r
 
     async def scan(self, *, prefix=None, glob=None):
-        """Yield (key, meta) — `meta` is GCS custom-meta or, on FS, the body.
-        `glob` uses `*` to match non-`/`."""
+        """Yield (key, meta) — `meta` is object-storage custom-meta or, on local
+        FS, the body. `glob` uses `*` to match non-`/`."""
         for k, m in sorted(await self._store.list_metas(prefix=prefix, glob=glob)):
             yield k, m

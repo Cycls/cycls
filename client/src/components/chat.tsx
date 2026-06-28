@@ -16,7 +16,8 @@ import type { Attachment, ChatApi, AppConfig } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
 import { track } from "../lib/posthog";
-import { toggleDark } from "../lib/utils";
+import { toggleDark, cn } from "../lib/utils";
+import { useToast } from "../lib/toast";
 import { useSpeechRecognition } from "../hooks/use-speech";
 import { useUrlParam } from "../hooks/use-url-param";
 import { SUGGESTIONS } from "./suggestions-data";
@@ -57,8 +58,10 @@ export interface FilesPanelProps {
   readFile: (path: string) => Promise<string>;
   writeFile: (path: string, text: string) => Promise<void>;
   searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
+  listFolders: () => Promise<{ name: string; path: string }[]>;
   onShareFile?: (path: string, audience: string) => Promise<string>;
   onOpenInCanvas?: (path: string, name: string) => void;
+  maxUpload?: number;   // per-file cap (MB) for the client pre-check
   org?: { id: string; name: string } | null;
 }
 
@@ -74,6 +77,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   const { name, pass_metadata: passMetadata, voice, suggestions } = config ?? {};
 
   const lang = useLang();
+  const { error: toastError } = useToast();
   const isAr = lang === "ar";
   const meta = passMetadata?.[isAr ? "ar" : "en"];
   const inputPlaceholder = meta ? (isAr ? `اسأل ${meta.name}` : `Ask ${meta.name}`) : undefined;
@@ -85,6 +89,24 @@ export function Chat({ chat, onShare, files, account, config }: {
   const [filesOpen, setFilesOpen] = useState(false);
   const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats">(account ? "chats" : "files");
   const [canvasFile, setCanvasFile] = useState<CanvasFile | null>(null);
+  const [panelExpanded, setPanelExpanded] = useState(false);
+  const [panelWidth, setPanelWidth] = useState(() => Number(localStorage.getItem("cycls_panel_width")) || 480);
+
+  // Drag the panel's left edge to resize; width persists across sessions.
+  const startResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    document.body.style.userSelect = "none";
+    const onMove = (ev: MouseEvent) =>
+      setPanelWidth(Math.min(Math.max(window.innerWidth - ev.clientX - 8, 360), window.innerWidth - 80));
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.userSelect = "";
+      setPanelWidth((w) => { localStorage.setItem("cycls_panel_width", String(w)); return w; });
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, []);
   const [shareOpen, setShareOpen] = useState(false);
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
@@ -140,7 +162,13 @@ export function Chat({ chat, onShare, files, account, config }: {
     setFilesOpen(false);
   }, [activeOrg?.id]);
 
-  const handleFilesAdded = useCallback(async (newFiles: File[]) => {
+  const handleFilesAdded = useCallback(async (incoming: File[]) => {
+    // Reject oversized files up front (server enforces the same cap).
+    const maxMb = config?.max_upload ?? 512;
+    const newFiles = incoming.filter((f) => f.size <= maxMb * 1024 * 1024);
+    const skipped = incoming.length - newFiles.length;
+    if (skipped) toastError(`${skipped === 1 ? "File" : `${skipped} files`} over the ${maxMb} MB limit ${skipped === 1 ? "was" : "were"} skipped.`);
+    if (!newFiles.length) return;
     if (uploadFile) {
       // Add placeholders immediately — blob URL is a stable key per file
       const placeholders: Attachment[] = newFiles.map((f) => ({
@@ -173,7 +201,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       }));
       setAttachments((prev) => [...prev, ...newAttachments]);
     }
-  }, [uploadFile]);
+  }, [uploadFile, config?.max_upload, toastError]);
 
   const removeFile = useCallback((index: number) => {
     setAttachments((prev) => prev.filter((_, i) => i !== index));
@@ -493,8 +521,20 @@ export function Chat({ chat, onShare, files, account, config }: {
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="fixed top-1 right-1 bottom-1 z-50 w-[calc(100%-0.5rem)] sm:w-[480px] rounded-xl border border-border bg-background flex flex-col overflow-hidden"
+              className={cn(
+                "fixed z-50 rounded-xl border border-border bg-background flex flex-col overflow-hidden",
+                panelExpanded ? "inset-2" : "top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] max-w-[calc(100%-0.5rem)]",
+              )}
+              style={panelExpanded ? undefined : { width: panelWidth }}
             >
+              {/* Resize handle (left edge) — desktop only */}
+              {!panelExpanded && (
+                <div
+                  onMouseDown={startResize}
+                  className="absolute left-0 top-0 bottom-0 z-20 hidden sm:block w-1.5 -ml-0.5 cursor-ew-resize hover:bg-accent/30"
+                  aria-label="Resize panel"
+                />
+              )}
               {/* Tab bar */}
               {(files || account) && (
                 <div className="flex items-center border-b border-border px-4 sm:px-6">
@@ -524,6 +564,18 @@ export function Chat({ chat, onShare, files, account, config }: {
                   )}
                   <div className="flex-1" />
                   <button
+                    onClick={() => setPanelExpanded((e) => !e)}
+                    className="hidden sm:flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                    aria-label={panelExpanded ? t("collapse") : t("expand")}
+                    title={panelExpanded ? t("collapse") : t("expand")}
+                  >
+                    {panelExpanded ? (
+                      <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M15 9h4.5M15 9V4.5M15 9l5.25-5.25M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" /></svg>
+                    ) : (
+                      <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 8.25V3.75h4.5M8.25 3.75L3.75 8.25M20.25 8.25V3.75h-4.5M15.75 3.75l4.5 4.5M3.75 15.75v4.5h4.5M8.25 20.25l-4.5-4.5M20.25 15.75v4.5h-4.5M15.75 20.25l4.5-4.5" /></svg>
+                    )}
+                  </button>
+                  <button
                     onClick={() => setFilesOpen(false)}
                     className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                     aria-label="Close"
@@ -533,7 +585,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </div>
               )}
               {filesTab === "files" && files ? (
-                <Files {...files} onOpenInCanvas={(path, name) => setCanvasFile({ path, name })} />
+                <Files {...files} onOpenInCanvas={(path, name) => setCanvasFile({ path, name })} maxUpload={config?.max_upload} />
               ) : filesTab === "shares" ? (
                 <div className="flex h-full flex-col">
                   <div className="flex-1 overflow-y-auto">

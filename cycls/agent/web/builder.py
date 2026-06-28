@@ -22,6 +22,7 @@ class Web:
         self._analytics: bool = False
         self._suggestions: bool = False
         self._affiliate: Optional[str] = None
+        self._max_upload: int = 512
         self._copy_public: List[str] = []
 
     def _copy(self, **updates):
@@ -62,6 +63,11 @@ class Web:
         a Rewardful key). Injected into the page config; the FE loads the tracker
         and reports conversions on checkout. Off when unset."""
         return self._copy(_affiliate=api_key)
+
+    def max_upload(self, mb: int):
+        """Per-file upload cap in MB (default 512). Enforced server-side and
+        pre-checked client-side so oversized files fail fast."""
+        return self._copy(_max_upload=mb)
 
     def copy_public(self, *files: str):
         return self._copy(_copy_public=list(files))

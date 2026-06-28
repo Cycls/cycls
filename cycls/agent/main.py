@@ -31,6 +31,7 @@ class Agent(App):
             name=name, title=web._title,
             auth=web._auth is not None, cms=web._cms, analytics=web._analytics,
             suggestions=web._suggestions, affiliate=web._affiliate,
+            max_upload=web._max_upload,
             volume=(image or {}).get("volume", "/workspace"),
         )
 

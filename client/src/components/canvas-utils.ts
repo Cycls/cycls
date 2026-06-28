@@ -10,6 +10,12 @@ export const isPdf = (name: string) => ext(name) === "pdf";
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif"]);
 export const isImage = (name: string) => IMAGE_EXTS.has(ext(name));
 
+const AUDIO_EXTS = new Set(["mp3", "wav", "ogg", "oga", "m4a", "aac", "flac", "opus", "weba"]);
+export const isAudio = (name: string) => AUDIO_EXTS.has(ext(name));
+
+const VIDEO_EXTS = new Set(["mp4", "webm", "mov", "m4v", "ogv"]);
+export const isVideo = (name: string) => VIDEO_EXTS.has(ext(name));
+
 const SPREADSHEET_EXTS = new Set(["csv", "tsv", "xlsx", "xls", "ods"]);
 export const isSpreadsheet = (name: string) => SPREADSHEET_EXTS.has(ext(name));
 
@@ -35,7 +41,7 @@ export const codeLang = (name: string): string | null => {
 
 // Extensions the canvas renders inline (markdown, html, pdf, or any source file).
 export const isRenderable = (name: string) =>
-  isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isSpreadsheet(name) || codeLang(name) != null;
+  isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || codeLang(name) != null;
 
 // Trigger a name-preserving download from an authed blob URL. A bare blob URL
 // carries no filename, so opening it instead saves with no extension — the
