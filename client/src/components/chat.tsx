@@ -714,6 +714,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           readFile={files.readFile}
           openFile={files.onOpenFile}
           writeFile={files.writeFile}
+          onShareFile={files.onShareFile}
         />
       )}
     </div>

@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Icon } from "./icon";
 import { LoadingBar } from "./loading-bar";
 import { DropdownMenu } from "./files";
+import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
 import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, codeLang, saveBlob } from "./canvas-utils";
@@ -110,29 +111,31 @@ export function CanvasDoc({ file, content, error, shared = false }: {
   );
 }
 
-export function Canvas({ file, onClose, readFile, openFile, writeFile }: {
+export function Canvas({ file, onClose, readFile, openFile, writeFile, onShareFile }: {
   file: CanvasFile | null;
   onClose: () => void;
   readFile: (path: string) => Promise<string>;   // authed text fetch (md/html/code source)
   openFile: (path: string) => Promise<string>;    // authed blob URL (pdf / download)
   writeFile: (path: string, text: string) => Promise<void>;  // overwrite (editor)
+  onShareFile?: (path: string, audience: string) => Promise<string>;
 }) {
   return (
     <AnimatePresence>
       {file && (
         <CanvasPanel key={file.path} file={file} onClose={onClose}
-          readFile={readFile} openFile={openFile} writeFile={writeFile} />
+          readFile={readFile} openFile={openFile} writeFile={writeFile} onShareFile={onShareFile} />
       )}
     </AnimatePresence>
   );
 }
 
-function CanvasPanel({ file, onClose, readFile, openFile, writeFile }: {
+function CanvasPanel({ file, onClose, readFile, openFile, writeFile, onShareFile }: {
   file: CanvasFile;
   onClose: () => void;
   readFile: (path: string) => Promise<string>;
   openFile: (path: string) => Promise<string>;
   writeFile: (path: string, text: string) => Promise<void>;
+  onShareFile?: (path: string, audience: string) => Promise<string>;
 }) {
   const { content, setContent, error } = useFileContent(file, readFile, openFile);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -142,6 +145,7 @@ function CanvasPanel({ file, onClose, readFile, openFile, writeFile }: {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const md = isMd(file.name);
   const lang = codeLang(file.name);
   const isText = md || lang != null;   // text-based: editable + copyable
@@ -229,6 +233,11 @@ function CanvasPanel({ file, onClose, readFile, openFile, writeFile }: {
           ) : (
             <>
               {saved && <span className="text-xs text-muted-foreground">{t("saved")}</span>}
+              {onShareFile && (
+                <button onClick={() => setShareOpen(true)} className={headerBtn} aria-label={t("share")} title={t("share")}>
+                  <Icon name="link" className="size-4" />
+                </button>
+              )}
               {isText && content != null && (
                 <button onClick={copy} className={headerBtn} aria-label={copied ? t("copied") : t("copy")} title={copied ? t("copied") : t("copy")}>
                   <Icon name={copied ? "check" : "copy"} className="size-4" />
@@ -313,6 +322,15 @@ function CanvasPanel({ file, onClose, readFile, openFile, writeFile }: {
           </div>
         </div>,
         document.body,
+      )}
+
+      {shareOpen && onShareFile && (
+        <ShareDialog
+          onClose={() => setShareOpen(false)}
+          mode="file"
+          subtitle={file.name}
+          onShare={(audience) => onShareFile(file.path, audience)}
+        />
       )}
     </>
   );
