@@ -24,6 +24,7 @@ web = (
     .auth(cycls.Clerk())
     .cms(DOMAIN)
     .analytics(True) # "cycls.ai"
+    .affiliate("059168")  # Rewardful referral tracking
     .title("The agent for getting things done")
 )
 
@@ -61,7 +62,7 @@ llm = (
     .system(SYSTEM)
     # .tools(TOOLS)  # skills+safe_keys
     # .on("render_image", render_image)
-    .allowed_tools(["Bash", "Editor", "WebSearch", "DataBase"])  # "Canvas"
+    .allowed_tools(["Bash", "Editor", "WebSearch", "DataBase", "Canvas"])
     # .mcp(cycls.MCP("https://figma-mcp.example/mcp").name("figma").token(os.environ["FIGMA_TOKEN"]))  # remote MCP, anthropic/* only
     # .sandbox(network=False)  # opt out of network access for the LLM bash
 )

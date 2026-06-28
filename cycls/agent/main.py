@@ -30,7 +30,7 @@ class Agent(App):
         self.config = Config(
             name=name, title=web._title,
             auth=web._auth is not None, cms=web._cms, analytics=web._analytics,
-            suggestions=web._suggestions,
+            suggestions=web._suggestions, affiliate=web._affiliate,
             volume=(image or {}).get("volume", "/workspace"),
         )
 

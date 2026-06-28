@@ -21,6 +21,7 @@ class Web:
         self._cms: Optional[str] = None
         self._analytics: bool = False
         self._suggestions: bool = False
+        self._affiliate: Optional[str] = None
         self._copy_public: List[str] = []
 
     def _copy(self, **updates):
@@ -55,6 +56,12 @@ class Web:
     def suggestions(self, on: bool = True):
         """Show the prompt-starter suggestions on the empty-chat screen. Off by default."""
         return self._copy(_suggestions=on)
+
+    def affiliate(self, api_key: str):
+        """Enable affiliate/referral tracking with this provider API key (e.g.
+        a Rewardful key). Injected into the page config; the FE loads the tracker
+        and reports conversions on checkout. Off when unset."""
+        return self._copy(_affiliate=api_key)
 
     def copy_public(self, *files: str):
         return self._copy(_copy_public=list(files))

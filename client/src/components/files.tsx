@@ -4,6 +4,7 @@ import { t, useLang } from "../lib/i18n";
 import { LoadingBar } from "./loading-bar";
 import { Icon, Spinner } from "./icon";
 import { ShareDialog } from "./share-dialog";
+import { isRenderable, saveBlob } from "./canvas-utils";
 import type { FilesPanelProps } from "./chat";
 
 const FolderIcon = ({ className = "size-5" }: { className?: string }) =>
@@ -40,7 +41,7 @@ export function DropdownMenu({ items, onClose }: {
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
-      <div className="absolute right-0 top-full z-50 mt-1 min-w-[140px] rounded-lg border border-border bg-background shadow-lg py-1">
+      <div className="absolute top-full ltr:right-0 rtl:left-0 z-50 mt-1 min-w-[140px] rounded-lg border border-border bg-background shadow-lg py-1">
         {items.map((item) => (
           <button
             key={item.label}
@@ -98,7 +99,7 @@ export function InlineInput({ initial, onSubmit, onCancel }: {
   );
 }
 
-export function Files({ entries, path, loading, onNavigate, onUpload, onMkdir, onRename, onDelete, onOpenFile, onShareFile, org }: FilesPanelProps) {
+export function Files({ entries, path, loading, onNavigate, onUpload, onMkdir, onRename, onDelete, onOpenFile, onShareFile, onOpenInCanvas, org }: FilesPanelProps) {
   useLang();
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -290,7 +291,14 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onMkdir, o
                 <div
                   key={entry.name}
                   className="group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer"
-                  onClick={() => { if (renaming || menuOpen) return; isDir ? navigate(entryPath) : onOpenFile(entryPath).then((url) => window.open(url, "_blank")); }}
+                  onClick={() => {
+                    if (renaming || menuOpen) return;
+                    if (isDir) return navigate(entryPath);
+                    // Renderable (md/html) → canvas; everything else → name-preserving
+                    // download (window.open on a blob URL drops the extension → corrupt file).
+                    if (isRenderable(entry.name) && onOpenInCanvas) return onOpenInCanvas(entryPath, entry.name);
+                    onOpenFile(entryPath).then((url) => saveBlob(url, entry.name));
+                  }}
                 >
                   {isDir ? (
                     <FolderIcon className="size-5 text-muted-foreground shrink-0" />
@@ -351,14 +359,7 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onMkdir, o
                         items={[
                           ...(!isDir ? [{
                             label: t("download"),
-                            onClick: () => {
-                              onOpenFile(entryPath).then((url) => {
-                                const a = document.createElement("a");
-                                a.href = url;
-                                a.download = entry.name;
-                                a.click();
-                              });
-                            },
+                            onClick: () => onOpenFile(entryPath).then((url) => saveBlob(url, entry.name)),
                           }] : []),
                           ...(!isDir && onShareFile ? [
                             { label: t("share"), onClick: () => setShareDialog({ path: entryPath, name: entry.name }) },

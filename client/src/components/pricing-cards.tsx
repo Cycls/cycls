@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { SignedIn } from "@clerk/clerk-react";
+import { SignedIn, useUser } from "@clerk/clerk-react";
 import { usePlans, useSubscription, CheckoutButton, SubscriptionDetailsButton } from "@clerk/clerk-react/experimental";
 import { t, getLang } from "../lib/i18n";
 import { track } from "../lib/posthog";
+import { convertReferral } from "../lib/affiliate";
 import { Icon } from "./icon";
 
 function formatPrice(money: { amount: number; currencySymbol: string; currency: string }) {
@@ -17,6 +18,7 @@ function formatPrice(money: { amount: number; currencySymbol: string; currency: 
 export function PricingCards({ payerType = "user", onSelect }: { payerType?: "user" | "organization"; onSelect: () => void }) {
   const { data: plansData, isLoading } = usePlans({ for: payerType });
   const { data: sub } = useSubscription({ for: payerType });
+  const { user } = useUser();
   const [period, setPeriod] = useState<"month" | "annual">("month");
 
   if (isLoading) {
@@ -135,6 +137,11 @@ export function PricingCards({ payerType = "user", onSelect }: { payerType?: "us
                           payer_type: payerType,
                           is_free: isFreePlan,
                         });
+                        // Affiliate referral attribution — paid plans only.
+                        // Email must match the Stripe customer (Clerk uses the
+                        // user's primary email). No-op if affiliate isn't enabled.
+                        const email = user?.primaryEmailAddress?.emailAddress;
+                        if (!isFreePlan && email) convertReferral(email);
                         onSelect();
                       }}
                     >

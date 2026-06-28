@@ -119,3 +119,11 @@ body {
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+
+/* Canvas → PDF: a portal'd copy of the rendered markdown that only the print
+   dialog (Save as PDF) sees — sidesteps the drawer's fixed/transform layout. */
+.print-root { display: none; }
+@media print {
+  body > *:not(.print-root) { display: none !important; }
+  .print-root { display: block !important; }
+}

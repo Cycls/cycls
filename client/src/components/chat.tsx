@@ -3,6 +3,7 @@ import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
+import { Canvas, type CanvasFile } from "./canvas";
 import { Popover } from "./popover";
 import { Icon, IconButton } from "./icon";
 import { CyclsLogo } from "./cycls-logo";
@@ -53,7 +54,11 @@ export interface FilesPanelProps {
   onRename: (from: string, to: string) => Promise<void>;
   onDelete: (path: string) => Promise<void>;
   onOpenFile: (path: string) => Promise<string>;
+  readFile: (path: string) => Promise<string>;
+  writeFile: (path: string, text: string) => Promise<void>;
+  searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
   onShareFile?: (path: string, audience: string) => Promise<string>;
+  onOpenInCanvas?: (path: string, name: string) => void;
   org?: { id: string; name: string } | null;
 }
 
@@ -79,6 +84,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   const [exploreLoading, setExploreLoading] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats">(account ? "chats" : "files");
+  const [canvasFile, setCanvasFile] = useState<CanvasFile | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
@@ -111,6 +117,9 @@ export function Chat({ chat, onShare, files, account, config }: {
     setUIHandler((ev) => {
       if (ev.action === "open_plan_modal") {
         openPricing(activeOrg ? "organization" : "user", "agent_event");
+      } else if (ev.action === "open_canvas" && typeof ev.path === "string") {
+        const path = ev.path;
+        setCanvasFile({ path, name: typeof ev.name === "string" ? ev.name : path.split("/").pop() || path });
       }
     });
     return () => setUIHandler(null);
@@ -249,6 +258,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     onRemoveFile: removeFile,
     listening, transcribing, startMic, stopMic, cancelMic, voice,
     onFilesAdded: handleFilesAdded,
+    onMentionSearch: files?.searchFiles,
     placeholder: inputPlaceholder,
   };
 
@@ -523,7 +533,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </div>
               )}
               {filesTab === "files" && files ? (
-                <Files {...files} />
+                <Files {...files} onOpenInCanvas={(path, name) => setCanvasFile({ path, name })} />
               ) : filesTab === "shares" ? (
                 <div className="flex h-full flex-col">
                   <div className="flex-1 overflow-y-auto">
@@ -644,6 +654,15 @@ export function Chat({ chat, onShare, files, account, config }: {
             </div>
           </div>
         </Popover>
+      )}
+      {files && (
+        <Canvas
+          file={canvasFile}
+          onClose={() => setCanvasFile(null)}
+          readFile={files.readFile}
+          openFile={files.onOpenFile}
+          writeFile={files.writeFile}
+        />
       )}
     </div>
   );

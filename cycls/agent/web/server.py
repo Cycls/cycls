@@ -24,6 +24,7 @@ class Config(BaseModel):
     suggestions: bool = False
     voice: bool = False
     pk: Optional[str] = None
+    affiliate: Optional[str] = None   # affiliate/referral provider key (e.g. Rewardful)
     volume: str = "/workspace"
 
     def set_prod(self, prod: bool):

@@ -157,6 +157,27 @@ def files_router(cycls_app, ws_dep, user_dep):
         target = _safe_path(ws.root, request.query_params.get("path", ""))
         if not target.is_dir():
             return []
+        # recursive=1 → flat list of every file under `target` with paths
+        # relative to the workspace root (for the composer's @-mention search).
+        # Skips hidden dirs/files (incl. the reserved .db/.database trees).
+        if request.query_params.get("recursive") is not None:
+            items = []
+            for root, dirs, files in os.walk(target):
+                dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+                for fn in sorted(files):
+                    if fn.startswith("."):
+                        continue
+                    full = Path(root) / fn
+                    items.append({
+                        "name": fn,
+                        "path": str(full.relative_to(ws.root)),
+                        "type": "file",
+                        "size": full.stat().st_size,
+                        "modified": datetime.fromtimestamp(full.stat().st_mtime, tz=timezone.utc).isoformat(),
+                    })
+                    if len(items) >= 2000:   # cap response size
+                        return items
+            return items
         items = []
         for entry in os.scandir(target):
             if entry.name.startswith("."):

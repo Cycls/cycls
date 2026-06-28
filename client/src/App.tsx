@@ -26,6 +26,7 @@ import { useFiles } from "./hooks/use-files";
 import { useUrlParam } from "./hooks/use-url-param";
 import { usePostHogIdentify } from "./hooks/use-posthog-identify";
 import { initPostHog, setAgentDomain, track, register } from "./lib/posthog";
+import { initAffiliate } from "./lib/affiliate";
 
 function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org?: { id: string; name: string } | null): FilesPanelProps {
   return {
@@ -36,6 +37,9 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
     onRename: f.rename,
     onDelete: f.remove,
     onOpenFile: f.openFile,
+    readFile: f.readFile,
+    writeFile: f.writeFile,
+    searchFiles: f.searchFiles,
     onShareFile: withShare ? f.shareFile : undefined,
     org: org ?? null,
   };
@@ -537,6 +541,12 @@ export default function App() {
       setAgentDomain(config.name);
     }
   }, [config?.analytics, config?.name]);
+
+  // Affiliate/referral tracking — loads the provider so an incoming ?via= is
+  // captured and convert() can fire on checkout.
+  useEffect(() => {
+    if (config?.affiliate) initAffiliate(config.affiliate);
+  }, [config?.affiliate]);
 
   useEffect(() => {
     register({ theme: isDark ? "dark" : "light", language: lang });
