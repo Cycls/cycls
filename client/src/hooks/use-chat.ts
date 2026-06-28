@@ -62,6 +62,7 @@ export interface AppConfig {
   analytics?: boolean;
   suggestions?: boolean;
   affiliate?: string;
+  max_upload?: number;   // per-file upload cap in MB
 }
 
 export function useChat(baseUrl: string = "") {

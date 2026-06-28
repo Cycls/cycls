@@ -7,7 +7,7 @@ from typing import NamedTuple, Optional
 
 
 # --unshare-user is required for --unshare-net to work in containers that
-# lack CAP_NET_ADMIN (Docker default, Cloud Run): the new netns is owned
+# lack CAP_NET_ADMIN (e.g. the Docker default): the new netns is owned
 # by the new userns where bwrap has all caps, so RTM_NEWADDR for lo works.
 _DEFAULT_ARGS = [
     "--ro-bind", "/", "/",

@@ -46,7 +46,7 @@ async def put_meta(workspace, chat_id, data):
 
 async def list_chats(workspace):
     """Yield (chat_id, {title, updatedAt}) for every chat. One LIST via
-    GCS matchGlob; one glob+read on local FS."""
+    object storage; one glob+read on local FS."""
     async for key, meta in DB(workspace).scan(glob="chat/*/index"):
         yield key.split("/")[1], meta
 

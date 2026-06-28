@@ -25,6 +25,7 @@ class Config(BaseModel):
     voice: bool = False
     pk: Optional[str] = None
     affiliate: Optional[str] = None   # affiliate/referral provider key (e.g. Rewardful)
+    max_upload: int = 512             # per-file upload cap in MB
     volume: str = "/workspace"
 
     def set_prod(self, prod: bool):

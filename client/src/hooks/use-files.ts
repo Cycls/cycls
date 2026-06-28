@@ -86,9 +86,19 @@ export function useFiles(baseUrl: string = "") {
       const all = (await (await api(`/files?recursive=1`)).json()) as (FileEntry & { path: string })[];
       const q = query.toLowerCase();
       return all
-        .filter((e) => e.path.toLowerCase().includes(q))
+        .filter((e) => e.type === "file" && e.path.toLowerCase().includes(q))
         .slice(0, 12)
         .map((e) => ({ name: e.name, path: e.path }));
+    } catch {
+      return [];
+    }
+  }, [api]);
+
+  // All folders in the workspace — backs the "Move to…" destination picker.
+  const listFolders = useCallback(async () => {
+    try {
+      const all = (await (await api(`/files?recursive=1`)).json()) as (FileEntry & { path: string })[];
+      return all.filter((e) => e.type === "directory").map((e) => ({ name: e.name, path: e.path }));
     } catch {
       return [];
     }
@@ -100,5 +110,5 @@ export function useFiles(baseUrl: string = "") {
     return `${window.location.origin}${url}`;
   }, [api]);
 
-  return { entries, path, loading, list, upload, mkdir, rename, remove, openFile, readFile, writeFile, searchFiles, shareFile, setGetToken };
+  return { entries, path, loading, list, upload, mkdir, rename, remove, openFile, readFile, writeFile, searchFiles, listFolders, shareFile, setGetToken };
 }

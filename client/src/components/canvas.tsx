@@ -6,7 +6,7 @@ import { LoadingBar } from "./loading-bar";
 import { DropdownMenu } from "./files";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isSpreadsheet, codeLang, saveBlob } from "./canvas-utils";
+import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, codeLang, saveBlob } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
 import { cn } from "../lib/utils";
 import { t } from "../lib/i18n";
@@ -35,7 +35,7 @@ export function useFileContent(
     setError(false);
     // Binary formats (pdf, images, spreadsheets) need bytes → fetch as a blob
     // URL; text formats fetch source.
-    const load = isPdf(file.name) || isImage(file.name) || isSpreadsheet(file.name)
+    const load = isPdf(file.name) || isImage(file.name) || isAudio(file.name) || isVideo(file.name) || isSpreadsheet(file.name)
       ? openFile(file.path).then((url) => { blobUrl = url; return url; })
       : readFile(file.path);
     load.then((v) => { if (!cancelled) setContent(v); })
@@ -76,6 +76,20 @@ export function CanvasDoc({ file, content, error, shared = false }: {
     return (
       <div className="flex h-full items-center justify-center overflow-auto p-4">
         <img src={content ?? ""} alt={file.name} className="max-h-full max-w-full object-contain" />
+      </div>
+    );
+  }
+  if (isVideo(file.name)) {
+    return (
+      <div className="flex h-full items-center justify-center bg-black">
+        <video src={content ?? ""} controls className="max-h-full max-w-full" />
+      </div>
+    );
+  }
+  if (isAudio(file.name)) {
+    return (
+      <div className="flex h-full items-center justify-center p-6">
+        <audio src={content ?? ""} controls className="w-full max-w-xl" />
       </div>
     );
   }
@@ -140,6 +154,13 @@ function CanvasPanel({ file, onClose, readFile, openFile, writeFile }: {
   };
 
   const download = () => openFile(file.path).then((url) => saveBlob(url, file.name)).catch(() => {});
+
+  // Open HTML as a standalone page (its own browsing context) — a stable,
+  // full-window render that doesn't reflow with the drawer, plus print/PDF.
+  const openInTab = () => {
+    if (content == null) return;
+    window.open(URL.createObjectURL(new Blob([content], { type: "text/html" })), "_blank");
+  };
 
   const startEdit = () => { setDraft(content ?? ""); setEditing(true); };
 
@@ -217,6 +238,13 @@ function CanvasPanel({ file, onClose, readFile, openFile, writeFile }: {
                 <button onClick={startEdit} className={headerBtn} aria-label={t("edit")} title={t("edit")}>
                   <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
+                  </svg>
+                </button>
+              )}
+              {isHtml(file.name) && content != null && (
+                <button onClick={openInTab} className={headerBtn} aria-label={t("openInTab")} title={t("openInTab")}>
+                  <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
                   </svg>
                 </button>
               )}
