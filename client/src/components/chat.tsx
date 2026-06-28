@@ -587,7 +587,7 @@ export function Chat({ chat, onShare, files, account, config }: {
               {filesTab === "files" && files ? (
                 <Files {...files} onOpenInCanvas={(path, name) => setCanvasFile({ path, name })} maxUpload={config?.max_upload} />
               ) : filesTab === "shares" ? (
-                <div className="flex h-full flex-col">
+                <div className="flex flex-1 min-h-0 flex-col">
                   <div className="flex-1 overflow-y-auto">
                     {sharesLoading ? (
                       <LoadingBar />
