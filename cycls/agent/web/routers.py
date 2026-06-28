@@ -246,8 +246,13 @@ def files_router(cycls_app, ws_dep, user_dep):
             raise HTTPException(status_code=404, detail="Not found")
         data = await request.json()
         dest = _safe_path(ws.root, data["to"])
+        if dest.exists():
+            raise HTTPException(status_code=409, detail="Destination already exists")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        src.rename(dest)
+        # shutil.move (not rename) so directory moves work on the gcsfuse
+        # workspace mount, which doesn't support renaming directories — it falls
+        # back to recursive copy + delete.
+        shutil.move(str(src), str(dest))
         return {"ok": True}
 
     @r.post("/files/{path:path}")
