@@ -65,11 +65,40 @@ export function useFiles(baseUrl: string = "") {
     return URL.createObjectURL(await (await api(`/files/${filePath}`)).blob());
   }, [api]);
 
+  // Authed text fetch — the canvas renders md/html from source, not a blob URL.
+  const readFile = useCallback(async (filePath: string) => {
+    return (await api(`/files/${filePath}`)).text();
+  }, [api]);
+
+  // Overwrite a text file from the canvas editor. PUT /files takes multipart,
+  // so wrap the text in a File.
+  const writeFile = useCallback(async (filePath: string, text: string) => {
+    const form = new FormData();
+    form.append("file", new File([text], filePath.split("/").pop() || "file"));
+    await api(`/files/${filePath}`, { method: "PUT", body: form });
+    track("file_saved", { path: filePath });
+  }, [api]);
+
+  // Workspace files matching a query — backs the @-mention picker in the
+  // composer. Recursive: matches nested paths like folder/sub/file.md too.
+  const searchFiles = useCallback(async (query: string) => {
+    try {
+      const all = (await (await api(`/files?recursive=1`)).json()) as (FileEntry & { path: string })[];
+      const q = query.toLowerCase();
+      return all
+        .filter((e) => e.path.toLowerCase().includes(q))
+        .slice(0, 12)
+        .map((e) => ({ name: e.name, path: e.path }));
+    } catch {
+      return [];
+    }
+  }, [api]);
+
   const shareFile = useCallback(async (filePath: string, audience: string = "public") => {
     const { url } = await (await api("/share", { method: "POST", json: { path: `file/${filePath}`, audience } })).json();
     track("file_shared", { path: filePath, audience });
     return `${window.location.origin}${url}`;
   }, [api]);
 
-  return { entries, path, loading, list, upload, mkdir, rename, remove, openFile, shareFile, setGetToken };
+  return { entries, path, loading, list, upload, mkdir, rename, remove, openFile, readFile, writeFile, searchFiles, shareFile, setGetToken };
 }

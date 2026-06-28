@@ -110,11 +110,27 @@ _EDIT_TOOL = {
     }, "required": ["path", "command"]}
 }
 
+_CANVAS_TOOL = {
+    "type": "custom",
+    "name": "canvas",
+    "description": (
+        "Display a workspace file to the user in the canvas viewer (a side panel). "
+        "Renders markdown, HTML, PDF, code/text, CSV, and Excel (xlsx/xls/ods); "
+        "other types offer a download. Use this to SHOW a file you created or that "
+        "the user asked to see — it opens the panel on their screen and returns a "
+        "short confirmation to you. Give the workspace-relative path."
+    ),
+    "input_schema": {"type": "object", "properties": {
+        "path": {"type": "string", "description": "Relative path of the file to display (e.g. report.xlsx)."},
+    }, "required": ["path"]}
+}
+
 _BUILTINS = {
     "WebSearch": [{"type": "web_search_20250305", "name": "web_search"}],
     "Bash":     [_BASH_TOOL],
     "Editor":   [_READ_TOOL, _EDIT_TOOL],
     "DataBase": [_DATABASE_TOOL],
+    "Canvas":   [_CANVAS_TOOL],
 }
 
 # Built-ins that only work on certain vendors. The loop warns + `build_tools`
@@ -213,6 +229,17 @@ async def _exec_read(inp, workspace):
     sliced = lines[start-1 : start-1 + inp["limit"]] if inp.get("limit") else lines[start-1:]
     return "\n".join(f"{i+start:6}\t{l}" for i, l in enumerate(sliced))
 
+async def _exec_canvas(inp, workspace):
+    """Resolve + validate the path, then return a UI event the loop forwards to
+    the client to open the canvas. The model gets a short ack (see the loop)."""
+    raw = inp.get("path", "")
+    try: path = _resolve_path(raw, workspace)
+    except ValueError as e: return f"Error: {e}"
+    if not path.exists(): return f"Error: {path} does not exist"
+    if path.is_dir(): return f"Error: {path} is a directory"
+    rel = raw.removeprefix("/workspace/").lstrip("/")
+    return {"type": "ui", "action": "open_canvas", "path": rel, "name": path.name}
+
 def _exec_edit(inp, workspace):
     try: path = _resolve_path(inp["path"], workspace)
     except ValueError as e: return f"Error: {e}"
@@ -261,6 +288,8 @@ _TOOLS = {
     "database":   (lambda inp, ws, **_: _exec_database(inp, ws),
                    lambda inp: {"tool_name": "Database",
                                 "step": f"{inp.get('command', '')} {inp.get('key') or inp.get('prefix', '')}".strip()}),
+    "canvas":     (lambda inp, ws, **_: _exec_canvas(inp, ws.root),
+                   lambda inp: {"tool_name": "Canvas", "step": inp.get("path", "")}),
     "web_search": (None,
                    lambda inp: {"tool_name": "Web Search", "step": inp.get("query", "")}),
 }

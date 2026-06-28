@@ -61,6 +61,7 @@ export interface AppConfig {
   pk?: string;
   analytics?: boolean;
   suggestions?: boolean;
+  affiliate?: string;
 }
 
 export function useChat(baseUrl: string = "") {

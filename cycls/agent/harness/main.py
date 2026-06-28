@@ -216,9 +216,14 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     model=bare_model, tool=block["name"], ms=ms, ok=ok,
                     output_bytes=len(out) if isinstance(out, (str, bytes)) else None)
                 if not ok: out = f"Error: {out}"
+                # A tool that returns a UI event (e.g. `canvas`) drives the client
+                # and the model gets a short ack — keeps tool_result a valid string.
+                if ok and isinstance(out, dict) and out.get("type") == "ui":
+                    yield out
+                    content = f"Opened {out.get('name') or out.get('path') or 'the file'} for the user."
                 # Custom-handler results flow through the stream for the body to see
                 # (UI rendering) AND serialize into tool_result for the model (data).
-                if handlers and block["name"] in handlers and ok:
+                elif handlers and block["name"] in handlers and ok:
                     yield out
                     content = out if isinstance(out, str) else json.dumps(out, default=str)
                 else:
