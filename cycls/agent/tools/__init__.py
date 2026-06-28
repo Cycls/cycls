@@ -114,11 +114,17 @@ _CANVAS_TOOL = {
     "type": "custom",
     "name": "canvas",
     "description": (
-        "Display a workspace file to the user in the canvas viewer (a side panel). "
-        "Renders markdown, HTML, PDF, code/text, CSV, and Excel (xlsx/xls/ods); "
-        "other types offer a download. Use this to SHOW a file you created or that "
-        "the user asked to see — it opens the panel on their screen and returns a "
-        "short confirmation to you. Give the workspace-relative path."
+        "Show a FINISHED deliverable to the user in the canvas viewer (a side "
+        "panel). Renders markdown, HTML, PDF, images, audio/video, code/text, CSV, "
+        "and Excel (xlsx/xls/ods); other types offer a download.\n\n"
+        "Use ONLY for a final artifact the user is actually expecting to view — the "
+        "report, document, dashboard, sheet, or chart they asked you to produce, "
+        "and only once it is complete.\n"
+        "Do NOT open transient or intermediate files: scripts you run, scratch or "
+        "work-in-progress notes, intermediate/partial markdown, helper or config "
+        "files, or anything you are still editing. When unsure, don't open it.\n"
+        "Call this at most once, after the deliverable is ready. Give the "
+        "workspace-relative path."
     ),
     "input_schema": {"type": "object", "properties": {
         "path": {"type": "string", "description": "Relative path of the file to display (e.g. report.xlsx)."},
