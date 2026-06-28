@@ -352,7 +352,7 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onMkdir, o
 
   return (
     <div
-      className="flex h-full flex-col"
+      className="flex flex-1 min-h-0 flex-col"
       onDragEnter={(e) => { if (!isFileDrag(e)) return; e.preventDefault(); dragCounter.current++; setDragging(true); }}
       onDragOver={(e) => { if (isFileDrag(e)) e.preventDefault(); }}
       onDragLeave={(e) => { if (!isFileDrag(e)) return; e.preventDefault(); dragCounter.current--; if (dragCounter.current <= 0) { dragCounter.current = 0; setDragging(false); } }}
@@ -488,7 +488,7 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onMkdir, o
       )}
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto relative">
+      <div className="flex-1 min-h-0 overflow-y-auto relative">
         {/* OS-file drag overlay */}
         <AnimatePresence>
           {dragging && (
