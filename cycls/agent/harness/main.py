@@ -13,7 +13,7 @@ from .. import state
 from ..state import Session
 from . import events
 from .events import Turn
-from .compact import COMPACT_BUFFER, KEEP_RECENT, compact
+from .compact import COMPACT_BUFFER
 from ..logs import log
 from .prompts import DEFAULT_SYSTEM
 from .providers import make_provider
@@ -134,10 +134,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
     while True:
         try:
-            if tokens_since_compact > window - COMPACT_BUFFER and len(messages) > KEEP_RECENT:
+            if tokens_since_compact > window - COMPACT_BUFFER and len(messages) - session.first_kept > 2:
                 yield events.step("Compacting context...")
                 try:
-                    await session.rewrite(await compact(provider, messages))
+                    await session.compact(provider)
                     tokens_since_compact = 0
                 except Exception as ce:
                     yield events.callout(f"Compaction failed: {ce}", "warning")
@@ -146,7 +146,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             partial_text = ""
             turn_t0 = time.monotonic()
             try:
-                async for ev in _stream_with_retry(provider, messages=state.normalize(messages), system=system_text,
+                async for ev in _stream_with_retry(provider, messages=state.normalize(session.context()), system=system_text,
                                                    tools=tools_list, max_tokens=max_tokens,
                                                    mcp_servers=mcp_servers, thinking=thinking):
                     if isinstance(ev, Turn): turn = ev
