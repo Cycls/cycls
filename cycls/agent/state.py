@@ -12,7 +12,8 @@ every turn in one operation.
 
 Keys:
     chat/{id}/index           — chat metadata (sidebar target)
-    chat/{id}/{turn:06d}      — turns
+    chat/{id}/{turn:06d}      — turns (append-only; the full transcript)
+    chat/{id}/compaction      — compaction marker (summary + first_kept)
     share/{token}             — opaque share tokens (RFC003)
     <.database/ slot>         — agent-controlled KV exposed to the LLM
 """
@@ -217,6 +218,18 @@ async def replace_messages(workspace, chat_id, messages):
     ])
 
 
+async def get_compaction(workspace, chat_id):
+    """The chat's compaction marker `{summary, first_kept}`, or None. Raw turns
+    stay on disk; this marker projects the model's context over them."""
+    _validate(chat_id)
+    return await DB(workspace).get(f"chat/{chat_id}/compaction")
+
+
+async def put_compaction(workspace, chat_id, data):
+    _validate(chat_id)
+    await DB(workspace).put(f"chat/{chat_id}/compaction", data)
+
+
 async def delete_chat(workspace, chat_id):
     """Delete the chat — index and all turns in one subtree wipe."""
     _validate(chat_id)
@@ -250,12 +263,36 @@ class Session:
     @classmethod
     async def open(cls, context):
         persist = bool(context.chat_id and context.user)
-        messages = _ephemeralize(await load_messages(context.workspace, context.chat_id)) if persist else []
-        return cls(context.workspace, context.chat_id if persist else None, messages)
+        if not persist:
+            return cls(context.workspace, None, [])
+        messages = _ephemeralize(await load_messages(context.workspace, context.chat_id))
+        marker = await get_compaction(context.workspace, context.chat_id) or {}
+        return cls(context.workspace, context.chat_id, messages,
+                   summary=marker.get("summary"), first_kept=int(marker.get("first_kept", 0)))
 
-    def __init__(self, workspace, chat_id, messages):
+    def __init__(self, workspace, chat_id, messages, summary=None, first_kept=0):
         self.workspace, self.chat_id, self.messages = workspace, chat_id, messages
+        self.summary, self.first_kept = summary, min(first_kept, len(messages))
         self._saved = len(messages)
+
+    def context(self):
+        """The model's view: raw turns whole, or (once compacted) the summary
+        standing in for the folded prefix + the recent raw turns verbatim."""
+        if self.summary is None:
+            return self.messages
+        from .harness.compact import prefix
+        return [*prefix(self.summary), *self.messages[self.first_kept:]]
+
+    async def compact(self, provider):
+        """Fold the projected context into a summary marker — raw turns on disk
+        are never touched, so the full transcript survives for the UI."""
+        from .harness.compact import compact
+        result = await compact(provider, self.context())
+        self.summary = result[0]["content"]
+        self.first_kept = len(self.messages) - (len(result) - 2)
+        if self.chat_id:
+            await put_compaction(self.workspace, self.chat_id,
+                                 {"summary": self.summary, "first_kept": self.first_kept})
 
     async def add_user(self, content, *, attachments=None):
         msg = {"role": "user", "content": content}
@@ -270,13 +307,6 @@ class Session:
         """Flush the unsaved tail of `.messages` to disk."""
         if self.chat_id and len(self.messages) > self._saved:
             await append_messages(self.workspace, self.chat_id, self.messages[self._saved:], self._saved)
-        self._saved = len(self.messages)
-
-    async def rewrite(self, messages):
-        """Replace `.messages` wholesale (compaction) and persist the rewrite."""
-        self.messages[:] = messages
-        if self.chat_id:
-            await replace_messages(self.workspace, self.chat_id, self.messages)
         self._saved = len(self.messages)
 
     def rollback(self):

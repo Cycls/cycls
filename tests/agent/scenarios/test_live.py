@@ -281,9 +281,9 @@ def test_long_bash_output_truncation_real(tmp_path):
 def test_compaction_real_roundtrip(tmp_path):
     """Force compaction by shrinking the buffers, then verify the loop
     summarizes real prior content and continues to produce a response.
-    Exercises `provider.complete`, the `<summary>` regex, replace_messages, the
-    `internal` flag, and the post-compact turn — none of which the mocked tests
-    actually run end-to-end."""
+    Exercises `provider.complete`, the `<summary>` regex, the append-only
+    compaction marker, and the post-compact turn — none of which the mocked
+    tests actually run end-to-end."""
     from unittest.mock import patch
     from cycls.agent import state as sessions
 
@@ -304,22 +304,22 @@ def test_compaction_real_roundtrip(tmp_path):
     llm = cycls.LLM().model(SONNET)
 
     # COMPACT_BUFFER huge ⇒ threshold negative ⇒ compaction fires immediately.
-    # main.KEEP_RECENT=1 ⇒ the `len(messages) > KEEP_RECENT` guard passes.
-    # compact.KEEP_RECENT=1 ⇒ recent = the just-added user msg, so the
-    # post-compact list `[summary_user, understood_assistant, new_user]` stays
+    # `_cut` snaps recent to a user message, so the post-compact list stays
     # role-alternating (Anthropic rejects two consecutive assistants).
-    with patch("cycls.agent.harness.main.COMPACT_BUFFER", 999_999_999), \
-         patch("cycls.agent.harness.main.KEEP_RECENT", 1), \
-         patch("cycls.agent.harness.compact.KEEP_RECENT", 1):
+    with patch("cycls.agent.harness.main.COMPACT_BUFFER", 999_999_999):
         events = asyncio.run(_collect(llm, ctx))
 
     assert any(isinstance(e, dict) and e.get("step") == "Compacting context..." for e in events), \
         f"expected Compacting step; got {events!r}"
 
-    # History rewritten to the internal summary pair + the post-compact turn.
+    # Raw transcript is preserved (append-only) — the prior turns survive and
+    # the new exchange is appended, nothing rewritten away.
     msgs = asyncio.run(sessions.load_messages(ctx.workspace, ctx.chat_id))
-    assert msgs[0]["role"] == "user" and msgs[0].get("internal") is True
-    assert msgs[0]["content"].startswith("This session continues from a previous conversation.")
-    assert msgs[1]["role"] == "assistant" and msgs[1].get("internal") is True
+    assert not any(m.get("internal") for m in msgs)
+    assert [m["content"] for m in msgs[:6]] == [m["content"] for m in prior]
+    assert len(msgs) > len(prior)
+    # Compaction lives in the marker, not the transcript.
+    marker = asyncio.run(sessions.get_compaction(ctx.workspace, ctx.chat_id))
+    assert marker and marker["summary"].startswith("This session continues from a previous conversation.")
     # Real response came back.
     assert _text_of(events).strip(), f"no post-compact text; events={events!r}"
