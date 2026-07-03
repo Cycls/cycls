@@ -609,20 +609,24 @@ def test_ingest_image_becomes_content_block(tmp_path):
         {"type": "image", "image": "photo.png"},
     ]
     result = asyncio.run(_ingest(parts, str(ws)))
-    assert len(result) == 2
     assert result[0] == {"type": "text", "text": "what is this?"}
-    assert result[1]["type"] == "image"
-    assert result[1]["source"]["media_type"] == "image/png"
+    assert result[1] == {"type": "text", "text": "[Attached: photo.png]"}  # filename framing
+    assert result[2]["type"] == "image"
+    assert result[2]["source"]["media_type"] == "image/png"
 
 
-def test_ingest_missing_file_becomes_text_hint(tmp_path):
+def test_ingest_unreadable_attachment_names_the_file(tmp_path):
+    """Binary/missing attachments must tell the model WHAT was attached — a
+    bare error string reads as 'no document', which is what users see."""
     ws = tmp_path / "workspace"
     ws.mkdir()
-    parts = [{"type": "file", "file": "nope.txt"}]
-    result = asyncio.run(_ingest(parts, str(ws)))
-    assert len(result) == 1
-    assert result[0]["type"] == "text"
-    assert "Error" in result[0]["text"] or "does not exist" in result[0]["text"]
+    (ws / "report.docx").write_bytes(b"PK\x03\x04\xff\xfe")
+
+    for fname in ("report.docx", "nope.txt"):
+        result = asyncio.run(_ingest([{"type": "file", "file": fname}], str(ws)))
+        assert len(result) == 1
+        assert f'"{fname}"' in result[0]["text"]
+        assert "propose a way to extract" in result[0]["text"]
 
 
 def test_ingest_empty_file_ref_passes_through(tmp_path):
