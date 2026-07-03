@@ -4,6 +4,13 @@ import os
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_catalog_fetch(monkeypatch):
+    """Keep tests offline — the loop's catalog.refresh() must never hit models.dev."""
+    from cycls.agent.harness import catalog
+    monkeypatch.setattr(catalog, "refresh", lambda *a, **k: None)
+
+
 # ---- Live LLM tests ----
 # Tests marked @pytest.mark.live hit real Anthropic. Off by default; opt
 # in with `pytest --live`. Also auto-skips if ANTHROPIC_API_KEY is unset.

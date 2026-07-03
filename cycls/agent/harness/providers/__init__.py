@@ -95,7 +95,7 @@ def make_provider(model: str, *, client=None, base_url=None, api_key=None) -> Pr
         from .anthropic import AnthropicProvider
         return AnthropicProvider(sdk, name)
     from .openai import OpenAIProvider
-    return OpenAIProvider(sdk, name)
+    return OpenAIProvider(sdk, name, vendor)
 
 
 # Re-export concrete providers for type-checking / direct construction by callers

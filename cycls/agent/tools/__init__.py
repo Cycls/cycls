@@ -3,7 +3,8 @@ API shape (`type` / `name` / `description` / `input_schema`) and registered in
 `_BUILTINS`; `build_tools` emits them as-is. User-supplied custom tools come
 through `_normalize_tool` (accepts the camelCase `inputSchema` form too)."""
 import asyncio, base64, json, os, pathlib
-from . import pdf
+from html.parser import HTMLParser
+from . import pdf, skills
 from ..state import _exec_database
 
 MAX_OUTPUT = 30_000
@@ -131,24 +132,60 @@ _CANVAS_TOOL = {
     }, "required": ["path"]}
 }
 
+# Portable web tools (Brave search + a generic fetch), client-side so they run
+# on any provider. `WebSearch` enables the pair; `web_search="native"` swaps in
+# the provider's own server-side search instead (Anthropic only, for now).
+_WEB_SEARCH_TOOL = {
+    "type": "custom",
+    "name": "web_search",
+    "description": (
+        "Search the web with Brave. Returns ranked results — each with its title, "
+        "URL, and the most relevant passages from the page. One call is usually "
+        "enough; when a result's passages aren't sufficient, follow up with "
+        "`web_fetch` on its URL.\n"
+        "Use for current events, facts, docs, or anything outside your training."
+    ),
+    "input_schema": {"type": "object", "properties": {
+        "query": {"type": "string", "description": "The search query."},
+        "count": {"type": "integer", "description": "Number of results (default 5, max 20)."},
+    }, "required": ["query"]}
+}
+_WEB_FETCH_TOOL = {
+    "type": "custom",
+    "name": "web_fetch",
+    "description": (
+        "Fetch a web page by URL and return its readable text. Use after "
+        "`web_search` when you need the full page, not just the passages. "
+        "Give the exact http(s) URL."
+    ),
+    "input_schema": {"type": "object", "properties": {
+        "url": {"type": "string", "description": "The full http(s) URL to fetch."},
+        "max_chars": {"type": "integer", "description": "Max characters to return (default 20000)."},
+    }, "required": ["url"]}
+}
+_NATIVE_WEB_SEARCH = {"type": "web_search_20250305", "name": "web_search"}
+
 _BUILTINS = {
-    "WebSearch": [{"type": "web_search_20250305", "name": "web_search"}],
     "Bash":     [_BASH_TOOL],
     "Editor":   [_READ_TOOL, _EDIT_TOOL],
     "DataBase": [_DATABASE_TOOL],
     "Canvas":   [_CANVAS_TOOL],
 }
 
-# Built-ins that only work on certain vendors. The loop warns + `build_tools`
-# skips when the active vendor doesn't match.
-_ANTHROPIC_ONLY = frozenset({"WebSearch"})
+
+def _web_search_tools(vendor, mode):
+    """`native` → the provider's server-side search (Anthropic only, for now);
+    otherwise our portable Brave search + fetch. Empty = skip the native ask."""
+    if mode == "native":
+        return [_NATIVE_WEB_SEARCH] if vendor == "anthropic" else []
+    return [_WEB_SEARCH_TOOL, _WEB_FETCH_TOOL]
 
 
-def vendor_skips(allowed_tools, vendor):
-    """Names from `allowed_tools` that the active `vendor` can't run."""
-    if vendor in (None, "anthropic"):
-        return []
-    return [n for n in allowed_tools if n in _ANTHROPIC_ONLY]
+def vendor_skips(allowed_tools, vendor, web_search="brave"):
+    """Requested tools the active vendor can't run — native search off Anthropic."""
+    if "WebSearch" in allowed_tools and web_search == "native" and vendor not in (None, "anthropic"):
+        return ["WebSearch"]
+    return []
 
 
 def _normalize_tool(spec):
@@ -160,12 +197,15 @@ def _normalize_tool(spec):
             "input_schema": spec.get("inputSchema", spec.get("input_schema", {}))}
 
 
-def build_tools(allowed_tools, custom, vendor=None):
+def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
     """Provider-neutral list. The Anthropic provider attaches a `cache_control`
     breakpoint to the last tool at request time."""
-    skipped = set(vendor_skips(allowed_tools, vendor))
-    tools = [t for name in allowed_tools if name not in skipped
-             for t in _BUILTINS.get(name, [])]
+    tools = []
+    for name in allowed_tools:
+        if name == "WebSearch":
+            tools += _web_search_tools(vendor, web_search)
+        else:
+            tools += _BUILTINS.get(name, [])
     tools += [_normalize_tool(t) for t in (custom or [])]
     return tools
 
@@ -194,6 +234,8 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
           .chdir("/workspace")
           .setenv(PATH=path, LANG=lang)
           .network(network).timeout(timeout))
+    for src, dst in skills.dev_mounts():   # dev skill scripts/templates, read-only
+        sb = sb.ro_bind(src, dst)
     result = await sb.run(["bash", "-c", command], env={"PATH": path, "LANG": lang})
     if result.timed_out:
         return f"Error: Command timed out after {timeout}s"
@@ -203,8 +245,72 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
         out = out[:h] + "\n... (truncated) ...\n" + out[-h:]
     return out.strip() or "(no output)"
 
+async def _exec_web_search(inp):
+    """Brave web search — one call, native-parity. Each result carries its
+    clean passages (description + extra_snippets), so no second fetch is needed
+    for most queries. Key from `BRAVE_API_KEY`."""
+    key = os.environ.get("BRAVE_API_KEY")
+    if not key: return "Error: web search is unavailable (BRAVE_API_KEY not set)."
+    query = (inp.get("query") or "").strip()
+    if not query: return "Error: query is required."
+    count = min(max(int(inp.get("count") or 5), 1), 20)
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get("https://api.search.brave.com/res/v1/web/search",
+                                  params={"q": query, "count": count},
+                                  headers={"X-Subscription-Token": key, "Accept": "application/json"})
+        r.raise_for_status()
+        results = ((r.json().get("web") or {}).get("results") or [])[:count]
+    except Exception as e:
+        return f"Error: web search failed ({e})."
+    if not results: return f"No results for {query!r}."
+    def fmt(i, x):
+        passages = " ".join([x.get("description", ""), *x.get("extra_snippets", [])]).strip()
+        return f"{i+1}. {x.get('title', '')}\n{x.get('url', '')}\n{passages}"
+    return "\n\n".join(fmt(i, x) for i, x in enumerate(results))
+
+
+class _TextExtractor(HTMLParser):
+    """Minimal HTML → text: drop scripts/styles/nav, keep visible text. Zero deps."""
+    _SKIP = {"script", "style", "noscript", "template", "svg", "head"}
+    def __init__(self):
+        super().__init__()
+        self.parts, self._skip = [], 0
+    def handle_starttag(self, tag, attrs):
+        if tag in self._SKIP: self._skip += 1
+    def handle_endtag(self, tag):
+        if tag in self._SKIP and self._skip: self._skip -= 1
+    def handle_data(self, data):
+        if not self._skip and (t := data.strip()): self.parts.append(t)
+
+
+def _html_to_text(html):
+    p = _TextExtractor()
+    try: p.feed(html)
+    except Exception: pass
+    return "\n".join(p.parts)
+
+
+async def _exec_web_fetch(inp):
+    """Fetch a URL and return readable text — the model's on-demand 'read the
+    full page' step after web_search."""
+    url = (inp.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")): return "Error: a full http(s) URL is required."
+    limit = min(max(int(inp.get("max_chars") or 20_000), 500), 100_000)
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; CyclsAgent/1.0)"})
+        r.raise_for_status()
+    except Exception as e:
+        return f"Error: fetch failed ({e})."
+    text = (_html_to_text(r.text) if "html" in r.headers.get("content-type", "") else r.text).strip()
+    return (text[:limit] + "\n... (truncated)") if len(text) > limit else (text or "(no readable text)")
+
+
 async def _exec_read(inp, workspace):
-    try: path = _resolve_path(inp["path"], workspace)
+    try: path = skills.resolve_dev_path(inp["path"]) or _resolve_path(inp["path"], workspace)
     except ValueError as e: return f"Error: {e}"
     if not path.exists(): return f"Error: {path} does not exist"
     if path.is_dir(): return f"Error: {path} is a directory"
@@ -296,8 +402,12 @@ _TOOLS = {
                                 "step": f"{inp.get('command', '')} {inp.get('key') or inp.get('prefix', '')}".strip()}),
     "canvas":     (lambda inp, ws, **_: _exec_canvas(inp, ws.root),
                    lambda inp: {"tool_name": "Canvas", "step": inp.get("path", "")}),
-    "web_search": (None,
+    "skill":      (lambda inp, ws, **_: skills._exec_skill(inp, ws.root),
+                   lambda inp: {"tool_name": "Skill", "step": inp.get("name", "")}),
+    "web_search": (lambda inp, ws, **_: _exec_web_search(inp),
                    lambda inp: {"tool_name": "Web Search", "step": inp.get("query", "")}),
+    "web_fetch":  (lambda inp, ws, **_: _exec_web_fetch(inp),
+                   lambda inp: {"tool_name": "Fetching", "step": inp.get("url", "")}),
 }
 
 

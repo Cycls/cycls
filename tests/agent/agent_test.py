@@ -934,6 +934,121 @@ def test_auto_retry_exhausted_shows_error(agent_env):
 
 
 # ---------------------------------------------------------------------------
+# AGENT.md + skills injection tests
+# ---------------------------------------------------------------------------
+
+def _capture_stream(final):
+    """(captured_kwargs, stream_fn) — captures what the loop sends the API."""
+    captured = {}
+    def stream(**kw):
+        captured.update(kw)
+        return FakeStream(final)
+    return captured, stream
+
+
+def _system_text(captured):
+    system = captured["system"]
+    return system[0]["text"] if isinstance(system, list) else system
+
+
+def test_agent_md_injected_into_system(agent_env):
+    ws, ctx = agent_env
+    (Path(ws) / "AGENT.md").write_text("Answer in pirate speak.")
+    captured, stream = _capture_stream(_make_response([_text_block()]))
+    mock_client = MagicMock()
+    mock_client.messages.stream = stream
+
+    with _mock_anthropic(mock_client):
+        asyncio.run(_drain(_run(context=ctx)))
+
+    assert "<workspace_instructions>" in _system_text(captured)
+    assert "Answer in pirate speak." in _system_text(captured)
+
+
+def test_agent_md_absent_or_disabled_leaves_system_clean(agent_env):
+    ws, ctx = agent_env
+    captured, stream = _capture_stream(_make_response([_text_block()]))
+    mock_client = MagicMock()
+    mock_client.messages.stream = stream
+
+    with _mock_anthropic(mock_client):
+        asyncio.run(_drain(_run(context=ctx)))
+    assert "<workspace_instructions>" not in _system_text(captured)
+
+    # File present but instructions=None → still clean
+    (Path(ws) / "AGENT.md").write_text("Ignored.")
+    ctx2 = _make_context(ws)
+    with _mock_anthropic(mock_client):
+        asyncio.run(_drain(_run(context=ctx2, instructions=None)))
+    assert "<workspace_instructions>" not in _system_text(captured)
+
+
+def test_agent_md_binary_ignored_loop_completes(agent_env):
+    ws, ctx = agent_env
+    (Path(ws) / "AGENT.md").write_bytes(b"\x00\x01binary")
+    captured, stream = _capture_stream(_make_response([_text_block("Done")]))
+    mock_client = MagicMock()
+    mock_client.messages.stream = stream
+
+    with _mock_anthropic(mock_client):
+        asyncio.run(_drain(_run(context=ctx)))
+    assert "<workspace_instructions>" not in _system_text(captured)
+
+
+def test_user_skill_adds_catalog_and_tool(agent_env):
+    ws, ctx = agent_env
+    d = Path(ws) / "skills" / "haiku"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: haiku\ndescription: Writes haikus.\n---\n5-7-5 always.")
+    captured, stream = _capture_stream(_make_response([_text_block()]))
+    mock_client = MagicMock()
+    mock_client.messages.stream = stream
+
+    with _mock_anthropic(mock_client):
+        asyncio.run(_drain(_run(context=ctx)))
+
+    assert "- haiku: Writes haikus." in _system_text(captured)
+    assert any(t.get("name") == "skill" for t in captured["tools"])
+
+
+def test_no_skills_no_catalog_no_tool(agent_env):
+    ws, ctx = agent_env
+    captured, stream = _capture_stream(_make_response([_text_block()]))
+    mock_client = MagicMock()
+    mock_client.messages.stream = stream
+
+    with _mock_anthropic(mock_client):
+        asyncio.run(_drain(_run(context=ctx)))
+
+    assert "<skills>" not in _system_text(captured)
+    assert not any(t.get("name") == "skill" for t in (captured.get("tools") or []))
+
+
+def test_skill_tool_call_returns_body_in_history(agent_env):
+    ws, ctx = agent_env
+    d = Path(ws) / "skills" / "haiku"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: haiku\ndescription: Writes haikus.\n---\n5-7-5 always.")
+
+    round1 = _make_response([_tool_use_block("s1", name="skill", inp={"name": "haiku"})],
+                            stop_reason="tool_use")
+    final = _make_response([_text_block("A haiku")])
+    responses = iter([round1, final])
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+
+    with _mock_anthropic(mock_client):
+        asyncio.run(_drain(_run(context=ctx)))
+
+    history = _read_history(ctx)
+    results = [b for m in history for b in (m.get("content") or [])
+               if isinstance(b, dict) and b.get("tool_use_id") == "s1"]
+    assert len(results) == 1
+    assert "5-7-5 always." in results[0]["content"]
+    assert "files in skills/haiku/" in results[0]["content"]
+
+
+# ---------------------------------------------------------------------------
 # Context window tests
 # ---------------------------------------------------------------------------
 
@@ -948,8 +1063,11 @@ def test_anthropic_context_window_1m_variants():
     assert AnthropicProvider(None, "claude-sonnet-4-6[1m]").context_window == 1_000_000
 
 
-def test_anthropic_context_window_unknown_defaults_200k():
-    assert AnthropicProvider(None, "future-model-name").context_window == 200_000
+def test_anthropic_context_window_unknown_claude_defaults_200k():
+    """An unknown claude-* id gets the family floor (200k); a fully unknown
+    id gets the catalog-wide safe default."""
+    assert AnthropicProvider(None, "claude-future-9").context_window == 200_000
+    assert AnthropicProvider(None, "future-model-name").context_window == 128_000
 
 
 def test_openai_context_window_gpt4o():
