@@ -98,24 +98,125 @@ def test_build_tools_custom_passthrough():
     assert tools[0]["name"] == "render_image"
 
 
-def test_build_tools_filters_anthropic_only_on_other_vendors():
-    """WebSearch is Anthropic-side only — skipped silently when vendor is openai."""
-    tools = build_tools(["WebSearch", "Bash"], None, vendor="openai")
-    names = {t.get("name") for t in tools}
-    assert "web_search" not in names
-    assert "bash" in names
+def test_build_tools_web_search_defaults_to_portable_brave():
+    """Default web search is our portable Brave pair — search + fetch — and it's
+    present on every vendor (that's the whole point of switching off native)."""
+    for vendor in ("openai", "anthropic", None):
+        names = {t.get("name") for t in build_tools(["WebSearch"], None, vendor=vendor)}
+        assert names == {"web_search", "web_fetch"}
 
 
-def test_build_tools_keeps_anthropic_only_for_anthropic():
-    tools = build_tools(["WebSearch", "Bash"], None, vendor="anthropic")
-    names = {t.get("name") for t in tools}
-    assert names == {"web_search", "bash"}
+def test_build_tools_native_web_search_only_on_anthropic():
+    """`native` uses the provider server tool on Anthropic, skips elsewhere."""
+    anth = build_tools(["WebSearch"], None, vendor="anthropic", web_search="native")
+    assert anth == [{"type": "web_search_20250305", "name": "web_search"}]
+    assert build_tools(["WebSearch"], None, vendor="openai", web_search="native") == []
 
 
-def test_vendor_skips_returns_anthropic_only_names():
-    assert vendor_skips(["WebSearch", "Bash"], "openai") == ["WebSearch"]
-    assert vendor_skips(["WebSearch", "Bash"], "anthropic") == []
-    assert vendor_skips(["WebSearch", "Bash"], None) == []
+def test_vendor_skips_flags_native_search_off_anthropic():
+    assert vendor_skips(["WebSearch", "Bash"], "openai", "native") == ["WebSearch"]
+    assert vendor_skips(["WebSearch", "Bash"], "anthropic", "native") == []
+    assert vendor_skips(["WebSearch"], "openai", "brave") == []
+    assert vendor_skips(["WebSearch"], "openai") == []  # default is brave
+
+
+# ---- model catalog ----
+
+def test_catalog_provider_aware_lookup():
+    from cycls.agent.harness import catalog
+    assert catalog.context_window("anthropic", "claude-sonnet-4-6") == 1_000_000
+    assert catalog.context_window("anthropic", "claude-sonnet-4-20250514") == 200_000
+    assert catalog.context_window("zai", "glm-5.2") == 1_048_576   # 1M model...
+    assert catalog.context_window("zai", "glm-4.6") == 200_000     # ...smaller family stays small
+    assert catalog.context_window("zhipu", "glm-5.2") == 1_048_576  # vendor alias
+
+
+def test_catalog_unknown_model_gets_safe_defaults():
+    from cycls.agent.harness import catalog
+    assert catalog.context_window("acme", "mystery-9") == 128_000
+    assert catalog.cost("acme", "mystery-9", 1_000_000, 0, 0, 0) == 0
+
+
+def test_catalog_cost_per_provider():
+    from cycls.agent.harness import catalog
+    assert catalog.cost("anthropic", "claude-sonnet-4-6", 1_000_000, 0, 0, 0) == 3.0
+    assert catalog.cost("anthropic", "claude-sonnet-4-6", 0, 1_000_000, 0, 0) == 15.0
+    assert catalog.cost("zai", "glm-5.2", 1_000_000, 0, 0, 0) == 1.40
+
+
+def test_catalog_refresh_targets_the_given_volume(tmp_path, monkeypatch):
+    """The loop passes the deployment volume — the snapshot must live there
+    (it survives serverless restarts), not in the container home."""
+    from cycls.agent.harness import catalog
+    monkeypatch.undo()  # drop the autouse no-op so the real refresh runs (no loop → no fetch)
+    monkeypatch.setattr(catalog, "_CACHE", catalog._CACHE)  # restore after test
+    catalog.refresh(tmp_path)
+    assert catalog._CACHE == tmp_path / ".cycls" / "models.json"
+
+
+def test_catalog_live_fills_gaps_but_bundled_wins(monkeypatch):
+    from cycls.agent.harness import catalog
+    monkeypatch.setattr(catalog, "_live", {
+        "acme": {"models": {"acme-1": {"limit": {"context": 9_000, "output": 900},
+                                       "cost": {"input": 7, "output": 21}}}},
+        "anthropic": {"models": {"claude-sonnet-4-6": {"limit": {"context": 1}}}},
+    })
+    assert catalog.context_window("acme", "acme-1") == 9_000        # live covers unknowns
+    assert catalog.cost("acme", "acme-1", 1_000_000, 0, 0, 0) == 7.0
+    assert catalog.context_window("anthropic", "claude-sonnet-4-6") == 1_000_000  # bundled wins
+
+
+# ---- web search / fetch executors ----
+
+class _FakeResp:
+    def __init__(self, data=None, text="", headers=None):
+        self._data, self.text, self.headers = data, text, headers or {}
+    def raise_for_status(self): pass
+    def json(self): return self._data
+
+
+class _FakeClient:
+    """Stands in for httpx.AsyncClient — returns a preset response from .get."""
+    resp = None
+    def __init__(self, *a, **k): pass
+    async def __aenter__(self): return self
+    async def __aexit__(self, *a): return False
+    async def get(self, *a, **k): return type(self).resp
+
+
+def test_web_search_requires_api_key(monkeypatch):
+    from cycls.agent.tools import _exec_web_search
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    assert "BRAVE_API_KEY" in asyncio.run(_exec_web_search({"query": "hi"}))
+
+
+def test_web_search_formats_passages(monkeypatch):
+    import httpx
+    from cycls.agent.tools import _exec_web_search
+    monkeypatch.setenv("BRAVE_API_KEY", "x")
+    _FakeClient.resp = _FakeResp(data={"web": {"results": [
+        {"title": "T1", "url": "http://a", "description": "D1", "extra_snippets": ["s1", "s2"]},
+        {"title": "T2", "url": "http://b", "description": "D2"}]}})
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+    out = asyncio.run(_exec_web_search({"query": "hi"}))
+    assert "T1" in out and "http://a" in out and "s1" in out and "s2" in out and "T2" in out
+
+
+def test_web_fetch_strips_html_to_text(monkeypatch):
+    import httpx
+    from cycls.agent.tools import _exec_web_fetch
+    _FakeClient.resp = _FakeResp(
+        text="<html><head><style>x{}</style></head><body><p>Hello</p><script>bad()</script>World</body></html>",
+        headers={"content-type": "text/html"})
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+    out = asyncio.run(_exec_web_fetch({"url": "http://a"}))
+    assert "Hello" in out and "World" in out
+    assert "bad()" not in out and "x{}" not in out
+
+
+def test_web_fetch_rejects_non_url():
+    from cycls.agent.tools import _exec_web_fetch
+    assert "http(s) URL" in asyncio.run(_exec_web_fetch({"url": "not-a-url"}))
 
 
 def test_openai_to_messages_degrades_image_in_tool_result():
@@ -164,6 +265,85 @@ def test_openai_to_messages_no_drops_when_text_only():
     assert out[0]["content"] == "plain text"
 
 
+class _CaptureClient:
+    """Fake OpenAI SDK client — records create() kwargs, yields no chunks."""
+    def __init__(self):
+        self.kwargs = None
+        self.chat = self
+        self.completions = self
+
+    async def create(self, **kw):
+        self.kwargs = kw
+        async def gen():
+            return
+            yield
+        return gen()
+
+
+def _stream_kwargs(vendor, thinking=None):
+    from cycls.agent.harness.providers.openai import OpenAIProvider
+    client = _CaptureClient()
+    p = OpenAIProvider(client, "some-model", vendor)
+    async def drain():
+        return [e async for e in p.stream(messages=[{"role": "user", "content": "hi"}],
+                                          system="", tools=[], max_tokens=100, thinking=thinking)]
+    asyncio.run(drain())
+    return client.kwargs
+
+
+def test_openai_vendor_uses_max_completion_tokens():
+    kw = _stream_kwargs("openai")
+    assert kw["max_completion_tokens"] == 100 and "max_tokens" not in kw
+
+
+def test_compat_vendors_use_standard_max_tokens():
+    kw = _stream_kwargs("zai")
+    assert kw["max_tokens"] == 100 and "max_completion_tokens" not in kw
+
+
+def test_glm_thinking_passthrough():
+    assert _stream_kwargs("zai", thinking="adaptive")["extra_body"] == {"thinking": {"type": "enabled"}}
+    assert _stream_kwargs("zai", thinking=None)["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert "extra_body" not in _stream_kwargs("groq", thinking="adaptive")
+
+
+def test_openai_usage_splits_cached_tokens():
+    """prompt_tokens includes cached tokens on OpenAI-compat providers — the
+    Turn must carry the split so cost prices them at the cache-read rate."""
+    from unittest.mock import AsyncMock, MagicMock
+    from cycls.agent.harness.providers.openai import OpenAIProvider
+    from cycls.agent.harness.events import Turn
+
+    chunk = MagicMock()
+    chunk.usage.prompt_tokens = 100
+    chunk.usage.completion_tokens = 10
+    chunk.usage.prompt_tokens_details.cached_tokens = 60
+    chunk.choices = []
+
+    client = _CaptureClient()
+    async def gen():
+        yield chunk
+    client.create = AsyncMock(return_value=gen())
+
+    async def drain():
+        return [e async for e in OpenAIProvider(client, "gpt-5.5").stream(
+            messages=[{"role": "user", "content": "hi"}], system="", tools=[], max_tokens=100)]
+    turn = next(e for e in asyncio.run(drain()) if isinstance(e, Turn))
+    assert (turn.input, turn.cached, turn.output) == (40, 60, 10)
+
+
+def test_openai_to_messages_drops_empty_text_parts():
+    """Strict endpoints (GLM) reject empty text — parts and thinking-only
+    assistant turns must not reach the wire."""
+    from cycls.agent.harness.providers.openai import OpenAIProvider
+    raw = [
+        {"role": "user", "content": [{"type": "text", "text": ""}, {"type": "text", "text": "hi"}]},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "hmm"}]},
+    ]
+    out, _ = OpenAIProvider(None, "glm-5.2", "zai")._to_messages(raw, "")
+    assert out == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+
+
 def test_build_tools_no_provider_specific_markers():
     """`build_tools` is provider-neutral — no `cache_control` (Anthropic-only)
     leaks in; the AnthropicProvider attaches it at request time."""
@@ -208,6 +388,26 @@ def test_llm_sandbox_network_kwarg_only():
     """`network` is keyword-only — prevents accidental positional misuse."""
     with pytest.raises(TypeError):
         cycls.LLM().sandbox(True)
+
+
+def test_llm_instructions_default_and_opt_out():
+    """AGENT.md auto-load is on by default; .instructions(None) disables,
+    any other string swaps the filename. Originals stay untouched."""
+    base = cycls.LLM()
+    assert base._instructions == "AGENT.md"
+    assert base.instructions(None)._instructions is None
+    assert base.instructions("NOTES.md")._instructions == "NOTES.md"
+    assert base._instructions == "AGENT.md"
+
+
+def test_llm_skills_accumulates_and_disables():
+    base = cycls.LLM()
+    assert base._skills == []
+    assert base.skills("a")._skills == ["a"]
+    assert base.skills("a").skills("b")._skills == ["a", "b"]
+    assert base.skills("a", "b")._skills == ["a", "b"]
+    assert base.skills(None)._skills is None
+    assert base._skills == []  # original untouched
 
 
 # ---- cycls.MCP ----

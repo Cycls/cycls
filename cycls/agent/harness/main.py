@@ -11,13 +11,14 @@ from pathlib import Path
 
 from .. import state
 from ..state import Session
-from . import events
+from . import catalog, events
 from .events import Turn
 from .compact import COMPACT_BUFFER
 from ..logs import log
-from .prompts import DEFAULT_SYSTEM
+from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips
+from ..tools import skills as skills_mod
 
 
 # ---- Config ----
@@ -26,20 +27,6 @@ MAX_RETRIES = 10
 BASE_DELAY_MS = 500
 MAX_DELAY_MS = 32_000
 _RETRYABLE_STATUSES = {429, 502, 503, 504, 529}
-
-# Pricing per million tokens: (input, output, cache_read, cache_write)
-_PRICING = {
-    "claude-sonnet": (3, 15, 0.30, 3.75),
-    "claude-opus":   (15, 75, 1.50, 18.75),
-    "claude-haiku":  (0.80, 4, 0.08, 1),
-}
-
-
-def _cost(model, in_, out, cached, cache_create):
-    """USD for one turn (or aggregate). Unknown model → 0."""
-    p = next((v for k, v in _PRICING.items() if k in model), None)
-    if not p: return 0.0
-    return (in_ * p[0] + out * p[1] + cached * p[2] + cache_create * p[3]) / 1_000_000
 
 
 async def _timed(coro):
@@ -111,11 +98,13 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                model="anthropic/claude-sonnet-4-20250514", max_tokens=None,
                bash_timeout=600, bash_network=True, client=None,
                base_url=None, api_key=None, handlers=None, mcp_servers=None,
-               thinking="adaptive"):
+               thinking="adaptive", web_search="brave",
+               instructions="AGENT.md", skills=[]):
     vendor, bare_model = model.split("/", 1)
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key)
     if max_tokens is None: max_tokens = provider.max_output
     workspace = context.workspace
+    catalog.refresh(Path(workspace.root).parent)  # volume-level: survives restarts, shared per deployment
     user = getattr(context, "user", None)
     Path(workspace.root).mkdir(parents=True, exist_ok=True)
 
@@ -126,9 +115,25 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     messages = session.messages
 
     system_text = DEFAULT_SYSTEM + ("\n\n" + system if system else "")
-    for skipped in vendor_skips(allowed_tools, vendor):
-        yield events.callout(f"`{skipped}` is Anthropic-only; skipped on `{vendor}/*` models.", "warning")
-    tools_list = build_tools(allowed_tools, tools or [], vendor=vendor)
+    if instructions:
+        try:
+            agent_md = await asyncio.to_thread(workspace_instructions, workspace.root, instructions)
+            if agent_md: system_text += "\n\n" + fence_instructions(agent_md)
+        except Exception as e:
+            yield events.callout(f"Couldn't load {instructions}: {e}", "warning")
+    skill_catalog = {}
+    if skills is not None:
+        try:
+            skills_mod.configure(skills)
+            skill_catalog = await asyncio.to_thread(skills_mod.discover, workspace.root)
+            if skill_catalog: system_text += "\n\n" + skills_mod.catalog_text(skill_catalog)
+        except Exception:
+            skill_catalog = {}
+    for _ in vendor_skips(allowed_tools, vendor, web_search):
+        yield events.callout(f"Native web search isn't available on `{vendor}/*` — use `.web_search('brave')` or an anthropic model.", "warning")
+    tools_list = build_tools(allowed_tools, tools or [], vendor=vendor, web_search=web_search)
+    if skill_catalog and not any(t.get("name") == "skill" for t in tools_list):
+        tools_list.append(skills_mod.SKILL_TOOL)
     window = provider.context_window
     tokens_since_compact = 0
 
@@ -164,7 +169,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
             turn_ms = int((time.monotonic() - turn_t0) * 1000)
             tokens_since_compact = turn.input + turn.cached + turn.cache_create
-            turn_cost = _cost(bare_model, turn.input, turn.output, turn.cached, turn.cache_create)
+            turn_cost = catalog.cost(vendor, bare_model, turn.input, turn.output, turn.cached, turn.cache_create)
             now = datetime.now(timezone.utc).isoformat()
             messages.append({"role": "assistant", "content": turn.content, "usage": {
                 "model": bare_model,

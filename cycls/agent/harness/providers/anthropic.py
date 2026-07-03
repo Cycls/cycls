@@ -6,31 +6,9 @@ through to sessions.py for direct persistence.
 """
 import json
 
-from .. import events
+from .. import catalog, events
 from ..events import Turn
 from ...tools import tool_step
-
-
-_WINDOWS = {
-    "claude-sonnet-4-6": 1_000_000,
-    "claude-opus-4-6":   1_000_000,
-    "claude-sonnet":     200_000,
-    "claude-opus":       200_000,
-    "claude-haiku":      200_000,
-}
-
-_MAX_OUTPUT = {
-    "claude-sonnet-4-6": 64_000,
-    "claude-opus-4-6":   64_000,
-    "claude-sonnet":     64_000,   # 4.x with extended
-    "claude-opus":       32_000,
-    "claude-haiku":      8_192,
-}
-
-
-def _lookup(table, model, default):
-    if model in table: return table[model]
-    return next((v for k, v in table.items() if k in model), default)
 
 
 # Cache breakpoint applied to system prompt, last tool, and last user-message
@@ -47,11 +25,11 @@ class AnthropicProvider:
 
     @property
     def context_window(self):
-        return _lookup(_WINDOWS, self.model, 200_000)
+        return catalog.context_window("anthropic", self.model)
 
     @property
     def max_output(self):
-        return _lookup(_MAX_OUTPUT, self.model, 8_192)
+        return catalog.max_output("anthropic", self.model)
 
     def _to_messages(self, messages):
         """Drop FE-only sidecars; attach `cache_control` to the last user

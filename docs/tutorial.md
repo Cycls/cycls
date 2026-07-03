@@ -288,6 +288,8 @@ async for ev in llm.run(context=context):
 | `.tools(list)` | Custom tool JSON schemas |
 | `.on(name, fn)` | Register async handler for a custom tool |
 | `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`) |
+| `.instructions(path)` | Workspace instructions file auto-loaded into the system prompt (default `AGENT.md`; `None` disables) |
+| `.skills(*dirs)` | Ship skills with the agent (dirs of `<name>/SKILL.md` folders; `None` disables skills) |
 | `.max_tokens(n)` | Max output tokens |
 | `.bash_timeout(secs)` | Bash sandbox timeout |
 | `.sandbox(network=True)` | Allow bash to make network calls (`curl`, `pip`, `git`). Default off |
@@ -351,6 +353,35 @@ async def render_image(args):
 
 llm = cycls.LLM().tools(TOOLS).on("render_image", render_image)
 ```
+
+### Workspace instructions and skills
+
+**AGENT.md** — every turn, the harness reads `AGENT.md` from the user's workspace root (if present) and appends it to the system prompt, fenced as user preferences subordinate to your `.system()` prompt. Users edit it via the files panel or by asking the agent. Capped at 24KB (truncated beyond that); binary or unreadable files are ignored. Rename via `.instructions("NOTES.md")` or disable with `.instructions(None)`.
+
+**Skills** are packs of task-specific instructions the model loads on demand: only each skill's name + description sit in the system prompt; the full body enters context when the model calls the `skill` tool (a reserved tool name). A skill is a folder with a `SKILL.md`:
+
+```markdown
+---
+name: pdf-reports
+description: Generate branded PDF reports from CSV data. Use when the user asks for a PDF report, invoice, or printable summary.
+---
+# Full instructions... (up to 48KB loaded on demand)
+```
+
+`name` is lowercase-hyphen (falls back to the folder name); `description` decides when the model reaches for it, so say *when to use* (max 1KB). Support files (scripts, templates, reference docs) live beside `SKILL.md`.
+
+Skills come from two places:
+
+- **Shipped with the agent** — put a `skills/` dir in your project, include it in the image, and register it:
+
+  ```python
+  image = cycls.Image().copy("skills/")
+  llm = cycls.LLM().skills("skills")
+  ```
+
+  Shipped skills are read-only; each mounts at `/skills/<name>/` inside the bash sandbox, so the model runs `python /skills/pdf-reports/scripts/render.py` and scripts read their own templates from there. They version with your deploys.
+
+- **User-created** — any `skills/<name>/SKILL.md` in a user's workspace joins the catalog automatically (rescanned every ~30s) and wins name collisions with shipped skills.
 
 ---
 

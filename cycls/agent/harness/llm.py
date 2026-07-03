@@ -30,6 +30,9 @@ class LLM:
         self._mcp = []
         self._loop = None
         self._thinking = "adaptive"
+        self._web_search = "brave"
+        self._instructions = "AGENT.md"
+        self._skills = []
 
     def _copy(self, **updates):
         new = LLM.__new__(LLM)
@@ -56,6 +59,22 @@ class LLM:
         event) and packaged as the tool_result sent back to the model."""
         return self._copy(_handlers={**self._handlers, name: handler})
 
+    def instructions(self, path):
+        """Workspace instructions file auto-loaded into the system prompt each
+        turn (default "AGENT.md" at the workspace root, capped at 24KB).
+        Pass None to disable."""
+        return self._copy(_instructions=path)
+
+    def skills(self, *sources):
+        """Ship skills with the agent: each source is a directory of skill
+        folders (<name>/SKILL.md + support files), or a single skill folder.
+        Shipped skills are read-only — their dirs mount at /skills/<name> in
+        the bash sandbox. User workspace skills (skills/<name>/SKILL.md) are
+        always discovered and win name collisions. `.skills(None)` disables
+        skills entirely. `skill` is a reserved tool name."""
+        if sources == (None,): return self._copy(_skills=None)
+        return self._copy(_skills=[*(self._skills or []), *sources])
+
     def mcp(self, *servers):
         """Connect to one or more remote MCP servers (cycls.MCP). Their tools
         run server-side via the Anthropic MCP connector — anthropic/* only."""
@@ -68,11 +87,19 @@ class LLM:
         Anthropic-only — OpenAI providers ignore this."""
         return self._copy(_thinking=spec)
 
+    def web_search(self, mode="brave"):
+        """Web search backend when `WebSearch` is allowed. `"brave"` (default) is
+        our portable search + fetch pair — works on any model and needs
+        `BRAVE_API_KEY`. `"native"` uses the provider's server-side search
+        (Anthropic only, for now; falls back with a warning elsewhere)."""
+        return self._copy(_web_search=mode)
+
     def loop(self, fn):
         """Run a custom loop instead of the built-in one. `fn` is an async
         generator with the default loop's signature (context, system, tools,
-        allowed_tools, model, max_tokens, ..., handlers, mcp_servers) that
-        yields `Event`s. Building blocks live in `cycls.agent.harness`:
+        allowed_tools, model, max_tokens, ..., handlers, mcp_servers,
+        instructions, skills) that yields `Event`s — accept `**kw` to stay
+        compatible as kwargs are added. Building blocks live in `cycls.agent.harness`:
         `default_loop`, `make_provider`, `Session`, `build_tools`, `dispatch`,
         `compact`, `events`."""
         return self._copy(_loop=fn)
@@ -104,5 +131,8 @@ class LLM:
             handlers=self._handlers,
             mcp_servers=self._mcp,
             thinking=self._thinking,
+            web_search=self._web_search,
+            instructions=self._instructions,
+            skills=self._skills,
         ):
             yield ev
