@@ -59,10 +59,15 @@ llm = (
     cycls.LLM()
     .model("anthropic/claude-sonnet-4-6")
     # .model("openai/gpt-5.4")
+    # .model("zai/glm-5.2").base_url("https://api.z.ai/api/paas/v4/")  # any OpenAI-compatible API
+    # .model("google/gemini-3.1-pro-preview").base_url("https://generativelanguage.googleapis.com/v1beta/openai/")
     .system(SYSTEM)
     # .tools(TOOLS)  # skills+safe_keys
     # .on("render_image", render_image)
     .allowed_tools(["Bash", "Editor", "WebSearch", "DataBase", "Canvas"])
+    # .web_search("native")  # Anthropic server-side search; default "brave" runs on any model (BRAVE_API_KEY)
+    # .skills("examples/agent/skills")  # ship skill folders (<name>/SKILL.md) with the agent
+    # .instructions("AGENT.md")  # workspace instructions file in the system prompt — this is the default
     # .mcp(cycls.MCP("https://figma-mcp.example/mcp").name("figma").token(os.environ["FIGMA_TOKEN"]))  # remote MCP, anthropic/* only
     # .sandbox(network=False)  # opt out of network access for the LLM bash
 )
