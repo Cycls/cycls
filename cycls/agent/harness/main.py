@@ -41,7 +41,8 @@ async def _timed(coro):
 # ---- Ingest ----
 
 async def _ingest(content, workspace):
-    """Resolve attachment refs in an incoming user message to inline blocks.
+    """Resolve attachment refs in an incoming user message to inline blocks,
+    framed with the filename so the model knows what the user attached.
     Reuses `_exec_read` as the single source of truth for path → content."""
     if not isinstance(content, list): return content
     out = []
@@ -50,6 +51,12 @@ async def _ingest(content, workspace):
             fname = block.get("image") or block.get("file")
             if fname:
                 result = await _exec_read({"path": fname}, workspace)
+                if isinstance(result, str) and result.startswith("Error:"):
+                    out.append({"type": "text", "text":
+                        f'[The user attached "{fname}" but it can\'t be read directly ({result[7:]}). '
+                        "It's saved in the workspace — propose a way to extract its content.]"})
+                    continue
+                out.append({"type": "text", "text": f"[Attached: {fname}]"})
                 if isinstance(result, list): out.extend(result); continue
                 if isinstance(result, str): out.append({"type": "text", "text": result}); continue
         out.append(block)
