@@ -55,15 +55,17 @@ cycls/
     ├── main.py             # Agent class + @cycls.agent decorator
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
-    ├── tools/              # tool schemas + execution + dispatch registry (+ pdf.py)
+    ├── tools/              # tool schemas + execution + dispatch registry (+ pdf.py, skills.py, Brave web search/fetch)
     ├── harness/            # the managed LLM loop and the kit a custom loop needs
     │   ├── llm.py          # cycls.LLM fluent builder (.loop(fn) swaps the loop)
-    │   ├── main.py         # the default loop (_run) + retry/recover
-    │   ├── providers.py    # make_provider + AnthropicProvider (one streaming interface)
-    │   ├── openai.py       # OpenAIProvider — Chat Completions on the same interface
+    │   ├── main.py         # the default loop (_run) + retry/recover + attachment ingest
+    │   ├── catalog.py      # model catalog — windows/output/pricing per provider, models.dev 24h volume cache
+    │   ├── providers/      # one streaming interface per vendor SDK
+    │   │   ├── anthropic.py  # native Messages (cache breakpoints, thinking, MCP, server search)
+    │   │   └── openai.py     # Chat Completions — also GLM (zai/*), Gemini-compat, Groq, vLLM via base_url
     │   ├── events.py       # typed loop events + to_ui (FE projection)
-    │   ├── compact.py      # context compaction (microcompact + partial)
-    │   └── prompts.py      # system + compaction prompts
+    │   ├── compact.py      # compaction — append-only marker, token-budgeted window, file ledger
+    │   └── prompts.py      # system + compaction prompts + workspace instructions (AGENT.md)
     └── web/                # FastAPI chat server, state routers, OG images, themes
 ```
 
@@ -130,7 +132,8 @@ tests/
 ├── agent/
 │   ├── agent_test.py            # _run loop, retry, recovery, ingest, exec/_resolve_path
 │   ├── chat_test.py             # to_ui_messages (FE projection) + _valid_prefix repair
-│   ├── harness_test.py          # build_tools, _resolve_path, LLM builder (incl. .loop)
+│   ├── harness_test.py          # build_tools, web search/fetch, model catalog, _resolve_path, LLM builder
+│   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
 │   ├── events_test.py           # to_ui wire shapes for the typed events
 │   ├── pdf_test.py              # PDF page parsing
 │   ├── web_test.py              # FastAPI routes, encoders, Messages
@@ -144,7 +147,7 @@ tests/
 
 **Mocked tier** (default): no API calls, no docker. Runs in ~85s.
 ```bash
-uv run pytest tests/                       # all 193 mocked tests
+uv run pytest tests/                       # all ~270 mocked tests
 uv run pytest tests/agent/ -v              # just agent tests
 uv run pytest tests/agent/scenarios/ -v    # just scenarios
 ```

@@ -149,8 +149,18 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             if tokens_since_compact > window - COMPACT_BUFFER and len(messages) - session.first_kept > 2:
                 yield events.step("Compacting context...")
                 try:
+                    provider.last_usage = None
                     await session.compact(provider)
                     tokens_since_compact = 0
+                    # The summarizer call is a real billed turn — track it too.
+                    if u := getattr(provider, "last_usage", None):
+                        c = catalog.cost(vendor, bare_model, u[0], u[1], 0, 0)
+                        log("usage", user=user, chat_id=session.chat_id, model=bare_model,
+                            input=u[0], output=u[1], cached=0, cache_create=0,
+                            cost=round(c, 6), ms=0, compact=True)
+                        if session.chat_id and c:
+                            try: await state.add_cost(workspace, session.chat_id, c)
+                            except Exception as e: print(f"[WARN] add_cost failed: {e}")
                 except Exception as ce:
                     yield events.callout(f"Compaction failed: {ce}", "warning")
 

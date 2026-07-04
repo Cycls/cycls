@@ -162,4 +162,5 @@ class OpenAIProvider:
         cap = {"max_completion_tokens" if self.vendor == "openai" else "max_tokens": max_tokens}
         r = await self._client.chat.completions.create(
             model=self.model, messages=api_messages, **cap)
+        if r.usage: self.last_usage = (r.usage.prompt_tokens, r.usage.completion_tokens)
         return r.choices[0].message.content or ""

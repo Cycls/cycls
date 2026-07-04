@@ -218,16 +218,17 @@ def test_openai_basic_real(tmp_path):
 
 
 @pytest.mark.live
-def test_openai_websearch_skipped_with_warning(tmp_path):
-    """`WebSearch` is Anthropic-only. On OpenAI, the loop emits a Callout
-    warning before the turn and the tool isn't registered with the model."""
+def test_openai_native_websearch_skipped_with_warning(tmp_path):
+    """`.web_search("native")` is Anthropic-only. On OpenAI, the loop emits a
+    Callout warning before the turn and the tool isn't registered with the
+    model. (The default `brave` mode runs on any vendor.)"""
     _, ctx = _ctx(tmp_path, "say hi in one word")
-    llm = cycls.LLM().model(OPENAI).allowed_tools(["WebSearch"]).max_tokens(20)
+    llm = cycls.LLM().model(OPENAI).allowed_tools(["WebSearch"]).web_search("native").max_tokens(20)
     events = asyncio.run(_collect(llm, ctx))
 
     callouts = [c for c in events if isinstance(c, dict) and c.get("type") == "callout"]
-    assert any("WebSearch" in c.get("callout", "") and "Anthropic-only" in c.get("callout", "")
-               for c in callouts), f"expected WebSearch skip callout; got {callouts!r}"
+    assert any("web search" in c.get("callout", "").lower() for c in callouts), \
+        f"expected native-search skip callout; got {callouts!r}"
     # And the model still produced a normal response.
     assert _text_of(events).strip(), f"no text from OpenAI; events={events!r}"
 
