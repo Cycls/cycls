@@ -46,6 +46,7 @@ export function PdfView({ url }: { url: string }) {
           canvas.className = "mx-auto mb-2 block bg-white shadow-sm";
           container.appendChild(canvas);
           await page.render({
+            canvas,
             canvasContext: canvas.getContext("2d")!,
             viewport,
             transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,

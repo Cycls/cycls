@@ -25,6 +25,18 @@ def to_ui_messages(raw):
     and merges consecutive assistant messages: a model turn is several
     assistant/tool-result round-trips on disk but one bubble in the UI, the same
     shape the live stream produces."""
+    # tool_use id → its result errored. Lets the FE downgrade failed canvas
+    # calls from a file card back to a plain step.
+    errored = set()
+    for msg in raw:
+        c = msg.get("content")
+        if msg.get("role") == "user" and isinstance(c, list):
+            for b in c:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    body = b.get("content")
+                    if b.get("is_error") or (isinstance(body, str) and body.startswith("Error")):
+                        errored.add(b.get("tool_use_id"))
+
     out = []
     for msg in raw:
         role, c = msg.get("role"), msg.get("content")
@@ -55,7 +67,10 @@ def to_ui_messages(raw):
                 elif t == "thinking":
                     parts.append({"type": "thinking", "thinking": b.get("thinking", "")})
                 elif t == "tool_use":
-                    parts.append({"type": "step", "id": b.get("id"), **tool_step(b.get("name", ""), b.get("input"))})
+                    part = {"type": "step", "id": b.get("id"), **tool_step(b.get("name", ""), b.get("input"))}
+                    if b.get("id") in errored:
+                        part["ok"] = False
+                    parts.append(part)
                 elif t == "server_tool_use":
                     # Server-side tools (web_search etc.) run Anthropic-side. The live
                     # provider stream yields a Step for these at content_block_stop;

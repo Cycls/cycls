@@ -14,6 +14,7 @@ export interface Part {
   row?: string[];
   step?: string;
   tool_name?: string;
+  ok?: boolean; // false when the tool call errored (refetch projection)
   id?: string;       // tool-call id — threads ToolStart → step_arg → final step
   args?: string;     // accumulated tool-call input (partial JSON), for the live preview
   delta?: string;    // a step_arg chunk on the wire (not stored)

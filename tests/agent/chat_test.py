@@ -44,6 +44,24 @@ def test_assistant_blocks_become_parts():
     assert msg["parts"][2]["tool_name"] == "Bash"
 
 
+def test_errored_tool_use_flagged_for_fe():
+    """A tool call whose result errored gets ok=False on its step part — the
+    FE uses this to downgrade failed canvas calls from file cards to steps."""
+    raw = [
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "c1", "name": "canvas", "input": {"path": "nope.md"}},
+            {"type": "tool_use", "id": "c2", "name": "canvas", "input": {"path": "report.md"}},
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "c1", "content": "Error: nope.md does not exist"},
+            {"type": "tool_result", "tool_use_id": "c2", "content": "Opened report.md for the user."},
+        ]},
+    ]
+    parts = to_ui_messages(raw)[0]["parts"]
+    assert parts[0]["ok"] is False
+    assert "ok" not in parts[1]
+
+
 def test_web_search_tool_use_renders_as_step():
     """`server_tool_use` blocks render as steps on refetch with the same
     {tool_name: "Web Search", step: query} shape the live provider yields."""
