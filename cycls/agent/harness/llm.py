@@ -90,8 +90,9 @@ class LLM:
     def web_search(self, mode="brave"):
         """Web search backend when `WebSearch` is allowed. `"brave"` (default) is
         our portable search + fetch pair — works on any model and needs
-        `BRAVE_API_KEY`. `"native"` uses the provider's server-side search
-        (Anthropic only, for now; falls back with a warning elsewhere)."""
+        `BRAVE_API_KEY`; without the key it falls back to the provider's native
+        search where one exists. `"native"` forces the provider's server-side
+        search (Anthropic only, for now; skipped with a warning elsewhere)."""
         return self._copy(_web_search=mode)
 
     def loop(self, fn):

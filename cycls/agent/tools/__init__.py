@@ -175,9 +175,11 @@ _BUILTINS = {
 
 def _web_search_tools(vendor, mode):
     """`native` → the provider's server-side search (Anthropic only, for now);
-    otherwise our portable Brave search + fetch. Empty = skip the native ask."""
-    if mode == "native":
-        return [_NATIVE_WEB_SEARCH] if vendor == "anthropic" else []
+    otherwise our portable Brave search + fetch. `brave` without a
+    BRAVE_API_KEY falls back to native where the provider has one."""
+    native_ok = vendor in (None, "anthropic")
+    if mode == "native" or (native_ok and not os.environ.get("BRAVE_API_KEY")):
+        return [_NATIVE_WEB_SEARCH] if native_ok else []
     return [_WEB_SEARCH_TOOL, _WEB_FETCH_TOOL]
 
 

@@ -98,12 +98,23 @@ def test_build_tools_custom_passthrough():
     assert tools[0]["name"] == "render_image"
 
 
-def test_build_tools_web_search_defaults_to_portable_brave():
+def test_build_tools_web_search_defaults_to_portable_brave(monkeypatch):
     """Default web search is our portable Brave pair — search + fetch — and it's
     present on every vendor (that's the whole point of switching off native)."""
+    monkeypatch.setenv("BRAVE_API_KEY", "x")
     for vendor in ("openai", "anthropic", None):
         names = {t.get("name") for t in build_tools(["WebSearch"], None, vendor=vendor)}
         assert names == {"web_search", "web_fetch"}
+
+
+def test_build_tools_missing_brave_key_falls_back_to_native(monkeypatch):
+    """No BRAVE_API_KEY → use the provider's native search where it has one;
+    other vendors keep the portable pair (which reports the missing key)."""
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    anth = build_tools(["WebSearch"], None, vendor="anthropic")
+    assert anth == [{"type": "web_search_20250305", "name": "web_search"}]
+    names = {t.get("name") for t in build_tools(["WebSearch"], None, vendor="openai")}
+    assert names == {"web_search", "web_fetch"}
 
 
 def test_build_tools_native_web_search_only_on_anthropic():
