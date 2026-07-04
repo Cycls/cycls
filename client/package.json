@@ -17,6 +17,7 @@
     "clsx": "^2",
     "framer-motion": "^12.35.0",
     "katex": "^0.16.38",
+    "pdfjs-dist": "^5.6.205",
     "posthog-js": "^1.369.3",
     "react": "^19",
     "react-dom": "^19",

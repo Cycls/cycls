@@ -50,8 +50,9 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
         />
       );
     case "step":
-      // A canvas call is a deliverable — render it as a clickable file card.
-      if (part.tool_name === "Canvas" && part.step)
+      // A successful canvas call is a deliverable — render it as a clickable
+      // file card. Failed calls (ok === false) stay plain steps.
+      if (part.tool_name === "Canvas" && part.step && part.ok !== false)
         return <FilePart key={index} path={part.step} onOpen={onOpenFile} />;
       return (
         <StepPart
@@ -130,7 +131,14 @@ export function MessageBubble({
     );
   }
 
-  const parts = (message.parts || []).filter((p) => p.type !== "chat_id");
+  const parts = (message.parts || [])
+    .filter((p) => p.type !== "chat_id")
+    // Collapse consecutive canvas cards for the same file (retries) into one.
+    .filter((p, i, all) => {
+      if (p.type !== "step" || p.tool_name !== "Canvas") return true;
+      const next = all[i + 1];
+      return !(next?.type === "step" && next.tool_name === "Canvas" && next.step === p.step);
+    });
   const isEmpty = parts.length === 0;
 
   const copyAll = () => {

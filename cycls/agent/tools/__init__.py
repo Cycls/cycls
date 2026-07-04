@@ -314,8 +314,8 @@ async def _exec_web_fetch(inp):
 async def _exec_read(inp, workspace):
     try: path = skills.resolve_dev_path(inp["path"]) or _resolve_path(inp["path"], workspace)
     except ValueError as e: return f"Error: {e}"
-    if not path.exists(): return f"Error: {path} does not exist"
-    if path.is_dir(): return f"Error: {path} is a directory"
+    if not path.exists(): return f"Error: {inp['path']} does not exist"
+    if path.is_dir(): return f"Error: {inp['path']} is a directory"
     ext, size = path.suffix.lower().lstrip("."), path.stat().st_size
 
     if ext == "pdf" and size > pdf.EXTRACT_SIZE_THRESHOLD:
@@ -338,7 +338,7 @@ async def _exec_read(inp, workspace):
                                           "data": base64.b64encode(path.read_bytes()).decode()}}]
 
     try: lines = path.read_text().splitlines()
-    except UnicodeDecodeError: return f"Error: {path} is a binary file"
+    except UnicodeDecodeError: return f"Error: {inp['path']} is a binary file"
     start = max(1, inp.get("offset", 1))
     sliced = lines[start-1 : start-1 + inp["limit"]] if inp.get("limit") else lines[start-1:]
     return "\n".join(f"{i+start:6}\t{l}" for i, l in enumerate(sliced))
@@ -349,35 +349,38 @@ async def _exec_canvas(inp, workspace):
     raw = inp.get("path", "")
     try: path = _resolve_path(raw, workspace)
     except ValueError as e: return f"Error: {e}"
-    if not path.exists(): return f"Error: {path} does not exist"
-    if path.is_dir(): return f"Error: {path} is a directory"
+    if not path.exists(): return f"Error: {raw} does not exist"
+    if path.is_dir(): return f"Error: {raw} is a directory"
     rel = raw.removeprefix("/workspace/").lstrip("/")
     return {"type": "ui", "action": "open_canvas", "path": rel, "name": path.name}
 
 def _exec_edit(inp, workspace):
+    # Echo the model's own relative path back — resolved paths leak the
+    # tenant dir and the model reuses them verbatim (e.g. in canvas calls).
+    rel = inp.get("path", "")
     try: path = _resolve_path(inp["path"], workspace)
     except ValueError as e: return f"Error: {e}"
     cmd = inp["command"]
-    if cmd != "create" and not path.exists(): return f"Error: {path} does not exist"
-    if path.exists() and path.is_dir(): return f"Error: {path} is a directory"
+    if cmd != "create" and not path.exists(): return f"Error: {rel} does not exist"
+    if path.exists() and path.is_dir(): return f"Error: {rel} is a directory"
     if cmd == "str_replace":
         text, old = path.read_text(), inp["old_str"]
         n = text.count(old)
-        if n == 0: return f"Error: old_str not found in {path}"
+        if n == 0: return f"Error: old_str not found in {rel}"
         if n > 1: return f"Error: old_str found {n} times, must be unique"
         path.write_text(text.replace(old, inp.get("new_str", ""), 1))
-        return f"Replaced in {path}"
+        return f"Replaced in {rel}"
     if cmd == "create":
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(inp["file_text"])
-        return f"Created {path}"
+        return f"Created {rel}"
     if cmd == "insert":
         lines = path.read_text().splitlines(keepends=True)
         new = inp["new_str"].splitlines(keepends=True)
         if not new[-1:] or not new[-1].endswith("\n"): new.append("\n")
         pos = inp["insert_line"]; lines[pos:pos] = new
         path.write_text("".join(lines))
-        return f"Inserted at line {pos} in {path}"
+        return f"Inserted at line {pos} in {rel}"
     return f"Error: unknown command {cmd}"
 
 # ---- Registry & dispatch ----
