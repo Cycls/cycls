@@ -8,14 +8,15 @@ import { TablePart } from "./parts/table-part";
 import { CalloutPart } from "./parts/callout-part";
 import { ImagePart } from "./parts/image-part";
 import { StepPart } from "./parts/step-part";
+import { FilePart } from "./parts/file-part";
 import { AttachmentBody } from "./attachment-body";
 import { Icon } from "./icon";
 import { cn } from "../lib/utils";
 
-function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: () => void) {
+function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: () => void, onOpenFile?: (path: string) => void) {
   switch (part.type) {
     case "text":
-      return <TextPart key={index} text={part.text || ""} />;
+      return <TextPart key={index} text={part.text || ""} onOpenFile={onOpenFile} />;
     case "thinking":
       return (
         <ThinkingPart
@@ -49,6 +50,9 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
         />
       );
     case "step":
+      // A canvas call is a deliverable — render it as a clickable file card.
+      if (part.tool_name === "Canvas" && part.step)
+        return <FilePart key={index} path={part.step} onOpen={onOpenFile} />;
       return (
         <StepPart
           key={index}
@@ -89,10 +93,12 @@ export function MessageBubble({
   message,
   isStreaming,
   onRetry,
+  onOpenFile,
 }: {
   message: Message;
   isStreaming?: boolean;
   onRetry?: () => void;
+  onOpenFile?: (path: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -145,10 +151,10 @@ export function MessageBubble({
         {groupParts(parts).map((group, gi) =>
           group.type === "step" ? (
             <div key={gi} className="my-3 flex flex-col">
-              {group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming, onRetry))}
+              {group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming, onRetry, onOpenFile))}
             </div>
           ) : (
-            group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming, onRetry))
+            group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming, onRetry, onOpenFile))
           )
         )}
 

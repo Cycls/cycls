@@ -9,6 +9,7 @@ import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
 import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, codeLang, saveBlob } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
+import { PdfView } from "./pdf-view";
 import { cn } from "../lib/utils";
 import { t } from "../lib/i18n";
 
@@ -71,7 +72,13 @@ export function CanvasDoc({ file, content, error, shared = false }: {
     );
   }
   if (isPdf(file.name)) {
-    return <iframe src={content ?? ""} title={file.name} className="h-full w-full border-0" />;
+    // Native inline viewer (desktop) beats pdf.js — search, zoom, print. Mobile
+    // browsers don't have one (iframe shows page 1 only / downloads), so render
+    // with pdf.js there. pdfViewerEnabled is exactly this capability flag.
+    if (navigator.pdfViewerEnabled) {
+      return <iframe src={content ?? ""} title={file.name} className="h-full w-full border-0" />;
+    }
+    return <PdfView url={content ?? ""} />;
   }
   if (isImage(file.name)) {
     return (

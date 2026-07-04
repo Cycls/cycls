@@ -89,6 +89,9 @@ export function Chat({ chat, onShare, files, account, config }: {
   const [filesOpen, setFilesOpen] = useState(false);
   const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats">(account ? "chats" : "files");
   const [canvasFile, setCanvasFile] = useState<CanvasFile | null>(null);
+  const openFileInCanvas = useCallback((path: string) => {
+    setCanvasFile({ path, name: path.split("/").pop() || path });
+  }, []);
   const [panelExpanded, setPanelExpanded] = useState(false);
   const [panelWidth, setPanelWidth] = useState(() => Number(localStorage.getItem("cycls_panel_width")) || 480);
 
@@ -489,6 +492,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                         msg.role === "assistant"
                       }
                       onRetry={isLast && hasError && !isStreaming ? onRetry : undefined}
+                      onOpenFile={openFileInCanvas}
                     />
                   );
                 })}
