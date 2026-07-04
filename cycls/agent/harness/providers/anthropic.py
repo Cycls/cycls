@@ -110,4 +110,5 @@ class AnthropicProvider:
         r = await self._client.messages.create(
             model=self.model, max_tokens=max_tokens,
             system=[{"type": "text", "text": system}], messages=messages)
+        self.last_usage = (r.usage.input_tokens, r.usage.output_tokens)
         return r.content[0].text
