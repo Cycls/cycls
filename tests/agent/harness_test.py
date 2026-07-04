@@ -312,6 +312,15 @@ def test_compat_vendors_use_standard_max_tokens():
     assert kw["max_tokens"] == 100 and "max_completion_tokens" not in kw
 
 
+def test_unified_reasoning_levels():
+    """`.thinking("low"|"medium"|"high")` maps to reasoning_effort on
+    OpenAI/Gemini-compat; other vendors and non-level specs don't send it."""
+    assert _stream_kwargs("openai", thinking="low")["reasoning_effort"] == "low"
+    assert _stream_kwargs("google", thinking="high")["reasoning_effort"] == "high"
+    assert "reasoning_effort" not in _stream_kwargs("openai", thinking="adaptive")
+    assert "reasoning_effort" not in _stream_kwargs("groq", thinking="medium")
+
+
 def test_glm_thinking_passthrough():
     assert _stream_kwargs("zai", thinking="adaptive")["extra_body"] == {"thinking": {"type": "enabled"}}
     assert _stream_kwargs("zai", thinking=None)["extra_body"] == {"thinking": {"type": "disabled"}}

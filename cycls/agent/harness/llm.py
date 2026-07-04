@@ -81,10 +81,11 @@ class LLM:
         return self._copy(_mcp=[*self._mcp, *servers])
 
     def thinking(self, spec):
-        """Set the model's thinking budget. `"adaptive"` (default) lets the
-        model decide — auto-disabled on models that don't support it (Haiku).
-        Pass an int for an explicit budget in tokens, or None to disable.
-        Anthropic-only — OpenAI providers ignore this."""
+        """Reasoning control, mapped per provider. `"adaptive"` (default) lets
+        the model decide; `"low"|"medium"|"high"` sets a unified effort level
+        (Anthropic `effort`, OpenAI/Gemini `reasoning_effort`); None disables
+        where the provider allows it (GLM). An int is a legacy Anthropic
+        token budget. Auto-disabled on models without thinking (Haiku)."""
         return self._copy(_thinking=spec)
 
     def web_search(self, mode="brave"):

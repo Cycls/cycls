@@ -61,10 +61,13 @@ class AnthropicProvider:
         }
         if isinstance(thinking, int):
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking}
+        elif thinking in ("low", "medium", "high") and "haiku" not in self.model:
+            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["extra_body"] = {"output_config": {"effort": thinking}}
         elif thinking == "adaptive" and "haiku" not in self.model:
             kwargs["thinking"] = {"type": "adaptive"}
         if mcp_servers:
-            kwargs["extra_body"] = {"mcp_servers": [s._spec() for s in mcp_servers]}
+            kwargs.setdefault("extra_body", {})["mcp_servers"] = [s._spec() for s in mcp_servers]
             kwargs["extra_headers"] = {"anthropic-beta": "mcp-client-2025-04-04"}
 
         tool_idx, search_idx, search_buf = {}, None, ""
