@@ -23,6 +23,8 @@ from cycls.app.db import workspace
 SONNET = "anthropic/claude-sonnet-4-6"
 HAIKU = "anthropic/claude-haiku-4-5-20251001"
 OPENAI = "openai/gpt-4o-mini"
+GLM = ("zai/glm-5.2", "https://api.z.ai/api/paas/v4/", "Z_AI_API_KEY")
+GEMINI = ("google/gemini-2.5-flash", "https://generativelanguage.googleapis.com/v1beta/openai/", "GOOGLE_API_KEY")
 
 
 def _ctx(tmp_path, prompt, *, persist=False):
@@ -324,3 +326,31 @@ def test_compaction_real_roundtrip(tmp_path):
     assert marker and marker["summary"].startswith("This session continues from a previous conversation.")
     # Real response came back.
     assert _text_of(events).strip(), f"no post-compact text; events={events!r}"
+
+
+# ---- OpenAI-compatible vendors (GLM, Gemini) — skip when their key is unset ----
+
+def _compat_roundtrip(tmp_path, spec, monkeypatch):
+    import os
+    model, base_url, key_env = spec
+    if not os.environ.get(key_env):
+        pytest.skip(f"{key_env} not set")
+    _, ctx = _ctx(tmp_path, "what is 17*23? answer with just the number")
+    llm = (cycls.LLM().model(model).base_url(base_url)
+           .api_key(os.environ[key_env]).thinking("low").max_tokens(2000))
+    events = asyncio.run(_collect(llm, ctx))
+    assert "391" in _text_of(events), f"expected 391; events={events!r}"
+
+
+@pytest.mark.live
+def test_glm_basic_real(tmp_path, monkeypatch):
+    """GLM 5.2 over z.ai's OpenAI-compat API — standard max_tokens, thinking
+    passthrough, strict-endpoint message shape."""
+    _compat_roundtrip(tmp_path, GLM, monkeypatch)
+
+
+@pytest.mark.live
+def test_gemini_basic_real(tmp_path, monkeypatch):
+    """Gemini over Google's OpenAI-compat (beta) endpoint — reasoning_effort
+    mapping and the shared Chat Completions path."""
+    _compat_roundtrip(tmp_path, GEMINI, monkeypatch)

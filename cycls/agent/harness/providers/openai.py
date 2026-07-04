@@ -114,6 +114,8 @@ class OpenAIProvider:
         if (api_tools := self._to_tools(tools)): kwargs["tools"] = api_tools
         if self.vendor in ("zai", "zhipu", "zhipuai", "glm"):
             kwargs["extra_body"] = {"thinking": {"type": "enabled" if thinking else "disabled"}}
+        elif thinking in ("low", "medium", "high") and self.vendor in ("openai", "google", "gemini"):
+            kwargs["reasoning_effort"] = thinking  # gpt-5*/o* and Gemini-compat map this natively
 
         text_buf, calls, stop, usage = [], {}, "end_turn", None
         async for chunk in await self._client.chat.completions.create(**kwargs):
