@@ -9,7 +9,6 @@ import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
 import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, codeLang, saveBlob } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
-import { PdfView } from "./pdf-view";
 import { cn } from "../lib/utils";
 import { t } from "../lib/i18n";
 
@@ -72,13 +71,23 @@ export function CanvasDoc({ file, content, error, shared = false }: {
     );
   }
   if (isPdf(file.name)) {
-    // Native inline viewer (desktop) beats pdf.js — search, zoom, print. Mobile
-    // browsers don't have one (iframe shows page 1 only / downloads), so render
-    // with pdf.js there. pdfViewerEnabled is exactly this capability flag.
-    if (navigator.pdfViewerEnabled) {
-      return <iframe src={content ?? ""} title={file.name} className="h-full w-full border-0" />;
-    }
-    return <PdfView url={content ?? ""} />;
+    // Desktop's native inline viewer is the best PDF UX (search, zoom, print).
+    // Phones can't EMBED PDFs (iOS iframes render page 1 only) but render them
+    // fine on direct navigation — so on small screens the iframe doubles as a
+    // first-page preview with an open button on top. Zero dependencies.
+    return (
+      <div className="relative h-full w-full">
+        <iframe src={content ?? ""} title={file.name} className="h-full w-full border-0" />
+        <a
+          href={content ?? ""}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="sm:hidden absolute bottom-6 left-1/2 -translate-x-1/2 rounded-full border border-border bg-background/90 px-4 py-2 text-sm font-medium text-foreground shadow-lg backdrop-blur transition-colors hover:bg-secondary"
+        >
+          {t("openInTab")}
+        </a>
+      </div>
+    );
   }
   if (isImage(file.name)) {
     return (
