@@ -45,6 +45,8 @@ def workspace_instructions(root, filename, cap=MAX_INSTRUCTIONS_BYTES):
     binary, or unreadable. Sync — call via asyncio.to_thread."""
     from pathlib import Path
     path = Path(root) / filename
+    if not path.is_file():  # tolerate the common case slip: agent.md for AGENT.md
+        path = Path(root) / filename.lower()
     try:
         if not path.is_file():
             return ""

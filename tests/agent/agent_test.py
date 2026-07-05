@@ -969,6 +969,21 @@ def test_agent_md_injected_into_system(agent_env):
     assert "Answer in pirate speak." in _system_text(captured)
 
 
+def test_agent_md_lowercase_fallback(agent_env):
+    """Users write agent.md as often as AGENT.md — the loader tolerates it
+    (prod filesystems are case-sensitive)."""
+    ws, ctx = agent_env
+    (Path(ws) / "agent.md").write_text("Answer in haiku.")
+    captured, stream = _capture_stream(_make_response([_text_block()]))
+    mock_client = MagicMock()
+    mock_client.messages.stream = stream
+
+    with _mock_anthropic(mock_client):
+        asyncio.run(_drain(_run(context=ctx)))
+
+    assert "Answer in haiku." in _system_text(captured)
+
+
 def test_agent_md_absent_or_disabled_leaves_system_clean(agent_env):
     ws, ctx = agent_env
     captured, stream = _capture_stream(_make_response([_text_block()]))
