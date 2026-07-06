@@ -2,11 +2,14 @@ import { memo, useState } from "react";
 import { cn } from "../../lib/utils";
 import { AnimatePresence, motion } from "framer-motion";
 import { Icon } from "../icon";
+import { t } from "../../lib/i18n";
 
 export const ThinkingPart = memo(function ThinkingPart({
   thinking,
+  isStreaming,
 }: {
   thinking: string;
+  isStreaming?: boolean;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -17,7 +20,7 @@ export const ThinkingPart = memo(function ThinkingPart({
         onClick={() => setIsExpanded(!isExpanded)}
         type="button"
       >
-        <span>Thinking</span>
+        <span className={cn(isStreaming && "text-shimmer")}>{t("thinking")}</span>
         <Icon name="chevron-down" className={cn("w-3 h-3 transition-transform", isExpanded ? "rotate-180" : "")} />
       </button>
 
