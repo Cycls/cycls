@@ -66,11 +66,11 @@ class Web:
         return self._copy(_affiliate=api_key)
 
     def workspaces(self, create: str = "member"):
-        """Enable multi-workspace mode (docs/workspaces.md): every user gets
-        a personal workspace (`u-{user_id}`); the active one is selected per
-        request via the `X-Workspace` header. Requires `auth(...)`.
-        `create` sets who may create team workspaces: "member" (default) or
-        "admin" (org admins only) — enforced when team workspaces land."""
+        """Enable multi-workspace mode (docs/workspaces.md): every user gets a
+        personal workspace, orgs get shared team workspaces with role-based
+        access; the active one is selected per request via the `X-Workspace`
+        header. Requires `auth(...)`. `create` sets who may create team
+        workspaces: "member" (default) or "admin" (org admins only)."""
         if create not in ("member", "admin"):
             raise ValueError(f'workspaces create must be "member" or "admin"; got {create!r}')
         return self._copy(_workspaces=create)

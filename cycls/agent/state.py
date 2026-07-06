@@ -376,7 +376,7 @@ async def resolve_role(user, ws_id, orgdb):
     other people's personal workspaces goes through the explicit lifecycle
     endpoints, never through content routes). Team: the member row wins;
     org admins hold implicit `admin` on any registered team workspace; a
-    `builtin: org` registry row (the migrated `t-shared` workspace) makes
+    `builtin: org` registry row (the org's default General workspace) makes
     every org member an editor without per-user rows."""
     if ws_id == f"u-{user.id}":
         return "owner"
