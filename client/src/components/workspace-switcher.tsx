@@ -8,6 +8,7 @@ export interface WorkspacesMenu {
   active: WorkspaceInfo | null;   // null = personal
   items: WorkspaceInfo[];
   canCreate: boolean;
+  isOrgAdmin: boolean;
   orgMembers: { id: string; name: string }[];
   onSwitch: (id: string | null) => void;
   onCreate: (name: string) => Promise<WorkspaceInfo>;
@@ -22,8 +23,9 @@ export function WorkspaceSwitcher({ workspaces }: { workspaces: WorkspacesMenu }
   const [manageWs, setManageWs] = useState<WorkspaceInfo | null>(null);
   const [wsMembers, setWsMembers] = useState<MemberInfo[] | null>(null);
   const [newWsName, setNewWsName] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
-  const close = () => { setOpen(false); setManageWs(null); setNewWsName(null); };
+  const close = () => { setOpen(false); setManageWs(null); setNewWsName(null); setConfirmDelete(false); };
 
   // id-keyed deps: the menu prop is rebuilt every parent render, object deps would refetch in a loop
   const fetchRef = useRef(workspaces.fetchMembers);
@@ -54,7 +56,7 @@ export function WorkspaceSwitcher({ workspaces }: { workspaces: WorkspacesMenu }
       <Popover open={open} onClose={close} className="right-2 top-12 mt-2 w-64 rounded-lg border border-border bg-background shadow-lg">
         {manageWs ? (
           <div>
-            <button onClick={() => setManageWs(null)} className={`${row} py-2.5 ${inactive}`}>
+            <button onClick={() => { setManageWs(null); setConfirmDelete(false); }} className={`${row} py-2.5 ${inactive}`}>
               <Icon name="chevron-left" className="w-3.5 h-3.5 rtl:rotate-180" />
               <span className="truncate">{manageWs.name}</span>
             </button>
@@ -107,22 +109,43 @@ export function WorkspaceSwitcher({ workspaces }: { workspaces: WorkspacesMenu }
                 })()}
               </div>
             )}
-            {(manageWs.role === "owner" || (manageWs.builtin && manageWs.role === "admin")) && (
+            {(manageWs.role === "owner" || workspaces.isOrgAdmin) && (
               <>
                 <div className="border-t border-border" />
-                <button
-                  onClick={() => {
-                    if (!window.confirm(t("deleteWorkspaceConfirm"))) return;
-                    const wasActive = workspaces.active?.id === manageWs.id;
-                    workspaces.onDelete(manageWs.id).then(() => {
-                      setManageWs(null);
-                      if (wasActive) workspaces.onSwitch(null);
-                    });
-                  }}
-                  className={`${row} py-2.5 text-red-500/80 hover:text-red-500 hover:bg-secondary/80`}
-                >
-                  {t("deleteWorkspace")}
-                </button>
+                {confirmDelete ? (
+                  <div className="px-3 py-2.5">
+                    <p className="text-sm text-foreground">{t("deleteWorkspaceConfirm")}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5 truncate">{manageWs.name}</p>
+                    <div className="flex gap-2 mt-2">
+                      <button
+                        onClick={() => setConfirmDelete(false)}
+                        className="flex-1 px-2 py-1.5 text-xs rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                      >
+                        {t("cancel")}
+                      </button>
+                      <button
+                        onClick={() => {
+                          const wasActive = workspaces.active?.id === manageWs.id;
+                          workspaces.onDelete(manageWs.id).then(() => {
+                            setManageWs(null);
+                            setConfirmDelete(false);
+                            if (wasActive) workspaces.onSwitch(null);
+                          });
+                        }}
+                        className="flex-1 px-2 py-1.5 text-xs rounded-md bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors cursor-pointer"
+                      >
+                        {t("delete")}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setConfirmDelete(true)}
+                    className={`${row} py-2.5 text-red-500/80 hover:text-red-500 hover:bg-secondary/80`}
+                  >
+                    {t("deleteWorkspace")}
+                  </button>
+                )}
               </>
             )}
           </div>

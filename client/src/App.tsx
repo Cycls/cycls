@@ -195,6 +195,7 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
       active: ws.workspaces.find((w) => w.id === workspace.id) || null,
       items: ws.workspaces,
       canCreate: config?.workspaces === "member" || membership?.role === "org:admin",
+      isOrgAdmin: membership?.role === "org:admin",
       orgMembers: (memberships?.data || [])
         .map((m) => ({
           id: m.publicUserData?.userId || "",
