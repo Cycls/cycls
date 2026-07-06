@@ -1,14 +1,12 @@
 import { useCallback, useState } from "react";
 import { useApi } from "./use-api";
 
-// Multi-workspace mode (server: docs/rfc-workspaces.md). Personal is implicit
-// (`u-{user_id}`, the server default); teams carry a role from the ACL.
 export interface WorkspaceInfo {
   id: string;
   name: string;
   type: "personal" | "team";
   role: string | null;
-  builtin?: string;   // "org" = the migrated t-shared workspace (everyone's an editor)
+  builtin?: string;
 }
 
 export interface MemberInfo {
