@@ -24,8 +24,9 @@ export function WorkspaceSwitcher({ workspaces }: { workspaces: WorkspacesMenu }
   const [wsMembers, setWsMembers] = useState<MemberInfo[] | null>(null);
   const [newWsName, setNewWsName] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
 
-  const close = () => { setOpen(false); setManageWs(null); setNewWsName(null); setConfirmDelete(false); };
+  const close = () => { setOpen(false); setManageWs(null); setNewWsName(null); setConfirmDelete(false); setConfirmText(""); };
 
   // id-keyed deps: the menu prop is rebuilt every parent render, object deps would refetch in a loop
   const fetchRef = useRef(workspaces.fetchMembers);
@@ -115,24 +116,33 @@ export function WorkspaceSwitcher({ workspaces }: { workspaces: WorkspacesMenu }
                 {confirmDelete ? (
                   <div className="px-3 py-2.5">
                     <p className="text-sm text-foreground">{t("deleteWorkspaceConfirm")}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5 truncate">{manageWs.name}</p>
+                    <p className="text-xs text-muted-foreground mt-1">{t("typeNameToConfirm")}</p>
+                    <input
+                      autoFocus
+                      value={confirmText}
+                      onChange={(e) => setConfirmText(e.target.value)}
+                      placeholder={manageWs.name}
+                      className="w-full mt-1.5 px-2 py-1.5 text-sm rounded-md border border-border bg-transparent text-foreground outline-none placeholder:text-muted-foreground/40"
+                    />
                     <div className="flex gap-2 mt-2">
                       <button
-                        onClick={() => setConfirmDelete(false)}
+                        onClick={() => { setConfirmDelete(false); setConfirmText(""); }}
                         className="flex-1 px-2 py-1.5 text-xs rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                       >
                         {t("cancel")}
                       </button>
                       <button
+                        disabled={confirmText.trim() !== manageWs.name}
                         onClick={() => {
                           const wasActive = workspaces.active?.id === manageWs.id;
                           workspaces.onDelete(manageWs.id).then(() => {
                             setManageWs(null);
                             setConfirmDelete(false);
+                            setConfirmText("");
                             if (wasActive) workspaces.onSwitch(null);
                           });
                         }}
-                        className="flex-1 px-2 py-1.5 text-xs rounded-md bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors cursor-pointer"
+                        className="flex-1 px-2 py-1.5 text-xs rounded-md bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         {t("delete")}
                       </button>
