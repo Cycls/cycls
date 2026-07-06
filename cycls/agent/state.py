@@ -18,7 +18,7 @@ Keys:
     <.database/ slot>         — agent-controlled KV exposed to the LLM
     <.org/ slot>              — workspaces registry + ACL (docs/rfc-workspaces.md)
 """
-import asyncio, json, re, secrets, shutil
+import asyncio, json, os, re, secrets, shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -367,7 +367,9 @@ async def resolve_role(user, ws_id, orgdb):
     Personal: owner-only; even org admins get None (lifecycle-only access to
     other people's personal workspaces goes through the explicit lifecycle
     endpoints, never through content routes). Team: the member row wins;
-    org admins hold implicit `admin` on any registered team workspace."""
+    org admins hold implicit `admin` on any registered team workspace; a
+    `builtin: org` registry row (the migrated `t-shared` workspace) makes
+    every org member an editor without per-user rows."""
     if ws_id == f"u-{user.id}":
         return "owner"
     if not ws_id.startswith("t-"):
@@ -375,8 +377,11 @@ async def resolve_role(user, ws_id, orgdb):
     row = await orgdb.get(f"members/{ws_id}/{user.id}")
     if row:
         return row.get("role")
-    if getattr(user, "org_role", None) == "admin" and await orgdb.get(f"workspaces/{ws_id}"):
+    reg = await orgdb.get(f"workspaces/{ws_id}")
+    if reg and getattr(user, "org_role", None) == "admin":
         return "admin"
+    if reg and reg.get("builtin") == "org" and getattr(user, "org_id", None):
+        return "editor"
     return None
 
 
@@ -399,6 +404,52 @@ async def wipe_workspace(org, ws_id, volume, base):
     orgdb = org_db(org, volume, base)
     await orgdb.delete(f"workspaces/{ws_id}")
     await orgdb.delete(f"members/{ws_id}/")
+
+
+# One-time-per-org legacy migration. The in-process cache makes the check
+# free after the first request; the `migrated` marker row makes it once
+# across restarts. Concurrent instances flipping the flag at the same moment
+# both see no marker and race the move — each move is idempotent (scandir of
+# an emptied root is a no-op), so the failure mode is benign. Enable the
+# flag during low traffic anyway.
+_migrated = set()
+
+
+async def ensure_migrated(user, volume, base):
+    """Move a pre-workspaces org tree into the new layout on first touch.
+
+    Org users: everything under `{volume}/{org}` (files, `.db`, `.database`)
+    moves into the builtin `t-shared` team workspace — that's where legacy
+    chats' attachments live, so the chats stay coherent. Solo users: into
+    their personal `u-{user.id}`. `ws/` and `.org/` stay org-level."""
+    org = org_of(user)
+    if org in _migrated:
+        return
+    orgdb = org_db(org, volume, base)
+    if await orgdb.get("migrated") is None:
+        ws_id = "t-shared" if getattr(user, "org_id", None) else f"u-{user.id}"
+        root = Path(volume) / org
+        dest = Path(workspace(org, volume, base=base, ws=ws_id).root)
+
+        def _move():
+            if not root.is_dir():
+                return False
+            entries = [e.name for e in os.scandir(root) if e.name not in ("ws", ".org")]
+            if not entries:
+                return False
+            dest.mkdir(parents=True, exist_ok=True)
+            for name in entries:   # shutil.move: dir renames work on gcsfuse (copy+delete)
+                shutil.move(str(root / name), str(dest / name))
+            return True
+
+        moved = await asyncio.to_thread(_move)
+        if moved and ws_id == "t-shared":
+            row = {"id": ws_id, "name": "Shared", "type": "team", "builtin": "org",
+                   "created_by": "cycls", "created_at": datetime.now(timezone.utc).isoformat()}
+            await orgdb.put(f"workspaces/{ws_id}", row, meta=row)
+        marker = {"at": datetime.now(timezone.utc).isoformat(), "moved": str(moved)}
+        await orgdb.put("migrated", marker, meta=marker)
+    _migrated.add(org)
 
 
 # ---- Agent KV (LLM-facing tool) ----

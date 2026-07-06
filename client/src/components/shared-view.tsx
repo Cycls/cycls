@@ -46,7 +46,8 @@ export function SharedView({ getToken }: { getToken?: () => Promise<string | nul
           if (token) headers.Authorization = `Bearer ${token}`;
         }
         const res = await fetch(
-          `${window.location.pathname.replace("/shared/", "/share/")}/data`,
+          // Keep the query: `?ws=` names the workspace that minted the share.
+          `${window.location.pathname.replace("/shared/", "/share/")}/data${window.location.search}`,
           { headers },
         );
         if (res.status === 403) throw new Error("This share is private or expired");
@@ -110,7 +111,8 @@ export function SharedView({ getToken }: { getToken?: () => Promise<string | nul
           ))}
           <button
             onClick={() => {
-              const userToken = window.location.pathname.replace(/^\/shared\//, "");
+              // Carry `?ws=` inside the fork param; forkShare() splits it back out.
+              const userToken = window.location.pathname.replace(/^\/shared\//, "") + window.location.search;
               window.location.href = `/?fork=${encodeURIComponent(userToken)}`;
             }}
             className="mt-6 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"

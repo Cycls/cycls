@@ -11,7 +11,7 @@ import { LoadingBar } from "./loading-bar";
 import { InputBox } from "./input-box";
 import { ShareDialog } from "./share-dialog";
 import { PricingCards } from "./pricing-cards";
-import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
+import { UserMenu, type UserInfo, type PlanInfo, type WorkspacesMenu } from "./user-menu";
 import type { Attachment, ChatApi, AppConfig } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
@@ -43,6 +43,7 @@ export interface AccountInfo {
   onCreateOrg: () => void;
   onManageOrg: () => void;
   onSwitchOrg: (orgId: string | null) => void;
+  workspaces?: WorkspacesMenu;
 }
 
 export interface FilesPanelProps {
@@ -73,7 +74,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   config?: AppConfig | null;
 }) {
   const { messages, isStreaming, chatLoading, chatId, send: onSend, retry: onRetry, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, setUIHandler } = chat;
-  const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg } = account ?? ({} as Partial<AccountInfo>);
+  const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions } = config ?? {};
 
   const lang = useLang();
@@ -377,7 +378,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </svg>
               </button>
             )}
-            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} /></div>}
+            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} workspaces={workspaces} /></div>}
           </div>
         </div>
       </header>

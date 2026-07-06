@@ -93,6 +93,7 @@ async def resolve_ws_id(user, header, mode, volume, base):
     is 404, not 403, so ids don't leak existence (docs/rfc-workspaces.md)."""
     if not mode or user is None:
         return None
+    await state.ensure_migrated(user, volume, base)   # free after the org's first touch
     ws_id = header or f"u-{user.id}"
     if ws_id == f"u-{user.id}":
         return ws_id
@@ -323,20 +324,31 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
     bearer_scheme = HTTPBearer(auto_error=False)
     mode = getattr(getattr(cycls_app, "config", None), "workspaces", None)
 
-    async def _resolve_or_403(user: str, token: str, bearer):
+    async def _locate(user: str, token: str, requester, ws_q=None):
+        """Find the share row in whichever of the owner's workspaces minted it.
+        Minted URLs carry `?ws=`; bare legacy links fall back to the owner's
+        personal workspace, then the migrated `t-shared` tree."""
+        candidates = [ws_q] if ws_q else ([personal_ws(user), "t-shared"] if mode else [None])
+        for ws_id in candidates:
+            try:
+                ws_owner = workspace(user, volume, base=base, ws=ws_id)
+            except ValueError:
+                break
+            row = await state.resolve(ws_owner, token, requester=requester)
+            if row is not None:
+                return ws_owner, row
+        return None
+
+    async def _resolve_or_403(user: str, token: str, bearer, ws_q=None):
         from cycls.app.auth import authenticate
-        # Multi-workspace mode: share rows live in the owner's personal
-        # workspace DB (Phase 1 — team-workspace shares carry an explicit ws
-        # in the row when the registry lands).
-        ws_owner = workspace(user, volume, base=base, ws=personal_ws(user) if mode else None)
         requester = None
         if bearer and cycls_app._auth_provider is not None:
             try: requester = authenticate(cycls_app._auth_provider, cycls_app.prod, bearer.credentials)
             except Exception: pass
-        row = await state.resolve(ws_owner, token, requester=requester)
-        if row is None:
+        found = await _locate(user, token, requester, ws_q)
+        if found is None:
             raise HTTPException(403, "Invalid, expired, or unauthorized link")
-        return ws_owner, row
+        return found
 
     # ---- Owner side ----
 
@@ -355,7 +367,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         for k in ("author_name", "author_image_url", "author_org_name", "author_org_image_url"):
             if (v := data.get(k)): row[k] = v
         await DB(ws).put(f"share/{token}", row, meta=row)
-        return {"token": token, "url": f"/shared/{ws.subject}/{token}", **row}
+        return {"token": token, "url": _share_url(ws, token), **row}
 
     @r.get("/share")
     async def list_shares(ws: Workspace = ws_dep):
@@ -371,7 +383,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
                 title = chat_titles.get(path[5:], "")
             else:
                 title = path[5:]
-            out.append({"token": token, "url": f"/shared/{ws.subject}/{token}", "title": title, **meta})
+            out.append({"token": token, "url": _share_url(ws, token), "title": title, **meta})
         out.sort(key=lambda s: s.get("shared_at", ""), reverse=True)
         return out
 
@@ -384,14 +396,15 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.get("/share/{user}/{token}/data")
     async def resolve_share(
-        user: str, token: str,
+        user: str, token: str, ws: Optional[str] = None,
         bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     ):
-        ws_owner, row = await _resolve_or_403(user, token, bearer)
+        ws_owner, row = await _resolve_or_403(user, token, bearer, ws)
         path = row["path"]
         common = {k: row[k] for k in
                   ("shared_at", "author_name", "author_image_url", "author_org_name", "author_org_image_url")
                   if k in row}
+        suffix = f"?ws={ws_owner.ws}" if ws_owner.ws else ""
         if path.startswith("chat/"):
             chat_id = path[5:]
             meta = await state.get_meta(ws_owner, chat_id)
@@ -401,18 +414,18 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             for m in messages:
                 for att in m.get("attachments") or []:
                     if ap := att.get("path"):
-                        att["url"] = f"/share/{user}/{token}/file/{ap}"
+                        att["url"] = f"/share/{user}/{token}/file/{ap}{suffix}"
             return {"type": "chat", "id": chat_id, "title": meta.get("title", ""),
                     "messages": messages, **common}
         return {"type": "file", "path": path[5:],
-                "url": f"/share/{user}/{token}/file/{path[5:]}", **common}
+                "url": f"/share/{user}/{token}/file/{path[5:]}{suffix}", **common}
 
     @r.get("/share/{user}/{token}/file/{file_path:path}")
     async def shared_attachment(
-        user: str, token: str, file_path: str,
+        user: str, token: str, file_path: str, ws: Optional[str] = None,
         bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     ):
-        ws_owner, row = await _resolve_or_403(user, token, bearer)
+        ws_owner, row = await _resolve_or_403(user, token, bearer, ws)
         path = row["path"]
         # Authorize: file_path must be the share's file (file share) or an attachment of its chat.
         if path.startswith("file/"):
@@ -427,11 +440,11 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         return _serve_file(ws_owner.root, file_path)
 
     @r.post("/share/{user}/{token}/fork")
-    async def fork_share(user: str, token: str, forker: Any = user_dep):
-        ws_source = workspace(user, volume, base=base, ws=personal_ws(user) if mode else None)
-        row = await state.resolve(ws_source, token, requester=forker)
-        if row is None:
+    async def fork_share(user: str, token: str, ws: Optional[str] = None, forker: Any = user_dep):
+        found = await _locate(user, token, forker, ws)
+        if found is None:
             raise HTTPException(403, "Invalid, expired, or unauthorized link")
+        ws_source, row = found
         if not row["path"].startswith("chat/"):
             raise HTTPException(400, "Only chat shares can be forked")
         source_id = row["path"][5:]
@@ -462,6 +475,12 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         return {"id": new_id}
 
     return r
+
+
+def _share_url(ws, token):
+    """Viewer URL for a share — carries the minting workspace so the viewer
+    endpoints can find the row without guessing."""
+    return f"/shared/{ws.subject}/{token}" + (f"?ws={ws.ws}" if ws.ws else "")
 
 
 def _serve_file(root, file_path):
@@ -523,6 +542,7 @@ def workspaces_router(cycls_app, user_dep, volume, base):
 
     @r.get("/workspaces")
     async def list_workspaces(request: Request, user: Any = user_dep):
+        await state.ensure_migrated(user, volume, base)
         orgdb = _orgdb(user)
         out = [{"id": f"u-{user.id}", "name": "Personal", "type": "personal", "role": "owner"}]
         if _is_org_admin(user) and request.query_params.get("all") is not None:
@@ -541,6 +561,11 @@ def workspaces_router(cycls_app, user_dep, volume, base):
             member = await orgdb.get(f"members/{ws_id}/{user.id}")
             if row:
                 out.append({**row, "role": (member or {}).get("role")})
+        # The migrated t-shared workspace has no member rows — every org
+        # member is an editor by its `builtin: org` registry row.
+        if getattr(user, "org_id", None) and not any(w["id"] == "t-shared" for w in out):
+            if reg := await orgdb.get("workspaces/t-shared"):
+                out.append({**reg, "role": "admin" if _is_org_admin(user) else "editor"})
         return out
 
     @r.post("/workspaces")

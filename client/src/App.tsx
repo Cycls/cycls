@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDarkMode } from "./hooks/use-dark-mode";
 import {
   AuthenticateWithRedirectCallback,
@@ -23,6 +23,8 @@ import { Chat, type AccountInfo, type FilesPanelProps } from "./components/chat"
 import { SharedView } from "./components/shared-view";
 import { useChat, AppConfig } from "./hooks/use-chat";
 import { useFiles } from "./hooks/use-files";
+import { useWorkspaces } from "./hooks/use-workspaces";
+import { setActiveWorkspace } from "./hooks/use-auth-headers";
 import { useUrlParam } from "./hooks/use-url-param";
 import { usePostHogIdentify } from "./hooks/use-posthog-identify";
 import { initPostHog, setAgentDomain, track, register } from "./lib/posthog";
@@ -46,25 +48,46 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
   };
 }
 
+// Active-workspace selection lives ABOVE the remount boundary (like the org),
+// so switching workspaces remounts ChatApp with fresh chat/files state — the
+// same mechanism as the org switch. Persisted per org (docs/rfc-workspaces.md).
+export type WorkspaceSelection = { id: string | null; switch: (id: string | null) => void };
+
 function ChatAppKeyed({ config }: { config: AppConfig | null }) {
   const { organization, isLoaded } = useOrganization();
   const orgKey = organization?.id || "personal";
+  const wsEnabled = !!config?.workspaces;
+  const wsKey = (org: string) => `cycls_ws_${org}`;
+  const [wsId, setWsId] = useState<string | null>(() => wsEnabled ? localStorage.getItem(wsKey(orgKey)) : null);
   const prevKey = useRef(orgKey);
   if (prevKey.current !== orgKey) {
     window.history.replaceState({}, "", window.location.pathname);
     prevKey.current = orgKey;
+    setWsId(wsEnabled ? localStorage.getItem(wsKey(orgKey)) : null);   // restore this org's last workspace
   }
+  setActiveWorkspace(wsEnabled ? wsId : null);   // before children render/fetch
+  const switchWorkspace = useCallback((id: string | null) => {
+    if (id) localStorage.setItem(wsKey(orgKey), id);
+    else localStorage.removeItem(wsKey(orgKey));
+    window.history.replaceState({}, "", window.location.pathname);
+    setWsId(id);
+  }, [orgKey]);
+  const workspace = useMemo<WorkspaceSelection | undefined>(
+    () => wsEnabled ? { id: wsId, switch: switchWorkspace } : undefined,
+    [wsEnabled, wsId, switchWorkspace]);
   if (!isLoaded) return null;
-  return <ChatApp key={orgKey} config={config} />;
+  return <ChatApp key={`${orgKey}:${wsId || "personal"}`} config={config} workspace={workspace} />;
 }
 
-function ChatApp({ config }: { config: AppConfig | null }) {
+function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: WorkspaceSelection }) {
   const chat = useChat();
   const files = useFiles();
+  const ws = useWorkspaces();
   const { getToken, signOut, isLoaded: authLoaded } = useAuth();
   const { user } = useUser();
   const clerk = useClerk();
-  const { organization } = useOrganization();
+  const { organization, membership, memberships } = useOrganization(
+    workspace ? { memberships: { infinite: true } } : {});
   const { userMemberships, setActive } = useOrganizationList({ userMemberships: true });
   const { data: subscription } = useSubscription({ for: organization ? "organization" : "user" });
   const lang = useLang();
@@ -96,7 +119,17 @@ function ChatApp({ config }: { config: AppConfig | null }) {
   useEffect(() => {
     chat.setGetToken(() => getToken());
     files.setGetToken(() => getToken());
-  }, [getToken, chat, files]);
+    ws.setGetToken(() => getToken());
+  }, [getToken, chat, files, ws]);
+
+  // Load the workspace list once auth settles; a persisted selection that no
+  // longer resolves (team deleted, membership revoked) falls back to personal.
+  useEffect(() => {
+    if (!workspace || !organization || !authLoaded) return;
+    ws.list().then((rows) => {
+      if (workspace.id && !rows.some((r) => r.id === workspace.id)) workspace.switch(null);
+    }).catch(() => {});
+  }, [workspace, organization, authLoaded, ws]);
 
   useUrlParam("q", (q) => chat.send(q, undefined, "url_param"));
 
@@ -160,6 +193,24 @@ function ChatApp({ config }: { config: AppConfig | null }) {
     onCreateOrg: () => clerk.openCreateOrganization(),
     onManageOrg: () => clerk.openOrganizationProfile(),
     onSwitchOrg: (orgId: string | null) => setActive?.({ organization: orgId || null }),
+    workspaces: workspace && organization ? {
+      active: ws.workspaces.find((w) => w.id === workspace.id) || null,
+      items: ws.workspaces,
+      canCreate: config?.workspaces === "member" || membership?.role === "org:admin",
+      orgMembers: (memberships?.data || [])
+        .map((m) => ({
+          id: m.publicUserData?.userId || "",
+          name: [m.publicUserData?.firstName, m.publicUserData?.lastName].filter(Boolean).join(" ")
+            || m.publicUserData?.identifier || m.publicUserData?.userId || "",
+        }))
+        .filter((m) => m.id),
+      onSwitch: workspace.switch,
+      onCreate: ws.create,
+      onDelete: ws.remove,
+      fetchMembers: ws.members,
+      onSetMember: ws.setMember,
+      onRemoveMember: ws.removeMember,
+    } : undefined,
   };
 
   return (
