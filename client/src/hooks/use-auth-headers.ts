@@ -1,9 +1,6 @@
 import { useCallback, useRef } from "react";
 
-// Active workspace (multi-workspace mode). Module-level so every hook
-// instance — useApi consumers, the chat stream POST, attachment uploads —
-// sends the same X-Workspace header without threading state through each.
-// null = personal (the server's default when the header is absent).
+// Module-level so every hook instance sends the same X-Workspace header. null = personal.
 let activeWorkspace: string | null = null;
 
 export function setActiveWorkspace(ws: string | null) {

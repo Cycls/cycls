@@ -46,7 +46,6 @@ export function SharedView({ getToken }: { getToken?: () => Promise<string | nul
           if (token) headers.Authorization = `Bearer ${token}`;
         }
         const res = await fetch(
-          // Keep the query: `?ws=` names the workspace that minted the share.
           `${window.location.pathname.replace("/shared/", "/share/")}/data${window.location.search}`,
           { headers },
         );
@@ -111,7 +110,6 @@ export function SharedView({ getToken }: { getToken?: () => Promise<string | nul
           ))}
           <button
             onClick={() => {
-              // Carry `?ws=` inside the fork param; forkShare() splits it back out.
               const userToken = window.location.pathname.replace(/^\/shared\//, "") + window.location.search;
               window.location.href = `/?fork=${encodeURIComponent(userToken)}`;
             }}

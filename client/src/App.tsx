@@ -48,9 +48,8 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
   };
 }
 
-// Active-workspace selection lives ABOVE the remount boundary (like the org),
-// so switching workspaces remounts ChatApp with fresh chat/files state — the
-// same mechanism as the org switch. Persisted per org (docs/rfc-workspaces.md).
+// Workspace selection lives above the remount boundary so switching remounts
+// ChatApp with fresh chat/files state, same as the org switch. Persisted per org.
 export type WorkspaceSelection = { id: string | null; switch: (id: string | null) => void };
 
 function ChatAppKeyed({ config }: { config: AppConfig | null }) {
@@ -63,7 +62,7 @@ function ChatAppKeyed({ config }: { config: AppConfig | null }) {
   if (prevKey.current !== orgKey) {
     window.history.replaceState({}, "", window.location.pathname);
     prevKey.current = orgKey;
-    setWsId(wsEnabled ? localStorage.getItem(wsKey(orgKey)) : null);   // restore this org's last workspace
+    setWsId(wsEnabled ? localStorage.getItem(wsKey(orgKey)) : null);
   }
   setActiveWorkspace(wsEnabled ? wsId : null);   // before children render/fetch
   const switchWorkspace = useCallback((id: string | null) => {
@@ -122,14 +121,13 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
     ws.setGetToken(() => getToken());
   }, [getToken, chat, files, ws]);
 
-  // Load the workspace list once auth settles; a persisted selection that no
-  // longer resolves (team deleted, membership revoked) falls back to personal.
+  // A persisted selection that no longer resolves falls back to personal.
   useEffect(() => {
     if (!workspace || !organization || !authLoaded) return;
     ws.list().then((rows) => {
       if (workspace.id && !rows.some((r) => r.id === workspace.id)) workspace.switch(null);
     }).catch(() => {});
-  }, [workspace, organization, authLoaded, ws]);
+  }, [workspace, organization?.id, authLoaded, ws.list]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useUrlParam("q", (q) => chat.send(q, undefined, "url_param"));
 

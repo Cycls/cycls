@@ -459,8 +459,7 @@ export function useChat(baseUrl: string = "") {
   }, [api]);
 
   const forkShare = useCallback(async (userToken: string) => {
-    // `userToken` is `<user>/<token>` with an optional `?ws=` naming the
-    // workspace that minted the share — reattach it after the /fork segment.
+    // `<user>/<token>` with an optional `?ws=` — reattach it after /fork
     const [path, query] = userToken.split("?");
     const { id } = await (await api(`/share/${path}/fork${query ? `?${query}` : ""}`, { method: "POST" })).json();
     track("share_forked", { source: userToken, new_chat_id: id });
