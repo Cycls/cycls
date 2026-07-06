@@ -16,11 +16,13 @@ Keys:
     chat/{id}/compaction      — compaction marker (summary + first_kept)
     share/{token}             — opaque share tokens (RFC003)
     <.database/ slot>         — agent-controlled KV exposed to the LLM
+    <.org/ slot>              — workspaces registry + ACL (docs/rfc-workspaces.md)
 """
-import asyncio, json, re
+import asyncio, json, re, secrets, shutil
 from datetime import datetime, timezone
+from pathlib import Path
 
-from cycls.app.db import DB, workspace
+from cycls.app.db import DB, workspace, _store
 
 
 # ---- Chat metadata ----
@@ -326,6 +328,77 @@ async def resolve(workspace, token, requester=None):
     if aud.startswith("org:") and getattr(requester, "org_id", None) == aud[4:]:
         return row
     return None
+
+
+# ---- Workspaces registry + ACL (docs/rfc-workspaces.md) ----
+#
+# Org-level rows under the `.org` slot — OUTSIDE every workspace root, so
+# they are never bind-mounted into a sandbox and unreachable by path tools:
+#     workspaces/{ws_id}            — team registry {id, name, type, created_by, created_at}
+#     members/{ws_id}/{user_id}     — ACL row {role, added_by, added_at}
+# Personal workspaces (`u-{user_id}`) have no rows: owner-only by construction,
+# and org admins get lifecycle (list/delete), never content.
+
+def org_of(user):
+    """Org segment for a User — mirrors workspace() subject derivation."""
+    return getattr(user, "org_id", None) or user.id
+
+
+def org_db(org, volume, base):
+    """DB over the org-level `.org` tree (registry + ACL)."""
+    return DB(workspace(org, volume, base=base, slot=".org"))
+
+
+async def create_team_ws(orgdb, name, creator_id):
+    ws_id = f"t-{secrets.token_urlsafe(8)}"   # urlsafe alphabet ⊂ [A-Za-z0-9_-]
+    now = datetime.now(timezone.utc).isoformat()
+    row = {"id": ws_id, "name": name, "type": "team",
+           "created_by": creator_id, "created_at": now}
+    member = {"role": "owner", "added_by": creator_id, "added_at": now}
+    # Rows are flat str:str so they ride object-store custom-meta (O(1) scan).
+    await orgdb.put(f"workspaces/{ws_id}", row, meta=row)
+    await orgdb.put(f"members/{ws_id}/{creator_id}", member, meta=member)
+    return row
+
+
+async def resolve_role(user, ws_id, orgdb):
+    """`user`'s role in `ws_id`, or None (no access — callers 404, not 403).
+
+    Personal: owner-only; even org admins get None (lifecycle-only access to
+    other people's personal workspaces goes through the explicit lifecycle
+    endpoints, never through content routes). Team: the member row wins;
+    org admins hold implicit `admin` on any registered team workspace."""
+    if ws_id == f"u-{user.id}":
+        return "owner"
+    if not ws_id.startswith("t-"):
+        return None
+    row = await orgdb.get(f"members/{ws_id}/{user.id}")
+    if row:
+        return row.get("role")
+    if getattr(user, "org_role", None) == "admin" and await orgdb.get(f"workspaces/{ws_id}"):
+        return "admin"
+    return None
+
+
+async def member_of(orgdb, user_id):
+    """Team workspace ids `user_id` belongs to — one glob LIST round-trip."""
+    return [k.split("/")[1] async for k, _ in orgdb.scan(glob=f"members/*/{user_id}")]
+
+
+async def wipe_workspace(org, ws_id, volume, base):
+    """Delete a workspace's file tree and object-store subtree, then its
+    registry + ACL rows. Trusted-code only — authorization happens in the
+    router. Idempotent: missing trees are fine. Deriving the root through
+    workspace() revalidates org and ws_id before anything is destroyed."""
+    root = Path(workspace(org, volume, base=base, ws=ws_id).root)
+    if root.exists():
+        await asyncio.to_thread(shutil.rmtree, root, True)
+    # Prod files ride gcsfuse but DB objects are written via the GCS API —
+    # sweep the object-store prefix too so no .json rows survive the rmtree.
+    await _store(f"{str(base).rstrip('/')}/{org}").remove_prefix(f"ws/{ws_id}/")
+    orgdb = org_db(org, volume, base)
+    await orgdb.delete(f"workspaces/{ws_id}")
+    await orgdb.delete(f"members/{ws_id}/")
 
 
 # ---- Agent KV (LLM-facing tool) ----

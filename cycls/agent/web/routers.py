@@ -3,7 +3,7 @@
 Chat metadata + message log and shares live in the workspace DB — see
 `cycls.agent.state`. Files stay on the workspace filesystem (POSIX-shaped).
 """
-import os, secrets, shutil, time, unicodedata, uuid
+import asyncio, os, secrets, shutil, time, unicodedata, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -85,19 +85,22 @@ def to_ui_messages(raw):
 
 # ---- Workspace selection (multi-workspace mode) ----
 
-def resolve_ws_id(user, header, mode):
-    """`X-Workspace` header → validated workspace id, or None in legacy mode.
-
-    Phase 1 of docs/rfc-workspaces.md: personal workspaces only — `u-{user.id}`
-    is the sole workspace a user can enter, and the default when no header is
-    sent. Anything else (a teammate's personal id, a team id, garbage) is 404,
-    not 403, so ids don't leak existence."""
+async def resolve_ws_id(user, header, mode, volume, base):
+    """`X-Workspace` header → workspace id the user may enter, or None in
+    legacy mode. Personal (`u-{user.id}`) is the default and needs no lookup;
+    team ids are checked against the ACL (member row, or implicit org-admin).
+    Everything else — a teammate's personal id, an unknown team, garbage —
+    is 404, not 403, so ids don't leak existence (docs/rfc-workspaces.md)."""
     if not mode or user is None:
         return None
-    personal = f"u-{user.id}"
-    if not header or header == personal:
-        return personal
-    raise HTTPException(status_code=404, detail="Workspace not found")
+    ws_id = header or f"u-{user.id}"
+    if ws_id == f"u-{user.id}":
+        return ws_id
+    if ws_id.startswith("t-"):
+        orgdb = state.org_db(state.org_of(user), volume, base)
+        if await state.resolve_role(user, ws_id, orgdb) is not None:
+            return ws_id
+    raise HTTPException(404, "Workspace not found")
 
 
 def personal_ws(subject):
@@ -486,15 +489,142 @@ def _zip_dir(dir_path):
                         background=BackgroundTask(lambda: os.unlink(tmp.name)))
 
 
+# ---- Workspaces (registry + members — docs/rfc-workspaces.md) ----
+
+def workspaces_router(cycls_app, user_dep, volume, base):
+    """Workspace lifecycle + member management. Content access control lives in
+    `resolve_ws_id`; this router owns create/rename/delete and the ACL rows."""
+    r = APIRouter()
+    mode = getattr(getattr(cycls_app, "config", None), "workspaces", None)
+
+    def _orgdb(user):
+        return state.org_db(state.org_of(user), volume, base)
+
+    def _is_org_admin(user):
+        return getattr(user, "org_role", None) == "admin"
+
+    def _name_or_400(data):
+        name = (data.get("name") or "").strip()
+        if not 1 <= len(name) <= 80:
+            raise HTTPException(400, "name must be 1-80 characters")
+        return name
+
+    async def _role_or_404(user, ws_id):
+        role = await state.resolve_role(user, ws_id, _orgdb(user))
+        if role is None:
+            raise HTTPException(404, "Workspace not found")
+        return role
+
+    async def _manager_or_403(user, ws_id):
+        if not ws_id.startswith("t-"):
+            raise HTTPException(404, "Workspace not found")
+        if await _role_or_404(user, ws_id) not in ("owner", "admin"):
+            raise HTTPException(403, "Managing this workspace requires owner or admin")
+
+    @r.get("/workspaces")
+    async def list_workspaces(request: Request, user: Any = user_dep):
+        orgdb = _orgdb(user)
+        out = [{"id": f"u-{user.id}", "name": "Personal", "type": "personal", "role": "owner"}]
+        if _is_org_admin(user) and request.query_params.get("all") is not None:
+            # Lifecycle view (offboarding): every team workspace + every personal
+            # dir. Names/ids only — content stays behind the owner-only check.
+            async for _, row in orgdb.scan(prefix="workspaces/"):
+                out.append({**row, "role": "admin"})
+            ws_dir = Path(volume) / state.org_of(user) / "ws"
+            dirs = await asyncio.to_thread(
+                lambda: [e.name for e in os.scandir(ws_dir) if e.is_dir()] if ws_dir.is_dir() else [])
+            out += [{"id": d, "name": d[2:], "type": "personal", "role": None}
+                    for d in sorted(dirs) if d.startswith("u-") and d != f"u-{user.id}"]
+            return out
+        for ws_id in await state.member_of(orgdb, user.id):
+            row = await orgdb.get(f"workspaces/{ws_id}")
+            member = await orgdb.get(f"members/{ws_id}/{user.id}")
+            if row:
+                out.append({**row, "role": (member or {}).get("role")})
+        return out
+
+    @r.post("/workspaces")
+    async def create_workspace(request: Request, user: Any = user_dep):
+        if mode == "admin" and not _is_org_admin(user):
+            raise HTTPException(403, "Only org admins can create team workspaces")
+        if not getattr(user, "org_id", None):
+            raise HTTPException(400, "Team workspaces require an organization")
+        name = _name_or_400(await request.json())
+        return await state.create_team_ws(_orgdb(user), name, user.id)
+
+    @r.patch("/workspaces/{ws_id}")
+    async def rename_workspace(ws_id: str, request: Request, user: Any = user_dep):
+        await _manager_or_403(user, ws_id)
+        name = _name_or_400(await request.json())
+        orgdb = _orgdb(user)
+        row = {**(await orgdb.get(f"workspaces/{ws_id}") or {}), "name": name}
+        await orgdb.put(f"workspaces/{ws_id}", row, meta=row)
+        return row
+
+    @r.delete("/workspaces/{ws_id}")
+    async def delete_workspace(ws_id: str, user: Any = user_dep):
+        if ws_id.startswith("u-"):
+            # Personal: the owner themselves, or an org admin (lifecycle —
+            # offboarding). Admins never gain content routes on it.
+            if ws_id != f"u-{user.id}" and not _is_org_admin(user):
+                raise HTTPException(404, "Workspace not found")
+        elif await _role_or_404(user, ws_id) != "owner" and not _is_org_admin(user):
+            raise HTTPException(403, "Deleting a team workspace requires its owner")
+        await state.wipe_workspace(state.org_of(user), ws_id, volume, base)
+        return {"ok": True}
+
+    # ---- Members (team workspaces only) ----
+
+    @r.get("/workspaces/{ws_id}/members")
+    async def list_members(ws_id: str, user: Any = user_dep):
+        if not ws_id.startswith("t-"):
+            raise HTTPException(404, "Workspace not found")
+        await _role_or_404(user, ws_id)   # any member (or org admin) may look
+        return [{"user_id": key.rsplit("/", 1)[1], **row}
+                async for key, row in _orgdb(user).scan(prefix=f"members/{ws_id}/")]
+
+    @r.put("/workspaces/{ws_id}/members/{member_id}")
+    async def put_member(ws_id: str, member_id: str, request: Request, user: Any = user_dep):
+        await _manager_or_403(user, ws_id)
+        role = (await request.json()).get("role", "editor")
+        if role not in ("admin", "editor"):
+            raise HTTPException(400, 'role must be "admin" or "editor"')
+        orgdb = _orgdb(user)
+        existing = await orgdb.get(f"members/{ws_id}/{member_id}")
+        if existing and existing.get("role") == "owner":
+            raise HTTPException(403, "The owner's role cannot be changed")
+        row = {"role": role, "added_by": user.id,
+               "added_at": datetime.now(timezone.utc).isoformat()}
+        await orgdb.put(f"members/{ws_id}/{member_id}", row, meta=row)
+        return {"user_id": member_id, **row}
+
+    @r.delete("/workspaces/{ws_id}/members/{member_id}")
+    async def remove_member(ws_id: str, member_id: str, user: Any = user_dep):
+        orgdb = _orgdb(user)
+        if member_id == user.id:
+            await _role_or_404(user, ws_id)   # leaving requires being in it
+        else:
+            await _manager_or_403(user, ws_id)
+        existing = await orgdb.get(f"members/{ws_id}/{member_id}")
+        if existing and existing.get("role") == "owner":
+            raise HTTPException(403, "The owner cannot be removed")
+        await orgdb.delete(f"members/{ws_id}/{member_id}")
+        return {"ok": True}
+
+    return r
+
+
 # ---- Mount ----
 
 def install_routers(cycls_app, app, required_auth, volume, base):
     mode = getattr(getattr(cycls_app, "config", None), "workspaces", None)
 
-    def _build_ws(request: Request, user: Any = required_auth):
-        ws_id = resolve_ws_id(user, request.headers.get("x-workspace"), mode)
+    async def _build_ws(request: Request, user: Any = required_auth):
+        ws_id = await resolve_ws_id(user, request.headers.get("x-workspace"), mode, volume, base)
         return workspace(user, volume, base=base, ws=ws_id)
     ws_dep = Depends(_build_ws)
     app.include_router(chats_router(ws_dep))
     app.include_router(files_router(cycls_app, ws_dep, required_auth))
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))
+    if mode:
+        app.include_router(workspaces_router(cycls_app, required_auth, volume, base))

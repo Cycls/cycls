@@ -582,29 +582,33 @@ def test_state_resolve_path_allows_normal(tmp_path):
 from cycls.agent.web.routers import resolve_ws_id, personal_ws
 
 
-def test_resolve_ws_id_legacy_mode_ignores_header():
+def _resolve(user, header, mode, tmp_path):
+    return asyncio.run(resolve_ws_id(user, header, mode, tmp_path, f"file://{tmp_path}"))
+
+
+def test_resolve_ws_id_legacy_mode_ignores_header(tmp_path):
     from cycls.app.auth import User
     user = User(id="user_1", org_id="org_1")
-    assert resolve_ws_id(user, None, None) is None
-    assert resolve_ws_id(user, "u-user_1", None) is None      # mode off → header ignored
-    assert resolve_ws_id(None, None, "member") is None        # no user → legacy
+    assert _resolve(user, None, None, tmp_path) is None
+    assert _resolve(user, "u-user_1", None, tmp_path) is None      # mode off → header ignored
+    assert _resolve(None, None, "member", tmp_path) is None        # no user → legacy
 
 
-def test_resolve_ws_id_defaults_to_personal():
+def test_resolve_ws_id_defaults_to_personal(tmp_path):
     from cycls.app.auth import User
     user = User(id="user_1", org_id="org_1")
-    assert resolve_ws_id(user, None, "member") == "u-user_1"
-    assert resolve_ws_id(user, "", "member") == "u-user_1"
-    assert resolve_ws_id(user, "u-user_1", "member") == "u-user_1"
+    assert _resolve(user, None, "member", tmp_path) == "u-user_1"
+    assert _resolve(user, "", "member", tmp_path) == "u-user_1"
+    assert _resolve(user, "u-user_1", "member", tmp_path) == "u-user_1"
 
 
-def test_resolve_ws_id_foreign_ids_404():
+def test_resolve_ws_id_foreign_ids_404(tmp_path):
     from fastapi import HTTPException
     from cycls.app.auth import User
     user = User(id="user_1", org_id="org_1")
-    for header in ("u-user_2", "t-team1", "../evil", "garbage"):
+    for header in ("u-user_2", "t-unknown", "../evil", "garbage"):
         with pytest.raises(HTTPException) as exc:
-            resolve_ws_id(user, header, "member")
+            _resolve(user, header, "member", tmp_path)
         assert exc.value.status_code == 404
 
 
