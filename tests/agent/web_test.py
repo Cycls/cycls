@@ -573,3 +573,116 @@ def test_state_resolve_path_rejects_cycls_nested(tmp_path):
 def test_state_resolve_path_allows_normal(tmp_path):
     out = resolve_path(tmp_path, "notes.md")
     assert out == (tmp_path / "notes.md").resolve()
+
+
+# =============================================================================
+# Multi-workspace mode (RFC docs/rfc-workspaces.md, Phase 1)
+# =============================================================================
+
+from cycls.agent.web.routers import resolve_ws_id, personal_ws
+
+
+def test_resolve_ws_id_legacy_mode_ignores_header():
+    from cycls.app.auth import User
+    user = User(id="user_1", org_id="org_1")
+    assert resolve_ws_id(user, None, None) is None
+    assert resolve_ws_id(user, "u-user_1", None) is None      # mode off → header ignored
+    assert resolve_ws_id(None, None, "member") is None        # no user → legacy
+
+
+def test_resolve_ws_id_defaults_to_personal():
+    from cycls.app.auth import User
+    user = User(id="user_1", org_id="org_1")
+    assert resolve_ws_id(user, None, "member") == "u-user_1"
+    assert resolve_ws_id(user, "", "member") == "u-user_1"
+    assert resolve_ws_id(user, "u-user_1", "member") == "u-user_1"
+
+
+def test_resolve_ws_id_foreign_ids_404():
+    from fastapi import HTTPException
+    from cycls.app.auth import User
+    user = User(id="user_1", org_id="org_1")
+    for header in ("u-user_2", "t-team1", "../evil", "garbage"):
+        with pytest.raises(HTTPException) as exc:
+            resolve_ws_id(user, header, "member")
+        assert exc.value.status_code == 404
+
+
+def test_personal_ws_from_subject():
+    assert personal_ws("org_1:user_1") == "u-user_1"
+    assert personal_ws("user_1") == "u-user_1"
+
+
+def _ws_routers_client(tmp_path, workspaces="member"):
+    """Mount the real state routers behind a stub app + fixed user."""
+    from types import SimpleNamespace
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+    from cycls.app.auth import User
+    from cycls.agent.web.routers import install_routers
+
+    user = User(id="user_1", org_id="org_1")
+    stub = SimpleNamespace(prod=False, _auth_provider=None,
+                           config=SimpleNamespace(workspaces=workspaces, max_upload=512))
+    fapp = FastAPI()
+    install_routers(stub, fapp, Depends(lambda: user), tmp_path, f"file://{tmp_path}")
+    return TestClient(fapp)
+
+
+def test_ws_mode_chats_land_in_personal_workspace(tmp_path):
+    client = _ws_routers_client(tmp_path)
+    r = client.put("/chats/c1", json={"title": "hello"})
+    assert r.status_code == 200
+    index = tmp_path / "org_1" / "ws" / "u-user_1" / ".db" / "user_1" / "chat" / "c1" / "index.json"
+    assert index.exists()
+    # explicit personal header hits the same store
+    r = client.get("/chats", headers={"X-Workspace": "u-user_1"})
+    assert [c["id"] for c in r.json()] == ["c1"]
+
+
+def test_ws_mode_foreign_workspace_is_404(tmp_path):
+    client = _ws_routers_client(tmp_path)
+    for header in ("u-user_2", "t-team1"):
+        assert client.get("/chats", headers={"X-Workspace": header}).status_code == 404
+
+
+def test_ws_mode_files_land_in_personal_workspace(tmp_path):
+    client = _ws_routers_client(tmp_path)
+    r = client.put("/files/notes.txt", files={"file": ("notes.txt", b"hi")})
+    assert r.status_code == 200
+    assert (tmp_path / "org_1" / "ws" / "u-user_1" / "notes.txt").read_bytes() == b"hi"
+
+
+def test_legacy_mode_files_land_in_org_root(tmp_path):
+    client = _ws_routers_client(tmp_path, workspaces=None)
+    r = client.put("/files/notes.txt", files={"file": ("notes.txt", b"hi")})
+    assert r.status_code == 200
+    assert (tmp_path / "org_1" / "notes.txt").read_bytes() == b"hi"
+
+
+def test_web_builder_workspaces_option():
+    from cycls.agent.web import Web
+    assert Web()._workspaces is None
+    assert Web().workspaces()._workspaces == "member"
+    assert Web().workspaces(create="admin")._workspaces == "admin"
+    with pytest.raises(ValueError):
+        Web().workspaces(create="anyone")
+
+
+def test_agent_workspaces_requires_auth(tmp_path):
+    import cycls
+
+    with pytest.raises(ValueError, match="requires"):
+        @cycls.agent(web=cycls.Web().workspaces())
+        async def my_agent(context):
+            yield "hi"
+
+
+def test_agent_workspaces_config_wiring():
+    import cycls
+
+    @cycls.agent(web=cycls.Web().auth(cycls.Clerk()).workspaces(create="admin"))
+    async def my_agent(context):
+        yield "hi"
+
+    assert my_agent.config.workspaces == "admin"

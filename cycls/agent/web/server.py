@@ -26,6 +26,7 @@ class Config(BaseModel):
     pk: Optional[str] = None
     affiliate: Optional[str] = None   # affiliate/referral provider key (e.g. Rewardful)
     max_upload: int = 512             # per-file upload cap in MB
+    workspaces: Optional[str] = None  # multi-workspace mode: None off, else team-create policy ("member"|"admin")
     volume: str = "/workspace"
 
     def set_prod(self, prod: bool):
@@ -128,6 +129,7 @@ def web(func, config, extra_routers=None, auth=None):
         user: Optional[User] = None
         chat_id: Optional[str] = None
         prod: bool = False
+        workspace_id: Optional[str] = None
 
         model_config = {"arbitrary_types_allowed": True}
 
@@ -139,13 +141,15 @@ def web(func, config, extra_routers=None, auth=None):
 
         @property
         def workspace(self) -> Workspace:
-            return workspace(self.user, volume, base=config.storage)
+            return workspace(self.user, volume, base=config.storage, ws=self.workspace_id)
 
     app = FastAPI()
 
     validate = validator(auth, config.prod)
     auth = Depends(validate) if config.auth else Depends(lambda: None)
     required_auth = Depends(validate)
+
+    from .routers import resolve_ws_id
 
     @app.post("/")
     @app.post("/chat")
@@ -154,8 +158,10 @@ def web(func, config, extra_routers=None, auth=None):
         data = await request.json()
         messages = data.get("messages")
         chat_id = request.query_params.get("id") or str(uuid.uuid4())
+        ws_id = resolve_ws_id(user, request.headers.get("x-workspace"), config.workspaces)
 
-        context = Context(messages=Messages(messages), user=user, chat_id=chat_id, prod=config.prod)
+        context = Context(messages=Messages(messages), user=user, chat_id=chat_id, prod=config.prod,
+                          workspace_id=ws_id)
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
 
         if request.url.path == "/chat/completions":

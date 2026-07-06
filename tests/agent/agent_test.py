@@ -236,7 +236,7 @@ def test_no_history_without_session(tmp_path):
     Path(ws).mkdir()
 
     ctx = types.SimpleNamespace()
-    ctx.workspace = types.SimpleNamespace(root=Path(ws))
+    ctx.workspace = types.SimpleNamespace(root=Path(ws), volume=Path(ws).parent, ws=None)
     ctx.chat_id = None
     ctx.user = None
     ctx.messages = types.SimpleNamespace()

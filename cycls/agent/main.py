@@ -24,6 +24,9 @@ class Agent(App):
     def __init__(self, func, name, web=None, image=None, memory="1Gi"):
         if web is None:
             web = Web()
+        if web._workspaces and web._auth is None:
+            raise ValueError("Web().workspaces() requires Web().auth(...) — "
+                             "workspaces are keyed on the authenticated user")
         self.theme = web._theme
         self.copy_public = web._copy_public
         self.server = APIRouter()
@@ -31,7 +34,7 @@ class Agent(App):
             name=name, title=web._title,
             auth=web._auth is not None, cms=web._cms, analytics=web._analytics,
             suggestions=web._suggestions, affiliate=web._affiliate,
-            max_upload=web._max_upload,
+            max_upload=web._max_upload, workspaces=web._workspaces,
             volume=(image or {}).get("volume", "/workspace"),
         )
 

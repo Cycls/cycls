@@ -24,6 +24,7 @@ class Web:
         self._affiliate: Optional[str] = None
         self._max_upload: int = 512
         self._copy_public: List[str] = []
+        self._workspaces: Optional[str] = None
 
     def _copy(self, **updates):
         new = Web.__new__(Web)
@@ -63,6 +64,16 @@ class Web:
         a Rewardful key). Injected into the page config; the FE loads the tracker
         and reports conversions on checkout. Off when unset."""
         return self._copy(_affiliate=api_key)
+
+    def workspaces(self, create: str = "member"):
+        """Enable multi-workspace mode (docs/rfc-workspaces.md): every user gets
+        a personal workspace (`u-{user_id}`); the active one is selected per
+        request via the `X-Workspace` header. Requires `auth(...)`.
+        `create` sets who may create team workspaces: "member" (default) or
+        "admin" (org admins only) — enforced when team workspaces land."""
+        if create not in ("member", "admin"):
+            raise ValueError(f'workspaces create must be "member" or "admin"; got {create!r}')
+        return self._copy(_workspaces=create)
 
     def max_upload(self, mb: int):
         """Per-file upload cap in MB (default 512). Enforced server-side and

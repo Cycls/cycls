@@ -343,7 +343,7 @@ async def _exec_database(inp, ws):
     """All returns are strings — Anthropic tool_result.content accepts
     str or content-blocks (each with a `type`); raw dicts/lists from JSON
     values would 400. JSON-encode the data ones."""
-    agent_ws = workspace(ws.subject, ws.root.parent, base=ws.base, slot=".database")
+    agent_ws = workspace(ws.subject, ws.volume, base=ws.base, slot=".database", ws=ws.ws)
     db = DB(agent_ws)
     cmd, key = inp.get("command"), inp.get("key", "")
     try:

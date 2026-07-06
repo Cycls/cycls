@@ -83,6 +83,29 @@ def to_ui_messages(raw):
     return out
 
 
+# ---- Workspace selection (multi-workspace mode) ----
+
+def resolve_ws_id(user, header, mode):
+    """`X-Workspace` header → validated workspace id, or None in legacy mode.
+
+    Phase 1 of docs/rfc-workspaces.md: personal workspaces only — `u-{user.id}`
+    is the sole workspace a user can enter, and the default when no header is
+    sent. Anything else (a teammate's personal id, a team id, garbage) is 404,
+    not 403, so ids don't leak existence."""
+    if not mode or user is None:
+        return None
+    personal = f"u-{user.id}"
+    if not header or header == personal:
+        return personal
+    raise HTTPException(status_code=404, detail="Workspace not found")
+
+
+def personal_ws(subject):
+    """Personal workspace id for a `org:user` / `user` subject string."""
+    org, _, user = subject.partition(":")
+    return f"u-{user or org}"
+
+
 # ---- Path safety ----
 
 def resolve_path(workspace, rel):
@@ -295,10 +318,14 @@ def files_router(cycls_app, ws_dep, user_dep):
 def share_router(cycls_app, ws_dep, user_dep, volume, base):
     r = APIRouter()
     bearer_scheme = HTTPBearer(auto_error=False)
+    mode = getattr(getattr(cycls_app, "config", None), "workspaces", None)
 
     async def _resolve_or_403(user: str, token: str, bearer):
         from cycls.app.auth import authenticate
-        ws_owner = workspace(user, volume, base=base)
+        # Multi-workspace mode: share rows live in the owner's personal
+        # workspace DB (Phase 1 — team-workspace shares carry an explicit ws
+        # in the row when the registry lands).
+        ws_owner = workspace(user, volume, base=base, ws=personal_ws(user) if mode else None)
         requester = None
         if bearer and cycls_app._auth_provider is not None:
             try: requester = authenticate(cycls_app._auth_provider, cycls_app.prod, bearer.credentials)
@@ -398,7 +425,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.post("/share/{user}/{token}/fork")
     async def fork_share(user: str, token: str, forker: Any = user_dep):
-        ws_source = workspace(user, volume, base=base)
+        ws_source = workspace(user, volume, base=base, ws=personal_ws(user) if mode else None)
         row = await state.resolve(ws_source, token, requester=forker)
         if row is None:
             raise HTTPException(403, "Invalid, expired, or unauthorized link")
@@ -409,7 +436,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         if meta is None:
             raise HTTPException(404, "Chat not found")
         raw = await state.load_messages(ws_source, source_id)
-        ws_fork = workspace(forker, volume, base=base)
+        ws_fork = workspace(forker, volume, base=base, ws=f"u-{forker.id}" if mode else None)
         new_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
         await state.put_meta(ws_fork, new_id, {
@@ -462,8 +489,11 @@ def _zip_dir(dir_path):
 # ---- Mount ----
 
 def install_routers(cycls_app, app, required_auth, volume, base):
-    def _build_ws(user: Any = required_auth):
-        return workspace(user, volume, base=base)
+    mode = getattr(getattr(cycls_app, "config", None), "workspaces", None)
+
+    def _build_ws(request: Request, user: Any = required_auth):
+        ws_id = resolve_ws_id(user, request.headers.get("x-workspace"), mode)
+        return workspace(user, volume, base=base, ws=ws_id)
     ws_dep = Depends(_build_ws)
     app.include_router(chats_router(ws_dep))
     app.include_router(files_router(cycls_app, ws_dep, required_auth))
