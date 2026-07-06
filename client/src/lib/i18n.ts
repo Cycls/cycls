@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 
 const translations = {
   en: {
-    sendMessage: "Send a message...",
+    sendMessage: "Ask anything — @ to mention a file",
     newChat: "New chat",
     share: "Share",
     shareConversation: "Share conversation",
@@ -106,7 +106,7 @@ const translations = {
     openInBrowser: "Sign-in with {provider} isn't supported in {app}'s browser. Tap \u22EF and choose \"Open in Browser\".",
   },
   ar: {
-    sendMessage: "أرسل رسالة...",
+    sendMessage: "اسأل أي شيء — اكتب @ لذكر ملف",
     newChat: "محادثة جديدة",
     share: "مشاركة",
     shareConversation: "مشاركة المحادثة",
