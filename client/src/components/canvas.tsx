@@ -301,7 +301,8 @@ function CanvasPanel({ file, onClose, readFile, openFile, writeFile, onShareFile
               )}
             </>
           )}
-          <button onClick={() => setExpanded((e) => !e)} className={headerBtn} aria-label={expanded ? t("collapse") : t("expand")} title={expanded ? t("collapse") : t("expand")}>
+          {/* Phones are already full-width — expand only means something on larger screens. */}
+          <button onClick={() => setExpanded((e) => !e)} className={cn(headerBtn, "hidden sm:flex")} aria-label={expanded ? t("collapse") : t("expand")} title={expanded ? t("collapse") : t("expand")}>
             {expanded ? (
               <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M15 9h4.5M15 9V4.5M15 9l5.25-5.25M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" /></svg>
             ) : (
