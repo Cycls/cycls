@@ -442,12 +442,16 @@ async def _restore_meta(org, ws_id, base):
 
 
 async def ensure_migrated(user, volume, base):
-    """Move a pre-workspaces org tree into the new layout on first touch.
+    """First-touch org setup: provision the builtin General workspace and
+    move any pre-workspaces tree into the new layout.
 
-    Org users: everything under `{volume}/{org}` (files, `.db`, `.database`)
-    moves into the builtin `t-shared` team workspace — that's where legacy
-    chats' attachments live, so the chats stay coherent. Solo users: into
-    their personal `u-{user.id}`. `ws/` and `.org/` stay org-level."""
+    Every org gets a default `t-shared` team workspace ("General", every
+    member an editor via its `builtin: org` row). Legacy content under
+    `{volume}/{org}` (files, `.db`, `.database`) moves into it — that's where
+    old chats' attachments live, so they stay coherent. Solo users migrate
+    into their personal `u-{user.id}` instead and get no team. `ws/` and
+    `.org/` stay org-level. The marker gates all of it, so an org admin
+    deleting General is permanent."""
     global _migrate_lock
     org = org_of(user)
     if org in _migrated:
@@ -458,8 +462,10 @@ async def ensure_migrated(user, volume, base):
         if org in _migrated:
             return
         orgdb = org_db(org, volume, base)
-        if await orgdb.get("migrated") is None:
-            ws_id = "t-shared" if getattr(user, "org_id", None) else f"u-{user.id}"
+        is_org = bool(getattr(user, "org_id", None))
+        marker = await orgdb.get("migrated")
+        if marker is None:
+            ws_id = "t-shared" if is_org else f"u-{user.id}"
             root = Path(volume) / org
             dest = Path(workspace(org, volume, base=base, ws=ws_id).root)
 
@@ -477,13 +483,25 @@ async def ensure_migrated(user, volume, base):
             moved = await asyncio.to_thread(_move)
             if moved:
                 await _restore_meta(org, ws_id, base)
-            if moved and ws_id == "t-shared":
-                row = {"id": ws_id, "name": "Shared", "type": "team", "builtin": "org",
-                       "created_by": "cycls", "created_at": datetime.now(timezone.utc).isoformat()}
-                await orgdb.put(f"workspaces/{ws_id}", row, meta=row)
-            marker = {"at": datetime.now(timezone.utc).isoformat(), "moved": str(moved)}
+            if is_org:
+                await _provision_general(orgdb)
+            marker = {"at": datetime.now(timezone.utc).isoformat(), "moved": str(moved), "v": "2"}
+            await orgdb.put("migrated", marker, meta=marker)
+        elif marker.get("v") != "2":
+            # v1 markers predate the default General workspace — provision it
+            # once (unless a row already exists), then stamp v2 so a later
+            # admin delete stays permanent.
+            if is_org and await orgdb.get("workspaces/t-shared") is None:
+                await _provision_general(orgdb)
+            marker = {**marker, "v": "2"}
             await orgdb.put("migrated", marker, meta=marker)
         _migrated.add(org)
+
+
+async def _provision_general(orgdb):
+    row = {"id": "t-shared", "name": "General", "type": "team", "builtin": "org",
+           "created_by": "cycls", "created_at": datetime.now(timezone.utc).isoformat()}
+    await orgdb.put("workspaces/t-shared", row, meta=row)
 
 
 # ---- Agent KV (LLM-facing tool) ----
