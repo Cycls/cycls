@@ -266,3 +266,117 @@ def test_personal_delete_lifecycle(tmp_path):
 def test_workspaces_router_absent_in_legacy_mode(tmp_path):
     client = _client(tmp_path, workspaces=None)
     assert client.get("/workspaces").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Legacy migration (t-shared) + builtin org role
+# ---------------------------------------------------------------------------
+
+def _seed_legacy(tmp_path, org="org_1", user="user_1"):
+    """A pre-workspaces tree: loose files + per-user chat DB at the org root."""
+    from cycls.app.db import workspace
+    root = tmp_path / org
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "report.md").write_text("legacy")
+    legacy_ws = workspace(f"{org}:{user}" if org != user else user,
+                          tmp_path, base=f"file://{tmp_path}")
+    _run(state.put_meta(legacy_ws, "c1", {"id": "c1", "title": "Old chat"}))
+    _run(state.append_messages(legacy_ws, "c1", [{"role": "user", "content": "hi"}], 0))
+
+
+def test_migration_moves_org_root_into_t_shared(tmp_path):
+    _seed_legacy(tmp_path)
+    client = _client(tmp_path)
+
+    rows = client.get("/workspaces").json()   # first touch triggers the move
+    shared = next(r for r in rows if r["id"] == "t-shared")
+    assert shared["builtin"] == "org" and shared["role"] == "editor"
+
+    # files now live inside t-shared, reachable by every org member; chats
+    # stay per-user within the workspace — only their owner sees them there
+    h = {"X-Workspace": "t-shared", "X-Test-User": "user_2"}
+    assert [f["name"] for f in client.get("/files", headers=h).json()] == ["report.md"]
+    assert client.get("/chats", headers=h).json() == []
+    h1 = {"X-Workspace": "t-shared"}
+    assert [c["id"] for c in client.get("/chats", headers=h1).json()] == ["c1"]
+    # the org root itself is clean (only the new layout + org rows remain)
+    import os as _os
+    assert set(_os.listdir(tmp_path / "org_1")) == {"ws", ".org"}
+    # personal workspaces start empty
+    assert client.get("/chats").json() == []
+    # org admin holds implicit admin on the builtin workspace
+    rows = client.get("/workspaces", headers={"X-Test-User": "admin_1"}).json()
+    assert next(r for r in rows if r["id"] == "t-shared")["role"] == "admin"
+
+
+def test_migration_is_once_and_skips_fresh_orgs(tmp_path):
+    client = _client(tmp_path)
+    client.get("/workspaces")   # fresh org: nothing to move, marker written
+    assert _run(_orgdb(tmp_path).get("migrated")) is not None
+    assert _run(_orgdb(tmp_path).get("workspaces/t-shared")) is None
+    # a legacy-looking file appearing later is NOT migrated again
+    (tmp_path / "org_1" / "late.txt").write_text("x")
+    state._migrated.clear()   # simulate a restart — marker row must gate it
+    client.get("/workspaces")
+    assert (tmp_path / "org_1" / "late.txt").exists()
+
+
+def test_migration_solo_user_goes_to_personal(tmp_path):
+    _seed_legacy(tmp_path, org="solo", user="solo")
+    client = _client(tmp_path)
+    h = {"X-Test-User": "solo"}
+    assert [f["name"] for f in client.get("/files", headers=h).json()] == ["report.md"]
+    assert (tmp_path / "solo" / "ws" / "u-solo" / "report.md").exists()
+    # no phantom t-shared for org-less users
+    assert _run(state.org_db("solo", tmp_path, f"file://{tmp_path}").get("workspaces/t-shared")) is None
+
+
+def test_outsider_cannot_enter_t_shared(tmp_path):
+    _seed_legacy(tmp_path)
+    client = _client(tmp_path)
+    client.get("/workspaces")   # migrate org_1
+    r = client.get("/files", headers={"X-Workspace": "t-shared", "X-Test-User": "outsider"})
+    assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Shares carry the minting workspace
+# ---------------------------------------------------------------------------
+
+def test_share_url_carries_ws_and_resolves(tmp_path):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    h = {"X-Workspace": ws_id}
+    client.put("/chats/c1", json={"title": "Team chat"}, headers=h)
+    body = client.post("/share", json={"path": "chat/c1"}, headers=h).json()
+    assert body["url"].endswith(f"?ws={ws_id}")
+
+    r = client.get(f"/share/org_1:user_1/{body['token']}/data?ws={ws_id}")
+    assert r.status_code == 200 and r.json()["title"] == "Team chat"
+    # without the ws hint the fallbacks (personal, t-shared) don't have the row
+    assert client.get(f"/share/org_1:user_1/{body['token']}/data").status_code == 403
+
+
+def test_share_bare_link_falls_back_to_personal(tmp_path):
+    client = _client(tmp_path)
+    client.put("/chats/c1", json={"title": "Mine"})          # personal workspace
+    body = client.post("/share", json={"path": "chat/c1"}).json()
+    r = client.get(f"/share/org_1:user_1/{body['token']}/data")   # no ?ws=
+    assert r.status_code == 200 and r.json()["title"] == "Mine"
+
+
+def test_fork_team_share_lands_in_forker_personal(tmp_path):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    h = {"X-Workspace": ws_id}
+    client.put("/chats/c1", json={"title": "Team chat"}, headers=h)
+    from cycls.app.db import workspace as _workspace
+    team_ws = _workspace("org_1:user_1", tmp_path, base=f"file://{tmp_path}", ws=ws_id)
+    _run(state.append_messages(team_ws, "c1", [{"role": "user", "content": "hi"}], 0))
+    token = client.post("/share", json={"path": "chat/c1"}, headers=h).json()["token"]
+
+    r = client.post(f"/share/org_1:user_1/{token}/fork?ws={ws_id}",
+                    headers={"X-Test-User": "user_2"})
+    assert r.status_code == 200
+    forked = client.get("/chats", headers={"X-Test-User": "user_2"}).json()
+    assert [c["title"] for c in forked] == ["Team chat"]

@@ -1,6 +1,6 @@
 # RFC — Multi-workspace orgs (personal + team folders)
 
-Status: **accepted — Phases 1–2 implemented** (ws dimension in `workspace()`, personal workspaces behind `Web().workspaces(...)`, `X-Workspace` header, `.org/` registry + ACL, team workspaces with the `/workspaces` + members API, org-admin lifecycle-only on personal; Phase 3 — FE switcher, share `ws` field, migration tooling — remains)
+Status: **accepted — implemented (Phases 1–3)**. ws dimension in `workspace()`, personal workspaces behind `Web().workspaces(...)`, `X-Workspace` header, `.org/` registry + ACL, team workspaces with the `/workspaces` + members API, org-admin lifecycle-only on personal, FE switcher + members UI in the user menu, share links carrying `?ws=`, and lazy once-per-org legacy migration into `t-shared`. Outstanding: a live sandbox probe on a deployed agent with the flag on.
 
 Give each org multiple folders, each one a full workspace (own file tree, chats, AGENT.md, skills). Every user gets a personal workspace; team workspaces are shared with role-based access managed by their creator. Org admins manage workspace lifecycle, not content.
 
@@ -92,8 +92,8 @@ Documented caveats:
 
 Gated behind `cycls.Web().workspaces(...)`, default off — existing deployments untouched. When enabled:
 
-- **Fresh deployments** get the clean layout immediately.
-- **Existing deployments** run a one-time migration: legacy org-root files move to a builtin team workspace (`t-shared`, all org members as editors); legacy chats under `{org}/.db/{user}` map there too — that's where their attachments live. Prod FS is gcsfuse (renames = copy+delete), so migrate via trusted server-side GCS rewrites, not through the mount.
+- **Fresh deployments** get the clean layout immediately (the migration marker is written on first touch with nothing to move).
+- **Existing deployments** migrate lazily, once per org, on the org's first request after the flag flips (`state.ensure_migrated`): everything under the org root — files, `.db`, `.database` — moves into a builtin `t-shared` team workspace whose `builtin: org` registry row makes every org member an editor with no per-user ACL rows; legacy chats stay coherent because their attachments move with them. Solo users migrate into their personal workspace instead. A `migrated` marker row in `.org/` gates re-runs across restarts; concurrent instances racing the move is benign (each move is idempotent) but flip the flag during low traffic anyway. Old share links without `?ws=` fall back to the owner's personal workspace, then `t-shared`.
 
 Phases:
 

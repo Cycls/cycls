@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 const backend = "http://localhost:8080";
-const apis = ["/config", "/chat", "/sessions", "/files", "/shared-assets", "/transcribe"];
+const apis = ["/config", "/chat", "/chats", "/sessions", "/files", "/shared-assets", "/transcribe", "/workspaces"];
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],

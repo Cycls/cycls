@@ -64,6 +64,7 @@ export interface AppConfig {
   suggestions?: boolean;
   affiliate?: string;
   max_upload?: number;   // per-file upload cap in MB
+  workspaces?: string | null;   // multi-workspace mode: null off, else team-create policy ("member"|"admin")
 }
 
 export function useChat(baseUrl: string = "") {
@@ -458,7 +459,10 @@ export function useChat(baseUrl: string = "") {
   }, [api]);
 
   const forkShare = useCallback(async (userToken: string) => {
-    const { id } = await (await api(`/share/${userToken}/fork`, { method: "POST" })).json();
+    // `userToken` is `<user>/<token>` with an optional `?ws=` naming the
+    // workspace that minted the share — reattach it after the /fork segment.
+    const [path, query] = userToken.split("?");
+    const { id } = await (await api(`/share/${path}/fork${query ? `?${query}` : ""}`, { method: "POST" })).json();
     track("share_forked", { source: userToken, new_chat_id: id });
     return id as string;
   }, [api]);
