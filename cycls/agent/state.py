@@ -49,8 +49,16 @@ async def put_meta(workspace, chat_id, data):
 
 async def list_chats(workspace):
     """Yield (chat_id, {title, updatedAt}) for every chat. One LIST via
-    object storage; one glob+read on local FS."""
-    async for key, meta in DB(workspace).scan(glob="chat/*/index"):
+    object storage; one glob+read on local FS. Rows whose custom-meta channel
+    was wiped (a gcsfuse move drops it — e.g. the workspace migration) are
+    self-healed from the body, which is canonical."""
+    db = DB(workspace)
+    async for key, meta in db.scan(glob="chat/*/index"):
+        if not meta.get("updatedAt"):
+            body = await db.get(key)
+            if isinstance(body, dict) and body.get("updatedAt"):
+                meta = body
+                await db.put(key, body, meta={k: v for k, v in body.items() if isinstance(v, str)})
         yield key.split("/")[1], meta
 
 
@@ -408,11 +416,29 @@ async def wipe_workspace(org, ws_id, volume, base):
 
 # One-time-per-org legacy migration. The in-process cache makes the check
 # free after the first request; the `migrated` marker row makes it once
-# across restarts. Concurrent instances flipping the flag at the same moment
-# both see no marker and race the move — each move is idempotent (scandir of
-# an emptied root is a no-op), so the failure mode is benign. Enable the
-# flag during low traffic anyway.
+# across restarts; the lock keeps concurrent first requests from racing the
+# move within an instance. Cross-instance races remain benign (each move is
+# idempotent) — still, enable the flag during low traffic.
 _migrated = set()
+_migrate_lock = None
+
+
+async def _restore_meta(org, ws_id, base):
+    """gcsfuse moves drop GCS custom metadata, which the scan-backed listings
+    (chat index, shares) read. Bodies are canonical — rewrite the channel."""
+    if not str(base).startswith("gs://"):
+        return
+    store = _store(f"{str(base).rstrip('/')}/{org}/ws/{ws_id}")
+    for key in await store.list_keys():
+        if not (key.endswith("/index") or "share/" in key):
+            continue
+        data = await store.read(key)
+        try:
+            row = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(row, dict) and row:
+            await store.write(key, data, meta={k: v for k, v in row.items() if isinstance(v, str)})
 
 
 async def ensure_migrated(user, volume, base):
@@ -422,34 +448,42 @@ async def ensure_migrated(user, volume, base):
     moves into the builtin `t-shared` team workspace — that's where legacy
     chats' attachments live, so the chats stay coherent. Solo users: into
     their personal `u-{user.id}`. `ws/` and `.org/` stay org-level."""
+    global _migrate_lock
     org = org_of(user)
     if org in _migrated:
         return
-    orgdb = org_db(org, volume, base)
-    if await orgdb.get("migrated") is None:
-        ws_id = "t-shared" if getattr(user, "org_id", None) else f"u-{user.id}"
-        root = Path(volume) / org
-        dest = Path(workspace(org, volume, base=base, ws=ws_id).root)
+    if _migrate_lock is None:
+        _migrate_lock = asyncio.Lock()
+    async with _migrate_lock:
+        if org in _migrated:
+            return
+        orgdb = org_db(org, volume, base)
+        if await orgdb.get("migrated") is None:
+            ws_id = "t-shared" if getattr(user, "org_id", None) else f"u-{user.id}"
+            root = Path(volume) / org
+            dest = Path(workspace(org, volume, base=base, ws=ws_id).root)
 
-        def _move():
-            if not root.is_dir():
-                return False
-            entries = [e.name for e in os.scandir(root) if e.name not in ("ws", ".org")]
-            if not entries:
-                return False
-            dest.mkdir(parents=True, exist_ok=True)
-            for name in entries:   # shutil.move: dir renames work on gcsfuse (copy+delete)
-                shutil.move(str(root / name), str(dest / name))
-            return True
+            def _move():
+                if not root.is_dir():
+                    return False
+                entries = [e.name for e in os.scandir(root) if e.name not in ("ws", ".org")]
+                if not entries:
+                    return False
+                dest.mkdir(parents=True, exist_ok=True)
+                for name in entries:   # shutil.move: dir renames work on gcsfuse (copy+delete)
+                    shutil.move(str(root / name), str(dest / name))
+                return True
 
-        moved = await asyncio.to_thread(_move)
-        if moved and ws_id == "t-shared":
-            row = {"id": ws_id, "name": "Shared", "type": "team", "builtin": "org",
-                   "created_by": "cycls", "created_at": datetime.now(timezone.utc).isoformat()}
-            await orgdb.put(f"workspaces/{ws_id}", row, meta=row)
-        marker = {"at": datetime.now(timezone.utc).isoformat(), "moved": str(moved)}
-        await orgdb.put("migrated", marker, meta=marker)
-    _migrated.add(org)
+            moved = await asyncio.to_thread(_move)
+            if moved:
+                await _restore_meta(org, ws_id, base)
+            if moved and ws_id == "t-shared":
+                row = {"id": ws_id, "name": "Shared", "type": "team", "builtin": "org",
+                       "created_by": "cycls", "created_at": datetime.now(timezone.utc).isoformat()}
+                await orgdb.put(f"workspaces/{ws_id}", row, meta=row)
+            marker = {"at": datetime.now(timezone.utc).isoformat(), "moved": str(moved)}
+            await orgdb.put("migrated", marker, meta=marker)
+        _migrated.add(org)
 
 
 # ---- Agent KV (LLM-facing tool) ----

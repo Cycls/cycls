@@ -380,3 +380,22 @@ def test_fork_team_share_lands_in_forker_personal(tmp_path):
     assert r.status_code == 200
     forked = client.get("/chats", headers={"X-Test-User": "user_2"}).json()
     assert [c["title"] for c in forked] == ["Team chat"]
+
+
+def test_list_chats_heals_wiped_meta(tmp_path, monkeypatch):
+    """gcsfuse moves drop GCS custom metadata; the sidebar listing must fall
+    back to the canonical body and rewrite the meta channel."""
+    from cycls.app import db as db_mod
+    from cycls.app.db import workspace
+
+    ws = workspace("u1", tmp_path, base=f"file://{tmp_path}")
+    _run(state.put_meta(ws, "c1", {"id": "c1", "title": "هلا", "updatedAt": "2026-07-06"}))
+
+    async def wiped_scan(self, *, prefix=None, glob=None):
+        yield "chat/c1/index", {}
+    monkeypatch.setattr(db_mod.DB, "scan", wiped_scan)
+
+    async def collect():
+        return [(cid, meta) async for cid, meta in state.list_chats(ws)]
+    rows = _run(collect())
+    assert rows == [("c1", {"id": "c1", "title": "هلا", "updatedAt": "2026-07-06"})]

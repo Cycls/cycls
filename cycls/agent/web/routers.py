@@ -378,6 +378,11 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         out = []
         async for key, meta in db.scan(prefix="share/"):
             token = key[6:]
+            if not meta.get("path"):   # meta channel wiped (gcsfuse move) — body is canonical
+                body = await db.get(key)
+                if isinstance(body, dict) and body.get("path"):
+                    meta = body
+                    await db.put(key, body, meta={k: v for k, v in body.items() if isinstance(v, str)})
             path = meta.get("path", "")
             if path.startswith("chat/"):
                 title = chat_titles.get(path[5:], "")
