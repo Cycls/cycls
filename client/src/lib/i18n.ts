@@ -2,6 +2,16 @@ import { useState, useEffect } from "react";
 
 const translations = {
   en: {
+    thinking: "Thinking",
+    steps: "steps",
+    verbBash: "ran commands",
+    verbWebSearch: "searched the web",
+    verbFetch: "fetched pages",
+    verbRead: "read files",
+    verbEdit: "edited files",
+    verbDatabase: "used memory",
+    verbCanvas: "prepared a file",
+    verbSkill: "used a skill",
     sendMessage: "Ask anything — @ to mention a file",
     newChat: "New chat",
     share: "Share",
@@ -106,6 +116,16 @@ const translations = {
     openInBrowser: "Sign-in with {provider} isn't supported in {app}'s browser. Tap \u22EF and choose \"Open in Browser\".",
   },
   ar: {
+    thinking: "يفكر",
+    steps: "خطوات",
+    verbBash: "شغّل أوامر",
+    verbWebSearch: "بحث في الويب",
+    verbFetch: "جلب صفحات",
+    verbRead: "قرأ ملفات",
+    verbEdit: "عدّل ملفات",
+    verbDatabase: "استخدم الذاكرة",
+    verbCanvas: "جهّز ملفًا",
+    verbSkill: "استخدم مهارة",
     sendMessage: "اسأل أي شيء — اكتب @ لذكر ملف",
     newChat: "محادثة جديدة",
     share: "مشاركة",

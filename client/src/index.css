@@ -127,3 +127,17 @@ body {
   body > *:not(.print-root) { display: none !important; }
   .print-root { display: block !important; }
 }
+
+/* Text shimmer — the streaming "Thinking" label */
+@keyframes text-shimmer {
+  0% { background-position: 150% center; }
+  100% { background-position: -50% center; }
+}
+.text-shimmer {
+  background: linear-gradient(90deg, var(--color-muted-foreground) 35%, var(--color-foreground) 50%, var(--color-muted-foreground) 65%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: text-shimmer 1.6s linear infinite;
+}
