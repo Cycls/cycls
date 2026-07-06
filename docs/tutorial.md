@@ -258,6 +258,7 @@ web = (
 | `.cms(host)` | Register this agent with a CMS (default `"cycls.ai"` fetches from `cms.cycls.ai/agents/{name}`) |
 | `.analytics(bool)` | Enable usage metrics |
 | `.copy_public(*files)` | Static files served at `/public` |
+| `.workspaces(create="member")` | Multi-workspace mode: every user gets a personal workspace, selected per request via the `X-Workspace` header. Requires `.auth(...)`. `create` sets who may create team workspaces (`"member"` or `"admin"`) once those land — see [docs/rfc-workspaces.md](rfc-workspaces.md) |
 
 Static files land at `https://your-app.cycls.ai/public/logo.png`.
 

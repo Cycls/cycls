@@ -111,7 +111,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key)
     if max_tokens is None: max_tokens = provider.max_output
     workspace = context.workspace
-    catalog.refresh(Path(workspace.root).parent)  # volume-level: survives restarts, shared per deployment
+    catalog.refresh(workspace.volume)  # volume-level: survives restarts, shared per deployment
     user = getattr(context, "user", None)
     Path(workspace.root).mkdir(parents=True, exist_ok=True)
 
