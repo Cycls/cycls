@@ -1,6 +1,6 @@
 # RFC — Multi-workspace orgs (personal + team folders)
 
-Status: **accepted — Phase 1 implemented** (ws dimension in `workspace()`, personal workspaces behind `Web().workspaces(...)`, `X-Workspace` header; registry/ACL/team workspaces and the FE switcher are Phases 2–3)
+Status: **accepted — Phases 1–2 implemented** (ws dimension in `workspace()`, personal workspaces behind `Web().workspaces(...)`, `X-Workspace` header, `.org/` registry + ACL, team workspaces with the `/workspaces` + members API, org-admin lifecycle-only on personal; Phase 3 — FE switcher, share `ws` field, migration tooling — remains)
 
 Give each org multiple folders, each one a full workspace (own file tree, chats, AGENT.md, skills). Every user gets a personal workspace; team workspaces are shared with role-based access managed by their creator. Org admins manage workspace lifecycle, not content.
 

@@ -158,7 +158,8 @@ def web(func, config, extra_routers=None, auth=None):
         data = await request.json()
         messages = data.get("messages")
         chat_id = request.query_params.get("id") or str(uuid.uuid4())
-        ws_id = resolve_ws_id(user, request.headers.get("x-workspace"), config.workspaces)
+        ws_id = await resolve_ws_id(user, request.headers.get("x-workspace"), config.workspaces,
+                                    volume, config.storage)
 
         context = Context(messages=Messages(messages), user=user, chat_id=chat_id, prod=config.prod,
                           workspace_id=ws_id)
