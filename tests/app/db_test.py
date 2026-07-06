@@ -51,7 +51,7 @@ def test_workspace_volume_property(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Multi-workspace mode (ws=) — RFC docs/rfc-workspaces.md
+# Multi-workspace mode (ws=) — docs/workspaces.md
 # ---------------------------------------------------------------------------
 
 def test_workspace_ws_org_personal(tmp_path):

@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
-# Workspace ids are namespaced: `u-{user_id}` personal, `t-{id}` team (RFC —
-# docs/rfc-workspaces.md). The prefix split means a team workspace can never
+# Workspace ids are namespaced: `u-{user_id}` personal, `t-{id}` team (see
+# docs/workspaces.md). The prefix split means a team workspace can never
 # be named to collide with someone's personal one.
 _WS_ID = re.compile(r"^[ut]-[A-Za-z0-9_-]+$")
 

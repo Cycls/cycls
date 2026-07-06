@@ -1,6 +1,6 @@
 """Multi-workspace Phase 2 — registry, ACL, team workspaces, admin lifecycle.
 
-Spec: docs/rfc-workspaces.md. The stub app mounts the real routers with a
+Spec: docs/workspaces.md. The stub app mounts the real routers with a
 header-switched fake auth (`X-Test-User`) so one client can act as several
 org members: a regular member, a second member, an org admin, and an
 outsider from another org.

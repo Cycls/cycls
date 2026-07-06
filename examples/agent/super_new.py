@@ -7,7 +7,7 @@ import cycls
 image = cycls.Image().copy(".providers.env", ".env")
 
 # Standalone test: auth only — no CMS registration, no analytics.
-# workspaces(): personal + team workspaces (docs/rfc-workspaces.md).
+# workspaces(): personal + team workspaces (docs/workspaces.md).
 web = (
     cycls.Web()
     .auth(cycls.Clerk())

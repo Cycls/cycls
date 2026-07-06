@@ -1,5 +1,5 @@
 /**
- * X-Workspace plumbing (rfc-workspaces FE invariants): the module-level
+ * X-Workspace plumbing (workspace FE invariants): the module-level
  * active workspace reaches every hook instance's headers, null (= personal)
  * sends no header, and a share link's `?ws=` reattaches after /fork.
  */

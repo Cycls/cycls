@@ -16,7 +16,7 @@ Keys:
     chat/{id}/compaction      — compaction marker (summary + first_kept)
     share/{token}             — opaque share tokens (RFC003)
     <.database/ slot>         — agent-controlled KV exposed to the LLM
-    <.org/ slot>              — workspaces registry + ACL (docs/rfc-workspaces.md)
+    <.org/ slot>              — workspaces registry + ACL (docs/workspaces.md)
 """
 import asyncio, json, os, re, secrets, shutil
 from datetime import datetime, timezone
@@ -338,7 +338,7 @@ async def resolve(workspace, token, requester=None):
     return None
 
 
-# ---- Workspaces registry + ACL (docs/rfc-workspaces.md) ----
+# ---- Workspaces registry + ACL (docs/workspaces.md) ----
 #
 # Org-level rows under the `.org` slot — OUTSIDE every workspace root, so
 # they are never bind-mounted into a sandbox and unreachable by path tools:
