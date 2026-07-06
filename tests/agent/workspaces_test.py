@@ -96,9 +96,9 @@ def test_create_team_and_list(tmp_path):
     assert rows[0] == {"id": "u-user_1", "name": "Personal", "type": "personal", "role": "owner"}
     team = next(r for r in rows if r["id"] == ws_id)
     assert team["name"] == "Research" and team["role"] == "owner"
-    # user_2 is not a member — sees only their personal
+    # user_2 is not a member — sees only their personal + the builtin General
     rows2 = client.get("/workspaces", headers={"X-Test-User": "user_2"}).json()
-    assert [r["id"] for r in rows2] == ["u-user_2"]
+    assert [r["id"] for r in rows2] == ["u-user_2", "t-shared"]
 
 
 def test_create_policy_admin_mode(tmp_path):
@@ -309,16 +309,33 @@ def test_migration_moves_org_root_into_t_shared(tmp_path):
     assert next(r for r in rows if r["id"] == "t-shared")["role"] == "admin"
 
 
-def test_migration_is_once_and_skips_fresh_orgs(tmp_path):
+def test_fresh_org_gets_general_and_migration_is_once(tmp_path):
     client = _client(tmp_path)
-    client.get("/workspaces")   # fresh org: nothing to move, marker written
+    rows = client.get("/workspaces").json()   # first touch: marker + General
+    general = next(r for r in rows if r["id"] == "t-shared")
+    assert general["name"] == "General" and general["role"] == "editor"
     assert _run(_orgdb(tmp_path).get("migrated")) is not None
-    assert _run(_orgdb(tmp_path).get("workspaces/t-shared")) is None
     # a legacy-looking file appearing later is NOT migrated again
     (tmp_path / "org_1" / "late.txt").write_text("x")
     state._migrated.clear()   # simulate a restart — marker row must gate it
     client.get("/workspaces")
     assert (tmp_path / "org_1" / "late.txt").exists()
+
+
+def test_deleting_general_is_permanent(tmp_path):
+    client = _client(tmp_path)
+    client.get("/workspaces")
+    r = client.delete("/workspaces/t-shared", headers={"X-Test-User": "admin_1"})
+    assert r.status_code == 200
+    state._migrated.clear()
+    rows = client.get("/workspaces").json()   # marker gates re-provisioning
+    assert not any(w["id"] == "t-shared" for w in rows)
+
+
+def test_solo_user_gets_no_general(tmp_path):
+    client = _client(tmp_path)
+    client.get("/workspaces", headers={"X-Test-User": "solo"})
+    assert _run(state.org_db("solo", tmp_path, f"file://{tmp_path}").get("workspaces/t-shared")) is None
 
 
 def test_migration_solo_user_goes_to_personal(tmp_path):
@@ -331,12 +348,17 @@ def test_migration_solo_user_goes_to_personal(tmp_path):
     assert _run(state.org_db("solo", tmp_path, f"file://{tmp_path}").get("workspaces/t-shared")) is None
 
 
-def test_outsider_cannot_enter_t_shared(tmp_path):
+def test_t_shared_is_per_org(tmp_path):
+    """Every org's General shares the `t-shared` id, but the root derives from
+    the requester's org — an outsider sees their own empty General, never
+    another org's files."""
     _seed_legacy(tmp_path)
     client = _client(tmp_path)
     client.get("/workspaces")   # migrate org_1
-    r = client.get("/files", headers={"X-Workspace": "t-shared", "X-Test-User": "outsider"})
-    assert r.status_code == 404
+    h = {"X-Workspace": "t-shared", "X-Test-User": "outsider"}
+    r = client.get("/files", headers=h)
+    assert r.status_code == 200 and r.json() == []
+    assert client.get("/files/report.md", headers=h).status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -399,3 +421,12 @@ def test_list_chats_heals_wiped_meta(tmp_path, monkeypatch):
         return [(cid, meta) async for cid, meta in state.list_chats(ws)]
     rows = _run(collect())
     assert rows == [("c1", {"id": "c1", "title": "هلا", "updatedAt": "2026-07-06"})]
+
+
+def test_v1_marker_org_gets_general_upgrade(tmp_path):
+    _run(_orgdb(tmp_path).put("migrated", {"at": "2026-07-06", "moved": "False"}))
+    client = _client(tmp_path)
+    rows = client.get("/workspaces").json()
+    assert any(w["id"] == "t-shared" and w["name"] == "General" for w in rows)
+    marker = _run(_orgdb(tmp_path).get("migrated"))
+    assert marker["v"] == "2" and marker["at"] == "2026-07-06"
