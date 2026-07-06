@@ -30,11 +30,6 @@ export function useWorkspaces(baseUrl: string = "") {
     return row;
   }, [api, list]);
 
-  const rename = useCallback(async (id: string, name: string) => {
-    await api(`/workspaces/${id}`, { method: "PATCH", json: { name } });
-    await list();
-  }, [api, list]);
-
   const remove = useCallback(async (id: string) => {
     await api(`/workspaces/${id}`, { method: "DELETE" });
     await list();
@@ -51,5 +46,5 @@ export function useWorkspaces(baseUrl: string = "") {
     await api(`/workspaces/${id}/members/${userId}`, { method: "DELETE" });
   }, [api]);
 
-  return { workspaces, list, create, rename, remove, members, setMember, removeMember, setGetToken };
+  return { workspaces, list, create, remove, members, setMember, removeMember, setGetToken };
 }

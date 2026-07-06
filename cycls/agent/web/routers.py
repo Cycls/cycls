@@ -327,7 +327,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
     async def _locate(user: str, token: str, requester, ws_q=None):
         """Find the share row in whichever of the owner's workspaces minted it.
         Minted URLs carry `?ws=`; bare legacy links fall back to the owner's
-        personal workspace, then the migrated `t-shared` tree."""
+        personal workspace, then General."""
         candidates = [ws_q] if ws_q else ([personal_ws(user), "t-shared"] if mode else [None])
         for ws_id in candidates:
             try:
@@ -566,8 +566,8 @@ def workspaces_router(cycls_app, user_dep, volume, base):
             member = await orgdb.get(f"members/{ws_id}/{user.id}")
             if row:
                 out.append({**row, "role": (member or {}).get("role")})
-        # The migrated t-shared workspace has no member rows — every org
-        # member is an editor by its `builtin: org` registry row.
+        # General has no member rows — every org member is an editor via
+        # its `builtin: org` registry row.
         if getattr(user, "org_id", None) and not any(w["id"] == "t-shared" for w in out):
             if reg := await orgdb.get("workspaces/t-shared"):
                 out.append({**reg, "role": "admin" if _is_org_admin(user) else "editor"})
