@@ -576,7 +576,7 @@ def test_state_resolve_path_allows_normal(tmp_path):
 
 
 # =============================================================================
-# Multi-workspace mode (RFC docs/rfc-workspaces.md, Phase 1)
+# Multi-workspace mode (docs/workspaces.md)
 # =============================================================================
 
 from cycls.agent.web.routers import resolve_ws_id, personal_ws

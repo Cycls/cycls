@@ -90,7 +90,7 @@ async def resolve_ws_id(user, header, mode, volume, base):
     legacy mode. Personal (`u-{user.id}`) is the default and needs no lookup;
     team ids are checked against the ACL (member row, or implicit org-admin).
     Everything else — a teammate's personal id, an unknown team, garbage —
-    is 404, not 403, so ids don't leak existence (docs/rfc-workspaces.md)."""
+    is 404, not 403, so ids don't leak existence (docs/workspaces.md)."""
     if not mode or user is None:
         return None
     await state.ensure_migrated(user, volume, base)   # free after the org's first touch
@@ -513,7 +513,7 @@ def _zip_dir(dir_path):
                         background=BackgroundTask(lambda: os.unlink(tmp.name)))
 
 
-# ---- Workspaces (registry + members — docs/rfc-workspaces.md) ----
+# ---- Workspaces (registry + members — docs/workspaces.md) ----
 
 def workspaces_router(cycls_app, user_dep, volume, base):
     """Workspace lifecycle + member management. Content access control lives in

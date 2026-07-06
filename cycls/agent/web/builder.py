@@ -66,7 +66,7 @@ class Web:
         return self._copy(_affiliate=api_key)
 
     def workspaces(self, create: str = "member"):
-        """Enable multi-workspace mode (docs/rfc-workspaces.md): every user gets
+        """Enable multi-workspace mode (docs/workspaces.md): every user gets
         a personal workspace (`u-{user_id}`); the active one is selected per
         request via the `X-Workspace` header. Requires `auth(...)`.
         `create` sets who may create team workspaces: "member" (default) or
