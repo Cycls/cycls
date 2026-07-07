@@ -245,6 +245,45 @@ def test_web_fetch_checks_redirect_hops(monkeypatch):
     assert "private" in asyncio.run(tools._exec_web_fetch({"url": "http://public.example/r"}))
 
 
+def test_custom_tool_step_defaults_to_first_string_input(monkeypatch):
+    """Unlabelled custom tools show their first string input, like Bash(command)."""
+    from cycls.agent import tools
+    monkeypatch.setattr(tools, "_custom_labels", {})
+    s = tools.tool_step("legal_search", {"limit": 5, "sql": "SELECT id FROM laws"})
+    assert s == {"tool_name": "legal_search", "step": "SELECT id FROM laws"}
+    assert tools.tool_step("t", {"a": "x" * 300})["step"].endswith("...")
+    assert tools.tool_step("t", {"n": 3}) == {"tool_name": "t", "step": ""}
+
+
+def test_registered_label_renders_the_step(monkeypatch):
+    from cycls.agent import tools
+    monkeypatch.setattr(tools, "_custom_labels", {})
+    tools.register_labels({"legal_search": lambda inp: f"بحث: {inp['sql']}"})
+    assert tools.tool_step("legal_search", {"sql": "SELECT 1"})["step"] == "بحث: SELECT 1"
+    # a broken label falls back to the default, never breaks the stream
+    tools.register_labels({"legal_search": lambda inp: inp["missing"]})
+    assert tools.tool_step("legal_search", {"sql": "SELECT 1"})["step"] == "SELECT 1"
+
+
+def test_llm_on_label_registers_via_run(monkeypatch):
+    from cycls.agent import tools
+    monkeypatch.setattr(tools, "_custom_labels", {})
+
+    async def fake_loop(**kw):
+        yield "ok"
+
+    async def handler(inp):
+        return "r"
+
+    llm = (cycls.LLM().model("openai/gpt-x").loop(fake_loop)
+           .on("legal_search", handler, label=lambda inp: "labelled"))
+
+    async def drain():
+        return [ev async for ev in llm.run(context=None)]
+    asyncio.run(drain())
+    assert tools.tool_step("legal_search", {})["step"] == "labelled"
+
+
 def test_web_fetch_caps_body_size(monkeypatch):
     """An endless body stops at _FETCH_MAX_BYTES instead of filling memory."""
     import httpx
