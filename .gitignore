@@ -28,4 +28,4 @@ node_modules/
 mj/
 cycls/agent/web/themes/
 *.tsbuildinfo
-uv.lock
+uv.lockexamples/agent/super_new.py
