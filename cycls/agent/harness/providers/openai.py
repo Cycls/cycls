@@ -8,7 +8,7 @@ Translates cycls Message shape (Anthropic JSON) ↔ OpenAI Chat Completions:
 """
 import json
 
-from .. import catalog, events
+from .. import events
 from ..events import Turn
 from ...tools import tool_step
 
@@ -18,14 +18,6 @@ class OpenAIProvider:
         self._client = client
         self.model = model
         self.vendor = vendor
-
-    @property
-    def context_window(self):
-        return catalog.context_window(self.vendor, self.model)
-
-    @property
-    def max_output(self):
-        return catalog.max_output(self.vendor, self.model)
 
     @staticmethod
     def _tool_result_text(content):
@@ -143,7 +135,8 @@ class OpenAIProvider:
                 elif slot["started"] and arg_chunk:
                     yield events.tool_args(slot["id"], arg_chunk)
             if chunk.choices[0].finish_reason:
-                stop = "tool_use" if chunk.choices[0].finish_reason == "tool_calls" else "end_turn"
+                stop = {"tool_calls": "tool_use", "length": "max_tokens"}.get(
+                    chunk.choices[0].finish_reason, "end_turn")
 
         content = [{"type": "text", "text": "".join(text_buf)}] if text_buf else []
         for _, tc in sorted(calls.items()):

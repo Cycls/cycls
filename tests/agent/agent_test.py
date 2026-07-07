@@ -12,7 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from cycls.agent.harness import providers as _providers
-from cycls.agent.harness.main import _run, MAX_RETRIES, _is_retryable, _ingest
+from cycls.agent.harness.main import (_run, MAX_RETRIES, MAX_CONTINUATIONS, _is_retryable,
+                                      _ingest, DEFAULT_WINDOW)
 
 
 @pytest.fixture(autouse=True)
@@ -645,7 +646,7 @@ def test_compaction_triggers_when_approaching_window(agent_env):
     """When input tokens approach context window and enough messages exist, compaction fires."""
     ws, ctx = agent_env
 
-    window = AnthropicProvider(None, "claude-sonnet-4-20250514").context_window
+    window = DEFAULT_WINDOW
     high_usage = _usage(inp=window - COMPACT_BUFFER + 1)
 
     # Build a few tool rounds so the message list clears the compaction guard
@@ -703,7 +704,6 @@ def test_compact_returns_internal_summary_pair_plus_recent(monkeypatch):
 
     seen = {}
     class FakeProvider:
-        max_output = 64_000
         async def complete(self, *, messages, system, max_tokens):
             seen["messages"], seen["system"], seen["max_tokens"] = messages, system, max_tokens
             return "<analysis>scratch work</analysis><summary>User asked about X.</summary>"
@@ -717,7 +717,7 @@ def test_compact_returns_internal_summary_pair_plus_recent(monkeypatch):
     assert "Understood" in result[1]["content"]
     assert result[2:] == recent  # recent slice passes through verbatim
 
-    assert seen["max_tokens"] == 16384  # clamped to min(provider.max_output, 16384)
+    assert seen["max_tokens"] == 8192
     assert seen["messages"][-1]["role"] == "user"
     assert "summary" in seen["messages"][-1]["content"].lower()
 
@@ -726,7 +726,7 @@ def test_compaction_failure_still_saves_history(agent_env):
     """If compaction API call fails, the conversation must still be saved."""
     ws, ctx = agent_env
 
-    window = AnthropicProvider(None, "claude-sonnet-4-20250514").context_window
+    window = DEFAULT_WINDOW
     high_usage = _usage(inp=window - COMPACT_BUFFER + 1)
 
     round1 = _make_response([_tool_use_block("t1")], stop_reason="tool_use", usage=high_usage)
@@ -755,7 +755,7 @@ def test_compaction_appends_marker_and_keeps_raw_history(agent_env):
     ws, ctx = agent_env
     from cycls.agent.state import get_compaction
 
-    window = AnthropicProvider(None, "claude-sonnet-4-20250514").context_window
+    window = DEFAULT_WINDOW
     high_usage = _usage(inp=window - COMPACT_BUFFER + 1)
 
     rounds = [_make_response([_tool_use_block(f"t{i}")], stop_reason="tool_use", usage=high_usage)
@@ -779,14 +779,115 @@ def test_compaction_appends_marker_and_keeps_raw_history(agent_env):
     assert marker and marker["summary"].startswith("This session continues") and marker["first_kept"] >= 0
 
 
+def test_compaction_seeds_from_stored_history(agent_env):
+    """A chat whose last stored turn is near the window compacts on the FIRST
+    call of the next request — not only mid-request."""
+    ws, ctx = agent_env
+    high = _usage(inp=DEFAULT_WINDOW - COMPACT_BUFFER + 1)
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(_make_response([_text_block("big")], usage=high))
+    with _mock_anthropic(mock_client):
+        asyncio.run(_drain(_run(context=ctx)))
+    _providers._clients.clear()
+
+    mock_client2 = MagicMock()
+    mock_client2.messages.stream = lambda **kw: FakeStream(_make_response([_text_block("Done")]))
+    mock_client2.messages.create = AsyncMock(return_value=MagicMock(
+        content=[MagicMock(text="<summary>Summary here</summary>")]))
+    with _mock_anthropic(mock_client2):
+        items = asyncio.run(_drain(_run(context=ctx)))
+
+    assert [i for i in items if isinstance(i, dict) and i.get("step") == "Compacting context..."]
+
+
+def test_max_tokens_autocontinues(agent_env):
+    """A cut answer stitches itself back: internal user continuation turn,
+    no warning shown."""
+    ws, ctx = agent_env
+    responses = iter([_make_response([_text_block("part one")], stop_reason="max_tokens"),
+                      _make_response([_text_block("part two")])])
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+    with _mock_anthropic(mock_client):
+        items = asyncio.run(_drain(_run(context=ctx)))
+
+    assert not [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
+    history = _read_history(ctx)
+    text = str(history)
+    assert "part one" in text and "part two" in text
+    assert any(m.get("internal") and m["role"] == "user" and "cut off" in str(m["content"])
+               for m in history)
+
+
+def test_max_tokens_continuation_is_bounded(agent_env):
+    """Endless cuts stop after MAX_CONTINUATIONS with a visible warning."""
+    ws, ctx = agent_env
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(
+        _make_response([_text_block("x")], stop_reason="max_tokens"))
+    with _mock_anthropic(mock_client):
+        items = asyncio.run(_drain(_run(context=ctx)))
+
+    steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Continuing past the output limit..."]
+    assert len(steps) == MAX_CONTINUATIONS
+    assert any(isinstance(i, dict) and "max_tokens" in str(i.get("callout", "")) for i in items)
+
+
+def _seeded_env(agent_env):
+    """Run one normal turn so the chat has history to fold, then reset clients."""
+    ws, ctx = agent_env
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(_make_response([_text_block("first")]))
+    with _mock_anthropic(mock_client):
+        asyncio.run(_drain(_run(context=ctx)))
+    _providers._clients.clear()
+    return ctx
+
+
+def test_context_overflow_stop_reason_compacts_and_retries(agent_env):
+    ctx = _seeded_env(agent_env)
+    responses = iter([_make_response([_text_block("partial")], stop_reason="model_context_window_exceeded"),
+                      _make_response([_text_block("Recovered")])])
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+    mock_client.messages.create = AsyncMock(return_value=MagicMock(
+        content=[MagicMock(text="<summary>S</summary>")]))
+    with _mock_anthropic(mock_client):
+        items = asyncio.run(_drain(_run(context=ctx)))
+
+    assert any(isinstance(i, dict) and i.get("step") == "Compacting context..." for i in items)
+    history = _read_history(ctx)
+    assert "Recovered" in str(history[-1]["content"])
+    assert "partial" not in str(history)  # the failed turn was dropped, not saved
+
+
+def test_context_overflow_error_text_compacts_and_retries(agent_env):
+    """Most providers overflow as an error, not a stop_reason."""
+    ctx = _seeded_env(agent_env)
+    calls = 0
+    def stream_side_effect(**kw):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise Exception("prompt is too long: 1200000 tokens > 1000000 maximum")
+        return FakeStream(_make_response([_text_block("Recovered")]))
+    mock_client = MagicMock()
+    mock_client.messages.stream = stream_side_effect
+    mock_client.messages.create = AsyncMock(return_value=MagicMock(
+        content=[MagicMock(text="<summary>S</summary>")]))
+    with _mock_anthropic(mock_client):
+        items = asyncio.run(_drain(_run(context=ctx)))
+
+    assert any(isinstance(i, dict) and i.get("step") == "Compacting context..." for i in items)
+    assert "Recovered" in str(_read_history(ctx))
+
+
 class _FakeSummarizer:
-    max_output = 64_000
     async def complete(self, *, messages, system, max_tokens):
         return "<summary>ok</summary>"
 
 
 class _BrokenSummarizer:
-    max_output = 64_000
     async def complete(self, *, messages, system, max_tokens):
         raise RuntimeError("summarizer down")
 
@@ -1067,33 +1168,3 @@ def test_skill_tool_call_returns_body_in_history(agent_env):
     assert "files in skills/haiku/" in results[0]["content"]
 
 
-# ---------------------------------------------------------------------------
-# Context window tests
-# ---------------------------------------------------------------------------
-
-def test_anthropic_context_window_family_models():
-    assert AnthropicProvider(None, "claude-sonnet-4-20250514").context_window == 200_000
-    assert AnthropicProvider(None, "claude-opus-4-20250514").context_window == 200_000
-    assert AnthropicProvider(None, "claude-haiku-3-5-20241022").context_window == 200_000
-
-
-def test_anthropic_context_window_1m_variants():
-    assert AnthropicProvider(None, "claude-opus-4-6[1m]").context_window == 1_000_000
-    assert AnthropicProvider(None, "claude-sonnet-4-6[1m]").context_window == 1_000_000
-
-
-def test_anthropic_context_window_unknown_claude_defaults_200k():
-    """An unknown claude-* id gets the family floor (200k); a fully unknown
-    id gets the catalog-wide safe default."""
-    assert AnthropicProvider(None, "claude-future-9").context_window == 200_000
-    assert AnthropicProvider(None, "future-model-name").context_window == 128_000
-
-
-def test_openai_context_window_gpt4o():
-    assert OpenAIProvider(None, "gpt-4o").context_window == 128_000
-
-
-def test_openai_context_window_unknown_defaults_128k():
-    """Chat-Completions endpoints (Groq, vLLM, etc.) default to 128k —
-    covers most modern Chat-Completions-compatible models."""
-    assert OpenAIProvider(None, "llama-3.3-70b").context_window == 128_000

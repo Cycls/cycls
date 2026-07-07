@@ -21,7 +21,9 @@ class LLM:
         self._system = ""
         self._tools = []
         self._allowed_tools = []
-        self._max_tokens = None   # None = use provider's max_output
+        self._max_tokens = None   # None = 8k default
+        self._context = None      # None = 1M default
+        self._price = None
         self._bash_timeout = 600
         self._bash_network = True
         self._base_url = None
@@ -46,6 +48,12 @@ class LLM:
     def tools(self, tools):         return self._copy(_tools=list(tools))
     def allowed_tools(self, names): return self._copy(_allowed_tools=list(names))
     def max_tokens(self, n):        return self._copy(_max_tokens=n)
+    def context(self, n):
+        """Model context window in tokens — sets when compaction kicks in."""
+        return self._copy(_context=n)
+    def price(self, *, input=0.0, output=0.0, cache_read=0.0, cache_write=0.0):
+        """Token prices in USD per 1M, for cost tracking. Unset → costs report as $0."""
+        return self._copy(_price=(input, output, cache_read, cache_write))
     def bash_timeout(self, secs):   return self._copy(_bash_timeout=secs)
     def sandbox(self, *, network=True):
         """Configure the bash sandbox. Network is OFF by default — enabling it
@@ -136,5 +144,7 @@ class LLM:
             web_search=self._web_search,
             instructions=self._instructions,
             skills=self._skills,
+            price=self._price,
+            context_window=self._context,
         ):
             yield ev

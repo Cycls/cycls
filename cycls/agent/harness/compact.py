@@ -77,7 +77,7 @@ async def _summarize(provider, old):
     from ..state import normalize
     raw = await provider.complete(
         messages=normalize(old) + [{"role": "user", "content": _SUMMARY_REQUEST}],
-        system=COMPACT_SYSTEM, max_tokens=min(provider.max_output, 16384))
+        system=COMPACT_SYSTEM, max_tokens=8_192)
     raw = re.sub(r"<analysis>[\s\S]*?</analysis>", "", raw)
     m = re.search(r"<summary>([\s\S]*?)</summary>", raw)
     return m.group(1).strip() if m else raw.strip()

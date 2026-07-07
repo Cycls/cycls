@@ -21,16 +21,23 @@ image = cycls.Image().copy(".providers.env", ".env")#.rebuild()
 web = (
     cycls.Web()
     .auth(cycls.Clerk())
-    .cms(brand="https://cms.cycls.ai/agents/super", explore="https://cms.cycls.ai/agents")
-    # .brand(name="Super", description="The agent for getting things done", logo="assets/logo.svg", og="assets/og.png")
+    .cms(brand="https://cms.cycls.ai/agents/super", explore="https://cms.cycls.ai/agents")  # any CMS returning the contract JSON; token=... for private ones
+    # Static branding — the same knobs without a CMS (static wins, piece by piece):
+    # .brand(name="Super", description="The agent for getting things done",
+    #        logo="assets/logo.svg", og="assets/og.png", favicon="assets/favicon.svg")
     # .brand(locale="ar", name="سوبر", description="وكيلك لإنجاز المهام")
     # .seo(title="Super — AI agent", description="Automate research, files and documents.")
-    # .colors(primary="#7c3aed", secondary="#f3e8ff")  # theme accent colors (light + optional _dark variants)
+    # .colors(primary="#7c3aed", secondary="#f3e8ff", primary_dark="#a78bfa")  # theme accents (any CSS color)
     # .head('<meta name="google-site-verification" content="...">')
     # .explore({"name": "Coder", "url": "https://coder.cycls.ai", "logo": "assets/coder.svg"})
+    # /robots.txt, /sitemap.xml, /llms.txt, /og.png are served automatically —
+    # derived from .seo()/.brand(), with JSON-LD + a server-rendered hero so the
+    # sign-in-gated page stays crawlable.
     .analytics(True) # "cycls.ai"
     .affiliate("059168")  # Rewardful referral tracking
     .title("The agent for getting things done")
+    # .workspaces()    # personal + team workspaces (docs/workspaces.md)
+    # .max_upload(512) # per-file upload cap in MB
 )
 
 SYSTEM = """
@@ -66,10 +73,14 @@ llm = (
     # .model("openai/gpt-5.4")
     # .model("zai/glm-5.2").base_url("https://api.z.ai/api/paas/v4/")  # any OpenAI-compatible API
     # .model("google/gemini-3.1-pro-preview").base_url("https://generativelanguage.googleapis.com/v1beta/openai/")
+    # .context(200_000)   # window → compaction timing (default 1M; set for smaller models)
+    .max_tokens(64_000)   # output cap per request (default 8k)
+    .price(input=3, output=15, cache_read=0.30, cache_write=6)  # USD/1M, for cost tracking
     .system(SYSTEM)
     # .tools(TOOLS)  # skills+safe_keys
     # .on("render_image", render_image)
     .allowed_tools(["Bash", "Editor", "WebSearch", "DataBase", "Canvas"])
+    # .thinking("low")  # unified reasoning across providers: "low" | "medium" | "high"
     # .web_search("native")  # Anthropic server-side search; default "brave" runs on any model (BRAVE_API_KEY)
     # .skills("examples/agent/skills")  # ship skill folders (<name>/SKILL.md) with the agent
     # .instructions("AGENT.md")  # workspace instructions file in the system prompt — this is the default
@@ -81,7 +92,7 @@ llm = (
 @cycls.agent(image=image, web=web, name="super")
 async def super(context):
     user = context.user
-    # Local dev is shalways exempted so prototyping isn't blocked by gates.
+    # Local dev is always exempted so prototyping isn't blocked by gates.
     exempt = user.id in EXEMPT_USERS or not context.prod
 
     # b2b: free orgs blocked (no compute, no tracking)

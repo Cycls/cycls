@@ -131,50 +131,35 @@ def test_vendor_skips_flags_native_search_off_anthropic():
     assert vendor_skips(["WebSearch"], "openai") == []  # default is brave
 
 
-# ---- model catalog ----
+# ---- pricing / context ----
 
-def test_catalog_provider_aware_lookup():
-    from cycls.agent.harness import catalog
-    assert catalog.context_window("anthropic", "claude-sonnet-4-6") == 1_000_000
-    assert catalog.context_window("anthropic", "claude-sonnet-4-20250514") == 200_000
-    assert catalog.context_window("zai", "glm-5.2") == 1_048_576   # 1M model...
-    assert catalog.context_window("zai", "glm-4.6") == 200_000     # ...smaller family stays small
-    assert catalog.context_window("zhipu", "glm-5.2") == 1_048_576  # vendor alias
-
-
-def test_catalog_unknown_model_gets_safe_defaults():
-    from cycls.agent.harness import catalog
-    assert catalog.context_window("acme", "mystery-9") == 128_000
-    assert catalog.cost("acme", "mystery-9", 1_000_000, 0, 0, 0) == 0
+def test_cost_from_price_rates():
+    from cycls.agent.harness.main import _cost
+    price = (3, 15, 0.30, 6)
+    assert _cost(price, 1_000_000, 0, 0, 0) == 3.0
+    assert _cost(price, 0, 1_000_000, 0, 0) == 15.0
+    assert _cost(price, 0, 0, 1_000_000, 1_000_000) == 6.30
+    assert _cost(None, 1_000_000, 1_000_000, 0, 0) == 0.0  # no .price() set
 
 
-def test_catalog_cost_per_provider():
-    from cycls.agent.harness import catalog
-    assert catalog.cost("anthropic", "claude-sonnet-4-6", 1_000_000, 0, 0, 0) == 3.0
-    assert catalog.cost("anthropic", "claude-sonnet-4-6", 0, 1_000_000, 0, 0) == 15.0
-    assert catalog.cost("zai", "glm-5.2", 1_000_000, 0, 0, 0) == 1.40
+def test_llm_price_and_context_reach_the_loop():
+    seen = {}
+    async def fake_loop(**kw):
+        seen.update(kw)
+        yield "ok"
+    llm = (cycls.LLM().model("openai/gpt-x")
+           .price(input=3, output=15, cache_read=0.30, cache_write=6)
+           .context(1_000_000).loop(fake_loop))
+    async def drain():
+        return [ev async for ev in llm.run(context=None)]
+    asyncio.run(drain())
+    assert seen["price"] == (3, 15, 0.30, 6)
+    assert seen["context_window"] == 1_000_000
 
 
-def test_catalog_refresh_targets_the_given_volume(tmp_path, monkeypatch):
-    """The loop passes the deployment volume — the snapshot must live there
-    (it survives serverless restarts), not in the container home."""
-    from cycls.agent.harness import catalog
-    monkeypatch.undo()  # drop the autouse no-op so the real refresh runs (no loop → no fetch)
-    monkeypatch.setattr(catalog, "_CACHE", catalog._CACHE)  # restore after test
-    catalog.refresh(tmp_path)
-    assert catalog._CACHE == tmp_path / ".cycls" / "models.json"
-
-
-def test_catalog_live_fills_gaps_but_bundled_wins(monkeypatch):
-    from cycls.agent.harness import catalog
-    monkeypatch.setattr(catalog, "_live", {
-        "acme": {"models": {"acme-1": {"limit": {"context": 9_000, "output": 900},
-                                       "cost": {"input": 7, "output": 21}}}},
-        "anthropic": {"models": {"claude-sonnet-4-6": {"limit": {"context": 1}}}},
-    })
-    assert catalog.context_window("acme", "acme-1") == 9_000        # live covers unknowns
-    assert catalog.cost("acme", "acme-1", 1_000_000, 0, 0, 0) == 7.0
-    assert catalog.context_window("anthropic", "claude-sonnet-4-6") == 1_000_000  # bundled wins
+def test_llm_price_and_context_default_unset():
+    assert cycls.LLM()._price is None
+    assert cycls.LLM()._context is None
 
 
 # ---- web search / fetch executors ----
