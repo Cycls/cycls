@@ -725,7 +725,7 @@ def test_seo_derives_from_brand(tmp_path):
     assert "<title>Super</title>" in html
     assert 'content="Gets things done"' in html
     assert "application/ld+json" in html
-    assert "<h1>Super</h1>" in html  # crawlable hero before JS runs
+    assert "<h1>" not in html  # no server-rendered body — nothing to flash before React mounts
 
 
 def test_seo_overrides_brand(tmp_path):
