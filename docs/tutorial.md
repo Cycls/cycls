@@ -244,7 +244,7 @@ web = (
     .auth(cycls.Clerk())
     .title("My Agent")
     .theme("default")
-    .cms("cycls.ai")
+    .cms(brand="https://cms.cycls.ai/agents/my-agent")
     .analytics(True)
     .copy_public("./assets/logo.png", "./downloads/")
 )
@@ -255,7 +255,7 @@ web = (
 | `.auth(provider)` | Set auth provider (`cycls.Clerk()` or `cycls.JWT(...)`) |
 | `.title(str)` | Browser tab + app title |
 | `.theme(name)` | `"default"` or `"dev"` |
-| `.cms(host)` | Register this agent with a CMS (default `"cycls.ai"` fetches from `cms.cycls.ai/agents/{name}`) |
+| `.cms(brand=, explore=, token=)` | Pull branding and/or the explore menu from any CMS: plain GET URLs returning the contract JSON, optional bearer `token`. Static `.brand()`/`.explore()` win, piece by piece |
 | `.analytics(bool)` | Enable usage metrics |
 | `.copy_public(*files)` | Static files served at `/public` |
 | `.workspaces(create="member")` | Multi-workspace mode: every user gets a personal workspace, teams are shared with role-based access, selected per request via the `X-Workspace` header. Requires `.auth(...)`. `create` sets who may create team workspaces (`"member"` or `"admin"`) — see [docs/workspaces.md](workspaces.md) |
@@ -289,7 +289,7 @@ async for ev in llm.run(context=context):
 | `.system(str)` | System prompt |
 | `.tools(list)` | Custom tool JSON schemas |
 | `.on(name, fn)` | Register async handler for a custom tool |
-| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`) |
+| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `DataBase`, `Canvas`) |
 | `.instructions(path)` | Workspace instructions file auto-loaded into the system prompt (default `AGENT.md`; `None` disables) |
 | `.skills(*dirs)` | Ship skills with the agent (dirs of `<name>/SKILL.md` folders; `None` disables skills) |
 | `.context(n)` | Model context window in tokens — sets when compaction kicks in (default 1M; set it for smaller models) |
@@ -299,12 +299,12 @@ async for ev in llm.run(context=context):
 | `.web_search(mode)` | `"brave"` (default, any model, needs `BRAVE_API_KEY`) or `"native"` (Anthropic server-side) |
 | `.mcp(*servers)` | Remote MCP servers via `cycls.MCP` (Anthropic models only) |
 | `.bash_timeout(secs)` | Bash sandbox timeout |
-| `.sandbox(network=True)` | Allow bash to make network calls (`curl`, `pip`, `git`). Default off |
+| `.sandbox(network=False)` | Cut bash off from the network (`curl`, `pip`, `git`). Default on |
 | `.base_url(url)` | Custom endpoint (Groq, vLLM, HUMAIN, self-hosted) |
 | `.api_key(key)` | Override API key |
 | `.loop(fn)` | Replace the built-in loop (see *Hooking the loop* below) |
 
-The Bash tool runs inside a `bubblewrap` sandbox with the workspace bound at `/workspace` and a sanitized environ. Network is off by default — enabling it allows outbound calls but means a prompt-injected bash could exfiltrate anything it can read. See [docs/sandbox-security.md](sandbox-security.md) for the full threat model.
+The Bash tool runs inside a `bubblewrap` sandbox with the workspace bound at `/workspace` and a sanitized environ. Network is on by default so `curl`/`pip`/`git` just work — but a prompt-injected bash could exfiltrate anything it can read, so pass `.sandbox(network=False)` when the agent doesn't need it. See [docs/sandbox-security.md](sandbox-security.md) for the full threat model.
 
 ### Hooking the loop
 
@@ -436,11 +436,11 @@ web = (
     cycls.Web()
     .auth(cycls.Clerk())
     .analytics(True)
-    .cms("cycls.ai")
+    .cms(brand="https://cms.cycls.ai/agents/my-agent")
 )
 ```
 
-`.cms("cycls.ai")` registers this agent with the Cycls CMS, which drives wallet-pass UI and [Cycls Pass](https://cycls.com) monetization.
+`.cms(...)` pulls branding from the Cycls CMS, which drives wallet-pass UI and [Cycls Pass](https://cycls.com) monetization.
 
 `context.user.plan` exposes the authenticated user's subscription tier, set by your auth provider's JWT claim. The Cycls-hosted Clerk app emits values like `"u:free_user"` / `"o:free_org"` (user-plan / org-plan prefixes) and `"cycls_pass"` for paid subscribers. Gate features by inspecting the value:
 

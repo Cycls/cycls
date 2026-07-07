@@ -1,7 +1,7 @@
 # uv run cycls run examples/agent/super.py
 # uv run cycls deploy examples/agent/super.py
 # cd client && npm run dev
-# uv run pytest tests/agent_test.py -v
+# uv run pytest tests/agent/ -v
 
 from datetime import datetime, timezone
 
@@ -31,8 +31,8 @@ web = (
     # .head('<meta name="google-site-verification" content="...">')
     # .explore({"name": "Coder", "url": "https://coder.cycls.ai", "logo": "assets/coder.svg"})
     # /robots.txt, /sitemap.xml, /llms.txt, /og.png are served automatically —
-    # derived from .seo()/.brand(), with JSON-LD + a server-rendered hero so the
-    # sign-in-gated page stays crawlable.
+    # derived from .seo()/.brand(), with JSON-LD in <head> so the sign-in-gated
+    # page stays crawlable.
     .analytics(True) # "cycls.ai"
     .affiliate("059168")  # Rewardful referral tracking
     .title("The agent for getting things done")
@@ -84,7 +84,7 @@ llm = (
     # .web_search("native")  # Anthropic server-side search; default "brave" runs on any model (BRAVE_API_KEY)
     # .skills("examples/agent/skills")  # ship skill folders (<name>/SKILL.md) with the agent
     # .instructions("AGENT.md")  # workspace instructions file in the system prompt — this is the default
-    # .mcp(cycls.MCP("https://figma-mcp.example/mcp").name("figma").token(os.environ["FIGMA_TOKEN"]))  # remote MCP, anthropic/* only
+    # .mcp(cycls.MCP("https://figma-mcp.example/mcp").name("figma").token(os.environ["FIGMA_TOKEN"]))  # remote MCP, anthropic/* only (needs `import os`)
     # .sandbox(network=False)  # opt out of network access for the LLM bash
 )
 
