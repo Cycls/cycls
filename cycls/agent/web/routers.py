@@ -188,7 +188,7 @@ def chats_router(ws_dep):
 
 # ---- Files ----
 
-def files_router(cycls_app, ws_dep, user_dep):
+def files_router(cycls_app, ws_dep):
     r = APIRouter()
     max_bytes = (getattr(getattr(cycls_app, "config", None), "max_upload", None) or DEFAULT_MAX_UPLOAD_MB) * 1024 * 1024
 
@@ -655,7 +655,7 @@ def install_routers(cycls_app, app, required_auth, volume, base):
         return workspace(user, volume, base=base, ws=ws_id)
     ws_dep = Depends(_build_ws)
     app.include_router(chats_router(ws_dep))
-    app.include_router(files_router(cycls_app, ws_dep, required_auth))
+    app.include_router(files_router(cycls_app, ws_dep))
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))
     if mode:
         app.include_router(workspaces_router(cycls_app, required_auth, volume, base))

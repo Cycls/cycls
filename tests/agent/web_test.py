@@ -840,6 +840,5 @@ def test_web_builder_brand_and_explore():
     assert w._explore[0]["title"] == "Coder" and w._explore[0]["link"] == "https://c.ai"
     assert w._cms == {"brand": "https://cms.x/agents/super", "token": "t"}
 
-    import pytest as _pytest
-    with _pytest.raises(ValueError):
+    with pytest.raises(ValueError):
         Web().brand(logo="missing/logo.svg")

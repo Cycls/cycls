@@ -330,7 +330,7 @@ def test_compaction_real_roundtrip(tmp_path):
 
 # ---- OpenAI-compatible vendors (GLM, Gemini) — skip when their key is unset ----
 
-def _compat_roundtrip(tmp_path, spec, monkeypatch):
+def _compat_roundtrip(tmp_path, spec):
     import os
     model, base_url, key_env = spec
     if not os.environ.get(key_env):
@@ -343,14 +343,14 @@ def _compat_roundtrip(tmp_path, spec, monkeypatch):
 
 
 @pytest.mark.live
-def test_glm_basic_real(tmp_path, monkeypatch):
+def test_glm_basic_real(tmp_path):
     """GLM 5.2 over z.ai's OpenAI-compat API — standard max_tokens, thinking
     passthrough, strict-endpoint message shape."""
-    _compat_roundtrip(tmp_path, GLM, monkeypatch)
+    _compat_roundtrip(tmp_path, GLM)
 
 
 @pytest.mark.live
-def test_gemini_basic_real(tmp_path, monkeypatch):
+def test_gemini_basic_real(tmp_path):
     """Gemini over Google's OpenAI-compat (beta) endpoint — reasoning_effort
     mapping and the shared Chat Completions path."""
-    _compat_roundtrip(tmp_path, GEMINI, monkeypatch)
+    _compat_roundtrip(tmp_path, GEMINI)
