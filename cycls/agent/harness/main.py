@@ -5,13 +5,13 @@ stops. Yields dict events (and bare strings for text deltas) that the agent
 body forwards as-is. `Turn` is loop-internal (the last event a provider
 stream emits) — never reaches the body.
 """
-import asyncio, json, random, time
+import asyncio, json, random, re, time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import state
 from ..state import Session
-from . import catalog, events
+from . import events
 from .events import Turn
 from .compact import COMPACT_BUFFER
 from ..logs import log
@@ -27,6 +27,23 @@ MAX_RETRIES = 10
 BASE_DELAY_MS = 500
 MAX_DELAY_MS = 32_000
 _RETRYABLE_STATUSES = {429, 502, 503, 504, 529}
+MAX_CONTINUATIONS = 4         # auto-continue rounds after a max_tokens cut
+_CONTINUE = ("Your previous message was cut off at the output-token limit. "
+             "Continue exactly from where you stopped. Do not repeat anything.")
+# Providers report context overflow as an error, each with its own wording.
+_OVERFLOW_RE = re.compile(
+    r"prompt is too long|request_too_large|exceeds the context window"
+    r"|maximum context length|input token count.*exceeds"
+    r"|context[_ ]length[_ ]exceeded|too many tokens", re.I)
+DEFAULT_WINDOW = 1_000_000    # context window when .context() is unset — set it for smaller models
+DEFAULT_MAX_TOKENS = 8_192    # output cap when .max_tokens() is unset — safe on every model
+
+
+def _cost(price, inp, out, cached, cache_create):
+    """USD for one turn from `.price()` rates (per 1M tokens). No price → 0."""
+    if not price: return 0.0
+    pin, pout, prd, pwr = price
+    return (inp * pin + out * pout + cached * prd + cache_create * pwr) / 1_000_000
 
 
 async def _timed(coro):
@@ -106,12 +123,11 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                bash_timeout=600, bash_network=True, client=None,
                base_url=None, api_key=None, handlers=None, mcp_servers=None,
                thinking="adaptive", web_search="brave",
-               instructions="AGENT.md", skills=[]):
+               instructions="AGENT.md", skills=[], price=None, context_window=None):
     vendor, bare_model = model.split("/", 1)
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key)
-    if max_tokens is None: max_tokens = provider.max_output
+    if max_tokens is None: max_tokens = DEFAULT_MAX_TOKENS
     workspace = context.workspace
-    catalog.refresh(workspace.volume)  # volume-level: survives restarts, shared per deployment
     user = getattr(context, "user", None)
     Path(workspace.root).mkdir(parents=True, exist_ok=True)
 
@@ -141,8 +157,15 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     tools_list = build_tools(allowed_tools, tools or [], vendor=vendor, web_search=web_search)
     if skill_catalog and not any(t.get("name") == "skill" for t in tools_list):
         tools_list.append(skills_mod.SKILL_TOOL)
-    window = provider.context_window
-    tokens_since_compact = 0
+    window = context_window or DEFAULT_WINDOW
+    # Seed from the last stored turn so a long chat compacts before its first
+    # call — not only mid-request. The first_kept slice skips stale
+    # pre-compaction usage that would re-trigger a compaction that already ran.
+    tokens_since_compact = next(
+        (m["usage"].get("input", 0) + m["usage"].get("cached", 0) + m["usage"].get("cache_create", 0)
+         for m in reversed(messages[session.first_kept:]) if m.get("usage")), 0)
+    continuations = 0
+    overflowed = False
 
     while True:
         try:
@@ -154,7 +177,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     tokens_since_compact = 0
                     # The summarizer call is a real billed turn — track it too.
                     if u := getattr(provider, "last_usage", None):
-                        c = catalog.cost(vendor, bare_model, u[0], u[1], 0, 0)
+                        c = _cost(price, u[0], u[1], 0, 0)
                         log("usage", user=user, chat_id=session.chat_id, model=bare_model,
                             input=u[0], output=u[1], cached=0, cache_create=0,
                             cost=round(c, 6), ms=0, compact=True)
@@ -186,7 +209,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
             turn_ms = int((time.monotonic() - turn_t0) * 1000)
             tokens_since_compact = turn.input + turn.cached + turn.cache_create
-            turn_cost = catalog.cost(vendor, bare_model, turn.input, turn.output, turn.cached, turn.cache_create)
+            turn_cost = _cost(price, turn.input, turn.output, turn.cached, turn.cache_create)
             now = datetime.now(timezone.utc).isoformat()
             messages.append({"role": "assistant", "content": turn.content, "usage": {
                 "model": bare_model,
@@ -200,10 +223,21 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 model=bare_model,
                 input=turn.input, output=turn.output,
                 cached=turn.cached, cache_create=turn.cache_create,
-                cost=round(turn_cost, 6), ms=turn_ms)
+                cost=round(turn_cost, 6), ms=turn_ms, stop=turn.stop_reason)
             if session.chat_id:
                 try: await state.add_cost(workspace, session.chat_id, turn_cost)
                 except Exception as e: print(f"[WARN] add_cost failed: {e}")
+
+            # max_tokens with zero output means the input filled the window —
+            # an overflow in disguise, not a truncation.
+            overflow = (turn.stop_reason == "model_context_window_exceeded"
+                        or (turn.stop_reason == "max_tokens" and turn.output == 0))
+            if overflow and not overflowed and len(messages) - session.first_kept > 2:
+                # One recovery per run: drop the partial turn, compact, replay it.
+                overflowed = True
+                messages.pop()
+                tokens_since_compact = window
+                continue
 
             if turn.stop_reason == "max_tokens":
                 # Pair any dangling tool_use blocks with error tool_results so
@@ -213,6 +247,18 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     messages.append({"role": "user", "content": [
                         {"type": "tool_result", "tool_use_id": i, "content": "Cut off by output limit.", "is_error": True}
                         for i in ids]})
+                if continuations < MAX_CONTINUATIONS:
+                    continuations += 1
+                    if not ids:
+                        messages.append({"role": "user", "internal": True, "content": _CONTINUE})
+                    yield events.step("Continuing past the output limit...")
+                    await session.checkpoint()
+                    continue
+
+            if turn.stop_reason == "pause_turn":  # server tool paused — resend to resume
+                await session.checkpoint()
+                continue
+
             if turn.stop_reason not in ("tool_use", "end_turn"):
                 yield events.callout(f"Stopped: {turn.stop_reason}", "warning")
             if turn.stop_reason != "tool_use":
@@ -254,7 +300,14 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             messages.append({"role": "user", "content": results})
             await session.checkpoint()
 
-        except Exception:
+        except Exception as e:
+            # Most providers report context overflow as an error, not a
+            # stop_reason — compact and replay the turn, once per run.
+            if (_OVERFLOW_RE.search(str(e)) and not overflowed
+                    and len(messages) - session.first_kept > 2):
+                overflowed = True
+                tokens_since_compact = window
+                continue
             # Retries already happened inside _stream_with_retry; this is fatal.
             # Rollback, then re-raise so the encoder owns the user-facing
             # callout + structured log (with error_id) in one place.

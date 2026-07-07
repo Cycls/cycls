@@ -274,8 +274,9 @@ llm = (
     .tools(TOOLS)                              # custom tool schemas
     .on("render_image", render_image)          # handler for a custom tool
     .allowed_tools(["Bash", "Editor", "WebSearch"])
+    .context(200_000)                          # model context window (default 1M)
     .max_tokens(16384)
-    .show_usage(True)
+    .price(input=3, output=15, cache_read=0.30, cache_write=6)  # USD/1M, cost tracking
 )
 
 async for ev in llm.run(context=context):
@@ -291,10 +292,14 @@ async for ev in llm.run(context=context):
 | `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`) |
 | `.instructions(path)` | Workspace instructions file auto-loaded into the system prompt (default `AGENT.md`; `None` disables) |
 | `.skills(*dirs)` | Ship skills with the agent (dirs of `<name>/SKILL.md` folders; `None` disables skills) |
-| `.max_tokens(n)` | Max output tokens |
+| `.context(n)` | Model context window in tokens — sets when compaction kicks in (default 1M; set it for smaller models) |
+| `.max_tokens(n)` | Max output tokens per request (default 8k) |
+| `.price(input=, output=, cache_read=, cache_write=)` | Token prices in USD per 1M for cost tracking; unset → costs report as $0 |
+| `.thinking(spec)` | Unified reasoning level: `"low"`/`"medium"`/`"high"`, `"adaptive"` (default), or `None` |
+| `.web_search(mode)` | `"brave"` (default, any model, needs `BRAVE_API_KEY`) or `"native"` (Anthropic server-side) |
+| `.mcp(*servers)` | Remote MCP servers via `cycls.MCP` (Anthropic models only) |
 | `.bash_timeout(secs)` | Bash sandbox timeout |
 | `.sandbox(network=True)` | Allow bash to make network calls (`curl`, `pip`, `git`). Default off |
-| `.show_usage(bool)` | Print cost + token usage at end of run |
 | `.base_url(url)` | Custom endpoint (Groq, vLLM, HUMAIN, self-hosted) |
 | `.api_key(key)` | Override API key |
 | `.loop(fn)` | Replace the built-in loop (see *Hooking the loop* below) |

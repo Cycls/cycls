@@ -5,13 +5,6 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _no_catalog_fetch(monkeypatch):
-    """Keep tests offline — the loop's catalog.refresh() must never hit models.dev."""
-    from cycls.agent.harness import catalog
-    monkeypatch.setattr(catalog, "refresh", lambda *a, **k: None)
-
-
-@pytest.fixture(autouse=True)
 def _reset_migrated():
     """Org names repeat across tests with fresh tmp_paths — clear the
     once-per-org migration cache so each test migrates its own tree."""

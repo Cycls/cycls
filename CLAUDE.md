@@ -57,9 +57,8 @@ cycls/
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
     ├── tools/              # tool schemas + execution + dispatch registry (+ pdf.py, skills.py, Brave web search/fetch)
     ├── harness/            # the managed LLM loop and the kit a custom loop needs
-    │   ├── llm.py          # cycls.LLM fluent builder (.loop(fn) swaps the loop)
+    │   ├── llm.py          # cycls.LLM fluent builder (.loop(fn) swaps the loop; .price()/.context() set cost rates + window)
     │   ├── main.py         # the default loop (_run) + retry/recover + attachment ingest
-    │   ├── catalog.py      # model catalog — windows/output/pricing per provider, models.dev 24h volume cache
     │   ├── providers/      # one streaming interface per vendor SDK
     │   │   ├── anthropic.py  # native Messages (cache breakpoints, thinking, MCP, server search)
     │   │   └── openai.py     # Chat Completions — also GLM (zai/*), Gemini-compat, Groq, vLLM via base_url
@@ -132,7 +131,7 @@ tests/
 ├── agent/
 │   ├── agent_test.py            # _run loop, retry, recovery, ingest, exec/_resolve_path
 │   ├── chat_test.py             # to_ui_messages (FE projection) + _valid_prefix repair
-│   ├── harness_test.py          # build_tools, web search/fetch, model catalog, _resolve_path, LLM builder
+│   ├── harness_test.py          # build_tools, web search/fetch, cost math, _resolve_path, LLM builder
 │   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
 │   ├── events_test.py           # to_ui wire shapes for the typed events
 │   ├── pdf_test.py              # PDF page parsing

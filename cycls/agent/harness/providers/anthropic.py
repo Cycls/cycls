@@ -6,7 +6,7 @@ through to sessions.py for direct persistence.
 """
 import json
 
-from .. import catalog, events
+from .. import events
 from ..events import Turn
 from ...tools import tool_step
 
@@ -22,14 +22,6 @@ class AnthropicProvider:
     def __init__(self, client, model):
         self._client = client
         self.model = model
-
-    @property
-    def context_window(self):
-        return catalog.context_window("anthropic", self.model)
-
-    @property
-    def max_output(self):
-        return catalog.max_output("anthropic", self.model)
 
     def _to_messages(self, messages):
         """Drop FE-only sidecars; attach `cache_control` to the last user
