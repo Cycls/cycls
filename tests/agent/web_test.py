@@ -690,3 +690,112 @@ def test_agent_workspaces_config_wiring():
         yield "hi"
 
     assert my_agent.config.workspaces == "admin"
+
+
+# =============================================================================
+# Branding / SEO / Explore
+# =============================================================================
+
+def _branded_config(public_path=THEME_PATH, **kw):
+    from cycls.agent.web.server import PassMetadata
+    return Config(
+        public_path=public_path, name="super",
+        pass_metadata={"en": PassMetadata(name="Super", description="Gets things done", logo="<svg/>")},
+        **kw,
+    )
+
+
+def _seo_theme(tmp_path):
+    (tmp_path / "index.html").write_text(
+        '<html><head><title>__TITLE__</title>'
+        '<meta name="description" content="__DESC__" />'
+        '<meta property="og:image" content="/og.png" /></head>'
+        '<body><div id="root"></div></body></html>')
+    return str(tmp_path)
+
+
+def test_seo_derives_from_brand(tmp_path):
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    client = TestClient(web(dummy_agent, _branded_config(_seo_theme(tmp_path))))
+    html = client.get("/").text
+    assert "<title>Super</title>" in html
+    assert 'content="Gets things done"' in html
+    assert "application/ld+json" in html
+    assert "<h1>Super</h1>" in html  # crawlable hero before JS runs
+
+
+def test_seo_overrides_brand(tmp_path):
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = _branded_config(_seo_theme(tmp_path), seo={"title": "Super — AI agent", "description": "Custom copy"},
+                             head='<meta name="verify" content="x">')
+    client = TestClient(web(dummy_agent, config))
+    html = client.get("/").text
+    assert "<title>Super — AI agent</title>" in html
+    assert 'content="Custom copy"' in html
+    assert '<meta name="verify" content="x">' in html
+
+
+def test_explore_static_and_disabled():
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    entries = [{"slug": "coder", "title": "Coder", "link": "https://coder.cycls.ai"}]
+    client = TestClient(web(dummy_agent, _branded_config(explore=entries)))
+    assert client.get("/explore").json() == {"agents": entries}
+
+    client = TestClient(web(dummy_agent, _branded_config()))
+    assert client.get("/explore").json() == {"agents": []}
+
+
+def test_custom_og_and_favicon_and_llms():
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = _branded_config(favicon="<svg>fav</svg>")
+    config._og_image = b"\x89PNGfake"
+    client = TestClient(web(dummy_agent, config))
+    assert client.get("/og.png").content == b"\x89PNGfake"
+    assert client.get("/favicon.svg").text == "<svg>fav</svg>"
+    assert "Gets things done" in client.get("/llms.txt").text
+    assert "Sitemap:" in client.get("/robots.txt").text
+
+
+def test_theme_colors_injected(tmp_path):
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = _branded_config(_seo_theme(tmp_path),
+                             colors={"primary": "#7c3aed", "secondary": "#f3e8ff", "primary_dark": "#a78bfa"})
+    html = TestClient(web(dummy_agent, config)).get("/").text
+    assert ":root{--color-accent:#7c3aed;--color-secondary:#f3e8ff;}" in html
+    assert ".dark{--color-accent:#a78bfa;--color-secondary:#f3e8ff;}" in html
+
+
+def test_web_builder_brand_and_explore():
+    from cycls.agent.web.builder import Web
+
+    w = (Web().brand(name="Super", description="d", logo="<svg/>")
+              .brand(locale="ar", name="سوبر")
+              .explore({"name": "Coder", "url": "https://c.ai"})
+              .cms(brand="https://cms.x/agents/super", token="t"))
+    assert w._brand["en"]["name"] == "Super" and w._brand["ar"]["name"] == "سوبر"
+    assert w._explore[0]["title"] == "Coder" and w._explore[0]["link"] == "https://c.ai"
+    assert w._cms == {"brand": "https://cms.x/agents/super", "token": "t"}
+
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        Web().brand(logo="missing/logo.svg")

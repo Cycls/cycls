@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 import cycls
 
 FREE_MONTHLY_LIMIT = 5
-DOMAIN = "cycls.ai"
 EXEMPT_USERS = {
     "user_2yY1NGlkgUtCgYiPLSHQUriCWrr",
     "user_2yXuICg28R0J2xXMDb6csQ0iEu9",
@@ -22,7 +21,13 @@ image = cycls.Image().copy(".providers.env", ".env")#.rebuild()
 web = (
     cycls.Web()
     .auth(cycls.Clerk())
-    .cms(DOMAIN)
+    .cms(brand="https://cms.cycls.ai/agents/super", explore="https://cms.cycls.ai/agents")
+    # .brand(name="Super", description="The agent for getting things done", logo="assets/logo.svg", og="assets/og.png")
+    # .brand(locale="ar", name="سوبر", description="وكيلك لإنجاز المهام")
+    # .seo(title="Super — AI agent", description="Automate research, files and documents.")
+    # .colors(primary="#7c3aed", secondary="#f3e8ff")  # theme accent colors (light + optional _dark variants)
+    # .head('<meta name="google-site-verification" content="...">')
+    # .explore({"name": "Coder", "url": "https://coder.cycls.ai", "logo": "assets/coder.svg"})
     .analytics(True) # "cycls.ai"
     .affiliate("059168")  # Rewardful referral tracking
     .title("The agent for getting things done")
