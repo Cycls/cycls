@@ -1,12 +1,6 @@
 // Affiliate / referral tracking. Vendor (Rewardful) is encapsulated here — the
 // rest of the app calls initAffiliate / convertReferral, so swapping providers
 // touches only this file.
-//
-// Cross-domain note: the referral cookie is captured on whatever domain runs
-// this. Cycls's landing (cycls.com) and agents (*.cycls.ai) are different
-// registrable domains, so the landing must forward the referral in the URL
-// (Rewardful data-domains / ?via=) for it to land on .cycls.ai. Here we just
-// load the tracker so an incoming ?via= is captured and convert() can fire.
 
 let initialized = false;
 
