@@ -446,10 +446,28 @@ _TOOLS = {
 }
 
 
+_custom_labels = {}
+
+
+def register_labels(labels):
+    """UI step labels for custom tools: name → (input dict → str). Registered
+    by LLM.run() so both live steps and the refetch projection render them."""
+    _custom_labels.update(labels or {})
+
+
 def tool_step(name, input):
     inp = input or {}
     entry = _TOOLS.get(name)
-    return entry[1](inp) if entry else {"tool_name": name, "step": ""}
+    if entry:
+        return entry[1](inp)
+    if fn := _custom_labels.get(name):
+        try:
+            return {"tool_name": name, "step": str(fn(inp))}
+        except Exception:
+            pass
+    # No label — show the first string value, like Bash(command).
+    step = next((v for v in inp.values() if isinstance(v, str) and v.strip()), "")
+    return {"tool_name": name, "step": step if len(step) <= 120 else step[:117] + "..."}
 
 
 def dispatch(block, workspace, timeout, handlers=None, network=False):

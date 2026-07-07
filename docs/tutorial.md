@@ -288,7 +288,7 @@ async for ev in llm.run(context=context):
 | `.model(str)` | `provider/model` string — `anthropic/...`, `openai/...`, `groq/...`, etc. |
 | `.system(str)` | System prompt |
 | `.tools(list)` | Custom tool JSON schemas |
-| `.on(name, fn)` | Register async handler for a custom tool |
+| `.on(name, fn, label=)` | Register async handler for a custom tool; `label` (input → str) renders the step line in the UI, like `Bash(command)` — default is the input's first string value |
 | `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `DataBase`, `Canvas`) |
 | `.instructions(path)` | Workspace instructions file auto-loaded into the system prompt (default `AGENT.md`; `None` disables) |
 | `.skills(*dirs)` | Ship skills with the agent (dirs of `<name>/SKILL.md` folders; `None` disables skills) |

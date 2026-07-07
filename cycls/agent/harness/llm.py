@@ -29,6 +29,7 @@ class LLM:
         self._base_url = None
         self._api_key = None
         self._handlers = {}
+        self._labels = {}
         self._mcp = []
         self._loop = None
         self._thinking = "adaptive"
@@ -62,11 +63,15 @@ class LLM:
         return self._copy(_bash_network=network)
     def base_url(self, url):        return self._copy(_base_url=url)
     def api_key(self, key):         return self._copy(_api_key=key)
-    def on(self, name, handler):
+    def on(self, name, handler, *, label=None):
         """Register an async handler for a custom tool by name. The handler's
         return value is both yielded to the stream (body sees it as a normal
-        event) and packaged as the tool_result sent back to the model."""
-        return self._copy(_handlers={**self._handlers, name: handler})
+        event) and packaged as the tool_result sent back to the model.
+        `label` renders the step line in the UI from the tool input
+        (input dict → str), like Bash(command) for builtins; without it the
+        first string value of the input is shown."""
+        return self._copy(_handlers={**self._handlers, name: handler},
+                          _labels={**self._labels, name: label} if label else self._labels)
 
     def instructions(self, path):
         """Workspace instructions file auto-loaded into the system prompt each
@@ -126,6 +131,8 @@ class LLM:
         if self._model is None:
             raise ValueError("LLM.model(...) is required before .run()")
         from .main import _run
+        from ..tools import register_labels
+        register_labels(self._labels)   # also read by the refetch projection
         loop = self._loop or _run
         async for ev in loop(
             context=context,
