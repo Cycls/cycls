@@ -254,11 +254,21 @@ export function Chat({ chat, onShare, files, account, config }: {
     setExploreOpen(true);
     track("explore_opened", { cached: exploreAgents.length > 0 });
     if (exploreAgents.length > 0) return;
+    if (config?.explore?.length) { setExploreAgents(config.explore); return; }  // static: no network
+    const CACHE_KEY = "cycls_explore";
+    try {
+      const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
+      if (cached && Date.now() - cached.at < 3_600_000 && cached.agents?.length) {
+        setExploreAgents(cached.agents);
+        return;
+      }
+    } catch { /* ignore */ }
     setExploreLoading(true);
     try {
-      const res = await fetch("https://cms.cycls.ai/agents");
+      const res = await fetch("/explore");
       const data = await res.json();
       setExploreAgents(data.agents || []);
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), agents: data.agents || [] }));
     } catch { /* silent */ }
     setExploreLoading(false);
   };
@@ -307,13 +317,17 @@ export function Chat({ chat, onShare, files, account, config }: {
           {name && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <span className="text-muted-foreground/40">|</span>
-              <button
-                onClick={openExplore}
-                className="flex items-center gap-1 text-foreground font-medium capitalize hover:opacity-70 transition-opacity cursor-pointer"
-              >
-                {meta?.name || name}
-                <Icon name="chevron-down" className="w-3 h-3 text-muted-foreground" />
-              </button>
+              {config?.explore_enabled ? (
+                <button
+                  onClick={openExplore}
+                  className="flex items-center gap-1 text-foreground font-medium capitalize hover:opacity-70 transition-opacity cursor-pointer"
+                >
+                  {meta?.name || name}
+                  <Icon name="chevron-down" className="w-3 h-3 text-muted-foreground" />
+                </button>
+              ) : (
+                <span className="text-foreground font-medium capitalize">{meta?.name || name}</span>
+              )}
             </div>
           )}
           </div>
@@ -413,9 +427,15 @@ export function Chat({ chat, onShare, files, account, config }: {
                     className="flex items-start gap-3 px-3 py-2.5 text-sm hover:bg-secondary/80 transition-colors cursor-pointer"
                   >
                     {agent.icon_svg ? (
-                      <div className="size-8 shrink-0 rounded-md overflow-hidden" dangerouslySetInnerHTML={{ __html: agent.icon_svg }} />
+                      agent.icon_svg.startsWith("<") ? (
+                        <div className="size-8 shrink-0 rounded-md overflow-hidden" dangerouslySetInnerHTML={{ __html: agent.icon_svg }} />
+                      ) : (
+                        <img src={agent.icon_svg} alt="" className="size-8 shrink-0 rounded-md object-cover" />
+                      )
                     ) : (
-                      <div className="size-8 shrink-0 rounded-md bg-secondary" />
+                      <div className="size-8 shrink-0 rounded-md bg-secondary flex items-center justify-center text-xs font-medium uppercase text-muted-foreground">
+                        {agentTitle?.[0]}
+                      </div>
                     )}
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-foreground truncate">{agentTitle}</p>
@@ -458,7 +478,11 @@ export function Chat({ chat, onShare, files, account, config }: {
                   transition={{ delay: 0.4 }}
                   className="absolute bottom-full left-0 right-0 flex flex-col items-center gap-4 mb-10 text-center"
                 >
-                  {meta.logo && <div className="size-16 rounded-xl overflow-hidden border border-border" dangerouslySetInnerHTML={{ __html: meta.logo }} />}
+                  {meta.logo && (meta.logo.startsWith("<") ? (
+                    <div className="size-16 rounded-xl overflow-hidden border border-border" dangerouslySetInnerHTML={{ __html: meta.logo }} />
+                  ) : (
+                    <img src={meta.logo} alt="" className="size-16 rounded-xl object-cover border border-border" />
+                  ))}
                   <h2 className="text-2xl font-semibold text-foreground">{meta.name}</h2>
                   {meta.description && <p className="text-base text-muted-foreground max-w-lg">{meta.description}</p>}
                 </motion.div>
