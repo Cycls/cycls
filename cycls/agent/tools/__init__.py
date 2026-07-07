@@ -2,7 +2,7 @@
 API shape (`type` / `name` / `description` / `input_schema`) and registered in
 `_BUILTINS`; `build_tools` emits them as-is. User-supplied custom tools come
 through `_normalize_tool` (accepts the camelCase `inputSchema` form too)."""
-import asyncio, base64, json, os, pathlib
+import asyncio, base64, ipaddress, json, os, pathlib, socket
 from html.parser import HTMLParser
 from . import pdf, skills
 from ..state import _exec_database
@@ -294,6 +294,20 @@ def _html_to_text(html):
     return "\n".join(p.parts)
 
 
+_FETCH_MAX_BYTES = 2_000_000
+_FETCH_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; CyclsAgent/1.0)"}
+
+
+def _is_public_host(host):
+    """web_fetch runs in the server process, not the bash sandbox — refuse
+    hosts that resolve to loopback/private/link-local addresses (SSRF)."""
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        return all(ipaddress.ip_address(i[4][0].split("%")[0]).is_global for i in infos)
+    except (OSError, ValueError):
+        return False
+
+
 async def _exec_web_fetch(inp):
     """Fetch a URL and return readable text — the model's on-demand 'read the
     full page' step after web_search."""
@@ -302,12 +316,28 @@ async def _exec_web_fetch(inp):
     limit = min(max(int(inp.get("max_chars") or 20_000), 500), 100_000)
     import httpx
     try:
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; CyclsAgent/1.0)"})
-        r.raise_for_status()
+        async with httpx.AsyncClient(timeout=20) as client:
+            for _ in range(5):  # redirect hops, each host re-checked
+                if not await asyncio.to_thread(_is_public_host, httpx.URL(url).host):
+                    return "Error: URL resolves to a private or unreachable address."
+                async with client.stream("GET", url, headers=_FETCH_HEADERS) as r:
+                    if r.is_redirect:
+                        url = str(httpx.URL(url).join(r.headers.get("location", "")))
+                        continue
+                    r.raise_for_status()
+                    total, chunks = 0, []
+                    async for chunk in r.aiter_bytes():
+                        chunks.append(chunk)
+                        total += len(chunk)
+                        if total >= _FETCH_MAX_BYTES: break
+                    body = b"".join(chunks).decode(r.encoding or "utf-8", "replace")
+                    ctype = r.headers.get("content-type", "")
+                    break
+            else:
+                return "Error: too many redirects."
     except Exception as e:
         return f"Error: fetch failed ({e})."
-    text = (_html_to_text(r.text) if "html" in r.headers.get("content-type", "") else r.text).strip()
+    text = (_html_to_text(body) if "html" in ctype else body).strip()
     return (text[:limit] + "\n... (truncated)") if len(text) > limit else (text or "(no readable text)")
 
 

@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from cycls.agent.harness import providers as _providers
-from cycls.agent.harness.main import (_run, MAX_RETRIES, MAX_CONTINUATIONS, _is_retryable,
-                                      _ingest, DEFAULT_WINDOW)
+from cycls.agent.harness.main import (_run, MAX_RETRIES, MAX_CONTINUATIONS, MAX_PAUSES,
+                                      _is_retryable, _ingest, DEFAULT_WINDOW)
 
 
 @pytest.fixture(autouse=True)
@@ -24,8 +24,6 @@ def _clear_client_cache():
     yield
     _providers._clients.clear()
 from cycls.agent.harness.compact import COMPACT_BUFFER, microcompact, compact
-from cycls.agent.harness.providers.anthropic import AnthropicProvider
-from cycls.agent.harness.providers.openai import OpenAIProvider
 from cycls.agent.harness.events import to_ui
 from cycls.agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path
 from cycls.agent.state import load_messages
@@ -833,6 +831,23 @@ def test_max_tokens_continuation_is_bounded(agent_env):
     assert any(isinstance(i, dict) and "max_tokens" in str(i.get("callout", "")) for i in items)
 
 
+def test_pause_turn_resume_is_bounded(agent_env):
+    """pause_turn resends until the turn completes — but a provider stuck on
+    pause_turn stops after MAX_PAUSES instead of looping (and billing) forever."""
+    ws, ctx = agent_env
+    calls = {"n": 0}
+    def stream(**kw):
+        calls["n"] += 1
+        return FakeStream(_make_response([_text_block("x")], stop_reason="pause_turn"))
+    mock_client = MagicMock()
+    mock_client.messages.stream = stream
+    with _mock_anthropic(mock_client):
+        items = asyncio.run(_drain(_run(context=ctx)))
+
+    assert calls["n"] == MAX_PAUSES + 1
+    assert any(isinstance(i, dict) and "pause_turn" in str(i.get("callout", "")) for i in items)
+
+
 def _seeded_env(agent_env):
     """Run one normal turn so the chat has history to fold, then reset clients."""
     ws, ctx = agent_env
@@ -928,6 +943,26 @@ def test_compact_cut_never_splits_a_tool_pair(monkeypatch):
     result = asyncio.run(compact(_FakeSummarizer(), messages))
 
     assert result[2:] == [{"role": "user", "content": "next question"}]  # pair stayed in `old`
+
+
+def test_compact_keeps_recent_tool_rounds_without_a_user_turn(monkeypatch):
+    """One user request + many tool rounds has no plain user turn to cut at —
+    the fallback cuts at an assistant boundary instead of folding everything."""
+    _keep_tokens(monkeypatch, 300)
+    messages = [{"role": "user", "content": "analyze the files"}]
+    for i in range(20):
+        messages.append({"role": "assistant", "content": [
+            {"type": "tool_use", "id": f"t{i}", "name": "read", "input": {"path": f"f{i}.py"}}]})
+        messages.append({"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": f"t{i}", "content": "r" * 400}]})
+
+    result = asyncio.run(compact(_FakeSummarizer(), messages))
+
+    recent = result[2:]
+    assert recent, "recent window must survive a tool-only tail"
+    assert len(recent) < len(messages)
+    assert recent[0]["role"] == "assistant"  # cut at a tool_use, its result follows
+    assert recent[1]["content"][0]["tool_use_id"] == recent[0]["content"][0]["id"]
 
 
 def test_compact_shrinks_even_when_summary_fails(monkeypatch):

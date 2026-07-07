@@ -7,8 +7,6 @@ outsider from another org.
 """
 import asyncio
 
-import pytest
-
 from cycls.agent import state
 from cycls.app.auth import User
 
@@ -307,6 +305,25 @@ def test_migration_moves_org_root_into_t_shared(tmp_path):
     # org admin holds implicit admin on the builtin workspace
     rows = client.get("/workspaces", headers={"X-Test-User": "admin_1"}).json()
     assert next(r for r in rows if r["id"] == "t-shared")["role"] == "admin"
+
+
+def test_migration_retry_merges_instead_of_nesting(tmp_path):
+    """A retried move (interrupted copy left a partial dest) merges — it must
+    not nest src under the existing dest dir, and the original file wins."""
+    src = tmp_path / "root" / "docs"
+    src.mkdir(parents=True)
+    (src / "a.txt").write_text("original")
+    (src / "b.txt").write_text("b")
+    dst = tmp_path / "dest" / "docs"
+    dst.mkdir(parents=True)
+    (dst / "a.txt").write_text("trunc")
+
+    state._merge_move(src, dst)
+
+    assert not (dst / "docs").exists()
+    assert (dst / "a.txt").read_text() == "original"
+    assert (dst / "b.txt").read_text() == "b"
+    assert not src.exists()
 
 
 def test_fresh_org_gets_general_and_migration_is_once(tmp_path):

@@ -43,8 +43,15 @@ def _cut(messages):
         total += _tokens(messages[i].get("content"))
         cut = i
         if total >= KEEP_RECENT_TOKENS: break
+    start = cut
     while cut < len(messages) and (messages[cut].get("role") != "user" or _is_tool_result(messages[cut])):
         cut += 1
+    if cut == len(messages):
+        # No plain user turn after the cut (one request, many tool rounds) —
+        # fall back to an assistant boundary so the recent window survives.
+        cut = start
+        while cut < len(messages) and messages[cut].get("role") != "assistant":
+            cut += 1
     return cut
 
 

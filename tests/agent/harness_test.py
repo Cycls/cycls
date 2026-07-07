@@ -165,19 +165,29 @@ def test_llm_price_and_context_default_unset():
 # ---- web search / fetch executors ----
 
 class _FakeResp:
-    def __init__(self, data=None, text="", headers=None):
+    def __init__(self, data=None, text="", headers=None, status=200):
         self._data, self.text, self.headers = data, text, headers or {}
+        self.is_redirect, self.encoding = 300 <= status < 400, "utf-8"
     def raise_for_status(self): pass
     def json(self): return self._data
+    async def aiter_bytes(self):
+        yield self.text.encode()
 
 
 class _FakeClient:
-    """Stands in for httpx.AsyncClient — returns a preset response from .get."""
+    """Stands in for httpx.AsyncClient — returns a preset response from .get/.stream."""
     resp = None
     def __init__(self, *a, **k): pass
     async def __aenter__(self): return self
     async def __aexit__(self, *a): return False
     async def get(self, *a, **k): return type(self).resp
+
+    def stream(self, *a, **k):
+        resp = type(self).resp
+        class _S:
+            async def __aenter__(self): return resp
+            async def __aexit__(self, *a): return False
+        return _S()
 
 
 def test_web_search_requires_api_key(monkeypatch):
@@ -200,12 +210,13 @@ def test_web_search_formats_passages(monkeypatch):
 
 def test_web_fetch_strips_html_to_text(monkeypatch):
     import httpx
-    from cycls.agent.tools import _exec_web_fetch
+    from cycls.agent import tools
     _FakeClient.resp = _FakeResp(
         text="<html><head><style>x{}</style></head><body><p>Hello</p><script>bad()</script>World</body></html>",
         headers={"content-type": "text/html"})
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
-    out = asyncio.run(_exec_web_fetch({"url": "http://a"}))
+    monkeypatch.setattr(tools, "_is_public_host", lambda h: True)
+    out = asyncio.run(tools._exec_web_fetch({"url": "http://a"}))
     assert "Hello" in out and "World" in out
     assert "bad()" not in out and "x{}" not in out
 
@@ -213,6 +224,42 @@ def test_web_fetch_strips_html_to_text(monkeypatch):
 def test_web_fetch_rejects_non_url():
     from cycls.agent.tools import _exec_web_fetch
     assert "http(s) URL" in asyncio.run(_exec_web_fetch({"url": "not-a-url"}))
+
+
+def test_web_fetch_blocks_private_addresses():
+    """SSRF guard: the fetch runs in the server process — loopback, RFC1918
+    and link-local (cloud metadata) targets are refused before any request."""
+    from cycls.agent.tools import _exec_web_fetch
+    for url in ("http://localhost:8000/x", "http://127.0.0.1/", "http://[::1]/",
+                "http://169.254.169.254/computeMetadata/v1/", "http://192.168.1.1/admin"):
+        assert "private" in asyncio.run(_exec_web_fetch({"url": url})), url
+
+
+def test_web_fetch_checks_redirect_hops(monkeypatch):
+    """A public URL redirecting to an internal host is refused at the hop."""
+    import httpx
+    from cycls.agent import tools
+    monkeypatch.setattr(tools, "_is_public_host", lambda h: h != "localhost")
+    _FakeClient.resp = _FakeResp(headers={"location": "http://localhost/admin"}, status=302)
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+    assert "private" in asyncio.run(tools._exec_web_fetch({"url": "http://public.example/r"}))
+
+
+def test_web_fetch_caps_body_size(monkeypatch):
+    """An endless body stops at _FETCH_MAX_BYTES instead of filling memory."""
+    import httpx
+    from cycls.agent import tools
+
+    class _Endless(_FakeResp):
+        async def aiter_bytes(self):
+            while True: yield b"a" * 100
+
+    monkeypatch.setattr(tools, "_is_public_host", lambda h: True)
+    monkeypatch.setattr(tools, "_FETCH_MAX_BYTES", 1_000)
+    _FakeClient.resp = _Endless(headers={"content-type": "text/plain"})
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+    out = asyncio.run(tools._exec_web_fetch({"url": "http://a"}))
+    assert len(out) <= 1_100
 
 
 def test_openai_to_messages_degrades_image_in_tool_result():
