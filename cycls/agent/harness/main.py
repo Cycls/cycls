@@ -28,6 +28,7 @@ BASE_DELAY_MS = 500
 MAX_DELAY_MS = 32_000
 _RETRYABLE_STATUSES = {429, 502, 503, 504, 529}
 MAX_CONTINUATIONS = 4         # auto-continue rounds after a max_tokens cut
+MAX_PAUSES = 8                # pause_turn resends before giving up
 _CONTINUE = ("Your previous message was cut off at the output-token limit. "
              "Continue exactly from where you stopped. Do not repeat anything.")
 # Providers report context overflow as an error, each with its own wording.
@@ -165,6 +166,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         (m["usage"].get("input", 0) + m["usage"].get("cached", 0) + m["usage"].get("cache_create", 0)
          for m in reversed(messages[session.first_kept:]) if m.get("usage")), 0)
     continuations = 0
+    pauses = 0
     overflowed = False
 
     while True:
@@ -255,7 +257,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     await session.checkpoint()
                     continue
 
-            if turn.stop_reason == "pause_turn":  # server tool paused — resend to resume
+            if turn.stop_reason == "pause_turn" and pauses < MAX_PAUSES:
+                pauses += 1  # server tool paused — resend to resume, bounded
                 await session.checkpoint()
                 continue
 

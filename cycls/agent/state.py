@@ -417,10 +417,26 @@ async def wipe_workspace(org, ws_id, volume, base):
 # One-time-per-org legacy migration. The in-process cache makes the check
 # free after the first request; the `migrated` marker row makes it once
 # across restarts; the lock keeps concurrent first requests from racing the
-# move within an instance. Cross-instance races remain benign (each move is
-# idempotent) — still, enable the flag during low traffic.
+# move within an instance. Cross-instance retries merge instead of nesting
+# (_merge_move) — still, enable the flag during low traffic.
 _migrated = set()
 _migrate_lock = None
+
+
+def _merge_move(src, dst):
+    """shutil.move that merges into an existing directory instead of nesting
+    under it. On file conflicts the source wins — an interrupted gcsfuse
+    copy+delete can leave a truncated copy at the destination."""
+    if src.is_dir() and dst.is_dir():
+        for e in list(os.scandir(src)):
+            _merge_move(src / e.name, dst / e.name)
+        os.rmdir(src)
+        return
+    if dst.is_dir():
+        shutil.rmtree(dst)
+    elif dst.exists():
+        dst.unlink()
+    shutil.move(str(src), str(dst))
 
 
 async def _restore_meta(org, ws_id, base):
@@ -476,8 +492,8 @@ async def ensure_migrated(user, volume, base):
                 if not entries:
                     return False
                 dest.mkdir(parents=True, exist_ok=True)
-                for name in entries:   # shutil.move: dir renames work on gcsfuse (copy+delete)
-                    shutil.move(str(root / name), str(dest / name))
+                for name in entries:
+                    _merge_move(root / name, dest / name)
                 return True
 
             moved = await asyncio.to_thread(_move)
