@@ -114,16 +114,17 @@ def personal_ws(subject):
 
 def resolve_path(workspace, rel):
     """Resolve *rel* inside *workspace*, raising ValueError on traversal or
-    access to the reserved `.db/` tree (framework-managed)."""
+    access to the reserved `.db/` and `.database/` trees (framework-managed)."""
     workspace = Path(workspace)
     rel = unicodedata.normalize("NFC", rel)
     resolved = (workspace / rel).resolve()
     ws = workspace.resolve()
     if not resolved.is_relative_to(ws):
         raise ValueError("Path traversal denied")
-    reserved = ws / ".db"
-    if resolved == reserved or resolved.is_relative_to(reserved):
-        raise ValueError("Reserved path: .db/ is managed by cycls")
+    for name in (".db", ".database"):
+        reserved = ws / name
+        if resolved == reserved or resolved.is_relative_to(reserved):
+            raise ValueError(f"Reserved path: {name}/ is managed by cycls")
     return resolved
 
 

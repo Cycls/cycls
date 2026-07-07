@@ -40,6 +40,11 @@ class Config(BaseModel):
     def set_prod(self, prod: bool):
         self.prod = prod
 
+    def public(self):
+        """Config as sent to the browser — cms (bearer token) and volume
+        (internal mount path) stay server-side."""
+        return self.model_dump(exclude={"cms", "volume"})
+
     @property
     def storage(self) -> str:
         if self.prod and self.name:
@@ -184,7 +189,7 @@ def web(func, config, extra_routers=None, auth=None):
 
     @app.get("/config")
     async def get_config():
-        return config
+        return config.public()
 
     @app.post("/transcribe")
     async def transcribe(request: Request, user: Optional[User] = auth):
@@ -240,7 +245,9 @@ def web(func, config, extra_routers=None, auth=None):
     _base_html = (Path(config.public_path) / "index.html").read_text()
 
     config.voice = bool(os.environ.get("OPENAI_API_KEY"))
-    _config_script = f'<script>window.__CONFIG__={config.model_dump_json()}</script>'
+    # "</" escaped so CMS-sourced text can't close the script tag
+    _config_json = json.dumps(config.public()).replace("</", "<\\/")
+    _config_script = f'<script>window.__CONFIG__={_config_json}</script>'
 
     brand_en = (config.pass_metadata or {}).get("en")
     seo = config.seo or {}
@@ -252,7 +259,7 @@ def web(func, config, extra_routers=None, auth=None):
     _jsonld = json.dumps({"@context": "https://schema.org", "@type": "WebApplication",
                           "name": app_title, "description": app_desc,
                           "image": config.og or "/og.png",
-                          "inLanguage": list(config.pass_metadata or {"en": None})})
+                          "inLanguage": list(config.pass_metadata or {"en": None})}).replace("</", "<\\/")
     _extra_head = f'<script type="application/ld+json">{_jsonld}</script>'
     if config.favicon:
         href = config.favicon if config.favicon.startswith(("http", "data:")) else "/favicon.svg"
