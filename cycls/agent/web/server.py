@@ -267,8 +267,20 @@ def web(func, config, extra_routers=None, auth=None):
         _extra_head += f"<style>:root{{{light}}}.dark{{{dark}}}</style>"
     if config.head:
         _extra_head += config.head
-    # Crawlable content before JS runs; React replaces it with the same copy.
-    _hero = f"<h1>{escape(app_title)}</h1><p>{escape(app_desc)}</p>"
+    # Crawlable content before JS runs, styled as a boot splash so the moment
+    # before React mounts reads as loading; React replaces it with the same copy.
+    _logo = (brand_en.logo if brand_en else "") or ""
+    if _logo and not _logo.lstrip().startswith("<"):
+        _logo = f'<img src="{escape(_logo)}" alt=""/>'
+    _hero = (
+        "<style>.boot{min-height:100dvh;display:flex;flex-direction:column;align-items:center;"
+        "justify-content:center;gap:12px;text-align:center;padding:24px;"
+        "font-family:ui-sans-serif,system-ui,sans-serif;animation:bootfade 1.2s ease infinite alternate}"
+        ".boot h1{font-size:1.25rem;font-weight:600;margin:0}.boot p{margin:0;font-size:.9rem;opacity:.6}"
+        ".boot svg,.boot img{width:44px;height:44px}"
+        "@keyframes bootfade{from{opacity:1}to{opacity:.55}}"
+        "@media(prefers-color-scheme:dark){html{background:#0a0a0a}.boot{color:#fafafa}}</style>"
+        f'<div class="boot">{_logo}<h1>{escape(app_title)}</h1><p>{escape(app_desc)}</p></div>')
 
     def _seo_html(title: str = "Cycls", desc: str = "AI Agent"):
         html = _base_html.replace("__TITLE__", escape(title)).replace("__DESC__", escape(desc))
