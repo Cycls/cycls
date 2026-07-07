@@ -135,18 +135,19 @@ tests/
 │   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
 │   ├── events_test.py           # to_ui wire shapes for the typed events
 │   ├── pdf_test.py              # PDF page parsing
-│   ├── web_test.py              # FastAPI routes, encoders, Messages
+│   ├── web_test.py              # FastAPI routes, encoders, Messages, SEO/branding
+│   ├── workspaces_test.py       # registry, ACL, team workspaces, admin lifecycle
 │   ├── integration_test.py      # Agent on top of App
 │   └── scenarios/
 │       ├── test_load_repair.py  # SlateDB roundtrip + repair invariants
 │       ├── test_database.py     # the `database` tool over the agent KV
 │       └── test_live.py         # @pytest.mark.live, real Anthropic
-└── client/src/hooks/__tests__/  # vitest — useChat hook
+└── client/src/hooks/__tests__/  # vitest — useChat + auth-header hooks
 ```
 
-**Mocked tier** (default): no API calls, no docker. Runs in ~85s.
+**Mocked tier** (default): no API calls, no docker. Runs in ~2min.
 ```bash
-uv run pytest tests/                       # all ~270 mocked tests
+uv run pytest tests/                       # all ~325 mocked tests
 uv run pytest tests/agent/ -v              # just agent tests
 uv run pytest tests/agent/scenarios/ -v    # just scenarios
 ```
@@ -158,7 +159,7 @@ set -a && source .providers.env && set +a
 uv run pytest tests/agent/scenarios/test_live.py --live -v
 ```
 
-**FE tier** (vitest): 9 tests on `useChat` hook (URL plumbing, callback identity stability, attachment blob fetch). Run from `client/`:
+**FE tier** (vitest): 16 tests — `useChat` (URL plumbing, callback identity stability, attachment blob fetch, retry gating) + `useAuthHeaders` (workspace header). Run from `client/`:
 ```bash
 cd client && npm test           # one-shot
 cd client && npm run test:watch # interactive

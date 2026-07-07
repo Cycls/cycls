@@ -56,8 +56,9 @@ class LLM:
         return self._copy(_price=(input, output, cache_read, cache_write))
     def bash_timeout(self, secs):   return self._copy(_bash_timeout=secs)
     def sandbox(self, *, network=True):
-        """Configure the bash sandbox. Network is OFF by default — enabling it
-        allows curl/pip/git but lets a compromised bash exfiltrate over the wire."""
+        """Configure the bash sandbox. Network is ON by default; pass
+        network=False when the agent doesn't need curl/pip/git — a
+        prompt-injected bash can exfiltrate anything it can read."""
         return self._copy(_bash_network=network)
     def base_url(self, url):        return self._copy(_base_url=url)
     def api_key(self, key):         return self._copy(_api_key=key)
