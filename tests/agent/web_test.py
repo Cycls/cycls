@@ -202,8 +202,44 @@ def test_config_endpoint():
 
     data = response.json()
     assert data["title"] == "Test Title"
-    assert data["cms"] is None
+    assert "cms" not in data
     print("✅ Test passed.")
+
+
+def test_config_keeps_secrets_server_side():
+    """cms (bearer token) and volume never reach /config or the page HTML."""
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = Config(public_path=THEME_PATH, auth=False,
+                    cms={"explore": "https://cms.example/agents", "token": "sekrit-bearer"},
+                    volume="/internal/mount")
+    client = TestClient(web(dummy_agent, config))
+
+    data = client.get("/config").json()
+    assert "cms" not in data
+    assert "volume" not in data
+
+    html = client.get("/").text
+    assert "sekrit-bearer" not in html
+    assert "/internal/mount" not in html
+    assert "window.__CONFIG__" in html
+
+
+def test_embedded_json_cannot_close_script_tag(tmp_path):
+    """CMS/SEO text containing </script> must not break out of the inline JSON."""
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = Config(public_path=THEME_PATH, auth=False,
+                    seo={"title": "T", "description": 'x</script><script>alert(1)</script>'})
+    client = TestClient(web(dummy_agent, config))
+    html = client.get("/").text
+    assert "<script>alert(1)</script>" not in html
 
 
 def test_chat_cycls_endpoint_streams():
@@ -568,6 +604,14 @@ def test_state_resolve_path_rejects_cycls_nested(tmp_path):
     (tmp_path / ".db" / "sub").mkdir(parents=True)
     with pytest.raises(ValueError, match="Reserved path"):
         resolve_path(tmp_path, ".db/sub/file.json")
+
+
+def test_state_resolve_path_rejects_agent_kv(tmp_path):
+    (tmp_path / ".database").mkdir()
+    with pytest.raises(ValueError, match="Reserved path"):
+        resolve_path(tmp_path, ".database")
+    with pytest.raises(ValueError, match="Reserved path"):
+        resolve_path(tmp_path, ".database/store.json")
 
 
 def test_state_resolve_path_allows_normal(tmp_path):
