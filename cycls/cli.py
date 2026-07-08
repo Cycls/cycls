@@ -85,6 +85,15 @@ def cmd_deploy(args):
     instance.deploy()
 
 
+def cmd_shell(args):
+    """Interactive bash inside the target's built image — same env as run/deploy."""
+    import subprocess
+    instance = _load_target(args.file)
+    tag = instance._ensure_local_image()
+    print(f"Entering {tag} (exit to leave)")
+    subprocess.run(["docker", "run", "--rm", "-it", "--entrypoint", "bash", tag])
+
+
 def cmd_ls(args):
     services = _api("GET", "/v1/deployment/list").json()
     if not services:
@@ -328,6 +337,10 @@ def main():
     p = sub.add_parser("deploy", help="Deploy an agent to production")
     p.add_argument("file", help="Path to agent file (file.py or file.py::name)")
     p.set_defaults(func=cmd_deploy)
+
+    p = sub.add_parser("shell", help="Open an interactive shell inside the built image")
+    p.add_argument("file", help="Path to agent file (file.py or file.py::name)")
+    p.set_defaults(func=cmd_shell)
 
     p = sub.add_parser("ls", help="List deployed agents")
     p.set_defaults(func=cmd_ls)

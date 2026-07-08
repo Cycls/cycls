@@ -43,7 +43,7 @@ docker system prune -af
 
 ```
 cycls/
-├── cli.py                  # CLI: run, deploy, ls, rm, logs, init, version
+├── cli.py                  # CLI: run, deploy, shell, ls, rm, logs, cost, sql, init, version
 ├── function/
 │   ├── main.py             # Function class + @cycls.function decorator
 │   └── image.py            # cycls.Image fluent builder
