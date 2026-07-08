@@ -1,6 +1,6 @@
 # cycls CLI
 
-Single command: `cycls`. Subcommands: `init`, `run`, `deploy`, `ls`, `rm`, `logs`, `cost`, `version`.
+Single command: `cycls`. Subcommands: `init`, `run`, `deploy`, `shell`, `ls`, `rm`, `logs`, `cost`, `sql`, `version`.
 
 ```bash
 cycls <subcommand> [args]
@@ -50,6 +50,26 @@ cycls deploy notes.py
 
 The deployment name is the decorator's `name=` (e.g. `@cycls.agent(name="super-stage")`)
 or the function name otherwise.
+
+## `cycls shell <file>`
+
+Open an interactive bash inside the target's built image — the exact
+environment `run` and `deploy` execute in. Builds (or reuses) the cached
+image, drops you in `/app`, and cleans the container up on exit.
+
+```bash
+cycls shell examples/function/c.py
+# Found cached image: cycls/triangle:730f149a5355f6e7
+# Entering cycls/triangle:730f149a5355f6e7 (exit to leave)
+root@a1b2c3:/app# gcc --version
+```
+
+Use it to verify what an `Image()` actually produced: poke at apt/pip
+packages, check linked libraries, test commands before adding them to
+`.run(...)`. Same `file.py` / `file.py::name` targeting as `run`.
+
+Note: importing the file executes its module top-level, so script-style
+files that call `.run()` at import time will run first.
 
 ## `cycls ls`
 
