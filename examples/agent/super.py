@@ -16,6 +16,8 @@ EXEMPT_USERS = {
     "user_3C4OrVnUh3PbayK89C73tqYPzOD",
 }
 
+# .pip("pandas")/.apt("ffmpeg")/.run("...") add deps + build steps; .volume("/data")
+# moves the workspace mount; .rebuild() forces a no-cache build.
 image = cycls.Image().copy(".providers.env", ".env")#.rebuild()
 
 web = (
@@ -36,6 +38,9 @@ web = (
     .analytics(True) # "cycls.ai"
     .affiliate("059168")  # Rewardful referral tracking
     .title("The agent for getting things done")
+    # .theme("default")   # "default" or "dev"
+    # .suggestions(True)  # show starter prompts on the empty chat
+    # .copy_public("assets/logo.png")  # static files served at /public/<name>
     # .workspaces()    # personal + team workspaces (docs/workspaces.md)
     # .max_upload(512) # per-file upload cap in MB
 )
@@ -77,8 +82,9 @@ llm = (
     .max_tokens(64_000)   # output cap per request (default 8k)
     .price(input=3, output=15, cache_read=0.30, cache_write=6)  # USD/1M, for cost tracking
     .system(SYSTEM)
-    # .tools(TOOLS)  # skills+safe_keys
-    # .on("render_image", render_image)
+    # .tools(TOOLS)  # custom tool JSON schemas
+    # .on("render_image", render_image, label=lambda inp: inp.get("alt", ""))
+    #   register a handler; label renders the UI step line, e.g. render_image(a cat)
     .allowed_tools(["Bash", "Editor", "WebSearch", "DataBase", "Canvas"])
     # .thinking("low")  # unified reasoning across providers: "low" | "medium" | "high"
     # .web_search("native")  # Anthropic server-side search; default "brave" runs on any model (BRAVE_API_KEY)
@@ -86,6 +92,9 @@ llm = (
     # .instructions("AGENT.md")  # workspace instructions file in the system prompt — this is the default
     # .mcp(cycls.MCP("https://figma-mcp.example/mcp").name("figma").token(os.environ["FIGMA_TOKEN"]))  # remote MCP, anthropic/* only (needs `import os`)
     # .sandbox(network=False)  # opt out of network access for the LLM bash
+    # .bash_timeout(600)  # bash sandbox timeout in seconds
+    # .api_key(os.environ["ANTHROPIC_API_KEY"])  # override the provider key (default: from env)
+    # .loop(my_loop)  # replace the built-in agent loop entirely (see docs/tutorial.md)
 )
 
 
