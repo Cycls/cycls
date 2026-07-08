@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import shutil
+import traceback
 from pathlib import Path
 import tarfile
 
@@ -160,15 +161,15 @@ class Function:
             print(f"Warning: cleanup error: {e}")
 
     def _image_tag(self, extra_parts=None) -> str:
-        parts = [self.base_image, self.python_version, "".join(self.pip),
-                 "".join(self.apt), "".join(self.run_commands)]
+        parts = [self.base_image, self.python_version, self.pip,
+                 self.apt, self.run_commands]
         for src, dst in sorted(self.copy.items()):
             if not Path(src).exists():
                 raise FileNotFoundError(f"Path in 'copy' not found: {src}")
             parts.append(f"{src}>{dst}:{_hash_path(src)}")
         if extra_parts:
             parts.extend(extra_parts)
-        return f"{self.image_prefix}:{hashlib.sha256(''.join(parts).encode()).hexdigest()[:16]}"
+        return f"{self.image_prefix}:{hashlib.sha256(json.dumps(parts).encode()).hexdigest()[:16]}"
 
     def _dockerfile_preamble(self) -> str:
         lines = [
@@ -321,8 +322,8 @@ CMD ["python", "entrypoint.py"]
             print("\n----------------------")
             print("Stopping...")
             return None
-        except Exception as e:
-            print(f"Error: {e}")
+        except Exception:
+            traceback.print_exc()
             return None
 
     def watch(self, *args, **kwargs):
