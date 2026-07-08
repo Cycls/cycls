@@ -51,7 +51,8 @@ export interface Message {
 export interface PassMetadata {
   name: string;
   description: string;
-  logo: string;
+  logo: string;    // agent icon — chat hero
+  brand?: string;  // brand wordmark — nav bar
 }
 
 export interface AppConfig {

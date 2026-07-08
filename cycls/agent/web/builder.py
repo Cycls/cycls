@@ -81,16 +81,19 @@ class Web:
         cms = {k: v for k, v in (("brand", brand), ("explore", explore), ("token", token)) if v}
         return self._copy(_cms=cms or None)
 
-    def brand(self, locale="en", *, name=None, description=None, logo=None, og=None, favicon=None):
+    def brand(self, locale="en", *, name=None, description=None, logo=None, brand=None, og=None, favicon=None):
         """Static branding, from code instead of a CMS. `name`, `description`,
-        and `logo` are per locale — repeat with `locale="ar"` for Arabic. `og`
-        (social card, path or URL) and `favicon` apply globally. Image paths
-        are read at build time (SVG inlined, PNG/JPG as data URIs), so assets
-        don't need to ship with the container."""
+        `logo` (the agent icon shown in the chat hero) and `brand` (the wordmark
+        shown in the nav bar; falls back to the Cycls logo when unset) are per
+        locale — repeat with `locale="ar"` for Arabic. `og` (social card, path
+        or URL) and `favicon` apply globally. Image paths are read at build time
+        (SVG inlined, PNG/JPG as data URIs), so assets don't need to ship with
+        the container."""
         cur = {**self._brand.get(locale, {})}
         if name is not None: cur["name"] = name
         if description is not None: cur["description"] = description
         if logo is not None: cur["logo"] = _asset(logo)
+        if brand is not None: cur["brand"] = _asset(brand)
         updates = {"_brand": {**self._brand, locale: cur}}
         if og is not None:
             if og.startswith(("http://", "https://")):

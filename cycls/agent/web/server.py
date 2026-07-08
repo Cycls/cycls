@@ -10,7 +10,8 @@ from cycls.agent.logs import log
 class PassMetadata(BaseModel):
     name: str
     description: str = ""
-    logo: str = ""
+    logo: str = ""       # agent icon — chat hero
+    brand: str = ""      # brand wordmark — nav bar (falls back to Cycls logo)
 
 class Config(BaseModel):
     public_path: str = "theme"

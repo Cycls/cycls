@@ -832,11 +832,14 @@ def test_theme_colors_injected(tmp_path):
 def test_web_builder_brand_and_explore():
     from cycls.agent.web.builder import Web
 
-    w = (Web().brand(name="Super", description="d", logo="<svg/>")
+    w = (Web().brand(name="Super", description="d", logo="<svg>icon</svg>", brand="<svg>nav</svg>")
               .brand(locale="ar", name="سوبر")
               .explore({"name": "Coder", "url": "https://c.ai"})
               .cms(brand="https://cms.x/agents/super", token="t"))
     assert w._brand["en"]["name"] == "Super" and w._brand["ar"]["name"] == "سوبر"
+    # logo (agent icon) and brand (nav wordmark) are distinct per-locale fields
+    assert w._brand["en"]["logo"] == "<svg>icon</svg>"
+    assert w._brand["en"]["brand"] == "<svg>nav</svg>"
     assert w._explore[0]["title"] == "Coder" and w._explore[0]["link"] == "https://c.ai"
     assert w._cms == {"brand": "https://cms.x/agents/super", "token": "t"}
 

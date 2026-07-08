@@ -32,7 +32,7 @@ class Agent(App):
         self.copy_public = web._copy_public
         self.server = APIRouter()
         brand = {loc: PassMetadata(name=d.get("name", ""), description=d.get("description", ""),
-                                   logo=d.get("logo", ""))
+                                   logo=d.get("logo", ""), brand=d.get("brand", ""))
                  for loc, d in web._brand.items()} or None
         self.config = Config(
             name=name, title=web._title, pass_metadata=brand,
