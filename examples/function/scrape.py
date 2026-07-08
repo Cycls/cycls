@@ -1,4 +1,4 @@
-# uv run cycls deploy examples/function/scrape.py --remote
+# uv run cycls deploy examples/function/scrape.py
 import cycls
 
 @cycls.function(image=cycls.Image().pip("httpx", "beautifulsoup4"))
@@ -17,7 +17,7 @@ def scrape(url):
     text = " ".join(soup.get_text(" ").split())
     return {"url": url, "title": title, "text": text[:3000]}
 
-# Read 12 pages in parallel — seconds, not a sequential slog.
+# Read 12 pages in parallel.
 # import cycls
 # urls = [f"https://en.wikipedia.org/wiki/{t}" for t in
 #         ("Python_(programming_language)", "Rust_(programming_language)",

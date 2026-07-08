@@ -51,14 +51,15 @@ cycls deploy notes.py
 The deployment name is the decorator's `name=` (e.g. `@cycls.agent(name="super-stage")`)
 or the function name otherwise.
 
-### `--remote`
+### Remote-callable functions
 
-Deploy a bare `@cycls.function` as a remote-callable endpoint instead of a
-self-serving app. The container wraps the function in a pickle-RPC shim;
-call it from any machine with `cycls` and your `CYCLS_API_KEY` — no Docker:
+`deploy` reads the function's contract: a function that takes `port` is a
+server and serves it; a bare function (no `port` param) deploys as a
+remote-callable endpoint — a pickle-RPC shim you can call from any machine
+with `cycls` and your `CYCLS_API_KEY`, no Docker:
 
 ```bash
-cycls deploy examples/function/remote.py --remote
+cycls deploy examples/function/remote.py
 # Deployed: https://simulate.cycls.ai
 # Call it: cycls.remote("simulate")(...)
 ```
