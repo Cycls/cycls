@@ -85,6 +85,8 @@ def remote(name, *, url=None, api_key=None):
                      "Content-Type": "application/octet-stream"},
             timeout=3600,
         )
+        if r.status_code == 404:
+            raise RemoteError(f"{name}: 404 — no such deployment. Run `cycls deploy <file>` first.")
         if r.status_code != 200:
             raise RemoteError(f"{name}: {r.status_code} {r.text[:2000]}")
         return cloudpickle.loads(r.content)

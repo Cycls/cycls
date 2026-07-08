@@ -1,4 +1,4 @@
-# uv run cycls deploy examples/function/remote.py --remote
+# uv run cycls deploy examples/function/remote.py
 import cycls
 
 @cycls.function(image=cycls.Image().pip("numpy"))

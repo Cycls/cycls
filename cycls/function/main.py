@@ -407,13 +407,25 @@ CMD ["python", "entrypoint.py"]
             print(f"Run: docker run --rm -p {port}:{port} {tag}")
             return tag
 
+    def _is_remote(self):
+        """A function that can't accept the injected `port` (no `port` param,
+        no **kwargs) isn't a server — deploy it as a callable endpoint."""
+        import inspect
+        try:
+            params = inspect.signature(self.func).parameters.values()
+        except (ValueError, TypeError):
+            return False
+        return not any(p.name == "port" or p.kind == p.VAR_KEYWORD for p in params)
+
     def deploy(self, *args, **kwargs):
         import requests
 
         base_url = self.base_url
         port = kwargs.pop('port', 8080)
         memory = kwargs.pop('memory', '1Gi')
-        remote = kwargs.pop('remote', False)
+        remote = kwargs.pop('remote', None)
+        if remote is None:
+            remote = self._is_remote()
 
         # Check name availability before uploading
         print(f"Checking '{self.name}'...")

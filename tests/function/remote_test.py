@@ -55,6 +55,14 @@ def shim_url(tmp_path_factory):
     proc.wait(timeout=5)
 
 
+def test_deploy_mode_reads_signature():
+    from cycls.function.main import Function
+    f = lambda func: Function(func, "t")
+    assert f(lambda url: url)._is_remote()                    # bare function → endpoint
+    assert not f(lambda port: port)._is_remote()              # server contract
+    assert not f(lambda **kwargs: None)._is_remote()          # can absorb port → server
+
+
 def test_token_deterministic():
     assert token_for("k", "n") == token_for("k", "n")
     assert token_for("k", "n") != token_for("k2", "n") != token_for("k", "n2")
