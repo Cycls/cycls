@@ -68,11 +68,11 @@ import cycls
 pi = cycls.remote("simulate")(10_000_000)   # args → Cloud Run → result
 ```
 
-Auth is a bearer token derived from your API key (nothing stored server-side).
-The client checks `/health` before the first call and refuses to send pickles
-across a Python-minor or cloudpickle-major version mismatch — redeploy from
-the calling environment if it errors. First call after idle pays a Cloud Run
-cold start (a few seconds).
+Auth is a token derived from your API key (nothing stored server-side).
+Each call carries its Python/cloudpickle versions and the endpoint refuses
+pickles that can't cross a version boundary — redeploy from the calling
+environment if it errors. First call after idle pays a Cloud Run cold start
+(a few seconds).
 
 ## `cycls shell <file>`
 

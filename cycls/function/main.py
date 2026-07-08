@@ -523,8 +523,8 @@ CMD ["python", "entrypoint.py"]
 
     def remote(self, *args, **kwargs):
         """Call this function's `--remote` deployment (see cycls.remote)."""
-        from .remote import RemoteFunction
-        return RemoteFunction(self.name, api_key=self._api_key)(*args, **kwargs)
+        from .remote import remote
+        return remote(self.name, api_key=self._api_key)(*args, **kwargs)
 
     def __del__(self):
         self._cleanup_container()
