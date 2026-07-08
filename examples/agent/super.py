@@ -26,7 +26,9 @@ web = (
     .cms(brand="https://cms.cycls.ai/agents/super", explore="https://cms.cycls.ai/agents")  # any CMS returning the contract JSON; token=... for private ones
     # Static branding — the same knobs without a CMS (static wins, piece by piece):
     # .brand(name="Super", description="The agent for getting things done",
-    #        logo="assets/logo.svg", og="assets/og.png", favicon="assets/favicon.svg")
+    #        logo="assets/icon.svg",   # agent icon, shown in the chat hero
+    #        brand="assets/logo.svg",  # brand wordmark, shown in the nav bar
+    #        og="assets/og.png", favicon="assets/favicon.svg")
     # .brand(locale="ar", name="سوبر", description="وكيلك لإنجاز المهام")
     # .seo(title="Super — AI agent", description="Automate research, files and documents.")
     # .colors(primary="#7c3aed", secondary="#f3e8ff", primary_dark="#a78bfa")  # theme accents (any CSS color)

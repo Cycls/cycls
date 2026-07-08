@@ -81,8 +81,15 @@ export function Chat({ chat, onShare, files, account, config }: {
   const lang = useLang();
   const { error: toastError } = useToast();
   const isAr = lang === "ar";
-  const meta = passMetadata?.[isAr ? "ar" : "en"];
-  const inputPlaceholder = meta ? (isAr ? `اسأل ${meta.name}` : `Ask ${meta.name}`) : undefined;
+  // logo and brand inherit from en; name/description stay per-locale.
+  const _active = passMetadata?.[isAr ? "ar" : "en"];
+  const _en = passMetadata?.en;
+  const meta = _active
+    ? { ..._active, logo: _active.logo || _en?.logo || "", brand: _active.brand || _en?.brand || "" }
+    : _en;
+  const inputPlaceholder = meta
+    ? (isAr ? `اسأل ${meta.name} - اكتب @ لذكر ملف` : `Ask ${meta.name} - @ to mention a file`)
+    : undefined;
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [exploreOpen, setExploreOpen] = useState(false);
@@ -311,9 +318,19 @@ export function Chat({ chat, onShare, files, account, config }: {
       <header className="pointer-events-none fixed top-0 right-0 left-0 h-12" dir="ltr">
         <div className="pointer-events-auto mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
           <div className="flex items-center gap-2">
-          <a href="https://cycls.ai" className="flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity">
-            <CyclsLogo className="h-5 fill-muted-foreground" />
-          </a>
+          {meta?.brand ? (
+            <span className="flex h-6 items-center">
+              {meta.brand.startsWith("<") ? (
+                <span className="flex h-6 items-center [&>svg]:h-6 [&>svg]:w-auto" dangerouslySetInnerHTML={{ __html: meta.brand }} />
+              ) : (
+                <img src={meta.brand} alt="" className="h-6 w-auto object-contain" />
+              )}
+            </span>
+          ) : (
+            <a href="https://cycls.ai" className="flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity">
+              <CyclsLogo className="h-5 fill-muted-foreground" />
+            </a>
+          )}
           {name && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <span className="text-muted-foreground/40">|</span>
