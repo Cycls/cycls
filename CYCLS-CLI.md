@@ -51,6 +51,29 @@ cycls deploy notes.py
 The deployment name is the decorator's `name=` (e.g. `@cycls.agent(name="super-stage")`)
 or the function name otherwise.
 
+### `--remote`
+
+Deploy a bare `@cycls.function` as a remote-callable endpoint instead of a
+self-serving app. The container wraps the function in a pickle-RPC shim;
+call it from any machine with `cycls` and your `CYCLS_API_KEY` — no Docker:
+
+```bash
+cycls deploy examples/function/remote.py --remote
+# Deployed: https://simulate.cycls.ai
+# Call it: cycls.remote("simulate")(...)
+```
+
+```python
+import cycls
+pi = cycls.remote("simulate")(10_000_000)   # args → Cloud Run → result
+```
+
+Auth is a bearer token derived from your API key (nothing stored server-side).
+The client checks `/health` before the first call and refuses to send pickles
+across a Python-minor or cloudpickle-major version mismatch — redeploy from
+the calling environment if it errors. First call after idle pays a Cloud Run
+cold start (a few seconds).
+
 ## `cycls shell <file>`
 
 Open an interactive bash inside the target's built image — the exact

@@ -46,7 +46,8 @@ cycls/
 ├── cli.py                  # CLI: run, deploy, shell, ls, rm, logs, cost, sql, init, version
 ├── function/
 │   ├── main.py             # Function class + @cycls.function decorator
-│   └── image.py            # cycls.Image fluent builder
+│   ├── image.py            # cycls.Image fluent builder
+│   └── remote.py           # pickle-RPC shim + cycls.remote client (--remote deploys)
 ├── app/
 │   ├── main.py             # App class + @cycls.app + _make_decorator
 │   ├── auth.py             # cycls.Clerk, cycls.JWT, User, make_validate
