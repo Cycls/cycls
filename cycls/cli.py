@@ -82,7 +82,13 @@ def cmd_run(args):
 
 def cmd_deploy(args):
     instance = _load_target(args.file)
-    instance.deploy()
+    if args.remote:
+        from cycls.app import App
+        if isinstance(instance, App):
+            sys.exit("Error: --remote is for bare @cycls.function targets; apps/agents already serve HTTP")
+        instance.deploy(remote=True)
+    else:
+        instance.deploy()
 
 
 def cmd_shell(args):
@@ -336,6 +342,8 @@ def main():
 
     p = sub.add_parser("deploy", help="Deploy an agent to production")
     p.add_argument("file", help="Path to agent file (file.py or file.py::name)")
+    p.add_argument("--remote", action="store_true",
+                   help="Deploy a bare function as a remote-callable endpoint (cycls.remote)")
     p.set_defaults(func=cmd_deploy)
 
     p = sub.add_parser("shell", help="Open an interactive shell inside the built image")

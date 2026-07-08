@@ -372,14 +372,20 @@ CMD ["python", "entrypoint.py"]
                 proc.wait(timeout=3)
                 return
 
-    def _prepare_deploy_context(self, workdir: Path, port: int, args=(), kwargs=None):
+    def _prepare_deploy_context(self, workdir: Path, port: int, args=(), kwargs=None, remote=False):
         kwargs = kwargs or {}
         kwargs['port'] = port
         self._copy_user_files(workdir)
         (workdir / "Dockerfile").write_text(self._dockerfile_deploy(port))
-        (workdir / "entrypoint.py").write_text(ENTRYPOINT_PY)
+        if remote:
+            from .remote import REMOTE_PY, token_for
+            (workdir / "entrypoint.py").write_text(REMOTE_PY)
+            payload = (self.func, token_for(self.api_key or "dev", self.name))
+        else:
+            (workdir / "entrypoint.py").write_text(ENTRYPOINT_PY)
+            payload = (self.func, args, kwargs)
         with open(workdir / "function.pkl", "wb") as f:
-            cloudpickle.dump((self.func, args, kwargs), f)
+            cloudpickle.dump(payload, f)
 
     def build(self, *args, **kwargs):
         import docker
@@ -407,6 +413,7 @@ CMD ["python", "entrypoint.py"]
         base_url = self.base_url
         port = kwargs.pop('port', 8080)
         memory = kwargs.pop('memory', '1Gi')
+        remote = kwargs.pop('remote', False)
 
         # Check name availability before uploading
         print(f"Checking '{self.name}'...")
@@ -436,7 +443,7 @@ CMD ["python", "entrypoint.py"]
 
         with tempfile.TemporaryDirectory() as tmpdir:
             workdir = Path(tmpdir)
-            self._prepare_deploy_context(workdir, port, args, kwargs)
+            self._prepare_deploy_context(workdir, port, args, kwargs, remote=remote)
 
             archive_path = workdir / archive_name
             with tarfile.open(archive_path, "w:gz") as tar:
@@ -479,7 +486,9 @@ CMD ["python", "entrypoint.py"]
                     "port": port,
                     "memory": memory,
                     "timeout": 1200,
-                    "use_http2": "true",
+                    # The remote shim is stdlib http.server — HTTP/1.1 only;
+                    # h2c end-to-end would 502 it.
+                    "use_http2": "false" if remote else "true",
                     "session_affinity": "true",
                 },
                 headers={"X-API-Key": self.api_key},
@@ -506,9 +515,16 @@ CMD ["python", "entrypoint.py"]
                     if status == "DONE":
                         url = event.get("url")
                         print(f"Deployed: {url}")
+                        if remote:
+                            print(f'Call it: cycls.remote("{self.name}")(...)')
                     elif status == "ERROR":
                         return None
             return url
+
+    def remote(self, *args, **kwargs):
+        """Call this function's `--remote` deployment (see cycls.remote)."""
+        from .remote import RemoteFunction
+        return RemoteFunction(self.name, api_key=self._api_key)(*args, **kwargs)
 
     def __del__(self):
         self._cleanup_container()
