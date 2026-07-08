@@ -8,5 +8,5 @@ def simulate(n=1_000_000):
     return float(4 * ((pts ** 2).sum(axis=1) <= 1).mean())
 
 # remote call from any machine+CYCLS_KEYS
-# import cycls
-# print(cycls.remote("simulate")(10_000_000))
+# import cycls; print(cycls.remote("simulate")(10_000_000))
+# import cycls; print(cycls.remote("simulate").map([10**6] * 100))
