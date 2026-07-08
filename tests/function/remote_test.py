@@ -1,5 +1,5 @@
-"""Remote-exec shim + client, no Docker: REMOTE_PY runs as a host subprocess
-(same python + cloudpickle as the client, so parity passes by construction)."""
+"""Pickle-RPC shim + client, no Docker: REMOTE_PY runs as a host subprocess
+(same python + cloudpickle as the client, so the runtime gate passes)."""
 import os
 import socket
 import subprocess
@@ -9,7 +9,7 @@ import time
 import cloudpickle
 import pytest
 
-from cycls.function.remote import REMOTE_PY, RemoteError, RemoteFunction, token_for
+from cycls.function.remote import REMOTE_PY, RemoteError, remote, token_for
 
 API_KEY = "test-key"
 NAME = "doubler"
@@ -44,7 +44,7 @@ def shim_url(tmp_path_factory):
     import requests
     for _ in range(50):
         try:
-            requests.get(f"{url}/health", timeout=1)
+            requests.get(url, timeout=1)
             break
         except requests.exceptions.ConnectionError:
             if proc.poll() is not None:
@@ -60,42 +60,30 @@ def test_token_deterministic():
     assert token_for("k", "n") != token_for("k2", "n") != token_for("k", "n2")
 
 
-def test_health_reports_parity(shim_url):
-    import requests
-    info = requests.get(f"{shim_url}/health", timeout=5).json()
-    assert info["python"] == f"{sys.version_info.major}.{sys.version_info.minor}"
-    assert info["cloudpickle"] == cloudpickle.__version__
-
-
 def test_call_roundtrip(shim_url):
-    fn = RemoteFunction(NAME, url=shim_url, api_key=API_KEY)
+    fn = remote(NAME, url=shim_url, api_key=API_KEY)
     assert fn(21) == 42
     assert fn(20, add=2) == 42  # kwargs travel too
 
 
 def test_bad_token_rejected(shim_url):
-    fn = RemoteFunction(NAME, url=shim_url, api_key="wrong-key")
+    fn = remote(NAME, url=shim_url, api_key="wrong-key")
     with pytest.raises(RemoteError, match="403"):
         fn(21)
 
 
 def test_exception_propagates(shim_url):
-    fn = RemoteFunction(NAME, url=shim_url, api_key=API_KEY)
+    fn = remote(NAME, url=shim_url, api_key=API_KEY)
     with pytest.raises(RemoteError, match="negative input"):
         fn(-1)
 
 
-def test_parity_mismatch_blocks_call(shim_url, monkeypatch):
+def test_runtime_mismatch_blocks_call(shim_url):
     import requests
-    real_get = requests.get
-
-    def fake_get(url, **kw):
-        r = real_get(url, **kw)
-        if url.endswith("/health"):
-            r.json = lambda: {"python": "3.9", "cloudpickle": "0.1"}
-        return r
-
-    monkeypatch.setattr(requests, "get", fake_get)
-    fn = RemoteFunction(NAME, url=shim_url, api_key=API_KEY)
-    with pytest.raises(RemoteError, match="won't cross"):
-        fn(21)
+    r = requests.post(shim_url,
+                      data=cloudpickle.dumps(((21,), {})),
+                      headers={"X-Cycls-Token": token_for(API_KEY, NAME),
+                               "X-Cycls-Runtime": "3.9/0.1"},
+                      timeout=5)
+    assert r.status_code == 409
+    assert "won't cross" in r.text
