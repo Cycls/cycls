@@ -94,14 +94,21 @@ class Function:
         image = image or {}
         self.func = func
         self.name = name.replace('_', '-')
-        self.python_version = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
+        host_py = f"{sys.version_info.major}.{sys.version_info.minor}"
+        if python_version and ".".join(str(python_version).split(".")[:2]) != host_py:
+            raise ValueError(
+                f"python_version={python_version!r} doesn't match the host's {host_py}: "
+                "functions ship as cloudpickle bytecode, which only loads on the same "
+                "major.minor Python.")
+        self.python_version = python_version or host_py
         self.base_image = f"python:{self.python_version}-slim"
         self.apt = sorted([*self._base_apt, *image.get("apt", [])])
         self.run_commands = list(image.get("run_commands", []))
         self.copy = image.get("copy", {})
         self._base_url = base_url
         self._api_key = api_key
-        self.pip = sorted(set([*self._base_pip, *image.get("pip", [])]) | {"cloudpickle"})
+        self.pip = sorted(set([*self._base_pip, *image.get("pip", [])])
+                          | {f"cloudpickle=={cloudpickle.__version__}"})
         self.force_rebuild = image.get("force_rebuild", False)
 
         self.image_prefix = f"cycls/{self.name}"
@@ -110,9 +117,6 @@ class Function:
         self._container = None
 
     def __getstate__(self):
-        # Strip runtime-only attrs (Docker client/container hold sockets)
-        # so cloudpickle can serialize Function/App/Agent instances when
-        # the user function references them via closure.
         state = self.__dict__.copy()
         state["_docker_client"] = None
         state["_container"] = None
