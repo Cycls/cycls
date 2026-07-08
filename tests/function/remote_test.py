@@ -66,6 +66,13 @@ def test_call_roundtrip(shim_url):
     assert fn(20, add=2) == 42  # kwargs travel too
 
 
+def test_map_fans_out_in_order(shim_url):
+    fn = remote(NAME, url=shim_url, api_key=API_KEY)
+    assert fn.map(range(5)) == [0, 2, 4, 6, 8]      # ordered despite concurrency
+    with pytest.raises(RemoteError, match="negative input"):
+        fn.map([1, -1, 2])                          # first failure propagates
+
+
 def test_bad_token_rejected(shim_url):
     fn = remote(NAME, url=shim_url, api_key="wrong-key")
     with pytest.raises(RemoteError, match="403"):

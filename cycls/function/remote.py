@@ -89,4 +89,12 @@ def remote(name, *, url=None, api_key=None):
             raise RemoteError(f"{name}: {r.status_code} {r.text[:2000]}")
         return cloudpickle.loads(r.content)
 
+    def fan_out(items, *, workers=16):
+        """One call per item, fanned out across the deployment's autoscaled
+        instances. Results in input order; raises on the first failure."""
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(workers) as pool:
+            return list(pool.map(call, items))
+
+    call.map = fan_out
     return call
