@@ -21,17 +21,9 @@ def _free_port():
         return s.getsockname()[1]
 
 
-@pytest.fixture(scope="module")
-def shim_url(tmp_path_factory):
-    tmp = tmp_path_factory.mktemp("remote")
-
-    def doubler(x, add=0):
-        if x < 0:
-            raise ValueError("negative input")
-        return x * 2 + add
-
+def _start_shim(tmp, func, name):
     (tmp / "function.pkl").write_bytes(
-        cloudpickle.dumps((doubler, token_for(API_KEY, NAME))))
+        cloudpickle.dumps((func, token_for(API_KEY, name))))
     (tmp / "shim.py").write_text(REMOTE_PY)
 
     port = _free_port()
@@ -50,9 +42,91 @@ def shim_url(tmp_path_factory):
             if proc.poll() is not None:
                 raise RuntimeError("shim died on startup")
             time.sleep(0.1)
+    return url, proc
+
+
+@pytest.fixture(scope="module")
+def shim_url(tmp_path_factory):
+    def doubler(x, add=0):
+        if x < 0:
+            raise ValueError("negative input")
+        return x * 2 + add
+
+    url, proc = _start_shim(tmp_path_factory.mktemp("remote"), doubler, NAME)
     yield url
     proc.terminate()
     proc.wait(timeout=5)
+
+
+def test_local_entrypoint_forms():
+    import cycls
+
+    @cycls.local_entrypoint
+    def bare():
+        return 41
+
+    @cycls.local_entrypoint()          # Modal-style parens
+    def parens():
+        return 42
+
+    # The decorated object stays a plain function — just marked.
+    assert bare._cycls_entry and bare() == 41
+    assert parens._cycls_entry and parens() == 42
+
+
+def test_drive_runs_entrypoint(tmp_path, shim_url, monkeypatch, capsys):
+    # The `cycls run` per-save path, minus the watcher: load the file, find
+    # its entrypoint, run it — its .remote() call lands on the local shim.
+    import cycls
+    from cycls.function import remote as rmod
+
+    monkeypatch.setattr(cycls, "remote",
+                        lambda n, **kw: rmod.remote(n, url=shim_url, api_key=API_KEY))
+    (tmp_path / "loop.py").write_text(
+        "import cycls\n"
+        "@cycls.function()\n"
+        "def unused(x): return x\n"
+        "@cycls.local_entrypoint\n"
+        "def main():\n"
+        f"    print('driver:', cycls.remote('{NAME}')(21))\n")
+
+    rmod._drive(str(tmp_path / "loop.py"))
+    assert "driver: 42" in capsys.readouterr().out
+
+
+@pytest.fixture(scope="module")
+def exec_url(tmp_path_factory):
+    def execute(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    url, proc = _start_shim(tmp_path_factory.mktemp("exec"), execute, "exec-x")
+    yield url
+    proc.terminate()
+    proc.wait(timeout=5)
+
+
+def test_function_remote_and_map_ship_current(exec_url, monkeypatch):
+    from cycls.function import remote as rmod
+    from cycls.function.main import Function
+
+    orig = rmod.remote
+    monkeypatch.setattr(rmod, "remote",
+                        lambda n, **kw: orig("exec-x", url=exec_url, api_key=API_KEY))
+    f = Function(lambda x: x * 2, "t")
+    assert f.remote(21) == 42
+    assert f.map([1, 2, 3]) == [2, 4, 6]     # same symmetry as cycls.remote(name).map
+    f.func = lambda x: x * 3                 # "edit" — the next call ships the new code
+    assert f.map([1, 2]) == [3, 6]
+
+
+def test_executor_shared_per_image():
+    from cycls.function.main import Function
+    a = Function(lambda x: x, "aa", image={"pip": ["numpy"]})
+    b = Function(lambda y: y * 2, "bb", image={"pip": ["numpy"]})   # same image, other code
+    c = Function(lambda z: z, "cc", image={"pip": ["pandas"]})
+    assert a._executor_name() == b._executor_name()                 # shared executor
+    assert a._executor_name() != c._executor_name()                 # deps differ → own executor
+    assert a._executor_name().startswith("exec-")
 
 
 def test_deploy_mode_reads_signature():
@@ -83,14 +157,19 @@ def test_map_fans_out_in_order(shim_url):
 
 def test_bad_token_rejected(shim_url):
     fn = remote(NAME, url=shim_url, api_key="wrong-key")
-    with pytest.raises(RemoteError, match="403"):
+    with pytest.raises(RemoteError, match="403") as e:
         fn(21)
+    assert e.value.status == 403
 
 
 def test_exception_propagates(shim_url):
+    # User-code failures surface as 500 with the remote traceback — and carry
+    # the status, so provisioning logic never mistakes them for a missing
+    # deployment (even if the error text itself mentions "404").
     fn = remote(NAME, url=shim_url, api_key=API_KEY)
-    with pytest.raises(RemoteError, match="negative input"):
+    with pytest.raises(RemoteError, match="negative input") as e:
         fn(-1)
+    assert e.value.status == 500
 
 
 def test_runtime_mismatch_blocks_call(shim_url):

@@ -527,16 +527,62 @@ CMD ["python", "entrypoint.py"]
                     if status == "DONE":
                         url = event.get("url")
                         print(f"Deployed: {url}")
-                        if remote:
+                        if remote and not self.name.startswith("exec-"):
                             print(f'Call it: cycls.remote("{self.name}")(...)')
                     elif status == "ERROR":
                         return None
             return url
 
+    def _executor_name(self):
+        # Per-image, name-independent: functions sharing an image share one
+        # executor; different deps (or python) → a different one.
+        return f"exec-{self._image_tag().rsplit(':', 1)[1]}"
+
     def remote(self, *args, **kwargs):
-        """Call this function's `--remote` deployment (see cycls.remote)."""
-        from .remote import remote
-        return remote(self.name, api_key=self._api_key)(*args, **kwargs)
+        """Run this function's CURRENT code in the cloud — ships the live
+        bytecode to a per-image executor, provisioned once on first call.
+        (cycls.remote(name) calls a frozen deployment by name instead.)"""
+        return self._on_executor(lambda call: call(self.func, *args, **kwargs))
+
+    def map(self, items, *, workers=16):
+        """Fan this function's CURRENT code out across autoscaled instances —
+        one cloud call per item, results in input order."""
+        from concurrent.futures import ThreadPoolExecutor
+        items = list(items)   # retry after provisioning must re-iterate
+        def fan(call):
+            with ThreadPoolExecutor(workers) as pool:
+                return list(pool.map(lambda item: call(self.func, item), items))
+        return self._on_executor(fan)
+
+    def _on_executor(self, op):
+        """Run `op(call)` against this image's executor, provisioning it on
+        the first 404 (missing service — user errors keep their own status)."""
+        import time
+        from .remote import remote as _remote, RemoteError
+        call = _remote(self._executor_name(), api_key=self._api_key)
+        try:
+            return op(call)
+        except RemoteError as e:
+            if e.status != 404: raise
+        print(f"Provisioning executor '{self._executor_name()}' (one-time for this image)...")
+        self._deploy_executor(self._executor_name())
+        for _ in range(15):
+            try:
+                return op(call)
+            except RemoteError as e:
+                if e.status != 404: raise
+                time.sleep(2)
+        raise RemoteError(f"executor {self._executor_name()!r} deployed but never became reachable")
+
+    def _deploy_executor(self, name):
+        from .remote import RemoteError
+        def execute(fn, *args, **kwargs):   # local → pickles by value (image has no cycls)
+            return fn(*args, **kwargs)
+        image = {"pip": self.pip, "apt": self.apt,
+                 "run_commands": self.run_commands, "copy": self.copy}
+        # remote=True is required: execute's **kwargs reads as a server signature.
+        if not Function(execute, name, image=image, api_key=self._api_key).deploy(remote=True):
+            raise RemoteError(f"provisioning {name!r} failed")
 
     def __del__(self):
         self._cleanup_container()

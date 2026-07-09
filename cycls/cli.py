@@ -1,6 +1,5 @@
 """cycls CLI — run, deploy, list, delete, logs, and scaffold agents."""
 import argparse
-import importlib.util
 import os
 import sys
 import time
@@ -17,14 +16,9 @@ def _load_target(path_spec):
     else:
         path_str, target = path_spec, None
 
+    from cycls.function.remote import _load_module
+    module = _load_module(path_str)
     path = Path(path_str).resolve()
-    if not path.exists():
-        sys.exit(f"Error: {path} not found")
-
-    spec = importlib.util.spec_from_file_location(path.stem, path)
-    module = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(path.parent))
-    spec.loader.exec_module(module)
 
     from cycls.function import Function
     from cycls.app import App
@@ -76,6 +70,18 @@ def cmd_run(args):
     instance._source_file = Path(args.file).resolve()
     if hasattr(instance, "local"):
         instance.local()
+    elif instance._is_remote():
+        # A remote function runs in the cloud — no Docker. Watch the file and
+        # re-run its driver in a fresh process on save, so each run ships the
+        # code as it is now.
+        import logging
+        from watchfiles import run_process
+        from cycls.function.remote import _drive
+        logging.getLogger("watchfiles").setLevel(logging.ERROR)   # hush its restart chatter
+        script = str(Path(args.file).resolve())
+        print(f"{instance.name} → cloud (Ctrl-C to stop)\n")
+        run_process(script, target=_drive, args=(script,),
+                    callback=lambda changes: print(f"↻ {Path(next(iter(changes))[1]).name}"))
     else:
         instance.run()
 

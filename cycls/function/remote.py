@@ -1,12 +1,14 @@
-"""Remote execution — deploy a function behind a pickle-RPC shim (`cycls
-deploy --remote`), call it from anywhere: `cycls.remote(name)(...)`.
+"""Remote execution — a bare `@cycls.function` (no `port` param) deploys
+behind a pickle-RPC shim: POST / takes a cloudpickled (args, kwargs) and
+returns a cloudpickled result.
 
-The shim (REMOTE_PY, stdlib-only) accepts POST /: cloudpickled (args, kwargs)
-in, cloudpickled result out. Auth is a token derived from the deployer's API
-key — any machine holding the key can compute it; nothing is stored. Each
-request carries its python/cloudpickle versions and the shim refuses pickles
-that couldn't cross (bytecode is version-bound). URLs follow the platform
-convention https://{name}.cycls.ai — pass url= to override.
+Call a deployment by name with `cycls.remote(name)(...)`, or run the code
+you're holding with `f.remote(...)` (see Function.remote). Auth is a token
+derived from the deployer's API key — any machine holding the key can compute
+it; nothing is stored. Each request carries its python/cloudpickle versions
+and the shim refuses pickles that couldn't cross (bytecode is version-bound).
+URLs follow the platform convention https://{name}.cycls.ai — pass url= to
+override.
 """
 import hashlib
 import sys
@@ -64,11 +66,54 @@ def token_for(api_key, name):
 
 
 class RemoteError(Exception):
-    pass
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status   # HTTP status of the failed call, when there was one
+
+
+def local_entrypoint(fn=None):
+    """Mark the file's `cycls run` driver: the body runs locally on every save,
+    and `.remote()` calls inside it run in the cloud. Keeps module import
+    side-effect-free — a top-level `.remote()` would fire on every import.
+    Use `@cycls.local_entrypoint`, with or without parens."""
+    def mark(f):
+        f._cycls_entry = True
+        return f
+    return mark(fn) if callable(fn) else mark
+
+
+def _load_module(path_str):
+    """Import a user file by path. Not registered in sys.modules — so its
+    functions stay `__main__`-like and cloudpickle ships them by value."""
+    import importlib.util
+    from pathlib import Path
+    path = Path(path_str).resolve()
+    if not path.exists():
+        sys.exit(f"Error: {path} not found")
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(path.parent))
+    spec.loader.exec_module(module)
+    return module
+
+
+def _drive(path):
+    """The per-save driver for `cycls run`, re-executed fresh each save (so
+    it always ships current code). Runs the file's @local_entrypoint; with
+    none, calls the sole Function with its defaults and prints the result."""
+    from .main import Function
+    objs = list(_load_module(path).__dict__.values())
+    entry = next((o for o in objs if getattr(o, "_cycls_entry", False)), None)
+    if entry:
+        entry()
+        return
+    result = next(o for o in objs if isinstance(o, Function)).remote()
+    if result is not None:          # not `if result` — 0 and "" are results too
+        print(result)
 
 
 def remote(name, *, url=None, api_key=None):
-    """Call a `--remote` deployment: `cycls.remote("simulate")(n)`."""
+    """Call a deployment by name: `cycls.remote("simulate")(n)`."""
     name = name.replace('_', '-')
 
     def call(*args, **kwargs):
@@ -86,9 +131,10 @@ def remote(name, *, url=None, api_key=None):
             timeout=3600,
         )
         if r.status_code == 404:
-            raise RemoteError(f"{name}: 404 — no such deployment. Run `cycls deploy <file>` first.")
+            raise RemoteError(f"{name}: 404 — no such deployment. Run `cycls deploy <file>` first.",
+                              status=404)
         if r.status_code != 200:
-            raise RemoteError(f"{name}: {r.status_code} {r.text[:2000]}")
+            raise RemoteError(f"{name}: {r.status_code} {r.text[:2000]}", status=r.status_code)
         return cloudpickle.loads(r.content)
 
     def fan_out(items, *, workers=16):
