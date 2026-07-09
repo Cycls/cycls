@@ -84,6 +84,11 @@ class Agent(App):
 
         self.func = runner
 
+    def remote(self, *args, **kwargs):
+        from cycls.function.remote import RemoteError
+        raise RemoteError("live cloud dev for agents isn't wired yet — "
+                          "use `cycls run` (Docker) or `cycls deploy`")
+
     def _local(self, port=8080):
         print(f"Starting local server at localhost:{port}")
         self.prod = False

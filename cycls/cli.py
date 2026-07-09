@@ -9,8 +9,9 @@ from pathlib import Path
 # ---- Module loading ----
 
 def _load_target(path_spec):
-    """Import a file and return the first @cycls.function/app/agent instance.
-    `path_spec` is 'file.py' or 'file.py::name' for an explicit target."""
+    """Import a file; return (target, entrypoint) — the first
+    @cycls.function/app/agent instance and the file's @cycls.local_entrypoint
+    (None if undeclared). `path_spec` is 'file.py' or 'file.py::name'."""
     if "::" in path_spec:
         path_str, target = path_spec.split("::", 1)
     else:
@@ -23,15 +24,18 @@ def _load_target(path_spec):
     from cycls.function import Function
     from cycls.app import App
 
+    entry = next((o for o in vars(module).values()
+                  if getattr(o, "_cycls_entry", False)), None)
+
     if target:
         obj = getattr(module, target, None)
         if obj is None:
             sys.exit(f"Error: target '{target}' not found in {path}")
-        return obj
+        return obj, entry
 
     for _, obj in module.__dict__.items():
         if isinstance(obj, (Function, App)):
-            return obj
+            return obj, entry
 
     sys.exit(f"Error: no @cycls.function/app/agent instance found in {path}")
 
@@ -66,35 +70,38 @@ def _api(method, path, **kwargs):
 # ---- Commands ----
 
 def cmd_run(args):
-    instance = _load_target(args.file)
+    instance, entry = _load_target(args.file)
     instance._source_file = Path(args.file).resolve()
-    if hasattr(instance, "local"):
+    if hasattr(instance, "local") and not entry:
         instance.local()
-    elif instance._is_remote():
-        # A remote function runs in the cloud — no Docker. Watch the file and
-        # re-run its driver in a fresh process on save, so each run ships the
-        # code as it is now.
-        import logging
-        from watchfiles import run_process
-        from cycls.function.remote import _drive
-        logging.getLogger("watchfiles").setLevel(logging.ERROR)   # hush its restart chatter
+    elif entry or instance._is_remote():
+        import subprocess
+        from watchfiles import watch
         script = str(Path(args.file).resolve())
-        print(f"{instance.name} → cloud (Ctrl-C to stop)\n")
-        run_process(script, target=_drive, args=(script,),
-                    callback=lambda changes: print(f"↻ {Path(next(iter(changes))[1]).name}"))
+        paths = [script] + [str(Path(p).resolve()) for p in instance.copy if Path(p).exists()]
+        drive = [sys.executable, "-c",
+                 f"from cycls.function.remote import _drive; _drive({script!r})"]
+        print(f"{instance.name} — rerunning on save (Ctrl-C to stop)\n", flush=True)
+        try:
+            subprocess.run(drive)
+            for changes in watch(*paths, raise_interrupt=False):
+                print(f"↻ {Path(next(iter(changes))[1]).name}", flush=True)
+                subprocess.run(drive)
+        except KeyboardInterrupt:
+            pass
     else:
         instance.run()
 
 
 def cmd_deploy(args):
-    instance = _load_target(args.file)
+    instance, _ = _load_target(args.file)
     instance.deploy()
 
 
 def cmd_shell(args):
     """Interactive bash inside the target's built image — same env as run/deploy."""
     import subprocess
-    instance = _load_target(args.file)
+    instance, _ = _load_target(args.file)
     tag = instance._ensure_local_image()
     print(f"Entering {tag} (exit to leave)")
     subprocess.run(["docker", "run", "--rm", "-it", "--entrypoint", "bash", tag])

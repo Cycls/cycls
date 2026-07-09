@@ -9,19 +9,33 @@ it; nothing is stored. Each request carries its python/cloudpickle versions
 and the shim refuses pickles that couldn't cross (bytecode is version-bound).
 URLs follow the platform convention https://{name}.cycls.ai — pass url= to
 override.
+
+The shim serves via hypercorn like everything else cycls deploys — one
+serving stack, h2 end-to-end on Cloud Run (no 32MB body cap).
 """
 import hashlib
 import sys
 
 from .main import _get_api_key
 
-REMOTE_PY = '''import hmac, http.server, os, sys, traceback
+def post(url, blob, *, name, api_key, timeout=3600):
+    """One authed, runtime-stamped POST of a pickle."""
+    import cloudpickle
+    import requests
+    return requests.post(
+        url, data=blob, timeout=timeout,
+        headers={"X-Cycls-Token": token_for(api_key, name),
+                 "X-Cycls-Runtime": f"{sys.version_info.major}.{sys.version_info.minor}/{cloudpickle.__version__}",
+                 "Content-Type": "application/octet-stream"})
+
+
+SHIM_PRELUDE = '''import asyncio, hmac, os, sys, traceback
 sys.path.insert(0, '/app')
 import cloudpickle
 
 pkl = sys.argv[1] if len(sys.argv) > 1 else "/app/function.pkl"
 with open(pkl, "rb") as f:
-    func, token = cloudpickle.load(f)
+    payload, token = cloudpickle.load(f)
 
 RUNTIME = f"{sys.version_info.major}.{sys.version_info.minor}/{cloudpickle.__version__}"
 
@@ -29,35 +43,63 @@ def gate(runtime):
     py, _, cp = runtime.partition("/")
     return py, cp.split(".")[0]
 
-class Handler(http.server.BaseHTTPRequestHandler):
-    def _send(self, code, body, ctype="application/octet-stream"):
-        self.send_response(code)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+async def reply(send, status, body, ctype=b"text/plain"):
+    await send({"type": "http.response.start", "status": status,
+                "headers": [(b"content-type", ctype)]})
+    await send({"type": "http.response.body", "body": body})
 
-    def do_POST(self):
-        # Custom header, NOT Authorization: Cloud Run reserves that for IAM
-        # and its front end 401s non-Google bearer tokens before we see them.
-        if not hmac.compare_digest(self.headers.get("X-Cycls-Token", ""), token):
-            self._send(403, b"bad token", "text/plain")
-            return
-        caller = self.headers.get("X-Cycls-Runtime", "?/?")
-        if gate(caller) != gate(RUNTIME):
-            self._send(409, (f"runtime mismatch: server {RUNTIME}, caller {caller} — "
-                             "pickles won't cross; redeploy from the calling "
-                             "environment or match it.").encode(), "text/plain")
-            return
-        try:
-            n = int(self.headers.get("Content-Length", 0))
-            args, kwargs = cloudpickle.loads(self.rfile.read(n))
-            self._send(200, cloudpickle.dumps(func(*args, **kwargs)))
-        except Exception:
-            self._send(500, traceback.format_exc().encode(), "text/plain")
+def check(scope):
+    """None if the request may proceed, else (status, message)."""
+    h = dict(scope["headers"])
+    if not hmac.compare_digest(h.get(b"x-cycls-token", b"").decode(), token):
+        return 403, b"bad token"
+    caller = h.get(b"x-cycls-runtime", b"?/?").decode()
+    if gate(caller) != gate(RUNTIME):
+        return 409, (f"runtime mismatch: server {RUNTIME}, caller {caller} — pickles "
+                     "won't cross; redeploy from the calling environment "
+                     "or match it.").encode()
+    return None
 
-port = int(os.environ.get("PORT", 8080))
-http.server.ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
+async def read(receive):
+    body, more = b"", True
+    while more:
+        msg = await receive()
+        body += msg.get("body", b"")
+        more = msg.get("more_body", False)
+    return body
+
+def boot(asgi):
+    from hypercorn.asyncio import serve
+    from hypercorn.config import Config
+    cfg = Config()
+    cfg.bind = [f"0.0.0.0:{int(os.environ.get('PORT', 8080))}"]
+    cfg.accesslog = "-"
+    asyncio.run(serve(asgi, cfg))
+'''
+
+REMOTE_PY = SHIM_PRELUDE + '''
+func = payload
+
+import concurrent.futures
+POOL = concurrent.futures.ThreadPoolExecutor(max_workers=64)
+
+async def app(scope, receive, send):
+    if scope["type"] != "http":
+        return
+    if scope["method"] != "POST":
+        return await reply(send, 404, b"not found")
+    if (bad := check(scope)):
+        return await reply(send, *bad)
+    try:
+        args, kwargs = cloudpickle.loads(await read(receive))
+        result = await asyncio.get_running_loop().run_in_executor(
+            POOL, lambda: func(*args, **kwargs))
+        await reply(send, 200, cloudpickle.dumps(result), b"application/octet-stream")
+    except Exception:
+        await reply(send, 500, traceback.format_exc().encode())
+
+if __name__ == "__main__":
+    boot(app)
 '''
 
 
@@ -68,14 +110,12 @@ def token_for(api_key, name):
 class RemoteError(Exception):
     def __init__(self, message, status=None):
         super().__init__(message)
-        self.status = status   # HTTP status of the failed call, when there was one
+        self.status = status
 
 
 def local_entrypoint(fn=None):
-    """Mark the file's `cycls run` driver: the body runs locally on every save,
-    and `.remote()` calls inside it run in the cloud. Keeps module import
-    side-effect-free — a top-level `.remote()` would fire on every import.
-    Use `@cycls.local_entrypoint`, with or without parens."""
+    """Mark the file's `cycls run` driver — runs locally on every save;
+    `.remote()` calls inside it run in the cloud."""
     def mark(f):
         f._cycls_entry = True
         return f
@@ -83,8 +123,8 @@ def local_entrypoint(fn=None):
 
 
 def _load_module(path_str):
-    """Import a user file by path. Not registered in sys.modules — so its
-    functions stay `__main__`-like and cloudpickle ships them by value."""
+    """Import a user file by path. Not registered in sys.modules, so its
+    functions pickle by value."""
     import importlib.util
     from pathlib import Path
     path = Path(path_str).resolve()
@@ -98,17 +138,19 @@ def _load_module(path_str):
 
 
 def _drive(path):
-    """The per-save driver for `cycls run`, re-executed fresh each save (so
-    it always ships current code). Runs the file's @local_entrypoint; with
-    none, calls the sole Function with its defaults and prints the result."""
+    """`cycls run`'s per-save driver: run the file's @local_entrypoint, or
+    call its function with defaults and print the result."""
     from .main import Function
     objs = list(_load_module(path).__dict__.values())
     entry = next((o for o in objs if getattr(o, "_cycls_entry", False)), None)
     if entry:
         entry()
         return
-    result = next(o for o in objs if isinstance(o, Function)).remote()
-    if result is not None:          # not `if result` — 0 and "" are results too
+    fn = next((o for o in objs if isinstance(o, Function)), None)
+    if fn is None:
+        sys.exit(f"{path}: nothing to run — no @cycls.local_entrypoint or @cycls.function")
+    result = fn.remote()
+    if result is not None:
         print(result)
 
 
@@ -118,18 +160,11 @@ def remote(name, *, url=None, api_key=None):
 
     def call(*args, **kwargs):
         import cloudpickle
-        import requests
         key = api_key or _get_api_key()
         if not key:
             raise RemoteError("No API key. Set CYCLS_API_KEY or cycls.api_key.")
-        r = requests.post(
-            url or f"https://{name}.cycls.ai",
-            data=cloudpickle.dumps((args, kwargs)),
-            headers={"X-Cycls-Token": token_for(key, name),
-                     "X-Cycls-Runtime": f"{sys.version_info.major}.{sys.version_info.minor}/{cloudpickle.__version__}",
-                     "Content-Type": "application/octet-stream"},
-            timeout=3600,
-        )
+        r = post(url or f"https://{name}.cycls.ai", cloudpickle.dumps((args, kwargs)),
+                 name=name, api_key=key)
         if r.status_code == 404:
             raise RemoteError(f"{name}: 404 — no such deployment. Run `cycls deploy <file>` first.",
                               status=404)
