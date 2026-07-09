@@ -94,7 +94,7 @@ def test_app_remote_pushes_current_builder(monkeypatch, capsys):
     import requests
     seen = {}
 
-    def fake_post(url, data=None, headers=None, timeout=None):
+    def fake_post(url, data=None, headers=None, timeout=None, stream=False):
         seen.update(url=url, data=data, headers=headers)
         class R:
             status_code = 200
@@ -109,6 +109,77 @@ def test_app_remote_pushes_current_builder(monkeypatch, capsys):
     assert seen["headers"]["X-Cycls-Token"] == token_for(API_KEY, "dev-demo")
     assert cloudpickle.loads(seen["data"])()  # the builder round-trips
     assert "https://dev-demo.cycls.ai" in capsys.readouterr().out
+
+
+@pytest.fixture
+def shim_ns(tmp_path, monkeypatch):
+    (tmp_path / "function.pkl").write_bytes(cloudpickle.dumps((builder(b"v1"), TOKEN)))
+    monkeypatch.setattr("sys.argv", ["shim.py", str(tmp_path / "function.pkl")])
+    saved = sys.stdout           # SERVE_PY installs its tee on the real sys.stdout
+    ns = {"__name__": "shim"}
+    exec(SERVE_PY, ns)
+    yield ns
+    sys.stdout = saved
+
+
+def test_log_tee_broadcasts_to_subscribers(shim_ns):
+    import queue
+    q = queue.Queue()
+    shim_ns["_subs"].append(q)
+    shim_ns["_Tee"]().write("hello from the app\n")   # this namespace's tee
+    shim_ns["_subs"].remove(q)
+    seen = "".join(q.get_nowait() for _ in range(q.qsize()))
+    assert "hello from the app" in seen
+
+
+def test_logs_endpoint_needs_token(shim_ns):
+    status, _ = call(shim_ns["dispatcher"], "/_cycls/logs", "GET",
+                     [(b"x-cycls-token", b"wrong")])
+    assert status == 403
+
+
+def test_stream_logs_relays_lines(monkeypatch, capsys):
+    import threading
+    import requests
+    from cycls import cli
+
+    stop = threading.Event()
+
+    class Streaming:
+        status_code = 200
+        def iter_lines(self, decode_unicode=True):
+            yield "200 GET / 2"
+            stop.set()
+
+    monkeypatch.setenv("CYCLS_API_KEY", "k")
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: Streaming())
+    cli._stream_logs("dev-demo", stop)
+    assert "GET /" in capsys.readouterr().out
+
+
+def test_stream_logs_gives_up_on_old_service(monkeypatch, capsys):
+    import threading
+    import requests
+    from cycls import cli
+
+    class Missing:
+        status_code = 404
+
+    monkeypatch.setenv("CYCLS_API_KEY", "k")
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: Missing())
+    cli._stream_logs("dev-old", threading.Event())
+    assert "cycls rm dev-old" in capsys.readouterr().out
+
+
+def test_pretty_log_shapes():
+    from cycls.cli import _pretty_log
+    assert _pretty_log("200 GET /").endswith("GET /")             # hypercorn access line
+    assert "\033[31m500" in _pretty_log("500 GET /boom")          # red on 5xx
+    assert "\033[33m404" in _pretty_log("404 GET /x")             # yellow on 4xx
+    assert _pretty_log("200 POST /_cycls/reload") is None         # loop's own traffic hidden
+    assert _pretty_log("Error in ASGI Framework") == "Error in ASGI Framework"
+    assert _pretty_log('  File "app.py", line 8') == '  File "app.py", line 8'   # traceback indent kept
+    assert _pretty_log("   ") is None
 
 
 def test_load_target_returns_entrypoint(tmp_path):

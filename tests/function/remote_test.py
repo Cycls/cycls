@@ -50,6 +50,7 @@ def shim_url(tmp_path_factory):
     def doubler(x, add=0):
         if x < 0:
             raise ValueError("negative input")
+        print("doubling", x)
         return x * 2 + add
 
     url, proc = _start_shim(tmp_path_factory.mktemp("remote"), doubler, NAME)
@@ -129,6 +130,52 @@ def test_executor_shared_per_image():
     assert a._executor_name().startswith("exec-")
 
 
+def test_bind_converts_by_signature():
+    from cycls.function.remote import _bind
+
+    def fn(n: int = 5, name="x", data=None, flag=True):
+        pass
+
+    assert _bind(fn, []) == {}                                        # defaults untouched
+    assert _bind(fn, ["--n", "10"]) == {"n": 10}                      # annotation converts
+    assert _bind(fn, ["--name", "abc"]) == {"name": "abc"}            # unparseable → str
+    assert _bind(fn, ["--data", "[1, 2]", "--flag", "False"]) == {"data": [1, 2], "flag": False}
+
+    def required(x):
+        pass
+
+    with pytest.raises(SystemExit):                                   # missing required arg
+        _bind(required, [])
+
+
+def test_drive_binds_args_to_entrypoint(tmp_path, capsys):
+    from cycls.function.remote import _drive
+    (tmp_path / "argy.py").write_text(
+        "import cycls\n"
+        "@cycls.function()\n"
+        "def g(x): return x\n"
+        "@cycls.local_entrypoint\n"
+        "def main(n: int = 1):\n"
+        "    print('n is', n * 2)\n")
+    _drive(str(tmp_path / "argy.py"), ["--n", "21"])
+    assert "n is 42" in capsys.readouterr().out
+
+
+def test_drive_routes_run_vs_remote(tmp_path, capsys, monkeypatch):
+    from cycls.function.main import Function
+    from cycls.function.remote import _drive
+    (tmp_path / "r.py").write_text(
+        "import cycls\n"
+        "@cycls.function()\n"
+        "def g(x: int = 1): return x\n")
+    monkeypatch.setattr(Function, "run", lambda self, **kw: ("local", kw))
+    monkeypatch.setattr(Function, "remote", lambda self, **kw: ("cloud", kw))
+    _drive(str(tmp_path / "r.py"), ["--x", "5"])
+    assert "('local', {'x': 5})" in capsys.readouterr().out
+    _drive(str(tmp_path / "r.py"), ["--x", "5"], remote=True)
+    assert "('cloud', {'x': 5})" in capsys.readouterr().out
+
+
 def test_deploy_mode_reads_signature():
     from cycls.function.main import Function
     f = lambda func: Function(func, "t")
@@ -146,6 +193,25 @@ def test_call_roundtrip(shim_url):
     fn = remote(NAME, url=shim_url, api_key=API_KEY)
     assert fn(21) == 42
     assert fn(20, add=2) == 42  # kwargs travel too
+
+
+def test_stdout_streams_back(shim_url, capsys):
+    fn = remote(NAME, url=shim_url, api_key=API_KEY)
+    assert fn(21) == 42
+    assert "doubling 21" in capsys.readouterr().out   # the remote print, relayed
+
+
+def test_legacy_shim_response(monkeypatch):
+    import cloudpickle
+    from cycls.function import remote as rmod
+
+    class R:
+        status_code = 200
+        headers = {"content-type": "application/octet-stream"}
+        content = cloudpickle.dumps(42)
+
+    monkeypatch.setattr(rmod, "post", lambda *a, **kw: R())
+    assert remote("old", url="http://x", api_key=API_KEY)(1) == 42
 
 
 def test_map_fans_out_in_order(shim_url):
