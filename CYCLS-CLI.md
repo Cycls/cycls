@@ -39,32 +39,29 @@ cycls run examples/agent/super.py::super     # explicit target
 `file` is `path.py` or `path.py::name` if the file has multiple decorated
 instances. Use `::name` to pick.
 
-For a **remote function** (a bare `@cycls.function` with no `port` param),
-`cycls run` skips Docker entirely and gives you a live cloud loop: on every
-save it re-runs the file's `@cycls.local_entrypoint` — local driver code
-whose `.remote()` calls ship the current bytecode to a warm per-image
-executor (provisioned once, ~90s the first time, then ~1s per iteration).
-Without an entrypoint, the function itself runs with its defaults.
+`cycls run` is the dev loop, and one rule covers it: **run is local,
+`--remote` is cloud** — mirroring `f.run()` / `f.remote()` on the objects.
 
-```python
-@cycls.local_entrypoint
-def main():
-    print(simulate.remote(10))
-```
+- Functions re-run on every save: locally in Docker, or with `--remote` on a
+  warm per-image executor (provisioned once, ~90s the first time, then ~1s
+  per save — no Docker needed).
+- Apps serve locally in Docker, or with `--remote` on a live dev URL
+  (`dev-{name}.cycls.ai`) — each save hot-swaps the running app, no redeploy.
 
 ```bash
-cycls run examples/function/remote.py
-# simulate → cloud, re-running on save (Ctrl-C to stop)
+cycls run examples/function/remote.py --remote --n 1000
 # 3.2            ← edit anything, save, reprints in ~1s
+cycls run examples/app/fast.py --remote
+#   https://dev-fast.cycls.ai
 ```
 
-Keep driver calls inside the entrypoint — top-level `.remote()` calls fire
-on *every* import (run, deploy, shell all import the file).
+Trailing `--name value` args bind to the function's signature (annotated
+params convert via their annotation, the rest literal_eval).
 
-Apps join the same loop: an app file whose entrypoint calls `app.remote()`
-gets a save-to-live cloud URL (`dev-{name}.cycls.ai`) — each save hot-swaps
-the running app in ~1s, no redeploy. An app file *without* an entrypoint
-serves locally in Docker, as always.
+For custom orchestration, mark a driver with `@cycls.local_entrypoint` — its
+code chooses the verbs (`.run()`, `.remote()`, `.map()`), so `--remote`
+doesn't apply. Keep driver calls inside it: top-level `.remote()` calls fire
+on *every* import (run, deploy, shell all import the file).
 
 ## `cycls deploy <file>`
 

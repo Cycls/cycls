@@ -69,26 +69,88 @@ def _api(method, path, **kwargs):
 
 # ---- Commands ----
 
+def _pretty_log(msg):
+    """Colorize hypercorn's `200 GET /path` access lines and hide the dev
+    loop's own traffic. Everything else — app output, tracebacks — passes
+    through untouched."""
+    msg = msg.rstrip()
+    parts = msg.split()
+    if len(parts) != 3 or not parts[0].isdigit():
+        return msg or None
+    status, method, path = parts
+    if path.startswith("/_cycls/"):
+        return None
+    color = 32 if int(status) < 300 else 33 if int(status) < 500 else 31
+    return f"\033[{color}m{status}\033[0m {method} {path}"
+
+
+def _stream_logs(name, stop):
+    """Live-tail the dev service's own log stream (/_cycls/logs). Started once
+    the service is up, so a 404 means it predates the endpoint."""
+    import requests
+    from cycls.function.main import _get_api_key
+    from cycls.function.remote import token_for
+    headers = {"X-Cycls-Token": token_for(_get_api_key(), name)}
+    while not stop.is_set():
+        try:
+            r = requests.get(f"https://{name}.cycls.ai/_cycls/logs",
+                             stream=True, timeout=(5, 30), headers=headers)
+            if r.status_code == 404:
+                print(f"  \033[2m│ no live logs on this service — `cycls rm {name}`, then save\033[0m",
+                      flush=True)
+                return
+            for raw in r.iter_lines(decode_unicode=True):
+                if stop.is_set():
+                    return
+                if (line := _pretty_log(raw or "")):
+                    print(f"  \033[2m│\033[0m {line}", flush=True)
+        except requests.RequestException:
+            pass
+        stop.wait(2)
+
+
+def _watch_loop(instance, script, argv, remote, after_first=None):
+    import subprocess
+    from watchfiles import watch
+    paths = [script] + [str(Path(p).resolve()) for p in instance.copy if Path(p).exists()]
+    drive = [sys.executable, "-c",
+             f"from cycls.function.remote import _drive; _drive({script!r}, {tuple(argv)!r}, {remote!r})"]
+    print(f"{instance.name} — rerunning on save (Ctrl-C to stop)\n", flush=True)
+    try:
+        first = subprocess.run(drive)
+        if after_first and first.returncode == 0:
+            after_first()
+        for changes in watch(*paths, raise_interrupt=False):
+            print(f"↻ {Path(next(iter(changes))[1]).name}", flush=True)
+            subprocess.run(drive)
+    except KeyboardInterrupt:
+        pass
+
+
 def cmd_run(args):
     instance, entry = _load_target(args.file)
     instance._source_file = Path(args.file).resolve()
-    if hasattr(instance, "local") and not entry:
-        instance.local()
-    elif entry or instance._is_remote():
-        import subprocess
-        from watchfiles import watch
-        script = str(Path(args.file).resolve())
-        paths = [script] + [str(Path(p).resolve()) for p in instance.copy if Path(p).exists()]
-        drive = [sys.executable, "-c",
-                 f"from cycls.function.remote import _drive; _drive({script!r})"]
-        print(f"{instance.name} — rerunning on save (Ctrl-C to stop)\n", flush=True)
-        try:
-            subprocess.run(drive)
-            for changes in watch(*paths, raise_interrupt=False):
-                print(f"↻ {Path(next(iter(changes))[1]).name}", flush=True)
-                subprocess.run(drive)
-        except KeyboardInterrupt:
-            pass
+    script = str(Path(args.file).resolve())
+    if entry:
+        if args.remote:
+            sys.exit("--remote conflicts with @cycls.local_entrypoint — the driver's code chooses run/remote")
+        _watch_loop(instance, script, args.args, remote=False)
+    elif hasattr(instance, "local"):
+        if args.remote:
+            import threading
+            from cycls.agent.main import Agent
+            if isinstance(instance, Agent):
+                sys.exit("live cloud dev for agents isn't wired yet — `cycls run` (Docker) or `cycls deploy`")
+            stop = threading.Event()
+            tail = threading.Thread(target=_stream_logs, args=(instance.dev_name, stop), daemon=True)
+            _watch_loop(instance, script, args.args, remote=True, after_first=tail.start)
+            stop.set()
+        else:
+            instance.local()
+    elif instance._is_remote():
+        _watch_loop(instance, script, args.args, remote=args.remote)
+    elif args.remote:
+        sys.exit(f"'{instance.name}' takes a port — it's a server; run it locally or `cycls deploy`")
     else:
         instance.run()
 
@@ -343,8 +405,11 @@ def main():
     parser = argparse.ArgumentParser(prog="cycls", description="Cycls — the deep-stack AI SDK")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("run", help="Run an agent locally in Docker")
+    p = sub.add_parser("run", allow_abbrev=False,
+                       help="Dev loop: rerun on save (local Docker; --remote for cloud)")
     p.add_argument("file", help="Path to agent file (file.py or file.py::name)")
+    p.add_argument("--remote", action="store_true",
+                   help="Run the loop in the cloud (f.remote / app.remote)")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("deploy", help="Deploy an agent to production")
@@ -395,7 +460,11 @@ def main():
     p = sub.add_parser("version", help="Print cycls version")
     p.set_defaults(func=cmd_version)
 
-    args = parser.parse_args()
+    args, extra = parser.parse_known_args()
+    if args.command == "run":
+        args.args = extra
+    elif extra:
+        parser.error(f"unrecognized arguments: {' '.join(extra)}")
     args.func(args)
 
 

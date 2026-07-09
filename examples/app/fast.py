@@ -1,6 +1,6 @@
-# Live cloud dev: uv run cycls run examples/app/fast.py — edit, save, the URL updates in ~1s.
-# (Drop the entrypoint and the same command serves it locally in Docker instead.)
-# Production: uv run cycls deploy examples/app/fast.py
+# uv run cycls run examples/app/fast.py            # localhost, reload on save
+# uv run cycls run examples/app/fast.py --remote   # live dev URL, hot-swap on save
+# uv run cycls deploy examples/app/fast.py         # production
 import cycls
 
 @cycls.app()
@@ -15,6 +15,7 @@ def fast():
 
     return app
 
-@cycls.local_entrypoint
-def main():
-    fast.remote()
+# Or drive the loop yourself — the entrypoint's code chooses the verbs:
+# @cycls.local_entrypoint
+# def main():
+#     fast.remote()

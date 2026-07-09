@@ -88,6 +88,7 @@ class Function:
 
     _base_pip = []
     _base_apt = []
+    _serves = False
 
     def __init__(self, func, name, python_version=None, image=None,
                  base_url=None, api_key=None):
@@ -527,7 +528,7 @@ CMD ["python", "entrypoint.py"]
                     if status == "DONE":
                         url = event.get("url")
                         print(f"Deployed: {url}")
-                        if remote and not self.name.startswith("exec-"):
+                        if remote is True and not self.name.startswith("exec-"):
                             print(f'Call it: cycls.remote("{self.name}")(...)')
                     elif status == "ERROR":
                         return None
