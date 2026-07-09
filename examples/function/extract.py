@@ -14,6 +14,7 @@ def extract(url):
             "title": (doc.metadata.get("title") or "").strip(),
             "text": text[:5000]}
 
+
 # Extract 6 research papers in parallel:
 # import cycls
 # papers = cycls.remote("extract").map([f"https://arxiv.org/pdf/{p}" for p in

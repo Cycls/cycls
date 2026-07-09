@@ -1,12 +1,20 @@
-# uv run cycls deploy examples/function/remote.py
+# Live cloud loop — no Docker. Edit anything, save, result reprints in ~1s:
+# cycls run examples/function/remote.py
 import cycls
 
-@cycls.function(image=cycls.Image().pip("numpy"))
+@cycls.function(image=cycls.Image().pip("numpy", "pandas"))
 def simulate(n=1_000_000):
     import numpy as np
     pts = np.random.rand(int(n), 2)
     return float(4 * ((pts ** 2).sum(axis=1) <= 1).mean())
 
-# remote call from any machine+CYCLS_KEYS
-# import cycls; print(cycls.remote("simulate")(10_000_000))
-# import cycls; print(cycls.remote("simulate").map([10**6] * 100))
+@cycls.local_entrypoint
+def main():
+    print(simulate.remote(10))           # runs in the cloud, current code
+    print(simulate.remote(1_000_000))
+    print(simulate.map([10, 20]))
+
+# Or deploy it and call the frozen version by name, from any machine + CYCLS_API_KEY:
+#   cycls deploy examples/function/remote.py
+#   cycls.remote("simulate")(10_000_000)
+#   cycls.remote("simulate").map([10**6] * 100)

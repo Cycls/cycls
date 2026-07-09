@@ -39,6 +39,28 @@ cycls run examples/agent/super.py::super     # explicit target
 `file` is `path.py` or `path.py::name` if the file has multiple decorated
 instances. Use `::name` to pick.
 
+For a **remote function** (a bare `@cycls.function` with no `port` param),
+`cycls run` skips Docker entirely and gives you a live cloud loop: on every
+save it re-runs the file's `@cycls.local_entrypoint` — local driver code
+whose `.remote()` calls ship the current bytecode to a warm per-image
+executor (provisioned once, ~90s the first time, then ~1s per iteration).
+Without an entrypoint, the function itself runs with its defaults.
+
+```python
+@cycls.local_entrypoint
+def main():
+    print(simulate.remote(10))
+```
+
+```bash
+cycls run examples/function/remote.py
+# simulate → cloud, re-running on save (Ctrl-C to stop)
+# 3.2            ← edit anything, save, reprints in ~1s
+```
+
+Keep driver calls inside the entrypoint — top-level `.remote()` calls fire
+on *every* import (run, deploy, shell all import the file).
+
 ## `cycls deploy <file>`
 
 Build and push to Cycls Cloud (managed runtime + per-tenant object-storage workspace).
