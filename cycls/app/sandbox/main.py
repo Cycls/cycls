@@ -25,7 +25,7 @@ _DEFAULT_ARGS = [
 
 # LD_PRELOAD shim — blocks libc connect() to 169.254.0.0/16 (cloud metadata).
 # Bound into every sandbox via LD_PRELOAD env var. See _blockmeta.c.
-# Bypassable by static binaries / raw syscall — see docs/sandbox-security.md.
+# Bypassable by static binaries / raw syscall — see docs/notes/sandbox-security.md.
 _BLOCKMETA_SO = str(importlib.resources.files("cycls.app.sandbox") / "_blockmeta.so")
 _BLOCKMETA_DST = "/tmp/.blockmeta.so"
 _METADATA_GUARD = [
