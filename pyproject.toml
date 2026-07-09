@@ -24,6 +24,7 @@ test = [
     "python-multipart>=0.0.6",
     "anthropic>=0.40.0",  # for --live tests against the real API
     "openai>=1.0.0",      # for --live tests against the real OpenAI API
+    "hypercorn>=0.18.0",
 ]
 
 [build-system]

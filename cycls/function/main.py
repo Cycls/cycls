@@ -175,7 +175,7 @@ class Function:
             parts.extend(extra_parts)
         return f"{self.image_prefix}:{hashlib.sha256(json.dumps(parts).encode()).hexdigest()[:16]}"
 
-    def _dockerfile_preamble(self) -> str:
+    def _dockerfile_preamble(self, extra_pip=()) -> str:
         lines = [
             f"FROM {self.base_image}",
             "ENV PIP_ROOT_USER_ACTION=ignore PYTHONUNBUFFERED=1",
@@ -186,8 +186,9 @@ class Function:
         if self.apt:
             lines.append(f"RUN apt-get update && apt-get install -y --no-install-recommends {' '.join(self.apt)}")
 
-        if self.pip:
-            lines.append(f"RUN uv pip install --system --no-cache {' '.join(self.pip)}")
+        pip = sorted(set(self.pip) | set(extra_pip))
+        if pip:
+            lines.append(f"RUN uv pip install --system --no-cache {' '.join(pip)}")
 
         for cmd in self.run_commands:
             lines.append(f"RUN {cmd}")
@@ -203,8 +204,8 @@ COPY runner.py /runner.py
 ENTRYPOINT ["python", "/runner.py", "/io"]
 """
 
-    def _dockerfile_deploy(self, port: int) -> str:
-        return f"""{self._dockerfile_preamble()}
+    def _dockerfile_deploy(self, port: int, extra_pip=()) -> str:
+        return f"""{self._dockerfile_preamble(extra_pip)}
 COPY function.pkl /app/function.pkl
 COPY entrypoint.py /app/entrypoint.py
 EXPOSE {port}
@@ -376,10 +377,11 @@ CMD ["python", "entrypoint.py"]
         kwargs = kwargs or {}
         kwargs['port'] = port
         self._copy_user_files(workdir)
-        (workdir / "Dockerfile").write_text(self._dockerfile_deploy(port))
+        (workdir / "Dockerfile").write_text(
+            self._dockerfile_deploy(port, extra_pip=("hypercorn",) if remote else ()))
         if remote:
             from .remote import REMOTE_PY, token_for
-            (workdir / "entrypoint.py").write_text(REMOTE_PY)
+            (workdir / "entrypoint.py").write_text(REMOTE_PY if remote is True else remote)
             payload = (self.func, token_for(self.api_key or "dev", self.name))
         else:
             (workdir / "entrypoint.py").write_text(ENTRYPOINT_PY)
@@ -498,9 +500,7 @@ CMD ["python", "entrypoint.py"]
                     "port": port,
                     "memory": memory,
                     "timeout": 1200,
-                    # The remote shim is stdlib http.server — HTTP/1.1 only;
-                    # h2c end-to-end would 502 it.
-                    "use_http2": "false" if remote else "true",
+                    "use_http2": "true",
                     "session_affinity": "true",
                 },
                 headers={"X-API-Key": self.api_key},
@@ -533,22 +533,26 @@ CMD ["python", "entrypoint.py"]
                         return None
             return url
 
+    def _image_config(self):
+        """This instance's build config as an `image=` dict."""
+        return {"pip": self.pip, "apt": self.apt,
+                "run_commands": self.run_commands, "copy": self.copy}
+
     def _executor_name(self):
-        # Per-image, name-independent: functions sharing an image share one
-        # executor; different deps (or python) → a different one.
         return f"exec-{self._image_tag().rsplit(':', 1)[1]}"
 
     def remote(self, *args, **kwargs):
         """Run this function's CURRENT code in the cloud — ships the live
-        bytecode to a per-image executor, provisioned once on first call.
-        (cycls.remote(name) calls a frozen deployment by name instead.)"""
+        bytecode to a per-image executor, provisioned once on first call."""
         return self._on_executor(lambda call: call(self.func, *args, **kwargs))
 
     def map(self, items, *, workers=16):
         """Fan this function's CURRENT code out across autoscaled instances —
-        one cloud call per item, results in input order."""
+        one cloud call per item, results in input order. If the executor
+        vanishes mid-fan, the whole fan retries after reprovisioning — items
+        that already ran run again, so side effects should be idempotent."""
         from concurrent.futures import ThreadPoolExecutor
-        items = list(items)   # retry after provisioning must re-iterate
+        items = list(items)
         def fan(call):
             with ThreadPoolExecutor(workers) as pool:
                 return list(pool.map(lambda item: call(self.func, item), items))
@@ -556,7 +560,7 @@ CMD ["python", "entrypoint.py"]
 
     def _on_executor(self, op):
         """Run `op(call)` against this image's executor, provisioning it on
-        the first 404 (missing service — user errors keep their own status)."""
+        the first 404."""
         import time
         from .remote import remote as _remote, RemoteError
         call = _remote(self._executor_name(), api_key=self._api_key)
@@ -576,12 +580,10 @@ CMD ["python", "entrypoint.py"]
 
     def _deploy_executor(self, name):
         from .remote import RemoteError
-        def execute(fn, *args, **kwargs):   # local → pickles by value (image has no cycls)
+        def execute(fn, *args, **kwargs):
             return fn(*args, **kwargs)
-        image = {"pip": self.pip, "apt": self.apt,
-                 "run_commands": self.run_commands, "copy": self.copy}
-        # remote=True is required: execute's **kwargs reads as a server signature.
-        if not Function(execute, name, image=image, api_key=self._api_key).deploy(remote=True):
+        if not Function(execute, name, image=self._image_config(),
+                        api_key=self._api_key).deploy(remote=True):
             raise RemoteError(f"provisioning {name!r} failed")
 
     def __del__(self):

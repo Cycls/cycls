@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from cycls.function import Function, _get_api_key, _get_base_url
+from cycls.function.remote import SHIM_PRELUDE
 from cycls.app.auth import JWT, validator
 from cycls.app.db import workspace
 
@@ -21,6 +22,25 @@ def _serve(app, port):
     config.accesslog = "-"  # access logs to stdout (hypercorn defaults to none)
     config.access_log_format = '%(s)s %(r)s'  # status + request line; drop UA/referer noise
     asyncio.run(serve(app, config))
+
+
+SERVE_PY = SHIM_PRELUDE + '''
+state = {"app": payload()}
+
+async def dispatcher(scope, receive, send):
+    if scope["type"] == "http" and scope["path"] == "/_cycls/reload" and scope["method"] == "POST":
+        if (bad := check(scope)):
+            return await reply(send, *bad)
+        try:
+            state["app"] = cloudpickle.loads(await read(receive))()
+        except Exception:
+            return await reply(send, 500, traceback.format_exc().encode())
+        return await reply(send, 200, b"reloaded")
+    await state["app"](scope, receive, send)
+
+if __name__ == "__main__":
+    boot(dispatcher)
+'''
 
 
 class App(Function):
@@ -90,6 +110,27 @@ class App(Function):
             raise RuntimeError("Missing API key. Set cycls.api_key or CYCLS_API_KEY environment variable.")
         self._prepare_func(prod=True)
         return super().deploy(port=port, memory=self.memory)
+
+    def remote(self):
+        """Serve this app's CURRENT code on its cloud dev service — provision
+        once, then each call hot-swaps the running app on a stable URL."""
+        import cloudpickle
+        from cycls.function.remote import RemoteError, post
+        if not self.api_key:
+            raise RemoteError("No API key. Set CYCLS_API_KEY or cycls.api_key.")
+        self.prod = False
+        name, builder = f"dev-{self.name}", self.user_func
+        r = post(f"https://{name}.cycls.ai/_cycls/reload", cloudpickle.dumps(builder),
+                 name=name, api_key=self.api_key, timeout=120)
+        if r.status_code == 404:
+            print(f"Provisioning '{name}' (one-time for this image)...")
+            dev = Function(builder, name, image=self._image_config(), api_key=self._api_key)
+            if not dev.deploy(remote=SERVE_PY, memory=self.memory):
+                raise RemoteError(f"provisioning {name!r} failed")
+        elif r.status_code != 200:
+            raise RemoteError(f"{name}: {r.status_code} {r.text[:2000]}", status=r.status_code)
+        else:
+            print(f"  https://{name}.cycls.ai")
 
 
 def _make_decorator(cls):

@@ -7,7 +7,7 @@ For a comprehensive walk through the primitives, decorators, CLI, and end-to-end
 ## Tech Stack
 
 - Python >= 3.9 (3.10+ for deployment)
-- FastAPI + Uvicorn for web serving
+- FastAPI + Hypercorn for web serving (hypercorn for h2 end-to-end on Cloud Run)
 - Docker for containerization
 - uv for package management
 - Cloudpickle for function serialization

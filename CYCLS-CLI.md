@@ -61,6 +61,11 @@ cycls run examples/function/remote.py
 Keep driver calls inside the entrypoint — top-level `.remote()` calls fire
 on *every* import (run, deploy, shell all import the file).
 
+Apps join the same loop: an app file whose entrypoint calls `app.remote()`
+gets a save-to-live cloud URL (`dev-{name}.cycls.ai`) — each save hot-swaps
+the running app in ~1s, no redeploy. An app file *without* an entrypoint
+serves locally in Docker, as always.
+
 ## `cycls deploy <file>`
 
 Build and push to Cycls Cloud (managed runtime + per-tenant object-storage workspace).
