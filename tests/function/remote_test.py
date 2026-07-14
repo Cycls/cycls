@@ -33,12 +33,12 @@ def _start_shim(tmp, func, name):
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     url = f"http://127.0.0.1:{port}"
-    import requests
+    import httpx
     for _ in range(50):
         try:
-            requests.get(url, timeout=1)
+            httpx.get(url, timeout=1)
             break
-        except requests.exceptions.ConnectionError:
+        except httpx.ConnectError:
             if proc.poll() is not None:
                 raise RuntimeError("shim died on startup")
             time.sleep(0.1)
@@ -203,14 +203,20 @@ def test_stdout_streams_back(shim_url, capsys):
 
 def test_legacy_shim_response(monkeypatch):
     import cloudpickle
-    from cycls.function import remote as rmod
+    import httpx
 
     class R:
         status_code = 200
         headers = {"content-type": "application/octet-stream"}
         content = cloudpickle.dumps(42)
+        def read(self):
+            return self.content
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
 
-    monkeypatch.setattr(rmod, "post", lambda *a, **kw: R())
+    monkeypatch.setattr(httpx, "stream", lambda *a, **kw: R())
     assert remote("old", url="http://x", api_key=API_KEY)(1) == 42
 
 
@@ -239,11 +245,11 @@ def test_exception_propagates(shim_url):
 
 
 def test_runtime_mismatch_blocks_call(shim_url):
-    import requests
-    r = requests.post(shim_url,
-                      data=cloudpickle.dumps(((21,), {})),
-                      headers={"X-Cycls-Token": token_for(API_KEY, NAME),
-                               "X-Cycls-Runtime": "3.9/0.1"},
-                      timeout=5)
+    import httpx
+    r = httpx.post(shim_url,
+                   content=cloudpickle.dumps(((21,), {})),
+                   headers={"X-Cycls-Token": token_for(API_KEY, NAME),
+                            "X-Cycls-Runtime": "3.9/0.1"},
+                   timeout=5)
     assert r.status_code == 409
     assert "won't cross" in r.text

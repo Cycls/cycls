@@ -7,22 +7,22 @@ import cycls
 
 
 def _responses(events=None):
-    resp = MagicMock()
-    resp.ok = True
+    stream = MagicMock()
+    resp = stream.return_value.__enter__.return_value
+    resp.is_error = False
     resp.iter_lines.return_value = events if events is not None else iter(
         [json.dumps({"status": "DONE", "url": "https://x.cycls.ai"})])
     check = MagicMock()
     check.status_code = 200
     check.json.return_value = {"available": True}
-    return resp, check
+    return stream, check
 
 
 def _deploy(fn, events=None, **kwargs):
-    resp, check = _responses(events)
-    with patch("requests.post", return_value=resp) as post, \
-         patch("requests.get", return_value=check):
+    stream, check = _responses(events)
+    with patch("httpx.stream", stream), patch("httpx.get", return_value=check):
         url = fn.deploy(**kwargs)
-    return url, post.call_args.kwargs["data"]
+    return url, stream.call_args.kwargs["data"]
 
 
 def test_decorator_spec_reaches_the_form():
@@ -75,11 +75,10 @@ def test_executor_inherits_spec():
     def f(x):
         return x
 
-    resp, check = _responses()
-    with patch("requests.post", return_value=resp) as post, \
-         patch("requests.get", return_value=check):
+    stream, check = _responses()
+    with patch("httpx.stream", stream), patch("httpx.get", return_value=check):
         f._deploy_executor("exec-test")
-    form = post.call_args.kwargs["data"]
+    form = stream.call_args.kwargs["data"]
     assert form["function_name"] == "exec-test"
     assert form["cpu"] == 4
     assert form["concurrency"] == 1

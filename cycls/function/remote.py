@@ -18,15 +18,18 @@ import sys
 
 from .main import _get_api_key
 
-def post(url, blob, *, name, api_key, timeout=3600, stream=False):
-    """One authed, runtime-stamped POST of a pickle."""
+def _stamp(api_key, name):
     import cloudpickle
-    import requests
-    return requests.post(
-        url, data=blob, timeout=timeout, stream=stream,
-        headers={"X-Cycls-Token": token_for(api_key, name),
-                 "X-Cycls-Runtime": f"{sys.version_info.major}.{sys.version_info.minor}/{cloudpickle.__version__}",
-                 "Content-Type": "application/octet-stream"})
+    return {"X-Cycls-Token": token_for(api_key, name),
+            "X-Cycls-Runtime": f"{sys.version_info.major}.{sys.version_info.minor}/{cloudpickle.__version__}",
+            "Content-Type": "application/octet-stream"}
+
+
+def post(url, blob, *, name, api_key, timeout=3600):
+    """One authed, runtime-stamped POST of a pickle."""
+    import httpx
+    return httpx.post(url, content=blob, timeout=timeout,
+                      headers=_stamp(api_key, name))
 
 
 SHIM_PRELUDE = '''import asyncio, hmac, os, sys, traceback
@@ -244,7 +247,7 @@ def _consume(name, r):
     `r` is the pickled result, `e` a remote traceback."""
     import cloudpickle
     result, buf, need = _MISSING, b"", None
-    for chunk in r.iter_content(8192):
+    for chunk in r.iter_bytes(8192):
         buf += chunk
         while True:
             if need is None:
@@ -273,19 +276,23 @@ def remote(name, *, url=None, api_key=None):
 
     def call(*args, **kwargs):
         import cloudpickle
+        import httpx
         key = api_key or _get_api_key()
         if not key:
             raise RemoteError("No API key. Set CYCLS_API_KEY or cycls.api_key.")
-        r = post(url or f"https://{name}.cycls.ai", cloudpickle.dumps((args, kwargs)),
-                 name=name, api_key=key, stream=True)
-        if r.status_code == 404:
-            raise RemoteError(f"{name}: 404 — no such deployment. Run `cycls deploy <file>` first.",
-                              status=404)
-        if r.status_code != 200:
-            raise RemoteError(f"{name}: {r.status_code} {r.text[:2000]}", status=r.status_code)
-        if r.headers.get("content-type") != "application/x-cycls-stream":
-            return cloudpickle.loads(r.content)
-        return _consume(name, r)
+        with httpx.stream("POST", url or f"https://{name}.cycls.ai",
+                          content=cloudpickle.dumps((args, kwargs)),
+                          timeout=3600, headers=_stamp(key, name)) as r:
+            if r.status_code == 404:
+                raise RemoteError(f"{name}: 404 — no such deployment. Run `cycls deploy <file>` first.",
+                                  status=404)
+            if r.status_code != 200:
+                r.read()
+                raise RemoteError(f"{name}: {r.status_code} {r.text[:2000]}", status=r.status_code)
+            if r.headers.get("content-type") != "application/x-cycls-stream":
+                r.read()
+                return cloudpickle.loads(r.content)
+            return _consume(name, r)
 
     def fan_out(items, *, workers=16):
         """One call per item, fanned out across the deployment's autoscaled

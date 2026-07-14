@@ -425,7 +425,7 @@ CMD ["python", "entrypoint.py"]
         return not any(p.name == "port" or p.kind == p.VAR_KEYWORD for p in params)
 
     def deploy(self, *args, **kwargs):
-        import requests
+        import httpx
 
         base_url = self.base_url
         port = kwargs.pop('port', 8080)
@@ -438,7 +438,7 @@ CMD ["python", "entrypoint.py"]
         # Check name availability before uploading
         print(f"Checking '{self.name}'...")
         try:
-            check_resp = requests.get(
+            check_resp = httpx.get(
                 f"{base_url}/v1/deployment/check-name",
                 params={"name": self.name},
                 headers={"X-API-Key": self.api_key},
@@ -452,7 +452,7 @@ CMD ["python", "entrypoint.py"]
             if not check_data.get("available"):
                 print(f"Error: {check_data.get('reason', 'Name unavailable')}")
                 return None
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             print(f"Error checking name: {e}")
             return None
 
@@ -471,48 +471,46 @@ CMD ["python", "entrypoint.py"]
                     if f.is_file() and f != archive_path:
                         tar.add(f, arcname=f.relative_to(workdir))
 
-            with open(archive_path, 'rb') as f:
-                response = requests.post(
-                    f"{base_url}/v1/deploy",
-                    data={
-                        "function_name": self.name,
-                        "port": port,
-                        "memory": "1Gi",
-                        "timeout": 1200,
-                        "use_http2": "true",
-                        "session_affinity": "true",
-                        **spec,
-                    },
-                    files={"source_archive": (archive_name, f, "application/gzip")},
-                    headers={"X-API-Key": self.api_key},
-                    timeout=9000,
-                    stream=True,
-                )
-
-            if not response.ok:
-                print(f"Deploy failed: {response.status_code}")
-                try:
-                    print(f"  {response.json()['detail']}")
-                except (json.JSONDecodeError, KeyError):
-                    print(f"  {response.text}")
-                return None
-
-            # Parse NDJSON stream
             url = None
-            for line in response.iter_lines(decode_unicode=True):
-                if line:
-                    event = json.loads(line)
-                    status = event.get("status", "")
-                    msg = event.get("message", "")
-                    print(f"  [{status}] {msg}")
-                    if status == "DONE":
-                        url = event.get("url")
-                        print(f"Deployed: {url}")
-                        if remote is True and not self.name.startswith("exec-"):
-                            print(f'Call it: cycls.remote("{self.name}")(...)')
-                        break
-                    elif status == "ERROR":
-                        return None
+            with open(archive_path, 'rb') as f, httpx.stream(
+                "POST",
+                f"{base_url}/v1/deploy",
+                data={
+                    "function_name": self.name,
+                    "port": port,
+                    "memory": "1Gi",
+                    "timeout": 1200,
+                    "use_http2": "true",
+                    "session_affinity": "true",
+                    **spec,
+                },
+                files={"source_archive": (archive_name, f, "application/gzip")},
+                headers={"X-API-Key": self.api_key},
+                timeout=9000,
+            ) as response:
+                if response.is_error:
+                    response.read()
+                    print(f"Deploy failed: {response.status_code}")
+                    try:
+                        print(f"  {response.json()['detail']}")
+                    except (json.JSONDecodeError, KeyError):
+                        print(f"  {response.text}")
+                    return None
+
+                for line in response.iter_lines():
+                    if line:
+                        event = json.loads(line)
+                        status = event.get("status", "")
+                        msg = event.get("message", "")
+                        print(f"  [{status}] {msg}")
+                        if status == "DONE":
+                            url = event.get("url")
+                            print(f"Deployed: {url}")
+                            if remote is True and not self.name.startswith("exec-"):
+                                print(f'Call it: cycls.remote("{self.name}")(...)')
+                            break
+                        elif status == "ERROR":
+                            return None
             return url
 
     def _image_config(self):
