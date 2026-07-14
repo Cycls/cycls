@@ -253,3 +253,9 @@ def test_runtime_mismatch_blocks_call(shim_url):
                    timeout=5)
     assert r.status_code == 409
     assert "won't cross" in r.text
+
+
+def test_bare_logs_is_module_level():
+    """App._serve imports this at container boot — template text alone doesn't count."""
+    from cycls.function.remote import BARE_LOGS
+    assert "hypercorn.access" in BARE_LOGS["loggers"]

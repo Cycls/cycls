@@ -32,6 +32,15 @@ def post(url, blob, *, name, api_key, timeout=3600):
                       headers=_stamp(api_key, name))
 
 
+BARE_LOGS = {
+    "version": 1, "disable_existing_loggers": False,
+    "formatters": {"bare": {"format": "%(message)s"}},
+    "handlers": {"c": {"class": "logging.StreamHandler", "formatter": "bare",
+                       "stream": "ext://sys.stdout"}},
+    "loggers": {"hypercorn.access": {"handlers": ["c"], "level": "INFO", "propagate": False},
+                "hypercorn.error": {"handlers": ["c"], "level": "INFO", "propagate": False}},
+}
+
 SHIM_PRELUDE = '''import asyncio, hmac, os, sys, traceback
 sys.path.insert(0, '/app')
 import cloudpickle
@@ -70,16 +79,7 @@ async def read(receive):
         body += msg.get("body", b"")
         more = msg.get("more_body", False)
     return body
-
-BARE_LOGS = {
-    "version": 1, "disable_existing_loggers": False,
-    "formatters": {"bare": {"format": "%(message)s"}},
-    "handlers": {"c": {"class": "logging.StreamHandler", "formatter": "bare",
-                       "stream": "ext://sys.stdout"}},
-    "loggers": {"hypercorn.access": {"handlers": ["c"], "level": "INFO", "propagate": False},
-                "hypercorn.error": {"handlers": ["c"], "level": "INFO", "propagate": False}},
-}
-
+''' + f"\nBARE_LOGS = {BARE_LOGS!r}\n" + '''
 def boot(asgi):
     from hypercorn.asyncio import serve
     from hypercorn.config import Config
