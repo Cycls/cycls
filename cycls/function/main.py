@@ -93,7 +93,7 @@ class Function:
 
     def __init__(self, func, name, python_version=None, image=None,
                  base_url=None, api_key=None, cpu=None, memory=None,
-                 timeout=None, concurrency=None):
+                 timeout=None, concurrency=None, max_instances=None):
         image = image or {}
         self.func = func
         self.name = name.replace('_', '-')
@@ -111,7 +111,8 @@ class Function:
         self._base_url = base_url
         self._api_key = api_key
         self.spec = {k: v for k, v in dict(cpu=cpu, memory=memory, timeout=timeout,
-                                           concurrency=concurrency).items() if v is not None}
+                                           concurrency=concurrency,
+                                           max_instances=max_instances).items() if v is not None}
         self.pip = sorted(set([*self._base_pip, *image.get("pip", [])])
                           | {f"cloudpickle=={cloudpickle.__version__}"})
         self.force_rebuild = image.get("force_rebuild", False)
