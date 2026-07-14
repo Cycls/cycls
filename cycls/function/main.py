@@ -429,8 +429,6 @@ CMD ["python", "entrypoint.py"]
 
         base_url = self.base_url
         port = kwargs.pop('port', 8080)
-        spec = {**self.spec, **{k: kwargs.pop(k) for k in ('cpu', 'memory', 'timeout', 'concurrency')
-                                if k in kwargs}}
         remote = kwargs.pop('remote', None)
         if remote is None:
             remote = self._is_remote()
@@ -482,7 +480,7 @@ CMD ["python", "entrypoint.py"]
                     "timeout": 1200,
                     "use_http2": "true",
                     "session_affinity": "true",
-                    **spec,
+                    **self.spec,
                 },
                 files={"source_archive": (archive_name, f, "application/gzip")},
                 headers={"X-API-Key": self.api_key},

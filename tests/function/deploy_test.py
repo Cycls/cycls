@@ -18,10 +18,10 @@ def _responses(events=None):
     return stream, check
 
 
-def _deploy(fn, events=None, **kwargs):
+def _deploy(fn, events=None):
     stream, check = _responses(events)
     with patch("httpx.stream", stream), patch("httpx.get", return_value=check):
-        url = fn.deploy(**kwargs)
+        url = fn.deploy()
     return url, stream.call_args.kwargs["data"]
 
 
@@ -49,16 +49,6 @@ def test_bare_function_sends_legacy_defaults():
     assert "concurrency" not in form
 
 
-def test_deploy_kwargs_override_decorator():
-    @cycls.function(image=cycls.Image(), cpu=2)
-    def f(x):
-        return x
-
-    _, form = _deploy(f, cpu=4, memory="8Gi")
-    assert form["cpu"] == 4
-    assert form["memory"] == "8Gi"
-
-
 def test_stream_abandoned_at_done():
     @cycls.function(image=cycls.Image())
     def f(x):
@@ -82,4 +72,3 @@ def test_executor_inherits_spec():
     assert form["function_name"] == "exec-test"
     assert form["cpu"] == 4
     assert form["concurrency"] == 1
-    assert "memory" in form and "timeout" in form

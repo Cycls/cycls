@@ -171,8 +171,9 @@ class App(Function):
                  name=name, api_key=self.api_key, timeout=120)
         if r.status_code == 404:
             print(f"Provisioning '{name}' (one-time for this image)...")
-            dev = Function(builder, name, image=self._image_config(), api_key=self._api_key)
-            if not dev.deploy(remote=SERVE_PY, memory=self.spec["memory"]):
+            dev = Function(builder, name, image=self._image_config(),
+                           api_key=self._api_key, memory=self.spec.get("memory"))
+            if not dev.deploy(remote=SERVE_PY):
                 raise RemoteError(f"provisioning {name!r} failed")
         elif r.status_code != 200:
             raise RemoteError(f"{name}: {r.status_code} {r.text[:2000]}", status=r.status_code)
