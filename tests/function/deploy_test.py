@@ -47,6 +47,15 @@ def test_bare_function_sends_legacy_defaults():
     assert form["timeout"] == 1200
     assert "cpu" not in form
     assert "concurrency" not in form
+    assert "max_instances" not in form
+
+
+def test_dev_provision_caps_instances():
+    from cycls.function.main import Function
+
+    f = Function(lambda context: None, "dev-demo", max_instances=1)
+    _, form = _deploy(f)
+    assert form["max_instances"] == 1
 
 
 def test_stream_abandoned_at_done():
