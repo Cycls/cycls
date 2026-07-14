@@ -87,24 +87,24 @@ def _pretty_log(msg):
 def _stream_logs(name, stop):
     """Live-tail the dev service's own log stream (/_cycls/logs). Started once
     the service is up, so a 404 means it predates the endpoint."""
-    import requests
+    import httpx
     from cycls.function.main import _get_api_key
     from cycls.function.remote import token_for
     headers = {"X-Cycls-Token": token_for(_get_api_key(), name)}
     while not stop.is_set():
         try:
-            r = requests.get(f"https://{name}.cycls.ai/_cycls/logs",
-                             stream=True, timeout=(5, 30), headers=headers)
-            if r.status_code == 404:
-                print(f"  \033[2m│ no live logs on this service — `cycls rm {name}`, then save\033[0m",
-                      flush=True)
-                return
-            for raw in r.iter_lines(decode_unicode=True):
-                if stop.is_set():
+            with httpx.stream("GET", f"https://{name}.cycls.ai/_cycls/logs",
+                              timeout=httpx.Timeout(30, connect=5), headers=headers) as r:
+                if r.status_code == 404:
+                    print(f"  \033[2m│ no live logs on this service — `cycls rm {name}`, then save\033[0m",
+                          flush=True)
                     return
-                if (line := _pretty_log(raw or "")):
-                    print(f"  \033[2m│\033[0m {line}", flush=True)
-        except requests.RequestException:
+                for raw in r.iter_lines():
+                    if stop.is_set():
+                        return
+                    if (line := _pretty_log(raw or "")):
+                        print(f"  \033[2m│\033[0m {line}", flush=True)
+        except httpx.HTTPError:
             pass
         stop.wait(2)
 
