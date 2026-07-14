@@ -8,6 +8,7 @@ import sys
 import shutil
 import traceback
 from pathlib import Path
+from typing import Literal, Optional, Union
 import tarfile
 
 os.environ["DOCKER_BUILDKIT"] = "1"
@@ -91,7 +92,8 @@ class Function:
     _serves = False
 
     def __init__(self, func, name, python_version=None, image=None,
-                 base_url=None, api_key=None):
+                 base_url=None, api_key=None, cpu=None, memory=None,
+                 timeout=None, concurrency=None):
         image = image or {}
         self.func = func
         self.name = name.replace('_', '-')
@@ -108,6 +110,8 @@ class Function:
         self.copy = image.get("copy", {})
         self._base_url = base_url
         self._api_key = api_key
+        self.spec = {k: v for k, v in dict(cpu=cpu, memory=memory, timeout=timeout,
+                                           concurrency=concurrency).items() if v is not None}
         self.pip = sorted(set([*self._base_pip, *image.get("pip", [])])
                           | {f"cloudpickle=={cloudpickle.__version__}"})
         self.force_rebuild = image.get("force_rebuild", False)
@@ -425,7 +429,8 @@ CMD ["python", "entrypoint.py"]
 
         base_url = self.base_url
         port = kwargs.pop('port', 8080)
-        memory = kwargs.pop('memory', '1Gi')
+        spec = {**self.spec, **{k: kwargs.pop(k) for k in ('cpu', 'memory', 'timeout', 'concurrency')
+                                if k in kwargs}}
         remote = kwargs.pop('remote', None)
         if remote is None:
             remote = self._is_remote()
@@ -472,10 +477,11 @@ CMD ["python", "entrypoint.py"]
                     data={
                         "function_name": self.name,
                         "port": port,
-                        "memory": memory,
+                        "memory": "1Gi",
                         "timeout": 1200,
                         "use_http2": "true",
                         "session_affinity": "true",
+                        **spec,
                     },
                     files={"source_archive": (archive_name, f, "application/gzip")},
                     headers={"X-API-Key": self.api_key},
@@ -504,6 +510,7 @@ CMD ["python", "entrypoint.py"]
                         print(f"Deployed: {url}")
                         if remote is True and not self.name.startswith("exec-"):
                             print(f'Call it: cycls.remote("{self.name}")(...)')
+                        break
                     elif status == "ERROR":
                         return None
             return url
@@ -558,18 +565,25 @@ CMD ["python", "entrypoint.py"]
         def execute(fn, *args, **kwargs):
             return fn(*args, **kwargs)
         if not Function(execute, name, image=self._image_config(),
-                        api_key=self._api_key).deploy(remote=True):
+                        api_key=self._api_key, **self.spec).deploy(remote=True):
             raise RemoteError(f"provisioning {name!r} failed")
 
     def __del__(self):
         self._cleanup_container()
 
 
-def function(name=None, image=None, **kwargs):
+def function(name=None, image=None, *,
+             cpu: Optional[Literal[1, 2, 4, 6, 8]] = None,
+             memory: Optional[Union[Literal["512Mi", "1Gi", "2Gi", "4Gi", "8Gi", "16Gi", "32Gi"], str]] = None,
+             timeout: Optional[int] = None,
+             concurrency: Optional[int] = None,
+             python_version=None):
     """Decorator that transforms a Python function into a containerized Function.
     Build config (pip, apt, run_commands, copy, force_rebuild) must be passed
     via `image=cycls.Image()...` — flat kwargs are not accepted."""
     def decorator(func):
-        return Function(func, name or func.__name__, image=image, **kwargs,
+        return Function(func, name or func.__name__, image=image, cpu=cpu,
+                        memory=memory, timeout=timeout, concurrency=concurrency,
+                        python_version=python_version,
                         base_url=_get_base_url(), api_key=_get_api_key())
     return decorator

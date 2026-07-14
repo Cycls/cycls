@@ -96,7 +96,6 @@ class App(Function):
         if auth is not None and not isinstance(auth, JWT):
             raise TypeError(f"auth must be cycls.JWT or None, got {type(auth).__name__}")
         self.user_func = func
-        self.memory = memory
         self.prod = False
         self.volume = Path((image or {}).get("volume", "/workspace"))
         self._auth_provider = auth
@@ -104,7 +103,7 @@ class App(Function):
         image = dict(image or {})
         image["copy"] = {str(CYCLS_PATH): "cycls", **image.get("copy", {})}
 
-        super().__init__(func=func, name=name, image=image,
+        super().__init__(func=func, name=name, image=image, memory=memory,
                          base_url=_get_base_url(), api_key=_get_api_key())
 
     def __call__(self, *args, **kwargs):
@@ -153,7 +152,7 @@ class App(Function):
         if self.api_key is None:
             raise RuntimeError("Missing API key. Set cycls.api_key or CYCLS_API_KEY environment variable.")
         self._prepare_func(prod=True)
-        return super().deploy(port=port, memory=self.memory)
+        return super().deploy(port=port)
 
     @property
     def dev_name(self):
@@ -173,7 +172,7 @@ class App(Function):
         if r.status_code == 404:
             print(f"Provisioning '{name}' (one-time for this image)...")
             dev = Function(builder, name, image=self._image_config(), api_key=self._api_key)
-            if not dev.deploy(remote=SERVE_PY, memory=self.memory):
+            if not dev.deploy(remote=SERVE_PY, memory=self.spec["memory"]):
                 raise RemoteError(f"provisioning {name!r} failed")
         elif r.status_code != 200:
             raise RemoteError(f"{name}: {r.status_code} {r.text[:2000]}", status=r.status_code)
