@@ -21,9 +21,11 @@ import { toggleDark, cn } from "../lib/utils";
 import { useToast } from "../lib/toast";
 import { useSpeechRecognition } from "../hooks/use-speech";
 import { useUrlParam } from "../hooks/use-url-param";
+import { useMediaQuery } from "../hooks/use-media-query";
+import { usePaneWidth } from "../hooks/use-pane-width";
 import { SUGGESTIONS } from "./suggestions-data";
 
-interface PassAgent {
+export interface PassAgent {
   slug: string;
   title: string;
   title_ar?: string;
@@ -97,28 +99,26 @@ export function Chat({ chat, onShare, files, account, config }: {
   const [exploreLoading, setExploreLoading] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats">(account ? "chats" : "files");
-  const [canvasFile, setCanvasFile] = useState<CanvasFile | null>(null);
-  const openFileInCanvas = useCallback((path: string) => {
-    setCanvasFile({ path, name: path.split("/").pop() || path });
+  const [canvasTabs, setCanvasTabs] = useState<CanvasFile[]>([]);
+  const [canvasActive, setCanvasActive] = useState<string | null>(null);
+  const [canvasHidden, setCanvasHidden] = useState(false);
+  const [canvasExpanded, setCanvasExpanded] = useState(false);
+  const isDesktop = useMediaQuery("(min-width: 1024px)");
+  useEffect(() => {
+    if (canvasHidden || canvasTabs.length === 0) setCanvasExpanded(false);
+  }, [canvasHidden, canvasTabs.length]);
+  const openFileInCanvas = useCallback((path: string, name?: string) => {
+    setCanvasTabs((tabs) => (tabs.some((f) => f.path === path) ? tabs : [...tabs, { path, name: name || path.split("/").pop() || path }]));
+    setCanvasActive(path);
+    setCanvasHidden(false);
+  }, []);
+  const closeCanvasTab = useCallback((path: string) => {
+    setCanvasTabs((tabs) => tabs.filter((f) => f.path !== path));
+    setCanvasActive((a) => (a === path ? null : a));
   }, []);
   const [panelExpanded, setPanelExpanded] = useState(false);
-  const [panelWidth, setPanelWidth] = useState(() => Number(localStorage.getItem("cycls_panel_width")) || 480);
-
   // Drag the panel's left edge to resize; width persists across sessions.
-  const startResize = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    document.body.style.userSelect = "none";
-    const onMove = (ev: MouseEvent) =>
-      setPanelWidth(Math.min(Math.max(window.innerWidth - ev.clientX - 8, 360), window.innerWidth - 80));
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      document.body.style.userSelect = "";
-      setPanelWidth((w) => { localStorage.setItem("cycls_panel_width", String(w)); return w; });
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  }, []);
+  const { width: panelWidth, startResize } = usePaneWidth("cycls_panel_width", 480, 360, 80);
   const [shareOpen, setShareOpen] = useState(false);
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
@@ -152,12 +152,11 @@ export function Chat({ chat, onShare, files, account, config }: {
       if (ev.action === "open_plan_modal") {
         openPricing(activeOrg ? "organization" : "user", "agent_event");
       } else if (ev.action === "open_canvas" && typeof ev.path === "string") {
-        const path = ev.path;
-        setCanvasFile({ path, name: typeof ev.name === "string" ? ev.name : path.split("/").pop() || path });
+        openFileInCanvas(ev.path, typeof ev.name === "string" ? ev.name : undefined);
       }
     });
     return () => setUIHandler(null);
-  }, [setUIHandler, activeOrg, openPricing]);
+  }, [setUIHandler, activeOrg, openPricing, openFileInCanvas]);
 
   const onSpeechEnd = useCallback((text: string) => {
     if (text.trim()) {
@@ -257,26 +256,26 @@ export function Chat({ chat, onShare, files, account, config }: {
 
   const isEmpty = messages.length === 0;
 
+  // Static config, then the 1h localStorage cache, then the network.
+  const loadExplore = useCallback(async (): Promise<PassAgent[]> => {
+    if (config?.explore?.length) return config.explore;  // static: no network
+    const CACHE_KEY = "cycls_explore";
+    try {
+      const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
+      if (cached && Date.now() - cached.at < 3_600_000 && cached.agents?.length) return cached.agents;
+    } catch { /* ignore */ }
+    const res = await fetch("/explore");
+    const data = await res.json();
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), agents: data.agents || [] }));
+    return data.agents || [];
+  }, [config]);
+
   const openExplore = async () => {
     setExploreOpen(true);
     track("explore_opened", { cached: exploreAgents.length > 0 });
     if (exploreAgents.length > 0) return;
-    if (config?.explore?.length) { setExploreAgents(config.explore); return; }  // static: no network
-    const CACHE_KEY = "cycls_explore";
-    try {
-      const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
-      if (cached && Date.now() - cached.at < 3_600_000 && cached.agents?.length) {
-        setExploreAgents(cached.agents);
-        return;
-      }
-    } catch { /* ignore */ }
     setExploreLoading(true);
-    try {
-      const res = await fetch("/explore");
-      const data = await res.json();
-      setExploreAgents(data.agents || []);
-      localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), agents: data.agents || [] }));
-    } catch { /* silent */ }
+    try { setExploreAgents(await loadExplore()); } catch { /* silent */ }
     setExploreLoading(false);
   };
 
@@ -313,10 +312,10 @@ export function Chat({ chat, onShare, files, account, config }: {
   };
 
   return (
-    <div className="h-dvh flex flex-col">
-      {/* Header */}
-      <header className="pointer-events-none fixed top-0 right-0 left-0 h-12" dir="ltr">
-        <div className="pointer-events-auto mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
+    <div className="h-dvh flex">
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+      <header className="relative z-30 h-12 shrink-0" dir="ltr">
+        <div className="mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
           <div className="flex items-center gap-2">
           {meta?.brand ? (
             <span className="flex h-6 items-center">
@@ -400,6 +399,19 @@ export function Chat({ chat, onShare, files, account, config }: {
               </>
             )}
             {workspaces && <WorkspaceSwitcher workspaces={workspaces} />}
+            {files && canvasTabs.length > 0 && (
+              <button
+                onClick={() => setCanvasHidden((h) => !h)}
+                className={`${canvasHidden ? "text-muted-foreground" : "text-foreground"} hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer`}
+                aria-label={canvasHidden ? "Show canvas" : "Hide canvas"}
+                title={canvasHidden ? "Show canvas" : "Hide canvas"}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <rect x="3.75" y="3.75" width="16.5" height="16.5" rx="2" />
+                  <path d="M14.25 4.75h3.5a1.5 1.5 0 011.5 1.5v11.5a1.5 1.5 0 01-1.5 1.5h-3.5z" fill={canvasHidden ? "none" : "currentColor"} stroke="none" />
+                </svg>
+              </button>
+            )}
             {(files || account) && (
               <button
                 onClick={() => filesOpen ? setFilesOpen(false) : openPanel()}
@@ -466,9 +478,6 @@ export function Chat({ chat, onShare, files, account, config }: {
         </div>
       </Popover>
 
-      {/* Spacer for fixed header */}
-      <div className="shrink-0 h-12" />
-
       {/* Stable file input — lives outside LayoutGroup so it survives remounts */}
       <input
         ref={fileInputRef}
@@ -483,6 +492,9 @@ export function Chat({ chat, onShare, files, account, config }: {
         }}
       />
 
+      {/* rtl:flex-row-reverse keeps the canvas on the right in Arabic */}
+      <div className="flex min-h-0 flex-1 rtl:flex-row-reverse">
+      <div className={cn("relative flex h-full min-w-0 flex-1 flex-col", isDesktop && canvasExpanded && !canvasHidden && canvasTabs.length > 0 && "hidden")}>
       <LayoutGroup>
         <LoadingBar active={chatLoading} />
         {!chatLoading && (isEmpty ? (
@@ -617,11 +629,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                     aria-label={panelExpanded ? t("collapse") : t("expand")}
                     title={panelExpanded ? t("collapse") : t("expand")}
                   >
-                    {panelExpanded ? (
-                      <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M15 9h4.5M15 9V4.5M15 9l5.25-5.25M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" /></svg>
-                    ) : (
-                      <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 8.25V3.75h4.5M8.25 3.75L3.75 8.25M20.25 8.25V3.75h-4.5M15.75 3.75l4.5 4.5M3.75 15.75v4.5h4.5M8.25 20.25l-4.5-4.5M20.25 15.75v4.5h-4.5M15.75 20.25l4.5-4.5" /></svg>
-                    )}
+                    <Icon name={panelExpanded ? "collapse" : "expand"} className="size-4" />
                   </button>
                   <button
                     onClick={() => setFilesOpen(false)}
@@ -633,7 +641,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </div>
               )}
               {filesTab === "files" && files ? (
-                <Files {...files} onOpenInCanvas={(path, name) => setCanvasFile({ path, name })} maxUpload={config?.max_upload} />
+                <Files {...files} onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
               ) : filesTab === "shares" ? (
                 <div className="flex flex-1 min-h-0 flex-col">
                   <div className="flex-1 overflow-y-auto">
@@ -755,16 +763,28 @@ export function Chat({ chat, onShare, files, account, config }: {
           </div>
         </Popover>
       )}
+      </div>
       {files && (
         <Canvas
-          file={canvasFile}
-          onClose={() => setCanvasFile(null)}
+          tabs={canvasTabs}
+          active={canvasActive}
+          docked={isDesktop}
+          hidden={canvasHidden}
+          expanded={canvasExpanded}
+          onToggleExpand={() => setCanvasExpanded((e) => !e)}
+          onSelectTab={setCanvasActive}
+          onCloseTab={closeCanvasTab}
+          onHide={() => setCanvasHidden(true)}
+          onAddFile={openFileInCanvas}
+          searchFiles={files.searchFiles}
           readFile={files.readFile}
           openFile={files.onOpenFile}
           writeFile={files.writeFile}
           onShareFile={files.onShareFile}
         />
       )}
+      </div>
+      </div>
     </div>
   );
 }
