@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { tintTile, tintLabel } from "../canvas-utils";
 
 // A deliverable the agent opened in the canvas — rendered as a persistent,
 // clickable card (same chip style as user attachments). Click reopens the
@@ -22,8 +23,8 @@ export const FilePart = memo(function FilePart({
         onOpen ? "hover:bg-secondary/50 cursor-pointer" : "cursor-default"
       }`}
     >
-      <div className="bg-secondary flex size-10 shrink-0 items-center justify-center rounded-lg">
-        <span className="text-[10px] font-medium uppercase text-muted-foreground">{ext}</span>
+      <div className="bg-secondary flex size-10 shrink-0 items-center justify-center rounded-lg" style={tintTile(name)}>
+        <span className="text-[10px] font-medium uppercase text-muted-foreground" style={tintLabel(name)}>{ext}</span>
       </div>
       <div className="flex min-w-0 flex-col overflow-hidden">
         <span className="truncate text-xs font-medium text-foreground">{name}</span>

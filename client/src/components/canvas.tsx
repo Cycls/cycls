@@ -7,8 +7,9 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, codeLang, saveBlob } from "./canvas-utils";
+import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, codeLang, extTint, saveBlob } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
+import { usePaneWidth } from "../hooks/use-pane-width";
 import { cn } from "../lib/utils";
 import { t } from "../lib/i18n";
 
@@ -127,25 +128,229 @@ export function CanvasDoc({ file, content, error, shared = false }: {
   );
 }
 
-export function Canvas({ file, onClose, readFile, openFile, writeFile, onShareFile }: {
-  file: CanvasFile | null;
-  onClose: () => void;
+// Open files as tabs, docked (desktop split pane) or as the overlay drawer.
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, readFile, openFile, writeFile, onShareFile }: {
+  tabs: CanvasFile[];
+  active: string | null;
+  docked: boolean;
+  hidden?: boolean;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  onSelectTab: (path: string) => void;
+  onCloseTab: (path: string) => void;
+  onHide: () => void;
+  onAddFile?: (path: string) => void;
+  searchFiles?: (q: string) => Promise<{ name: string; path: string }[]>;
   readFile: (path: string) => Promise<string>;   // authed text fetch (md/html/code source)
   openFile: (path: string) => Promise<string>;    // authed blob URL (pdf / download)
   writeFile: (path: string, text: string) => Promise<void>;  // overwrite (editor)
   onShareFile?: (path: string, audience: string) => Promise<string>;
 }) {
+  const file = hidden ? null : tabs.find((f) => f.path === active) ?? tabs[tabs.length - 1] ?? null;
+  const { width, startResize, resizing } = usePaneWidth("cycls_canvas_width", 560, 380, 480);
+
+  const stripBtn = "flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer";
+  const inner = file && (
+    <>
+      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+          {tabs.map((f) => {
+            const on = f.path === file.path;
+            const tint = extTint(f.name);
+            return (
+              <div
+                key={f.path}
+                role="button"
+                onClick={() => onSelectTab(f.path)}
+                className={cn(
+                  "group flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg py-1 pl-2.5 pr-1 text-xs transition-colors",
+                  on ? "bg-secondary text-foreground font-medium" : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+                )}
+              >
+                {tint && <span className="size-1.5 rounded-full" style={{ backgroundColor: tint }} />}
+                <span className="max-w-40 truncate">{f.name}</span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onCloseTab(f.path); }}
+                  className={cn("rounded p-0.5 hover:bg-accent/20", on ? "" : "opacity-0 group-hover:opacity-100")}
+                  aria-label={`Close ${f.name}`}
+                >
+                  <Icon name="x" className="size-3" />
+                </button>
+              </div>
+            );
+          })}
+          {onAddFile && searchFiles && <AddTab onAdd={onAddFile} searchFiles={searchFiles} />}
+        </div>
+        <button onClick={onToggleExpand} className={cn(stripBtn, "hidden sm:flex")} aria-label={expanded ? t("collapse") : t("expand")} title={expanded ? t("collapse") : t("expand")}>
+          <Icon name={expanded ? "collapse" : "expand"} className="size-3.5" />
+        </button>
+        <button onClick={onHide} className={stripBtn} aria-label="Hide canvas" title="Hide canvas">
+          <Icon name="chevron-right" className="size-4" />
+        </button>
+      </div>
+      <CanvasFileView
+        key={file.path}
+        file={file}
+        onClose={() => onCloseTab(file.path)}
+        readFile={readFile}
+        openFile={openFile}
+        writeFile={writeFile}
+        onShareFile={onShareFile}
+      />
+    </>
+  );
+
+  if (docked) {
+    // Expanded fills the content row; chat.tsx hides the chat column.
+    if (file && expanded) {
+      return (
+        <aside dir="ltr" className="relative min-w-0 flex-1">
+          <div className="absolute inset-x-1 bottom-1 top-1 flex flex-col overflow-hidden rounded-xl border border-border bg-background">
+            {inner}
+          </div>
+        </aside>
+      );
+    }
+    return (
+      <AnimatePresence initial={false}>
+        {file && (
+          <motion.aside
+            key="canvas"
+            dir="ltr"
+            initial={{ width: 0 }}
+            animate={{ width }}
+            exit={{ width: 0 }}
+            transition={resizing ? { duration: 0 } : { type: "spring", damping: 30, stiffness: 300 }}
+            className="relative shrink-0 overflow-hidden"
+          >
+            {/* Right-anchored fixed-width card so content doesn't squish while the pane animates. */}
+            <div className="absolute bottom-1 right-1 top-1 flex flex-col overflow-hidden rounded-xl border border-border bg-background" style={{ width: width - 8 }}>
+              <div
+                onMouseDown={startResize}
+                className="absolute bottom-0 left-0 top-0 z-20 w-1.5 cursor-ew-resize hover:bg-accent/30"
+                aria-label="Resize canvas"
+              />
+              {inner}
+            </div>
+          </motion.aside>
+        )}
+      </AnimatePresence>
+    );
+  }
+
+  if (file && expanded) {
+    return (
+      <>
+        <div className="fixed inset-0 z-[55] bg-black/30 backdrop-blur-[2px]" onClick={onHide} />
+        <div dir="ltr" className="fixed inset-2 z-[60] flex flex-col overflow-hidden rounded-xl border border-border bg-background">
+          {inner}
+        </div>
+      </>
+    );
+  }
+
   return (
     <AnimatePresence>
       {file && (
-        <CanvasPanel key={file.path} file={file} onClose={onClose}
-          readFile={readFile} openFile={openFile} writeFile={writeFile} onShareFile={onShareFile} />
+        <>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="fixed inset-0 z-[55] bg-black/30 backdrop-blur-[2px]"
+            onClick={onHide}
+          />
+          <motion.div
+            initial={{ x: "100%" }}
+            animate={{ x: 0 }}
+            exit={{ x: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="fixed bottom-1 right-1 top-1 z-[60] flex w-[calc(100%-0.5rem)] flex-col overflow-hidden rounded-xl border border-border bg-background sm:w-[720px] lg:w-[60vw] lg:max-w-[960px]"
+            dir="ltr"
+          >
+            {inner}
+          </motion.div>
+        </>
       )}
     </AnimatePresence>
   );
 }
 
-function CanvasPanel({ file, onClose, readFile, openFile, writeFile, onShareFile }: {
+// The menu is position:fixed from the button's rect so the pane's
+// overflow-hidden can't clip it.
+function AddTab({ onAdd, searchFiles }: {
+  onAdd: (path: string) => void;
+  searchFiles: (q: string) => Promise<{ name: string; path: string }[]>;
+}) {
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<{ name: string; path: string }[]>([]);
+
+  useEffect(() => {
+    if (!pos) return;
+    let dead = false;
+    searchFiles(q).then((r) => { if (!dead) setResults(r); });
+    return () => { dead = true; };
+  }, [pos != null, q, searchFiles]);
+
+  const toggle = (e: React.MouseEvent<HTMLButtonElement>) => {
+    if (pos) { setPos(null); return; }
+    const r = e.currentTarget.getBoundingClientRect();
+    setQ("");
+    setPos({ x: r.left, y: r.bottom + 4 });
+  };
+
+  return (
+    <>
+      <button
+        onClick={toggle}
+        className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+        aria-label="Open a file"
+        title="Open a file"
+      >
+        <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+        </svg>
+      </button>
+      {pos && createPortal(
+        <>
+          <div className="fixed inset-0 z-[70]" onClick={() => setPos(null)} />
+          <div className="fixed z-[70] w-72 overflow-hidden rounded-xl border border-border bg-background shadow-xl" style={{ left: pos.x, top: pos.y }}>
+            <input
+              autoFocus
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search files…"
+              className="w-full border-b border-border bg-transparent px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
+            />
+            <div className="max-h-64 overflow-y-auto py-1">
+              {results.length === 0 ? (
+                <div className="px-3 py-3 text-center text-xs text-muted-foreground">—</div>
+              ) : results.map((r) => {
+                const tint = extTint(r.name);
+                return (
+                  <button
+                    key={r.path}
+                    onClick={() => { onAdd(r.path); setPos(null); }}
+                    className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-secondary/80"
+                  >
+                    <span className="size-1.5 shrink-0 rounded-full" style={{ backgroundColor: tint || "var(--color-muted-foreground)" }} />
+                    <span className="truncate" dir="ltr">{r.path}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+// Keyed by path from the parent, so per-file state resets on tab switch.
+function CanvasFileView({ file, onClose, readFile, openFile, writeFile, onShareFile }: {
   file: CanvasFile;
   onClose: () => void;
   readFile: (path: string) => Promise<string>;
@@ -160,11 +365,11 @@ function CanvasPanel({ file, onClose, readFile, openFile, writeFile, onShareFile
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [expanded, setExpanded] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const md = isMd(file.name);
   const lang = codeLang(file.name);
   const isText = md || lang != null;   // text-based: editable + copyable
+  const dirs = file.path.split("/").slice(0, -1);
 
   const copy = () => {
     if (content == null) return;
@@ -211,124 +416,104 @@ function CanvasPanel({ file, onClose, readFile, openFile, writeFile, onShareFile
 
   return (
     <>
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.15 }}
-        className="fixed inset-0 z-[55] bg-black/30 backdrop-blur-[2px]"
-        onClick={onClose}
-      />
-      <motion.div
-        initial={{ x: "100%" }}
-        animate={{ x: 0 }}
-        exit={{ x: "100%" }}
-        transition={{ type: "spring", damping: 25, stiffness: 200 }}
-        className={cn(
-          "fixed z-[60] rounded-xl border border-border bg-background flex flex-col overflow-hidden",
-          expanded ? "inset-2" : "top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] sm:w-[720px] lg:w-[60vw] lg:max-w-[960px]",
+      {/* Header */}
+      <div className="flex items-center gap-2 border-b border-border px-4 sm:px-6 py-3">
+        <div className="flex min-w-0 items-center gap-1 text-sm">
+          {dirs.map((seg, i) => (
+            <span key={i} className="flex shrink-0 items-center gap-1 text-muted-foreground">
+              <span className="max-w-24 truncate">{seg}</span>
+              <Icon name="chevron-right" className="size-3 text-muted-foreground/50" strokeWidth={2.5} />
+            </span>
+          ))}
+          <span className="min-w-0 truncate font-medium text-foreground">{file.name}</span>
+        </div>
+        {lang && lang !== "text" && (
+          <span className="shrink-0 rounded-md bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">{lang}</span>
         )}
-        dir="ltr"
-      >
-        {/* Header */}
-        <div className="flex items-center gap-2 border-b border-border px-4 sm:px-6 py-3">
-          <span className="min-w-0 truncate text-sm font-medium text-foreground">{file.name}</span>
-          {lang && lang !== "text" && (
-            <span className="shrink-0 rounded-md bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">{lang}</span>
-          )}
-          <div className="flex-1" />
-          {editing ? (
-            <>
-              <button onClick={() => setEditing(false)} className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer px-2 py-1">
-                {t("cancel")}
+        <div className="flex-1" />
+        {editing ? (
+          <>
+            <button onClick={() => setEditing(false)} className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer px-2 py-1">
+              {t("cancel")}
+            </button>
+            <button onClick={save} disabled={saving} className="text-xs font-medium text-foreground bg-secondary hover:bg-secondary/80 rounded-md px-3 py-1.5 transition-colors cursor-pointer disabled:opacity-50">
+              {saving ? t("saving") : t("save")}
+            </button>
+          </>
+        ) : (
+          <>
+            {saved && <span className="text-xs text-muted-foreground">{t("saved")}</span>}
+            {onShareFile && (
+              <button onClick={() => setShareOpen(true)} className={headerBtn} aria-label={t("share")} title={t("share")}>
+                <Icon name="link" className="size-4" />
               </button>
-              <button onClick={save} disabled={saving} className="text-xs font-medium text-foreground bg-secondary hover:bg-secondary/80 rounded-md px-3 py-1.5 transition-colors cursor-pointer disabled:opacity-50">
-                {saving ? t("saving") : t("save")}
+            )}
+            {isText && content != null && (
+              <button onClick={copy} className={headerBtn} aria-label={copied ? t("copied") : t("copy")} title={copied ? t("copied") : t("copy")}>
+                <Icon name={copied ? "check" : "copy"} className="size-4" />
               </button>
-            </>
-          ) : (
-            <>
-              {saved && <span className="text-xs text-muted-foreground">{t("saved")}</span>}
-              {onShareFile && (
-                <button onClick={() => setShareOpen(true)} className={headerBtn} aria-label={t("share")} title={t("share")}>
-                  <Icon name="link" className="size-4" />
-                </button>
-              )}
-              {isText && content != null && (
-                <button onClick={copy} className={headerBtn} aria-label={copied ? t("copied") : t("copy")} title={copied ? t("copied") : t("copy")}>
-                  <Icon name={copied ? "check" : "copy"} className="size-4" />
-                </button>
-              )}
-              {isText && content != null && (
-                <button onClick={startEdit} className={headerBtn} aria-label={t("edit")} title={t("edit")}>
-                  <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
-                  </svg>
-                </button>
-              )}
-              {isHtml(file.name) && content != null && (
-                <button onClick={openInTab} className={headerBtn} aria-label={t("openInTab")} title={t("openInTab")}>
-                  <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-                  </svg>
-                </button>
-              )}
-              {/* Extra export options (md → PDF) get a menu; otherwise the
-                  icon downloads directly — no single-item dropdown. */}
-              {md ? (
-                <div className="relative shrink-0">
-                  <button onClick={() => setMenuOpen((o) => !o)} className={headerBtn} aria-label={t("export")} title={t("export")}>
-                    <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-                    </svg>
-                  </button>
-                  {menuOpen && (
-                    <DropdownMenu
-                      onClose={() => setMenuOpen(false)}
-                      items={[
-                        { label: t("exportPdf"), onClick: () => window.print() },
-                        { label: t("download"), onClick: download },
-                      ]}
-                    />
-                  )}
-                </div>
-              ) : (
-                <button onClick={download} className={headerBtn} aria-label={t("download")} title={t("download")}>
+            )}
+            {isText && content != null && (
+              <button onClick={startEdit} className={headerBtn} aria-label={t("edit")} title={t("edit")}>
+                <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
+                </svg>
+              </button>
+            )}
+            {isHtml(file.name) && content != null && (
+              <button onClick={openInTab} className={headerBtn} aria-label={t("openInTab")} title={t("openInTab")}>
+                <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                </svg>
+              </button>
+            )}
+            {/* Extra export options (md → PDF) get a menu; otherwise the
+                icon downloads directly — no single-item dropdown. */}
+            {md ? (
+              <div className="relative shrink-0">
+                <button onClick={() => setMenuOpen((o) => !o)} className={headerBtn} aria-label={t("export")} title={t("export")}>
                   <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
                   </svg>
                 </button>
-              )}
-            </>
-          )}
-          {/* Phones are already full-width — expand only means something on larger screens. */}
-          <button onClick={() => setExpanded((e) => !e)} className={cn(headerBtn, "hidden sm:flex")} aria-label={expanded ? t("collapse") : t("expand")} title={expanded ? t("collapse") : t("expand")}>
-            {expanded ? (
-              <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M15 9h4.5M15 9V4.5M15 9l5.25-5.25M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" /></svg>
+                {menuOpen && (
+                  <DropdownMenu
+                    onClose={() => setMenuOpen(false)}
+                    items={[
+                      { label: t("exportPdf"), onClick: () => window.print() },
+                      { label: t("download"), onClick: download },
+                    ]}
+                  />
+                )}
+              </div>
             ) : (
-              <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 8.25V3.75h4.5M8.25 3.75L3.75 8.25M20.25 8.25V3.75h-4.5M15.75 3.75l4.5 4.5M3.75 15.75v4.5h4.5M8.25 20.25l-4.5-4.5M20.25 15.75v4.5h-4.5M15.75 20.25l4.5-4.5" /></svg>
+              <button onClick={download} className={headerBtn} aria-label={t("download")} title={t("download")}>
+                <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                </svg>
+              </button>
             )}
-          </button>
-          <button onClick={onClose} className={headerBtn} aria-label="Close">
-            <Icon name="x" className="size-4" />
-          </button>
-        </div>
+          </>
+        )}
+        <button onClick={onClose} className={headerBtn} aria-label="Close file" title="Close file">
+          <Icon name="x" className="size-4" />
+        </button>
+      </div>
 
-        {/* Body */}
-        <div className="flex-1 overflow-hidden">
-          {editing ? (
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={onEditorKey}
-              spellCheck={false}
-              className="h-full w-full resize-none border-0 bg-background px-4 py-4 sm:px-6 font-mono text-[13px] leading-relaxed text-foreground focus:outline-none"
-            />
-          ) : (
-            <CanvasDoc file={file} content={content} error={error} />
-          )}
-        </div>
-      </motion.div>
+      {/* Body */}
+      <div className="flex-1 overflow-hidden">
+        {editing ? (
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onEditorKey}
+            spellCheck={false}
+            className="h-full w-full resize-none border-0 bg-background px-4 py-4 sm:px-6 font-mono text-[13px] leading-relaxed text-foreground focus:outline-none"
+          />
+        ) : (
+          <CanvasDoc file={file} content={content} error={error} />
+        )}
+      </div>
 
       {/* Print-only copy for Export PDF (md). Lives at body level so the drawer's
           fixed/transform layout doesn't distort it; hidden except when printing. */}

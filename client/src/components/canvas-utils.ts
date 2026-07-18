@@ -19,6 +19,26 @@ export const isVideo = (name: string) => VIDEO_EXTS.has(ext(name));
 const SPREADSHEET_EXTS = new Set(["csv", "tsv", "xlsx", "xls", "ods"]);
 export const isSpreadsheet = (name: string) => SPREADSHEET_EXTS.has(ext(name));
 
+// Per-filetype accent — faint tile wash + label color for extension tiles.
+const TINTS: Record<string, string> = {
+  pdf: "#ff3b30", doc: "#2b7fff", docx: "#2b7fff", txt: "#8e8e93", md: "#8e8e93", rtf: "#8e8e93",
+  xls: "#34c759", xlsx: "#34c759", csv: "#34c759", numbers: "#34c759",
+  ppt: "#e8590c", pptx: "#e8590c", key: "#e8590c",
+  mp4: "#ff2d55", mov: "#ff2d55", mp3: "#ff9500", wav: "#ff9500", m4a: "#ff9500",
+  zip: "#8e8e93", tar: "#8e8e93", gz: "#8e8e93",
+  json: "#ff9500", js: "#ff9500", ts: "#2b7fff", tsx: "#2b7fff", py: "#34c759", html: "#ff9500", css: "#2b7fff", sh: "#34c759",
+};
+export const extTint = (name: string): string | undefined => TINTS[ext(name)];
+// Wash + label styles for an extension tile; undefined → neutral (bg-secondary).
+export const tintTile = (name: string) => {
+  const c = extTint(name);
+  return c ? { backgroundColor: c + "1f" } : undefined;
+};
+export const tintLabel = (name: string) => {
+  const c = extTint(name);
+  return c ? { color: c } : undefined;
+};
+
 // Source files → shiki language id. Unknown-but-textual extensions render as
 // plain "text" (still a code element). Everything not listed falls back to
 // download-with-filename at the call site (the #32 fix).

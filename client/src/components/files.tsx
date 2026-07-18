@@ -4,7 +4,7 @@ import { t, useLang } from "../lib/i18n";
 import { LoadingBar } from "./loading-bar";
 import { Icon, Spinner } from "./icon";
 import { ShareDialog } from "./share-dialog";
-import { isRenderable, saveBlob } from "./canvas-utils";
+import { isRenderable, saveBlob, tintTile, tintLabel } from "./canvas-utils";
 import { useToast } from "../lib/toast";
 import type { FilesPanelProps } from "./chat";
 
@@ -539,8 +539,8 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onMkdir, o
             {/* Uploading indicators */}
             {uploading.map((name) => (
               <div key={name} className="flex items-center gap-3 px-4 py-2.5 sm:px-6 opacity-50">
-                <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
-                  <span className="text-[10px] font-medium text-muted-foreground uppercase">{name.split(".").pop()}</span>
+                <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg" style={tintTile(name)}>
+                  <span className="text-[10px] font-medium text-muted-foreground uppercase" style={tintLabel(name)}>{name.split(".").pop()}</span>
                 </div>
                 <span className="text-sm text-foreground truncate flex-1">{name}</span>
                 <Spinner className="size-4 text-muted-foreground shrink-0" />
@@ -594,8 +594,8 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onMkdir, o
                   ) : thumbUrls[entry.name] ? (
                     <img src={thumbUrls[entry.name]} alt={entry.name} className="size-8 rounded object-cover shrink-0" draggable={false} />
                   ) : (
-                    <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
-                      <span className="text-[10px] font-medium text-muted-foreground uppercase">{entry.name.split(".").pop()}</span>
+                    <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg" style={tintTile(entry.name)}>
+                      <span className="text-[10px] font-medium text-muted-foreground uppercase" style={tintLabel(entry.name)}>{entry.name.split(".").pop()}</span>
                     </div>
                   )}
 
