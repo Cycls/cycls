@@ -45,6 +45,7 @@ class Agent(App):
             volume=(image or {}).get("volume", "/workspace"),
         )
         self.config._og_image = web._og_bytes
+        self._iap = web._iap
 
         # Merge Web's copy_public files under public/. App.__init__ adds
         # the cycls source tree on top.
@@ -87,12 +88,13 @@ class Agent(App):
         user_func, config, name = self.user_func, self.config, self.name
         routers = self._routers()
         provider = self._auth_provider
+        iap = self._iap
 
         def runner(port):
             from dotenv import load_dotenv
             load_dotenv()
             print(f"\n🔨 {name} => http://localhost:{port}\n")
-            _serve(web(user_func, config, extra_routers=routers, auth=provider), port)
+            _serve(web(user_func, config, extra_routers=routers, auth=provider, iap=iap), port)
 
         self.func = runner
 
@@ -104,7 +106,7 @@ class Agent(App):
         self.config.public_path = str(CYCLS_PATH.joinpath(f"agent/web/themes/{self.theme}"))
         import uvicorn
         uvicorn.run(web(self.user_func, self.config, extra_routers=self._routers(),
-                        auth=self._auth_provider),
+                        auth=self._auth_provider, iap=self._iap),
                     host="0.0.0.0", port=port)
 
 
