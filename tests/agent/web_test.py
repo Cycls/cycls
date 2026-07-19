@@ -206,6 +206,52 @@ def test_config_endpoint():
     print("✅ Test passed.")
 
 
+def test_cms_brand_merges_piece_by_piece(monkeypatch):
+    """Static .brand() wins piece by piece; the CMS fills what's unset — a
+    static name/description must not skip the fetch and lose the CMS icon."""
+    from cycls.agent.web.server import PassMetadata
+
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {"title": "Super", "title_ar": "سوبر",
+                    "description": "cms desc", "description_ar": "cms desc ar",
+                    "icon_svg": "<svg id='cms-icon'/>"}
+    monkeypatch.setattr("httpx.get", lambda *a, **k: _Resp())
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = Config(public_path=THEME_PATH, auth=False,
+                    cms={"brand": "https://cms.example/agents/super"},
+                    pass_metadata={"en": PassMetadata(name="Super New", description="testbed")})
+    web(dummy_agent, config)
+
+    en, ar = config.pass_metadata["en"], config.pass_metadata["ar"]
+    assert en.name == "Super New"                 # static wins
+    assert en.description == "testbed"            # static wins
+    assert en.logo == "<svg id='cms-icon'/>"      # CMS fills the icon
+    assert ar.name == "سوبر"                      # CMS fills the missing locale
+    assert ar.logo == "<svg id='cms-icon'/>"
+
+
+def test_cms_brand_fetch_failure_keeps_static(monkeypatch):
+    """A dead CMS must not clobber static branding."""
+    from cycls.agent.web.server import PassMetadata
+
+    def boom(*a, **k): raise OSError("down")
+    monkeypatch.setattr("httpx.get", boom)
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = Config(public_path=THEME_PATH, auth=False,
+                    cms={"brand": "https://cms.example/agents/super"},
+                    pass_metadata={"en": PassMetadata(name="Super New")})
+    web(dummy_agent, config)
+    assert config.pass_metadata == {"en": PassMetadata(name="Super New")}
+
+
 def test_config_keeps_secrets_server_side():
     """cms (bearer token) and volume never reach /config or the page HTML."""
     from fastapi.testclient import TestClient
