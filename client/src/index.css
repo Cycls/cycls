@@ -141,3 +141,23 @@ body {
   color: transparent;
   animation: text-shimmer 1.6s linear infinite;
 }
+
+/* Clerk drawers (checkout, subscription details) must clear the app chrome
+   and the settings dialog (z-80). Clerk gives them no usable z of their own. */
+.cl-drawerRoot,
+.cl-drawerBackdrop,
+.cl-checkout-root {
+  z-index: 100 !important;
+}
+
+/* Clerk modals (reverification, profile) above the settings dialog too. */
+.cl-modalBackdrop {
+  z-index: 110 !important;
+}
+
+/* iOS Safari zooms the page when a focused field is under 16px. */
+@media (max-width: 640px) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}

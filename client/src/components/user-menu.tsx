@@ -19,10 +19,11 @@ export interface PlanInfo {
   planPeriod: string;
 }
 
-export function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, activeOrg, orgs, plan, onOpenPlans }: {
+export function UserMenu({ user, onSignOut, onManageAccount, onOpenSettings, onCreateOrg, onManageOrg, onSwitchOrg, activeOrg, orgs, plan, onOpenPlans }: {
   user: UserInfo;
   onSignOut?: () => void;
   onManageAccount?: () => void;
+  onOpenSettings?: () => void;
   onCreateOrg?: () => void;
   onManageOrg?: () => void;
   onSwitchOrg?: (orgId: string | null) => void;
@@ -131,10 +132,14 @@ export function UserMenu({ user, onSignOut, onManageAccount, onCreateOrg, onMana
                   </button>
                 )}
                 <button
-                  onClick={() => { setOpen(false); activeOrg && onManageOrg ? onManageOrg() : onManageAccount?.(); }}
+                  onClick={() => {
+                    setOpen(false);
+                    if (onOpenSettings) onOpenSettings();
+                    else activeOrg && onManageOrg ? onManageOrg() : onManageAccount?.();
+                  }}
                   className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                 >
-                  {activeOrg ? t("manageOrg") : t("manageAccount")}
+                  {onOpenSettings ? t("settings") : activeOrg ? t("manageOrg") : t("manageAccount")}
                 </button>
                 {onSwitchOrg && (
                   <>

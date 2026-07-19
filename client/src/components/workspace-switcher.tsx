@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { t } from "../lib/i18n";
 import { Popover } from "./popover";
 import { Icon } from "./icon";
+import { DropdownMenu } from "./files";
 import type { WorkspaceInfo, MemberInfo } from "../hooks/use-workspaces";
 
 export interface WorkspacesMenu {
@@ -16,6 +17,31 @@ export interface WorkspacesMenu {
   fetchMembers: (id: string) => Promise<MemberInfo[]>;
   onSetMember: (id: string, userId: string, role: string) => Promise<void>;
   onRemoveMember: (id: string, userId: string) => Promise<void>;
+}
+
+// Role dropdown for a workspace member (editor ↔ admin).
+function MemberRole({ role, onChange }: { role: string; onChange: (r: string) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        className="flex cursor-pointer items-center gap-1 text-[10px] text-muted-foreground/60 hover:text-foreground"
+      >
+        {role}
+        <Icon name="chevron-down" className="size-2.5" />
+      </button>
+      {open && (
+        <DropdownMenu
+          onClose={() => setOpen(false)}
+          items={[
+            { label: "editor", onClick: () => onChange("editor") },
+            { label: "admin", onClick: () => onChange("admin") },
+          ]}
+        />
+      )}
+    </div>
+  );
 }
 
 export function WorkspaceSwitcher({ workspaces }: { workspaces: WorkspacesMenu }) {
@@ -76,13 +102,10 @@ export function WorkspaceSwitcher({ workspaces }: { workspaces: WorkspacesMenu }
                       <span className="text-[10px] text-muted-foreground/60">{m.role}</span>
                     ) : (
                       <>
-                        <button
-                          onClick={() => workspaces.onSetMember(manageWs.id, m.user_id, m.role === "editor" ? "admin" : "editor").then(refreshMembers)}
-                          className="text-[10px] text-muted-foreground/60 hover:text-foreground cursor-pointer"
-                          title="Toggle role"
-                        >
-                          {m.role}
-                        </button>
+                        <MemberRole
+                          role={m.role}
+                          onChange={(r) => workspaces.onSetMember(manageWs.id, m.user_id, r).then(refreshMembers)}
+                        />
                         <button
                           onClick={() => workspaces.onRemoveMember(manageWs.id, m.user_id).then(refreshMembers)}
                           className="text-muted-foreground/60 hover:text-foreground cursor-pointer"

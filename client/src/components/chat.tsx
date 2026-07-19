@@ -12,6 +12,7 @@ import { InputBox } from "./input-box";
 import { ShareDialog } from "./share-dialog";
 import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
+import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceSwitcher, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
@@ -121,6 +122,14 @@ export function Chat({ chat, onShare, files, account, config }: {
   // Drag the panel's left edge to resize; width persists across sessions.
   const { width: panelWidth, startResize } = usePaneWidth("cycls_panel_width", 480, 360, 80);
   const [shareOpen, setShareOpen] = useState(false);
+  // Survives the ChatApp remount on org/workspace switch (App keys by org), so
+  // changing context inside the settings dialog doesn't close it.
+  const [settingsOpen, _setSettingsOpen] = useState(() => sessionStorage.getItem("cycls_settings") === "1");
+  const setSettingsOpen = useCallback((v: boolean) => {
+    _setSettingsOpen(v);
+    if (v) sessionStorage.setItem("cycls_settings", "1");
+    else sessionStorage.removeItem("cycls_settings");
+  }, []);
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
   const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string; favoritedAt?: string }[]>([]);
@@ -424,7 +433,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </svg>
               </button>
             )}
-            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} /></div>}
+            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} /></div>}
           </div>
         </div>
       </header>
@@ -763,6 +772,9 @@ export function Chat({ chat, onShare, files, account, config }: {
             </div>
           </div>
         </Popover>
+      )}
+      {settingsOpen && account && (
+        <SettingsDialog account={account} onClose={() => setSettingsOpen(false)} />
       )}
       </div>
       {files && (
