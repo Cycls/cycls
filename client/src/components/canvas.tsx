@@ -7,7 +7,7 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, codeLang, extTint, saveBlob } from "./canvas-utils";
+import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, is3d, codeLang, extTint, saveBlob } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
 import { usePaneWidth } from "../hooks/use-pane-width";
 import { cn } from "../lib/utils";
@@ -37,7 +37,7 @@ export function useFileContent(
     setError(false);
     // Binary formats (pdf, images, spreadsheets) need bytes → fetch as a blob
     // URL; text formats fetch source.
-    const load = isPdf(file.name) || isImage(file.name) || isAudio(file.name) || isVideo(file.name) || isSpreadsheet(file.name)
+    const load = isPdf(file.name) || isImage(file.name) || isAudio(file.name) || isVideo(file.name) || isSpreadsheet(file.name) || is3d(file.name)
       ? openFile(file.path).then((url) => { blobUrl = url; return url; })
       : readFile(file.path);
     load.then((v) => { if (!cancelled) setContent(v); })
@@ -113,6 +113,22 @@ export function CanvasDoc({ file, content, error, shared = false }: {
   }
   if (isSpreadsheet(file.name)) {
     return content ? <SpreadsheetView url={content} name={file.name} /> : null;
+  }
+  if (is3d(file.name)) {
+    // model-viewer from CDN inside our own iframe shell — no npm dependency.
+    // No sandbox: the srcDoc is our template, and an opaque origin couldn't
+    // fetch the parent's blob URL.
+    return content ? (
+      <iframe
+        srcDoc={`<!doctype html><html><head><meta charset="utf-8">
+<script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+<style>html,body{margin:0;height:100%;overflow:hidden}
+model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at center,#1a1a1a 0%,#0a0a0a 100%)}</style>
+</head><body><model-viewer src="${content}" camera-controls auto-rotate shadow-intensity="1" exposure="1.1" environment-image="neutral"></model-viewer></body></html>`}
+        title={file.name}
+        className="h-full w-full border-0"
+      />
+    ) : null;
   }
   if (isMd(file.name)) {
     return (

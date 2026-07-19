@@ -19,6 +19,8 @@ export const isVideo = (name: string) => VIDEO_EXTS.has(ext(name));
 const SPREADSHEET_EXTS = new Set(["csv", "tsv", "xlsx", "xls", "ods"]);
 export const isSpreadsheet = (name: string) => SPREADSHEET_EXTS.has(ext(name));
 
+export const is3d = (name: string) => ["glb", "gltf"].includes(ext(name));
+
 // Per-filetype accent — faint tile wash + label color for extension tiles.
 const TINTS: Record<string, string> = {
   pdf: "#ff3b30", doc: "#2b7fff", docx: "#2b7fff", txt: "#8e8e93", md: "#8e8e93", rtf: "#8e8e93",
@@ -27,6 +29,7 @@ const TINTS: Record<string, string> = {
   mp4: "#ff2d55", mov: "#ff2d55", mp3: "#ff9500", wav: "#ff9500", m4a: "#ff9500",
   zip: "#8e8e93", tar: "#8e8e93", gz: "#8e8e93",
   json: "#ff9500", js: "#ff9500", ts: "#2b7fff", tsx: "#2b7fff", py: "#34c759", html: "#ff9500", css: "#2b7fff", sh: "#34c759",
+  glb: "#af52de", gltf: "#af52de",
 };
 export const extTint = (name: string): string | undefined => TINTS[ext(name)];
 // Wash + label styles for an extension tile; undefined → neutral (bg-secondary).
@@ -61,7 +64,7 @@ export const codeLang = (name: string): string | null => {
 
 // Extensions the canvas renders inline (markdown, html, pdf, or any source file).
 export const isRenderable = (name: string) =>
-  isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || codeLang(name) != null;
+  isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || is3d(name) || codeLang(name) != null;
 
 // Trigger a name-preserving download from an authed blob URL. A bare blob URL
 // carries no filename, so opening it instead saves with no extension — the

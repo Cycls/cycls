@@ -4,11 +4,12 @@ import App from "./App";
 import "./index.css";
 import { initPostHog, setAgentDomain } from "./lib/posthog";
 import { ToastProvider } from "./lib/toast";
+import { applyTheme, getThemeMode } from "./lib/utils";
 
-// Default to system preferences
-if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
-  document.body.classList.add("dark");
-}
+applyTheme();
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  if (getThemeMode() === "system") applyTheme();
+});
 if (navigator.language.startsWith("ar")) {
   document.documentElement.lang = "ar";
   document.documentElement.dir = "rtl";

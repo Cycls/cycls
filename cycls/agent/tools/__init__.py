@@ -117,7 +117,7 @@ _CANVAS_TOOL = {
     "description": (
         "Show a FINISHED deliverable to the user in the canvas viewer (a side "
         "panel). Renders markdown, HTML, PDF, images, audio/video, code/text, CSV, "
-        "and Excel (xlsx/xls/ods); other types offer a download.\n\n"
+        "Excel (xlsx/xls/ods), and 3D models (glb/gltf); other types offer a download.\n\n"
         "Use ONLY for a final artifact the user is actually expecting to view — the "
         "report, document, dashboard, sheet, or chart they asked you to produce, "
         "and only once it is complete.\n"
