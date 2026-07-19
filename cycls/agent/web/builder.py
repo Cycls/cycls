@@ -34,6 +34,7 @@ def _asset(value: str) -> str:
 class Web:
     def __init__(self):
         self._auth: Optional[JWT] = None
+        self._iap = None
         self._title: Optional[str] = None
         self._theme: str = "default"
         self._cms: Optional[dict] = None
@@ -56,6 +57,10 @@ class Web:
         new = Web.__new__(Web)
         new.__dict__ = {**self.__dict__, **updates}
         return new
+
+    def iap(self, config):
+        """Apple In-App Purchase entitlements (see cycls.AppleIAP)."""
+        return self._copy(_iap=config)
 
     def auth(self, provider: Optional[JWT]):
         if provider is not None and not isinstance(provider, JWT):
