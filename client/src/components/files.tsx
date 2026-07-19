@@ -182,7 +182,7 @@ type SortKey = "name" | "size" | "modified" | "type";
 
 const fileExt = (name: string) => (name.includes(".") ? name.split(".").pop()!.toLowerCase() : "");
 
-export function Files({ entries, path, loading, onNavigate, onUpload, onMkdir, onRename, onDelete, onOpenFile, onShareFile, onOpenInCanvas, listFolders, maxUpload, org }: FilesPanelProps) {
+export function Files({ entries, path, loading, onNavigate, onUpload, onUploadBatch, onMkdir, onRename, onDelete, onOpenFile, onShareFile, onOpenInCanvas, listFolders, maxUpload, org }: FilesPanelProps) {
   useLang();
   const { error: toastError } = useToast();
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
@@ -244,14 +244,29 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onMkdir, o
       const sub = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
       try { await onUpload([dir, sub].filter(Boolean).join("/"), f); } catch {}
     };
+    // Zip small files into ≤64MB batches — one request instead of hundreds; big files go individually.
+    const SMALL = 8 * 1024 * 1024, GROUP = 64 * 1024 * 1024;
+    const small = list.filter((f) => f.size <= SMALL);
+    const rest = onUploadBatch && small.length > 1 ? list.filter((f) => f.size > SMALL) : list;
+    if (onUploadBatch && small.length > 1) {
+      const groups: File[][] = [[]];
+      let size = 0;
+      for (const f of small) {
+        if (size + f.size > GROUP && groups[groups.length - 1].length) { groups.push([]); size = 0; }
+        groups[groups.length - 1].push(f); size += f.size;
+      }
+      for (const g of groups) {
+        try { await onUploadBatch(dir, g.map((f) => ({ rel: relOf(f), file: f }))); } catch {}
+      }
+    }
     // Cap concurrency so a large folder doesn't fan out into hundreds of requests.
     let i = 0;
-    await Promise.all(Array.from({ length: Math.min(4, list.length) }, async () => {
-      while (i < list.length) await uploadOne(list[i++]);
+    await Promise.all(Array.from({ length: Math.min(4, rest.length) }, async () => {
+      while (i < rest.length) await uploadOne(rest[i++]);
     }));
     setUploading((prev) => prev.filter((n) => !names.includes(n)));
     onNavigate(path);
-  }, [path, onUpload, onNavigate, maxUpload, toastError]);
+  }, [path, onUpload, onUploadBatch, onNavigate, maxUpload, toastError]);
 
   // Move selected entries (or a single one) into destDir.
   const moveInto = useCallback(async (names: string[], destDir: string) => {

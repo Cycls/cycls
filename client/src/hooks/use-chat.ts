@@ -98,12 +98,11 @@ export function useChat(baseUrl: string = "") {
       const h = await authHeaders();
       const id = crypto.randomUUID().slice(0, 8);
       const uploadPath = `attachments/${id}-${file.name}`;
-      const form = new FormData();
-      form.append("file", file);
+      // Raw body, not multipart — auth runs before the body is read, so slow uploads can't outlive the JWT.
       const res = await fetch(`${baseUrl}/files/${uploadPath}`, {
         method: "PUT",
         headers: h,
-        body: form,
+        body: file,
       });
       if (!res.ok) {
         track("file_upload_failed", {
