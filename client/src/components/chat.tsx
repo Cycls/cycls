@@ -55,6 +55,7 @@ export interface FilesPanelProps {
   loading: boolean;
   onNavigate: (dir: string) => void;
   onUpload: (dir: string, file: File) => Promise<void>;
+  onUploadBatch?: (dir: string, files: { rel: string; file: File }[]) => Promise<void>;
   onMkdir: (dir: string, name: string) => Promise<void>;
   onRename: (from: string, to: string) => Promise<void>;
   onDelete: (path: string) => Promise<void>;

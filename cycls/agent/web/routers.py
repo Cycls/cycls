@@ -3,11 +3,11 @@
 Chat metadata + message log and shares live in the workspace DB — see
 `cycls.agent.state`. Files stay on the workspace filesystem (POSIX-shaped).
 """
-import asyncio, os, secrets, shutil, time, unicodedata, uuid
+import asyncio, os, secrets, shutil, tempfile, time, unicodedata, uuid, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
-from fastapi import APIRouter, Depends, Request, Response, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, Request, Response, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 
@@ -261,26 +261,81 @@ def files_router(cycls_app, ws_dep):
         return FileResponse(file_path)
 
     @r.put("/files/{path:path}")
-    async def put_file(path: str, request: Request, file: UploadFile = File(...), ws: Workspace = ws_dep):
+    async def put_file(path: str, request: Request, ws: Workspace = ws_dep):
+        """Streams the raw body to a .part temp, then renames. No File(...)
+        param — that reads the whole body before auth runs, so uploads longer
+        than the JWT lifetime 401 at the end. Multipart kept for old clients."""
         file_path = _safe_path(ws.root, path)
+        limit_msg = f"File exceeds the {max_bytes // (1024 * 1024)} MB limit"
+        if int(request.headers.get("content-length") or 0) > max_bytes:
+            raise HTTPException(413, limit_msg)
+        if request.headers.get("content-type", "").startswith("multipart/form-data"):
+            form = await request.form()
+            up = form.get("file")
+            if up is None or isinstance(up, str):
+                raise HTTPException(400, "multipart body missing 'file' field")
+            async def _form_chunks(f=up):
+                while chunk := await f.read(1 << 20):
+                    yield chunk
+            source = _form_chunks()
+        else:
+            source = request.stream()
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        # Stream to a .part temp in 1 MB chunks (flat app memory regardless of
-        # size), enforce a cap, then rename — so a failed upload can't corrupt an
-        # existing file. Works on local FS and the gcsfuse workspace mount.
         tmp = file_path.with_name(file_path.name + ".part")
         size = 0
         try:
             with open(tmp, "wb") as out:
-                while chunk := await file.read(1 << 20):
+                async for chunk in source:
                     size += len(chunk)
                     if size > max_bytes:
-                        raise HTTPException(413, f"File exceeds the {max_bytes // (1024 * 1024)} MB limit")
+                        raise HTTPException(413, limit_msg)
                     out.write(chunk)
             tmp.replace(file_path)
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
         return {"ok": True}
+
+    @r.post("/files-batch/{path:path}")
+    async def upload_batch(path: str, request: Request, ws: Workspace = ws_dep):
+        """Zip batch from the FE — one request for a whole folder. Member
+        paths pass the same traversal checks as any upload, all validated
+        before anything is written."""
+        _safe_path(ws.root, path)
+        limit_msg = f"Upload exceeds the {max_bytes // (1024 * 1024)} MB limit"
+        if int(request.headers.get("content-length") or 0) > max_bytes:
+            raise HTTPException(413, limit_msg)
+        size = 0
+        with tempfile.NamedTemporaryFile(suffix=".zip") as tmp:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > max_bytes:
+                    raise HTTPException(413, limit_msg)
+                tmp.write(chunk)
+            tmp.flush()
+            try:
+                zf = zipfile.ZipFile(tmp.name)
+            except zipfile.BadZipFile:
+                raise HTTPException(400, "Body is not a valid zip")
+            with zf:
+                infos = [i for i in zf.infolist() if not i.is_dir()]
+                # Zip-bomb guard: the uncompressed total obeys the same cap.
+                if sum(i.file_size for i in infos) > max_bytes:
+                    raise HTTPException(413, limit_msg)
+                targets = [(i, _safe_path(ws.root, f"{path}/{i.filename}" if path else i.filename))
+                           for i in infos]
+                sem = asyncio.Semaphore(8)
+
+                async def _extract(info, dest):
+                    def _do():
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        with zf.open(info) as src, open(dest, "wb") as out:
+                            shutil.copyfileobj(src, out, 1 << 20)
+                    async with sem:
+                        await asyncio.to_thread(_do)
+
+                await asyncio.gather(*(_extract(i, d) for i, d in targets))
+        return {"ok": True, "files": len(targets)}
 
     @r.patch("/files/{path:path}")
     async def rename(path: str, request: Request, ws: Workspace = ws_dep):

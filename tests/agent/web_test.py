@@ -707,7 +707,7 @@ def test_personal_ws_from_subject():
     assert personal_ws("user_1") == "u-user_1"
 
 
-def _ws_routers_client(tmp_path, workspaces="member"):
+def _ws_routers_client(tmp_path, workspaces="member", max_upload=512):
     """Mount the real state routers behind a stub app + fixed user."""
     from types import SimpleNamespace
     from fastapi import Depends, FastAPI
@@ -717,10 +717,83 @@ def _ws_routers_client(tmp_path, workspaces="member"):
 
     user = User(id="user_1", org_id="org_1")
     stub = SimpleNamespace(prod=False, _auth_provider=None,
-                           config=SimpleNamespace(workspaces=workspaces, max_upload=512))
+                           config=SimpleNamespace(workspaces=workspaces, max_upload=max_upload))
     fapp = FastAPI()
     install_routers(stub, fapp, Depends(lambda: user), tmp_path, f"file://{tmp_path}")
     return TestClient(fapp)
+
+
+def _zip_bytes(members):
+    """{name: bytes} → in-memory zip."""
+    import io, zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+    return buf.getvalue()
+
+
+def test_raw_body_upload_streams_to_disk(tmp_path):
+    """Raw (non-multipart) PUT: body streams to the target; content preserved."""
+    client = _ws_routers_client(tmp_path)
+    r = client.put("/files/docs/big.bin", content=b"\x00\x01" * 1000)
+    assert r.status_code == 200
+    dest = tmp_path / "org_1" / "ws" / "u-user_1" / "docs" / "big.bin"
+    assert dest.read_bytes() == b"\x00\x01" * 1000
+    assert not dest.with_name("big.bin.part").exists()
+
+
+def test_raw_body_upload_over_cap_413(tmp_path):
+    client = _ws_routers_client(tmp_path, max_upload=1)
+    r = client.put("/files/big.bin", content=b"\0" * (1024 * 1024 + 1))
+    assert r.status_code == 413
+    assert not list(tmp_path.glob("**/big.bin*"))   # no .part left behind
+
+
+def test_multipart_upload_missing_field_400(tmp_path):
+    client = _ws_routers_client(tmp_path)
+    r = client.put("/files/x.txt", files={"wrong": ("x.txt", b"hi")})
+    assert r.status_code == 400
+
+
+def test_batch_upload_extracts_zip(tmp_path):
+    client = _ws_routers_client(tmp_path)
+    body = _zip_bytes({"a.txt": b"aaa", "sub/deep/b.txt": b"bbb", "ملف.txt": "عربي".encode()})
+    r = client.post("/files-batch/docs", content=body)
+    assert r.status_code == 200
+    assert r.json()["files"] == 3
+    root = tmp_path / "org_1" / "ws" / "u-user_1" / "docs"
+    assert (root / "a.txt").read_bytes() == b"aaa"
+    assert (root / "sub" / "deep" / "b.txt").read_bytes() == b"bbb"
+    assert (root / "ملف.txt").read_text() == "عربي"
+
+
+def test_batch_upload_rejects_traversal_member(tmp_path):
+    """One hostile member poisons the whole batch — nothing gets written."""
+    client = _ws_routers_client(tmp_path)
+    body = _zip_bytes({"ok.txt": b"fine", "../evil.txt": b"nope"})
+    r = client.post("/files-batch/", content=body)
+    assert r.status_code == 403
+    ws_root = tmp_path / "org_1" / "ws" / "u-user_1"
+    assert not (ws_root / "ok.txt").exists()          # validated before any write
+    assert not list(tmp_path.glob("**/evil.txt"))
+
+
+def test_batch_upload_rejects_reserved_and_non_zip(tmp_path):
+    client = _ws_routers_client(tmp_path)
+    r = client.post("/files-batch/", content=_zip_bytes({".db/kv.json": b"x"}))
+    assert r.status_code == 403
+    assert client.post("/files-batch/", content=b"not a zip").status_code == 400
+
+
+def test_batch_upload_zip_bomb_413(tmp_path):
+    """Uncompressed total obeys the cap even when the compressed body is tiny."""
+    client = _ws_routers_client(tmp_path, max_upload=1)
+    body = _zip_bytes({"bomb.txt": b"\0" * (2 * 1024 * 1024)})   # 2MB → ~2KB zipped
+    assert len(body) < 1024 * 1024
+    r = client.post("/files-batch/", content=body)
+    assert r.status_code == 413
+    assert not list(tmp_path.glob("**/bomb.txt"))
 
 
 def test_ws_mode_chats_land_in_personal_workspace(tmp_path):
