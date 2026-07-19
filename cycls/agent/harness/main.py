@@ -58,10 +58,12 @@ async def _timed(coro):
 
 # ---- Ingest ----
 
-async def _ingest(content, workspace):
+async def _ingest(content, workspace, vision=True):
     """Resolve attachment refs in an incoming user message to inline blocks,
     framed with the filename so the model knows what the user attached.
-    Reuses `_exec_read` as the single source of truth for path → content."""
+    Reuses `_exec_read` as the single source of truth for path → content.
+    With `vision=False`, media that resolves to base64 blocks (images, PDFs)
+    stays out of history — the model gets a note naming the file instead."""
     if not isinstance(content, list): return content
     out = []
     for block in content:
@@ -72,6 +74,12 @@ async def _ingest(content, workspace):
                 if isinstance(result, str) and result.startswith("Error:"):
                     out.append({"type": "text", "text":
                         f'[The user attached "{fname}" but it can\'t be read directly ({result[7:]}). '
+                        "It's saved in the workspace — propose a way to extract its content.]"})
+                    continue
+                if (not vision and isinstance(result, list)
+                        and any(b.get("type") in ("image", "document") for b in result)):
+                    out.append({"type": "text", "text":
+                        f'[The user attached "{fname}" but this model can\'t view it directly (no vision). '
                         "It's saved in the workspace — propose a way to extract its content.]"})
                     continue
                 out.append({"type": "text", "text": f"[Attached: {fname}]"})
@@ -123,10 +131,11 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                model="anthropic/claude-sonnet-4-20250514", max_tokens=None,
                bash_timeout=600, bash_network=True, client=None,
                base_url=None, api_key=None, handlers=None, mcp_servers=None,
-               thinking="adaptive", web_search="brave",
+               thinking="adaptive", vision=True, web_search="brave",
                instructions="AGENT.md", skills=[], price=None, context_window=None):
     vendor, bare_model = model.split("/", 1)
-    provider = make_provider(model, client=client, base_url=base_url, api_key=api_key)
+    provider = make_provider(model, client=client, base_url=base_url, api_key=api_key,
+                             vision=vision)
     if max_tokens is None: max_tokens = DEFAULT_MAX_TOKENS
     workspace = context.workspace
     user = getattr(context, "user", None)
@@ -134,7 +143,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
     session = await Session.open(context)
     incoming = context.messages.raw[-1]
-    await session.add_user(await _ingest(incoming.get("content", ""), workspace.root),
+    await session.add_user(await _ingest(incoming.get("content", ""), workspace.root, vision),
                            attachments=incoming.get("attachments"))
     messages = session.messages
 

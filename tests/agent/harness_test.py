@@ -162,6 +162,19 @@ def test_llm_price_and_context_default_unset():
     assert cycls.LLM()._context is None
 
 
+def test_llm_vision_default_on_and_reaches_the_loop():
+    assert cycls.LLM()._vision is True
+    seen = {}
+    async def fake_loop(**kw):
+        seen.update(kw)
+        yield "ok"
+    llm = cycls.LLM().model("zai/glm-5.2").vision(False).loop(fake_loop)
+    async def drain():
+        return [ev async for ev in llm.run(context=None)]
+    asyncio.run(drain())
+    assert seen["vision"] is False
+
+
 # ---- web search / fetch executors ----
 
 class _FakeResp:
@@ -335,6 +348,51 @@ def test_openai_to_messages_degrades_document_in_tool_result():
     assert "[document content not viewable on this provider]" in out[0]["content"]
 
 
+def test_openai_to_messages_user_image_sent_when_vision():
+    """Default (vision=True): user-content images go out as image_url data URLs."""
+    from cycls.agent.harness.providers.openai import OpenAIProvider
+    raw = [
+        {"role": "user", "content": [
+            {"type": "text", "text": "what is this?"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "abc"}},
+        ]},
+    ]
+    out, dropped = OpenAIProvider(None, "gpt-x")._to_messages(raw, "")
+    assert dropped == set()
+    parts = out[0]["content"]
+    assert parts[1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
+
+
+def test_openai_to_messages_user_image_stubbed_without_vision():
+    """vision=False backstop: an image block that reaches a text-only model
+    degrades to a text stub instead of a rejected request (z.ai code 1210)."""
+    from cycls.agent.harness.providers.openai import OpenAIProvider
+    raw = [
+        {"role": "user", "content": [
+            {"type": "text", "text": "what is this?"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "abc"}},
+        ]},
+    ]
+    out, dropped = OpenAIProvider(None, "glm-5.2", "zai", vision=False)._to_messages(raw, "")
+    assert dropped == {"image"}
+    parts = out[0]["content"]
+    assert parts[1] == {"type": "text", "text": "[image content not viewable on this provider]"}
+
+
+def test_openai_to_messages_user_document_stubbed():
+    """Documents have no Chat Completions wire form — stubbed on any model,
+    not silently dropped."""
+    from cycls.agent.harness.providers.openai import OpenAIProvider
+    raw = [
+        {"role": "user", "content": [
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "abc"}},
+        ]},
+    ]
+    out, dropped = OpenAIProvider(None, "gpt-x")._to_messages(raw, "")
+    assert dropped == {"document"}
+    assert out[0]["content"][0] == {"type": "text", "text": "[document content not viewable on this provider]"}
+
+
 def test_openai_to_messages_no_drops_when_text_only():
     from cycls.agent.harness.providers.openai import OpenAIProvider
     raw = [
@@ -418,6 +476,32 @@ def test_openai_usage_splits_cached_tokens():
 
     async def drain():
         return [e async for e in OpenAIProvider(client, "gpt-5.5").stream(
+            messages=[{"role": "user", "content": "hi"}], system="", tools=[], max_tokens=100)]
+    turn = next(e for e in asyncio.run(drain()) if isinstance(e, Turn))
+    assert (turn.input, turn.cached, turn.output) == (40, 60, 10)
+
+
+def test_openai_usage_cached_tokens_top_level_fallback():
+    """Kimi/Moonshot reports `cached_tokens` at the top level of usage, not
+    under prompt_tokens_details — the split must still be carried."""
+    from unittest.mock import AsyncMock, MagicMock
+    from cycls.agent.harness.providers.openai import OpenAIProvider
+    from cycls.agent.harness.events import Turn
+
+    chunk = MagicMock()
+    chunk.usage.prompt_tokens = 100
+    chunk.usage.completion_tokens = 10
+    chunk.usage.prompt_tokens_details = None
+    chunk.usage.cached_tokens = 60
+    chunk.choices = []
+
+    client = _CaptureClient()
+    async def gen():
+        yield chunk
+    client.create = AsyncMock(return_value=gen())
+
+    async def drain():
+        return [e async for e in OpenAIProvider(client, "kimi-k3", "kimi").stream(
             messages=[{"role": "user", "content": "hi"}], system="", tools=[], max_tokens=100)]
     turn = next(e for e in asyncio.run(drain()) if isinstance(e, Turn))
     assert (turn.input, turn.cached, turn.output) == (40, 60, 10)

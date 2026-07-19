@@ -614,6 +614,37 @@ def test_ingest_image_becomes_content_block(tmp_path):
     assert result[2]["source"]["media_type"] == "image/png"
 
 
+def test_ingest_no_vision_image_becomes_note(tmp_path):
+    """vision=False: the image stays in the workspace; history gets a note
+    naming the file so the model can extract it with tools — no base64 block
+    that a text-only provider would reject."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "photo.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
+
+    parts = [
+        {"type": "text", "text": "what is this?"},
+        {"type": "image", "image": "photo.png"},
+    ]
+    result = asyncio.run(_ingest(parts, str(ws), vision=False))
+    assert result[0] == {"type": "text", "text": "what is this?"}
+    assert len(result) == 2
+    assert '"photo.png"' in result[1]["text"]
+    assert "propose a way to extract" in result[1]["text"]
+    assert all(b["type"] == "text" for b in result)
+
+
+def test_ingest_no_vision_text_file_still_inlined(tmp_path):
+    """vision=False only gates base64 media — plain text attachments inline."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "notes.txt").write_text("hello world")
+
+    result = asyncio.run(_ingest([{"type": "file", "file": "notes.txt"}], str(ws), vision=False))
+    assert result[0] == {"type": "text", "text": "[Attached: notes.txt]"}
+    assert "hello world" in result[1]["text"]
+
+
 def test_ingest_unreadable_attachment_names_the_file(tmp_path):
     """Binary/missing attachments must tell the model WHAT was attached — a
     bare error string reads as 'no document', which is what users see."""

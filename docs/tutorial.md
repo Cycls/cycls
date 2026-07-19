@@ -297,6 +297,7 @@ async for ev in llm.run(context=context):
 | `.max_tokens(n)` | Max output tokens per request (default 8k) |
 | `.price(input=, output=, cache_read=, cache_write=)` | Token prices in USD per 1M for cost tracking; unset → costs report as $0 |
 | `.thinking(spec)` | Unified reasoning level: `"low"`/`"medium"`/`"high"`, `"adaptive"` (default), or `None` |
+| `.vision(bool)` | Whether the model accepts base64 media (images, PDFs). Default on; pass `False` for text-only models (GLM, most local) — attachments then stay in the workspace and the model gets a note naming the file, instead of the provider rejecting the request |
 | `.web_search(mode)` | `"brave"` (default, any model, needs `BRAVE_API_KEY`) or `"native"` (Anthropic server-side) |
 | `.mcp(*servers)` | Remote MCP servers via `cycls.MCP` (Anthropic models only) |
 | `.bash_timeout(secs)` | Bash sandbox timeout |

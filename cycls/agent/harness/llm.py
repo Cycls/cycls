@@ -33,6 +33,7 @@ class LLM:
         self._mcp = []
         self._loop = None
         self._thinking = "adaptive"
+        self._vision = True
         self._web_search = "brave"
         self._instructions = "AGENT.md"
         self._skills = []
@@ -102,6 +103,14 @@ class LLM:
         token budget. Auto-disabled on models without thinking (Haiku)."""
         return self._copy(_thinking=spec)
 
+    def vision(self, enabled=True):
+        """Whether the model accepts base64 media (images, PDFs) in messages.
+        ON by default. Pass False for text-only models (GLM, most local/vLLM):
+        attached media then stays in the workspace and the model gets a note
+        naming the file so it can extract the content with tools, instead of
+        the provider rejecting the whole request."""
+        return self._copy(_vision=enabled)
+
     def web_search(self, mode="brave"):
         """Web search backend when `WebSearch` is allowed. `"brave"` (default) is
         our portable search + fetch pair — works on any model and needs
@@ -149,6 +158,7 @@ class LLM:
             handlers=self._handlers,
             mcp_servers=self._mcp,
             thinking=self._thinking,
+            vision=self._vision,
             web_search=self._web_search,
             instructions=self._instructions,
             skills=self._skills,

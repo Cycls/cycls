@@ -5,6 +5,8 @@ Translates cycls Message shape (Anthropic JSON) ↔ OpenAI Chat Completions:
   - assistant tool_use blocks ↔ assistant.tool_calls
   - user tool_result blocks ↔ role="tool" messages (text-only)
   - image/document in tool_results → text stubs (with a warning)
+  - user-content images → image_url data URLs; stubs on vision=False models
+  - user-content documents → text stubs (no Chat Completions wire form)
 """
 import json
 
@@ -14,10 +16,11 @@ from ...tools import tool_step
 
 
 class OpenAIProvider:
-    def __init__(self, client, model, vendor="openai"):
+    def __init__(self, client, model, vendor="openai", vision=True):
         self._client = client
         self.model = model
         self.vendor = vendor
+        self.vision = vision
 
     @staticmethod
     def _tool_result_text(content):
@@ -50,11 +53,17 @@ class OpenAIProvider:
                     if t == "text":
                         # Strict endpoints (GLM) reject empty text parts.
                         if b.get("text"): parts.append({"type": "text", "text": b["text"]})
-                    elif t == "image":
+                    elif t == "image" and self.vision:
                         src = b.get("source", {})
                         if src.get("type") == "base64":
                             parts.append({"type": "image_url", "image_url": {
                                 "url": f"data:{src['media_type']};base64,{src['data']}"}})
+                    elif t in ("image", "document"):
+                        # Text-only model (vision=False) or a document block, which
+                        # has no Chat Completions wire form — stub instead of a 400.
+                        dropped.add(t)
+                        parts.append({"type": "text",
+                                      "text": f"[{t} content not viewable on this provider]"})
                     elif t == "tool_result":
                         text, d = self._tool_result_text(b.get("content"))
                         dropped |= d
@@ -92,7 +101,7 @@ class OpenAIProvider:
     async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None, thinking=None):
         api_messages, dropped = self._to_messages(messages, system)
         for kind in sorted(dropped):
-            yield events.callout(f"`{kind}` content in tool results isn't viewable on this provider — the model sees a text stub.", "warning")
+            yield events.callout(f"`{kind}` content isn't viewable on this provider — the model sees a text stub.", "warning")
         if mcp_servers:
             yield events.callout("MCP servers are Anthropic-only — ignored on this provider.", "warning")
 
@@ -146,7 +155,9 @@ class OpenAIProvider:
         # Server-side caching is automatic on these providers; report the cached
         # split so cost prices it at the cache-read rate. prompt_tokens INCLUDES
         # cached tokens (unlike Anthropic's input_tokens, which excludes them).
-        cached = (getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0) if usage else 0
+        # Kimi/Moonshot reports `cached_tokens` at the top level of usage.
+        cached = (getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0)
+                  or getattr(usage, "cached_tokens", 0) or 0) if usage else 0
         yield Turn(content=content, stop_reason=stop,
                    input=(usage.prompt_tokens - cached if usage else 0),
                    output=(usage.completion_tokens if usage else 0),
