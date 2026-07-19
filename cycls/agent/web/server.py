@@ -106,7 +106,7 @@ class Messages(list):
     def raw(self):
         return self._raw
 
-def web(func, config, extra_routers=None, auth=None):
+def web(func, config, extra_routers=None, auth=None, iap=None):
     from fastapi import FastAPI, Request, HTTPException, Depends
     from fastapi import Response as FastAPIResponse
     from fastapi.responses import StreamingResponse
@@ -119,23 +119,29 @@ def web(func, config, extra_routers=None, auth=None):
 
     cms = config.cms or {}
     _cms_headers = {"Authorization": f"Bearer {cms['token']}"} if cms.get("token") else {}
-    if cms.get("brand") and not config.pass_metadata:
+    if cms.get("brand"):
         try:
             resp = httpx.get(cms["brand"], headers=_cms_headers, timeout=5)
             if resp.status_code == 200:
                 agent = resp.json()
-                config.pass_metadata = {
-                    "en": PassMetadata(
-                        name=agent.get("title") or config.name or "",
-                        description=agent.get("description", ""),
-                        logo=agent.get("icon_svg", ""),
-                    ),
-                    "ar": PassMetadata(
-                        name=agent.get("title_ar") or agent.get("title") or config.name or "",
-                        description=agent.get("description_ar", ""),
-                        logo=agent.get("icon_svg", ""),
-                    ),
+                cms_meta = {
+                    "en": {"name": agent.get("title") or "",
+                           "description": agent.get("description", "")},
+                    "ar": {"name": agent.get("title_ar") or agent.get("title") or "",
+                           "description": agent.get("description_ar", "")},
                 }
+                # Static .brand() wins piece by piece; CMS fills what's unset.
+                static = config.pass_metadata or {}
+                merged = {}
+                for loc, c in cms_meta.items():
+                    s = static.get(loc)
+                    merged[loc] = PassMetadata(
+                        name=(s.name if s else "") or c["name"] or config.name or "",
+                        description=(s.description if s else "") or c["description"],
+                        logo=(s.logo if s else "") or agent.get("icon_svg", ""),
+                        brand=s.brand if s else "",
+                    )
+                config.pass_metadata = {**static, **merged}
         except Exception:
             pass
 
@@ -162,7 +168,7 @@ def web(func, config, extra_routers=None, auth=None):
 
     app = FastAPI()
 
-    validate = validator(auth, config.prod)
+    validate = validator(auth, config.prod, iap)
     auth = Depends(validate) if config.auth else Depends(lambda: None)
     required_auth = Depends(validate)
 
