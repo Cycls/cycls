@@ -47,6 +47,16 @@ def test_function_spec_carries_volumes_only_when_set():
     assert no_storage.spec["volumes"] == "{}"
 
 
+def test_function_spec_survives_executor_reentry():
+    @cycls.function(volumes={"/mj": cycls.Volume("mj")})
+    def add(x, y):
+        return x + y
+
+    from cycls.function import Function
+    executor = Function(lambda: None, "exec-abc123", **add.spec)
+    assert executor.spec["volumes"] == add.spec["volumes"]
+
+
 def test_app_storage_resolves_through_platform_mapping(monkeypatch):
     app = cycls.App(func=lambda: None, name="myapp",
                     volumes={"/workspace": cycls.Volume("myapp-data")})

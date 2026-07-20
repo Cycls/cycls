@@ -116,7 +116,9 @@ class Function:
         self.spec = {k: v for k, v in dict(cpu=cpu, memory=memory, timeout=timeout,
                                            concurrency=concurrency,
                                            max_instances=max_instances,
-                                           volumes=to_wire(volumes) if volumes is not None else None,
+                                           volumes=volumes if isinstance(volumes, str)
+                                                   else to_wire(volumes) if volumes is not None
+                                                   else None,
                                            ).items() if v is not None}
         self.pip = sorted(set([*self._base_pip, *image.get("pip", [])])
                           | {f"cloudpickle=={cloudpickle.__version__}"})
