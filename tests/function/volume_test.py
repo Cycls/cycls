@@ -43,7 +43,7 @@ def test_function_spec_carries_volumes_only_when_set():
         pass
 
     assert json.loads(with_volumes.spec["volumes"]) == {"/data": {"name": "shared"}}
-    assert "volumes" not in without_volumes.spec
+    assert without_volumes.spec["volumes"] == "{}"
     assert no_storage.spec["volumes"] == "{}"
 
 

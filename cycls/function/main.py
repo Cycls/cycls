@@ -117,8 +117,7 @@ class Function:
                                            concurrency=concurrency,
                                            max_instances=max_instances,
                                            volumes=volumes if isinstance(volumes, str)
-                                                   else to_wire(volumes) if volumes is not None
-                                                   else None,
+                                                   else to_wire(volumes or {}),
                                            ).items() if v is not None}
         self.pip = sorted(set([*self._base_pip, *image.get("pip", [])])
                           | {f"cloudpickle=={cloudpickle.__version__}"})
