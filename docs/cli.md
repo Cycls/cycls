@@ -282,6 +282,28 @@ can take 5–10s (lazy server-side setup); a per-query scanned-bytes cap is
 enforced (add `LIMIT` or narrower predicates); SQL-engine errors surface
 verbatim — they're actionable.
 
+## `cycls volume <command>`
+
+Manage [volumes](volume.md) — named persistent storage, attached to
+deployments via `volumes=` on any decorator.
+
+```bash
+cycls volume create training-data          # explicit create (referencing one
+                                           # in a decorator also creates it)
+cycls volume ls                            # all volumes, with attachments
+# training-data   attached: crunch, dashboard   2026-07-20T14:02
+cycls volume ls training-data models/      # contents under a prefix
+cycls volume put training-data ./model.bin models/model.bin
+cycls volume get training-data outputs/result.parquet .
+cycls volume rm training-data models/old.bin   # remove a file
+cycls volume delete training-data [-y]     # delete the volume — refuses while
+                                           # attached; recoverable for 7 days
+```
+
+`put`/`get` move bytes directly to storage (no size limit through the API).
+`rm` removes a file; `delete` removes the volume — deleting a *deployment*
+never touches volume data.
+
 ## `cycls version`
 
 ```bash

@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Literal, Optional, Union
 import tarfile
 
+from .volume import to_wire
+
 os.environ["DOCKER_BUILDKIT"] = "1"
 
 ENTRYPOINT_PY = '''import sys
@@ -93,7 +95,8 @@ class Function:
 
     def __init__(self, func, name, python_version=None, image=None,
                  base_url=None, api_key=None, cpu=None, memory=None,
-                 timeout=None, concurrency=None, max_instances=None):
+                 timeout=None, concurrency=None, max_instances=None,
+                 volumes=None):
         image = image or {}
         self.func = func
         self.name = name.replace('_', '-')
@@ -112,7 +115,9 @@ class Function:
         self._api_key = api_key
         self.spec = {k: v for k, v in dict(cpu=cpu, memory=memory, timeout=timeout,
                                            concurrency=concurrency,
-                                           max_instances=max_instances).items() if v is not None}
+                                           max_instances=max_instances,
+                                           volumes=to_wire(volumes) if volumes is not None else None,
+                                           ).items() if v is not None}
         self.pip = sorted(set([*self._base_pip, *image.get("pip", [])])
                           | {f"cloudpickle=={cloudpickle.__version__}"})
         self.force_rebuild = image.get("force_rebuild", False)
@@ -574,6 +579,7 @@ def function(name=None, image=None, *,
              memory: Optional[Union[Literal["512Mi", "1Gi", "2Gi", "4Gi", "8Gi", "16Gi", "32Gi"], str]] = None,
              timeout: Optional[int] = None,
              concurrency: Optional[int] = None,
+             volumes: Optional[dict] = None,
              python_version=None):
     """Decorator that transforms a Python function into a containerized Function.
     Build config (pip, apt, run_commands, copy, force_rebuild) must be passed
@@ -581,6 +587,6 @@ def function(name=None, image=None, *,
     def decorator(func):
         return Function(func, name or func.__name__, image=image, cpu=cpu,
                         memory=memory, timeout=timeout, concurrency=concurrency,
-                        python_version=python_version,
+                        volumes=volumes, python_version=python_version,
                         base_url=_get_base_url(), api_key=_get_api_key())
     return decorator

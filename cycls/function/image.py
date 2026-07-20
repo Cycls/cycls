@@ -27,7 +27,3 @@ class Image(dict):
     def rebuild(self):
         """Force a full Docker rebuild (disable cache)."""
         return self._with(force_rebuild=True)
-
-    def volume(self, path):
-        """Mount path for per-request workspaces. Default `/workspace`."""
-        return self._with(volume=path)

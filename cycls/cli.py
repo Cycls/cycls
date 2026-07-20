@@ -358,6 +358,8 @@ _STARTER_TEMPLATE = '''import cycls
 
 image = cycls.Image()
 
+chats = cycls.Volume("{vol}-chats")
+
 web = (
     cycls.Web()
     .auth(cycls.Clerk())
@@ -371,7 +373,7 @@ llm = (
 )
 
 
-@cycls.agent(image=image, web=web)
+@cycls.agent(image=image, web=web, volumes={{"/workspace": chats}})
 async def {name}(context):
     async for ev in llm.run(context=context):
         yield cycls.to_ui(ev)
@@ -383,12 +385,89 @@ def cmd_init(args):
     path = Path(f"{name}.py")
     if path.exists():
         sys.exit(f"Error: {path} already exists.")
-    path.write_text(_STARTER_TEMPLATE.format(name=name))
+    path.write_text(_STARTER_TEMPLATE.format(name=name, vol=name.replace("_", "-")))
     print(f"Created {path}")
     print()
     print("Next steps:")
     print(f"  cycls run {path}       # run locally in Docker")
     print(f"  cycls deploy {path}    # deploy to production")
+
+
+def cmd_volume_create(args):
+    r = _api("POST", "/v1/volume/create", json={"name": args.name}).json()
+    print(f"Volume '{r['name']}' " + ("created." if r.get("created") else "already exists."))
+
+
+def cmd_volume_ls(args):
+    if args.name:
+        params = {"volume": args.name}
+        if args.path:
+            params["prefix"] = args.path
+        objects, token = [], None
+        while True:
+            if token:
+                params["page_token"] = token
+            r = _api("GET", "/v1/volume/objects", params=params).json()
+            objects += r.get("objects", [])
+            token = r.get("next_page_token")
+            if not token:
+                break
+        if not objects:
+            print("Empty.")
+            return
+        width = max(len(o["path"]) for o in objects)
+        for o in objects:
+            print(f"{o['path']:<{width}}  {o['size']:>12}  {o.get('updated') or ''}")
+    else:
+        vols = _api("GET", "/v1/volume/list").json()
+        if not vols:
+            print("No volumes.")
+            return
+        width = max(len(v["name"]) for v in vols)
+        for v in vols:
+            attached = ", ".join(v.get("attached_to", [])) or "-"
+            print(f"{v['name']:<{width}}  attached: {attached}  {v['created_at']}")
+
+
+def cmd_volume_delete(args):
+    if not args.yes:
+        confirm = input(f"Delete volume '{args.name}' and all its data? [y/N] ").strip().lower()
+        if confirm != "y":
+            return
+    r = _api("POST", "/v1/volume/delete", json={"name": args.name}).json()
+    print(r.get("detail", "Deleted."))
+
+
+def cmd_volume_put(args):
+    import httpx
+    remote = args.remote or Path(args.local).name
+    url = _api("POST", "/v1/volume/upload",
+               json={"volume": args.name, "path": remote}).json()["url"]
+    with open(args.local, "rb") as f:
+        resp = httpx.put(url, content=f, timeout=None)
+    if resp.status_code >= 400:
+        sys.exit(f"Error: upload failed with {resp.status_code}")
+    print(f"Uploaded {args.local} -> {args.name}:/{remote.lstrip('/')}")
+
+
+def cmd_volume_get(args):
+    import httpx
+    url = _api("POST", "/v1/volume/download",
+               json={"volume": args.name, "path": args.remote}).json()["url"]
+    local = Path(args.local or Path(args.remote).name)
+    with httpx.stream("GET", url, timeout=None) as resp:
+        if resp.status_code >= 400:
+            sys.exit(f"Error: download failed with {resp.status_code}")
+        with open(local, "wb") as f:
+            for chunk in resp.iter_bytes():
+                f.write(chunk)
+    print(f"Downloaded {args.name}:/{args.remote.lstrip('/')} -> {local}")
+
+
+def cmd_volume_rm(args):
+    r = _api("POST", "/v1/volume/delete-object",
+             json={"volume": args.name, "path": args.path}).json()
+    print(r.get("detail", "Removed."))
 
 
 def cmd_version(args):
@@ -456,6 +535,34 @@ def main():
     p = sub.add_parser("init", help="Scaffold a starter agent file")
     p.add_argument("name", nargs="?", help="Agent name (default: my_agent)")
     p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("volume", help="Manage volumes (named persistent storage)")
+    vsub = p.add_subparsers(dest="volume_command", required=True)
+    v = vsub.add_parser("create", help="Create a volume")
+    v.add_argument("name")
+    v.set_defaults(func=cmd_volume_create)
+    v = vsub.add_parser("ls", help="List volumes, or a volume's contents")
+    v.add_argument("name", nargs="?", help="Volume name (omit to list volumes)")
+    v.add_argument("path", nargs="?", default="", help="Path prefix within the volume")
+    v.set_defaults(func=cmd_volume_ls)
+    v = vsub.add_parser("delete", help="Delete a volume and all its data")
+    v.add_argument("name")
+    v.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
+    v.set_defaults(func=cmd_volume_delete)
+    v = vsub.add_parser("put", help="Upload a file to a volume")
+    v.add_argument("name")
+    v.add_argument("local")
+    v.add_argument("remote", nargs="?", help="Remote path (default: the file's name)")
+    v.set_defaults(func=cmd_volume_put)
+    v = vsub.add_parser("get", help="Download a file from a volume")
+    v.add_argument("name")
+    v.add_argument("remote")
+    v.add_argument("local", nargs="?", help="Local path (default: the file's name)")
+    v.set_defaults(func=cmd_volume_get)
+    v = vsub.add_parser("rm", help="Remove a file from a volume")
+    v.add_argument("name")
+    v.add_argument("path")
+    v.set_defaults(func=cmd_volume_rm)
 
     p = sub.add_parser("version", help="Print cycls version")
     p.set_defaults(func=cmd_version)

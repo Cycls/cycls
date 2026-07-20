@@ -1,5 +1,6 @@
 import asyncio
 import importlib.resources
+import json
 import os
 from functools import cached_property
 from pathlib import Path
@@ -92,7 +93,7 @@ class App(Function):
     _serves = True
 
     def __init__(self, func, name, image=None, memory="1Gi",
-                 auth: Optional[JWT] = None):
+                 auth: Optional[JWT] = None, volumes=None):
         if auth is not None and not isinstance(auth, JWT):
             raise TypeError(f"auth must be cycls.JWT or None, got {type(auth).__name__}")
         self.user_func = func
@@ -104,6 +105,7 @@ class App(Function):
         image["copy"] = {str(CYCLS_PATH): "cycls", **image.get("copy", {})}
 
         super().__init__(func=func, name=name, image=image, memory=memory,
+                         volumes=volumes,
                          base_url=_get_base_url(), api_key=_get_api_key())
 
     def __call__(self, *args, **kwargs):
@@ -112,7 +114,12 @@ class App(Function):
     @property
     def storage(self) -> str:
         if self.prod and self.name:
-            return f"gs://cycls-ws-{self.name}"
+            bucket = json.loads(os.environ.get("CYCLS_VOLUMES") or "{}").get("/workspace")
+            if bucket:
+                return f"gs://{bucket}"
+            raise RuntimeError(
+                "No volume mounted at /workspace — workspace/db need one. "
+                "Declare volumes={'/workspace': cycls.Volume(...)} on the decorator.")
         return f"file://{self.volume}"
 
     def _depends(self, fn):

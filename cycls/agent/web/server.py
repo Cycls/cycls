@@ -32,7 +32,12 @@ class Config(BaseModel):
     @property
     def storage(self) -> str:
         if self.prod and self.name:
-            return f"gs://cycls-ws-{self.name}"
+            bucket = json.loads(os.environ.get("CYCLS_VOLUMES") or "{}").get("/workspace")
+            if bucket:
+                return f"gs://{bucket}"
+            raise RuntimeError(
+                "No volume mounted at /workspace — agent state needs one. "
+                "Declare volumes={'/workspace': cycls.Volume(...)} on the decorator.")
         return f"file://{self.volume}"
 
 async def _aiter(stream):
