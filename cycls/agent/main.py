@@ -21,7 +21,12 @@ class Agent(App):
     _base_apt = [*App._base_apt, "fonts-noto-core",
                  "poppler-utils", "ripgrep", "jq", "curl"]
 
-    def __init__(self, func, name, web=None, image=None, memory="1Gi"):
+    def __init__(self, func, name, web=None, image=None, memory="1Gi", volumes=None):
+        if not volumes or "/workspace" not in volumes:
+            raise ValueError(
+                "agents keep chat state on a volume mounted at '/workspace' — add "
+                "volumes={'/workspace': cycls.Volume('<name>')} to the decorator "
+                "(existing agents: the volume shown by `cycls volume ls`)")
         if web is None:
             web = Web()
         self.theme = web._theme
@@ -45,6 +50,7 @@ class Agent(App):
             image=image,
             memory=memory,
             auth=web._auth,
+            volumes=volumes,
         )
         self.config.name = self.name
 

@@ -67,7 +67,8 @@ llm = (
 )
 
 
-@cycls.agent(image=image, web=web, name="super")
+@cycls.agent(image=image, web=web, name="super",
+             volumes={"/workspace": cycls.Volume("super")})
 async def super(context):
     user = context.user
     # Local dev is shalways exempted so prototyping isn't blocked by gates.

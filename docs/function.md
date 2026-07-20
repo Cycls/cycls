@@ -178,8 +178,26 @@ last week's build while holding the source — and callers who don't have the
 source get a stable, named API.
 
 Redeploying the same name updates it in place. `cycls ls` lists deployments,
-`cycls rm <name>` deletes one (workspace storage survives; redeploy picks it
-back up).
+`cycls rm <name>` deletes one. Its storage is detached, not deleted — data
+lives in [volumes](volume.md), which outlive deployments; redeploying the
+same name re-attaches them, files intact.
+
+## Volumes
+
+Persistent, shareable storage mounts on any deployment:
+
+```python
+data = cycls.Volume("training-data")
+
+@cycls.function(volumes={"/data": data})
+def crunch(day): ...
+```
+
+Functions mount exactly what they declare — nothing implicit. Apps and
+agents resolve their state from the volume mounted at `/workspace`: agents
+require one, apps only if they use `workspace`/`db`. See
+[volume.md](volume.md) for creation, sharing, `read_only`/`sub_path`
+mounts, lifecycle, and the `cycls volume` CLI.
 
 ## Security and versioning on the wire
 
@@ -194,6 +212,11 @@ Remote calls are pickle-RPC over HTTPS, protected twice:
   and the server refuses pickles that couldn't cross (Python minor must
   match, cloudpickle major must match) with an explicit error instead of a
   cryptic unpickle crash. Redeploy from the calling environment to resolve.
+
+One boundary to know: deployments under the same account share a trust
+domain — code running in one can reach the others' workspace storage. For
+hard isolation (prod vs experiments, or per-client separation), deploy from
+a separate organization; each org is its own tenant with its own boundary.
 
 URLs follow the convention `https://{name}.cycls.ai`.
 

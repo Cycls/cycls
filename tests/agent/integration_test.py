@@ -1,5 +1,7 @@
 import pytest
 import cycls
+
+WS = {"/workspace": cycls.Volume("test-chats")}
 from cycls.agent import Agent
 import asyncio
 import subprocess
@@ -17,7 +19,7 @@ def test_app_decorator_returns_app():
     """Tests that @cycls.app decorator returns an App."""
     print("\n--- Running test: test_app_decorator_returns_app ---")
 
-    @cycls.agent()
+    @cycls.agent(volumes=WS)
     async def my_app(context):
         yield "hello"
 
@@ -30,7 +32,7 @@ def test_agent_server_api_route_records():
     """Tests that @my_agent.server.api_route records routes on the APIRouter."""
     print("\n--- Running test: test_agent_server_api_route_records ---")
 
-    @cycls.agent()
+    @cycls.agent(volumes=WS)
     async def my_agent(context):
         yield "hi"
 
@@ -55,7 +57,7 @@ def test_app_custom_name():
     """Tests that custom name parameter is respected."""
     print("\n--- Running test: test_app_custom_name ---")
 
-    @cycls.agent(name="custom-name")
+    @cycls.agent(name="custom-name", volumes=WS)
     async def my_app(context):
         yield "hello"
 
@@ -71,7 +73,7 @@ def test_web_builder_propagates_into_config():
 
     web = cycls.Web().auth(cycls.Clerk()).analytics(True).cms("cycls.ai")
 
-    @cycls.agent(web=web)
+    @cycls.agent(web=web, volumes=WS)
     async def premium_app(context):
         yield "premium"
 
@@ -88,7 +90,7 @@ def test_app_default_config():
     """Tests default configuration values."""
     print("\n--- Running test: test_app_default_config ---")
 
-    @cycls.agent()
+    @cycls.agent(volumes=WS)
     async def default_app(context):
         yield "default"
 
@@ -140,7 +142,7 @@ def test_app_is_callable():
     """Tests that App delegates calls to the wrapped function."""
     print("\n--- Running test: test_app_is_callable ---")
 
-    @cycls.agent()
+    @cycls.agent(volumes=WS)
     def simple_app(context):
         yield f"received: {context}"
 
@@ -156,7 +158,7 @@ def test_app_async_function():
     """Tests that async functions work with @cycls.app."""
     print("\n--- Running test: test_app_async_function ---")
 
-    @cycls.agent()
+    @cycls.agent(volumes=WS)
     async def async_app(context):
         yield "async "
         yield "response"
@@ -179,7 +181,7 @@ def test_app_sync_function():
     """Tests that sync generator functions work with @cycls.app."""
     print("\n--- Running test: test_app_sync_function ---")
 
-    @cycls.agent()
+    @cycls.agent(volumes=WS)
     def sync_app(context):
         yield "sync "
         yield "response"
@@ -196,7 +198,7 @@ def test_app_theme_resolution():
     """Tests that Web().theme() is stored correctly on the agent."""
     print("\n--- Running test: test_app_theme_resolution ---")
 
-    @cycls.agent(web=cycls.Web().theme("dev"))
+    @cycls.agent(web=cycls.Web().theme("dev"), volumes=WS)
     async def dev_app(context):
         yield "dev"
 
@@ -224,7 +226,7 @@ def test_app_pip():
     """Tests that pip packages are stored correctly."""
     print("\n--- Running test: test_app_pip ---")
 
-    @cycls.agent(image=cycls.Image().pip("numpy", "pandas"))
+    @cycls.agent(image=cycls.Image().pip("numpy", "pandas"), volumes=WS)
     async def data_app(context):
         yield "data"
 
@@ -243,6 +245,7 @@ def test_app_copy_params():
     @cycls.agent(
         web=cycls.Web().copy_public("logo.png"),
         image=cycls.Image().copy("utils.py"),
+        volumes=WS,
     )
     async def file_app(context):
         yield "files"
@@ -261,7 +264,7 @@ def test_app_all_config_options():
 
     web = cycls.Web().title("My App").auth(cycls.Clerk()).analytics(True)
 
-    @cycls.agent(web=web)
+    @cycls.agent(web=web, volumes=WS)
     async def full_app(context):
         yield "full"
 
