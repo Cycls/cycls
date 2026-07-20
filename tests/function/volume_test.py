@@ -91,6 +91,15 @@ def test_agent_config_storage_resolves_through_platform_mapping(monkeypatch):
         config.storage
 
 
+def test_authed_agent_deploy_prep_defers_storage_to_container(monkeypatch):
+    monkeypatch.delenv("CYCLS_VOLUMES", raising=False)
+    agent = cycls.Agent(func=lambda ctx: None, name="bot",
+                        web=cycls.Web().auth(cycls.Clerk()),
+                        volumes={"/workspace": cycls.Volume("bot-chats")})
+    agent._prepare_func(prod=True)
+    assert callable(agent.func)
+
+
 def test_agent_requires_an_explicit_workspace_volume():
     with pytest.raises(ValueError, match="chat state"):
         cycls.Agent(func=lambda: None, name="bot")
