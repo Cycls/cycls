@@ -7,6 +7,7 @@ Distribute Intelligence
   <a href="https://docs.cycls.com">Docs</a> |
   <a href="docs/function.md">Functions</a> |
   <a href="docs/volume.md">Volumes</a> |
+  <a href="docs/cron.md">Cron</a> |
   <a href="docs/cli.md">CLI</a>
 </h4>
 
@@ -368,6 +369,7 @@ No YAML. No Dockerfiles. No infrastructure repo. The code is the deployment.
 
 - [Functions](docs/function.md) — the function interface, end to end
 - [Volumes](docs/volume.md) — persistent, shareable storage for deployments
+- [Cron](docs/cron.md) — fire a deployed function on a schedule
 - [CLI](docs/cli.md) — every command
 - [Tutorial](docs/notes/tutorial.md) — comprehensive guide from basics to advanced
 - [Sandbox security](docs/notes/sandbox-security.md) — how the Bash tool is isolated
