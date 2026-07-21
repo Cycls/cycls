@@ -255,7 +255,14 @@ web = (
 | `.title(str)` | Browser tab + app title |
 | `.brand(locale=, name=, description=, logo=, brand=, og=, favicon=)` | Static branding per locale. `logo` is the agent icon (chat hero); `brand` is the wordmark shown in the nav bar (falls back to the Cycls logo when unset); `og`/`favicon` are global |
 | `.theme(name)` | `"default"` or `"dev"` |
+| `.colors(primary=, secondary=, primary_dark=, secondary_dark=)` | Theme accent colors (any CSS color). `primary` drives highlights and active states, `secondary` chips and bubbles; the `_dark` variants override dark mode |
 | `.cms(brand=, explore=, token=)` | Pull branding and/or the explore menu from any CMS: plain GET URLs returning the contract JSON, optional bearer `token`. Static `.brand()`/`.explore()` win, piece by piece |
+| `.explore(*agents)` | Static explore menu (the agents dropdown): `{"name", "url", "logo"?, ...}` entries. Overrides the CMS list; with neither, the menu is hidden |
+| `.seo(title=, description=)` | Page/SEO copy when it should differ from the brand — the `<title>` tag, meta + og description |
+| `.head(html)` | Append raw HTML to `<head>` — site verification, custom meta. Repeatable |
+| `.suggestions(on=True)` | Show prompt-starter suggestions on the empty-chat screen. Off by default |
+| `.affiliate(api_key)` | Affiliate/referral tracking (e.g. a Rewardful key); the FE loads the tracker and reports conversions on checkout |
+| `.max_upload(mb)` | Per-file upload cap in MB (default 512). Enforced server-side, pre-checked client-side |
 | `.analytics(bool)` | Enable usage metrics |
 | `.copy_public(*files)` | Static files served at `/public` |
 | `.workspaces(create="member")` | Multi-workspace mode: every user gets a personal workspace, teams are shared with role-based access, selected per request via the `X-Workspace` header. Requires `.auth(...)`. `create` sets who may create team workspaces (`"member"` or `"admin"`) — see [docs/workspaces.md](../workspaces.md) |
