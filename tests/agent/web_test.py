@@ -840,7 +840,8 @@ def test_agent_workspaces_requires_auth(tmp_path):
     import cycls
 
     with pytest.raises(ValueError, match="requires"):
-        @cycls.agent(web=cycls.Web().workspaces())
+        @cycls.agent(web=cycls.Web().workspaces(),
+                     volumes={"/workspace": cycls.Volume("test-chats")})
         async def my_agent(context):
             yield "hi"
 
@@ -848,7 +849,8 @@ def test_agent_workspaces_requires_auth(tmp_path):
 def test_agent_workspaces_config_wiring():
     import cycls
 
-    @cycls.agent(web=cycls.Web().auth(cycls.Clerk()).workspaces(create="admin"))
+    @cycls.agent(web=cycls.Web().auth(cycls.Clerk()).workspaces(create="admin"),
+                 volumes={"/workspace": cycls.Volume("test-chats")})
     async def my_agent(context):
         yield "hi"
 

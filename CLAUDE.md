@@ -2,12 +2,12 @@
 
 Python SDK for building, deploying, and monetizing AI agents. Write a function, deploy it as an API, web interface, or both.
 
-For a comprehensive walk through the primitives, decorators, CLI, and end-to-end patterns, see [docs/tutorial.md](docs/tutorial.md).
+For a comprehensive walk through the primitives, decorators, CLI, and end-to-end patterns, see [docs/notes/tutorial.md](docs/notes/tutorial.md).
 
 ## Tech Stack
 
 - Python >= 3.9 (3.10+ for deployment)
-- FastAPI + Uvicorn for web serving
+- FastAPI + Hypercorn for web serving (hypercorn for h2 end-to-end on Cloud Run)
 - Docker for containerization
 - uv for package management
 - Cloudpickle for function serialization
@@ -43,10 +43,11 @@ docker system prune -af
 
 ```
 cycls/
-├── cli.py                  # CLI: run, deploy, ls, rm, logs, init, version
+├── cli.py                  # CLI: run, deploy, shell, ls, rm, logs, cost, sql, init, version
 ├── function/
 │   ├── main.py             # Function class + @cycls.function decorator
-│   └── image.py            # cycls.Image fluent builder
+│   ├── image.py            # cycls.Image fluent builder
+│   └── remote.py           # pickle-RPC shim + cycls.remote client (--remote deploys)
 ├── app/
 │   ├── main.py             # App class + @cycls.app + _make_decorator
 │   ├── auth.py             # cycls.Clerk, cycls.JWT, User, make_validate

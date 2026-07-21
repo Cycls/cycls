@@ -214,7 +214,6 @@ def my_func(x):
 | `.apt(*pkgs)` | Install system packages |
 | `.copy(src, dst=None)` | Bundle local files/directories (dst defaults to src) |
 | `.run(cmd)` | Run a shell command during build |
-| `.volume(path)` | Mount path for per-request workspaces (default `/workspace`) |
 | `.rebuild()` | Force Docker cache bust |
 
 Cycls hashes image config to create deterministic Docker tags. Same inputs = instant rebuild from cache. Changed inputs = rebuild only what changed.

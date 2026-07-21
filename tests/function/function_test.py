@@ -1,6 +1,6 @@
 import pytest
 import cycls
-import requests
+import httpx
 import time
 
 # This is the main test file for the 'cycls' library.
@@ -75,14 +75,14 @@ def test_long_running_service():
 
             # 3. Make the HTTP request to the now-guaranteed-to-be-running service.
             print(f"Making request to http://localhost:{TEST_PORT}")
-            response = requests.get(f"http://localhost:{TEST_PORT}", timeout=10)
+            response = httpx.get(f"http://localhost:{TEST_PORT}", timeout=10)
 
             # 4. Assert that the response from the service is correct.
             assert response.status_code == 200
             assert response.json() == {"status": "ok", "message": "Service is running!"}
             print("✅ Test passed.")
 
-    except (requests.ConnectionError, RuntimeError) as e:
+    except (httpx.TransportError, RuntimeError) as e:
         print(f"❌ Test failed: Could not connect to the service. Error: {e}")
         # Re-raise the exception to make the test framework aware of the failure.
         raise
@@ -253,7 +253,7 @@ def test_build_deployable_image():
 
         # 4. Wait for service to start and make request.
         time.sleep(3)
-        response = requests.get(f"http://localhost:{TEST_PORT}", timeout=10)
+        response = httpx.get(f"http://localhost:{TEST_PORT}", timeout=10)
 
         # 5. Assert response is correct.
         assert response.status_code == 200

@@ -6,8 +6,12 @@ import json
 import os
 import sys
 import shutil
+import traceback
 from pathlib import Path
+from typing import Literal, Optional, Union
 import tarfile
+
+from .volume import to_wire
 
 os.environ["DOCKER_BUILDKIT"] = "1"
 
@@ -87,20 +91,36 @@ class Function:
 
     _base_pip = []
     _base_apt = []
+    _serves = False
 
     def __init__(self, func, name, python_version=None, image=None,
-                 base_url=None, api_key=None):
+                 base_url=None, api_key=None, cpu=None, memory=None,
+                 timeout=None, concurrency=None, max_instances=None,
+                 volumes=None):
         image = image or {}
         self.func = func
         self.name = name.replace('_', '-')
-        self.python_version = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
+        host_py = f"{sys.version_info.major}.{sys.version_info.minor}"
+        if python_version and ".".join(str(python_version).split(".")[:2]) != host_py:
+            raise ValueError(
+                f"python_version={python_version!r} doesn't match the host's {host_py}: "
+                "functions ship as cloudpickle bytecode, which only loads on the same "
+                "major.minor Python.")
+        self.python_version = python_version or host_py
         self.base_image = f"python:{self.python_version}-slim"
         self.apt = sorted([*self._base_apt, *image.get("apt", [])])
         self.run_commands = list(image.get("run_commands", []))
         self.copy = image.get("copy", {})
         self._base_url = base_url
         self._api_key = api_key
-        self.pip = sorted(set([*self._base_pip, *image.get("pip", [])]) | {"cloudpickle"})
+        self.spec = {k: v for k, v in dict(cpu=cpu, memory=memory, timeout=timeout,
+                                           concurrency=concurrency,
+                                           max_instances=max_instances,
+                                           volumes=volumes if isinstance(volumes, str)
+                                                   else to_wire(volumes or {}),
+                                           ).items() if v is not None}
+        self.pip = sorted(set([*self._base_pip, *image.get("pip", [])])
+                          | {f"cloudpickle=={cloudpickle.__version__}"})
         self.force_rebuild = image.get("force_rebuild", False)
 
         self.image_prefix = f"cycls/{self.name}"
@@ -109,9 +129,6 @@ class Function:
         self._container = None
 
     def __getstate__(self):
-        # Strip runtime-only attrs (Docker client/container hold sockets)
-        # so cloudpickle can serialize Function/App/Agent instances when
-        # the user function references them via closure.
         state = self.__dict__.copy()
         state["_docker_client"] = None
         state["_container"] = None
@@ -160,17 +177,17 @@ class Function:
             print(f"Warning: cleanup error: {e}")
 
     def _image_tag(self, extra_parts=None) -> str:
-        parts = [self.base_image, self.python_version, "".join(self.pip),
-                 "".join(self.apt), "".join(self.run_commands)]
+        parts = [self.base_image, self.python_version, self.pip,
+                 self.apt, self.run_commands]
         for src, dst in sorted(self.copy.items()):
             if not Path(src).exists():
                 raise FileNotFoundError(f"Path in 'copy' not found: {src}")
             parts.append(f"{src}>{dst}:{_hash_path(src)}")
         if extra_parts:
             parts.extend(extra_parts)
-        return f"{self.image_prefix}:{hashlib.sha256(''.join(parts).encode()).hexdigest()[:16]}"
+        return f"{self.image_prefix}:{hashlib.sha256(json.dumps(parts).encode()).hexdigest()[:16]}"
 
-    def _dockerfile_preamble(self) -> str:
+    def _dockerfile_preamble(self, extra_pip=()) -> str:
         lines = [
             f"FROM {self.base_image}",
             "ENV PIP_ROOT_USER_ACTION=ignore PYTHONUNBUFFERED=1",
@@ -181,8 +198,9 @@ class Function:
         if self.apt:
             lines.append(f"RUN apt-get update && apt-get install -y --no-install-recommends {' '.join(self.apt)}")
 
-        if self.pip:
-            lines.append(f"RUN uv pip install --system --no-cache {' '.join(self.pip)}")
+        pip = sorted(set(self.pip) | set(extra_pip))
+        if pip:
+            lines.append(f"RUN uv pip install --system --no-cache {' '.join(pip)}")
 
         for cmd in self.run_commands:
             lines.append(f"RUN {cmd}")
@@ -198,8 +216,8 @@ COPY runner.py /runner.py
 ENTRYPOINT ["python", "/runner.py", "/io"]
 """
 
-    def _dockerfile_deploy(self, port: int) -> str:
-        return f"""{self._dockerfile_preamble()}
+    def _dockerfile_deploy(self, port: int, extra_pip=()) -> str:
+        return f"""{self._dockerfile_preamble(extra_pip)}
 COPY function.pkl /app/function.pkl
 COPY entrypoint.py /app/entrypoint.py
 EXPOSE {port}
@@ -321,8 +339,8 @@ CMD ["python", "entrypoint.py"]
             print("\n----------------------")
             print("Stopping...")
             return None
-        except Exception as e:
-            print(f"Error: {e}")
+        except Exception:
+            traceback.print_exc()
             return None
 
     def watch(self, *args, **kwargs):
@@ -367,14 +385,21 @@ CMD ["python", "entrypoint.py"]
                 proc.wait(timeout=3)
                 return
 
-    def _prepare_deploy_context(self, workdir: Path, port: int, args=(), kwargs=None):
+    def _prepare_deploy_context(self, workdir: Path, port: int, args=(), kwargs=None, remote=False):
         kwargs = kwargs or {}
         kwargs['port'] = port
         self._copy_user_files(workdir)
-        (workdir / "Dockerfile").write_text(self._dockerfile_deploy(port))
-        (workdir / "entrypoint.py").write_text(ENTRYPOINT_PY)
+        (workdir / "Dockerfile").write_text(
+            self._dockerfile_deploy(port, extra_pip=("hypercorn",) if remote else ()))
+        if remote:
+            from .remote import REMOTE_PY, token_for
+            (workdir / "entrypoint.py").write_text(REMOTE_PY if remote is True else remote)
+            payload = (self.func, token_for(self.api_key or "dev", self.name))
+        else:
+            (workdir / "entrypoint.py").write_text(ENTRYPOINT_PY)
+            payload = (self.func, args, kwargs)
         with open(workdir / "function.pkl", "wb") as f:
-            cloudpickle.dump((self.func, args, kwargs), f)
+            cloudpickle.dump(payload, f)
 
     def build(self, *args, **kwargs):
         import docker
@@ -396,17 +421,29 @@ CMD ["python", "entrypoint.py"]
             print(f"Run: docker run --rm -p {port}:{port} {tag}")
             return tag
 
+    def _is_remote(self):
+        """A function that can't accept the injected `port` (no `port` param,
+        no **kwargs) isn't a server — deploy it as a callable endpoint."""
+        import inspect
+        try:
+            params = inspect.signature(self.func).parameters.values()
+        except (ValueError, TypeError):
+            return False
+        return not any(p.name == "port" or p.kind == p.VAR_KEYWORD for p in params)
+
     def deploy(self, *args, **kwargs):
-        import requests
+        import httpx
 
         base_url = self.base_url
         port = kwargs.pop('port', 8080)
-        memory = kwargs.pop('memory', '1Gi')
+        remote = kwargs.pop('remote', None)
+        if remote is None:
+            remote = self._is_remote()
 
         # Check name availability before uploading
         print(f"Checking '{self.name}'...")
         try:
-            check_resp = requests.get(
+            check_resp = httpx.get(
                 f"{base_url}/v1/deployment/check-name",
                 params={"name": self.name},
                 headers={"X-API-Key": self.api_key},
@@ -420,7 +457,7 @@ CMD ["python", "entrypoint.py"]
             if not check_data.get("available"):
                 print(f"Error: {check_data.get('reason', 'Name unavailable')}")
                 return None
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             print(f"Error checking name: {e}")
             return None
 
@@ -431,7 +468,7 @@ CMD ["python", "entrypoint.py"]
 
         with tempfile.TemporaryDirectory() as tmpdir:
             workdir = Path(tmpdir)
-            self._prepare_deploy_context(workdir, port, args, kwargs)
+            self._prepare_deploy_context(workdir, port, args, kwargs, remote=remote)
 
             archive_path = workdir / archive_name
             with tarfile.open(archive_path, "w:gz") as tar:
@@ -439,81 +476,118 @@ CMD ["python", "entrypoint.py"]
                     if f.is_file() and f != archive_path:
                         tar.add(f, arcname=f.relative_to(workdir))
 
-            print("Uploading...")
-            upload_resp = requests.post(
-                f"{base_url}/v1/deploy/upload",
-                data={"function_name": self.name},
-                headers={"X-API-Key": self.api_key},
-                timeout=30,
-            )
-            if not upload_resp.ok:
-                print(f"Upload request failed: {upload_resp.status_code}")
-                try:
-                    print(f"  {upload_resp.json()['detail']}")
-                except (json.JSONDecodeError, KeyError):
-                    print(f"  {upload_resp.text}")
-                return None
-            upload_data = upload_resp.json()
-
-            with open(archive_path, 'rb') as f:
-                gcs_resp = requests.put(
-                    upload_data["upload_url"],
-                    data=f,
-                    headers={"Content-Type": "application/gzip"},
-                    timeout=9000,
-                )
-            if not gcs_resp.ok:
-                print(f"Archive upload failed: {gcs_resp.status_code}")
-                return None
-
-            response = requests.post(
+            url = None
+            with open(archive_path, 'rb') as f, httpx.stream(
+                "POST",
                 f"{base_url}/v1/deploy",
                 data={
                     "function_name": self.name,
-                    "source_object": upload_data["object_name"],
                     "port": port,
-                    "memory": memory,
+                    "memory": "1Gi",
                     "timeout": 1200,
                     "use_http2": "true",
                     "session_affinity": "true",
+                    **self.spec,
                 },
+                files={"source_archive": (archive_name, f, "application/gzip")},
                 headers={"X-API-Key": self.api_key},
                 timeout=9000,
-                stream=True,
-            )
+            ) as response:
+                if response.is_error:
+                    response.read()
+                    print(f"Deploy failed: {response.status_code}")
+                    try:
+                        print(f"  {response.json()['detail']}")
+                    except (json.JSONDecodeError, KeyError):
+                        print(f"  {response.text}")
+                    return None
 
-            if not response.ok:
-                print(f"Deploy failed: {response.status_code}")
-                try:
-                    print(f"  {response.json()['detail']}")
-                except (json.JSONDecodeError, KeyError):
-                    print(f"  {response.text}")
-                return None
-
-            # Parse NDJSON stream
-            url = None
-            for line in response.iter_lines(decode_unicode=True):
-                if line:
-                    event = json.loads(line)
-                    status = event.get("status", "")
-                    msg = event.get("message", "")
-                    print(f"  [{status}] {msg}")
-                    if status == "DONE":
-                        url = event.get("url")
-                        print(f"Deployed: {url}")
-                    elif status == "ERROR":
-                        return None
+                for line in response.iter_lines():
+                    if line:
+                        event = json.loads(line)
+                        status = event.get("status", "")
+                        msg = event.get("message", "")
+                        print(f"  [{status}] {msg}")
+                        if status == "DONE":
+                            url = event.get("url")
+                            print(f"Deployed: {url}")
+                            if remote is True and not self.name.startswith("exec-"):
+                                print(f'Call it: cycls.remote("{self.name}")(...)')
+                            break
+                        elif status == "ERROR":
+                            return None
             return url
+
+    def _image_config(self):
+        """This instance's build config as an `image=` dict."""
+        return {"pip": self.pip, "apt": self.apt,
+                "run_commands": self.run_commands, "copy": self.copy}
+
+    def _executor_name(self):
+        return f"exec-{self._image_tag().rsplit(':', 1)[1]}"
+
+    def remote(self, *args, **kwargs):
+        """Run this function's CURRENT code in the cloud — ships the live
+        bytecode to a per-image executor, provisioned once on first call."""
+        return self._on_executor(lambda call: call(self.func, *args, **kwargs))
+
+    def map(self, items, *, workers=16):
+        """Fan this function's CURRENT code out across autoscaled instances —
+        one cloud call per item, results in input order. If the executor
+        vanishes mid-fan, the whole fan retries after reprovisioning — items
+        that already ran run again, so side effects should be idempotent."""
+        from concurrent.futures import ThreadPoolExecutor
+        items = list(items)
+        def fan(call):
+            with ThreadPoolExecutor(workers) as pool:
+                return list(pool.map(lambda item: call(self.func, item), items))
+        return self._on_executor(fan)
+
+    def _on_executor(self, op):
+        """Run `op(call)` against this image's executor, provisioning it on
+        the first 404."""
+        import time
+        from .remote import remote as _remote, RemoteError
+        call = _remote(self._executor_name(), api_key=self._api_key)
+        try:
+            return op(call)
+        except RemoteError as e:
+            if e.status != 404: raise
+        print(f"Provisioning executor '{self._executor_name()}' (one-time for this image)...")
+        self._deploy_executor(self._executor_name())
+        for _ in range(15):
+            try:
+                return op(call)
+            except RemoteError as e:
+                if e.status != 404: raise
+                time.sleep(2)
+        raise RemoteError(f"executor {self._executor_name()!r} deployed but never became reachable")
+
+    def _deploy_executor(self, name):
+        from .remote import RemoteError
+        def execute(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+        if not Function(execute, name, image=self._image_config(),
+                        api_key=self._api_key, **self.spec).deploy(remote=True):
+            raise RemoteError(f"provisioning {name!r} failed")
 
     def __del__(self):
         self._cleanup_container()
 
 
-def function(name=None, image=None, **kwargs):
+def function(name=None, image=None, *,
+             cpu: Optional[Literal[1, 2, 4, 6, 8]] = None,
+             memory: Optional[Union[Literal["512Mi", "1Gi", "2Gi", "4Gi", "8Gi", "16Gi", "32Gi"], str]] = None,
+             timeout: Optional[int] = None,
+             concurrency: Optional[int] = None,
+             volumes: Optional[dict] = None,
+             python_version=None):
     """Decorator that transforms a Python function into a containerized Function.
     Build config (pip, apt, run_commands, copy, force_rebuild) must be passed
     via `image=cycls.Image()...` — flat kwargs are not accepted."""
     def decorator(func):
-        return Function(func, name or func.__name__, image=image, **kwargs,
+        return Function(func, name or func.__name__, image=image, cpu=cpu,
+                        memory=memory, timeout=timeout, concurrency=concurrency,
+                        volumes=volumes, python_version=python_version,
                         base_url=_get_base_url(), api_key=_get_api_key())
     return decorator
