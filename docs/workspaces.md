@@ -93,5 +93,5 @@ missing.
   shared repo, but worth knowing.
 - A deliberately adversarial user with `network=True` bash can steal the
   deployment's service-account token, which reads the whole bucket across
-  workspaces. See [sandbox-security.md](sandbox-security.md) for the threat
+  workspaces. See [sandbox-security.md](notes/sandbox-security.md) for the threat
   boundary; `network=False` closes it fully.
