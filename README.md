@@ -370,6 +370,7 @@ No YAML. No Dockerfiles. No infrastructure repo. The code is the deployment.
 - [Functions](docs/function.md) — the function interface, end to end
 - [Volumes](docs/volume.md) — persistent, shareable storage for deployments
 - [Cron](docs/cron.md) — fire a deployed function on a schedule
+- [Workspaces](docs/workspaces.md) — personal and team workspaces for agents
 - [CLI](docs/cli.md) — every command
 - [Tutorial](docs/notes/tutorial.md) — comprehensive guide from basics to advanced
 - [Sandbox security](docs/notes/sandbox-security.md) — how the Bash tool is isolated
