@@ -199,6 +199,21 @@ require one, apps only if they use `workspace`/`db`. See
 [volume.md](volume.md) for creation, sharing, `read_only`/`sub_path`
 mounts, lifecycle, and the `cycls volume` CLI.
 
+## Schedules
+
+A bare function can carry a schedule — the platform fires its frozen
+invocation on it, no caller needed:
+
+```python
+@cycls.function(schedule=cycls.Cron("0 3 * * *", timezone="Asia/Riyadh"),
+                volumes={"/out": cycls.Volume("scrapes")})
+def nightly(): ...
+```
+
+Delete the `schedule=` line and redeploy to remove it — source is truth.
+See [cron.md](cron.md) for semantics (at-least-once, overlap, the
+thirty-minute ceiling) and what can't be scheduled.
+
 ## Security and versioning on the wire
 
 Remote calls are pickle-RPC over HTTPS, protected twice:
