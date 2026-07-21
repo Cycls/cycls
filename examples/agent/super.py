@@ -96,7 +96,7 @@ llm = (
     # .sandbox(network=False)  # opt out of network access for the LLM bash
     # .bash_timeout(600)  # bash sandbox timeout in seconds
     # .api_key(os.environ["ANTHROPIC_API_KEY"])  # override the provider key (default: from env)
-    # .loop(my_loop)  # replace the built-in agent loop entirely (see docs/tutorial.md)
+    # .loop(my_loop)  # replace the built-in agent loop entirely (see docs/notes/tutorial.md)
 )
 
 

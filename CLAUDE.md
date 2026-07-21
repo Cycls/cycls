@@ -47,10 +47,12 @@ cycls/
 ├── function/
 │   ├── main.py             # Function class + @cycls.function decorator
 │   ├── image.py            # cycls.Image fluent builder
+│   ├── volume.py           # cycls.Volume — named persistent storage
+│   ├── schedule.py         # cycls.Cron — fire a deployed function on a schedule
 │   └── remote.py           # pickle-RPC shim + cycls.remote client (--remote deploys)
 ├── app/
 │   ├── main.py             # App class + @cycls.app + _make_decorator
-│   ├── auth.py             # cycls.Clerk, cycls.JWT, User, make_validate
+│   ├── auth.py             # cycls.Clerk, cycls.JWT, GCP, User, AppleIAP, validator
 │   └── web.py              # cycls.Web fluent builder
 └── agent/
     ├── main.py             # Agent class + @cycls.agent decorator
@@ -148,7 +150,7 @@ tests/
 
 **Mocked tier** (default): no API calls, no docker. Runs in ~2min.
 ```bash
-uv run pytest tests/                       # all ~325 mocked tests
+uv run pytest tests/                       # all ~410 mocked tests
 uv run pytest tests/agent/ -v              # just agent tests
 uv run pytest tests/agent/scenarios/ -v    # just scenarios
 ```

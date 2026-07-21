@@ -258,9 +258,31 @@ web = (
 | `.cms(brand=, explore=, token=)` | Pull branding and/or the explore menu from any CMS: plain GET URLs returning the contract JSON, optional bearer `token`. Static `.brand()`/`.explore()` win, piece by piece |
 | `.analytics(bool)` | Enable usage metrics |
 | `.copy_public(*files)` | Static files served at `/public` |
-| `.workspaces(create="member")` | Multi-workspace mode: every user gets a personal workspace, teams are shared with role-based access, selected per request via the `X-Workspace` header. Requires `.auth(...)`. `create` sets who may create team workspaces (`"member"` or `"admin"`) — see [docs/workspaces.md](workspaces.md) |
+| `.workspaces(create="member")` | Multi-workspace mode: every user gets a personal workspace, teams are shared with role-based access, selected per request via the `X-Workspace` header. Requires `.auth(...)`. `create` sets who may create team workspaces (`"member"` or `"admin"`) — see [docs/workspaces.md](../workspaces.md) |
+| `.iap(cycls.AppleIAP(...))` | Apple In-App Purchase entitlements: a StoreKit 2 signed transaction (JWS) in a header is verified offline against the bundled Apple root cert and, when valid, upgrades the request's `user.plan`. See below |
 
 Static files land at `https://your-app.cycls.ai/public/logo.png`.
+
+### Apple IAP entitlements
+
+For agents that sell subscriptions through Apple In-App Purchase, `.iap(...)`
+verifies the buyer on every request without a round-trip to Apple. The iOS
+client sends its current StoreKit 2 transaction (a JWS Apple signed) in a
+header; `cycls.AppleIAP` validates the certificate chain against the bundled
+Apple Root CA G3, checks the product and expiry, and confirms the purchase's
+`appAccountToken` binds to the authenticated user (so it can't be replayed by
+another account). A valid entitlement upgrades that request's `user.plan`.
+
+```python
+iap = cycls.AppleIAP(
+    bundle_id="com.example.app",
+    products={"com.example.app.pro.monthly"},
+    namespace="<uuid the client also uses>",   # UUIDv5 namespace for appAccountToken
+)
+web = cycls.Web().auth(cycls.Clerk()).iap(iap)
+```
+
+Gate features on the upgraded plan inside the agent via `context.user.plan`.
 
 ---
 
@@ -681,5 +703,5 @@ image = cycls.Image().pip("numpy").rebuild()
 ## Next Steps
 
 - Explore the [examples](../examples/) directory for working code
-- Read the [README](../README.md) for the architectural overview
+- Read the [README](../../README.md) for the architectural overview
 - Visit [cycls.com](https://cycls.com) for deploy + billing
