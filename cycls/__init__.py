@@ -4,7 +4,7 @@ try:
 except ImportError:
     pass
 
-from .function import function, Function, Image, Volume
+from .function import function, Function, Image, Volume, Cron
 from .function.remote import remote, local_entrypoint, RemoteError
 from .app import app, App, AppleIAP, Clerk, GCP, JWT, User, Sandbox, SandboxResult, DB, Workspace
 from .agent.web import Web

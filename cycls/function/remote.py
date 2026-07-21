@@ -125,6 +125,16 @@ async def app(scope, receive, send):
         return
     if scope["method"] != "POST":
         return await reply(send, 404, b"not found")
+    if scope.get("path") == "/cron":
+        h = dict(scope["headers"])
+        expected = os.environ.get("CYCLS_CRON_TOKEN", "")
+        if not (expected and hmac.compare_digest(h.get(b"x-cron-token", b"").decode(), expected)):
+            return await reply(send, 403, b"bad cron token")
+        try:
+            await asyncio.get_running_loop().run_in_executor(POOL, func)
+            return await reply(send, 200, b"ok")
+        except Exception:
+            return await reply(send, 500, traceback.format_exc().encode())
     if (bad := check(scope)):
         return await reply(send, *bad)
     try:
