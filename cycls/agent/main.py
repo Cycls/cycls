@@ -22,7 +22,12 @@ class Agent(App):
     _base_apt = [*App._base_apt, "fonts-noto-core",
                  "poppler-utils", "ripgrep", "jq", "curl"]
 
-    def __init__(self, func, name, web=None, image=None, memory="1Gi"):
+    def __init__(self, func, name, web=None, image=None, memory="1Gi", volumes=None):
+        if not volumes or "/workspace" not in volumes:
+            raise ValueError(
+                "agents keep chat state on a volume mounted at '/workspace' — add "
+                "volumes={'/workspace': cycls.Volume('<name>')} to the decorator "
+                "(existing agents: the volume shown by `cycls volume ls`)")
         if web is None:
             web = Web()
         if web._workspaces and web._auth is None:
@@ -58,6 +63,7 @@ class Agent(App):
             image=image,
             memory=memory,
             auth=web._auth,
+            volumes=volumes,
         )
         self.config.name = self.name
 
@@ -76,8 +82,8 @@ class Agent(App):
         if self._auth_provider is not None:
             cycls_app = self
             volume = Path(self.config.volume)
-            storage = self.storage
-            routers.insert(0, lambda app, auth: install_routers(cycls_app, app, auth, volume, storage))
+            routers.insert(0, lambda app, auth: install_routers(
+                cycls_app, app, auth, volume, cycls_app.storage))
         return routers
 
     def _prepare_func(self, prod):
@@ -97,6 +103,11 @@ class Agent(App):
             _serve(web(user_func, config, extra_routers=routers, auth=provider, iap=iap), port)
 
         self.func = runner
+
+    def remote(self, *args, **kwargs):
+        from cycls.function.remote import RemoteError
+        raise RemoteError("live cloud dev for agents isn't wired yet — "
+                          "use `cycls run` (Docker) or `cycls deploy`")
 
     def _local(self, port=8080):
         print(f"Starting local server at localhost:{port}")

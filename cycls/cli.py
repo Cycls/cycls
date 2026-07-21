@@ -1,6 +1,5 @@
 """cycls CLI — run, deploy, list, delete, logs, and scaffold agents."""
 import argparse
-import importlib.util
 import os
 import sys
 import time
@@ -10,34 +9,33 @@ from pathlib import Path
 # ---- Module loading ----
 
 def _load_target(path_spec):
-    """Import a file and return the first @cycls.function/app/agent instance.
-    `path_spec` is 'file.py' or 'file.py::name' for an explicit target."""
+    """Import a file; return (target, entrypoint) — the first
+    @cycls.function/app/agent instance and the file's @cycls.local_entrypoint
+    (None if undeclared). `path_spec` is 'file.py' or 'file.py::name'."""
     if "::" in path_spec:
         path_str, target = path_spec.split("::", 1)
     else:
         path_str, target = path_spec, None
 
+    from cycls.function.remote import _load_module
+    module = _load_module(path_str)
     path = Path(path_str).resolve()
-    if not path.exists():
-        sys.exit(f"Error: {path} not found")
-
-    spec = importlib.util.spec_from_file_location(path.stem, path)
-    module = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(path.parent))
-    spec.loader.exec_module(module)
 
     from cycls.function import Function
     from cycls.app import App
+
+    entry = next((o for o in vars(module).values()
+                  if getattr(o, "_cycls_entry", False)), None)
 
     if target:
         obj = getattr(module, target, None)
         if obj is None:
             sys.exit(f"Error: target '{target}' not found in {path}")
-        return obj
+        return obj, entry
 
     for _, obj in module.__dict__.items():
         if isinstance(obj, (Function, App)):
-            return obj
+            return obj, entry
 
     sys.exit(f"Error: no @cycls.function/app/agent instance found in {path}")
 
@@ -71,18 +69,104 @@ def _api(method, path, **kwargs):
 
 # ---- Commands ----
 
+def _pretty_log(msg):
+    """Colorize hypercorn's `200 GET /path` access lines and hide the dev
+    loop's own traffic. Everything else — app output, tracebacks — passes
+    through untouched."""
+    msg = msg.rstrip()
+    parts = msg.split()
+    if len(parts) != 3 or not parts[0].isdigit():
+        return msg or None
+    status, method, path = parts
+    if path.startswith("/_cycls/"):
+        return None
+    color = 32 if int(status) < 300 else 33 if int(status) < 500 else 31
+    return f"\033[{color}m{status}\033[0m {method} {path}"
+
+
+def _stream_logs(name, stop):
+    """Live-tail the dev service's own log stream (/_cycls/logs). Started once
+    the service is up, so a 404 means it predates the endpoint."""
+    import httpx
+    from cycls.function.main import _get_api_key
+    from cycls.function.remote import token_for
+    headers = {"X-Cycls-Token": token_for(_get_api_key(), name)}
+    while not stop.is_set():
+        try:
+            with httpx.stream("GET", f"https://{name}.cycls.ai/_cycls/logs",
+                              timeout=httpx.Timeout(30, connect=5), headers=headers) as r:
+                if r.status_code == 404:
+                    print(f"  \033[2m│ no live logs on this service — `cycls rm {name}`, then save\033[0m",
+                          flush=True)
+                    return
+                for raw in r.iter_lines():
+                    if stop.is_set():
+                        return
+                    if (line := _pretty_log(raw or "")):
+                        print(f"  \033[2m│\033[0m {line}", flush=True)
+        except httpx.HTTPError:
+            pass
+        stop.wait(2)
+
+
+def _watch_loop(instance, script, argv, remote, after_first=None):
+    import subprocess
+    from watchfiles import watch
+    paths = [script] + [str(Path(p).resolve()) for p in instance.copy if Path(p).exists()]
+    drive = [sys.executable, "-c",
+             f"from cycls.function.remote import _drive; _drive({script!r}, {tuple(argv)!r}, {remote!r})"]
+    print(f"{instance.name} — rerunning on save (Ctrl-C to stop)\n", flush=True)
+    try:
+        first = subprocess.run(drive)
+        if after_first and first.returncode == 0:
+            after_first()
+        for changes in watch(*paths, raise_interrupt=False):
+            print(f"↻ {Path(next(iter(changes))[1]).name}", flush=True)
+            subprocess.run(drive)
+    except KeyboardInterrupt:
+        pass
+
+
 def cmd_run(args):
-    instance = _load_target(args.file)
+    instance, entry = _load_target(args.file)
     instance._source_file = Path(args.file).resolve()
-    if hasattr(instance, "local"):
-        instance.local()
+    script = str(Path(args.file).resolve())
+    if entry:
+        if args.remote:
+            sys.exit("--remote conflicts with @cycls.local_entrypoint — the driver's code chooses run/remote")
+        _watch_loop(instance, script, args.args, remote=False)
+    elif hasattr(instance, "local"):
+        if args.remote:
+            import threading
+            from cycls.agent.main import Agent
+            if isinstance(instance, Agent):
+                sys.exit("live cloud dev for agents isn't wired yet — `cycls run` (Docker) or `cycls deploy`")
+            stop = threading.Event()
+            tail = threading.Thread(target=_stream_logs, args=(instance.dev_name, stop), daemon=True)
+            _watch_loop(instance, script, args.args, remote=True, after_first=tail.start)
+            stop.set()
+        else:
+            instance.local()
+    elif instance._is_remote():
+        _watch_loop(instance, script, args.args, remote=args.remote)
+    elif args.remote:
+        sys.exit(f"'{instance.name}' takes a port — it's a server; run it locally or `cycls deploy`")
     else:
         instance.run()
 
 
 def cmd_deploy(args):
-    instance = _load_target(args.file)
+    instance, _ = _load_target(args.file)
     instance.deploy()
+
+
+def cmd_shell(args):
+    """Interactive bash inside the target's built image — same env as run/deploy."""
+    import subprocess
+    instance, _ = _load_target(args.file)
+    tag = instance._ensure_local_image()
+    print(f"Entering {tag} (exit to leave)")
+    subprocess.run(["docker", "run", "--rm", "-it", "--entrypoint", "bash", tag])
 
 
 def cmd_ls(args):
@@ -274,6 +358,8 @@ _STARTER_TEMPLATE = '''import cycls
 
 image = cycls.Image()
 
+chats = cycls.Volume("{vol}-chats")
+
 web = (
     cycls.Web()
     .auth(cycls.Clerk())
@@ -287,7 +373,7 @@ llm = (
 )
 
 
-@cycls.agent(image=image, web=web)
+@cycls.agent(image=image, web=web, volumes={{"/workspace": chats}})
 async def {name}(context):
     async for ev in llm.run(context=context):
         yield cycls.to_ui(ev)
@@ -299,12 +385,89 @@ def cmd_init(args):
     path = Path(f"{name}.py")
     if path.exists():
         sys.exit(f"Error: {path} already exists.")
-    path.write_text(_STARTER_TEMPLATE.format(name=name))
+    path.write_text(_STARTER_TEMPLATE.format(name=name, vol=name.replace("_", "-")))
     print(f"Created {path}")
     print()
     print("Next steps:")
     print(f"  cycls run {path}       # run locally in Docker")
     print(f"  cycls deploy {path}    # deploy to production")
+
+
+def cmd_volume_create(args):
+    r = _api("POST", "/v1/volume/create", json={"name": args.name}).json()
+    print(f"Volume '{r['name']}' " + ("created." if r.get("created") else "already exists."))
+
+
+def cmd_volume_ls(args):
+    if args.name:
+        params = {"volume": args.name}
+        if args.path:
+            params["prefix"] = args.path
+        objects, token = [], None
+        while True:
+            if token:
+                params["page_token"] = token
+            r = _api("GET", "/v1/volume/objects", params=params).json()
+            objects += r.get("objects", [])
+            token = r.get("next_page_token")
+            if not token:
+                break
+        if not objects:
+            print("Empty.")
+            return
+        width = max(len(o["path"]) for o in objects)
+        for o in objects:
+            print(f"{o['path']:<{width}}  {o['size']:>12}  {o.get('updated') or ''}")
+    else:
+        vols = _api("GET", "/v1/volume/list").json()
+        if not vols:
+            print("No volumes.")
+            return
+        width = max(len(v["name"]) for v in vols)
+        for v in vols:
+            attached = ", ".join(v.get("attached_to", [])) or "-"
+            print(f"{v['name']:<{width}}  attached: {attached}  {v['created_at']}")
+
+
+def cmd_volume_delete(args):
+    if not args.yes:
+        confirm = input(f"Delete volume '{args.name}' and all its data? [y/N] ").strip().lower()
+        if confirm != "y":
+            return
+    r = _api("POST", "/v1/volume/delete", json={"name": args.name}).json()
+    print(r.get("detail", "Deleted."))
+
+
+def cmd_volume_put(args):
+    import httpx
+    remote = args.remote or Path(args.local).name
+    url = _api("POST", "/v1/volume/upload",
+               json={"volume": args.name, "path": remote}).json()["url"]
+    with open(args.local, "rb") as f:
+        resp = httpx.put(url, content=f, timeout=None)
+    if resp.status_code >= 400:
+        sys.exit(f"Error: upload failed with {resp.status_code}")
+    print(f"Uploaded {args.local} -> {args.name}:/{remote.lstrip('/')}")
+
+
+def cmd_volume_get(args):
+    import httpx
+    url = _api("POST", "/v1/volume/download",
+               json={"volume": args.name, "path": args.remote}).json()["url"]
+    local = Path(args.local or Path(args.remote).name)
+    with httpx.stream("GET", url, timeout=None) as resp:
+        if resp.status_code >= 400:
+            sys.exit(f"Error: download failed with {resp.status_code}")
+        with open(local, "wb") as f:
+            for chunk in resp.iter_bytes():
+                f.write(chunk)
+    print(f"Downloaded {args.name}:/{args.remote.lstrip('/')} -> {local}")
+
+
+def cmd_volume_rm(args):
+    r = _api("POST", "/v1/volume/delete-object",
+             json={"volume": args.name, "path": args.path}).json()
+    print(r.get("detail", "Removed."))
 
 
 def cmd_version(args):
@@ -321,13 +484,20 @@ def main():
     parser = argparse.ArgumentParser(prog="cycls", description="Cycls — the deep-stack AI SDK")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("run", help="Run an agent locally in Docker")
+    p = sub.add_parser("run", allow_abbrev=False,
+                       help="Dev loop: rerun on save (local Docker; --remote for cloud)")
     p.add_argument("file", help="Path to agent file (file.py or file.py::name)")
+    p.add_argument("--remote", action="store_true",
+                   help="Run the loop in the cloud (f.remote / app.remote)")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("deploy", help="Deploy an agent to production")
     p.add_argument("file", help="Path to agent file (file.py or file.py::name)")
     p.set_defaults(func=cmd_deploy)
+
+    p = sub.add_parser("shell", help="Open an interactive shell inside the built image")
+    p.add_argument("file", help="Path to agent file (file.py or file.py::name)")
+    p.set_defaults(func=cmd_shell)
 
     p = sub.add_parser("ls", help="List deployed agents")
     p.set_defaults(func=cmd_ls)
@@ -366,10 +536,42 @@ def main():
     p.add_argument("name", nargs="?", help="Agent name (default: my_agent)")
     p.set_defaults(func=cmd_init)
 
+    p = sub.add_parser("volume", help="Manage volumes (named persistent storage)")
+    vsub = p.add_subparsers(dest="volume_command", required=True)
+    v = vsub.add_parser("create", help="Create a volume")
+    v.add_argument("name")
+    v.set_defaults(func=cmd_volume_create)
+    v = vsub.add_parser("ls", help="List volumes, or a volume's contents")
+    v.add_argument("name", nargs="?", help="Volume name (omit to list volumes)")
+    v.add_argument("path", nargs="?", default="", help="Path prefix within the volume")
+    v.set_defaults(func=cmd_volume_ls)
+    v = vsub.add_parser("delete", help="Delete a volume and all its data")
+    v.add_argument("name")
+    v.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
+    v.set_defaults(func=cmd_volume_delete)
+    v = vsub.add_parser("put", help="Upload a file to a volume")
+    v.add_argument("name")
+    v.add_argument("local")
+    v.add_argument("remote", nargs="?", help="Remote path (default: the file's name)")
+    v.set_defaults(func=cmd_volume_put)
+    v = vsub.add_parser("get", help="Download a file from a volume")
+    v.add_argument("name")
+    v.add_argument("remote")
+    v.add_argument("local", nargs="?", help="Local path (default: the file's name)")
+    v.set_defaults(func=cmd_volume_get)
+    v = vsub.add_parser("rm", help="Remove a file from a volume")
+    v.add_argument("name")
+    v.add_argument("path")
+    v.set_defaults(func=cmd_volume_rm)
+
     p = sub.add_parser("version", help="Print cycls version")
     p.set_defaults(func=cmd_version)
 
-    args = parser.parse_args()
+    args, extra = parser.parse_known_args()
+    if args.command == "run":
+        args.args = extra
+    elif extra:
+        parser.error(f"unrecognized arguments: {' '.join(extra)}")
     args.func(args)
 
 
