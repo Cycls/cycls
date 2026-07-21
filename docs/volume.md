@@ -127,4 +127,5 @@ def dashboard(port): ...   # serves clean/, can't corrupt it
 ```
 
 One volume, three deployments, no copying — and deleting any of the three
-never touches the data.
+never touches the data. Put a [schedule](cron.md) on the producer and the
+whole pipeline runs itself.

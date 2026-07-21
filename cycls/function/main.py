@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Literal, Optional, Union
 import tarfile
 
+from .schedule import Cron
 from .volume import to_wire
 
 os.environ["DOCKER_BUILDKIT"] = "1"
@@ -96,7 +97,7 @@ class Function:
     def __init__(self, func, name, python_version=None, image=None,
                  base_url=None, api_key=None, cpu=None, memory=None,
                  timeout=None, concurrency=None, max_instances=None,
-                 volumes=None):
+                 volumes=None, schedule=None):
         image = image or {}
         self.func = func
         self.name = name.replace('_', '-')
@@ -113,11 +114,20 @@ class Function:
         self.copy = image.get("copy", {})
         self._base_url = base_url
         self._api_key = api_key
+        if isinstance(schedule, Cron):
+            import inspect
+            if "port" in inspect.signature(func).parameters:
+                raise ValueError(
+                    "scheduled functions are remote endpoints — a function taking `port` "
+                    "deploys as a server the schedule cannot fire. Drop the port "
+                    "parameter, or the schedule.")
         self.spec = {k: v for k, v in dict(cpu=cpu, memory=memory, timeout=timeout,
                                            concurrency=concurrency,
                                            max_instances=max_instances,
                                            volumes=volumes if isinstance(volumes, str)
                                                    else to_wire(volumes or {}),
+                                           schedule=schedule.cron if isinstance(schedule, Cron) else schedule,
+                                           timezone=schedule.timezone if isinstance(schedule, Cron) else None,
                                            ).items() if v is not None}
         self.pip = sorted(set([*self._base_pip, *image.get("pip", [])])
                           | {f"cloudpickle=={cloudpickle.__version__}"})
@@ -567,8 +577,9 @@ CMD ["python", "entrypoint.py"]
         from .remote import RemoteError
         def execute(fn, *args, **kwargs):
             return fn(*args, **kwargs)
+        spec = {k: v for k, v in self.spec.items() if k not in ("schedule", "timezone")}
         if not Function(execute, name, image=self._image_config(),
-                        api_key=self._api_key, **self.spec).deploy(remote=True):
+                        api_key=self._api_key, **spec).deploy(remote=True):
             raise RemoteError(f"provisioning {name!r} failed")
 
     def __del__(self):
@@ -581,6 +592,7 @@ def function(name=None, image=None, *,
              timeout: Optional[int] = None,
              concurrency: Optional[int] = None,
              volumes: Optional[dict] = None,
+             schedule: Optional[Cron] = None,
              python_version=None):
     """Decorator that transforms a Python function into a containerized Function.
     Build config (pip, apt, run_commands, copy, force_rebuild) must be passed
@@ -588,6 +600,6 @@ def function(name=None, image=None, *,
     def decorator(func):
         return Function(func, name or func.__name__, image=image, cpu=cpu,
                         memory=memory, timeout=timeout, concurrency=concurrency,
-                        volumes=volumes, python_version=python_version,
+                        volumes=volumes, schedule=schedule, python_version=python_version,
                         base_url=_get_base_url(), api_key=_get_api_key())
     return decorator
