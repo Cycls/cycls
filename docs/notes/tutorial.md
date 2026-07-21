@@ -608,6 +608,20 @@ def api_server(port):
 api_server.run(port=8000)
 ```
 
+Two more decorator arguments round out deployed functions: `volumes=` mounts
+named persistent storage (`cycls.Volume`) at a container path, and
+`schedule=` makes the platform fire the function on a cron schedule with no
+caller:
+
+```python
+@cycls.function(schedule=cycls.Cron("0 3 * * *", timezone="Asia/Riyadh"),
+                volumes={"/out": cycls.Volume("scrapes")})
+def nightly(): ...
+```
+
+See [docs/volume.md](../volume.md) and [docs/cron.md](../cron.md) for
+semantics.
+
 ### Function vs Agent
 
 | | `@cycls.function` | `@cycls.agent` |
