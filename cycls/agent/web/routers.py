@@ -695,9 +695,10 @@ def workspaces_router(cycls_app, user_dep, volume, base):
         data = await request.json()
         orgdb = _orgdb(user)
         row = {**(await orgdb.get(f"workspaces/{ws_id}") or {})}
+        # On General, manager status derives solely from org membership
+        # (resolve_role's builtin branch), so name/icon edits there are
+        # org-admin-only without any extra check.
         if "name" in data:
-            if row.get("builtin"):
-                raise HTTPException(400, "The builtin General workspace cannot be renamed")
             name = _name_or_400(data)
             await _unique_name_or_409(orgdb, name, exclude=ws_id)
             row["name"] = name
