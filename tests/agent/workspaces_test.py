@@ -184,15 +184,16 @@ def test_builtin_roles_ignore_member_rows(tmp_path):
     assert _run(state.resolve_role(USERS["solo"], "t-shared", orgdb)) is None
 
 
-def test_builtin_general_name_locked_icon_open(tmp_path):
-    """General can't be renamed; org admins may set its icon; members can't."""
+def test_builtin_general_org_admin_only_edits(tmp_path):
+    """General's name and icon are editable by org admins only — members 403
+    (their builtin role is editor, never a manager role)."""
     client = _client(tmp_path)
     client.get("/workspaces")   # provisions General
     admin = {"X-Test-User": "admin_1"}
-    assert client.patch("/workspaces/t-shared", json={"name": "HQ"}, headers=admin).status_code == 400
-    r = client.patch("/workspaces/t-shared", json={"icon": "🏠"}, headers=admin)
-    assert r.status_code == 200 and r.json()["icon"] == "🏠"
-    assert client.patch("/workspaces/t-shared", json={"icon": "🚀"}).status_code == 403   # plain member
+    r = client.patch("/workspaces/t-shared", json={"name": "HQ", "icon": "🏠"}, headers=admin)
+    assert r.status_code == 200 and r.json()["name"] == "HQ" and r.json()["icon"] == "🏠"
+    assert client.patch("/workspaces/t-shared", json={"name": "Ours"}).status_code == 403   # plain member
+    assert client.patch("/workspaces/t-shared", json={"icon": "🚀"}).status_code == 403
 
 
 def test_workspace_icon_emoji_only(tmp_path):

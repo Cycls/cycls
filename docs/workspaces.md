@@ -22,7 +22,7 @@ the org) or `"admin"` (org admins only).
 | --- | --- | --- | --- |
 | Personal | `u-{user_id}` | only the owner — org admins get lifecycle (list/delete), never content | the owner |
 | Team | `t-{id}` | members via the ACL; org admins implicitly | the creator (`owner`) + `admin` members |
-| General (builtin) | `t-shared` | every org member (editor), no per-member rows | org admins |
+| General (builtin) | `t-shared` | every org member (editor), no per-member rows — member routes 400; roles derive from org membership alone | org admins (name/icon editable by them only) |
 
 Every org gets **General** automatically on its first request — fresh orgs and
 migrated ones share the same shape: Personal + General. An org admin deleting
@@ -58,7 +58,7 @@ PATCH  /workspaces/<id>                     # rename / set icon — one emoji, v
 DELETE /workspaces/<id>                     # owner or org admin; personal: self or org admin
 GET    /workspaces/<id>/members             # 400 on General — membership is the org itself
 PUT    /workspaces/<id>/members/<user_id>   # body: {"role": "editor"|"admin"}; 400 on General
-DELETE /workspaces/<id>/members/<user_id>   # managers, or yourself (leave)
+DELETE /workspaces/<id>/members/<user_id>   # managers, or yourself (leave); 400 on General
 ```
 
 Adding a member takes their Clerk user id; the row alone grants nothing —
