@@ -3,6 +3,7 @@ import { t } from "../lib/i18n";
 import { toggleDark } from "../lib/utils";
 import { Popover } from "./popover";
 import { Icon } from "./icon";
+import { WorkspacePanel, WsIcon, type WorkspacesMenu } from "./workspace-switcher";
 
 export interface UserInfo {
   name: string;
@@ -19,7 +20,7 @@ export interface PlanInfo {
   planPeriod: string;
 }
 
-export function UserMenu({ user, onSignOut, onManageAccount, onOpenSettings, onCreateOrg, onManageOrg, onSwitchOrg, activeOrg, orgs, plan, onOpenPlans }: {
+export function UserMenu({ user, onSignOut, onManageAccount, onOpenSettings, onCreateOrg, onManageOrg, onSwitchOrg, activeOrg, orgs, plan, onOpenPlans, workspaces }: {
   user: UserInfo;
   onSignOut?: () => void;
   onManageAccount?: () => void;
@@ -31,14 +32,16 @@ export function UserMenu({ user, onSignOut, onManageAccount, onOpenSettings, onC
   orgs?: { id: string; name: string; imageUrl: string }[];
   plan?: PlanInfo;
   onOpenPlans?: () => void;
+  workspaces?: WorkspacesMenu;
 }) {
   const [open, setOpen] = useState(false);
   const [showOrgs, setShowOrgs] = useState(false);
+  const [showWs, setShowWs] = useState(false);
 
   return (
     <div className="relative">
       <button
-        onClick={() => { setOpen(!open); setShowOrgs(false); }}
+        onClick={() => { setOpen(!open); setShowOrgs(false); setShowWs(false); }}
         className="flex items-center justify-center rounded-lg hover:opacity-80 transition-opacity cursor-pointer px-1 h-8"
         aria-label="Profile"
       >
@@ -57,9 +60,15 @@ export function UserMenu({ user, onSignOut, onManageAccount, onOpenSettings, onC
           </div>
         </div>
       </button>
-      <Popover open={open} onClose={() => { setOpen(false); setShowOrgs(false); }} className="right-2 top-12 mt-2 w-56 rounded-lg border border-border bg-background shadow-lg">
+      <Popover open={open} onClose={() => { setOpen(false); setShowOrgs(false); setShowWs(false); }} className="right-2 top-12 mt-2 w-56 rounded-lg border border-border bg-background shadow-lg">
         <div>
-            {showOrgs ? (
+            {showWs && workspaces ? (
+              <WorkspacePanel
+                workspaces={workspaces}
+                onBack={() => setShowWs(false)}
+                onClose={() => { setOpen(false); setShowWs(false); }}
+              />
+            ) : showOrgs ? (
               <>
                 <button
                   onClick={() => setShowOrgs(false)}
@@ -157,6 +166,18 @@ export function UserMenu({ user, onSignOut, onManageAccount, onOpenSettings, onC
                     </span>
                     <Icon name="chevron-right" className="w-3.5 h-3.5 rtl:rotate-180" />
                   </button>
+                  {workspaces && (
+                    <button
+                      onClick={() => setShowWs(true)}
+                      className="flex w-full items-center justify-between px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center gap-2 truncate">
+                        <WsIcon ws={workspaces.active} />
+                        <span className="truncate">{workspaces.active?.name || t("personal")}</span>
+                      </span>
+                      <Icon name="chevron-right" className="w-3.5 h-3.5 rtl:rotate-180" />
+                    </button>
+                  )}
                   </>
                 )}
                 {onSignOut && (

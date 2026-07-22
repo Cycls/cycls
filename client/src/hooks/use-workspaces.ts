@@ -7,6 +7,7 @@ export interface WorkspaceInfo {
   type: "personal" | "team";
   role: string | null;
   builtin?: string;
+  icon?: string;   // Notion-style icon (emoji today); absent → client default
 }
 
 export interface MemberInfo {
