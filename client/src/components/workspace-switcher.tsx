@@ -30,52 +30,6 @@ export function WsIcon({ ws, className = "" }: { ws: { name: string; icon?: stri
   );
 }
 
-// Compact switcher for the side panel's tab bar: active workspace + a
-// dropdown to jump between Personal and teams. Switch-only — management
-// lives in the user menu and settings.
-export function WsQuickSwitch({ workspaces }: { workspaces: WorkspacesMenu }) {
-  const [open, setOpen] = useState(false);
-  const row = "flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors cursor-pointer";
-  const inactive = "text-muted-foreground hover:text-foreground hover:bg-secondary/80";
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer"
-        aria-label={t("workspaceSection")}
-      >
-        <WsIcon ws={workspaces.active} />
-        <span className="max-w-[7rem] truncate">{workspaces.active?.name || t("personal")}</span>
-        <Icon name="chevron-down" className="w-3 h-3" />
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute end-0 top-full z-50 mt-1 w-56 rounded-lg border border-border bg-background py-1 shadow-lg">
-            <button
-              onClick={() => { workspaces.onSwitch(null); setOpen(false); }}
-              className={`${row} ${!workspaces.active ? "text-foreground bg-secondary/60" : inactive}`}
-            >
-              <WsIcon ws={null} />
-              {t("personal")}
-            </button>
-            {workspaces.items.filter((w) => w.type === "team").map((w) => (
-              <button
-                key={w.id}
-                onClick={() => { workspaces.onSwitch(w.id); setOpen(false); }}
-                className={`${row} ${workspaces.active?.id === w.id ? "text-foreground bg-secondary/60" : inactive}`}
-              >
-                <WsIcon ws={w} />
-                <span className="truncate">{w.name}</span>
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
 // Role dropdown for a workspace member (editor ↔ admin).
 function MemberRole({ role, onChange }: { role: string; onChange: (r: string) => void }) {
   const [open, setOpen] = useState(false);

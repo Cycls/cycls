@@ -13,7 +13,7 @@ import { ShareDialog } from "./share-dialog";
 import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
-import { WsQuickSwitch, type WorkspacesMenu } from "./workspace-switcher";
+import { type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
@@ -651,7 +651,6 @@ export function Chat({ chat, onShare, files, account, config }: {
                     </button>
                   )}
                   <div className="flex-1" />
-                  {workspaces && <WsQuickSwitch workspaces={workspaces} />}
                   <button
                     onClick={() => setPanelExpanded((e) => !e)}
                     className="hidden sm:flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
