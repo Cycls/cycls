@@ -119,20 +119,25 @@ def test_create_validates_name(tmp_path):
     assert client.post("/workspaces", json={"name": "x" * 81}).status_code == 400
 
 
-def test_workspace_name_unique_per_org(tmp_path):
-    """Duplicate names 409 on create and rename (case-insensitive); keeping
-    your own name on PATCH is fine; 'Personal' is reserved."""
+def test_workspace_names_duplicates_ok_reserved_blocked(tmp_path):
+    """Names are labels, not addresses — unrelated teams may share one.
+    Only the names in everyone's list are reserved: Personal and General's."""
     client = _client(tmp_path)
     ws_id = _mk_team(client, "Research")
-    assert client.post("/workspaces", json={"name": "Research"}).status_code == 409
-    assert client.post("/workspaces", json={"name": "research"}).status_code == 409
-    assert client.post("/workspaces", json={"name": "Personal"}).status_code == 409
+    assert client.post("/workspaces", json={"name": "Research"}).status_code == 200   # duplicate allowed
     other = _mk_team(client, "Design")
-    assert client.patch(f"/workspaces/{other}", json={"name": "RESEARCH"}).status_code == 409
-    # self-rename to the same name is not a conflict
+    assert client.patch(f"/workspaces/{other}", json={"name": "research"}).status_code == 200
     assert client.patch(f"/workspaces/{ws_id}", json={"name": "Research"}).status_code == 200
-    # General is registered — its name collides too
+    # reserved, case-insensitively
+    assert client.post("/workspaces", json={"name": "Personal"}).status_code == 409
+    assert client.post("/workspaces", json={"name": "personal"}).status_code == 409
     assert client.post("/workspaces", json={"name": "General"}).status_code == 409
+    assert client.patch(f"/workspaces/{other}", json={"name": "general"}).status_code == 409
+    # renaming General tracks the reservation: its new name becomes reserved
+    admin = {"X-Test-User": "admin_1"}
+    assert client.patch("/workspaces/t-shared", json={"name": "HQ"}, headers=admin).status_code == 200
+    assert client.post("/workspaces", json={"name": "hq"}).status_code == 409
+    assert client.post("/workspaces", json={"name": "General"}).status_code == 200   # freed
 
 
 def test_workspace_icon_lifecycle(tmp_path):
