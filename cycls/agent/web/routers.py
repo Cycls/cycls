@@ -597,6 +597,17 @@ def workspaces_router(cycls_app, user_dep, volume, base):
             raise HTTPException(400, "icon must be a string of at most 64 characters")
         return icon
 
+    async def _unique_name_or_409(orgdb, name, exclude=None):
+        """Names are the only human identifier in the switcher — enforce
+        uniqueness per org, case-insensitively (Arabic has no case; casefold
+        handles both). Check-then-write without a transaction: a concurrent
+        create can slip a duplicate through — benign, ids stay the real key."""
+        if name.casefold() == "personal":   # sits beside the builtin Personal entry
+            raise HTTPException(409, "A workspace with this name already exists")
+        async for key, row in orgdb.scan(prefix="workspaces/"):
+            if key.split("/")[-1] != exclude and (row.get("name") or "").casefold() == name.casefold():
+                raise HTTPException(409, "A workspace with this name already exists")
+
     async def _role_or_404(user, ws_id):
         role = await state.resolve_role(user, ws_id, _orgdb(user))
         if role is None:
@@ -645,7 +656,10 @@ def workspaces_router(cycls_app, user_dep, volume, base):
             raise HTTPException(400, "Team workspaces require an organization")
         data = await request.json()
         name = _name_or_400(data)
-        return await state.create_team_ws(_orgdb(user), name, user.id,
+        await state.ensure_migrated(user, volume, base)   # registers General before the name check
+        orgdb = _orgdb(user)
+        await _unique_name_or_409(orgdb, name)
+        return await state.create_team_ws(orgdb, name, user.id,
                                           icon=_icon_or_400(data))
 
     @r.patch("/workspaces/{ws_id}")
@@ -655,7 +669,9 @@ def workspaces_router(cycls_app, user_dep, volume, base):
         orgdb = _orgdb(user)
         row = {**(await orgdb.get(f"workspaces/{ws_id}") or {})}
         if "name" in data:
-            row["name"] = _name_or_400(data)
+            name = _name_or_400(data)
+            await _unique_name_or_409(orgdb, name, exclude=ws_id)
+            row["name"] = name
         if "icon" in data:
             if icon := _icon_or_400(data):
                 row["icon"] = icon
