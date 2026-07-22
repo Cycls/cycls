@@ -209,7 +209,7 @@ export function WorkspacePanel({ workspaces, onBack, onClose }: {
             key={w.id}
             className={`relative flex w-full items-center gap-1 pl-2 pr-2 text-sm transition-colors ${workspaces.active?.id === w.id ? "text-foreground bg-secondary/60" : inactive}`}
           >
-            {!w.builtin && (w.role === "owner" || w.role === "admin" || workspaces.isOrgAdmin) ? (
+            {(w.role === "owner" || w.role === "admin" || workspaces.isOrgAdmin) ? (
               <button
                 onClick={(e) => { e.stopPropagation(); setPickerFor(pickerFor === w.id ? null : w.id); }}
                 className="cursor-pointer rounded p-1 hover:bg-secondary"

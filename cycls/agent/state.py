@@ -383,14 +383,19 @@ async def resolve_role(user, ws_id, orgdb):
         return "owner"
     if not ws_id.startswith("t-"):
         return None
+    reg = await orgdb.get(f"workspaces/{ws_id}")
+    if reg and reg.get("builtin") == "org":
+        # Builtin (General): roles derive from org membership alone. Member
+        # rows are ignored — a stray row could otherwise downgrade an org
+        # admin, and "removing" someone wouldn't actually revoke anything.
+        if getattr(user, "org_role", None) == "admin":
+            return "admin"
+        return "editor" if getattr(user, "org_id", None) else None
     row = await orgdb.get(f"members/{ws_id}/{user.id}")
     if row:
         return row.get("role")
-    reg = await orgdb.get(f"workspaces/{ws_id}")
     if reg and getattr(user, "org_role", None) == "admin":
         return "admin"
-    if reg and reg.get("builtin") == "org" and getattr(user, "org_id", None):
-        return "editor"
     return None
 
 
