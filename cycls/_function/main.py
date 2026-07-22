@@ -45,19 +45,13 @@ except Exception:
     sys.exit(1)
 '''
 
-# Module-level configuration
-api_key = None
-base_url = None
-
 def _get_api_key():
-    import sys
-    cycls_pkg = sys.modules.get('cycls')
-    return api_key or (cycls_pkg and cycls_pkg.__dict__.get('api_key')) or os.getenv("CYCLS_API_KEY")
+    import cycls
+    return cycls.api_key or os.getenv("CYCLS_API_KEY")
 
 def _get_base_url():
-    import sys
-    cycls_pkg = sys.modules.get('cycls')
-    return base_url or (cycls_pkg and cycls_pkg.__dict__.get('base_url')) or os.getenv("CYCLS_BASE_URL")
+    import cycls
+    return cycls.base_url or os.getenv("CYCLS_BASE_URL")
 
 def _hash_path(path_str: str) -> str:
     h = hashlib.sha256()

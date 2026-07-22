@@ -98,7 +98,7 @@ class App(Function):
             raise TypeError(f"auth must be cycls.JWT or None, got {type(auth).__name__}")
         self.user_func = func
         self.prod = False
-        self.volume = Path((image or {}).get("volume", "/workspace"))
+        self.volume = Path("/workspace")
         self._auth_provider = auth
 
         image = dict(image or {})
