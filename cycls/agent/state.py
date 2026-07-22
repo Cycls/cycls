@@ -12,14 +12,17 @@ every turn in one operation.
 
 Keys:
     chat/{id}/index           — chat metadata (sidebar target)
-    chat/{id}/{turn:06d}      — turns
+    chat/{id}/{turn:06d}      — turns (append-only; the full transcript)
+    chat/{id}/compaction      — compaction marker (summary + first_kept)
     share/{token}             — opaque share tokens (RFC003)
     <.database/ slot>         — agent-controlled KV exposed to the LLM
+    <.org/ slot>              — workspaces registry + ACL (docs/workspaces.md)
 """
-import asyncio, json, re
+import asyncio, json, os, re, secrets, shutil
 from datetime import datetime, timezone
+from pathlib import Path
 
-from cycls.app.db import DB, workspace
+from cycls.app.db import DB, workspace, _store
 
 
 # ---- Chat metadata ----
@@ -46,8 +49,16 @@ async def put_meta(workspace, chat_id, data):
 
 async def list_chats(workspace):
     """Yield (chat_id, {title, updatedAt}) for every chat. One LIST via
-    GCS matchGlob; one glob+read on local FS."""
-    async for key, meta in DB(workspace).scan(glob="chat/*/index"):
+    object storage; one glob+read on local FS. Rows whose custom-meta channel
+    was wiped (a gcsfuse move drops it — e.g. the workspace migration) are
+    self-healed from the body, which is canonical."""
+    db = DB(workspace)
+    async for key, meta in db.scan(glob="chat/*/index"):
+        if not meta.get("updatedAt"):
+            body = await db.get(key)
+            if isinstance(body, dict) and body.get("updatedAt"):
+                meta = body
+                await db.put(key, body, meta={k: v for k, v in body.items() if isinstance(v, str)})
         yield key.split("/")[1], meta
 
 
@@ -217,6 +228,18 @@ async def replace_messages(workspace, chat_id, messages):
     ])
 
 
+async def get_compaction(workspace, chat_id):
+    """The chat's compaction marker `{summary, first_kept}`, or None. Raw turns
+    stay on disk; this marker projects the model's context over them."""
+    _validate(chat_id)
+    return await DB(workspace).get(f"chat/{chat_id}/compaction")
+
+
+async def put_compaction(workspace, chat_id, data):
+    _validate(chat_id)
+    await DB(workspace).put(f"chat/{chat_id}/compaction", data)
+
+
 async def delete_chat(workspace, chat_id):
     """Delete the chat — index and all turns in one subtree wipe."""
     _validate(chat_id)
@@ -250,12 +273,36 @@ class Session:
     @classmethod
     async def open(cls, context):
         persist = bool(context.chat_id and context.user)
-        messages = _ephemeralize(await load_messages(context.workspace, context.chat_id)) if persist else []
-        return cls(context.workspace, context.chat_id if persist else None, messages)
+        if not persist:
+            return cls(context.workspace, None, [])
+        messages = _ephemeralize(await load_messages(context.workspace, context.chat_id))
+        marker = await get_compaction(context.workspace, context.chat_id) or {}
+        return cls(context.workspace, context.chat_id, messages,
+                   summary=marker.get("summary"), first_kept=int(marker.get("first_kept", 0)))
 
-    def __init__(self, workspace, chat_id, messages):
+    def __init__(self, workspace, chat_id, messages, summary=None, first_kept=0):
         self.workspace, self.chat_id, self.messages = workspace, chat_id, messages
+        self.summary, self.first_kept = summary, min(first_kept, len(messages))
         self._saved = len(messages)
+
+    def context(self):
+        """The model's view: raw turns whole, or (once compacted) the summary
+        standing in for the folded prefix + the recent raw turns verbatim."""
+        if self.summary is None:
+            return self.messages
+        from .harness.compact import prefix
+        return [*prefix(self.summary), *self.messages[self.first_kept:]]
+
+    async def compact(self, provider):
+        """Fold the projected context into a summary marker — raw turns on disk
+        are never touched, so the full transcript survives for the UI."""
+        from .harness.compact import compact
+        result = await compact(provider, self.context())
+        self.summary = result[0]["content"]
+        self.first_kept = len(self.messages) - (len(result) - 2)
+        if self.chat_id:
+            await put_compaction(self.workspace, self.chat_id,
+                                 {"summary": self.summary, "first_kept": self.first_kept})
 
     async def add_user(self, content, *, attachments=None):
         msg = {"role": "user", "content": content}
@@ -270,13 +317,6 @@ class Session:
         """Flush the unsaved tail of `.messages` to disk."""
         if self.chat_id and len(self.messages) > self._saved:
             await append_messages(self.workspace, self.chat_id, self.messages[self._saved:], self._saved)
-        self._saved = len(self.messages)
-
-    async def rewrite(self, messages):
-        """Replace `.messages` wholesale (compaction) and persist the rewrite."""
-        self.messages[:] = messages
-        if self.chat_id:
-            await replace_messages(self.workspace, self.chat_id, self.messages)
         self._saved = len(self.messages)
 
     def rollback(self):
@@ -298,6 +338,189 @@ async def resolve(workspace, token, requester=None):
     return None
 
 
+# ---- Workspaces registry + ACL (docs/workspaces.md) ----
+#
+# Org-level rows under the `.org` slot — OUTSIDE every workspace root, so
+# they are never bind-mounted into a sandbox and unreachable by path tools:
+#     workspaces/{ws_id}            — team registry {id, name, type, created_by, created_at}
+#     members/{ws_id}/{user_id}     — ACL row {role, added_by, added_at}
+# Personal workspaces (`u-{user_id}`) have no rows: owner-only by construction,
+# and org admins get lifecycle (list/delete), never content.
+
+def org_of(user):
+    """Org segment for a User — mirrors workspace() subject derivation."""
+    return getattr(user, "org_id", None) or user.id
+
+
+def org_db(org, volume, base):
+    """DB over the org-level `.org` tree (registry + ACL)."""
+    return DB(workspace(org, volume, base=base, slot=".org"))
+
+
+async def create_team_ws(orgdb, name, creator_id, icon=None):
+    ws_id = f"t-{secrets.token_urlsafe(8)}"   # urlsafe alphabet ⊂ [A-Za-z0-9_-]
+    now = datetime.now(timezone.utc).isoformat()
+    row = {"id": ws_id, "name": name, "type": "team",
+           "created_by": creator_id, "created_at": now}
+    if icon: row["icon"] = icon
+    member = {"role": "owner", "added_by": creator_id, "added_at": now}
+    # Rows are flat str:str so they ride object-store custom-meta (O(1) scan).
+    await orgdb.put(f"workspaces/{ws_id}", row, meta=row)
+    await orgdb.put(f"members/{ws_id}/{creator_id}", member, meta=member)
+    return row
+
+
+async def resolve_role(user, ws_id, orgdb):
+    """`user`'s role in `ws_id`, or None (no access — callers 404, not 403).
+
+    Personal: owner-only; even org admins get None (lifecycle-only access to
+    other people's personal workspaces goes through the explicit lifecycle
+    endpoints, never through content routes). Team: the member row wins;
+    org admins hold implicit `admin` on any registered team workspace; a
+    `builtin: org` registry row (the org's default General workspace) makes
+    every org member an editor without per-user rows."""
+    if ws_id == f"u-{user.id}":
+        return "owner"
+    if not ws_id.startswith("t-"):
+        return None
+    row = await orgdb.get(f"members/{ws_id}/{user.id}")
+    if row:
+        return row.get("role")
+    reg = await orgdb.get(f"workspaces/{ws_id}")
+    if reg and getattr(user, "org_role", None) == "admin":
+        return "admin"
+    if reg and reg.get("builtin") == "org" and getattr(user, "org_id", None):
+        return "editor"
+    return None
+
+
+async def member_of(orgdb, user_id):
+    """Team workspace ids `user_id` belongs to — one glob LIST round-trip."""
+    return [k.split("/")[1] async for k, _ in orgdb.scan(glob=f"members/*/{user_id}")]
+
+
+async def wipe_workspace(org, ws_id, volume, base):
+    """Delete a workspace's file tree and object-store subtree, then its
+    registry + ACL rows. Trusted-code only — authorization happens in the
+    router. Idempotent: missing trees are fine. Deriving the root through
+    workspace() revalidates org and ws_id before anything is destroyed."""
+    root = Path(workspace(org, volume, base=base, ws=ws_id).root)
+    if root.exists():
+        await asyncio.to_thread(shutil.rmtree, root, True)
+    # Prod files ride gcsfuse but DB objects are written via the GCS API —
+    # sweep the object-store prefix too so no .json rows survive the rmtree.
+    await _store(f"{str(base).rstrip('/')}/{org}").remove_prefix(f"ws/{ws_id}/")
+    orgdb = org_db(org, volume, base)
+    await orgdb.delete(f"workspaces/{ws_id}")
+    await orgdb.delete(f"members/{ws_id}/")
+
+
+# One-time-per-org legacy migration. The in-process cache makes the check
+# free after the first request; the `migrated` marker row makes it once
+# across restarts; the lock keeps concurrent first requests from racing the
+# move within an instance. Cross-instance retries merge instead of nesting
+# (_merge_move) — still, enable the flag during low traffic.
+_migrated = set()
+_migrate_lock = None
+
+
+def _merge_move(src, dst):
+    """shutil.move that merges into an existing directory instead of nesting
+    under it. On file conflicts the source wins — an interrupted gcsfuse
+    copy+delete can leave a truncated copy at the destination."""
+    if src.is_dir() and dst.is_dir():
+        for e in list(os.scandir(src)):
+            _merge_move(src / e.name, dst / e.name)
+        os.rmdir(src)
+        return
+    if dst.is_dir():
+        shutil.rmtree(dst)
+    elif dst.exists():
+        dst.unlink()
+    shutil.move(str(src), str(dst))
+
+
+async def _restore_meta(org, ws_id, base):
+    """gcsfuse moves drop GCS custom metadata, which the scan-backed listings
+    (chat index, shares) read. Bodies are canonical — rewrite the channel."""
+    if not str(base).startswith("gs://"):
+        return
+    store = _store(f"{str(base).rstrip('/')}/{org}/ws/{ws_id}")
+    for key in await store.list_keys():
+        if not (key.endswith("/index") or "share/" in key):
+            continue
+        data = await store.read(key)
+        try:
+            row = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(row, dict) and row:
+            await store.write(key, data, meta={k: v for k, v in row.items() if isinstance(v, str)})
+
+
+async def ensure_migrated(user, volume, base):
+    """First-touch org setup: provision the builtin General workspace and
+    move any pre-workspaces tree into the new layout.
+
+    Every org gets a default `t-shared` team workspace ("General", every
+    member an editor via its `builtin: org` row). Legacy content under
+    `{volume}/{org}` (files, `.db`, `.database`) moves into it — that's where
+    old chats' attachments live, so they stay coherent. Solo users migrate
+    into their personal `u-{user.id}` instead and get no team. `ws/` and
+    `.org/` stay org-level. The marker gates all of it, so an org admin
+    deleting General is permanent."""
+    global _migrate_lock
+    org = org_of(user)
+    if org in _migrated:
+        return
+    if _migrate_lock is None:
+        _migrate_lock = asyncio.Lock()
+    async with _migrate_lock:
+        if org in _migrated:
+            return
+        orgdb = org_db(org, volume, base)
+        is_org = bool(getattr(user, "org_id", None))
+        marker = await orgdb.get("migrated")
+        if marker is None:
+            ws_id = "t-shared" if is_org else f"u-{user.id}"
+            root = Path(volume) / org
+            dest = Path(workspace(org, volume, base=base, ws=ws_id).root)
+
+            def _move():
+                if not root.is_dir():
+                    return False
+                entries = [e.name for e in os.scandir(root) if e.name not in ("ws", ".org")]
+                if not entries:
+                    return False
+                dest.mkdir(parents=True, exist_ok=True)
+                for name in entries:
+                    _merge_move(root / name, dest / name)
+                return True
+
+            moved = await asyncio.to_thread(_move)
+            if moved:
+                await _restore_meta(org, ws_id, base)
+            if is_org:
+                await _provision_general(orgdb)
+            marker = {"at": datetime.now(timezone.utc).isoformat(), "moved": str(moved), "v": "2"}
+            await orgdb.put("migrated", marker, meta=marker)
+        elif marker.get("v") != "2":
+            # v1 markers predate the default General workspace — provision it
+            # once (unless a row already exists), then stamp v2 so a later
+            # admin delete stays permanent.
+            if is_org and await orgdb.get("workspaces/t-shared") is None:
+                await _provision_general(orgdb)
+            marker = {**marker, "v": "2"}
+            await orgdb.put("migrated", marker, meta=marker)
+        _migrated.add(org)
+
+
+async def _provision_general(orgdb):
+    row = {"id": "t-shared", "name": "General", "type": "team", "builtin": "org",
+           "created_by": "cycls", "created_at": datetime.now(timezone.utc).isoformat()}
+    await orgdb.put("workspaces/t-shared", row, meta=row)
+
+
 # ---- Agent KV (LLM-facing tool) ----
 
 def _validate_db_key(key):
@@ -313,7 +536,7 @@ async def _exec_database(inp, ws):
     """All returns are strings — Anthropic tool_result.content accepts
     str or content-blocks (each with a `type`); raw dicts/lists from JSON
     values would 400. JSON-encode the data ones."""
-    agent_ws = workspace(ws.subject, ws.root.parent, base=ws.base, slot=".database")
+    agent_ws = workspace(ws.subject, ws.volume, base=ws.base, slot=".database", ws=ws.ws)
     db = DB(agent_ws)
     cmd, key = inp.get("command"), inp.get("key", "")
     try:

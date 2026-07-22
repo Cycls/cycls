@@ -23,6 +23,8 @@ from cycls.app.db import workspace
 SONNET = "anthropic/claude-sonnet-4-6"
 HAIKU = "anthropic/claude-haiku-4-5-20251001"
 OPENAI = "openai/gpt-4o-mini"
+GLM = ("zai/glm-5.2", "https://api.z.ai/api/paas/v4/", "Z_AI_API_KEY")
+GEMINI = ("google/gemini-2.5-flash", "https://generativelanguage.googleapis.com/v1beta/openai/", "GOOGLE_API_KEY")
 
 
 def _ctx(tmp_path, prompt, *, persist=False):
@@ -218,16 +220,17 @@ def test_openai_basic_real(tmp_path):
 
 
 @pytest.mark.live
-def test_openai_websearch_skipped_with_warning(tmp_path):
-    """`WebSearch` is Anthropic-only. On OpenAI, the loop emits a Callout
-    warning before the turn and the tool isn't registered with the model."""
+def test_openai_native_websearch_skipped_with_warning(tmp_path):
+    """`.web_search("native")` is Anthropic-only. On OpenAI, the loop emits a
+    Callout warning before the turn and the tool isn't registered with the
+    model. (The default `brave` mode runs on any vendor.)"""
     _, ctx = _ctx(tmp_path, "say hi in one word")
-    llm = cycls.LLM().model(OPENAI).allowed_tools(["WebSearch"]).max_tokens(20)
+    llm = cycls.LLM().model(OPENAI).allowed_tools(["WebSearch"]).web_search("native").max_tokens(20)
     events = asyncio.run(_collect(llm, ctx))
 
     callouts = [c for c in events if isinstance(c, dict) and c.get("type") == "callout"]
-    assert any("WebSearch" in c.get("callout", "") and "Anthropic-only" in c.get("callout", "")
-               for c in callouts), f"expected WebSearch skip callout; got {callouts!r}"
+    assert any("web search" in c.get("callout", "").lower() for c in callouts), \
+        f"expected native-search skip callout; got {callouts!r}"
     # And the model still produced a normal response.
     assert _text_of(events).strip(), f"no text from OpenAI; events={events!r}"
 
@@ -281,9 +284,9 @@ def test_long_bash_output_truncation_real(tmp_path):
 def test_compaction_real_roundtrip(tmp_path):
     """Force compaction by shrinking the buffers, then verify the loop
     summarizes real prior content and continues to produce a response.
-    Exercises `provider.complete`, the `<summary>` regex, replace_messages, the
-    `internal` flag, and the post-compact turn — none of which the mocked tests
-    actually run end-to-end."""
+    Exercises `provider.complete`, the `<summary>` regex, the append-only
+    compaction marker, and the post-compact turn — none of which the mocked
+    tests actually run end-to-end."""
     from unittest.mock import patch
     from cycls.agent import state as sessions
 
@@ -304,22 +307,50 @@ def test_compaction_real_roundtrip(tmp_path):
     llm = cycls.LLM().model(SONNET)
 
     # COMPACT_BUFFER huge ⇒ threshold negative ⇒ compaction fires immediately.
-    # main.KEEP_RECENT=1 ⇒ the `len(messages) > KEEP_RECENT` guard passes.
-    # compact.KEEP_RECENT=1 ⇒ recent = the just-added user msg, so the
-    # post-compact list `[summary_user, understood_assistant, new_user]` stays
+    # `_cut` snaps recent to a user message, so the post-compact list stays
     # role-alternating (Anthropic rejects two consecutive assistants).
-    with patch("cycls.agent.harness.main.COMPACT_BUFFER", 999_999_999), \
-         patch("cycls.agent.harness.main.KEEP_RECENT", 1), \
-         patch("cycls.agent.harness.compact.KEEP_RECENT", 1):
+    with patch("cycls.agent.harness.main.COMPACT_BUFFER", 999_999_999):
         events = asyncio.run(_collect(llm, ctx))
 
     assert any(isinstance(e, dict) and e.get("step") == "Compacting context..." for e in events), \
         f"expected Compacting step; got {events!r}"
 
-    # History rewritten to the internal summary pair + the post-compact turn.
+    # Raw transcript is preserved (append-only) — the prior turns survive and
+    # the new exchange is appended, nothing rewritten away.
     msgs = asyncio.run(sessions.load_messages(ctx.workspace, ctx.chat_id))
-    assert msgs[0]["role"] == "user" and msgs[0].get("internal") is True
-    assert msgs[0]["content"].startswith("This session continues from a previous conversation.")
-    assert msgs[1]["role"] == "assistant" and msgs[1].get("internal") is True
+    assert not any(m.get("internal") for m in msgs)
+    assert [m["content"] for m in msgs[:6]] == [m["content"] for m in prior]
+    assert len(msgs) > len(prior)
+    # Compaction lives in the marker, not the transcript.
+    marker = asyncio.run(sessions.get_compaction(ctx.workspace, ctx.chat_id))
+    assert marker and marker["summary"].startswith("This session continues from a previous conversation.")
     # Real response came back.
     assert _text_of(events).strip(), f"no post-compact text; events={events!r}"
+
+
+# ---- OpenAI-compatible vendors (GLM, Gemini) — skip when their key is unset ----
+
+def _compat_roundtrip(tmp_path, spec):
+    import os
+    model, base_url, key_env = spec
+    if not os.environ.get(key_env):
+        pytest.skip(f"{key_env} not set")
+    _, ctx = _ctx(tmp_path, "what is 17*23? answer with just the number")
+    llm = (cycls.LLM().model(model).base_url(base_url)
+           .api_key(os.environ[key_env]).thinking("low").max_tokens(2000))
+    events = asyncio.run(_collect(llm, ctx))
+    assert "391" in _text_of(events), f"expected 391; events={events!r}"
+
+
+@pytest.mark.live
+def test_glm_basic_real(tmp_path):
+    """GLM 5.2 over z.ai's OpenAI-compat API — standard max_tokens, thinking
+    passthrough, strict-endpoint message shape."""
+    _compat_roundtrip(tmp_path, GLM)
+
+
+@pytest.mark.live
+def test_gemini_basic_real(tmp_path):
+    """Gemini over Google's OpenAI-compat (beta) endpoint — reasoning_effort
+    mapping and the shared Chat Completions path."""
+    _compat_roundtrip(tmp_path, GEMINI)

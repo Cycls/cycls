@@ -48,29 +48,50 @@ const markdownComponents = {
 const remarkPlugins = [[remarkGfm, { singleTilde: false }], remarkMath] as const;
 const rehypePlugins = [[rehypeKatex, { strict: false }]] as const;
 
+// Relative hrefs are workspace files the agent linked — open them in the
+// canvas instead of navigating. Absolute URLs open in a new tab as usual.
+const _isWorkspacePath = (href: string) => !/^([a-z][a-z0-9+.-]*:|\/\/|#)/i.test(href);
+
 const MemoizedMarkdownBlock = memo(
-  function MarkdownBlock({ content }: { content: string }) {
+  function MarkdownBlock({ content, onOpenFile }: { content: string; onOpenFile?: (path: string) => void }) {
+    const components = {
+      ...markdownComponents,
+      a({ href, children }: { href?: string; children?: React.ReactNode }) {
+        if (href && onOpenFile && _isWorkspacePath(href)) {
+          return (
+            <a
+              href={href}
+              onClick={(e) => { e.preventDefault(); onOpenFile(decodeURI(href)); }}
+              className="cursor-pointer"
+            >
+              {children}
+            </a>
+          );
+        }
+        return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+      },
+    };
     return (
       <ReactMarkdown
         remarkPlugins={remarkPlugins as any}
         rehypePlugins={rehypePlugins as any}
-        components={markdownComponents as any}
+        components={components as any}
       >
         {content}
       </ReactMarkdown>
     );
   },
-  (prev, next) => prev.content === next.content,
+  (prev, next) => prev.content === next.content && prev.onOpenFile === next.onOpenFile,
 );
 
-export const TextPart = memo(function TextPart({ text }: { text: string }) {
+export const TextPart = memo(function TextPart({ text, onOpenFile }: { text: string; onOpenFile?: (path: string) => void }) {
   const escaped = escapeCurrencyDollars(text);
   const blocks = useMemo(() => parseMarkdownIntoBlocks(escaped), [escaped]);
 
   return (
     <div dir="auto" className="prose dark:prose-invert min-w-full">
       {blocks.map((block, index) => (
-        <MemoizedMarkdownBlock key={index} content={block} />
+        <MemoizedMarkdownBlock key={index} content={block} onOpenFile={onOpenFile} />
       ))}
     </div>
   );

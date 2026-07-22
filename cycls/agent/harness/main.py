@@ -5,7 +5,7 @@ stops. Yields dict events (and bare strings for text deltas) that the agent
 body forwards as-is. `Turn` is loop-internal (the last event a provider
 stream emits) — never reaches the body.
 """
-import asyncio, json, random, time
+import asyncio, json, random, re, time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,11 +13,12 @@ from .. import state
 from ..state import Session
 from . import events
 from .events import Turn
-from .compact import COMPACT_BUFFER, KEEP_RECENT, compact
+from .compact import COMPACT_BUFFER
 from ..logs import log
-from .prompts import DEFAULT_SYSTEM
+from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips
+from ..tools import skills as skills_mod
 
 
 # ---- Config ----
@@ -26,20 +27,24 @@ MAX_RETRIES = 10
 BASE_DELAY_MS = 500
 MAX_DELAY_MS = 32_000
 _RETRYABLE_STATUSES = {429, 502, 503, 504, 529}
+MAX_CONTINUATIONS = 4         # auto-continue rounds after a max_tokens cut
+MAX_PAUSES = 8                # pause_turn resends before giving up
+_CONTINUE = ("Your previous message was cut off at the output-token limit. "
+             "Continue exactly from where you stopped. Do not repeat anything.")
+# Providers report context overflow as an error, each with its own wording.
+_OVERFLOW_RE = re.compile(
+    r"prompt is too long|request_too_large|exceeds the context window"
+    r"|maximum context length|input token count.*exceeds"
+    r"|context[_ ]length[_ ]exceeded|too many tokens", re.I)
+DEFAULT_WINDOW = 1_000_000    # context window when .context() is unset — set it for smaller models
+DEFAULT_MAX_TOKENS = 8_192    # output cap when .max_tokens() is unset — safe on every model
 
-# Pricing per million tokens: (input, output, cache_read, cache_write)
-_PRICING = {
-    "claude-sonnet": (3, 15, 0.30, 3.75),
-    "claude-opus":   (15, 75, 1.50, 18.75),
-    "claude-haiku":  (0.80, 4, 0.08, 1),
-}
 
-
-def _cost(model, in_, out, cached, cache_create):
-    """USD for one turn (or aggregate). Unknown model → 0."""
-    p = next((v for k, v in _PRICING.items() if k in model), None)
-    if not p: return 0.0
-    return (in_ * p[0] + out * p[1] + cached * p[2] + cache_create * p[3]) / 1_000_000
+def _cost(price, inp, out, cached, cache_create):
+    """USD for one turn from `.price()` rates (per 1M tokens). No price → 0."""
+    if not price: return 0.0
+    pin, pout, prd, pwr = price
+    return (inp * pin + out * pout + cached * prd + cache_create * pwr) / 1_000_000
 
 
 async def _timed(coro):
@@ -53,9 +58,12 @@ async def _timed(coro):
 
 # ---- Ingest ----
 
-async def _ingest(content, workspace):
-    """Resolve attachment refs in an incoming user message to inline blocks.
-    Reuses `_exec_read` as the single source of truth for path → content."""
+async def _ingest(content, workspace, vision=True):
+    """Resolve attachment refs in an incoming user message to inline blocks,
+    framed with the filename so the model knows what the user attached.
+    Reuses `_exec_read` as the single source of truth for path → content.
+    With `vision=False`, media that resolves to base64 blocks (images, PDFs)
+    stays out of history — the model gets a note naming the file instead."""
     if not isinstance(content, list): return content
     out = []
     for block in content:
@@ -63,6 +71,18 @@ async def _ingest(content, workspace):
             fname = block.get("image") or block.get("file")
             if fname:
                 result = await _exec_read({"path": fname}, workspace)
+                if isinstance(result, str) and result.startswith("Error:"):
+                    out.append({"type": "text", "text":
+                        f'[The user attached "{fname}" but it can\'t be read directly ({result[7:]}). '
+                        "It's saved in the workspace — propose a way to extract its content.]"})
+                    continue
+                if (not vision and isinstance(result, list)
+                        and any(b.get("type") in ("image", "document") for b in result)):
+                    out.append({"type": "text", "text":
+                        f'[The user attached "{fname}" but this model can\'t view it directly (no vision). '
+                        "It's saved in the workspace — propose a way to extract its content.]"})
+                    continue
+                out.append({"type": "text", "text": f"[Attached: {fname}]"})
                 if isinstance(result, list): out.extend(result); continue
                 if isinstance(result, str): out.append({"type": "text", "text": result}); continue
         out.append(block)
@@ -111,34 +131,70 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                model="anthropic/claude-sonnet-4-20250514", max_tokens=None,
                bash_timeout=600, bash_network=True, client=None,
                base_url=None, api_key=None, handlers=None, mcp_servers=None,
-               thinking="adaptive"):
+               thinking="adaptive", vision=True, web_search="brave",
+               instructions="AGENT.md", skills=[], price=None, context_window=None):
     vendor, bare_model = model.split("/", 1)
-    provider = make_provider(model, client=client, base_url=base_url, api_key=api_key)
-    if max_tokens is None: max_tokens = provider.max_output
+    provider = make_provider(model, client=client, base_url=base_url, api_key=api_key,
+                             vision=vision)
+    if max_tokens is None: max_tokens = DEFAULT_MAX_TOKENS
     workspace = context.workspace
     user = getattr(context, "user", None)
     Path(workspace.root).mkdir(parents=True, exist_ok=True)
 
     session = await Session.open(context)
     incoming = context.messages.raw[-1]
-    await session.add_user(await _ingest(incoming.get("content", ""), workspace.root),
+    await session.add_user(await _ingest(incoming.get("content", ""), workspace.root, vision),
                            attachments=incoming.get("attachments"))
     messages = session.messages
 
     system_text = DEFAULT_SYSTEM + ("\n\n" + system if system else "")
-    for skipped in vendor_skips(allowed_tools, vendor):
-        yield events.callout(f"`{skipped}` is Anthropic-only; skipped on `{vendor}/*` models.", "warning")
-    tools_list = build_tools(allowed_tools, tools or [], vendor=vendor)
-    window = provider.context_window
-    tokens_since_compact = 0
+    if instructions:
+        try:
+            agent_md = await asyncio.to_thread(workspace_instructions, workspace.root, instructions)
+            if agent_md: system_text += "\n\n" + fence_instructions(agent_md)
+        except Exception as e:
+            yield events.callout(f"Couldn't load {instructions}: {e}", "warning")
+    skill_catalog = {}
+    if skills is not None:
+        try:
+            skills_mod.configure(skills)
+            skill_catalog = await asyncio.to_thread(skills_mod.discover, workspace.root)
+            if skill_catalog: system_text += "\n\n" + skills_mod.catalog_text(skill_catalog)
+        except Exception:
+            skill_catalog = {}
+    for _ in vendor_skips(allowed_tools, vendor, web_search):
+        yield events.callout(f"Native web search isn't available on `{vendor}/*` — use `.web_search('brave')` or an anthropic model.", "warning")
+    tools_list = build_tools(allowed_tools, tools or [], vendor=vendor, web_search=web_search)
+    if skill_catalog and not any(t.get("name") == "skill" for t in tools_list):
+        tools_list.append(skills_mod.SKILL_TOOL)
+    window = context_window or DEFAULT_WINDOW
+    # Seed from the last stored turn so a long chat compacts before its first
+    # call — not only mid-request. The first_kept slice skips stale
+    # pre-compaction usage that would re-trigger a compaction that already ran.
+    tokens_since_compact = next(
+        (m["usage"].get("input", 0) + m["usage"].get("cached", 0) + m["usage"].get("cache_create", 0)
+         for m in reversed(messages[session.first_kept:]) if m.get("usage")), 0)
+    continuations = 0
+    pauses = 0
+    overflowed = False
 
     while True:
         try:
-            if tokens_since_compact > window - COMPACT_BUFFER and len(messages) > KEEP_RECENT:
+            if tokens_since_compact > window - COMPACT_BUFFER and len(messages) - session.first_kept > 2:
                 yield events.step("Compacting context...")
                 try:
-                    await session.rewrite(await compact(provider, messages))
+                    provider.last_usage = None
+                    await session.compact(provider)
                     tokens_since_compact = 0
+                    # The summarizer call is a real billed turn — track it too.
+                    if u := getattr(provider, "last_usage", None):
+                        c = _cost(price, u[0], u[1], 0, 0)
+                        log("usage", user=user, chat_id=session.chat_id, model=bare_model,
+                            input=u[0], output=u[1], cached=0, cache_create=0,
+                            cost=round(c, 6), ms=0, compact=True)
+                        if session.chat_id and c:
+                            try: await state.add_cost(workspace, session.chat_id, c)
+                            except Exception as e: print(f"[WARN] add_cost failed: {e}")
                 except Exception as ce:
                     yield events.callout(f"Compaction failed: {ce}", "warning")
 
@@ -146,7 +202,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             partial_text = ""
             turn_t0 = time.monotonic()
             try:
-                async for ev in _stream_with_retry(provider, messages=state.normalize(messages), system=system_text,
+                async for ev in _stream_with_retry(provider, messages=state.normalize(session.context()), system=system_text,
                                                    tools=tools_list, max_tokens=max_tokens,
                                                    mcp_servers=mcp_servers, thinking=thinking):
                     if isinstance(ev, Turn): turn = ev
@@ -164,7 +220,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
             turn_ms = int((time.monotonic() - turn_t0) * 1000)
             tokens_since_compact = turn.input + turn.cached + turn.cache_create
-            turn_cost = _cost(bare_model, turn.input, turn.output, turn.cached, turn.cache_create)
+            turn_cost = _cost(price, turn.input, turn.output, turn.cached, turn.cache_create)
             now = datetime.now(timezone.utc).isoformat()
             messages.append({"role": "assistant", "content": turn.content, "usage": {
                 "model": bare_model,
@@ -178,10 +234,21 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 model=bare_model,
                 input=turn.input, output=turn.output,
                 cached=turn.cached, cache_create=turn.cache_create,
-                cost=round(turn_cost, 6), ms=turn_ms)
+                cost=round(turn_cost, 6), ms=turn_ms, stop=turn.stop_reason)
             if session.chat_id:
                 try: await state.add_cost(workspace, session.chat_id, turn_cost)
                 except Exception as e: print(f"[WARN] add_cost failed: {e}")
+
+            # max_tokens with zero output means the input filled the window —
+            # an overflow in disguise, not a truncation.
+            overflow = (turn.stop_reason == "model_context_window_exceeded"
+                        or (turn.stop_reason == "max_tokens" and turn.output == 0))
+            if overflow and not overflowed and len(messages) - session.first_kept > 2:
+                # One recovery per run: drop the partial turn, compact, replay it.
+                overflowed = True
+                messages.pop()
+                tokens_since_compact = window
+                continue
 
             if turn.stop_reason == "max_tokens":
                 # Pair any dangling tool_use blocks with error tool_results so
@@ -191,6 +258,19 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     messages.append({"role": "user", "content": [
                         {"type": "tool_result", "tool_use_id": i, "content": "Cut off by output limit.", "is_error": True}
                         for i in ids]})
+                if continuations < MAX_CONTINUATIONS:
+                    continuations += 1
+                    if not ids:
+                        messages.append({"role": "user", "internal": True, "content": _CONTINUE})
+                    yield events.step("Continuing past the output limit...")
+                    await session.checkpoint()
+                    continue
+
+            if turn.stop_reason == "pause_turn" and pauses < MAX_PAUSES:
+                pauses += 1  # server tool paused — resend to resume, bounded
+                await session.checkpoint()
+                continue
+
             if turn.stop_reason not in ("tool_use", "end_turn"):
                 yield events.callout(f"Stopped: {turn.stop_reason}", "warning")
             if turn.stop_reason != "tool_use":
@@ -216,9 +296,14 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     model=bare_model, tool=block["name"], ms=ms, ok=ok,
                     output_bytes=len(out) if isinstance(out, (str, bytes)) else None)
                 if not ok: out = f"Error: {out}"
+                # A tool that returns a UI event (e.g. `canvas`) drives the client
+                # and the model gets a short ack — keeps tool_result a valid string.
+                if ok and isinstance(out, dict) and out.get("type") == "ui":
+                    yield out
+                    content = f"Opened {out.get('name') or out.get('path') or 'the file'} for the user."
                 # Custom-handler results flow through the stream for the body to see
                 # (UI rendering) AND serialize into tool_result for the model (data).
-                if handlers and block["name"] in handlers and ok:
+                elif handlers and block["name"] in handlers and ok:
                     yield out
                     content = out if isinstance(out, str) else json.dumps(out, default=str)
                 else:
@@ -227,7 +312,14 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             messages.append({"role": "user", "content": results})
             await session.checkpoint()
 
-        except Exception:
+        except Exception as e:
+            # Most providers report context overflow as an error, not a
+            # stop_reason — compact and replay the turn, once per run.
+            if (_OVERFLOW_RE.search(str(e)) and not overflowed
+                    and len(messages) - session.first_kept > 2):
+                overflowed = True
+                tokens_since_compact = window
+                continue
             # Retries already happened inside _stream_with_retry; this is fatal.
             # Rollback, then re-raise so the encoder owns the user-facing
             # callout + structured log (with error_id) in one place.

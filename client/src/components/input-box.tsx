@@ -1,10 +1,22 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { t, getLang, setLang } from "../lib/i18n";
 import { track } from "../lib/posthog";
 import { Icon } from "./icon";
 import { AttachmentBody } from "./attachment-body";
 import type { Attachment } from "../hooks/use-chat";
+
+// Render composer text with inserted file mentions wrapped in a light-gray
+// highlight. Lives behind a transparent-text-area as an aligned backdrop —
+// a <textarea> can't style substrings itself.
+function highlightMentions(text: string, mentions: string[]) {
+  if (!mentions.length) return text;
+  const uniq = [...new Set(mentions)].sort((a, b) => b.length - a.length);  // longest first
+  const re = new RegExp(`(${uniq.map((m) => m.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "g");
+  return text.split(re).map((p, i) =>
+    uniq.includes(p) ? <span key={i} className="rounded bg-muted">{p}</span> : <span key={i}>{p}</span>,
+  );
+}
 
 export function InputBox({
   textareaRef,
@@ -25,6 +37,7 @@ export function InputBox({
   cancelMic,
   voice,
   onFilesAdded,
+  onMentionSearch,
   placeholder,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -45,9 +58,76 @@ export function InputBox({
   cancelMic: () => void;
   voice?: boolean;
   onFilesAdded?: (files: File[]) => void;
+  onMentionSearch?: (query: string) => Promise<{ name: string; path: string }[]>;
   placeholder?: string;
 }) {
   const [dragOver, setDragOver] = useState(false);
+
+  // ---- @-mention file picker ----
+  const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
+  const [results, setResults] = useState<{ name: string; path: string }[]>([]);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [mentions, setMentions] = useState<string[]>([]);   // inserted paths → highlighted
+  const backdropRef = useRef<HTMLDivElement>(null);
+
+  // Drop highlights whose text no longer appears (edited/sent).
+  useEffect(() => {
+    setMentions((ms) => ms.filter((m) => input.includes(m)));
+  }, [input]);
+
+  // An "@token" right before the caret (at line start or after whitespace).
+  const detectMention = (value: string, caret: number) => {
+    const m = value.slice(0, caret).match(/(?:^|\s)@([^\s@]*)$/);
+    setMention(m ? { query: m[1], start: caret - m[1].length - 1 } : null);
+  };
+
+  useEffect(() => {
+    if (!mention || !onMentionSearch) { setResults([]); return; }
+    let cancelled = false;
+    onMentionSearch(mention.query).then((r) => { if (!cancelled) { setResults(r); setActiveIdx(0); } });
+    return () => { cancelled = true; };
+  }, [mention?.query, onMentionSearch]);
+
+  const selectMention = (file: { name: string; path: string }) => {
+    if (!mention) return;
+    const caret = textareaRef.current?.selectionStart ?? input.length;
+    const next = input.slice(0, mention.start) + file.path + " " + input.slice(caret);
+    setInput(next);
+    setMentions((ms) => (ms.includes(file.path) ? ms : [...ms, file.path]));
+    setMention(null);
+    setResults([]);
+    const pos = mention.start + file.path.length + 1;
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(pos, pos);
+    });
+  };
+
+  const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value);
+    detectMention(e.target.value, e.target.selectionStart ?? e.target.value.length);
+  };
+
+  // Intercept nav keys while the picker is open; otherwise normal handling.
+  const onKeyDownInternal = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mention && results.length) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx((i) => (i + 1) % results.length); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx((i) => (i - 1 + results.length) % results.length); return; }
+      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); selectMention(results[activeIdx]); return; }
+      if (e.key === "Escape") { e.preventDefault(); setMention(null); return; }
+    }
+    handleKeyDown(e);
+  };
+
+  // Paste images / files from the clipboard → attach them.
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!onFilesAdded) return;
+    const files = Array.from(e.clipboardData.items)
+      .filter((it) => it.kind === "file")
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => !!f);
+    if (files.length) { e.preventDefault(); onFilesAdded(files); }
+  };
 
   return (
     <motion.div
@@ -109,16 +189,66 @@ export function InputBox({
         )}
       </AnimatePresence>
 
-      <textarea
-        ref={textareaRef}
-        dir={input ? "auto" : getLang() === "ar" ? "rtl" : "ltr"}
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder || t("sendMessage")}
-        rows={1}
-        className="w-full min-h-[44px] max-h-[240px] resize-none bg-transparent px-3 py-2.5 text-foreground placeholder:text-muted-foreground focus:outline-none overflow-y-auto"
-      />
+      <div className="relative">
+        {/* @-mention file picker — floats above the textarea */}
+        <AnimatePresence>
+          {mention && results.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={{ duration: 0.12 }}
+              dir="ltr"
+              onClick={(e) => e.stopPropagation()}
+              className="absolute bottom-full left-2 right-2 mb-2 z-50 max-h-56 overflow-y-auto rounded-xl border border-border bg-background shadow-lg py-1"
+            >
+              <div className="px-3 pb-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">{t("files")}</div>
+              {results.map((f, i) => (
+                <button
+                  key={f.path}
+                  type="button"
+                  onMouseEnter={() => setActiveIdx(i)}
+                  onMouseDown={(e) => { e.preventDefault(); selectMention(f); }}
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer ${i === activeIdx ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary/60"}`}
+                >
+                  <svg className="size-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <span className="truncate">
+                    {f.path.lastIndexOf("/") >= 0 && (
+                      <span className="text-muted-foreground/60">{f.path.slice(0, f.path.lastIndexOf("/") + 1)}</span>
+                    )}
+                    {f.name}
+                  </span>
+                </button>
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Backdrop that paints the mention highlights, aligned behind the
+            transparent-background textarea. Same box metrics so text lines up. */}
+        <div
+          ref={backdropRef}
+          aria-hidden
+          dir={input ? "auto" : getLang() === "ar" ? "rtl" : "ltr"}
+          className="pointer-events-none absolute inset-0 z-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2.5 leading-6 text-transparent"
+        >
+          {highlightMentions(input, mentions)}
+        </div>
+        <textarea
+          ref={textareaRef}
+          dir={input ? "auto" : getLang() === "ar" ? "rtl" : "ltr"}
+          value={input}
+          onChange={onChange}
+          onKeyDown={onKeyDownInternal}
+          onPaste={onPaste}
+          onScroll={(e) => { if (backdropRef.current) backdropRef.current.scrollTop = e.currentTarget.scrollTop; }}
+          placeholder={placeholder || t("sendMessage")}
+          rows={1}
+          className="relative z-10 w-full min-h-[44px] max-h-[240px] resize-none bg-transparent px-3 py-2.5 leading-6 text-foreground placeholder:text-muted-foreground focus:outline-none overflow-y-auto"
+        />
+      </div>
 
       {/* Actions row: paperclip left, send right */}
       <div className="flex items-center justify-between px-1 pt-1" dir="ltr">

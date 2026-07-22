@@ -8,19 +8,22 @@ import { TablePart } from "./parts/table-part";
 import { CalloutPart } from "./parts/callout-part";
 import { ImagePart } from "./parts/image-part";
 import { StepPart } from "./parts/step-part";
+import { StepGroup } from "./parts/step-group";
+import { FilePart } from "./parts/file-part";
 import { AttachmentBody } from "./attachment-body";
 import { Icon } from "./icon";
 import { cn } from "../lib/utils";
 
-function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: () => void) {
+function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: () => void, onOpenFile?: (path: string) => void) {
   switch (part.type) {
     case "text":
-      return <TextPart key={index} text={part.text || ""} />;
+      return <TextPart key={index} text={part.text || ""} onOpenFile={onOpenFile} />;
     case "thinking":
       return (
         <ThinkingPart
           key={index}
           thinking={part.thinking || ""}
+          isStreaming={isStreaming}
         />
       );
     case "code":
@@ -72,14 +75,22 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
   }
 }
 
+// Successful canvas calls are deliverables — they render as file cards and
+// must never fold into a step group.
+function groupKind(p: Part) {
+  if (p.type === "step" && p.tool_name === "Canvas" && p.step && p.ok !== false) return "file";
+  return p.type;
+}
+
 function groupParts(parts: Part[]) {
-  const groups: { type: string; items: Part[]; startIndex: number }[] = [];
+  const groups: { kind: string; items: Part[]; startIndex: number }[] = [];
   for (let i = 0; i < parts.length; i++) {
+    const kind = groupKind(parts[i]);
     const last = groups[groups.length - 1];
-    if (parts[i].type === "step" && last?.type === "step") {
+    if (kind === "step" && last?.kind === "step") {
       last.items.push(parts[i]);
     } else {
-      groups.push({ type: parts[i].type, items: [parts[i]], startIndex: i });
+      groups.push({ kind, items: [parts[i]], startIndex: i });
     }
   }
   return groups;
@@ -89,10 +100,12 @@ export function MessageBubble({
   message,
   isStreaming,
   onRetry,
+  onOpenFile,
 }: {
   message: Message;
   isStreaming?: boolean;
   onRetry?: () => void;
+  onOpenFile?: (path: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -124,7 +137,14 @@ export function MessageBubble({
     );
   }
 
-  const parts = (message.parts || []).filter((p) => p.type !== "chat_id");
+  const parts = (message.parts || [])
+    .filter((p) => p.type !== "chat_id")
+    // Collapse consecutive canvas cards for the same file (retries) into one.
+    .filter((p, i, all) => {
+      if (p.type !== "step" || p.tool_name !== "Canvas") return true;
+      const next = all[i + 1];
+      return !(next?.type === "step" && next.tool_name === "Canvas" && next.step === p.step);
+    });
   const isEmpty = parts.length === 0;
 
   const copyAll = () => {
@@ -142,15 +162,15 @@ export function MessageBubble({
       <div className="relative flex min-w-0 flex-1 flex-col gap-1">
         {isEmpty && isStreaming && <Loader />}
 
-        {groupParts(parts).map((group, gi) =>
-          group.type === "step" ? (
-            <div key={gi} className="my-3 flex flex-col">
-              {group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming, onRetry))}
-            </div>
-          ) : (
-            group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming, onRetry))
-          )
-        )}
+        {groupParts(parts).map((group, gi, all) => {
+          if (group.kind === "step")
+            return <StepGroup key={gi} items={group.items} live={isStreaming && gi === all.length - 1} />;
+          if (group.kind === "file")
+            return <FilePart key={gi} path={group.items[0].step || ""} onOpen={onOpenFile} />;
+          return group.items.map((part, i) =>
+            renderPart(part, group.startIndex + i,
+              isStreaming && group.startIndex + i === parts.length - 1, onRetry, onOpenFile));
+        })}
 
         {/* Actions */}
         {!isEmpty && !isStreaming && (

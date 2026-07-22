@@ -5,6 +5,8 @@ Translates cycls Message shape (Anthropic JSON) ↔ OpenAI Chat Completions:
   - assistant tool_use blocks ↔ assistant.tool_calls
   - user tool_result blocks ↔ role="tool" messages (text-only)
   - image/document in tool_results → text stubs (with a warning)
+  - user-content images → image_url data URLs; stubs on vision=False models
+  - user-content documents → text stubs (no Chat Completions wire form)
 """
 import json
 
@@ -13,40 +15,12 @@ from ..events import Turn
 from ...tools import tool_step
 
 
-_WINDOWS = {
-    "gpt-5":  400_000,
-    "gpt-4o": 128_000,
-    "gpt-4":  128_000,
-    "o1":     200_000,
-    "o3":     200_000,
-}
-
-_MAX_OUTPUT = {
-    "gpt-5":  128_000,
-    "gpt-4o": 16_384,
-    "gpt-4":  8_192,
-    "o1":     100_000,
-    "o3":     100_000,
-}
-
-
-def _lookup(table, model, default):
-    if model in table: return table[model]
-    return next((v for k, v in table.items() if k in model), default)
-
-
 class OpenAIProvider:
-    def __init__(self, client, model):
+    def __init__(self, client, model, vendor="openai", vision=True):
         self._client = client
         self.model = model
-
-    @property
-    def context_window(self):
-        return _lookup(_WINDOWS, self.model, 128_000)
-
-    @property
-    def max_output(self):
-        return _lookup(_MAX_OUTPUT, self.model, 16_384)
+        self.vendor = vendor
+        self.vision = vision
 
     @staticmethod
     def _tool_result_text(content):
@@ -77,12 +51,19 @@ class OpenAIProvider:
                 for b in content:
                     t = b.get("type")
                     if t == "text":
-                        parts.append({"type": "text", "text": b["text"]})
-                    elif t == "image":
+                        # Strict endpoints (GLM) reject empty text parts.
+                        if b.get("text"): parts.append({"type": "text", "text": b["text"]})
+                    elif t == "image" and self.vision:
                         src = b.get("source", {})
                         if src.get("type") == "base64":
                             parts.append({"type": "image_url", "image_url": {
                                 "url": f"data:{src['media_type']};base64,{src['data']}"}})
+                    elif t in ("image", "document"):
+                        # Text-only model (vision=False) or a document block, which
+                        # has no Chat Completions wire form — stub instead of a 400.
+                        dropped.add(t)
+                        parts.append({"type": "text",
+                                      "text": f"[{t} content not viewable on this provider]"})
                     elif t == "tool_result":
                         text, d = self._tool_result_text(b.get("content"))
                         dropped |= d
@@ -101,7 +82,7 @@ class OpenAIProvider:
                             "name": b["name"], "arguments": json.dumps(b.get("input", {}))}})
                 msg = {"role": "assistant", "content": text or None}
                 if calls: msg["tool_calls"] = calls
-                out.append(msg)
+                if text or calls: out.append(msg)  # thinking-only turns have no wire form here
         s = system if isinstance(system, str) else (
             "\n\n".join(s.get("text", "") for s in system if isinstance(s, dict))
             if isinstance(system, list) else "")
@@ -120,16 +101,22 @@ class OpenAIProvider:
     async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None, thinking=None):
         api_messages, dropped = self._to_messages(messages, system)
         for kind in sorted(dropped):
-            yield events.callout(f"`{kind}` content in tool results isn't viewable on this provider — the model sees a text stub.", "warning")
+            yield events.callout(f"`{kind}` content isn't viewable on this provider — the model sees a text stub.", "warning")
         if mcp_servers:
             yield events.callout("MCP servers are Anthropic-only — ignored on this provider.", "warning")
 
         kwargs = {
             "model": self.model, "messages": api_messages,
-            "max_completion_tokens": max_tokens,
             "stream": True, "stream_options": {"include_usage": True},
         }
+        # OpenAI's reasoning models require `max_completion_tokens`; everyone
+        # else speaks the standard `max_tokens`.
+        kwargs["max_completion_tokens" if self.vendor == "openai" else "max_tokens"] = max_tokens
         if (api_tools := self._to_tools(tools)): kwargs["tools"] = api_tools
+        if self.vendor in ("zai", "zhipu", "zhipuai", "glm"):
+            kwargs["extra_body"] = {"thinking": {"type": "enabled" if thinking else "disabled"}}
+        elif thinking in ("low", "medium", "high") and self.vendor in ("openai", "google", "gemini"):
+            kwargs["reasoning_effort"] = thinking  # gpt-5*/o* and Gemini-compat map this natively
 
         text_buf, calls, stop, usage = [], {}, "end_turn", None
         async for chunk in await self._client.chat.completions.create(**kwargs):
@@ -157,19 +144,29 @@ class OpenAIProvider:
                 elif slot["started"] and arg_chunk:
                     yield events.tool_args(slot["id"], arg_chunk)
             if chunk.choices[0].finish_reason:
-                stop = "tool_use" if chunk.choices[0].finish_reason == "tool_calls" else "end_turn"
+                stop = {"tool_calls": "tool_use", "length": "max_tokens"}.get(
+                    chunk.choices[0].finish_reason, "end_turn")
 
         content = [{"type": "text", "text": "".join(text_buf)}] if text_buf else []
         for _, tc in sorted(calls.items()):
             try: inp = json.loads(tc["args"]) if tc["args"] else {}
             except json.JSONDecodeError: inp = {}
             content.append({"type": "tool_use", "id": tc["id"], "name": tc["name"], "input": inp})
+        # Server-side caching is automatic on these providers; report the cached
+        # split so cost prices it at the cache-read rate. prompt_tokens INCLUDES
+        # cached tokens (unlike Anthropic's input_tokens, which excludes them).
+        # Kimi/Moonshot reports `cached_tokens` at the top level of usage.
+        cached = (getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0)
+                  or getattr(usage, "cached_tokens", 0) or 0) if usage else 0
         yield Turn(content=content, stop_reason=stop,
-                   input=(usage.prompt_tokens if usage else 0),
-                   output=(usage.completion_tokens if usage else 0))
+                   input=(usage.prompt_tokens - cached if usage else 0),
+                   output=(usage.completion_tokens if usage else 0),
+                   cached=cached)
 
     async def complete(self, *, messages, system, max_tokens):
         api_messages, _ = self._to_messages(messages, system)
+        cap = {"max_completion_tokens" if self.vendor == "openai" else "max_tokens": max_tokens}
         r = await self._client.chat.completions.create(
-            model=self.model, max_completion_tokens=max_tokens, messages=api_messages)
+            model=self.model, messages=api_messages, **cap)
+        if r.usage: self.last_usage = (r.usage.prompt_tokens, r.usage.completion_tokens)
         return r.choices[0].message.content or ""

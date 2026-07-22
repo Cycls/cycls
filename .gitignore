@@ -29,3 +29,4 @@ mj/
 cycls/agent/web/themes/
 *.tsbuildinfo
 uv.lock
+examples/agent/super_new.py

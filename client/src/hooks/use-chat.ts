@@ -14,6 +14,7 @@ export interface Part {
   row?: string[];
   step?: string;
   tool_name?: string;
+  ok?: boolean; // false when the tool call errored (refetch projection)
   id?: string;       // tool-call id — threads ToolStart → step_arg → final step
   args?: string;     // accumulated tool-call input (partial JSON), for the live preview
   delta?: string;    // a step_arg chunk on the wire (not stored)
@@ -50,7 +51,8 @@ export interface Message {
 export interface PassMetadata {
   name: string;
   description: string;
-  logo: string;
+  logo: string;    // agent icon — chat hero
+  brand?: string;  // brand wordmark — nav bar
 }
 
 export interface AppConfig {
@@ -61,6 +63,11 @@ export interface AppConfig {
   pk?: string;
   analytics?: boolean;
   suggestions?: boolean;
+  affiliate?: string;
+  max_upload?: number;   // per-file upload cap in MB
+  explore_enabled?: boolean;
+  explore?: { slug: string; title: string; title_ar?: string; description: string; description_ar?: string; icon_svg?: string; link: string }[] | null;
+  workspaces?: string | null;   // multi-workspace mode: null off, else team-create policy ("member"|"admin")
 }
 
 export function useChat(baseUrl: string = "") {
@@ -91,12 +98,11 @@ export function useChat(baseUrl: string = "") {
       const h = await authHeaders();
       const id = crypto.randomUUID().slice(0, 8);
       const uploadPath = `attachments/${id}-${file.name}`;
-      const form = new FormData();
-      form.append("file", file);
+      // Raw body, not multipart — auth runs before the body is read, so slow uploads can't outlive the JWT.
       const res = await fetch(`${baseUrl}/files/${uploadPath}`, {
         method: "PUT",
         headers: h,
-        body: form,
+        body: file,
       });
       if (!res.ok) {
         track("file_upload_failed", {
@@ -455,7 +461,9 @@ export function useChat(baseUrl: string = "") {
   }, [api]);
 
   const forkShare = useCallback(async (userToken: string) => {
-    const { id } = await (await api(`/share/${userToken}/fork`, { method: "POST" })).json();
+    // `<user>/<token>` with an optional `?ws=` — reattach it after /fork
+    const [path, query] = userToken.split("?");
+    const { id } = await (await api(`/share/${path}/fork${query ? `?${query}` : ""}`, { method: "POST" })).json();
     track("share_forked", { source: userToken, new_chat_id: id });
     return id as string;
   }, [api]);

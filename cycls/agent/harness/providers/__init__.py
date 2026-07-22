@@ -50,8 +50,6 @@ class Message(TypedDict):
 
 class Provider(Protocol):
     model: str
-    context_window: int    # model's input token budget
-    max_output: int        # model's output token cap
 
     def stream(self, *, messages: list[Message], system: str, tools: list[dict],
                max_tokens: int, mcp_servers=None, thinking=None) -> AsyncIterator:
@@ -80,10 +78,13 @@ def _client_for(vendor: str, *, base_url, api_key):
     return c
 
 
-def make_provider(model: str, *, client=None, base_url=None, api_key=None) -> Provider:
+def make_provider(model: str, *, client=None, base_url=None, api_key=None,
+                  vision=True) -> Provider:
     """Build the provider for a `vendor/model` string. `anthropic/*` goes native;
     everything else (openai, groq, vllm, local) goes through Chat Completions.
-    Pass `client` to inject a pre-built SDK client (test seam)."""
+    Pass `client` to inject a pre-built SDK client (test seam). `vision=False`
+    marks a text-only model: image blocks degrade to text stubs instead of
+    being sent (and rejected) on the wire — no-op on the native Anthropic path."""
     if "/" not in model:
         raise ValueError(
             f"model must be `vendor/model` (e.g. `anthropic/claude-sonnet-4-6`, "
@@ -95,7 +96,7 @@ def make_provider(model: str, *, client=None, base_url=None, api_key=None) -> Pr
         from .anthropic import AnthropicProvider
         return AnthropicProvider(sdk, name)
     from .openai import OpenAIProvider
-    return OpenAIProvider(sdk, name)
+    return OpenAIProvider(sdk, name, vendor, vision=vision)
 
 
 # Re-export concrete providers for type-checking / direct construction by callers

@@ -4,6 +4,14 @@ import os
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _reset_migrated():
+    """Org names repeat across tests with fresh tmp_paths — clear the
+    once-per-org migration cache so each test migrates its own tree."""
+    from cycls.agent import state
+    state._migrated.clear()
+
+
 # ---- Live LLM tests ----
 # Tests marked @pytest.mark.live hit real Anthropic. Off by default; opt
 # in with `pytest --live`. Also auto-skips if ANTHROPIC_API_KEY is unset.

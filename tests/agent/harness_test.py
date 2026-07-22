@@ -98,24 +98,220 @@ def test_build_tools_custom_passthrough():
     assert tools[0]["name"] == "render_image"
 
 
-def test_build_tools_filters_anthropic_only_on_other_vendors():
-    """WebSearch is Anthropic-side only — skipped silently when vendor is openai."""
-    tools = build_tools(["WebSearch", "Bash"], None, vendor="openai")
-    names = {t.get("name") for t in tools}
-    assert "web_search" not in names
-    assert "bash" in names
+def test_build_tools_web_search_defaults_to_portable_brave(monkeypatch):
+    """Default web search is our portable Brave pair — search + fetch — and it's
+    present on every vendor (that's the whole point of switching off native)."""
+    monkeypatch.setenv("BRAVE_API_KEY", "x")
+    for vendor in ("openai", "anthropic", None):
+        names = {t.get("name") for t in build_tools(["WebSearch"], None, vendor=vendor)}
+        assert names == {"web_search", "web_fetch"}
 
 
-def test_build_tools_keeps_anthropic_only_for_anthropic():
-    tools = build_tools(["WebSearch", "Bash"], None, vendor="anthropic")
-    names = {t.get("name") for t in tools}
-    assert names == {"web_search", "bash"}
+def test_build_tools_missing_brave_key_falls_back_to_native(monkeypatch):
+    """No BRAVE_API_KEY → use the provider's native search where it has one;
+    other vendors keep the portable pair (which reports the missing key)."""
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    anth = build_tools(["WebSearch"], None, vendor="anthropic")
+    assert anth == [{"type": "web_search_20250305", "name": "web_search"}]
+    names = {t.get("name") for t in build_tools(["WebSearch"], None, vendor="openai")}
+    assert names == {"web_search", "web_fetch"}
 
 
-def test_vendor_skips_returns_anthropic_only_names():
-    assert vendor_skips(["WebSearch", "Bash"], "openai") == ["WebSearch"]
-    assert vendor_skips(["WebSearch", "Bash"], "anthropic") == []
-    assert vendor_skips(["WebSearch", "Bash"], None) == []
+def test_build_tools_native_web_search_only_on_anthropic():
+    """`native` uses the provider server tool on Anthropic, skips elsewhere."""
+    anth = build_tools(["WebSearch"], None, vendor="anthropic", web_search="native")
+    assert anth == [{"type": "web_search_20250305", "name": "web_search"}]
+    assert build_tools(["WebSearch"], None, vendor="openai", web_search="native") == []
+
+
+def test_vendor_skips_flags_native_search_off_anthropic():
+    assert vendor_skips(["WebSearch", "Bash"], "openai", "native") == ["WebSearch"]
+    assert vendor_skips(["WebSearch", "Bash"], "anthropic", "native") == []
+    assert vendor_skips(["WebSearch"], "openai", "brave") == []
+    assert vendor_skips(["WebSearch"], "openai") == []  # default is brave
+
+
+# ---- pricing / context ----
+
+def test_cost_from_price_rates():
+    from cycls.agent.harness.main import _cost
+    price = (3, 15, 0.30, 6)
+    assert _cost(price, 1_000_000, 0, 0, 0) == 3.0
+    assert _cost(price, 0, 1_000_000, 0, 0) == 15.0
+    assert _cost(price, 0, 0, 1_000_000, 1_000_000) == 6.30
+    assert _cost(None, 1_000_000, 1_000_000, 0, 0) == 0.0  # no .price() set
+
+
+def test_llm_price_and_context_reach_the_loop():
+    seen = {}
+    async def fake_loop(**kw):
+        seen.update(kw)
+        yield "ok"
+    llm = (cycls.LLM().model("openai/gpt-x")
+           .price(input=3, output=15, cache_read=0.30, cache_write=6)
+           .context(1_000_000).loop(fake_loop))
+    async def drain():
+        return [ev async for ev in llm.run(context=None)]
+    asyncio.run(drain())
+    assert seen["price"] == (3, 15, 0.30, 6)
+    assert seen["context_window"] == 1_000_000
+
+
+def test_llm_price_and_context_default_unset():
+    assert cycls.LLM()._price is None
+    assert cycls.LLM()._context is None
+
+
+def test_llm_vision_default_on_and_reaches_the_loop():
+    assert cycls.LLM()._vision is True
+    seen = {}
+    async def fake_loop(**kw):
+        seen.update(kw)
+        yield "ok"
+    llm = cycls.LLM().model("zai/glm-5.2").vision(False).loop(fake_loop)
+    async def drain():
+        return [ev async for ev in llm.run(context=None)]
+    asyncio.run(drain())
+    assert seen["vision"] is False
+
+
+# ---- web search / fetch executors ----
+
+class _FakeResp:
+    def __init__(self, data=None, text="", headers=None, status=200):
+        self._data, self.text, self.headers = data, text, headers or {}
+        self.is_redirect, self.encoding = 300 <= status < 400, "utf-8"
+    def raise_for_status(self): pass
+    def json(self): return self._data
+    async def aiter_bytes(self):
+        yield self.text.encode()
+
+
+class _FakeClient:
+    """Stands in for httpx.AsyncClient — returns a preset response from .get/.stream."""
+    resp = None
+    def __init__(self, *a, **k): pass
+    async def __aenter__(self): return self
+    async def __aexit__(self, *a): return False
+    async def get(self, *a, **k): return type(self).resp
+
+    def stream(self, *a, **k):
+        resp = type(self).resp
+        class _S:
+            async def __aenter__(self): return resp
+            async def __aexit__(self, *a): return False
+        return _S()
+
+
+def test_web_search_requires_api_key(monkeypatch):
+    from cycls.agent.tools import _exec_web_search
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    assert "BRAVE_API_KEY" in asyncio.run(_exec_web_search({"query": "hi"}))
+
+
+def test_web_search_formats_passages(monkeypatch):
+    import httpx
+    from cycls.agent.tools import _exec_web_search
+    monkeypatch.setenv("BRAVE_API_KEY", "x")
+    _FakeClient.resp = _FakeResp(data={"web": {"results": [
+        {"title": "T1", "url": "http://a", "description": "D1", "extra_snippets": ["s1", "s2"]},
+        {"title": "T2", "url": "http://b", "description": "D2"}]}})
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+    out = asyncio.run(_exec_web_search({"query": "hi"}))
+    assert "T1" in out and "http://a" in out and "s1" in out and "s2" in out and "T2" in out
+
+
+def test_web_fetch_strips_html_to_text(monkeypatch):
+    import httpx
+    from cycls.agent import tools
+    _FakeClient.resp = _FakeResp(
+        text="<html><head><style>x{}</style></head><body><p>Hello</p><script>bad()</script>World</body></html>",
+        headers={"content-type": "text/html"})
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(tools, "_is_public_host", lambda h: True)
+    out = asyncio.run(tools._exec_web_fetch({"url": "http://a"}))
+    assert "Hello" in out and "World" in out
+    assert "bad()" not in out and "x{}" not in out
+
+
+def test_web_fetch_rejects_non_url():
+    from cycls.agent.tools import _exec_web_fetch
+    assert "http(s) URL" in asyncio.run(_exec_web_fetch({"url": "not-a-url"}))
+
+
+def test_web_fetch_blocks_private_addresses():
+    """SSRF guard: the fetch runs in the server process — loopback, RFC1918
+    and link-local (cloud metadata) targets are refused before any request."""
+    from cycls.agent.tools import _exec_web_fetch
+    for url in ("http://localhost:8000/x", "http://127.0.0.1/", "http://[::1]/",
+                "http://169.254.169.254/computeMetadata/v1/", "http://192.168.1.1/admin"):
+        assert "private" in asyncio.run(_exec_web_fetch({"url": url})), url
+
+
+def test_web_fetch_checks_redirect_hops(monkeypatch):
+    """A public URL redirecting to an internal host is refused at the hop."""
+    import httpx
+    from cycls.agent import tools
+    monkeypatch.setattr(tools, "_is_public_host", lambda h: h != "localhost")
+    _FakeClient.resp = _FakeResp(headers={"location": "http://localhost/admin"}, status=302)
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+    assert "private" in asyncio.run(tools._exec_web_fetch({"url": "http://public.example/r"}))
+
+
+def test_custom_tool_step_defaults_to_first_string_input(monkeypatch):
+    """Unlabelled custom tools show their first string input, like Bash(command)."""
+    from cycls.agent import tools
+    monkeypatch.setattr(tools, "_custom_labels", {})
+    s = tools.tool_step("legal_search", {"limit": 5, "sql": "SELECT id FROM laws"})
+    assert s == {"tool_name": "legal_search", "step": "SELECT id FROM laws"}
+    assert tools.tool_step("t", {"a": "x" * 300})["step"].endswith("...")
+    assert tools.tool_step("t", {"n": 3}) == {"tool_name": "t", "step": ""}
+
+
+def test_registered_label_renders_the_step(monkeypatch):
+    from cycls.agent import tools
+    monkeypatch.setattr(tools, "_custom_labels", {})
+    tools.register_labels({"legal_search": lambda inp: f"بحث: {inp['sql']}"})
+    assert tools.tool_step("legal_search", {"sql": "SELECT 1"})["step"] == "بحث: SELECT 1"
+    # a broken label falls back to the default, never breaks the stream
+    tools.register_labels({"legal_search": lambda inp: inp["missing"]})
+    assert tools.tool_step("legal_search", {"sql": "SELECT 1"})["step"] == "SELECT 1"
+
+
+def test_llm_on_label_registers_via_run(monkeypatch):
+    from cycls.agent import tools
+    monkeypatch.setattr(tools, "_custom_labels", {})
+
+    async def fake_loop(**kw):
+        yield "ok"
+
+    async def handler(inp):
+        return "r"
+
+    llm = (cycls.LLM().model("openai/gpt-x").loop(fake_loop)
+           .on("legal_search", handler, label=lambda inp: "labelled"))
+
+    async def drain():
+        return [ev async for ev in llm.run(context=None)]
+    asyncio.run(drain())
+    assert tools.tool_step("legal_search", {})["step"] == "labelled"
+
+
+def test_web_fetch_caps_body_size(monkeypatch):
+    """An endless body stops at _FETCH_MAX_BYTES instead of filling memory."""
+    import httpx
+    from cycls.agent import tools
+
+    class _Endless(_FakeResp):
+        async def aiter_bytes(self):
+            while True: yield b"a" * 100
+
+    monkeypatch.setattr(tools, "_is_public_host", lambda h: True)
+    monkeypatch.setattr(tools, "_FETCH_MAX_BYTES", 1_000)
+    _FakeClient.resp = _Endless(headers={"content-type": "text/plain"})
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+    out = asyncio.run(tools._exec_web_fetch({"url": "http://a"}))
+    assert len(out) <= 1_100
 
 
 def test_openai_to_messages_degrades_image_in_tool_result():
@@ -152,6 +348,51 @@ def test_openai_to_messages_degrades_document_in_tool_result():
     assert "[document content not viewable on this provider]" in out[0]["content"]
 
 
+def test_openai_to_messages_user_image_sent_when_vision():
+    """Default (vision=True): user-content images go out as image_url data URLs."""
+    from cycls.agent.harness.providers.openai import OpenAIProvider
+    raw = [
+        {"role": "user", "content": [
+            {"type": "text", "text": "what is this?"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "abc"}},
+        ]},
+    ]
+    out, dropped = OpenAIProvider(None, "gpt-x")._to_messages(raw, "")
+    assert dropped == set()
+    parts = out[0]["content"]
+    assert parts[1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
+
+
+def test_openai_to_messages_user_image_stubbed_without_vision():
+    """vision=False backstop: an image block that reaches a text-only model
+    degrades to a text stub instead of a rejected request (z.ai code 1210)."""
+    from cycls.agent.harness.providers.openai import OpenAIProvider
+    raw = [
+        {"role": "user", "content": [
+            {"type": "text", "text": "what is this?"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "abc"}},
+        ]},
+    ]
+    out, dropped = OpenAIProvider(None, "glm-5.2", "zai", vision=False)._to_messages(raw, "")
+    assert dropped == {"image"}
+    parts = out[0]["content"]
+    assert parts[1] == {"type": "text", "text": "[image content not viewable on this provider]"}
+
+
+def test_openai_to_messages_user_document_stubbed():
+    """Documents have no Chat Completions wire form — stubbed on any model,
+    not silently dropped."""
+    from cycls.agent.harness.providers.openai import OpenAIProvider
+    raw = [
+        {"role": "user", "content": [
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "abc"}},
+        ]},
+    ]
+    out, dropped = OpenAIProvider(None, "gpt-x")._to_messages(raw, "")
+    assert dropped == {"document"}
+    assert out[0]["content"][0] == {"type": "text", "text": "[document content not viewable on this provider]"}
+
+
 def test_openai_to_messages_no_drops_when_text_only():
     from cycls.agent.harness.providers.openai import OpenAIProvider
     raw = [
@@ -162,6 +403,120 @@ def test_openai_to_messages_no_drops_when_text_only():
     out, dropped = OpenAIProvider(None, "gpt-x")._to_messages(raw, "")
     assert dropped == set()
     assert out[0]["content"] == "plain text"
+
+
+class _CaptureClient:
+    """Fake OpenAI SDK client — records create() kwargs, yields no chunks."""
+    def __init__(self):
+        self.kwargs = None
+        self.chat = self
+        self.completions = self
+
+    async def create(self, **kw):
+        self.kwargs = kw
+        async def gen():
+            return
+            yield
+        return gen()
+
+
+def _stream_kwargs(vendor, thinking=None):
+    from cycls.agent.harness.providers.openai import OpenAIProvider
+    client = _CaptureClient()
+    p = OpenAIProvider(client, "some-model", vendor)
+    async def drain():
+        return [e async for e in p.stream(messages=[{"role": "user", "content": "hi"}],
+                                          system="", tools=[], max_tokens=100, thinking=thinking)]
+    asyncio.run(drain())
+    return client.kwargs
+
+
+def test_openai_vendor_uses_max_completion_tokens():
+    kw = _stream_kwargs("openai")
+    assert kw["max_completion_tokens"] == 100 and "max_tokens" not in kw
+
+
+def test_compat_vendors_use_standard_max_tokens():
+    kw = _stream_kwargs("zai")
+    assert kw["max_tokens"] == 100 and "max_completion_tokens" not in kw
+
+
+def test_unified_reasoning_levels():
+    """`.thinking("low"|"medium"|"high")` maps to reasoning_effort on
+    OpenAI/Gemini-compat; other vendors and non-level specs don't send it."""
+    assert _stream_kwargs("openai", thinking="low")["reasoning_effort"] == "low"
+    assert _stream_kwargs("google", thinking="high")["reasoning_effort"] == "high"
+    assert "reasoning_effort" not in _stream_kwargs("openai", thinking="adaptive")
+    assert "reasoning_effort" not in _stream_kwargs("groq", thinking="medium")
+
+
+def test_glm_thinking_passthrough():
+    assert _stream_kwargs("zai", thinking="adaptive")["extra_body"] == {"thinking": {"type": "enabled"}}
+    assert _stream_kwargs("zai", thinking=None)["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert "extra_body" not in _stream_kwargs("groq", thinking="adaptive")
+
+
+def test_openai_usage_splits_cached_tokens():
+    """prompt_tokens includes cached tokens on OpenAI-compat providers — the
+    Turn must carry the split so cost prices them at the cache-read rate."""
+    from unittest.mock import AsyncMock, MagicMock
+    from cycls.agent.harness.providers.openai import OpenAIProvider
+    from cycls.agent.harness.events import Turn
+
+    chunk = MagicMock()
+    chunk.usage.prompt_tokens = 100
+    chunk.usage.completion_tokens = 10
+    chunk.usage.prompt_tokens_details.cached_tokens = 60
+    chunk.choices = []
+
+    client = _CaptureClient()
+    async def gen():
+        yield chunk
+    client.create = AsyncMock(return_value=gen())
+
+    async def drain():
+        return [e async for e in OpenAIProvider(client, "gpt-5.5").stream(
+            messages=[{"role": "user", "content": "hi"}], system="", tools=[], max_tokens=100)]
+    turn = next(e for e in asyncio.run(drain()) if isinstance(e, Turn))
+    assert (turn.input, turn.cached, turn.output) == (40, 60, 10)
+
+
+def test_openai_usage_cached_tokens_top_level_fallback():
+    """Kimi/Moonshot reports `cached_tokens` at the top level of usage, not
+    under prompt_tokens_details — the split must still be carried."""
+    from unittest.mock import AsyncMock, MagicMock
+    from cycls.agent.harness.providers.openai import OpenAIProvider
+    from cycls.agent.harness.events import Turn
+
+    chunk = MagicMock()
+    chunk.usage.prompt_tokens = 100
+    chunk.usage.completion_tokens = 10
+    chunk.usage.prompt_tokens_details = None
+    chunk.usage.cached_tokens = 60
+    chunk.choices = []
+
+    client = _CaptureClient()
+    async def gen():
+        yield chunk
+    client.create = AsyncMock(return_value=gen())
+
+    async def drain():
+        return [e async for e in OpenAIProvider(client, "kimi-k3", "kimi").stream(
+            messages=[{"role": "user", "content": "hi"}], system="", tools=[], max_tokens=100)]
+    turn = next(e for e in asyncio.run(drain()) if isinstance(e, Turn))
+    assert (turn.input, turn.cached, turn.output) == (40, 60, 10)
+
+
+def test_openai_to_messages_drops_empty_text_parts():
+    """Strict endpoints (GLM) reject empty text — parts and thinking-only
+    assistant turns must not reach the wire."""
+    from cycls.agent.harness.providers.openai import OpenAIProvider
+    raw = [
+        {"role": "user", "content": [{"type": "text", "text": ""}, {"type": "text", "text": "hi"}]},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "hmm"}]},
+    ]
+    out, _ = OpenAIProvider(None, "glm-5.2", "zai")._to_messages(raw, "")
+    assert out == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
 
 
 def test_build_tools_no_provider_specific_markers():
@@ -208,6 +563,26 @@ def test_llm_sandbox_network_kwarg_only():
     """`network` is keyword-only — prevents accidental positional misuse."""
     with pytest.raises(TypeError):
         cycls.LLM().sandbox(True)
+
+
+def test_llm_instructions_default_and_opt_out():
+    """AGENT.md auto-load is on by default; .instructions(None) disables,
+    any other string swaps the filename. Originals stay untouched."""
+    base = cycls.LLM()
+    assert base._instructions == "AGENT.md"
+    assert base.instructions(None)._instructions is None
+    assert base.instructions("NOTES.md")._instructions == "NOTES.md"
+    assert base._instructions == "AGENT.md"
+
+
+def test_llm_skills_accumulates_and_disables():
+    base = cycls.LLM()
+    assert base._skills == []
+    assert base.skills("a")._skills == ["a"]
+    assert base.skills("a").skills("b")._skills == ["a", "b"]
+    assert base.skills("a", "b")._skills == ["a", "b"]
+    assert base.skills(None)._skills is None
+    assert base._skills == []  # original untouched
 
 
 # ---- cycls.MCP ----

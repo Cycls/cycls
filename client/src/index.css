@@ -119,3 +119,45 @@ body {
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+
+/* Canvas → PDF: a portal'd copy of the rendered markdown that only the print
+   dialog (Save as PDF) sees — sidesteps the drawer's fixed/transform layout. */
+.print-root { display: none; }
+@media print {
+  body > *:not(.print-root) { display: none !important; }
+  .print-root { display: block !important; }
+}
+
+/* Text shimmer — the streaming "Thinking" label */
+@keyframes text-shimmer {
+  0% { background-position: 150% center; }
+  100% { background-position: -50% center; }
+}
+.text-shimmer {
+  background: linear-gradient(90deg, var(--color-muted-foreground) 35%, var(--color-foreground) 50%, var(--color-muted-foreground) 65%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: text-shimmer 1.6s linear infinite;
+}
+
+/* Clerk drawers (checkout, subscription details) must clear the app chrome
+   and the settings dialog (z-80). Clerk gives them no usable z of their own. */
+.cl-drawerRoot,
+.cl-drawerBackdrop,
+.cl-checkout-root {
+  z-index: 100 !important;
+}
+
+/* Clerk modals (reverification, profile) above the settings dialog too. */
+.cl-modalBackdrop {
+  z-index: 110 !important;
+}
+
+/* iOS Safari zooms the page when a focused field is under 16px. */
+@media (max-width: 640px) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}

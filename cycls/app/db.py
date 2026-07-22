@@ -1,14 +1,19 @@
 """Workspace + DB — per-tenant JSON KV over object storage.
 
 `file://` (dev) and `gs://` (prod). `db.scan(...)` is the 1-round-trip
-listing path: GCS uses LIST + custom-meta; FS uses `pathlib.glob` + body
-reads (no metadata channel locally). `meta=` on `db.put` is a GCS-only
-perf hint — body is canonical on FS.
+listing path: object storage uses LIST + custom-meta; FS uses `pathlib.glob`
++ body reads (no metadata channel locally). `meta=` on `db.put` is an
+object-storage-only perf hint — body is canonical on FS.
 """
-import asyncio, json, os
+import asyncio, json, os, re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
+
+# Workspace ids are namespaced: `u-{user_id}` personal, `t-{id}` team (see
+# docs/workspaces.md). The prefix split means a team workspace can never
+# be named to collide with someone's personal one.
+_WS_ID = re.compile(r"^[ut]-[A-Za-z0-9_-]+$")
 
 
 @dataclass(frozen=True)
@@ -17,17 +22,35 @@ class Workspace:
     path: str
     subject: str
     base: str | None = None
+    ws: str | None = None
+
+    @property
+    def volume(self) -> Path:
+        """The deployment volume this workspace lives under."""
+        root = Path(self.root)
+        return root.parents[2] if self.ws else root.parent
 
 
-def workspace(target, volume, base=None, slot=".db"):
-    """Derive a Workspace from a User, a subject string, or None (anonymous)."""
+def workspace(target, volume, base=None, slot=".db", ws=None):
+    """Derive a Workspace from a User, a subject string, or None (anonymous).
+
+    `ws` (multi-workspace mode) adds a folder dimension below the org:
+    root `{volume}/{org}/ws/{ws}`, DB path `{org}/ws/{ws}/{slot}/{user}`.
+    Without it, legacy layout: root `{volume}/{org}`, path `{org}/{slot}/{user}`.
+    """
     sub = ("local" if target is None
            else target if isinstance(target, str)
            else f"{target.org_id}:{target.id}" if getattr(target, "org_id", None)
            else target.id)
     org, _, user = sub.partition(":")
-    path = f"{org}/{slot}/{user}" if user else f"{org}/{slot}"
-    return Workspace(Path(volume) / org, path, sub, base)
+    for seg in (org, user):
+        if seg and (seg in (".", "..") or "/" in seg or "\\" in seg):
+            raise ValueError(f"invalid workspace subject: {sub!r}")
+    if ws is not None and not _WS_ID.match(ws):
+        raise ValueError(f"invalid workspace id: {ws!r}")
+    parts = [org, "ws", ws] if ws else [org]
+    path = "/".join([*parts, slot, user] if user else [*parts, slot])
+    return Workspace(Path(volume).joinpath(*parts), path, sub, base, ws)
 
 
 _METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
@@ -223,7 +246,7 @@ class DB:
             if r is not None: yield r
 
     async def scan(self, *, prefix=None, glob=None):
-        """Yield (key, meta) — `meta` is GCS custom-meta or, on FS, the body.
-        `glob` uses `*` to match non-`/`."""
+        """Yield (key, meta) — `meta` is object-storage custom-meta or, on local
+        FS, the body. `glob` uses `*` to match non-`/`."""
         for k, m in sorted(await self._store.list_metas(prefix=prefix, glob=glob)):
             yield k, m

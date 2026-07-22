@@ -202,8 +202,90 @@ def test_config_endpoint():
 
     data = response.json()
     assert data["title"] == "Test Title"
-    assert data["cms"] is None
+    assert "cms" not in data
     print("✅ Test passed.")
+
+
+def test_cms_brand_merges_piece_by_piece(monkeypatch):
+    """Static .brand() wins piece by piece; the CMS fills what's unset — a
+    static name/description must not skip the fetch and lose the CMS icon."""
+    from cycls.agent.web.server import PassMetadata
+
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {"title": "Super", "title_ar": "سوبر",
+                    "description": "cms desc", "description_ar": "cms desc ar",
+                    "icon_svg": "<svg id='cms-icon'/>"}
+    monkeypatch.setattr("httpx.get", lambda *a, **k: _Resp())
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = Config(public_path=THEME_PATH, auth=False,
+                    cms={"brand": "https://cms.example/agents/super"},
+                    pass_metadata={"en": PassMetadata(name="Super New", description="testbed")})
+    web(dummy_agent, config)
+
+    en, ar = config.pass_metadata["en"], config.pass_metadata["ar"]
+    assert en.name == "Super New"                 # static wins
+    assert en.description == "testbed"            # static wins
+    assert en.logo == "<svg id='cms-icon'/>"      # CMS fills the icon
+    assert ar.name == "سوبر"                      # CMS fills the missing locale
+    assert ar.logo == "<svg id='cms-icon'/>"
+
+
+def test_cms_brand_fetch_failure_keeps_static(monkeypatch):
+    """A dead CMS must not clobber static branding."""
+    from cycls.agent.web.server import PassMetadata
+
+    def boom(*a, **k): raise OSError("down")
+    monkeypatch.setattr("httpx.get", boom)
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = Config(public_path=THEME_PATH, auth=False,
+                    cms={"brand": "https://cms.example/agents/super"},
+                    pass_metadata={"en": PassMetadata(name="Super New")})
+    web(dummy_agent, config)
+    assert config.pass_metadata == {"en": PassMetadata(name="Super New")}
+
+
+def test_config_keeps_secrets_server_side():
+    """cms (bearer token) and volume never reach /config or the page HTML."""
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = Config(public_path=THEME_PATH, auth=False,
+                    cms={"explore": "https://cms.example/agents", "token": "sekrit-bearer"},
+                    volume="/internal/mount")
+    client = TestClient(web(dummy_agent, config))
+
+    data = client.get("/config").json()
+    assert "cms" not in data
+    assert "volume" not in data
+
+    html = client.get("/").text
+    assert "sekrit-bearer" not in html
+    assert "/internal/mount" not in html
+    assert "window.__CONFIG__" in html
+
+
+def test_embedded_json_cannot_close_script_tag(tmp_path):
+    """CMS/SEO text containing </script> must not break out of the inline JSON."""
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = Config(public_path=THEME_PATH, auth=False,
+                    seo={"title": "T", "description": 'x</script><script>alert(1)</script>'})
+    client = TestClient(web(dummy_agent, config))
+    html = client.get("/").text
+    assert "<script>alert(1)</script>" not in html
 
 
 def test_chat_cycls_endpoint_streams():
@@ -570,6 +652,317 @@ def test_state_resolve_path_rejects_cycls_nested(tmp_path):
         resolve_path(tmp_path, ".db/sub/file.json")
 
 
+def test_state_resolve_path_rejects_agent_kv(tmp_path):
+    (tmp_path / ".database").mkdir()
+    with pytest.raises(ValueError, match="Reserved path"):
+        resolve_path(tmp_path, ".database")
+    with pytest.raises(ValueError, match="Reserved path"):
+        resolve_path(tmp_path, ".database/store.json")
+
+
 def test_state_resolve_path_allows_normal(tmp_path):
     out = resolve_path(tmp_path, "notes.md")
     assert out == (tmp_path / "notes.md").resolve()
+
+
+# =============================================================================
+# Multi-workspace mode (docs/workspaces.md)
+# =============================================================================
+
+from cycls.agent.web.routers import resolve_ws_id, personal_ws
+
+
+def _resolve(user, header, mode, tmp_path):
+    return asyncio.run(resolve_ws_id(user, header, mode, tmp_path, f"file://{tmp_path}"))
+
+
+def test_resolve_ws_id_legacy_mode_ignores_header(tmp_path):
+    from cycls.app.auth import User
+    user = User(id="user_1", org_id="org_1")
+    assert _resolve(user, None, None, tmp_path) is None
+    assert _resolve(user, "u-user_1", None, tmp_path) is None      # mode off → header ignored
+    assert _resolve(None, None, "member", tmp_path) is None        # no user → legacy
+
+
+def test_resolve_ws_id_defaults_to_personal(tmp_path):
+    from cycls.app.auth import User
+    user = User(id="user_1", org_id="org_1")
+    assert _resolve(user, None, "member", tmp_path) == "u-user_1"
+    assert _resolve(user, "", "member", tmp_path) == "u-user_1"
+    assert _resolve(user, "u-user_1", "member", tmp_path) == "u-user_1"
+
+
+def test_resolve_ws_id_foreign_ids_404(tmp_path):
+    from fastapi import HTTPException
+    from cycls.app.auth import User
+    user = User(id="user_1", org_id="org_1")
+    for header in ("u-user_2", "t-unknown", "../evil", "garbage"):
+        with pytest.raises(HTTPException) as exc:
+            _resolve(user, header, "member", tmp_path)
+        assert exc.value.status_code == 404
+
+
+def test_personal_ws_from_subject():
+    assert personal_ws("org_1:user_1") == "u-user_1"
+    assert personal_ws("user_1") == "u-user_1"
+
+
+def _ws_routers_client(tmp_path, workspaces="member", max_upload=512):
+    """Mount the real state routers behind a stub app + fixed user."""
+    from types import SimpleNamespace
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+    from cycls.app.auth import User
+    from cycls.agent.web.routers import install_routers
+
+    user = User(id="user_1", org_id="org_1")
+    stub = SimpleNamespace(prod=False, _auth_provider=None,
+                           config=SimpleNamespace(workspaces=workspaces, max_upload=max_upload))
+    fapp = FastAPI()
+    install_routers(stub, fapp, Depends(lambda: user), tmp_path, f"file://{tmp_path}")
+    return TestClient(fapp)
+
+
+def _zip_bytes(members):
+    """{name: bytes} → in-memory zip."""
+    import io, zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+    return buf.getvalue()
+
+
+def test_raw_body_upload_streams_to_disk(tmp_path):
+    """Raw (non-multipart) PUT: body streams to the target; content preserved."""
+    client = _ws_routers_client(tmp_path)
+    r = client.put("/files/docs/big.bin", content=b"\x00\x01" * 1000)
+    assert r.status_code == 200
+    dest = tmp_path / "org_1" / "ws" / "u-user_1" / "docs" / "big.bin"
+    assert dest.read_bytes() == b"\x00\x01" * 1000
+    assert not dest.with_name("big.bin.part").exists()
+
+
+def test_raw_body_upload_over_cap_413(tmp_path):
+    client = _ws_routers_client(tmp_path, max_upload=1)
+    r = client.put("/files/big.bin", content=b"\0" * (1024 * 1024 + 1))
+    assert r.status_code == 413
+    assert not list(tmp_path.glob("**/big.bin*"))   # no .part left behind
+
+
+def test_multipart_upload_missing_field_400(tmp_path):
+    client = _ws_routers_client(tmp_path)
+    r = client.put("/files/x.txt", files={"wrong": ("x.txt", b"hi")})
+    assert r.status_code == 400
+
+
+def test_batch_upload_extracts_zip(tmp_path):
+    client = _ws_routers_client(tmp_path)
+    body = _zip_bytes({"a.txt": b"aaa", "sub/deep/b.txt": b"bbb", "ملف.txt": "عربي".encode()})
+    r = client.post("/files-batch/docs", content=body)
+    assert r.status_code == 200
+    assert r.json()["files"] == 3
+    root = tmp_path / "org_1" / "ws" / "u-user_1" / "docs"
+    assert (root / "a.txt").read_bytes() == b"aaa"
+    assert (root / "sub" / "deep" / "b.txt").read_bytes() == b"bbb"
+    assert (root / "ملف.txt").read_text() == "عربي"
+
+
+def test_batch_upload_rejects_traversal_member(tmp_path):
+    """One hostile member poisons the whole batch — nothing gets written."""
+    client = _ws_routers_client(tmp_path)
+    body = _zip_bytes({"ok.txt": b"fine", "../evil.txt": b"nope"})
+    r = client.post("/files-batch/", content=body)
+    assert r.status_code == 403
+    ws_root = tmp_path / "org_1" / "ws" / "u-user_1"
+    assert not (ws_root / "ok.txt").exists()          # validated before any write
+    assert not list(tmp_path.glob("**/evil.txt"))
+
+
+def test_batch_upload_rejects_reserved_and_non_zip(tmp_path):
+    client = _ws_routers_client(tmp_path)
+    r = client.post("/files-batch/", content=_zip_bytes({".db/kv.json": b"x"}))
+    assert r.status_code == 403
+    assert client.post("/files-batch/", content=b"not a zip").status_code == 400
+
+
+def test_batch_upload_zip_bomb_413(tmp_path):
+    """Uncompressed total obeys the cap even when the compressed body is tiny."""
+    client = _ws_routers_client(tmp_path, max_upload=1)
+    body = _zip_bytes({"bomb.txt": b"\0" * (2 * 1024 * 1024)})   # 2MB → ~2KB zipped
+    assert len(body) < 1024 * 1024
+    r = client.post("/files-batch/", content=body)
+    assert r.status_code == 413
+    assert not list(tmp_path.glob("**/bomb.txt"))
+
+
+def test_ws_mode_chats_land_in_personal_workspace(tmp_path):
+    client = _ws_routers_client(tmp_path)
+    r = client.put("/chats/c1", json={"title": "hello"})
+    assert r.status_code == 200
+    index = tmp_path / "org_1" / "ws" / "u-user_1" / ".db" / "user_1" / "chat" / "c1" / "index.json"
+    assert index.exists()
+    # explicit personal header hits the same store
+    r = client.get("/chats", headers={"X-Workspace": "u-user_1"})
+    assert [c["id"] for c in r.json()] == ["c1"]
+
+
+def test_ws_mode_foreign_workspace_is_404(tmp_path):
+    client = _ws_routers_client(tmp_path)
+    for header in ("u-user_2", "t-team1"):
+        assert client.get("/chats", headers={"X-Workspace": header}).status_code == 404
+
+
+def test_ws_mode_files_land_in_personal_workspace(tmp_path):
+    client = _ws_routers_client(tmp_path)
+    r = client.put("/files/notes.txt", files={"file": ("notes.txt", b"hi")})
+    assert r.status_code == 200
+    assert (tmp_path / "org_1" / "ws" / "u-user_1" / "notes.txt").read_bytes() == b"hi"
+
+
+def test_legacy_mode_files_land_in_org_root(tmp_path):
+    client = _ws_routers_client(tmp_path, workspaces=None)
+    r = client.put("/files/notes.txt", files={"file": ("notes.txt", b"hi")})
+    assert r.status_code == 200
+    assert (tmp_path / "org_1" / "notes.txt").read_bytes() == b"hi"
+
+
+def test_web_builder_workspaces_option():
+    from cycls.agent.web import Web
+    assert Web()._workspaces is None
+    assert Web().workspaces()._workspaces == "member"
+    assert Web().workspaces(create="admin")._workspaces == "admin"
+    with pytest.raises(ValueError):
+        Web().workspaces(create="anyone")
+
+
+def test_agent_workspaces_requires_auth(tmp_path):
+    import cycls
+
+    with pytest.raises(ValueError, match="requires"):
+        @cycls.agent(web=cycls.Web().workspaces(),
+                     volumes={"/workspace": cycls.Volume("test-chats")})
+        async def my_agent(context):
+            yield "hi"
+
+
+def test_agent_workspaces_config_wiring():
+    import cycls
+
+    @cycls.agent(web=cycls.Web().auth(cycls.Clerk()).workspaces(create="admin"),
+                 volumes={"/workspace": cycls.Volume("test-chats")})
+    async def my_agent(context):
+        yield "hi"
+
+    assert my_agent.config.workspaces == "admin"
+
+
+# =============================================================================
+# Branding / SEO / Explore
+# =============================================================================
+
+def _branded_config(public_path=THEME_PATH, **kw):
+    from cycls.agent.web.server import PassMetadata
+    return Config(
+        public_path=public_path, name="super",
+        pass_metadata={"en": PassMetadata(name="Super", description="Gets things done", logo="<svg/>")},
+        **kw,
+    )
+
+
+def _seo_theme(tmp_path):
+    (tmp_path / "index.html").write_text(
+        '<html><head><title>__TITLE__</title>'
+        '<meta name="description" content="__DESC__" />'
+        '<meta property="og:image" content="/og.png" /></head>'
+        '<body><div id="root"></div></body></html>')
+    return str(tmp_path)
+
+
+def test_seo_derives_from_brand(tmp_path):
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    client = TestClient(web(dummy_agent, _branded_config(_seo_theme(tmp_path))))
+    html = client.get("/").text
+    assert "<title>Super</title>" in html
+    assert 'content="Gets things done"' in html
+    assert "application/ld+json" in html
+    assert "<h1>" not in html  # no server-rendered body — nothing to flash before React mounts
+
+
+def test_seo_overrides_brand(tmp_path):
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = _branded_config(_seo_theme(tmp_path), seo={"title": "Super — AI agent", "description": "Custom copy"},
+                             head='<meta name="verify" content="x">')
+    client = TestClient(web(dummy_agent, config))
+    html = client.get("/").text
+    assert "<title>Super — AI agent</title>" in html
+    assert 'content="Custom copy"' in html
+    assert '<meta name="verify" content="x">' in html
+
+
+def test_explore_static_and_disabled():
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    entries = [{"slug": "coder", "title": "Coder", "link": "https://coder.cycls.ai"}]
+    client = TestClient(web(dummy_agent, _branded_config(explore=entries)))
+    assert client.get("/explore").json() == {"agents": entries}
+
+    client = TestClient(web(dummy_agent, _branded_config()))
+    assert client.get("/explore").json() == {"agents": []}
+
+
+def test_custom_og_and_favicon_and_llms():
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = _branded_config(favicon="<svg>fav</svg>")
+    config._og_image = b"\x89PNGfake"
+    client = TestClient(web(dummy_agent, config))
+    assert client.get("/og.png").content == b"\x89PNGfake"
+    assert client.get("/favicon.svg").text == "<svg>fav</svg>"
+    assert "Gets things done" in client.get("/llms.txt").text
+    assert "Sitemap:" in client.get("/robots.txt").text
+
+
+def test_theme_colors_injected(tmp_path):
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    config = _branded_config(_seo_theme(tmp_path),
+                             colors={"primary": "#7c3aed", "secondary": "#f3e8ff", "primary_dark": "#a78bfa"})
+    html = TestClient(web(dummy_agent, config)).get("/").text
+    assert ":root{--color-accent:#7c3aed;--color-secondary:#f3e8ff;}" in html
+    assert ".dark{--color-accent:#a78bfa;--color-secondary:#f3e8ff;}" in html
+
+
+def test_web_builder_brand_and_explore():
+    from cycls.agent.web.builder import Web
+
+    w = (Web().brand(name="Super", description="d", logo="<svg>icon</svg>", brand="<svg>nav</svg>")
+              .brand(locale="ar", name="سوبر")
+              .explore({"name": "Coder", "url": "https://c.ai"})
+              .cms(brand="https://cms.x/agents/super", token="t"))
+    assert w._brand["en"]["name"] == "Super" and w._brand["ar"]["name"] == "سوبر"
+    # logo (agent icon) and brand (nav wordmark) are distinct per-locale fields
+    assert w._brand["en"]["logo"] == "<svg>icon</svg>"
+    assert w._brand["en"]["brand"] == "<svg>nav</svg>"
+    assert w._explore[0]["title"] == "Coder" and w._explore[0]["link"] == "https://c.ai"
+    assert w._cms == {"brand": "https://cms.x/agents/super", "token": "t"}
+
+    with pytest.raises(ValueError):
+        Web().brand(logo="missing/logo.svg")

@@ -43,28 +43,31 @@ docker system prune -af
 
 ```
 cycls/
-├── cli.py                  # CLI: run, deploy, shell, ls, rm, logs, cost, sql, init, version
+├── cli.py                  # CLI: run, deploy, shell, ls, rm, logs, cost, sql, volume, init, version
 ├── function/
 │   ├── main.py             # Function class + @cycls.function decorator
 │   ├── image.py            # cycls.Image fluent builder
+│   ├── volume.py           # cycls.Volume — named persistent storage
+│   ├── schedule.py         # cycls.Cron — fire a deployed function on a schedule
 │   └── remote.py           # pickle-RPC shim + cycls.remote client (--remote deploys)
 ├── app/
 │   ├── main.py             # App class + @cycls.app + _make_decorator
-│   ├── auth.py             # cycls.Clerk, cycls.JWT, User, make_validate
+│   ├── auth.py             # cycls.Clerk, cycls.JWT, GCP, User, AppleIAP, validator
 │   └── web.py              # cycls.Web fluent builder
 └── agent/
     ├── main.py             # Agent class + @cycls.agent decorator
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
-    ├── tools/              # tool schemas + execution + dispatch registry (+ pdf.py)
+    ├── tools/              # tool schemas + execution + dispatch registry (+ pdf.py, skills.py, Brave web search/fetch)
     ├── harness/            # the managed LLM loop and the kit a custom loop needs
-    │   ├── llm.py          # cycls.LLM fluent builder (.loop(fn) swaps the loop)
-    │   ├── main.py         # the default loop (_run) + retry/recover
-    │   ├── providers.py    # make_provider + AnthropicProvider (one streaming interface)
-    │   ├── openai.py       # OpenAIProvider — Chat Completions on the same interface
+    │   ├── llm.py          # cycls.LLM fluent builder (.loop(fn) swaps the loop; .price()/.context() set cost rates + window)
+    │   ├── main.py         # the default loop (_run) + retry/recover + attachment ingest
+    │   ├── providers/      # one streaming interface per vendor SDK
+    │   │   ├── anthropic.py  # native Messages (cache breakpoints, thinking, MCP, server search)
+    │   │   └── openai.py     # Chat Completions — also GLM (zai/*), Gemini-compat, Groq, vLLM via base_url
     │   ├── events.py       # typed loop events + to_ui (FE projection)
-    │   ├── compact.py      # context compaction (microcompact + partial)
-    │   └── prompts.py      # system + compaction prompts
+    │   ├── compact.py      # compaction — append-only marker, token-budgeted window, file ledger
+    │   └── prompts.py      # system + compaction prompts + workspace instructions (AGENT.md)
     └── web/                # FastAPI chat server, state routers, OG images, themes
 ```
 
@@ -131,21 +134,23 @@ tests/
 ├── agent/
 │   ├── agent_test.py            # _run loop, retry, recovery, ingest, exec/_resolve_path
 │   ├── chat_test.py             # to_ui_messages (FE projection) + _valid_prefix repair
-│   ├── harness_test.py          # build_tools, _resolve_path, LLM builder (incl. .loop)
+│   ├── harness_test.py          # build_tools, web search/fetch, cost math, _resolve_path, LLM builder
+│   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
 │   ├── events_test.py           # to_ui wire shapes for the typed events
 │   ├── pdf_test.py              # PDF page parsing
-│   ├── web_test.py              # FastAPI routes, encoders, Messages
+│   ├── web_test.py              # FastAPI routes, encoders, Messages, SEO/branding
+│   ├── workspaces_test.py       # registry, ACL, team workspaces, admin lifecycle
 │   ├── integration_test.py      # Agent on top of App
 │   └── scenarios/
 │       ├── test_load_repair.py  # SlateDB roundtrip + repair invariants
 │       ├── test_database.py     # the `database` tool over the agent KV
 │       └── test_live.py         # @pytest.mark.live, real Anthropic
-└── client/src/hooks/__tests__/  # vitest — useChat hook
+└── client/src/hooks/__tests__/  # vitest — useChat + auth-header hooks
 ```
 
-**Mocked tier** (default): no API calls, no docker. Runs in ~85s.
+**Mocked tier** (default): no API calls, no docker. Runs in ~2min.
 ```bash
-uv run pytest tests/                       # all 193 mocked tests
+uv run pytest tests/                       # all ~410 mocked tests
 uv run pytest tests/agent/ -v              # just agent tests
 uv run pytest tests/agent/scenarios/ -v    # just scenarios
 ```
@@ -157,7 +162,7 @@ set -a && source .providers.env && set +a
 uv run pytest tests/agent/scenarios/test_live.py --live -v
 ```
 
-**FE tier** (vitest): 9 tests on `useChat` hook (URL plumbing, callback identity stability, attachment blob fetch). Run from `client/`:
+**FE tier** (vitest): 16 tests — `useChat` (URL plumbing, callback identity stability, attachment blob fetch, retry gating) + `useAuthHeaders` (workspace header). Run from `client/`:
 ```bash
 cd client && npm test           # one-shot
 cd client && npm run test:watch # interactive

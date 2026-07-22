@@ -21,15 +21,22 @@ class LLM:
         self._system = ""
         self._tools = []
         self._allowed_tools = []
-        self._max_tokens = None   # None = use provider's max_output
+        self._max_tokens = None   # None = 8k default
+        self._context = None      # None = 1M default
+        self._price = None
         self._bash_timeout = 600
         self._bash_network = True
         self._base_url = None
         self._api_key = None
         self._handlers = {}
+        self._labels = {}
         self._mcp = []
         self._loop = None
         self._thinking = "adaptive"
+        self._vision = True
+        self._web_search = "brave"
+        self._instructions = "AGENT.md"
+        self._skills = []
 
     def _copy(self, **updates):
         new = LLM.__new__(LLM)
@@ -43,18 +50,45 @@ class LLM:
     def tools(self, tools):         return self._copy(_tools=list(tools))
     def allowed_tools(self, names): return self._copy(_allowed_tools=list(names))
     def max_tokens(self, n):        return self._copy(_max_tokens=n)
+    def context(self, n):
+        """Model context window in tokens — sets when compaction kicks in."""
+        return self._copy(_context=n)
+    def price(self, *, input=0.0, output=0.0, cache_read=0.0, cache_write=0.0):
+        """Token prices in USD per 1M, for cost tracking. Unset → costs report as $0."""
+        return self._copy(_price=(input, output, cache_read, cache_write))
     def bash_timeout(self, secs):   return self._copy(_bash_timeout=secs)
     def sandbox(self, *, network=True):
-        """Configure the bash sandbox. Network is OFF by default — enabling it
-        allows curl/pip/git but lets a compromised bash exfiltrate over the wire."""
+        """Configure the bash sandbox. Network is ON by default; pass
+        network=False when the agent doesn't need curl/pip/git — a
+        prompt-injected bash can exfiltrate anything it can read."""
         return self._copy(_bash_network=network)
     def base_url(self, url):        return self._copy(_base_url=url)
     def api_key(self, key):         return self._copy(_api_key=key)
-    def on(self, name, handler):
+    def on(self, name, handler, *, label=None):
         """Register an async handler for a custom tool by name. The handler's
         return value is both yielded to the stream (body sees it as a normal
-        event) and packaged as the tool_result sent back to the model."""
-        return self._copy(_handlers={**self._handlers, name: handler})
+        event) and packaged as the tool_result sent back to the model.
+        `label` renders the step line in the UI from the tool input
+        (input dict → str), like Bash(command) for builtins; without it the
+        first string value of the input is shown."""
+        return self._copy(_handlers={**self._handlers, name: handler},
+                          _labels={**self._labels, name: label} if label else self._labels)
+
+    def instructions(self, path):
+        """Workspace instructions file auto-loaded into the system prompt each
+        turn (default "AGENT.md" at the workspace root, capped at 24KB).
+        Pass None to disable."""
+        return self._copy(_instructions=path)
+
+    def skills(self, *sources):
+        """Ship skills with the agent: each source is a directory of skill
+        folders (<name>/SKILL.md + support files), or a single skill folder.
+        Shipped skills are read-only — their dirs mount at /skills/<name> in
+        the bash sandbox. User workspace skills (skills/<name>/SKILL.md) are
+        always discovered and win name collisions. `.skills(None)` disables
+        skills entirely. `skill` is a reserved tool name."""
+        if sources == (None,): return self._copy(_skills=None)
+        return self._copy(_skills=[*(self._skills or []), *sources])
 
     def mcp(self, *servers):
         """Connect to one or more remote MCP servers (cycls.MCP). Their tools
@@ -62,17 +96,35 @@ class LLM:
         return self._copy(_mcp=[*self._mcp, *servers])
 
     def thinking(self, spec):
-        """Set the model's thinking budget. `"adaptive"` (default) lets the
-        model decide — auto-disabled on models that don't support it (Haiku).
-        Pass an int for an explicit budget in tokens, or None to disable.
-        Anthropic-only — OpenAI providers ignore this."""
+        """Reasoning control, mapped per provider. `"adaptive"` (default) lets
+        the model decide; `"low"|"medium"|"high"` sets a unified effort level
+        (Anthropic `effort`, OpenAI/Gemini `reasoning_effort`); None disables
+        where the provider allows it (GLM). An int is a legacy Anthropic
+        token budget. Auto-disabled on models without thinking (Haiku)."""
         return self._copy(_thinking=spec)
+
+    def vision(self, enabled=True):
+        """Whether the model accepts base64 media (images, PDFs) in messages.
+        ON by default. Pass False for text-only models (GLM, most local/vLLM):
+        attached media then stays in the workspace and the model gets a note
+        naming the file so it can extract the content with tools, instead of
+        the provider rejecting the whole request."""
+        return self._copy(_vision=enabled)
+
+    def web_search(self, mode="brave"):
+        """Web search backend when `WebSearch` is allowed. `"brave"` (default) is
+        our portable search + fetch pair — works on any model and needs
+        `BRAVE_API_KEY`; without the key it falls back to the provider's native
+        search where one exists. `"native"` forces the provider's server-side
+        search (Anthropic only, for now; skipped with a warning elsewhere)."""
+        return self._copy(_web_search=mode)
 
     def loop(self, fn):
         """Run a custom loop instead of the built-in one. `fn` is an async
         generator with the default loop's signature (context, system, tools,
-        allowed_tools, model, max_tokens, ..., handlers, mcp_servers) that
-        yields `Event`s. Building blocks live in `cycls.agent.harness`:
+        allowed_tools, model, max_tokens, ..., handlers, mcp_servers,
+        instructions, skills) that yields `Event`s — accept `**kw` to stay
+        compatible as kwargs are added. Building blocks live in `cycls.agent.harness`:
         `default_loop`, `make_provider`, `Session`, `build_tools`, `dispatch`,
         `compact`, `events`."""
         return self._copy(_loop=fn)
@@ -88,6 +140,8 @@ class LLM:
         if self._model is None:
             raise ValueError("LLM.model(...) is required before .run()")
         from .main import _run
+        from ..tools import register_labels
+        register_labels(self._labels)   # also read by the refetch projection
         loop = self._loop or _run
         async for ev in loop(
             context=context,
@@ -104,5 +158,11 @@ class LLM:
             handlers=self._handlers,
             mcp_servers=self._mcp,
             thinking=self._thinking,
+            vision=self._vision,
+            web_search=self._web_search,
+            instructions=self._instructions,
+            skills=self._skills,
+            price=self._price,
+            context_window=self._context,
         ):
             yield ev

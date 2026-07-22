@@ -71,7 +71,7 @@ def test_web_builder_propagates_into_config():
     """Tests that cycls.Web().auth().analytics().cms() fields land on Config."""
     print("\n--- Running test: test_web_builder_propagates_into_config ---")
 
-    web = cycls.Web().auth(cycls.Clerk()).analytics(True).cms("cycls.ai")
+    web = cycls.Web().auth(cycls.Clerk()).analytics(True).cms(brand="https://cms.cycls.ai/agents/x")
 
     @cycls.agent(web=web, volumes=WS)
     async def premium_app(context):
@@ -79,7 +79,7 @@ def test_web_builder_propagates_into_config():
 
     assert premium_app.config.auth == True
     assert premium_app.config.analytics == True
-    assert premium_app.config.cms == "cycls.ai"
+    assert premium_app.config.cms == {"brand": "https://cms.cycls.ai/agents/x"}
     print("✅ Test passed.")
 
 

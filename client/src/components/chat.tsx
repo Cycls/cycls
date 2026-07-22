@@ -3,6 +3,7 @@ import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
+import { Canvas, type CanvasFile } from "./canvas";
 import { Popover } from "./popover";
 import { Icon, IconButton } from "./icon";
 import { CyclsLogo } from "./cycls-logo";
@@ -11,16 +12,21 @@ import { InputBox } from "./input-box";
 import { ShareDialog } from "./share-dialog";
 import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
+import { SettingsDialog } from "./settings-dialog";
+import { type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
 import { track } from "../lib/posthog";
-import { toggleDark } from "../lib/utils";
+import { toggleDark, cn } from "../lib/utils";
+import { useToast } from "../lib/toast";
 import { useSpeechRecognition } from "../hooks/use-speech";
 import { useUrlParam } from "../hooks/use-url-param";
+import { useMediaQuery } from "../hooks/use-media-query";
+import { usePaneWidth } from "../hooks/use-pane-width";
 import { SUGGESTIONS } from "./suggestions-data";
 
-interface PassAgent {
+export interface PassAgent {
   slug: string;
   title: string;
   title_ar?: string;
@@ -41,6 +47,7 @@ export interface AccountInfo {
   onCreateOrg: () => void;
   onManageOrg: () => void;
   onSwitchOrg: (orgId: string | null) => void;
+  workspaces?: WorkspacesMenu;
 }
 
 export interface FilesPanelProps {
@@ -49,11 +56,18 @@ export interface FilesPanelProps {
   loading: boolean;
   onNavigate: (dir: string) => void;
   onUpload: (dir: string, file: File) => Promise<void>;
+  onUploadBatch?: (dir: string, files: { rel: string; file: File }[]) => Promise<void>;
   onMkdir: (dir: string, name: string) => Promise<void>;
   onRename: (from: string, to: string) => Promise<void>;
   onDelete: (path: string) => Promise<void>;
   onOpenFile: (path: string) => Promise<string>;
+  readFile: (path: string) => Promise<string>;
+  writeFile: (path: string, text: string) => Promise<void>;
+  searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
+  listFolders: () => Promise<{ name: string; path: string }[]>;
   onShareFile?: (path: string, audience: string) => Promise<string>;
+  onOpenInCanvas?: (path: string, name: string) => void;
+  maxUpload?: number;   // per-file cap (MB) for the client pre-check
   org?: { id: string; name: string } | null;
 }
 
@@ -65,13 +79,21 @@ export function Chat({ chat, onShare, files, account, config }: {
   config?: AppConfig | null;
 }) {
   const { messages, isStreaming, chatLoading, chatId, send: onSend, retry: onRetry, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, setUIHandler } = chat;
-  const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg } = account ?? ({} as Partial<AccountInfo>);
+  const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions } = config ?? {};
 
   const lang = useLang();
+  const { error: toastError } = useToast();
   const isAr = lang === "ar";
-  const meta = passMetadata?.[isAr ? "ar" : "en"];
-  const inputPlaceholder = meta ? (isAr ? `اسأل ${meta.name}` : `Ask ${meta.name}`) : undefined;
+  // logo and brand inherit from en; name/description stay per-locale.
+  const _active = passMetadata?.[isAr ? "ar" : "en"];
+  const _en = passMetadata?.en;
+  const meta = _active
+    ? { ..._active, logo: _active.logo || _en?.logo || "", brand: _active.brand || _en?.brand || "" }
+    : _en;
+  const inputPlaceholder = meta
+    ? (isAr ? `اسأل ${meta.name} - اكتب @ لذكر ملف` : `Ask ${meta.name} - @ to mention a file`)
+    : undefined;
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [exploreOpen, setExploreOpen] = useState(false);
@@ -79,7 +101,35 @@ export function Chat({ chat, onShare, files, account, config }: {
   const [exploreLoading, setExploreLoading] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats">(account ? "chats" : "files");
+  const [canvasTabs, setCanvasTabs] = useState<CanvasFile[]>([]);
+  const [canvasActive, setCanvasActive] = useState<string | null>(null);
+  const [canvasHidden, setCanvasHidden] = useState(false);
+  const [canvasExpanded, setCanvasExpanded] = useState(false);
+  const isDesktop = useMediaQuery("(min-width: 1024px)");
+  useEffect(() => {
+    if (canvasHidden || canvasTabs.length === 0) setCanvasExpanded(false);
+  }, [canvasHidden, canvasTabs.length]);
+  const openFileInCanvas = useCallback((path: string, name?: string) => {
+    setCanvasTabs((tabs) => (tabs.some((f) => f.path === path) ? tabs : [...tabs, { path, name: name || path.split("/").pop() || path }]));
+    setCanvasActive(path);
+    setCanvasHidden(false);
+  }, []);
+  const closeCanvasTab = useCallback((path: string) => {
+    setCanvasTabs((tabs) => tabs.filter((f) => f.path !== path));
+    setCanvasActive((a) => (a === path ? null : a));
+  }, []);
+  const [panelExpanded, setPanelExpanded] = useState(false);
+  // Drag the panel's left edge to resize; width persists across sessions.
+  const { width: panelWidth, startResize } = usePaneWidth("cycls_panel_width", 480, 360, 80);
   const [shareOpen, setShareOpen] = useState(false);
+  // Survives the ChatApp remount on org/workspace switch (App keys by org), so
+  // changing context inside the settings dialog doesn't close it.
+  const [settingsOpen, _setSettingsOpen] = useState(() => sessionStorage.getItem("cycls_settings") === "1");
+  const setSettingsOpen = useCallback((v: boolean) => {
+    _setSettingsOpen(v);
+    if (v) sessionStorage.setItem("cycls_settings", "1");
+    else sessionStorage.removeItem("cycls_settings");
+  }, []);
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
   const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string; favoritedAt?: string }[]>([]);
@@ -111,10 +161,12 @@ export function Chat({ chat, onShare, files, account, config }: {
     setUIHandler((ev) => {
       if (ev.action === "open_plan_modal") {
         openPricing(activeOrg ? "organization" : "user", "agent_event");
+      } else if (ev.action === "open_canvas" && typeof ev.path === "string") {
+        openFileInCanvas(ev.path, typeof ev.name === "string" ? ev.name : undefined);
       }
     });
     return () => setUIHandler(null);
-  }, [setUIHandler, activeOrg, openPricing]);
+  }, [setUIHandler, activeOrg, openPricing, openFileInCanvas]);
 
   const onSpeechEnd = useCallback((text: string) => {
     if (text.trim()) {
@@ -131,7 +183,13 @@ export function Chat({ chat, onShare, files, account, config }: {
     setFilesOpen(false);
   }, [activeOrg?.id]);
 
-  const handleFilesAdded = useCallback(async (newFiles: File[]) => {
+  const handleFilesAdded = useCallback(async (incoming: File[]) => {
+    // Reject oversized files up front (server enforces the same cap).
+    const maxMb = config?.max_upload ?? 512;
+    const newFiles = incoming.filter((f) => f.size <= maxMb * 1024 * 1024);
+    const skipped = incoming.length - newFiles.length;
+    if (skipped) toastError(`${skipped === 1 ? "File" : `${skipped} files`} over the ${maxMb} MB limit ${skipped === 1 ? "was" : "were"} skipped.`);
+    if (!newFiles.length) return;
     if (uploadFile) {
       // Add placeholders immediately — blob URL is a stable key per file
       const placeholders: Attachment[] = newFiles.map((f) => ({
@@ -164,7 +222,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       }));
       setAttachments((prev) => [...prev, ...newAttachments]);
     }
-  }, [uploadFile]);
+  }, [uploadFile, config?.max_upload, toastError]);
 
   const removeFile = useCallback((index: number) => {
     setAttachments((prev) => prev.filter((_, i) => i !== index));
@@ -208,16 +266,26 @@ export function Chat({ chat, onShare, files, account, config }: {
 
   const isEmpty = messages.length === 0;
 
+  // Static config, then the 1h localStorage cache, then the network.
+  const loadExplore = useCallback(async (): Promise<PassAgent[]> => {
+    if (config?.explore?.length) return config.explore;  // static: no network
+    const CACHE_KEY = "cycls_explore";
+    try {
+      const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
+      if (cached && Date.now() - cached.at < 3_600_000 && cached.agents?.length) return cached.agents;
+    } catch { /* ignore */ }
+    const res = await fetch("/explore");
+    const data = await res.json();
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), agents: data.agents || [] }));
+    return data.agents || [];
+  }, [config]);
+
   const openExplore = async () => {
     setExploreOpen(true);
     track("explore_opened", { cached: exploreAgents.length > 0 });
     if (exploreAgents.length > 0) return;
     setExploreLoading(true);
-    try {
-      const res = await fetch("https://cms.cycls.ai/agents");
-      const data = await res.json();
-      setExploreAgents(data.agents || []);
-    } catch { /* silent */ }
+    try { setExploreAgents(await loadExplore()); } catch { /* silent */ }
     setExploreLoading(false);
   };
 
@@ -249,28 +317,43 @@ export function Chat({ chat, onShare, files, account, config }: {
     onRemoveFile: removeFile,
     listening, transcribing, startMic, stopMic, cancelMic, voice,
     onFilesAdded: handleFilesAdded,
+    onMentionSearch: files?.searchFiles,
     placeholder: inputPlaceholder,
   };
 
   return (
-    <div className="h-dvh flex flex-col">
-      {/* Header */}
-      <header className="pointer-events-none fixed top-0 right-0 left-0 h-12" dir="ltr">
-        <div className="pointer-events-auto mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
+    <div className="h-dvh flex">
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+      <header className="relative z-30 h-12 shrink-0" dir="ltr">
+        <div className="mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
           <div className="flex items-center gap-2">
-          <a href="https://cycls.ai" className="flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity">
-            <CyclsLogo className="h-5 fill-muted-foreground" />
-          </a>
+          {meta?.brand ? (
+            <span className="flex h-6 items-center">
+              {meta.brand.startsWith("<") ? (
+                <span className="flex h-6 items-center [&>svg]:h-6 [&>svg]:w-auto" dangerouslySetInnerHTML={{ __html: meta.brand }} />
+              ) : (
+                <img src={meta.brand} alt="" className="h-6 w-auto object-contain" />
+              )}
+            </span>
+          ) : (
+            <a href="https://cycls.ai" className="flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity">
+              <CyclsLogo className="h-5 fill-muted-foreground" />
+            </a>
+          )}
           {name && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <span className="text-muted-foreground/40">|</span>
-              <button
-                onClick={openExplore}
-                className="flex items-center gap-1 text-foreground font-medium capitalize hover:opacity-70 transition-opacity cursor-pointer"
-              >
-                {meta?.name || name}
-                <Icon name="chevron-down" className="w-3 h-3 text-muted-foreground" />
-              </button>
+              {config?.explore_enabled ? (
+                <button
+                  onClick={openExplore}
+                  className="flex items-center gap-1 text-foreground font-medium capitalize hover:opacity-70 transition-opacity cursor-pointer"
+                >
+                  {meta?.name || name}
+                  <Icon name="chevron-down" className="w-3 h-3 text-muted-foreground" />
+                </button>
+              ) : (
+                <span className="text-foreground font-medium capitalize">{meta?.name || name}</span>
+              )}
             </div>
           )}
           </div>
@@ -325,6 +408,19 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </button>
               </>
             )}
+            {files && canvasTabs.length > 0 && (
+              <button
+                onClick={() => setCanvasHidden((h) => !h)}
+                className={`${canvasHidden ? "text-muted-foreground" : "text-foreground"} hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer`}
+                aria-label={canvasHidden ? "Show canvas" : "Hide canvas"}
+                title={canvasHidden ? "Show canvas" : "Hide canvas"}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <rect x="3.75" y="3.75" width="16.5" height="16.5" rx="2" />
+                  <path d="M14.25 4.75h3.5a1.5 1.5 0 011.5 1.5v11.5a1.5 1.5 0 01-1.5 1.5h-3.5z" fill={canvasHidden ? "none" : "currentColor"} stroke="none" />
+                </svg>
+              </button>
+            )}
             {(files || account) && (
               <button
                 onClick={() => filesOpen ? setFilesOpen(false) : openPanel()}
@@ -336,7 +432,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </svg>
               </button>
             )}
-            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} /></div>}
+            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} workspaces={workspaces} /></div>}
           </div>
         </div>
       </header>
@@ -369,9 +465,15 @@ export function Chat({ chat, onShare, files, account, config }: {
                     className="flex items-start gap-3 px-3 py-2.5 text-sm hover:bg-secondary/80 transition-colors cursor-pointer"
                   >
                     {agent.icon_svg ? (
-                      <div className="size-8 shrink-0 rounded-md overflow-hidden" dangerouslySetInnerHTML={{ __html: agent.icon_svg }} />
+                      agent.icon_svg.startsWith("<") ? (
+                        <div className="size-8 shrink-0 rounded-md overflow-hidden" dangerouslySetInnerHTML={{ __html: agent.icon_svg }} />
+                      ) : (
+                        <img src={agent.icon_svg} alt="" className="size-8 shrink-0 rounded-md object-cover" />
+                      )
                     ) : (
-                      <div className="size-8 shrink-0 rounded-md bg-secondary" />
+                      <div className="size-8 shrink-0 rounded-md bg-secondary flex items-center justify-center text-xs font-medium uppercase text-muted-foreground">
+                        {agentTitle?.[0]}
+                      </div>
                     )}
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-foreground truncate">{agentTitle}</p>
@@ -384,9 +486,6 @@ export function Chat({ chat, onShare, files, account, config }: {
           )}
         </div>
       </Popover>
-
-      {/* Spacer for fixed header */}
-      <div className="shrink-0 h-12" />
 
       {/* Stable file input — lives outside LayoutGroup so it survives remounts */}
       <input
@@ -402,6 +501,9 @@ export function Chat({ chat, onShare, files, account, config }: {
         }}
       />
 
+      {/* rtl:flex-row-reverse keeps the canvas on the right in Arabic */}
+      <div className="flex min-h-0 flex-1 rtl:flex-row-reverse">
+      <div className={cn("relative flex h-full min-w-0 flex-1 flex-col", isDesktop && canvasExpanded && !canvasHidden && canvasTabs.length > 0 && "hidden")}>
       <LayoutGroup>
         <LoadingBar active={chatLoading} />
         {!chatLoading && (isEmpty ? (
@@ -414,7 +516,11 @@ export function Chat({ chat, onShare, files, account, config }: {
                   transition={{ delay: 0.4 }}
                   className="absolute bottom-full left-0 right-0 flex flex-col items-center gap-4 mb-10 text-center"
                 >
-                  {meta.logo && <div className="size-16 rounded-xl overflow-hidden border border-border" dangerouslySetInnerHTML={{ __html: meta.logo }} />}
+                  {meta.logo && (meta.logo.startsWith("<") ? (
+                    <div className="size-16 rounded-xl overflow-hidden border border-border" dangerouslySetInnerHTML={{ __html: meta.logo }} />
+                  ) : (
+                    <img src={meta.logo} alt="" className="size-16 rounded-xl object-cover border border-border" />
+                  ))}
                   <h2 className="text-2xl font-semibold text-foreground">{meta.name}</h2>
                   {meta.description && <p className="text-base text-muted-foreground max-w-lg">{meta.description}</p>}
                 </motion.div>
@@ -451,6 +557,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                         msg.role === "assistant"
                       }
                       onRetry={isLast && hasError && !isStreaming ? onRetry : undefined}
+                      onOpenFile={openFileInCanvas}
                     />
                   );
                 })}
@@ -483,8 +590,20 @@ export function Chat({ chat, onShare, files, account, config }: {
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="fixed top-1 right-1 bottom-1 z-50 w-[calc(100%-0.5rem)] sm:w-[480px] rounded-xl border border-border bg-background flex flex-col overflow-hidden"
+              className={cn(
+                "fixed z-50 rounded-xl border border-border bg-background flex flex-col overflow-hidden",
+                panelExpanded ? "inset-2" : "top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] max-w-[calc(100%-0.5rem)]",
+              )}
+              style={panelExpanded ? undefined : { width: panelWidth }}
             >
+              {/* Resize handle (left edge) — desktop only */}
+              {!panelExpanded && (
+                <div
+                  onMouseDown={startResize}
+                  className="absolute left-0 top-0 bottom-0 z-20 hidden sm:block w-1.5 -ml-0.5 cursor-ew-resize hover:bg-accent/30"
+                  aria-label="Resize panel"
+                />
+              )}
               {/* Tab bar */}
               {(files || account) && (
                 <div className="flex items-center border-b border-border px-4 sm:px-6">
@@ -514,6 +633,14 @@ export function Chat({ chat, onShare, files, account, config }: {
                   )}
                   <div className="flex-1" />
                   <button
+                    onClick={() => setPanelExpanded((e) => !e)}
+                    className="hidden sm:flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                    aria-label={panelExpanded ? t("collapse") : t("expand")}
+                    title={panelExpanded ? t("collapse") : t("expand")}
+                  >
+                    <Icon name={panelExpanded ? "collapse" : "expand"} className="size-4" />
+                  </button>
+                  <button
                     onClick={() => setFilesOpen(false)}
                     className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                     aria-label="Close"
@@ -523,9 +650,9 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </div>
               )}
               {filesTab === "files" && files ? (
-                <Files {...files} />
+                <Files {...files} onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
               ) : filesTab === "shares" ? (
-                <div className="flex h-full flex-col">
+                <div className="flex flex-1 min-h-0 flex-col">
                   <div className="flex-1 overflow-y-auto">
                     {sharesLoading ? (
                       <LoadingBar />
@@ -645,6 +772,31 @@ export function Chat({ chat, onShare, files, account, config }: {
           </div>
         </Popover>
       )}
+      {settingsOpen && account && (
+        <SettingsDialog account={account} onClose={() => setSettingsOpen(false)} />
+      )}
+      </div>
+      {files && (
+        <Canvas
+          tabs={canvasTabs}
+          active={canvasActive}
+          docked={isDesktop}
+          hidden={canvasHidden}
+          expanded={canvasExpanded}
+          onToggleExpand={() => setCanvasExpanded((e) => !e)}
+          onSelectTab={setCanvasActive}
+          onCloseTab={closeCanvasTab}
+          onHide={() => setCanvasHidden(true)}
+          onAddFile={openFileInCanvas}
+          searchFiles={files.searchFiles}
+          readFile={files.readFile}
+          openFile={files.onOpenFile}
+          writeFile={files.writeFile}
+          onShareFile={files.onShareFile}
+        />
+      )}
+      </div>
+      </div>
     </div>
   );
 }
