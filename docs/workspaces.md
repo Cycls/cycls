@@ -53,8 +53,8 @@ Mounted only when workspaces are enabled; all routes require auth.
 
 ```
 GET    /workspaces                          # personal + your teams (+ ?all=1: org-admin lifecycle view)
-POST   /workspaces                          # create team (body: {"name": ...})
-PATCH  /workspaces/<id>                     # rename (owner/admin)
+POST   /workspaces                          # create team (body: {"name": ..., "icon"?: "🚀"})
+PATCH  /workspaces/<id>                     # rename / set icon (owner/admin; icon: "" clears)
 DELETE /workspaces/<id>                     # owner or org admin; personal: self or org admin
 GET    /workspaces/<id>/members
 PUT    /workspaces/<id>/members/<user_id>   # body: {"role": "editor"|"admin"}

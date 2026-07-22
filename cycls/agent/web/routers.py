@@ -589,6 +589,14 @@ def workspaces_router(cycls_app, user_dep, volume, base):
             raise HTTPException(400, "name must be 1-80 characters")
         return name
 
+    def _icon_or_400(data):
+        """Workspace icon — an opaque string to the server (an emoji today, an
+        image URL later). Only bound its size; rendering is the client's job."""
+        icon = data.get("icon")
+        if icon and (not isinstance(icon, str) or len(icon) > 64):
+            raise HTTPException(400, "icon must be a string of at most 64 characters")
+        return icon
+
     async def _role_or_404(user, ws_id):
         role = await state.resolve_role(user, ws_id, _orgdb(user))
         if role is None:
@@ -635,15 +643,24 @@ def workspaces_router(cycls_app, user_dep, volume, base):
             raise HTTPException(403, "Only org admins can create team workspaces")
         if not getattr(user, "org_id", None):
             raise HTTPException(400, "Team workspaces require an organization")
-        name = _name_or_400(await request.json())
-        return await state.create_team_ws(_orgdb(user), name, user.id)
+        data = await request.json()
+        name = _name_or_400(data)
+        return await state.create_team_ws(_orgdb(user), name, user.id,
+                                          icon=_icon_or_400(data))
 
     @r.patch("/workspaces/{ws_id}")
-    async def rename_workspace(ws_id: str, request: Request, user: Any = user_dep):
+    async def update_workspace(ws_id: str, request: Request, user: Any = user_dep):
         await _manager_or_403(user, ws_id)
-        name = _name_or_400(await request.json())
+        data = await request.json()
         orgdb = _orgdb(user)
-        row = {**(await orgdb.get(f"workspaces/{ws_id}") or {}), "name": name}
+        row = {**(await orgdb.get(f"workspaces/{ws_id}") or {})}
+        if "name" in data:
+            row["name"] = _name_or_400(data)
+        if "icon" in data:
+            if icon := _icon_or_400(data):
+                row["icon"] = icon
+            else:
+                row.pop("icon", None)   # empty/null clears it, Notion-style
         await orgdb.put(f"workspaces/{ws_id}", row, meta=row)
         return row
 
