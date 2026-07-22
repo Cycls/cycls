@@ -119,6 +119,32 @@ def test_create_validates_name(tmp_path):
     assert client.post("/workspaces", json={"name": "x" * 81}).status_code == 400
 
 
+def test_workspace_icon_lifecycle(tmp_path):
+    """Create with an emoji icon, see it in the list, PATCH a new one,
+    clear it with icon: "" — old rows never grow an icon key."""
+    client = _client(tmp_path)
+    r = client.post("/workspaces", json={"name": "Launch", "icon": "🚀"})
+    assert r.status_code == 200 and r.json()["icon"] == "🚀"
+    ws_id = r.json()["id"]
+
+    team = next(w for w in client.get("/workspaces").json() if w["id"] == ws_id)
+    assert team["icon"] == "🚀"
+
+    r = client.patch(f"/workspaces/{ws_id}", json={"icon": "🔬"})
+    assert r.json()["icon"] == "🔬" and r.json()["name"] == "Launch"
+    # rename alone leaves the icon in place
+    assert client.patch(f"/workspaces/{ws_id}", json={"name": "Lab"}).json()["icon"] == "🔬"
+
+    r = client.patch(f"/workspaces/{ws_id}", json={"icon": ""})
+    assert "icon" not in r.json()
+    assert "icon" not in next(w for w in client.get("/workspaces").json() if w["id"] == ws_id)
+
+    # icon-less create stays icon-less; oversized icon is a 400
+    plain = client.post("/workspaces", json={"name": "Plain"}).json()
+    assert "icon" not in plain
+    assert client.post("/workspaces", json={"name": "X", "icon": "x" * 65}).status_code == 400
+
+
 def test_rename_requires_manager(tmp_path):
     client = _client(tmp_path)
     ws_id = _mk_team(client)

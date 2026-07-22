@@ -357,11 +357,12 @@ def org_db(org, volume, base):
     return DB(workspace(org, volume, base=base, slot=".org"))
 
 
-async def create_team_ws(orgdb, name, creator_id):
+async def create_team_ws(orgdb, name, creator_id, icon=None):
     ws_id = f"t-{secrets.token_urlsafe(8)}"   # urlsafe alphabet ⊂ [A-Za-z0-9_-]
     now = datetime.now(timezone.utc).isoformat()
     row = {"id": ws_id, "name": name, "type": "team",
            "created_by": creator_id, "created_at": now}
+    if icon: row["icon"] = icon
     member = {"role": "owner", "added_by": creator_id, "added_at": now}
     # Rows are flat str:str so they ride object-store custom-meta (O(1) scan).
     await orgdb.put(f"workspaces/{ws_id}", row, meta=row)
