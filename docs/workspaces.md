@@ -70,7 +70,12 @@ is inert. The chat UI offers org members by name (from Clerk, client-side).
 Migration is lazy and automatic: on an org's first request after the flag
 flips, everything under the org root (files, chats, agent KV) moves into
 General — old chats stay coherent because their attachments move with them.
-Solo users' trees move into their personal workspace. A marker row makes this
+Solo users' trees move into their personal workspace. An org user's
+pre-workspaces bare-user tree (from the era the SDK keyed by plain user id)
+also merges into General on their first touch — chats and KV into its
+per-user stores, files into the shared tree; for users in several orgs, the
+first org they touch wins. Trees already carrying the workspace layout stay
+with their solo context. A marker row makes this
 once-per-org across restarts, and a lock serializes concurrent first
 requests; cross-instance races are benign, but flip the flag during low
 traffic anyway. Share links minted before the migration keep working — the
