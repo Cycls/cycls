@@ -13,7 +13,7 @@ import { ShareDialog } from "./share-dialog";
 import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
-import { type WorkspacesMenu } from "./workspace-switcher";
+import { WsQuickSwitch, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
@@ -99,8 +99,19 @@ export function Chat({ chat, onShare, files, account, config }: {
   const [exploreOpen, setExploreOpen] = useState(false);
   const [exploreAgents, setExploreAgents] = useState<PassAgent[]>([]);
   const [exploreLoading, setExploreLoading] = useState(false);
-  const [filesOpen, setFilesOpen] = useState(false);
-  const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats">(account ? "chats" : "files");
+  // Panel open state + tab survive the ChatApp remount on workspace/org
+  // switch, so the panel's workspace switcher works in place.
+  const [filesOpen, _setFilesOpen] = useState(() => sessionStorage.getItem("cycls_panel") === "1");
+  const setFilesOpen = useCallback((v: boolean | ((p: boolean) => boolean)) => {
+    _setFilesOpen((prev) => {
+      const next = typeof v === "function" ? v(prev) : v;
+      if (next) sessionStorage.setItem("cycls_panel", "1");
+      else sessionStorage.removeItem("cycls_panel");
+      return next;
+    });
+  }, []);
+  const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats">(() =>
+    (sessionStorage.getItem("cycls_panel_tab") as "files" | "shares" | "chats") || (account ? "chats" : "files"));
   const [canvasTabs, setCanvasTabs] = useState<CanvasFile[]>([]);
   const [canvasActive, setCanvasActive] = useState<string | null>(null);
   const [canvasHidden, setCanvasHidden] = useState(false);
@@ -292,6 +303,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   // Switch the side panel's active tab and (re)load its data.
   const selectTab = (tab: "files" | "shares" | "chats") => {
     setFilesTab(tab);
+    sessionStorage.setItem("cycls_panel_tab", tab);
     if (tab === "chats" && onListChats) {
       setChatsLoading(true);
       onListChats().then((items) => { setChats(items); setChatsLoading(false); }).catch(() => setChatsLoading(false));
@@ -308,6 +320,13 @@ export function Chat({ chat, onShare, files, account, config }: {
     selectTab(tab ?? filesTab);
     setFilesOpen(true);
   };
+
+  // Restored-open panel (workspace/org switch remounts Chat): load the
+  // active tab's data, same as the click path would have.
+  useEffect(() => {
+    if (filesOpen) selectTab(filesTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const inputProps = {
     textareaRef, input, setInput, handleKeyDown, handleSubmit, isStreaming, onStop,
@@ -632,6 +651,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                     </button>
                   )}
                   <div className="flex-1" />
+                  {workspaces && <WsQuickSwitch workspaces={workspaces} />}
                   <button
                     onClick={() => setPanelExpanded((e) => !e)}
                     className="hidden sm:flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
