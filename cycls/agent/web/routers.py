@@ -666,13 +666,15 @@ def workspaces_router(cycls_app, user_dep, volume, base):
         for ws_id in await state.member_of(orgdb, user.id):
             row = await orgdb.get(f"workspaces/{ws_id}")
             member = await orgdb.get(f"members/{ws_id}/{user.id}")
+            if (member or {}).get("role") == "excluded":   # General exclusion marker
+                continue
             if row:
                 out.append({**row, "role": (member or {}).get("role")})
-        # General has no member rows — every org member is an editor via
-        # its `builtin: org` registry row.
+        # General: every org member by default (no rows) — unless excluded.
         if getattr(user, "org_id", None) and not any(w["id"] == "t-shared" for w in out):
-            if reg := await orgdb.get("workspaces/t-shared"):
-                out.append({**reg, "role": "admin" if _is_org_admin(user) else "editor"})
+            if role := await state.resolve_role(user, "t-shared", orgdb):
+                if reg := await orgdb.get("workspaces/t-shared"):
+                    out.append({**reg, "role": role})
         return out
 
     @r.post("/workspaces")
@@ -724,31 +726,30 @@ def workspaces_router(cycls_app, user_dep, volume, base):
 
     # ---- Members (team workspaces only) ----
 
-    async def _memberful_or_400(user, ws_id):
-        """Builtin workspaces (General) have no member rows — membership IS
-        the org. Reject member operations so clients can't write rows that
-        mislead (a 'remove' there wouldn't actually revoke anything)."""
+    async def _is_builtin(user, ws_id):
         reg = await _orgdb(user).get(f"workspaces/{ws_id}")
-        if reg and reg.get("builtin"):
-            raise HTTPException(400, "General includes every org member — membership is managed by the organization")
+        return bool(reg and reg.get("builtin"))
 
     @r.get("/workspaces/{ws_id}/members")
     async def list_members(ws_id: str, user: Any = user_dep):
         if not ws_id.startswith("t-"):
             raise HTTPException(404, "Workspace not found")
         await _role_or_404(user, ws_id)   # any member (or org admin) may look
-        await _memberful_or_400(user, ws_id)
+        # On General the rows are exclusions — membership is the org minus these.
         return [{"user_id": key.rsplit("/", 1)[1], **row}
                 async for key, row in _orgdb(user).scan(prefix=f"members/{ws_id}/")]
 
     @r.put("/workspaces/{ws_id}/members/{member_id}")
     async def put_member(ws_id: str, member_id: str, request: Request, user: Any = user_dep):
         await _manager_or_403(user, ws_id)
-        await _memberful_or_400(user, ws_id)
         role = (await request.json()).get("role", "editor")
         if role not in ("admin", "editor"):
             raise HTTPException(400, 'role must be "admin" or "editor"')
         orgdb = _orgdb(user)
+        if await _is_builtin(user, ws_id):
+            # Everyone is in General by default — "adding" clears an exclusion.
+            await orgdb.delete(f"members/{ws_id}/{member_id}")
+            return {"user_id": member_id, "role": "editor"}
         existing = await orgdb.get(f"members/{ws_id}/{member_id}")
         if existing and existing.get("role") == "owner":
             raise HTTPException(403, "The owner's role cannot be changed")
@@ -760,11 +761,19 @@ def workspaces_router(cycls_app, user_dep, volume, base):
     @r.delete("/workspaces/{ws_id}/members/{member_id}")
     async def remove_member(ws_id: str, member_id: str, user: Any = user_dep):
         orgdb = _orgdb(user)
-        if member_id == user.id:
+        builtin = await _is_builtin(user, ws_id)
+        if member_id == user.id and not builtin:
             await _role_or_404(user, ws_id)   # leaving requires being in it
         else:
-            await _manager_or_403(user, ws_id)
-        await _memberful_or_400(user, ws_id)
+            await _manager_or_403(user, ws_id)   # on General: org admins only
+        if builtin:
+            # Membership of General is the org itself — removal writes an
+            # exclusion marker instead. Org admins are immune (resolve_role
+            # ignores the marker for them; they could reverse it anyway).
+            row = {"role": "excluded", "added_by": user.id,
+                   "added_at": datetime.now(timezone.utc).isoformat()}
+            await orgdb.put(f"members/{ws_id}/{member_id}", row, meta=row)
+            return {"ok": True}
         existing = await orgdb.get(f"members/{ws_id}/{member_id}")
         if existing and existing.get("role") == "owner":
             raise HTTPException(403, "The owner cannot be removed")
