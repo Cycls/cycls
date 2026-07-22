@@ -161,6 +161,18 @@ def test_workspace_icon_lifecycle(tmp_path):
     assert client.post("/workspaces", json={"name": "X", "icon": "x" * 65}).status_code == 400
 
 
+def test_workspace_icon_emoji_only(tmp_path):
+    """One shared icon vocabulary across clients: single emoji only —
+    ZWJ sequences, flags, skin tones, keycaps pass; text and URLs 400."""
+    client = _client(tmp_path)
+    for i, good in enumerate(["🚀", "👨‍👩‍👧‍👦", "🇸🇦", "1️⃣", "👍🏽", "✍️", "⭐"]):
+        r = client.post("/workspaces", json={"name": f"G{i}", "icon": good})
+        assert r.status_code == 200, (good, r.text)
+        assert r.json()["icon"] == good
+    for bad in ["abc", "x", "https://x.com/a.png", "a🚀", "🚀🚀🚀🚀🚀", ":)"]:
+        assert client.post("/workspaces", json={"name": "B", "icon": bad}).status_code == 400, bad
+
+
 def test_rename_requires_manager(tmp_path):
     client = _client(tmp_path)
     ws_id = _mk_team(client)
