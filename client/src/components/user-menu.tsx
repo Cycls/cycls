@@ -166,18 +166,22 @@ export function UserMenu({ user, onSignOut, onManageAccount, onOpenSettings, onC
                     </span>
                     <Icon name="chevron-right" className="w-3.5 h-3.5 rtl:rotate-180" />
                   </button>
-                  {workspaces && (
-                    <button
-                      onClick={() => setShowWs(true)}
-                      className="flex w-full items-center justify-between px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                    >
-                      <span className="flex items-center gap-2 truncate">
-                        <WsIcon ws={workspaces.active} />
-                        <span className="truncate">{workspaces.active?.name || t("personal")}</span>
-                      </span>
-                      <Icon name="chevron-right" className="w-3.5 h-3.5 rtl:rotate-180" />
-                    </button>
-                  )}
+                  </>
+                )}
+                {workspaces && (
+                  <>
+                  <div className="border-t border-border" />
+                  <p className="px-3 pt-2 pb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">{t("workspaces")}</p>
+                  <button
+                    onClick={() => setShowWs(true)}
+                    className="flex w-full items-center justify-between px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                  >
+                    <span className="flex items-center gap-2 truncate">
+                      <WsIcon ws={workspaces.active} />
+                      <span className="truncate">{workspaces.active?.name || t("personal")}</span>
+                    </span>
+                    <Icon name="chevron-right" className="w-3.5 h-3.5 rtl:rotate-180" />
+                  </button>
                   </>
                 )}
                 {onSignOut && (

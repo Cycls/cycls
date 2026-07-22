@@ -206,6 +206,7 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
         .filter((m) => m.id),
       onSwitch: workspace.switch,
       onCreate: ws.create,
+      onUpdate: ws.update,
       onDelete: ws.remove,
       fetchMembers: ws.members,
       onSetMember: ws.setMember,
