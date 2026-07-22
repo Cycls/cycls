@@ -1,7 +1,7 @@
 """HTTP routers for the agent's state surface — chats, files, share.
 
 Chat metadata + message log and shares live in the workspace DB — see
-`cycls.agent.state`. Files stay on the workspace filesystem (POSIX-shaped).
+`cycls._agent.state`. Files stay on the workspace filesystem (POSIX-shaped).
 """
 import os, secrets, shutil, time, unicodedata, uuid
 from datetime import datetime, timezone
@@ -11,9 +11,9 @@ from fastapi import APIRouter, Depends, Request, Response, HTTPException, Upload
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 
-from cycls.app.db import DB, Workspace, workspace
-from cycls.agent import state
-from cycls.agent.tools import tool_step
+from cycls._app.db import DB, Workspace, workspace
+from cycls._agent import state
+from cycls._agent.tools import tool_step
 
 
 def to_ui_messages(raw):
@@ -225,7 +225,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
     bearer_scheme = HTTPBearer(auto_error=False)
 
     async def _resolve_or_403(user: str, token: str, bearer):
-        from cycls.app.auth import authenticate
+        from cycls._app.auth import authenticate
         ws_owner = workspace(user, volume, base=base)
         requester = None
         if bearer and cycls_app._auth_provider is not None:

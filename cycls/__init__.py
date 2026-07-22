@@ -4,13 +4,31 @@ try:
 except ImportError:
     pass
 
-from .function import function, Function, Image, Volume, Cron
-from .function.remote import remote, local_entrypoint, RemoteError
-from .app import app, App, Clerk, GCP, JWT, User, Sandbox, SandboxResult, DB, Workspace
-from .agent.web import Web
-from .agent import LLM, MCP, agent, Agent, events, to_ui
-from .agent.logs import log
+_EXPORTS = {
+    "._function": ("function", "Function", "Image", "Volume", "Cron"),
+    "._function.remote": ("remote", "local_entrypoint", "RemoteError"),
+    "._app": ("app", "App", "Clerk", "GCP", "JWT", "User",
+              "Sandbox", "SandboxResult", "DB", "Workspace"),
+    "._agent": ("LLM", "MCP", "agent", "Agent", "events", "to_ui"),
+    "._agent.web": ("Web",),
+    "._agent.logs": ("log",),
+}
 
-# Module-level config
+__all__ = [n for names in _EXPORTS.values() for n in names]
+
 api_key = None
 base_url = None
+
+
+def __getattr__(name):
+    for mod, names in _EXPORTS.items():
+        if name in names:
+            import importlib
+            value = getattr(importlib.import_module(mod, __name__), name)
+            globals()[name] = value
+            return value
+    raise AttributeError(f"module 'cycls' has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted({*globals(), *__all__})

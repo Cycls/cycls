@@ -1,5 +1,5 @@
 """Tests for to_ui_messages — stored API messages → FE shape converter."""
-from cycls.agent.web.routers import to_ui_messages
+from cycls._agent.web.routers import to_ui_messages
 
 
 def test_passes_through_string_user_content():
@@ -162,7 +162,7 @@ def test_internal_messages_are_dropped():
 # normalize — single safety net enforcing provider API pairing invariants
 # =============================================================================
 
-from cycls.agent.state import normalize
+from cycls._agent.state import normalize
 
 
 def test_normalize_empty():

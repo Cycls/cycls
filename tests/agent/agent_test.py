@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cycls.agent.harness import providers as _providers
-from cycls.agent.harness.main import _run, MAX_RETRIES, _is_retryable, _ingest
+from cycls._agent.harness import providers as _providers
+from cycls._agent.harness.main import _run, MAX_RETRIES, _is_retryable, _ingest
 
 
 @pytest.fixture(autouse=True)
@@ -22,13 +22,13 @@ def _clear_client_cache():
     _providers._clients.clear()
     yield
     _providers._clients.clear()
-from cycls.agent.harness.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact, compact
-from cycls.agent.harness.providers.anthropic import AnthropicProvider
-from cycls.agent.harness.providers.openai import OpenAIProvider
-from cycls.agent.harness.events import to_ui
-from cycls.agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path
-from cycls.agent.state import load_messages
-from cycls.app.db import workspace
+from cycls._agent.harness.compact import COMPACT_BUFFER, KEEP_RECENT, microcompact, compact
+from cycls._agent.harness.providers.anthropic import AnthropicProvider
+from cycls._agent.harness.providers.openai import OpenAIProvider
+from cycls._agent.harness.events import to_ui
+from cycls._agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path
+from cycls._agent.state import load_messages
+from cycls._app.db import workspace
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +162,7 @@ def test_history_saved_after_each_tool_round(agent_env):
     mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
 
     with _mock_anthropic(mock_client), \
-         patch("cycls.agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
+         patch("cycls._agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         asyncio.run(_drain(_run(context=ctx)))
 
     history = _read_history(ctx)
@@ -188,7 +188,7 @@ def test_history_survives_crash_after_first_tool_round(agent_env):
     mock_client.messages.stream = stream_side_effect
 
     with _mock_anthropic(mock_client), \
-         patch("cycls.agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
+         patch("cycls._agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         # Harness re-raises after rollback; the encoder owns the user-facing
         # callout + structured log. Test asserts on the raised exception.
         with pytest.raises(ConnectionError, match="Lost connection"):
@@ -465,7 +465,7 @@ def test_tool_result_present_after_bash_timeout(agent_env):
     mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
 
     with _mock_anthropic(mock_client), \
-         patch("cycls.agent.tools._exec_bash",
+         patch("cycls._agent.tools._exec_bash",
                new_callable=lambda: AsyncMock(return_value="Error: Command timed out after 300s")):
         asyncio.run(_drain(_run(context=ctx)))
 
@@ -498,7 +498,7 @@ def test_multiple_tool_calls_all_get_results(agent_env):
         return "ok"
 
     with _mock_anthropic(mock_client), \
-         patch("cycls.agent.tools._exec_bash", side_effect=mock_bash):
+         patch("cycls._agent.tools._exec_bash", side_effect=mock_bash):
         asyncio.run(_drain(_run(context=ctx)))
 
     history = _read_history(ctx)
@@ -657,7 +657,7 @@ def test_compaction_triggers_when_approaching_window(agent_env):
         content=[MagicMock(text="<analysis>thinking</analysis><summary>Summary here</summary>")]))
 
     with _mock_anthropic(mock_client), \
-         patch("cycls.agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
+         patch("cycls._agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         items = asyncio.run(_drain(_run(context=ctx)))
 
     steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Compacting context..."]
@@ -731,7 +731,7 @@ def test_compaction_failure_still_saves_history(agent_env):
     mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
 
     with _mock_anthropic(mock_client), \
-         patch("cycls.agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
+         patch("cycls._agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         asyncio.run(_drain(_run(context=ctx)))
 
     history = _read_history(ctx)

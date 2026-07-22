@@ -2,9 +2,9 @@ import json, inspect, uuid, os
 from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional, Any
-from cycls.app.auth import User, validator
-from cycls.app.db import Workspace, workspace
-from cycls.agent.logs import log
+from cycls._app.auth import User, validator
+from cycls._app.db import Workspace, workspace
+from cycls._agent.logs import log
 
 
 class PassMetadata(BaseModel):

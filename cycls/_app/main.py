@@ -6,10 +6,10 @@ from functools import cached_property
 from pathlib import Path
 from typing import Optional
 
-from cycls.function import Function, _get_api_key, _get_base_url
-from cycls.function.remote import SHIM_PRELUDE
-from cycls.app.auth import JWT, validator
-from cycls.app.db import workspace
+from cycls._function import Function, _get_api_key, _get_base_url
+from cycls._function.remote import SHIM_PRELUDE
+from cycls._app.auth import JWT, validator
+from cycls._app.db import workspace
 
 CYCLS_PATH = importlib.resources.files("cycls")
 
@@ -17,7 +17,7 @@ CYCLS_PATH = importlib.resources.files("cycls")
 def _serve(app, port):
     from hypercorn.asyncio import serve
     from hypercorn.config import Config
-    from cycls.function.remote import BARE_LOGS
+    from cycls._function.remote import BARE_LOGS
     config = Config()
     config.bind = [f"0.0.0.0:{port}"]
     config.alpn_protocols = ["h2", "http/1.1"]
@@ -124,7 +124,7 @@ class App(Function):
 
     def _depends(self, fn):
         if self._auth_provider is None:
-            raise RuntimeError("Requires auth=... on the @cycls.app decorator")
+            raise RuntimeError("Requires auth=... on the @cycls._app decorator")
         from fastapi import Depends
         return Depends(fn)
 
@@ -169,7 +169,7 @@ class App(Function):
         """Serve this app's CURRENT code on its cloud dev service — provision
         once, then each call hot-swaps the running app on a stable URL."""
         import cloudpickle
-        from cycls.function.remote import RemoteError, post
+        from cycls._function.remote import RemoteError, post
         if not self.api_key:
             raise RemoteError("No API key. Set CYCLS_API_KEY or cycls.api_key.")
         self.prod = False

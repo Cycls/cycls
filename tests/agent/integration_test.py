@@ -2,7 +2,7 @@ import pytest
 import cycls
 
 WS = {"/workspace": cycls.Volume("test-chats")}
-from cycls.agent import Agent
+from cycls._agent import Agent
 import asyncio
 import subprocess
 import tempfile
@@ -13,10 +13,10 @@ import os
 
 
 # --- Test Case 1: Basic Decorator ---
-# Verifies that @cycls.app returns an App instance
+# Verifies that @cycls._app returns an App instance
 
 def test_app_decorator_returns_app():
-    """Tests that @cycls.app decorator returns an App."""
+    """Tests that @cycls._app decorator returns an App."""
     print("\n--- Running test: test_app_decorator_returns_app ---")
 
     @cycls.agent(volumes=WS)
@@ -155,7 +155,7 @@ def test_app_is_callable():
 # Verifies that async functions work correctly
 
 def test_app_async_function():
-    """Tests that async functions work with @cycls.app."""
+    """Tests that async functions work with @cycls._app."""
     print("\n--- Running test: test_app_async_function ---")
 
     @cycls.agent(volumes=WS)
@@ -178,7 +178,7 @@ def test_app_async_function():
 # Verifies that sync generator functions work
 
 def test_app_sync_function():
-    """Tests that sync generator functions work with @cycls.app."""
+    """Tests that sync generator functions work with @cycls._app."""
     print("\n--- Running test: test_app_sync_function ---")
 
     @cycls.agent(volumes=WS)

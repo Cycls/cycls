@@ -1,6 +1,6 @@
 # uv run cycls run examples/app/habits.py
 # uv run cycls deploy examples/app/habits.py
-"""Habit tracker — full @cycls.app surface in ~80 lines.
+"""Habit tracker — full @cycls._app surface in ~80 lines.
 
 Demonstrates:
   - auth=cycls.Clerk(...)            JWT validation, every route protected

@@ -4,11 +4,11 @@ Holds all settings that define how an agent runs: model, system prompt, tools,
 allowed builtins, token limits, provider credentials, runtime knobs. Call
 `.run(context=...)` to execute the loop — `context` is the only runtime input.
 
-`.run` yields typed `Event`s (see `cycls.agent.harness.events`): the agent body
+`.run` yields typed `Event`s (see `cycls._agent.harness.events`): the agent body
 `to_ui`s them through, or pattern-matches first to hook the loop. `.loop(fn)`
 swaps in a different loop entirely (the building blocks — `make_provider`,
 `Session`, `build_tools`, `dispatch`, `compact`, `events` — live in
-`cycls.agent.harness`).
+`cycls._agent.harness`).
 
 Everything else lives on the builder. State is where you built it, not where
 you invoked it.
@@ -72,7 +72,7 @@ class LLM:
         """Run a custom loop instead of the built-in one. `fn` is an async
         generator with the default loop's signature (context, system, tools,
         allowed_tools, model, max_tokens, ..., handlers, mcp_servers) that
-        yields `Event`s. Building blocks live in `cycls.agent.harness`:
+        yields `Event`s. Building blocks live in `cycls._agent.harness`:
         `default_loop`, `make_provider`, `Session`, `build_tools`, `dispatch`,
         `compact`, `events`."""
         return self._copy(_loop=fn)

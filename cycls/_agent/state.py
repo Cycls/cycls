@@ -1,5 +1,5 @@
 """Agent state primitives — chat (index + turns + Session), shares, and the
-LLM-facing database tool. All built on cycls.app.db.DB.
+LLM-facing database tool. All built on cycls._app.db.DB.
 
 Chat layout — one folder per chat:
     chat/{id}/index           — chat metadata (title, updatedAt, createdAt)
@@ -19,7 +19,7 @@ Keys:
 import asyncio, json, re
 from datetime import datetime, timezone
 
-from cycls.app.db import DB, workspace
+from cycls._app.db import DB, workspace
 
 
 # ---- Chat metadata ----
