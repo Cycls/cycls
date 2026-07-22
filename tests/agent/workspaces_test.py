@@ -161,26 +161,47 @@ def test_workspace_icon_lifecycle(tmp_path):
     assert client.post("/workspaces", json={"name": "X", "icon": "x" * 65}).status_code == 400
 
 
-def test_builtin_general_member_routes_400(tmp_path):
-    """General's membership IS the org — member operations are rejected so
-    clients can't write rows that mislead."""
+def test_builtin_general_exclusions(tmp_path):
+    """Everyone is in General by default; org admins may remove (exclude)
+    anyone; re-adding clears the exclusion. Members can't remove."""
     client = _client(tmp_path)
     client.get("/workspaces")   # provisions General
     admin = {"X-Test-User": "admin_1"}
-    assert client.get("/workspaces/t-shared/members").status_code == 400
-    assert client.put("/workspaces/t-shared/members/user_2", json={"role": "editor"}, headers=admin).status_code == 400
-    assert client.delete("/workspaces/t-shared/members/user_2", headers=admin).status_code == 400
+    u2 = {"X-Test-User": "user_2"}
+
+    assert client.delete("/workspaces/t-shared/members/user_2").status_code == 403   # member can't
+    assert client.delete("/workspaces/t-shared/members/user_2", headers=admin).status_code == 200
+
+    # excluded: General gone from their list, content access 404s
+    assert all(w["id"] != "t-shared" for w in client.get("/workspaces", headers=u2).json())
+    assert client.get("/chats", headers={**u2, "X-Workspace": "t-shared"}).status_code == 404
+
+    # the exclusion is visible in the member list; others keep access
+    rows = client.get("/workspaces/t-shared/members", headers=admin).json()
+    assert [(r["user_id"], r["role"]) for r in rows] == [("user_2", "excluded")]
+    assert any(w["id"] == "t-shared" for w in client.get("/workspaces").json())
+
+    # re-add restores the default
+    assert client.put("/workspaces/t-shared/members/user_2", json={"role": "editor"}, headers=admin).status_code == 200
+    assert any(w["id"] == "t-shared" for w in client.get("/workspaces", headers=u2).json())
+    assert client.get("/workspaces/t-shared/members", headers=admin).json() == []
+
+    # org admins are immune to exclusion
+    client.delete("/workspaces/t-shared/members/admin_1", headers=admin)
+    assert any(w["id"] == "t-shared" for w in client.get("/workspaces", headers=admin).json())
 
 
 def test_builtin_roles_ignore_member_rows(tmp_path):
-    """A stray member row on General (pre-enforcement junk) must not change
-    anyone's role — org membership alone decides."""
+    """On General only the `excluded` marker matters — stray role rows must
+    not change anyone's role (a row could otherwise downgrade an org admin)."""
     orgdb = _orgdb(tmp_path)
     _run(orgdb.put("workspaces/t-shared", {"id": "t-shared", "name": "General", "type": "team", "builtin": "org"}))
     _run(orgdb.put("members/t-shared/admin_1", {"role": "editor"}))   # would downgrade the admin
     _run(orgdb.put("members/t-shared/user_1", {"role": "admin"}))     # would elevate a member
+    _run(orgdb.put("members/t-shared/user_2", {"role": "excluded"}))
     assert _run(state.resolve_role(USERS["admin_1"], "t-shared", orgdb)) == "admin"
     assert _run(state.resolve_role(USERS["user_1"], "t-shared", orgdb)) == "editor"
+    assert _run(state.resolve_role(USERS["user_2"], "t-shared", orgdb)) is None
     assert _run(state.resolve_role(USERS["solo"], "t-shared", orgdb)) is None
 
 

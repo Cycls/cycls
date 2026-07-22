@@ -942,12 +942,12 @@ function WorkspacesTab({ ws }: { ws: WorkspacesMenu }) {
   };
 
   useEffect(() => {
-    if (!managed || managed.builtin) { setMembers(null); return; }
+    if (!managed) { setMembers(null); return; }
     let alive = true;
     setMembers(null);
     ws.fetchMembers(managed.id).then((m) => alive && setMembers(m)).catch(() => alive && setMembers([]));
     return () => { alive = false; };
-  }, [managed?.id, managed?.builtin]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [managed?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshMembers = () => managed && ws.fetchMembers(managed.id).then(setMembers);
 
@@ -1004,7 +1004,37 @@ function WorkspacesTab({ ws }: { ws: WorkspacesMenu }) {
         )}
         <SectionLabel>{t("members")}</SectionLabel>
         {managed.builtin ? (
-          <p className="py-2 text-sm text-muted-foreground">{t("everyoneInOrg")}</p>
+          // General: the org IS the membership — rows are exclusions. Org
+          // admins remove anyone (writes an exclusion) or add them back.
+          <>
+            <p className="py-2 text-sm text-muted-foreground">{t("everyoneInOrg")}</p>
+            {members === null ? <LoadingBar /> : (
+              <ListCard>
+                {ws.orgMembers.map((om) => {
+                  const excluded = members.some((m) => m.user_id === om.id && m.role === "excluded");
+                  return (
+                    <Row
+                      key={om.id}
+                      label={userChip(om.id)}
+                      control={excluded ? (
+                        <span className="flex items-center gap-3">
+                          <span className="text-xs text-muted-foreground/60">{t("excluded")}</span>
+                          <button
+                            onClick={() => ws.onSetMember(managed.id, om.id, "editor").then(refreshMembers)}
+                            className="cursor-pointer text-lg leading-none text-muted-foreground hover:text-foreground"
+                          >
+                            +
+                          </button>
+                        </span>
+                      ) : (
+                        <SmallDanger label={t("remove")} onClick={() => ws.onRemoveMember(managed.id, om.id).then(refreshMembers)} />
+                      )}
+                    />
+                  );
+                })}
+              </ListCard>
+            )}
+          </>
         ) : members === null ? <LoadingBar /> : (
           <>
             <ListCard>
