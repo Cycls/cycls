@@ -8,6 +8,7 @@ import { LoadingBar } from "./loading-bar";
 import { PricingCards } from "./pricing-cards";
 import type { AccountInfo } from "./chat";
 import { WsIcon, type WorkspacesMenu } from "./workspace-switcher";
+import { EmojiPicker } from "./emoji-picker";
 import type { MemberInfo } from "../hooks/use-workspaces";
 import { t, useLang, setLang, getLang } from "../lib/i18n";
 import { cn, getThemeMode, setThemeMode, type ThemeMode } from "../lib/utils";
@@ -910,7 +911,8 @@ function WorkspacesTab({ ws }: { ws: WorkspacesMenu }) {
   const [members, setMembers] = useState<MemberInfo[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [editing, setEditing] = useState<"name" | "icon" | null>(null);
+  const [editing, setEditing] = useState(false);       // inline name rename
+  const [iconPicker, setIconPicker] = useState(false);
   const freshWs = useNewIds(ws.items.map((w) => w.id));
   const freshMembers = useNewIds((members ?? []).map((m) => m.user_id));
   const managed = ws.items.find((w) => w.id === manageId) || null;
@@ -954,7 +956,7 @@ function WorkspacesTab({ ws }: { ws: WorkspacesMenu }) {
     const canEdit = !managed.builtin && (managed.role === "owner" || managed.role === "admin" || ws.isOrgAdmin);
     return (
       <div>
-        <button onClick={() => { setManageId(null); setDeleting(false); setEditing(null); }} className="mb-3 flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+        <button onClick={() => { setManageId(null); setDeleting(false); setEditing(false); }} className="mb-3 flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
           <Icon name="chevron-left" className="size-3.5 rtl:rotate-180" />
           <WsIcon ws={managed} />
           <span className="truncate">{managed.name}</span>
@@ -965,36 +967,35 @@ function WorkspacesTab({ ws }: { ws: WorkspacesMenu }) {
             <ListCard>
               <Row
                 label={t("name")}
-                control={editing === "name" ? (
+                control={editing ? (
                   <InlineInput
                     initial={managed.name}
-                    onSubmit={(v) => { setEditing(null); ws.onUpdate(managed.id, { name: v }); }}
-                    onCancel={() => setEditing(null)}
+                    onSubmit={(v) => { setEditing(false); ws.onUpdate(managed.id, { name: v }); }}
+                    onCancel={() => setEditing(false)}
                   />
                 ) : (
-                  <button onClick={() => setEditing("name")} className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">
+                  <button onClick={() => setEditing(true)} className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">
                     {managed.name}
                   </button>
                 )}
               />
               <Row
                 label={t("icon")}
-                control={editing === "icon" ? (
-                  <InlineInput
-                    initial={managed.icon || ""}
-                    onSubmit={(v) => { setEditing(null); ws.onUpdate(managed.id, { icon: v }); }}
-                    onCancel={() => setEditing(null)}
-                  />
-                ) : (
-                  <span className="flex items-center gap-3">
-                    <button onClick={() => setEditing("icon")} className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">
+                control={
+                  <span className="relative">
+                    <button onClick={() => setIconPicker((v) => !v)} className="cursor-pointer rounded p-1 hover:bg-secondary/60">
                       <WsIcon ws={managed} />
                     </button>
-                    {managed.icon && (
-                      <SmallDanger label={t("remove")} onClick={() => ws.onUpdate(managed.id, { icon: "" })} />
+                    {iconPicker && (
+                      <EmojiPicker
+                        align="end"
+                        onPick={(e) => { setIconPicker(false); ws.onUpdate(managed.id, { icon: e }); }}
+                        onClear={managed.icon ? () => { setIconPicker(false); ws.onUpdate(managed.id, { icon: "" }); } : undefined}
+                        onClose={() => setIconPicker(false)}
+                      />
                     )}
                   </span>
-                )}
+                }
               />
             </ListCard>
           </>
