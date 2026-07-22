@@ -16,18 +16,23 @@ const EMOJI = [
 const looksLikeEmoji = (s: string) =>
   /^(\p{Extended_Pictographic}|\p{Regional_Indicator}|[#*0-9]️?⃣)/u.test(s);
 
+// `align`: "start"/"end" are logical (settings rows); "right" pins to the
+// physical right edge — for the user-menu panel, which hugs the screen's
+// right side in both LTR and RTL, so the picker can only extend leftward.
+const ALIGN = { start: "start-0", end: "end-0", right: "right-0" };
+
 export function EmojiPicker({ onPick, onClear, onClose, align = "start" }: {
   onPick: (emoji: string) => void;
   onClear?: () => void;
   onClose: () => void;
-  align?: "start" | "end";
+  align?: keyof typeof ALIGN;
 }) {
   const [free, setFree] = useState("");
   const submitFree = () => { if (looksLikeEmoji(free.trim())) onPick(free.trim()); };
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); onClose(); }} />
-      <div className={`absolute z-50 top-full mt-1 ${align === "start" ? "start-0" : "end-0"} w-60 rounded-lg border border-border bg-background p-2 shadow-lg`}>
+      <div className={`absolute z-50 top-full mt-1 ${ALIGN[align]} w-60 rounded-lg border border-border bg-background p-2 shadow-lg`}>
         <input
           value={free}
           onChange={(e) => setFree(e.target.value)}

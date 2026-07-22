@@ -222,6 +222,7 @@ export function WorkspacePanel({ workspaces, onBack, onClose }: {
             )}
             {pickerFor === w.id && (
               <EmojiPicker
+                align="right"
                 onPick={(e) => { setPickerFor(null); workspaces.onUpdate(w.id, { icon: e }); }}
                 onClear={w.icon ? () => { setPickerFor(null); workspaces.onUpdate(w.id, { icon: "" }); } : undefined}
                 onClose={() => setPickerFor(null)}
