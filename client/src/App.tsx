@@ -116,11 +116,11 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
     clerk?.client?.lastAuthenticationStrategy,
   );
 
-  useEffect(() => {
-    chat.setGetToken(() => getToken());
-    files.setGetToken(() => getToken());
-    ws.setGetToken(() => getToken());
-  }, [getToken, chat, files, ws]);
+  // Render-time, not an effect — child mount-effects fire requests before
+  // parent effects would register the token getter.
+  chat.setGetToken(() => getToken());
+  files.setGetToken(() => getToken());
+  ws.setGetToken(() => getToken());
 
   // A persisted selection that no longer resolves falls back to personal.
   useEffect(() => {
