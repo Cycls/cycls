@@ -88,7 +88,8 @@ if __name__ == "__main__":
 
 
 class App(Function):
-    _base_pip = ["hypercorn", "fastapi[standard]", "pyjwt", "cryptography"]
+    _base_pip = ["hypercorn==0.18.0", "fastapi[standard]==0.139.2",
+                 "pyjwt==2.13.0", "cryptography==49.0.0"]
     _base_apt = ["bubblewrap"]
     _serves = True
 

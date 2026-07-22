@@ -16,6 +16,31 @@ from .web import Web, web, Config
 CYCLS_PATH = importlib.resources.files('cycls')
 
 
+class _Routes:
+    """agent.server — route registrations as plain data, replayed onto a real
+    APIRouter where the app is built, so no fastapi instances cross the pickle boundary."""
+    _methods = {"api_route", "get", "post", "put", "delete", "patch",
+                "head", "options", "trace", "websocket"}
+
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        if name not in self._methods:
+            raise AttributeError(name)
+        def decorator(*args, **kwargs):
+            def register(fn):
+                self.calls.append((name, args, kwargs, fn))
+                return fn
+            return register
+        return decorator
+
+    def replay(self, router):
+        for name, args, kwargs, fn in self.calls:
+            getattr(router, name)(*args, **kwargs)(fn)
+        return router
+
+
 class Agent(App):
     _base_pip = [*App._base_pip, "resvg-py", "anthropic", "openai", "python-dotenv"]
     _base_apt = [*App._base_apt, "fonts-noto-core",
@@ -31,7 +56,7 @@ class Agent(App):
             web = Web()
         self.theme = web._theme
         self.copy_public = web._copy_public
-        self.server = APIRouter()
+        self.server = _Routes()
         self.config = Config(
             name=name, title=web._title,
             auth=web._auth is not None, cms=web._cms, analytics=web._analytics,
@@ -64,7 +89,7 @@ class Agent(App):
         """State routers (chats, files, share) require auth to be meaningful.
         Agents without auth skip them entirely — no silent 401s on unused endpoints."""
         server = self.server
-        routers = [lambda app, auth: app.include_router(server)]
+        routers = [lambda app, auth: app.include_router(server.replay(APIRouter()))]
         if self._auth_provider is not None:
             cycls_app = self
             volume = Path(self.config.volume)
