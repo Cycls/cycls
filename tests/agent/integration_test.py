@@ -28,9 +28,12 @@ def test_app_decorator_returns_app():
     print("✅ Test passed.")
 
 
-def test_agent_server_api_route_records():
-    """Tests that @my_agent.server.api_route records routes on the APIRouter."""
-    print("\n--- Running test: test_agent_server_api_route_records ---")
+def test_agent_server_routes_cross_pickle_as_data():
+    """Tests that agent.server routes survive cloudpickle and build the router on the far side."""
+    print("\n--- Running test: test_agent_server_routes_cross_pickle_as_data ---")
+
+    import cloudpickle
+    from fastapi import FastAPI
 
     @cycls.agent(volumes=WS)
     async def my_agent(context):
@@ -40,13 +43,16 @@ def test_agent_server_api_route_records():
     def health():
         return {"ok": True}
 
-    @my_agent.server.api_route("/webhook", methods=["POST"])
+    @my_agent.server.post("/webhook")
     async def webhook(request):
         return {"received": True}
 
-    paths = {r.path for r in my_agent.server.routes}
-    assert "/health" in paths
-    assert "/webhook" in paths
+    routers = cloudpickle.loads(cloudpickle.dumps(my_agent._routers()))
+    app = FastAPI()
+    for r in routers:
+        r(app, None)
+    paths = {route.path for route in app.routes}
+    assert {"/health", "/webhook"} <= paths
     print("✅ Test passed.")
 
 
