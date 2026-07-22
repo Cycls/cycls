@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { t } from "../lib/i18n";
 import { Icon } from "./icon";
 import { DropdownMenu } from "./files";
+import { EmojiPicker } from "./emoji-picker";
 import type { WorkspaceInfo, MemberInfo } from "../hooks/use-workspaces";
 
 export interface WorkspacesMenu {
@@ -67,6 +68,7 @@ export function WorkspacePanel({ workspaces, onBack, onClose }: {
   const [newWsName, setNewWsName] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmText, setConfirmText] = useState("");
+  const [pickerFor, setPickerFor] = useState<string | null>(null);
 
   // id-keyed deps: the menu prop is rebuilt every parent render, object deps would refetch in a loop
   const fetchRef = useRef(workspaces.fetchMembers);
@@ -205,10 +207,27 @@ export function WorkspacePanel({ workspaces, onBack, onClose }: {
         {workspaces.items.filter((w) => w.type === "team").map((w) => (
           <div
             key={w.id}
-            className={`flex w-full items-center gap-1 pl-3 pr-2 text-sm transition-colors ${workspaces.active?.id === w.id ? "text-foreground bg-secondary/60" : inactive}`}
+            className={`relative flex w-full items-center gap-1 pl-2 pr-2 text-sm transition-colors ${workspaces.active?.id === w.id ? "text-foreground bg-secondary/60" : inactive}`}
           >
+            {!w.builtin && (w.role === "owner" || w.role === "admin" || workspaces.isOrgAdmin) ? (
+              <button
+                onClick={(e) => { e.stopPropagation(); setPickerFor(pickerFor === w.id ? null : w.id); }}
+                className="cursor-pointer rounded p-1 hover:bg-secondary"
+                aria-label={t("icon")}
+              >
+                <WsIcon ws={w} />
+              </button>
+            ) : (
+              <span className="p-1"><WsIcon ws={w} /></span>
+            )}
+            {pickerFor === w.id && (
+              <EmojiPicker
+                onPick={(e) => { setPickerFor(null); workspaces.onUpdate(w.id, { icon: e }); }}
+                onClear={w.icon ? () => { setPickerFor(null); workspaces.onUpdate(w.id, { icon: "" }); } : undefined}
+                onClose={() => setPickerFor(null)}
+              />
+            )}
             <button onClick={() => { workspaces.onSwitch(w.id); onClose(); }} className="flex flex-1 items-center gap-2 truncate py-1.5 text-start cursor-pointer">
-              <WsIcon ws={w} />
               <span className="truncate">{w.name}</span>
             </button>
             {(w.role === "owner" || w.role === "admin") && (
