@@ -110,6 +110,31 @@ def personal_ws(subject):
     return f"u-{user or org}"
 
 
+# ---- Emoji check (workspace icons) ----
+
+_EMOJI_MODIFIERS = {0x200D, 0xFE0E, 0xFE0F, 0x20E3}   # ZWJ, variation selectors, keycap
+
+
+def _is_emoji(s):
+    """True iff `s` is one emoji: a pictograph, flag pair, or keycap, possibly
+    a ZWJ sequence (family, professions) with skin tones. Codepoint-range
+    check — no emoji dependency; ranges cover Unicode's emoji blocks."""
+    cps = [ord(c) for c in s]
+    base = [c for c in cps if c not in _EMOJI_MODIFIERS and not 0x1F3FB <= c <= 0x1F3FF]
+    if not base or len(base) > 4:   # longest common ZWJ sequence: family of four
+        return False
+    def ok(c):
+        return (0x1F000 <= c <= 0x1FAFF      # emoji, symbols, supplemental
+                or 0x2600 <= c <= 0x27BF     # misc symbols, dingbats
+                or 0x2B00 <= c <= 0x2BFF     # stars, arrows
+                or 0x2190 <= c <= 0x21FF or 0x2300 <= c <= 0x23FF
+                or 0x1F1E6 <= c <= 0x1F1FF   # regional indicators (flags)
+                or c in (0x00A9, 0x00AE, 0x203C, 0x2049, 0x2122, 0x2139,
+                         0x3030, 0x303D, 0x3297, 0x3299)
+                or (0x20E3 in cps and (0x30 <= c <= 0x39 or c in (0x23, 0x2A))))  # keycap digit/#/*
+    return all(ok(c) for c in base)
+
+
 # ---- Path safety ----
 
 def resolve_path(workspace, rel):
@@ -590,11 +615,13 @@ def workspaces_router(cycls_app, user_dep, volume, base):
         return name
 
     def _icon_or_400(data):
-        """Workspace icon — an opaque string to the server (an emoji today, an
-        image URL later). Only bound its size; rendering is the client's job."""
+        """Workspace icon — exactly one emoji (ZWJ sequences, flags, skin
+        tones, keycaps included). Validated server-side so every client shares
+        one icon vocabulary regardless of its picker UI. Loosen deliberately
+        if icons ever grow beyond emoji (e.g. uploaded image URLs)."""
         icon = data.get("icon")
-        if icon and (not isinstance(icon, str) or len(icon) > 64):
-            raise HTTPException(400, "icon must be a string of at most 64 characters")
+        if icon and (not isinstance(icon, str) or len(icon) > 64 or not _is_emoji(icon)):
+            raise HTTPException(400, "icon must be a single emoji")
         return icon
 
     async def _unique_name_or_409(orgdb, name, exclude=None):
