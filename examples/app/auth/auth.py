@@ -21,7 +21,7 @@ from typing import Optional
 from uuid import uuid4
 
 import cycls
-from cycls.app import User, Workspace, workspace
+from cycls._app import User, Workspace, workspace
 
 HTML_PATH = str(Path(__file__).parent / "auth.html")
 

@@ -32,7 +32,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build]
-artifacts = ["cycls/agent/web/themes/"]
+artifacts = ["cycls/_agent/web/themes/"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["cycls"]

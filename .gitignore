@@ -26,6 +26,6 @@ node_modules/
 .*
 !.github
 mj/
-cycls/agent/web/themes/
+cycls/_agent/web/themes/
 *.tsbuildinfo
 uv.lock

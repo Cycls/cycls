@@ -4,7 +4,7 @@ import asyncio
 import pytest
 
 import cycls
-from cycls.agent.tools import _resolve_path, build_tools, vendor_skips
+from cycls._agent.tools import _resolve_path, build_tools, vendor_skips
 
 
 # ---- _resolve_path escape hardening ----
@@ -121,7 +121,7 @@ def test_vendor_skips_returns_anthropic_only_names():
 def test_openai_to_messages_degrades_image_in_tool_result():
     """OpenAI tool messages are text-only — image/document blocks inside a
     tool_result get a text stub + the kinds are reported so the loop can warn."""
-    from cycls.agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.providers.openai import OpenAIProvider
     raw = [
         {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": [
@@ -139,7 +139,7 @@ def test_openai_to_messages_degrades_image_in_tool_result():
 
 
 def test_openai_to_messages_degrades_document_in_tool_result():
-    from cycls.agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.providers.openai import OpenAIProvider
     raw = [
         {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": [
@@ -153,7 +153,7 @@ def test_openai_to_messages_degrades_document_in_tool_result():
 
 
 def test_openai_to_messages_no_drops_when_text_only():
-    from cycls.agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.providers.openai import OpenAIProvider
     raw = [
         {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": "plain text"},
@@ -176,7 +176,7 @@ def test_anthropic_provider_caches_last_tool_and_last_user_message():
     """AnthropicProvider attaches cache_control to the last tool and the last
     user message's tail block — the three breakpoints (system + tools + last
     user) make the entire static prefix cacheable per turn."""
-    from cycls.agent.harness.providers.anthropic import AnthropicProvider
+    from cycls._agent.harness.providers.anthropic import AnthropicProvider
     p = AnthropicProvider(None, "claude-sonnet-4-20250514")
 
     tools = [{"name": "a", "description": "", "input_schema": {}},
@@ -259,5 +259,5 @@ def test_llm_loop_runs_custom_loop():
 
 
 def test_harness_kit_exposes_building_blocks():
-    from cycls.agent.harness import default_loop, make_provider, Session, build_tools, dispatch, compact, events, to_ui
+    from cycls._agent.harness import default_loop, make_provider, Session, build_tools, dispatch, compact, events, to_ui
     assert callable(default_loop) and callable(make_provider) and callable(build_tools)

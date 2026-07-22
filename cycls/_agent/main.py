@@ -9,7 +9,7 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
-from cycls.app.main import App, _make_decorator, _serve
+from cycls._app.main import App, _make_decorator, _serve
 from .web.routers import install_routers
 from .web import Web, web, Config
 
@@ -77,7 +77,7 @@ class Agent(App):
         self.prod = prod
         self._sync_config_pk(prod)
         self.config.set_prod(prod)
-        self.config.public_path = f"cycls/agent/web/themes/{self.theme}"
+        self.config.public_path = f"cycls/_agent/web/themes/{self.theme}"
         user_func, config, name = self.user_func, self.config, self.name
         routers = self._routers()
         provider = self._auth_provider
@@ -91,7 +91,7 @@ class Agent(App):
         self.func = runner
 
     def remote(self, *args, **kwargs):
-        from cycls.function.remote import RemoteError
+        from cycls._function.remote import RemoteError
         raise RemoteError("live cloud dev for agents isn't wired yet — "
                           "use `cycls run` (Docker) or `cycls deploy`")
 
@@ -100,7 +100,7 @@ class Agent(App):
         self.prod = False
         self._sync_config_pk(False)
         self.config.set_prod(False)
-        self.config.public_path = str(CYCLS_PATH.joinpath(f"agent/web/themes/{self.theme}"))
+        self.config.public_path = str(CYCLS_PATH.joinpath(f"_agent/web/themes/{self.theme}"))
         import uvicorn
         uvicorn.run(web(self.user_func, self.config, extra_routers=self._routers(),
                         auth=self._auth_provider),

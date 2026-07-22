@@ -44,15 +44,15 @@ docker system prune -af
 ```
 cycls/
 ├── cli.py                  # CLI: run, deploy, shell, ls, rm, logs, cost, sql, init, version
-├── function/
+├── _function/
 │   ├── main.py             # Function class + @cycls.function decorator
 │   ├── image.py            # cycls.Image fluent builder
 │   └── remote.py           # pickle-RPC shim + cycls.remote client (--remote deploys)
-├── app/
+├── _app/
 │   ├── main.py             # App class + @cycls.app + _make_decorator
 │   ├── auth.py             # cycls.Clerk, cycls.JWT, User, make_validate
 │   └── web.py              # cycls.Web fluent builder
-└── agent/
+└── _agent/
     ├── main.py             # Agent class + @cycls.agent decorator
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector

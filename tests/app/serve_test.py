@@ -7,8 +7,8 @@ import sys
 import cloudpickle
 import pytest
 
-from cycls.app.main import SERVE_PY, App
-from cycls.function.remote import token_for
+from cycls._app.main import SERVE_PY, App
+from cycls._function.remote import token_for
 
 API_KEY, NAME = "test-key", "dev-demo"
 TOKEN = token_for(API_KEY, NAME)
@@ -17,7 +17,7 @@ RUNTIME = f"{sys.version_info.major}.{sys.version_info.minor}/{cloudpickle.__ver
 
 def builder(text):
     """A picklable zero-arg callable returning a tiny ASGI app — the same
-    contract @cycls.app functions satisfy."""
+    contract @cycls._app functions satisfy."""
     def build():
         async def app(scope, receive, send):
             await send({"type": "http.response.start", "status": 200, "headers": []})

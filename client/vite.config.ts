@@ -7,7 +7,7 @@ const apis = ["/config", "/chat", "/sessions", "/files", "/shared-assets", "/tra
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  build: { outDir: "../cycls/agent/web/themes/default", emptyOutDir: true },
+  build: { outDir: "../cycls/_agent/web/themes/default", emptyOutDir: true },
   server: {
     proxy: {
       ...Object.fromEntries(apis.map((p) => [p, backend])),

@@ -161,7 +161,7 @@ def _resolve_path(raw_path, workspace):
 # ---- Tool execution ----
 
 async def _exec_bash(command, cwd, timeout=600, network=False):
-    from cycls.app.sandbox import Sandbox
+    from cycls._app.sandbox import Sandbox
     path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     lang = os.environ.get("LANG", "C.UTF-8")
     sb = (Sandbox()

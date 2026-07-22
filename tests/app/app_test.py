@@ -1,8 +1,8 @@
-"""Tests for the bare @cycls.app decorator: user function returns an ASGI app."""
+"""Tests for the bare @cycls._app decorator: user function returns an ASGI app."""
 import cycls
-from cycls.app import App
-from cycls.app.auth import User
-from cycls.app.db import workspace
+from cycls._app import App
+from cycls._app.auth import User
+from cycls._app.db import workspace
 
 
 def test_app_decorator_returns_app():
