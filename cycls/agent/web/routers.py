@@ -696,6 +696,8 @@ def workspaces_router(cycls_app, user_dep, volume, base):
         orgdb = _orgdb(user)
         row = {**(await orgdb.get(f"workspaces/{ws_id}") or {})}
         if "name" in data:
+            if row.get("builtin"):
+                raise HTTPException(400, "The builtin General workspace cannot be renamed")
             name = _name_or_400(data)
             await _unique_name_or_409(orgdb, name, exclude=ws_id)
             row["name"] = name
@@ -721,17 +723,27 @@ def workspaces_router(cycls_app, user_dep, volume, base):
 
     # ---- Members (team workspaces only) ----
 
+    async def _memberful_or_400(user, ws_id):
+        """Builtin workspaces (General) have no member rows — membership IS
+        the org. Reject member operations so clients can't write rows that
+        mislead (a 'remove' there wouldn't actually revoke anything)."""
+        reg = await _orgdb(user).get(f"workspaces/{ws_id}")
+        if reg and reg.get("builtin"):
+            raise HTTPException(400, "General includes every org member — membership is managed by the organization")
+
     @r.get("/workspaces/{ws_id}/members")
     async def list_members(ws_id: str, user: Any = user_dep):
         if not ws_id.startswith("t-"):
             raise HTTPException(404, "Workspace not found")
         await _role_or_404(user, ws_id)   # any member (or org admin) may look
+        await _memberful_or_400(user, ws_id)
         return [{"user_id": key.rsplit("/", 1)[1], **row}
                 async for key, row in _orgdb(user).scan(prefix=f"members/{ws_id}/")]
 
     @r.put("/workspaces/{ws_id}/members/{member_id}")
     async def put_member(ws_id: str, member_id: str, request: Request, user: Any = user_dep):
         await _manager_or_403(user, ws_id)
+        await _memberful_or_400(user, ws_id)
         role = (await request.json()).get("role", "editor")
         if role not in ("admin", "editor"):
             raise HTTPException(400, 'role must be "admin" or "editor"')
@@ -751,6 +763,7 @@ def workspaces_router(cycls_app, user_dep, volume, base):
             await _role_or_404(user, ws_id)   # leaving requires being in it
         else:
             await _manager_or_403(user, ws_id)
+        await _memberful_or_400(user, ws_id)
         existing = await orgdb.get(f"members/{ws_id}/{member_id}")
         if existing and existing.get("role") == "owner":
             raise HTTPException(403, "The owner cannot be removed")

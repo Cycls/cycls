@@ -161,6 +161,40 @@ def test_workspace_icon_lifecycle(tmp_path):
     assert client.post("/workspaces", json={"name": "X", "icon": "x" * 65}).status_code == 400
 
 
+def test_builtin_general_member_routes_400(tmp_path):
+    """General's membership IS the org — member operations are rejected so
+    clients can't write rows that mislead."""
+    client = _client(tmp_path)
+    client.get("/workspaces")   # provisions General
+    admin = {"X-Test-User": "admin_1"}
+    assert client.get("/workspaces/t-shared/members").status_code == 400
+    assert client.put("/workspaces/t-shared/members/user_2", json={"role": "editor"}, headers=admin).status_code == 400
+    assert client.delete("/workspaces/t-shared/members/user_2", headers=admin).status_code == 400
+
+
+def test_builtin_roles_ignore_member_rows(tmp_path):
+    """A stray member row on General (pre-enforcement junk) must not change
+    anyone's role — org membership alone decides."""
+    orgdb = _orgdb(tmp_path)
+    _run(orgdb.put("workspaces/t-shared", {"id": "t-shared", "name": "General", "type": "team", "builtin": "org"}))
+    _run(orgdb.put("members/t-shared/admin_1", {"role": "editor"}))   # would downgrade the admin
+    _run(orgdb.put("members/t-shared/user_1", {"role": "admin"}))     # would elevate a member
+    assert _run(state.resolve_role(USERS["admin_1"], "t-shared", orgdb)) == "admin"
+    assert _run(state.resolve_role(USERS["user_1"], "t-shared", orgdb)) == "editor"
+    assert _run(state.resolve_role(USERS["solo"], "t-shared", orgdb)) is None
+
+
+def test_builtin_general_name_locked_icon_open(tmp_path):
+    """General can't be renamed; org admins may set its icon; members can't."""
+    client = _client(tmp_path)
+    client.get("/workspaces")   # provisions General
+    admin = {"X-Test-User": "admin_1"}
+    assert client.patch("/workspaces/t-shared", json={"name": "HQ"}, headers=admin).status_code == 400
+    r = client.patch("/workspaces/t-shared", json={"icon": "🏠"}, headers=admin)
+    assert r.status_code == 200 and r.json()["icon"] == "🏠"
+    assert client.patch("/workspaces/t-shared", json={"icon": "🚀"}).status_code == 403   # plain member
+
+
 def test_workspace_icon_emoji_only(tmp_path):
     """One shared icon vocabulary across clients: single emoji only —
     ZWJ sequences, flags, skin tones, keycaps pass; text and URLs 400."""

@@ -953,7 +953,8 @@ function WorkspacesTab({ ws }: { ws: WorkspacesMenu }) {
 
   if (managed) {
     const canDelete = managed.role === "owner" || ws.isOrgAdmin;
-    const canEdit = !managed.builtin && (managed.role === "owner" || managed.role === "admin" || ws.isOrgAdmin);
+    const canEdit = managed.role === "owner" || managed.role === "admin" || ws.isOrgAdmin;
+    const canRename = canEdit && !managed.builtin;   // General's name is fixed; its icon is fair game
     return (
       <div>
         <button onClick={() => { setManageId(null); setDeleting(false); setEditing(false); }} className="mb-3 flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
@@ -967,7 +968,9 @@ function WorkspacesTab({ ws }: { ws: WorkspacesMenu }) {
             <ListCard>
               <Row
                 label={t("name")}
-                control={editing ? (
+                control={!canRename ? (
+                  <span className="text-sm text-muted-foreground">{managed.name}</span>
+                ) : editing ? (
                   <InlineInput
                     initial={managed.name}
                     onSubmit={(v) => { setEditing(false); ws.onUpdate(managed.id, { name: v }); }}
