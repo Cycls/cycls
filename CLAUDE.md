@@ -2,7 +2,7 @@
 
 Python SDK for building, deploying, and monetizing AI agents. Write a function, deploy it as an API, web interface, or both.
 
-For a comprehensive walk through the primitives, decorators, CLI, and end-to-end patterns, see [docs/notes/tutorial.md](docs/notes/tutorial.md).
+For a comprehensive walk through the primitives, decorators, CLI, and end-to-end patterns, see [docs/tutorial.md](docs/tutorial.md).
 
 ## Tech Stack
 
