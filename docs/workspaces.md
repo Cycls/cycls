@@ -53,8 +53,8 @@ Mounted only when workspaces are enabled; all routes require auth.
 
 ```
 GET    /workspaces                          # personal + your teams (+ ?all=1: org-admin lifecycle view)
-POST   /workspaces                          # create team (body: {"name": ..., "icon"?: "🚀"}; 409 on duplicate name)
-PATCH  /workspaces/<id>                     # rename / set icon — one emoji, validated (owner/admin; icon: "" clears; 409 on duplicate name)
+POST   /workspaces                          # create team (body: {"name": ..., "icon"?: "🚀"}); 409 on reserved names (Personal, General's)
+PATCH  /workspaces/<id>                     # rename / set icon — one emoji, validated (owner/admin; icon: "" clears)
 DELETE /workspaces/<id>                     # owner or org admin; personal: self or org admin
 GET    /workspaces/<id>/members             # on General: the exclusion rows (membership is the org minus these)
 PUT    /workspaces/<id>/members/<user_id>   # body: {"role": "editor"|"admin"}; on General: clears an exclusion (re-add)

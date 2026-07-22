@@ -624,15 +624,17 @@ def workspaces_router(cycls_app, user_dep, volume, base):
             raise HTTPException(400, "icon must be a single emoji")
         return icon
 
-    async def _unique_name_or_409(orgdb, name, exclude=None):
-        """Names are the only human identifier in the switcher — enforce
-        uniqueness per org, case-insensitively (Arabic has no case; casefold
-        handles both). Check-then-write without a transaction: a concurrent
-        create can slip a duplicate through — benign, ids stay the real key."""
-        if name.casefold() == "personal":   # sits beside the builtin Personal entry
+    async def _reserved_name_or_409(orgdb, name, exclude=None):
+        """Team names are labels, not addresses: workspaces are id-addressed
+        and visibility is membership-scoped, so duplicates are allowed (an
+        org-wide check would also leak hidden workspaces' existence). Only
+        the two names in everyone's list are reserved — Personal and the
+        General workspace's current name. Casefold: Arabic has no case."""
+        if name.casefold() == "personal":
             raise HTTPException(409, "A workspace with this name already exists")
-        async for key, row in orgdb.scan(prefix="workspaces/"):
-            if key.split("/")[-1] != exclude and (row.get("name") or "").casefold() == name.casefold():
+        if exclude != "t-shared":
+            general = await orgdb.get("workspaces/t-shared")
+            if general and (general.get("name") or "").casefold() == name.casefold():
                 raise HTTPException(409, "A workspace with this name already exists")
 
     async def _role_or_404(user, ws_id):
@@ -687,7 +689,7 @@ def workspaces_router(cycls_app, user_dep, volume, base):
         name = _name_or_400(data)
         await state.ensure_migrated(user, volume, base)   # registers General before the name check
         orgdb = _orgdb(user)
-        await _unique_name_or_409(orgdb, name)
+        await _reserved_name_or_409(orgdb, name)
         return await state.create_team_ws(orgdb, name, user.id,
                                           icon=_icon_or_400(data))
 
@@ -702,7 +704,7 @@ def workspaces_router(cycls_app, user_dep, volume, base):
         # org-admin-only without any extra check.
         if "name" in data:
             name = _name_or_400(data)
-            await _unique_name_or_409(orgdb, name, exclude=ws_id)
+            await _reserved_name_or_409(orgdb, name, exclude=ws_id)
             row["name"] = name
         if "icon" in data:
             if icon := _icon_or_400(data):
