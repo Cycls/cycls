@@ -119,6 +119,22 @@ def test_create_validates_name(tmp_path):
     assert client.post("/workspaces", json={"name": "x" * 81}).status_code == 400
 
 
+def test_workspace_name_unique_per_org(tmp_path):
+    """Duplicate names 409 on create and rename (case-insensitive); keeping
+    your own name on PATCH is fine; 'Personal' is reserved."""
+    client = _client(tmp_path)
+    ws_id = _mk_team(client, "Research")
+    assert client.post("/workspaces", json={"name": "Research"}).status_code == 409
+    assert client.post("/workspaces", json={"name": "research"}).status_code == 409
+    assert client.post("/workspaces", json={"name": "Personal"}).status_code == 409
+    other = _mk_team(client, "Design")
+    assert client.patch(f"/workspaces/{other}", json={"name": "RESEARCH"}).status_code == 409
+    # self-rename to the same name is not a conflict
+    assert client.patch(f"/workspaces/{ws_id}", json={"name": "Research"}).status_code == 200
+    # General is registered — its name collides too
+    assert client.post("/workspaces", json={"name": "General"}).status_code == 409
+
+
 def test_workspace_icon_lifecycle(tmp_path):
     """Create with an emoji icon, see it in the list, PATCH a new one,
     clear it with icon: "" — old rows never grow an icon key."""
