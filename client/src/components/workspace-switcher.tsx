@@ -12,6 +12,7 @@ export interface WorkspacesMenu {
   orgMembers: { id: string; name: string }[];
   onSwitch: (id: string | null) => void;
   onCreate: (name: string) => Promise<WorkspaceInfo>;
+  onUpdate: (id: string, patch: { name?: string; icon?: string }) => Promise<WorkspaceInfo>;
   onDelete: (id: string) => Promise<void>;
   fetchMembers: (id: string) => Promise<MemberInfo[]>;
   onSetMember: (id: string, userId: string, role: string) => Promise<void>;

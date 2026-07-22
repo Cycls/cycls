@@ -7,7 +7,7 @@ import { InlineInput, DropdownMenu } from "./files";
 import { LoadingBar } from "./loading-bar";
 import { PricingCards } from "./pricing-cards";
 import type { AccountInfo } from "./chat";
-import type { WorkspacesMenu } from "./workspace-switcher";
+import { WsIcon, type WorkspacesMenu } from "./workspace-switcher";
 import type { MemberInfo } from "../hooks/use-workspaces";
 import { t, useLang, setLang, getLang } from "../lib/i18n";
 import { cn, getThemeMode, setThemeMode, type ThemeMode } from "../lib/utils";
@@ -910,6 +910,7 @@ function WorkspacesTab({ ws }: { ws: WorkspacesMenu }) {
   const [members, setMembers] = useState<MemberInfo[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [editing, setEditing] = useState<"name" | "icon" | null>(null);
   const freshWs = useNewIds(ws.items.map((w) => w.id));
   const freshMembers = useNewIds((members ?? []).map((m) => m.user_id));
   const managed = ws.items.find((w) => w.id === manageId) || null;
@@ -950,12 +951,54 @@ function WorkspacesTab({ ws }: { ws: WorkspacesMenu }) {
 
   if (managed) {
     const canDelete = managed.role === "owner" || ws.isOrgAdmin;
+    const canEdit = !managed.builtin && (managed.role === "owner" || managed.role === "admin" || ws.isOrgAdmin);
     return (
       <div>
-        <button onClick={() => { setManageId(null); setDeleting(false); }} className="mb-3 flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+        <button onClick={() => { setManageId(null); setDeleting(false); setEditing(null); }} className="mb-3 flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
           <Icon name="chevron-left" className="size-3.5 rtl:rotate-180" />
+          <WsIcon ws={managed} />
           <span className="truncate">{managed.name}</span>
         </button>
+        {canEdit && (
+          <>
+            <SectionLabel>{t("general")}</SectionLabel>
+            <ListCard>
+              <Row
+                label={t("name")}
+                control={editing === "name" ? (
+                  <InlineInput
+                    initial={managed.name}
+                    onSubmit={(v) => { setEditing(null); ws.onUpdate(managed.id, { name: v }); }}
+                    onCancel={() => setEditing(null)}
+                  />
+                ) : (
+                  <button onClick={() => setEditing("name")} className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">
+                    {managed.name}
+                  </button>
+                )}
+              />
+              <Row
+                label={t("icon")}
+                control={editing === "icon" ? (
+                  <InlineInput
+                    initial={managed.icon || ""}
+                    onSubmit={(v) => { setEditing(null); ws.onUpdate(managed.id, { icon: v }); }}
+                    onCancel={() => setEditing(null)}
+                  />
+                ) : (
+                  <span className="flex items-center gap-3">
+                    <button onClick={() => setEditing("icon")} className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">
+                      <WsIcon ws={managed} />
+                    </button>
+                    {managed.icon && (
+                      <SmallDanger label={t("remove")} onClick={() => ws.onUpdate(managed.id, { icon: "" })} />
+                    )}
+                  </span>
+                )}
+              />
+            </ListCard>
+          </>
+        )}
         <SectionLabel>{t("members")}</SectionLabel>
         {managed.builtin ? (
           <p className="py-2 text-sm text-muted-foreground">{t("everyoneInOrg")}</p>
@@ -1030,7 +1073,7 @@ function WorkspacesTab({ ws }: { ws: WorkspacesMenu }) {
           <Row
             key={w.id}
             highlight={freshWs.has(w.id)}
-            label={w.name}
+            label={<span className="flex min-w-0 items-center gap-2.5"><WsIcon ws={w} /><span className="truncate">{w.name}</span></span>}
             sub={w.role}
             control={(w.role === "owner" || w.role === "admin" || ws.isOrgAdmin) && (
               <button
