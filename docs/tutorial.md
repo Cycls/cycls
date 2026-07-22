@@ -1,6 +1,6 @@
 # Cycls Tutorial
 
-Cycls is the deep-stack AI SDK for Python. Every layer of an AI agent — container, UI, LLM — is a composable primitive. Write an agent in one file, deploy it with one command.
+Cycls is the deep-stack AI SDK for Python. Every layer of an AI agent — container, UI, LLM, storage — is a composable primitive. Write an agent in one file, deploy it with one command.
 
 ## Prerequisites
 
@@ -28,7 +28,7 @@ llm = (
 )
 
 
-@cycls.agent()
+@cycls.agent(volumes={"/workspace": cycls.Volume("hello-chats")})
 async def hello(context):
     async for ev in llm.run(context=context):
         yield cycls.to_ui(ev)
@@ -43,11 +43,13 @@ cycls deploy hello.py  # production
 
 You now have a streaming chat interface backed by Claude, live at `http://localhost:8080` (or `https://hello.cycls.ai` for the deploy).
 
+Agents keep chat state on a [volume](volume.md) mounted at `/workspace` — the decorator requires one. Locally `cycls run` ignores volumes (your code sees the local filesystem); in the cloud the named volume is created on first deploy and outlives the deployment.
+
 ---
 
-## The Three Primitives
+## The Primitives
 
-Every Cycls agent is composed from three fluent immutable builders:
+Every Cycls agent is composed from fluent immutable builders:
 
 ```python
 image = cycls.Image().pip("numpy").copy(".env")
@@ -69,22 +71,24 @@ llm = (
 )
 
 
-@cycls.agent(image=image, web=web)
+@cycls.agent(image=image, web=web,
+             volumes={"/workspace": cycls.Volume("my-agent")})
 async def my_agent(context):
     async for ev in llm.run(context=context):
         yield cycls.to_ui(ev)
 ```
 
-- **`cycls.Image`** — container build config (pip, apt, copy, run commands, volume)
+- **`cycls.Image`** — container build config (pip, apt, copy, run commands)
 - **`cycls.Web`** — UI, auth, branding, CMS, analytics
 - **`cycls.LLM`** — model, system prompt, tools, handlers, allowed builtins, sandbox
-- **`cycls.Workspace` / `cycls.Dict`** — persistent per-user state (see [Free-tier quota recipe](#free-tier-quota-recipe))
+- **`cycls.Volume`** — named persistent storage, attached by mount path
+- **`cycls.DB`** — per-user JSON store over the workspace (see [Free-tier quota recipe](#free-tier-quota-recipe))
 
 Each decorator accepts exactly the primitives it needs:
 
-- `@cycls.function(image=)` — non-blocking compute
-- `@cycls.app(image=)` — blocking ASGI service
-- `@cycls.agent(image=, web=)` — managed chat product (LLM is consumed inside the body)
+- `@cycls.function(image=, volumes=, schedule=)` — non-blocking compute
+- `@cycls.app(image=, volumes=)` — blocking ASGI service
+- `@cycls.agent(image=, web=, volumes=)` — managed chat product (LLM is consumed inside the body; a `/workspace` volume is required)
 
 ---
 
@@ -98,9 +102,9 @@ async def my_agent(context):
     context.messages.raw  # full data with all parts
     context.last_message  # shortcut: last user message text
     context.user          # User(id, org_id, plan, features, ...) when auth is set
+    context.chat_id       # current chat session id
     context.prod          # True when running via .deploy(), False on .local() — gate billing/analytics
-    with context.workspace():   # per-user persistent scope — enables cycls.Dict(...)
-        usage = cycls.Dict("usage")
+    context.workspace     # per-user file scope on the /workspace volume
 ```
 
 ---
@@ -235,6 +239,21 @@ image = cycls.Image().copy(".providers.env", ".env")
 
 ---
 
+## `cycls.Volume` — Persistent Storage
+
+```python
+data = cycls.Volume("training-data")
+
+@cycls.function(volumes={"/data": data})
+def crunch(day):
+    import pandas as pd
+    return pd.read_parquet(f"/data/events-{day}.parquet").sum()
+```
+
+Named storage attached to any deployment at any mount path — created on first reference, shared by name across deployments, and alive until you explicitly `cycls volume delete` it. `.read_only()` and `.sub_path("a/b")` restrict a mount. Agents require one at `/workspace` (chat state lives there); `cycls rm` detaches volumes but never deletes their data. Seed and extract data with `cycls volume put/get`. Full story: [volume.md](volume.md).
+
+---
+
 ## `cycls.Web` — UI, Auth, Branding
 
 ```python
@@ -256,6 +275,7 @@ web = (
 | `.theme(name)` | `"default"` or `"dev"` |
 | `.cms(host)` | Register this agent with a CMS (default `"cycls.ai"` fetches from `cms.cycls.ai/agents/{name}`) |
 | `.analytics(bool)` | Enable usage metrics |
+| `.suggestions(bool)` | Prompt-starter suggestions on the empty-chat screen (default off) |
 | `.copy_public(*files)` | Static files served at `/public` |
 
 Static files land at `https://your-app.cycls.ai/public/logo.png`.
@@ -295,7 +315,7 @@ async for ev in llm.run(context=context):
 | `.api_key(key)` | Override API key |
 | `.loop(fn)` | Replace the built-in loop (see *Hooking the loop* below) |
 
-The Bash tool runs inside a `bubblewrap` sandbox with the workspace bound at `/workspace` and a sanitized environ. Network is off by default — enabling it allows outbound calls but means a prompt-injected bash could exfiltrate anything it can read. See [docs/sandbox-security.md](sandbox-security.md) for the full threat model.
+The Bash tool runs inside a `bubblewrap` sandbox with the workspace bound at `/workspace` and a sanitized environ. Network is off by default — enabling it allows outbound calls but means a prompt-injected bash could exfiltrate anything it can read. See [sandbox-security.md](notes/sandbox-security.md) for the full threat model.
 
 ### Hooking the loop
 
@@ -310,7 +330,7 @@ async for ev in llm.run(context=context):
     yield cycls.to_ui(ev)
 ```
 
-Need more than a hook? `.loop(fn)` swaps the loop entirely — `fn` is an async generator with the default loop's signature that yields events. The building blocks live in `cycls.agent.harness`: `default_loop`, `make_provider`, `Session` (the message log + persistence), `build_tools`, `dispatch`, `compact`, `events`.
+Need more than a hook? `.loop(fn)` swaps the loop entirely — `fn` is an async generator with the default loop's signature that yields events. The building blocks live in `cycls._agent.harness`: `default_loop`, `make_provider`, `Session` (the message log + persistence), `build_tools`, `dispatch`, `compact`, `events`.
 
 ### Multi-provider
 
@@ -415,7 +435,7 @@ else:
 
 ### Free-tier quota recipe
 
-Block free orgs (b2b) and rate-limit free users (b2c) with a per-workspace counter. `cycls.Dict` stores the counter under the user's `.cycls/` directory; the key is the month, so history accumulates and resets happen naturally.
+Block free orgs (b2b) and rate-limit free users (b2c) with a per-user counter. `cycls.DB` stores it on the workspace volume; the key is the month, so history accumulates and resets happen naturally.
 
 ```python
 from datetime import datetime, timezone
@@ -423,47 +443,52 @@ import cycls
 
 FREE_MONTHLY_LIMIT = 10
 
-@cycls.agent(image=image, web=web)
+@cycls.agent(image=image, web=web,
+             volumes={"/workspace": cycls.Volume("my-agent")})
 async def my_agent(context):
     user = context.user
+    exempt = not context.prod   # local dev is never blocked
 
-    if user.plan == "o:free_org":
-        yield {"type": "callout",
-               "callout": "This workspace needs a paid plan.",
-               "style": "error"}
+    if user.plan == "o:free_org" and not exempt:
+        cycls.log("cap_hit", user=user, chat_id=context.chat_id, kind="org_free")
+        yield {"type": "callout", "callout": "This workspace needs a paid plan.", "style": "error"}
+        yield {"type": "ui", "action": "open_plan_modal"}
         return
 
-    with context.workspace():
-        usage = cycls.Dict("usage")
-        month = datetime.now(timezone.utc).strftime("%Y-%m")
-        entry = usage.get(month, {"count": 0})
+    db = cycls.DB(context.workspace)
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    entry = await db.get(f"usage/{month}", {"count": 0})
 
-        if user.plan == "u:free_user" and entry["count"] >= FREE_MONTHLY_LIMIT:
-            yield {"type": "callout",
-                   "callout": f"Free tier limit reached ({FREE_MONTHLY_LIMIT}/mo).",
-                   "style": "warning"}
-            return
+    if user.plan == "u:free_user" and entry["count"] >= FREE_MONTHLY_LIMIT and not exempt:
+        cycls.log("cap_hit", user=user, chat_id=context.chat_id,
+                  kind="user_free_monthly", count=entry["count"])
+        yield {"type": "callout",
+               "callout": f"Free tier limit reached ({FREE_MONTHLY_LIMIT}/mo).",
+               "style": "warning"}
+        yield {"type": "ui", "action": "open_plan_modal"}
+        return
 
-        entry["count"] += 1
-        usage[month] = entry
+    entry["count"] += 1
+    await db.put(f"usage/{month}", entry)
 
     async for ev in llm.run(context=context):
         yield cycls.to_ui(ev)
 ```
 
-`cycls.Dict("name")` is a persistent JSON-backed dict scoped to the surrounding `with context.workspace():` block. The `.cycls/` directory is framework-managed — user tools (Bash, Editor, files API) can read it but cannot write to it, so the quota cannot be tampered with from inside the agent.
+`cycls.DB(context.workspace)` is a per-user JSON store persisted on the `/workspace` volume: `await db.get(key, default)`, `await db.put(key, value)`, `db.items(prefix=...)`, `db.delete(...)`. `cycls.log(level, user=, chat_id=, **fields)` emits one structured line the log backend captures — queryable later via `cycls logs -q` and `cycls sql`.
 
 ---
 
 ## HTTP Extension
 
-Agents expose the underlying FastAPI `APIRouter` via `.server` for webhooks, health checks, OAuth callbacks, and any custom routes. Use `Depends(my_agent.auth)` to protect routes with the same Clerk JWT the chat endpoint uses.
+Agents expose a FastAPI-style router via `.server` for webhooks, health checks, OAuth callbacks, and any custom routes. Registrations are recorded and replayed onto the real `APIRouter` inside the container, so the decorators (`.get`, `.post`, `.api_route`, `.websocket`, ...) work as usual. Use `Depends(my_agent.auth)` to protect routes with the same Clerk JWT the chat endpoint uses.
 
 ```python
 from fastapi import Depends
 
 
-@cycls.agent(web=cycls.Web().auth(cycls.Clerk()))
+@cycls.agent(web=cycls.Web().auth(cycls.Clerk()),
+             volumes={"/workspace": cycls.Volume("my-agent")})
 async def my_agent(context):
     async for ev in llm.run(context=context):
         yield cycls.to_ui(ev)
@@ -488,13 +513,20 @@ async def profile(user = Depends(my_agent.auth)):
 ### CLI (recommended)
 
 ```bash
-cycls run my_agent.py       # local Docker + hot-reload
-cycls deploy my_agent.py    # production
-cycls ls                    # list deployments
-cycls logs <name> -f        # tail logs
-cycls rm <name>             # delete a deployment
 cycls init [name]           # scaffold a starter file
+cycls run my_agent.py       # local Docker + hot-reload
+cycls run func.py --remote  # cloud dev: warm executor / live dev-URL hot-swap
+cycls deploy my_agent.py    # production
+cycls shell my_agent.py     # bash inside the built image
+cycls ls                    # list deployments
+cycls rm <name>             # delete a deployment
+cycls logs <name> -f        # tail logs (-q for structured filters)
+cycls cost <name>           # aggregate LLM spend
+cycls sql [QUERY]           # SQL over logs + billing
+cycls volume ls             # manage volumes (create, put, get, rm, delete)
 ```
+
+Full reference: [cli.md](cli.md).
 
 ### Programmatic
 
@@ -547,6 +579,19 @@ def api_server(port):
 api_server.run(port=8000)
 ```
 
+### Scheduling
+
+Bare functions deploy as remote-callable endpoints (`cycls.remote("name")(...)`). Add `schedule=` and the platform calls the deployed function on a cron — pair it with a volume so output lands somewhere durable:
+
+```python
+@cycls.function(schedule=cycls.Cron("0 3 * * *", timezone="Asia/Riyadh"),
+                volumes={"/reports": cycls.Volume("daily-reports")})
+def nightly():
+    ...
+```
+
+Details: [function.md](function.md), [cron.md](cron.md).
+
 ### Function vs Agent
 
 | | `@cycls.function` | `@cycls.agent` |
@@ -561,7 +606,8 @@ api_server.run(port=8000)
 
 | Method | Description |
 |---|---|
-| `.run(*args, **kwargs)` | Execute and return result |
+| `.run(*args, **kwargs)` | Execute locally in Docker and return result |
+| `.remote(*args, **kwargs)` | Execute on Cycls Cloud with current code |
 | `.watch(*args, **kwargs)` | Run with file watching |
 | `.build(*args, **kwargs)` | Build standalone Docker image |
 | `.deploy(*args, **kwargs)` | Deploy to Cycls cloud |
@@ -573,11 +619,11 @@ api_server.run(port=8000)
 Every agent exposes these HTTP endpoints:
 
 ```
-POST /chat/cycls           # Cycls streaming protocol (SSE)
+POST /                     # Cycls streaming protocol (SSE); /chat is an alias
 POST /chat/completions     # OpenAI-compatible format
 GET  /config               # App config (title, plan, auth flag, ...)
-POST /attachments          # File upload (multipart)
-GET  /attachments/<token>  # Attachment download
+POST /transcribe           # Voice input → text
+GET  /og.png               # Social-preview image
 
 # Authenticated:
 GET    /chats                 # List chats
@@ -591,9 +637,14 @@ PUT    /files/<path>          # Upload (multipart)
 PATCH  /files/<path>          # Rename (body: {"to": "new/path"})
 POST   /files/<path>          # Create directory
 DELETE /files/<path>          # Delete
+
+POST   /share                 # Create a share link for a chat
+GET    /share                 # List share links
+DELETE /share/<token>         # Revoke
+GET    /shared/<user>/<token> # Public share page (+ /data, /file/<path>, /fork)
 ```
 
-Sessions and files are per-user under `/workspace/<user_id>/`. Path traversal is blocked. State routers (sessions, files, share) are only installed when auth is configured.
+Sessions and files are per-user under `/workspace/<user_id>/`. Path traversal is blocked. State routers (chats, files, share) are only installed when auth is configured.
 
 ---
 
@@ -641,6 +692,9 @@ image = cycls.Image().pip("numpy").rebuild()
 
 ## Next Steps
 
+- [function.md](function.md) — the full remote-execution story
+- [volume.md](volume.md) — persistent storage in depth
+- [cron.md](cron.md) — scheduled functions
+- [cli.md](cli.md) — every CLI verb
 - Explore the [examples](../examples/) directory for working code
-- Read the [README](../README.md) for the architectural overview
 - Visit [cycls.com](https://cycls.com) for deploy + billing
