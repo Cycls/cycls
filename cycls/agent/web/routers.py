@@ -665,18 +665,20 @@ def workspaces_router(cycls_app, user_dep, volume, base):
             out += [{"id": d, "name": d[2:], "type": "personal", "role": None}
                     for d in sorted(dirs) if d.startswith("u-") and d != f"u-{user.id}"]
             return out
-        for ws_id in await state.member_of(orgdb, user.id):
-            row = await orgdb.get(f"workspaces/{ws_id}")
-            member = await orgdb.get(f"members/{ws_id}/{user.id}")
-            if (member or {}).get("role") == "excluded":   # General exclusion marker
-                continue
-            if row:
-                out.append({**row, "role": (member or {}).get("role")})
-        # General: every org member by default (no rows) — unless excluded.
-        if getattr(user, "org_id", None) and not any(w["id"] == "t-shared" for w in out):
-            if role := await state.resolve_role(user, "t-shared", orgdb):
-                if reg := await orgdb.get("workspaces/t-shared"):
-                    out.append({**reg, "role": role})
+        # Two LISTs total — my member rows and the registry — joined in
+        # memory; per-team gets would be 2K roundtrips on object storage.
+        members = {k.split("/")[1]: m async for k, m in orgdb.scan(glob=f"members/*/{user.id}")}
+        regs = {k.split("/")[-1]: row async for k, row in orgdb.scan(prefix="workspaces/")}
+        for ws_id, member in members.items():
+            reg = regs.get(ws_id)
+            if reg and not reg.get("builtin") and member.get("role") != "excluded":
+                out.append({**reg, "role": member.get("role")})
+        # General: every org member by default; admins immune to exclusion.
+        if getattr(user, "org_id", None) and (reg := regs.get("t-shared")):
+            if _is_org_admin(user):
+                out.append({**reg, "role": "admin"})
+            elif members.get("t-shared", {}).get("role") != "excluded":
+                out.append({**reg, "role": "editor"})
         return out
 
     @r.post("/workspaces")
