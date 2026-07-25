@@ -67,21 +67,13 @@ is inert. The chat UI offers org members by name (from Clerk, client-side).
 
 ## Enabling on an existing deployment
 
-Migration is lazy and automatic: on an org's first request after the flag
-flips, everything under the org root (files, chats, agent KV) moves into
-General — old chats stay coherent because their attachments move with them.
-Solo users' trees move into their personal workspace. A bare-user tree is
-solo data and is never moved into an org, whatever org the user's token
-carries — it surfaces only in the user's personal (no-org) context. A marker row makes this
-once-per-org across restarts, and a lock serializes concurrent first
-requests; cross-instance races are benign, but flip the flag during low
-traffic anyway. Share links minted before the migration keep working — the
-viewer falls back to the owner's personal workspace, then General.
-
-Note for the storage-curious: chat titles in the sidebar ride GCS custom
-metadata, which gcsfuse moves drop. The migration rewrites it from the
-canonical bodies, and listings self-heal any row whose meta channel is
-missing.
+The SDK moves no data. On an org's first request it provisions General's
+registry row — nothing else. Legacy content under the org root stays where
+it is (invisible in workspace mode) until the operator migrates it into
+General via the CLI, dry-run first. Solo accounts need no migration at
+all: their personal workspace IS the account root, so their data is
+readable in place the moment the flag flips. Deleting General writes a
+tombstone row, which keeps the deletion permanent across provisioning.
 
 ## Security
 

@@ -65,18 +65,22 @@ function ChatAppKeyed({ config }: { config: AppConfig | null }) {
     prevKey.current = orgKey;
     setWsId(wsEnabled ? localStorage.getItem(wsKey(orgKey)) : null);
   }
-  setActiveWorkspace(wsEnabled ? wsId : null);   // before children render/fetch
+  // Personal context has one workspace — never restore/persist a selection
+  // (a stale team id in the personal bucket 404'd every request).
+  const effectiveWs = organization ? wsId : null;
+  setActiveWorkspace(wsEnabled ? effectiveWs : null);   // before children render/fetch
   const switchWorkspace = useCallback((id: string | null) => {
+    if (!organization) { setWsId(null); return; }
     if (id) localStorage.setItem(wsKey(orgKey), id);
     else localStorage.removeItem(wsKey(orgKey));
     window.history.replaceState({}, "", window.location.pathname);
     setWsId(id);
-  }, [orgKey]);
+  }, [orgKey, organization]);
   const workspace = useMemo<WorkspaceSelection | undefined>(
-    () => wsEnabled ? { id: wsId, switch: switchWorkspace } : undefined,
-    [wsEnabled, wsId, switchWorkspace]);
+    () => wsEnabled ? { id: effectiveWs, switch: switchWorkspace } : undefined,
+    [wsEnabled, effectiveWs, switchWorkspace]);
   if (!isLoaded) return null;
-  return <ChatApp key={`${orgKey}:${wsId || "personal"}`} config={config} workspace={workspace} />;
+  return <ChatApp key={`${orgKey}:${effectiveWs || "personal"}`} config={config} workspace={workspace} />;
 }
 
 function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: WorkspaceSelection }) {

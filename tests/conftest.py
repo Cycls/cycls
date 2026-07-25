@@ -5,11 +5,11 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _reset_migrated():
+def _reset_provisioned():
     """Org names repeat across tests with fresh tmp_paths — clear the
-    once-per-org migration cache so each test migrates its own tree."""
+    once-per-org provisioning cache."""
     from cycls._agent import state
-    state._migrated.clear()
+    state._provisioned.clear()
 
 
 # ---- Live LLM tests ----

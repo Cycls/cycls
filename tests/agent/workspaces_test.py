@@ -397,61 +397,32 @@ def _seed_legacy(tmp_path, org="org_1", user="user_1"):
     _run(state.append_messages(legacy_ws, "c1", [{"role": "user", "content": "hi"}], 0))
 
 
-def test_migration_moves_org_root_into_t_shared(tmp_path):
+def test_org_legacy_data_stays_until_cli_migration(tmp_path):
+    """The SDK never moves data: legacy org content stays at the org root
+    (invisible in workspace mode) until the operator migrates via the CLI.
+    General is provisioned as an empty registry row."""
     _seed_legacy(tmp_path)
     client = _client(tmp_path)
 
-    rows = client.get("/workspaces").json()   # first touch triggers the move
+    rows = client.get("/workspaces").json()
     shared = next(r for r in rows if r["id"] == "t-shared")
     assert shared["builtin"] == "org" and shared["role"] == "editor"
-
-    # files now live inside t-shared, reachable by every org member; chats
-    # stay per-user within the workspace — only their owner sees them there
-    h = {"X-Workspace": "t-shared", "X-Test-User": "user_2"}
-    assert [f["name"] for f in client.get("/files", headers=h).json()] == ["report.md"]
+    assert (tmp_path / "org_1" / "report.md").exists()   # untouched
+    h = {"X-Workspace": "t-shared"}
+    assert client.get("/files", headers=h).json() == []
     assert client.get("/chats", headers=h).json() == []
-    h1 = {"X-Workspace": "t-shared"}
-    assert [c["id"] for c in client.get("/chats", headers=h1).json()] == ["c1"]
-    # the org root itself is clean (only the new layout + org rows remain)
-    import os as _os
-    assert set(_os.listdir(tmp_path / "org_1")) == {"ws", ".org"}
-    # personal workspaces start empty
-    assert client.get("/chats").json() == []
-    # org admin holds implicit admin on the builtin workspace
     rows = client.get("/workspaces", headers={"X-Test-User": "admin_1"}).json()
     assert next(r for r in rows if r["id"] == "t-shared")["role"] == "admin"
 
 
-def test_migration_retry_merges_instead_of_nesting(tmp_path):
-    """A retried move (interrupted copy left a partial dest) merges — it must
-    not nest src under the existing dest dir, and the original file wins."""
-    src = tmp_path / "root" / "docs"
-    src.mkdir(parents=True)
-    (src / "a.txt").write_text("original")
-    (src / "b.txt").write_text("b")
-    dst = tmp_path / "dest" / "docs"
-    dst.mkdir(parents=True)
-    (dst / "a.txt").write_text("trunc")
-
-    state._merge_move(src, dst)
-
-    assert not (dst / "docs").exists()
-    assert (dst / "a.txt").read_text() == "original"
-    assert (dst / "b.txt").read_text() == "b"
-    assert not src.exists()
-
-
-def test_fresh_org_gets_general_and_migration_is_once(tmp_path):
+def test_fresh_org_gets_general_once(tmp_path):
     client = _client(tmp_path)
-    rows = client.get("/workspaces").json()   # first touch: marker + General
-    general = next(r for r in rows if r["id"] == "t-shared")
+    general = next(r for r in client.get("/workspaces").json() if r["id"] == "t-shared")
     assert general["name"] == "General" and general["role"] == "editor"
-    assert _run(_orgdb(tmp_path).get("migrated")) is not None
-    # a legacy-looking file appearing later is NOT migrated again
-    (tmp_path / "org_1" / "late.txt").write_text("x")
-    state._migrated.clear()   # simulate a restart — marker row must gate it
+    row = _run(_orgdb(tmp_path).get("workspaces/t-shared"))
+    state._provisioned.clear()   # restart: existing row is not overwritten
     client.get("/workspaces")
-    assert (tmp_path / "org_1" / "late.txt").exists()
+    assert _run(_orgdb(tmp_path).get("workspaces/t-shared")) == row
 
 
 def test_deleting_general_is_permanent(tmp_path):
@@ -459,9 +430,10 @@ def test_deleting_general_is_permanent(tmp_path):
     client.get("/workspaces")
     r = client.delete("/workspaces/t-shared", headers={"X-Test-User": "admin_1"})
     assert r.status_code == 200
-    state._migrated.clear()
-    rows = client.get("/workspaces").json()   # marker gates re-provisioning
+    state._provisioned.clear()
+    rows = client.get("/workspaces").json()   # tombstone blocks re-provisioning
     assert not any(w["id"] == "t-shared" for w in rows)
+    assert client.get("/chats", headers={"X-Workspace": "t-shared"}).status_code == 404
 
 
 def test_solo_user_gets_no_general(tmp_path):
@@ -492,14 +464,19 @@ def test_migration_never_moves_solo_data_into_an_org(tmp_path):
     assert [c["id"] for c in client.get("/chats", headers=h).json()] == ["c1"]
 
 
-def test_migration_solo_user_goes_to_personal(tmp_path):
+def test_solo_data_readable_in_place_no_migration(tmp_path):
+    """Solo personal workspace IS the account root: legacy data is readable
+    immediately, nothing moves, no marker or General is provisioned."""
     _seed_legacy(tmp_path, org="solo", user="solo")
     client = _client(tmp_path)
     h = {"X-Test-User": "solo"}
     assert [f["name"] for f in client.get("/files", headers=h).json()] == ["report.md"]
-    assert (tmp_path / "solo" / "ws" / "u-solo" / "report.md").exists()
-    # no phantom t-shared for org-less users
-    assert _run(state.org_db("solo", tmp_path, f"file://{tmp_path}").get("workspaces/t-shared")) is None
+    assert [c["id"] for c in client.get("/chats", headers=h).json()] == ["c1"]
+    assert (tmp_path / "solo" / "report.md").exists()          # untouched
+    assert not (tmp_path / "solo" / "ws").exists()             # no move
+    orgdb = state.org_db("solo", tmp_path, f"file://{tmp_path}")
+    assert _run(orgdb.get("workspaces/t-shared")) is None
+    assert _run(orgdb.get("migrated")) is None                 # no marker either
 
 
 def test_t_shared_is_per_org(tmp_path):
@@ -577,10 +554,10 @@ def test_list_chats_heals_wiped_meta(tmp_path, monkeypatch):
     assert rows == [("c1", {"id": "c1", "title": "هلا", "updatedAt": "2026-07-06"})]
 
 
-def test_v1_marker_org_gets_general_upgrade(tmp_path):
+def test_org_with_stale_migration_marker_still_gets_general(tmp_path):
+    """Marker rows from the retired in-SDK migration are inert — provisioning
+    keys off the registry row alone."""
     _run(_orgdb(tmp_path).put("migrated", {"at": "2026-07-06", "moved": "False"}))
     client = _client(tmp_path)
     rows = client.get("/workspaces").json()
     assert any(w["id"] == "t-shared" and w["name"] == "General" for w in rows)
-    marker = _run(_orgdb(tmp_path).get("migrated"))
-    assert marker["v"] == "2" and marker["at"] == "2026-07-06"

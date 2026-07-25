@@ -93,7 +93,7 @@ async def resolve_ws_id(user, header, mode, volume, base):
     is 404, not 403, so ids don't leak existence (docs/workspaces.md)."""
     if not mode or user is None:
         return None
-    await state.ensure_migrated(user, volume, base)   # free after the org's first touch
+    await state.ensure_general(user, volume, base)
     ws_id = header or f"u-{user.id}"
     if ws_id == f"u-{user.id}":
         return ws_id
@@ -651,7 +651,7 @@ def workspaces_router(cycls_app, user_dep, volume, base):
 
     @r.get("/workspaces")
     async def list_workspaces(request: Request, user: Any = user_dep):
-        await state.ensure_migrated(user, volume, base)
+        await state.ensure_general(user, volume, base)
         orgdb = _orgdb(user)
         out = [{"id": f"u-{user.id}", "name": "Personal", "type": "personal", "role": "owner"}]
         if _is_org_admin(user) and request.query_params.get("all") is not None:
@@ -674,7 +674,7 @@ def workspaces_router(cycls_app, user_dep, volume, base):
             if reg and not reg.get("builtin") and member.get("role") != "excluded":
                 out.append({**reg, "role": member.get("role")})
         # General: every org member by default; admins immune to exclusion.
-        if getattr(user, "org_id", None) and (reg := regs.get("t-shared")):
+        if getattr(user, "org_id", None) and (reg := regs.get("t-shared")) and reg.get("builtin"):
             if _is_org_admin(user):
                 out.append({**reg, "role": "admin"})
             elif members.get("t-shared", {}).get("role") != "excluded":
@@ -689,7 +689,7 @@ def workspaces_router(cycls_app, user_dep, volume, base):
             raise HTTPException(400, "Team workspaces require an organization")
         data = await request.json()
         name = _name_or_400(data)
-        await state.ensure_migrated(user, volume, base)   # registers General before the name check
+        await state.ensure_general(user, volume, base)
         orgdb = _orgdb(user)
         await _reserved_name_or_409(orgdb, name)
         return await state.create_team_ws(orgdb, name, user.id,
@@ -725,7 +725,12 @@ def workspaces_router(cycls_app, user_dep, volume, base):
                 raise HTTPException(404, "Workspace not found")
         elif await _role_or_404(user, ws_id) != "owner" and not _is_org_admin(user):
             raise HTTPException(403, "Deleting a team workspace requires its owner")
+        builtin = await _is_builtin(user, ws_id)
         await state.wipe_workspace(state.org_of(user), ws_id, volume, base)
+        if builtin:
+            # Tombstone: blocks lazy re-provisioning — deleting General is permanent.
+            row = {"id": ws_id, "deleted": datetime.now(timezone.utc).isoformat()}
+            await _orgdb(user).put(f"workspaces/{ws_id}", row, meta=row)
         return {"ok": True}
 
     # ---- Members (team workspaces only) ----

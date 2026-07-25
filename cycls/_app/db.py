@@ -48,6 +48,8 @@ def workspace(target, volume, base=None, slot=".db", ws=None):
             raise ValueError(f"invalid workspace subject: {sub!r}")
     if ws is not None and not _WS_ID.match(ws):
         raise ValueError(f"invalid workspace id: {ws!r}")
+    if ws is not None and not user and ws == f"u-{org}":
+        ws = None   # a solo account's personal workspace IS the account root
     parts = [org, "ws", ws] if ws else [org]
     path = "/".join([*parts, slot, user] if user else [*parts, slot])
     return Workspace(Path(volume).joinpath(*parts), path, sub, base, ws)
