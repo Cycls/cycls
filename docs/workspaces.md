@@ -24,9 +24,9 @@ the org) or `"admin"` (org admins only).
 | Team | `t-{id}` | members via the ACL; org admins implicitly | the creator (`owner`) + `admin` members |
 | General (builtin) | `t-shared` | every org member (editor) by default — org admins may exclude individuals; member rows hold only `excluded` markers | org admins (name/icon editable by them only) |
 
-Every org gets **General** automatically on its first request — fresh orgs and
-migrated ones share the same shape: Personal + General. An org admin deleting
-General is permanent. Solo (org-less) users get Personal only.
+Every org gets **General** automatically on its first request — an empty
+registry row; any legacy data reaches it only via the operator CLI. An org
+admin deleting General is permanent. Solo (org-less) users get Personal only.
 
 Team member roles: `owner` (the creator; can delete), `admin` (manages
 members and rename), `editor` (works in the workspace). The owner row is

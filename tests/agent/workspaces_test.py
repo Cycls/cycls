@@ -382,7 +382,7 @@ def test_workspaces_router_absent_in_legacy_mode(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Legacy migration (t-shared) + builtin org role
+# General provisioning (t-shared) + builtin org role
 # ---------------------------------------------------------------------------
 
 def _seed_legacy(tmp_path, org="org_1", user="user_1"):
@@ -485,7 +485,7 @@ def test_t_shared_is_per_org(tmp_path):
     another org's files."""
     _seed_legacy(tmp_path)
     client = _client(tmp_path)
-    client.get("/workspaces")   # migrate org_1
+    client.get("/workspaces")   # provision org_1's General
     h = {"X-Workspace": "t-shared", "X-Test-User": "outsider"}
     r = client.get("/files", headers=h)
     assert r.status_code == 200 and r.json() == []
