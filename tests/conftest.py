@@ -8,7 +8,7 @@ import pytest
 def _reset_migrated():
     """Org names repeat across tests with fresh tmp_paths — clear the
     once-per-org migration cache so each test migrates its own tree."""
-    from cycls.agent import state
+    from cycls._agent import state
     state._migrated.clear()
 
 

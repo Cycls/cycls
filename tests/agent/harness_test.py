@@ -4,7 +4,7 @@ import asyncio
 import pytest
 
 import cycls
-from cycls.agent.tools import _resolve_path, build_tools, vendor_skips
+from cycls._agent.tools import _resolve_path, build_tools, vendor_skips
 
 
 # ---- _resolve_path escape hardening ----
@@ -134,7 +134,7 @@ def test_vendor_skips_flags_native_search_off_anthropic():
 # ---- pricing / context ----
 
 def test_cost_from_price_rates():
-    from cycls.agent.harness.main import _cost
+    from cycls._agent.harness.main import _cost
     price = (3, 15, 0.30, 6)
     assert _cost(price, 1_000_000, 0, 0, 0) == 3.0
     assert _cost(price, 0, 1_000_000, 0, 0) == 15.0
@@ -204,14 +204,14 @@ class _FakeClient:
 
 
 def test_web_search_requires_api_key(monkeypatch):
-    from cycls.agent.tools import _exec_web_search
+    from cycls._agent.tools import _exec_web_search
     monkeypatch.delenv("BRAVE_API_KEY", raising=False)
     assert "BRAVE_API_KEY" in asyncio.run(_exec_web_search({"query": "hi"}))
 
 
 def test_web_search_formats_passages(monkeypatch):
     import httpx
-    from cycls.agent.tools import _exec_web_search
+    from cycls._agent.tools import _exec_web_search
     monkeypatch.setenv("BRAVE_API_KEY", "x")
     _FakeClient.resp = _FakeResp(data={"web": {"results": [
         {"title": "T1", "url": "http://a", "description": "D1", "extra_snippets": ["s1", "s2"]},
@@ -223,7 +223,7 @@ def test_web_search_formats_passages(monkeypatch):
 
 def test_web_fetch_strips_html_to_text(monkeypatch):
     import httpx
-    from cycls.agent import tools
+    from cycls._agent import tools
     _FakeClient.resp = _FakeResp(
         text="<html><head><style>x{}</style></head><body><p>Hello</p><script>bad()</script>World</body></html>",
         headers={"content-type": "text/html"})
@@ -235,14 +235,14 @@ def test_web_fetch_strips_html_to_text(monkeypatch):
 
 
 def test_web_fetch_rejects_non_url():
-    from cycls.agent.tools import _exec_web_fetch
+    from cycls._agent.tools import _exec_web_fetch
     assert "http(s) URL" in asyncio.run(_exec_web_fetch({"url": "not-a-url"}))
 
 
 def test_web_fetch_blocks_private_addresses():
     """SSRF guard: the fetch runs in the server process — loopback, RFC1918
     and link-local (cloud metadata) targets are refused before any request."""
-    from cycls.agent.tools import _exec_web_fetch
+    from cycls._agent.tools import _exec_web_fetch
     for url in ("http://localhost:8000/x", "http://127.0.0.1/", "http://[::1]/",
                 "http://169.254.169.254/computeMetadata/v1/", "http://192.168.1.1/admin"):
         assert "private" in asyncio.run(_exec_web_fetch({"url": url})), url
@@ -251,7 +251,7 @@ def test_web_fetch_blocks_private_addresses():
 def test_web_fetch_checks_redirect_hops(monkeypatch):
     """A public URL redirecting to an internal host is refused at the hop."""
     import httpx
-    from cycls.agent import tools
+    from cycls._agent import tools
     monkeypatch.setattr(tools, "_is_public_host", lambda h: h != "localhost")
     _FakeClient.resp = _FakeResp(headers={"location": "http://localhost/admin"}, status=302)
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
@@ -260,7 +260,7 @@ def test_web_fetch_checks_redirect_hops(monkeypatch):
 
 def test_custom_tool_step_defaults_to_first_string_input(monkeypatch):
     """Unlabelled custom tools show their first string input, like Bash(command)."""
-    from cycls.agent import tools
+    from cycls._agent import tools
     monkeypatch.setattr(tools, "_custom_labels", {})
     s = tools.tool_step("legal_search", {"limit": 5, "sql": "SELECT id FROM laws"})
     assert s == {"tool_name": "legal_search", "step": "SELECT id FROM laws"}
@@ -269,7 +269,7 @@ def test_custom_tool_step_defaults_to_first_string_input(monkeypatch):
 
 
 def test_registered_label_renders_the_step(monkeypatch):
-    from cycls.agent import tools
+    from cycls._agent import tools
     monkeypatch.setattr(tools, "_custom_labels", {})
     tools.register_labels({"legal_search": lambda inp: f"بحث: {inp['sql']}"})
     assert tools.tool_step("legal_search", {"sql": "SELECT 1"})["step"] == "بحث: SELECT 1"
@@ -279,7 +279,7 @@ def test_registered_label_renders_the_step(monkeypatch):
 
 
 def test_llm_on_label_registers_via_run(monkeypatch):
-    from cycls.agent import tools
+    from cycls._agent import tools
     monkeypatch.setattr(tools, "_custom_labels", {})
 
     async def fake_loop(**kw):
@@ -300,7 +300,7 @@ def test_llm_on_label_registers_via_run(monkeypatch):
 def test_web_fetch_caps_body_size(monkeypatch):
     """An endless body stops at _FETCH_MAX_BYTES instead of filling memory."""
     import httpx
-    from cycls.agent import tools
+    from cycls._agent import tools
 
     class _Endless(_FakeResp):
         async def aiter_bytes(self):
@@ -317,7 +317,7 @@ def test_web_fetch_caps_body_size(monkeypatch):
 def test_openai_to_messages_degrades_image_in_tool_result():
     """OpenAI tool messages are text-only — image/document blocks inside a
     tool_result get a text stub + the kinds are reported so the loop can warn."""
-    from cycls.agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.providers.openai import OpenAIProvider
     raw = [
         {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": [
@@ -335,7 +335,7 @@ def test_openai_to_messages_degrades_image_in_tool_result():
 
 
 def test_openai_to_messages_degrades_document_in_tool_result():
-    from cycls.agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.providers.openai import OpenAIProvider
     raw = [
         {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": [
@@ -350,7 +350,7 @@ def test_openai_to_messages_degrades_document_in_tool_result():
 
 def test_openai_to_messages_user_image_sent_when_vision():
     """Default (vision=True): user-content images go out as image_url data URLs."""
-    from cycls.agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.providers.openai import OpenAIProvider
     raw = [
         {"role": "user", "content": [
             {"type": "text", "text": "what is this?"},
@@ -366,7 +366,7 @@ def test_openai_to_messages_user_image_sent_when_vision():
 def test_openai_to_messages_user_image_stubbed_without_vision():
     """vision=False backstop: an image block that reaches a text-only model
     degrades to a text stub instead of a rejected request (z.ai code 1210)."""
-    from cycls.agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.providers.openai import OpenAIProvider
     raw = [
         {"role": "user", "content": [
             {"type": "text", "text": "what is this?"},
@@ -382,7 +382,7 @@ def test_openai_to_messages_user_image_stubbed_without_vision():
 def test_openai_to_messages_user_document_stubbed():
     """Documents have no Chat Completions wire form — stubbed on any model,
     not silently dropped."""
-    from cycls.agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.providers.openai import OpenAIProvider
     raw = [
         {"role": "user", "content": [
             {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "abc"}},
@@ -394,7 +394,7 @@ def test_openai_to_messages_user_document_stubbed():
 
 
 def test_openai_to_messages_no_drops_when_text_only():
-    from cycls.agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.providers.openai import OpenAIProvider
     raw = [
         {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": "plain text"},
@@ -421,7 +421,7 @@ class _CaptureClient:
 
 
 def _stream_kwargs(vendor, thinking=None):
-    from cycls.agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.providers.openai import OpenAIProvider
     client = _CaptureClient()
     p = OpenAIProvider(client, "some-model", vendor)
     async def drain():
@@ -460,8 +460,8 @@ def test_openai_usage_splits_cached_tokens():
     """prompt_tokens includes cached tokens on OpenAI-compat providers — the
     Turn must carry the split so cost prices them at the cache-read rate."""
     from unittest.mock import AsyncMock, MagicMock
-    from cycls.agent.harness.providers.openai import OpenAIProvider
-    from cycls.agent.harness.events import Turn
+    from cycls._agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.events import Turn
 
     chunk = MagicMock()
     chunk.usage.prompt_tokens = 100
@@ -485,8 +485,8 @@ def test_openai_usage_cached_tokens_top_level_fallback():
     """Kimi/Moonshot reports `cached_tokens` at the top level of usage, not
     under prompt_tokens_details — the split must still be carried."""
     from unittest.mock import AsyncMock, MagicMock
-    from cycls.agent.harness.providers.openai import OpenAIProvider
-    from cycls.agent.harness.events import Turn
+    from cycls._agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.events import Turn
 
     chunk = MagicMock()
     chunk.usage.prompt_tokens = 100
@@ -510,7 +510,7 @@ def test_openai_usage_cached_tokens_top_level_fallback():
 def test_openai_to_messages_drops_empty_text_parts():
     """Strict endpoints (GLM) reject empty text — parts and thinking-only
     assistant turns must not reach the wire."""
-    from cycls.agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.providers.openai import OpenAIProvider
     raw = [
         {"role": "user", "content": [{"type": "text", "text": ""}, {"type": "text", "text": "hi"}]},
         {"role": "assistant", "content": [{"type": "thinking", "thinking": "hmm"}]},
@@ -531,7 +531,7 @@ def test_anthropic_provider_caches_last_tool_and_last_user_message():
     """AnthropicProvider attaches cache_control to the last tool and the last
     user message's tail block — the three breakpoints (system + tools + last
     user) make the entire static prefix cacheable per turn."""
-    from cycls.agent.harness.providers.anthropic import AnthropicProvider
+    from cycls._agent.harness.providers.anthropic import AnthropicProvider
     p = AnthropicProvider(None, "claude-sonnet-4-20250514")
 
     tools = [{"name": "a", "description": "", "input_schema": {}},
@@ -634,5 +634,5 @@ def test_llm_loop_runs_custom_loop():
 
 
 def test_harness_kit_exposes_building_blocks():
-    from cycls.agent.harness import default_loop, make_provider, Session, build_tools, dispatch, compact, events, to_ui
+    from cycls._agent.harness import default_loop, make_provider, Session, build_tools, dispatch, compact, events, to_ui
     assert callable(default_loop) and callable(make_provider) and callable(build_tools)

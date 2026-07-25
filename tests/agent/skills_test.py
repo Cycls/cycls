@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from cycls.agent.tools import skills
-from cycls.agent.harness.prompts import workspace_instructions, fence_instructions
+from cycls._agent.tools import skills
+from cycls._agent.harness.prompts import workspace_instructions, fence_instructions
 
 
 @pytest.fixture(autouse=True)

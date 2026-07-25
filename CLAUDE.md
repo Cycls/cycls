@@ -2,7 +2,7 @@
 
 Python SDK for building, deploying, and monetizing AI agents. Write a function, deploy it as an API, web interface, or both.
 
-For a comprehensive walk through the primitives, decorators, CLI, and end-to-end patterns, see [docs/notes/tutorial.md](docs/notes/tutorial.md).
+For a comprehensive walk through the primitives, decorators, CLI, and end-to-end patterns, see [docs/tutorial.md](docs/tutorial.md).
 
 ## Tech Stack
 
@@ -44,17 +44,17 @@ docker system prune -af
 ```
 cycls/
 ├── cli.py                  # CLI: run, deploy, shell, ls, rm, logs, cost, sql, volume, init, version
-├── function/
+├── _function/
 │   ├── main.py             # Function class + @cycls.function decorator
 │   ├── image.py            # cycls.Image fluent builder
 │   ├── volume.py           # cycls.Volume — named persistent storage
 │   ├── schedule.py         # cycls.Cron — fire a deployed function on a schedule
 │   └── remote.py           # pickle-RPC shim + cycls.remote client (--remote deploys)
-├── app/
+├── _app/
 │   ├── main.py             # App class + @cycls.app + _make_decorator
 │   ├── auth.py             # cycls.Clerk, cycls.JWT, GCP, User, AppleIAP, validator
 │   └── web.py              # cycls.Web fluent builder
-└── agent/
+└── _agent/
     ├── main.py             # Agent class + @cycls.agent decorator
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector

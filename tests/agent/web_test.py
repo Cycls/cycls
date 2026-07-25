@@ -2,13 +2,13 @@ import pytest
 import json
 import asyncio
 import importlib.resources
-from cycls.agent.web import web, Config, Messages, sse, encoder, openai_encoder
+from cycls._agent.web import web, Config, Messages, sse, encoder, openai_encoder
 
 # To run these tests:
 # poetry run pytest tests/web_test.py -v -s
 
 # Use actual default theme
-THEME_PATH = str(importlib.resources.files('cycls').joinpath('agent/web/themes/dev'))
+THEME_PATH = str(importlib.resources.files('cycls').joinpath('_agent/web/themes/dev'))
 
 
 # =============================================================================
@@ -209,7 +209,7 @@ def test_config_endpoint():
 def test_cms_brand_merges_piece_by_piece(monkeypatch):
     """Static .brand() wins piece by piece; the CMS fills what's unset — a
     static name/description must not skip the fetch and lose the CMS icon."""
-    from cycls.agent.web.server import PassMetadata
+    from cycls._agent.web.server import PassMetadata
 
     class _Resp:
         status_code = 200
@@ -237,7 +237,7 @@ def test_cms_brand_merges_piece_by_piece(monkeypatch):
 
 def test_cms_brand_fetch_failure_keeps_static(monkeypatch):
     """A dead CMS must not clobber static branding."""
-    from cycls.agent.web.server import PassMetadata
+    from cycls._agent.web.server import PassMetadata
 
     def boom(*a, **k): raise OSError("down")
     monkeypatch.setattr("httpx.get", boom)
@@ -358,9 +358,9 @@ def _share_test_app(tmp_path):
     """Mount the token-based share router with a fixed in-process User."""
     from fastapi import Depends, FastAPI
     from fastapi.testclient import TestClient
-    from cycls.app.auth import User
-    from cycls.app.db import workspace
-    from cycls.agent.web.routers import share_router
+    from cycls._app.auth import User
+    from cycls._app.db import workspace
+    from cycls._agent.web.routers import share_router
     import cycls
 
     @cycls.app(image={"volume": str(tmp_path)})
@@ -378,8 +378,8 @@ def _share_test_app(tmp_path):
 
 def test_share_router_mint_and_resolve(tmp_path):
     """POST /share mints a token; GET /share/<user>/<token>/data returns the chat."""
-    from cycls.agent import state as chat
-    from cycls.app.db import workspace
+    from cycls._agent import state as chat
+    from cycls._app.db import workspace
     import asyncio
 
     svc, user, client = _share_test_app(tmp_path)
@@ -432,8 +432,8 @@ def test_share_router_unknown_chat_404(tmp_path):
 
 
 def test_share_router_list_and_delete(tmp_path):
-    from cycls.agent import state as chat
-    from cycls.app.db import workspace
+    from cycls._agent import state as chat
+    from cycls._app.db import workspace
     import asyncio
 
     svc, user, client = _share_test_app(tmp_path)
@@ -455,7 +455,7 @@ def test_share_router_list_and_delete(tmp_path):
 
 def test_share_router_file_share(tmp_path):
     """File shares: /data returns metadata pointing at /file/<path>; /file/<path> serves bytes."""
-    from cycls.app.db import workspace
+    from cycls._app.db import workspace
 
     svc, user, client = _share_test_app(tmp_path)
     ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
@@ -474,7 +474,7 @@ def test_share_router_file_share(tmp_path):
 def test_validator_rejects_query_token(tmp_path):
     """Regression: `?token=` in the query MUST NOT authenticate (Codespace proxy
     can inject stray Bearers; URL tokens leak via logs/Referer). Bearer header only."""
-    from cycls.app.auth import JWT, validator
+    from cycls._app.auth import JWT, validator
     from fastapi import Depends, FastAPI
     from fastapi.testclient import TestClient
 
@@ -615,7 +615,7 @@ def test_context_workspace_uses_config_volume():
     """Config.volume threads into Context.workspace() at per-request construction."""
     from fastapi.testclient import TestClient
     from pathlib import Path
-    from cycls.app.db import Workspace
+    from cycls._app.db import Workspace
 
     captured = {}
     async def handler(context):
@@ -635,7 +635,7 @@ def test_context_workspace_uses_config_volume():
 # Web router path-guard tests (state files / resolve_path)
 # =============================================================================
 
-from cycls.agent.web.routers import resolve_path
+from cycls._agent.web.routers import resolve_path
 
 
 def test_state_resolve_path_rejects_cycls(tmp_path):
@@ -669,7 +669,7 @@ def test_state_resolve_path_allows_normal(tmp_path):
 # Multi-workspace mode (docs/workspaces.md)
 # =============================================================================
 
-from cycls.agent.web.routers import resolve_ws_id, personal_ws
+from cycls._agent.web.routers import resolve_ws_id, personal_ws
 
 
 def _resolve(user, header, mode, tmp_path):
@@ -677,7 +677,7 @@ def _resolve(user, header, mode, tmp_path):
 
 
 def test_resolve_ws_id_legacy_mode_ignores_header(tmp_path):
-    from cycls.app.auth import User
+    from cycls._app.auth import User
     user = User(id="user_1", org_id="org_1")
     assert _resolve(user, None, None, tmp_path) is None
     assert _resolve(user, "u-user_1", None, tmp_path) is None      # mode off → header ignored
@@ -685,7 +685,7 @@ def test_resolve_ws_id_legacy_mode_ignores_header(tmp_path):
 
 
 def test_resolve_ws_id_defaults_to_personal(tmp_path):
-    from cycls.app.auth import User
+    from cycls._app.auth import User
     user = User(id="user_1", org_id="org_1")
     assert _resolve(user, None, "member", tmp_path) == "u-user_1"
     assert _resolve(user, "", "member", tmp_path) == "u-user_1"
@@ -694,7 +694,7 @@ def test_resolve_ws_id_defaults_to_personal(tmp_path):
 
 def test_resolve_ws_id_foreign_ids_404(tmp_path):
     from fastapi import HTTPException
-    from cycls.app.auth import User
+    from cycls._app.auth import User
     user = User(id="user_1", org_id="org_1")
     for header in ("u-user_2", "t-unknown", "../evil", "garbage"):
         with pytest.raises(HTTPException) as exc:
@@ -712,8 +712,8 @@ def _ws_routers_client(tmp_path, workspaces="member", max_upload=512):
     from types import SimpleNamespace
     from fastapi import Depends, FastAPI
     from fastapi.testclient import TestClient
-    from cycls.app.auth import User
-    from cycls.agent.web.routers import install_routers
+    from cycls._app.auth import User
+    from cycls._agent.web.routers import install_routers
 
     user = User(id="user_1", org_id="org_1")
     stub = SimpleNamespace(prod=False, _auth_provider=None,
@@ -828,7 +828,7 @@ def test_legacy_mode_files_land_in_org_root(tmp_path):
 
 
 def test_web_builder_workspaces_option():
-    from cycls.agent.web import Web
+    from cycls._agent.web import Web
     assert Web()._workspaces is None
     assert Web().workspaces()._workspaces == "member"
     assert Web().workspaces(create="admin")._workspaces == "admin"
@@ -862,7 +862,7 @@ def test_agent_workspaces_config_wiring():
 # =============================================================================
 
 def _branded_config(public_path=THEME_PATH, **kw):
-    from cycls.agent.web.server import PassMetadata
+    from cycls._agent.web.server import PassMetadata
     return Config(
         public_path=public_path, name="super",
         pass_metadata={"en": PassMetadata(name="Super", description="Gets things done", logo="<svg/>")},
@@ -951,7 +951,7 @@ def test_theme_colors_injected(tmp_path):
 
 
 def test_web_builder_brand_and_explore():
-    from cycls.agent.web.builder import Web
+    from cycls._agent.web.builder import Web
 
     w = (Web().brand(name="Super", description="d", logo="<svg>icon</svg>", brand="<svg>nav</svg>")
               .brand(locale="ar", name="سوبر")

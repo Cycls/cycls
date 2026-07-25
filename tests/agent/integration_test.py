@@ -2,7 +2,7 @@ import pytest
 import cycls
 
 WS = {"/workspace": cycls.Volume("test-chats")}
-from cycls.agent import Agent
+from cycls._agent import Agent
 import asyncio
 import subprocess
 import tempfile
@@ -13,10 +13,10 @@ import os
 
 
 # --- Test Case 1: Basic Decorator ---
-# Verifies that @cycls.app returns an App instance
+# Verifies that @cycls._app returns an App instance
 
 def test_app_decorator_returns_app():
-    """Tests that @cycls.app decorator returns an App."""
+    """Tests that @cycls._app decorator returns an App."""
     print("\n--- Running test: test_app_decorator_returns_app ---")
 
     @cycls.agent(volumes=WS)
@@ -28,9 +28,12 @@ def test_app_decorator_returns_app():
     print("✅ Test passed.")
 
 
-def test_agent_server_api_route_records():
-    """Tests that @my_agent.server.api_route records routes on the APIRouter."""
-    print("\n--- Running test: test_agent_server_api_route_records ---")
+def test_agent_server_routes_cross_pickle_as_data():
+    """Tests that agent.server routes survive cloudpickle and build the router on the far side."""
+    print("\n--- Running test: test_agent_server_routes_cross_pickle_as_data ---")
+
+    import cloudpickle
+    from fastapi import FastAPI
 
     @cycls.agent(volumes=WS)
     async def my_agent(context):
@@ -40,13 +43,20 @@ def test_agent_server_api_route_records():
     def health():
         return {"ok": True}
 
-    @my_agent.server.api_route("/webhook", methods=["POST"])
+    @my_agent.server.post("/webhook")
     async def webhook(request):
         return {"received": True}
 
-    paths = {r.path for r in my_agent.server.routes}
-    assert "/health" in paths
-    assert "/webhook" in paths
+    routers = cloudpickle.loads(cloudpickle.dumps(my_agent._routers()))
+    app = FastAPI()
+    for r in routers:
+        r(app, None)
+    # Assert functionally — newer FastAPI defers included routers in
+    # app.routes (_IncludedRouter), so path introspection is version-fragile.
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    assert client.get("/health").json() == {"ok": True}
+    assert client.post("/webhook").status_code != 404   # registered
     print("✅ Test passed.")
 
 
@@ -155,7 +165,7 @@ def test_app_is_callable():
 # Verifies that async functions work correctly
 
 def test_app_async_function():
-    """Tests that async functions work with @cycls.app."""
+    """Tests that async functions work with @cycls._app."""
     print("\n--- Running test: test_app_async_function ---")
 
     @cycls.agent(volumes=WS)
@@ -178,7 +188,7 @@ def test_app_async_function():
 # Verifies that sync generator functions work
 
 def test_app_sync_function():
-    """Tests that sync generator functions work with @cycls.app."""
+    """Tests that sync generator functions work with @cycls._app."""
     print("\n--- Running test: test_app_sync_function ---")
 
     @cycls.agent(volumes=WS)

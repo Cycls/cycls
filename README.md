@@ -372,7 +372,7 @@ No YAML. No Dockerfiles. No infrastructure repo. The code is the deployment.
 - [Cron](docs/cron.md) — fire a deployed function on a schedule
 - [Workspaces](docs/workspaces.md) — personal and team workspaces for agents
 - [CLI](docs/cli.md) — every command
-- [Tutorial](docs/notes/tutorial.md) — comprehensive guide from basics to advanced
+- [Tutorial](docs/tutorial.md) — comprehensive guide from basics to advanced
 - [Sandbox security](docs/notes/sandbox-security.md) — how the Bash tool is isolated
 - [Examples](examples/) — working code samples
 
