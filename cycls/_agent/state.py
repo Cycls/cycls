@@ -469,27 +469,6 @@ async def _restore_meta(org, ws_id, base):
             await store.write(key, data, meta={k: v for k, v in row.items() if isinstance(v, str)})
 
 
-def _move_user_tree(root, dest, uid):
-    """Move a pre-workspaces bare-user tree into the org's General: `.db` and
-    `.database` land under their per-user paths there, everything else merges
-    into the shared file tree — chats and their attachments stay coherent.
-    A tree that already has the workspace layout (`ws/` or `.org/`) belongs
-    to an active solo context and is left alone."""
-    if not root.is_dir() or (root / "ws").is_dir() or (root / ".org").is_dir():
-        return False
-    entries = [e.name for e in os.scandir(root)]
-    if not entries:
-        return False
-    dest.mkdir(parents=True, exist_ok=True)
-    for name in entries:
-        if name in (".db", ".database"):
-            (dest / name).mkdir(exist_ok=True)
-            _merge_move(root / name, dest / name / uid)
-        else:
-            _merge_move(root / name, dest / name)
-    return True
-
-
 async def ensure_migrated(user, volume, base):
     """First-touch setup: provision the builtin General workspace and move
     any pre-workspaces trees into the new layout.
@@ -502,21 +481,20 @@ async def ensure_migrated(user, volume, base):
     `.org/` stay org-level. The org marker gates all of it, so an org admin
     deleting General is permanent.
 
-    Org-context users get a second, per-user leg: a bare-user tree left from
-    the era the SDK keyed by plain user id merges into General too (the org
-    context can't see `{volume}/{user_id}` otherwise — its chats would just
-    disappear). For a user in several orgs, the first org they touch wins."""
+    A bare-user tree (`{volume}/{user_id}`) is SOLO data: it must never be
+    moved into an org, no matter what org the user's token carries. It
+    surfaces only through the solo leg above, when the user visits in
+    personal (no-org) context."""
     global _migrate_lock
     org = org_of(user)
     is_org = bool(getattr(user, "org_id", None))
-    user_key = f"{org}:{user.id}" if is_org and getattr(user, "id", None) else None
-    if org in _migrated and (user_key is None or user_key in _migrated):
+    if org in _migrated:
         return
     if _migrate_lock is None:
         _migrate_lock = asyncio.Lock()
     async with _migrate_lock:
-        orgdb = org_db(org, volume, base)
         if org not in _migrated:
+            orgdb = org_db(org, volume, base)
             marker = await orgdb.get("migrated")
             if marker is None:
                 ws_id = "t-shared" if is_org else f"u-{user.id}"
@@ -550,20 +528,6 @@ async def ensure_migrated(user, volume, base):
                 marker = {**marker, "v": "2"}
                 await orgdb.put("migrated", marker, meta=marker)
             _migrated.add(org)
-        if user_key and user_key not in _migrated:
-            if await orgdb.get(f"migrated/{user.id}") is None:
-                moved = False
-                # No General (an admin deleted it — permanent): leave the tree
-                # where the solo context can still reach it.
-                if await orgdb.get("workspaces/t-shared") is not None:
-                    dest = Path(workspace(org, volume, base=base, ws="t-shared").root)
-                    moved = await asyncio.to_thread(
-                        _move_user_tree, Path(volume) / user.id, dest, user.id)
-                    if moved:
-                        await _restore_meta(org, "t-shared", base)
-                marker = {"at": datetime.now(timezone.utc).isoformat(), "moved": str(moved)}
-                await orgdb.put(f"migrated/{user.id}", marker, meta=marker)
-            _migrated.add(user_key)
 
 
 async def _provision_general(orgdb):
