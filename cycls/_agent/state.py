@@ -50,7 +50,7 @@ async def put_meta(workspace, chat_id, data):
 async def list_chats(workspace):
     """Yield (chat_id, {title, updatedAt}) for every chat. One LIST via
     object storage; one glob+read on local FS. Rows whose custom-meta channel
-    was wiped (a gcsfuse move drops it — e.g. the workspace migration) are
+    was wiped (any gcsfuse move drops it — e.g. an operator CLI migration) are
     self-healed from the body, which is canonical."""
     db = DB(workspace)
     async for key, meta in db.scan(glob="chat/*/index"):
