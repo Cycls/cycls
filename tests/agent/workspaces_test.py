@@ -7,8 +7,8 @@ outsider from another org.
 """
 import asyncio
 
-from cycls.agent import state
-from cycls.app.auth import User
+from cycls._agent import state
+from cycls._app.auth import User
 
 USERS = {
     "user_1": User(id="user_1", org_id="org_1"),
@@ -31,7 +31,7 @@ def _client(tmp_path, workspaces="member"):
     from types import SimpleNamespace
     from fastapi import Depends, FastAPI, Request
     from fastapi.testclient import TestClient
-    from cycls.agent.web.routers import install_routers
+    from cycls._agent.web.routers import install_routers
 
     def fake_auth(request: Request):
         return USERS[request.headers.get("x-test-user", "user_1")]
@@ -387,7 +387,7 @@ def test_workspaces_router_absent_in_legacy_mode(tmp_path):
 
 def _seed_legacy(tmp_path, org="org_1", user="user_1"):
     """A pre-workspaces tree: loose files + per-user chat DB at the org root."""
-    from cycls.app.db import workspace
+    from cycls._app.db import workspace
     root = tmp_path / org
     root.mkdir(parents=True, exist_ok=True)
     (root / "report.md").write_text("legacy")
@@ -560,7 +560,7 @@ def test_fork_team_share_lands_in_forker_personal(tmp_path):
     ws_id = _mk_team(client)
     h = {"X-Workspace": ws_id}
     client.put("/chats/c1", json={"title": "Team chat"}, headers=h)
-    from cycls.app.db import workspace as _workspace
+    from cycls._app.db import workspace as _workspace
     team_ws = _workspace("org_1:user_1", tmp_path, base=f"file://{tmp_path}", ws=ws_id)
     _run(state.append_messages(team_ws, "c1", [{"role": "user", "content": "hi"}], 0))
     token = client.post("/share", json={"path": "chat/c1"}, headers=h).json()["token"]
@@ -575,8 +575,8 @@ def test_fork_team_share_lands_in_forker_personal(tmp_path):
 def test_list_chats_heals_wiped_meta(tmp_path, monkeypatch):
     """gcsfuse moves drop GCS custom metadata; the sidebar listing must fall
     back to the canonical body and rewrite the meta channel."""
-    from cycls.app import db as db_mod
-    from cycls.app.db import workspace
+    from cycls._app import db as db_mod
+    from cycls._app.db import workspace
 
     ws = workspace("u1", tmp_path, base=f"file://{tmp_path}")
     _run(state.put_meta(ws, "c1", {"id": "c1", "title": "هلا", "updatedAt": "2026-07-06"}))

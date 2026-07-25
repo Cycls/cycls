@@ -51,7 +51,7 @@ def test_bare_function_sends_legacy_defaults():
 
 
 def test_dev_provision_caps_instances():
-    from cycls.function.main import Function
+    from cycls._function.main import Function
 
     f = Function(lambda context: None, "dev-demo", max_instances=1)
     _, form = _deploy(f)

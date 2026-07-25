@@ -3,7 +3,7 @@ import json
 import pytest
 
 import cycls
-from cycls.function.volume import to_wire
+from cycls._function.volume import to_wire
 
 
 def test_volume_wire_form():
@@ -52,7 +52,7 @@ def test_function_spec_survives_executor_reentry():
     def add(x, y):
         return x + y
 
-    from cycls.function import Function
+    from cycls._function import Function
     executor = Function(lambda: None, "exec-abc123", **add.spec)
     assert executor.spec["volumes"] == add.spec["volumes"]
 
@@ -78,7 +78,7 @@ def test_app_storage_resolves_through_platform_mapping(monkeypatch):
 
 
 def test_agent_config_storage_resolves_through_platform_mapping(monkeypatch):
-    from cycls.agent.web.server import Config
+    from cycls._agent.web.server import Config
 
     config = Config(name="bot")
     config.set_prod(True)

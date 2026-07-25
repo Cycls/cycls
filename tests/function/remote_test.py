@@ -9,7 +9,7 @@ import time
 import cloudpickle
 import pytest
 
-from cycls.function.remote import REMOTE_PY, RemoteError, remote, token_for
+from cycls._function.remote import REMOTE_PY, RemoteError, remote, token_for
 
 API_KEY = "test-key"
 NAME = "doubler"
@@ -79,7 +79,7 @@ def test_drive_runs_entrypoint(tmp_path, shim_url, monkeypatch, capsys):
     # The `cycls run` per-save path, minus the watcher: load the file, find
     # its entrypoint, run it — its .remote() call lands on the local shim.
     import cycls
-    from cycls.function import remote as rmod
+    from cycls._function import remote as rmod
 
     monkeypatch.setattr(cycls, "remote",
                         lambda n, **kw: rmod.remote(n, url=shim_url, api_key=API_KEY))
@@ -107,8 +107,8 @@ def exec_url(tmp_path_factory):
 
 
 def test_function_remote_and_map_ship_current(exec_url, monkeypatch):
-    from cycls.function import remote as rmod
-    from cycls.function.main import Function
+    from cycls._function import remote as rmod
+    from cycls._function.main import Function
 
     orig = rmod.remote
     monkeypatch.setattr(rmod, "remote",
@@ -121,7 +121,7 @@ def test_function_remote_and_map_ship_current(exec_url, monkeypatch):
 
 
 def test_executor_shared_per_image():
-    from cycls.function.main import Function
+    from cycls._function.main import Function
     a = Function(lambda x: x, "aa", image={"pip": ["numpy"]})
     b = Function(lambda y: y * 2, "bb", image={"pip": ["numpy"]})   # same image, other code
     c = Function(lambda z: z, "cc", image={"pip": ["pandas"]})
@@ -131,7 +131,7 @@ def test_executor_shared_per_image():
 
 
 def test_bind_converts_by_signature():
-    from cycls.function.remote import _bind
+    from cycls._function.remote import _bind
 
     def fn(n: int = 5, name="x", data=None, flag=True):
         pass
@@ -149,7 +149,7 @@ def test_bind_converts_by_signature():
 
 
 def test_drive_binds_args_to_entrypoint(tmp_path, capsys):
-    from cycls.function.remote import _drive
+    from cycls._function.remote import _drive
     (tmp_path / "argy.py").write_text(
         "import cycls\n"
         "@cycls.function()\n"
@@ -162,8 +162,8 @@ def test_drive_binds_args_to_entrypoint(tmp_path, capsys):
 
 
 def test_drive_routes_run_vs_remote(tmp_path, capsys, monkeypatch):
-    from cycls.function.main import Function
-    from cycls.function.remote import _drive
+    from cycls._function.main import Function
+    from cycls._function.remote import _drive
     (tmp_path / "r.py").write_text(
         "import cycls\n"
         "@cycls.function()\n"
@@ -177,7 +177,7 @@ def test_drive_routes_run_vs_remote(tmp_path, capsys, monkeypatch):
 
 
 def test_deploy_mode_reads_signature():
-    from cycls.function.main import Function
+    from cycls._function.main import Function
     f = lambda func: Function(func, "t")
     assert f(lambda url: url)._is_remote()                    # bare function → endpoint
     assert not f(lambda port: port)._is_remote()              # server contract
@@ -257,5 +257,5 @@ def test_runtime_mismatch_blocks_call(shim_url):
 
 def test_bare_logs_is_module_level():
     """App._serve imports this at container boot — template text alone doesn't count."""
-    from cycls.function.remote import BARE_LOGS
+    from cycls._function.remote import BARE_LOGS
     assert "hypercorn.access" in BARE_LOGS["loggers"]

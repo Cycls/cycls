@@ -17,12 +17,12 @@ def _load_target(path_spec):
     else:
         path_str, target = path_spec, None
 
-    from cycls.function.remote import _load_module
+    from cycls._function.remote import _load_module
     module = _load_module(path_str)
     path = Path(path_str).resolve()
 
-    from cycls.function import Function
-    from cycls.app import App
+    from cycls._function import Function
+    from cycls._app import App
 
     entry = next((o for o in vars(module).values()
                   if getattr(o, "_cycls_entry", False)), None)
@@ -45,7 +45,7 @@ def _load_target(path_spec):
 def _api(method, path, **kwargs):
     """Call the Cycls API with the user's API key."""
     import httpx
-    from cycls.function.main import _get_api_key, _get_base_url
+    from cycls._function.main import _get_api_key, _get_base_url
 
     api_key = _get_api_key()
     if not api_key:
@@ -88,8 +88,8 @@ def _stream_logs(name, stop):
     """Live-tail the dev service's own log stream (/_cycls/logs). Started once
     the service is up, so a 404 means it predates the endpoint."""
     import httpx
-    from cycls.function.main import _get_api_key
-    from cycls.function.remote import token_for
+    from cycls._function.main import _get_api_key
+    from cycls._function.remote import token_for
     headers = {"X-Cycls-Token": token_for(_get_api_key(), name)}
     while not stop.is_set():
         try:
@@ -114,7 +114,7 @@ def _watch_loop(instance, script, argv, remote, after_first=None):
     from watchfiles import watch
     paths = [script] + [str(Path(p).resolve()) for p in instance.copy if Path(p).exists()]
     drive = [sys.executable, "-c",
-             f"from cycls.function.remote import _drive; _drive({script!r}, {tuple(argv)!r}, {remote!r})"]
+             f"from cycls._function.remote import _drive; _drive({script!r}, {tuple(argv)!r}, {remote!r})"]
     print(f"{instance.name} — rerunning on save (Ctrl-C to stop)\n", flush=True)
     try:
         first = subprocess.run(drive)
@@ -138,7 +138,7 @@ def cmd_run(args):
     elif hasattr(instance, "local"):
         if args.remote:
             import threading
-            from cycls.agent.main import Agent
+            from cycls._agent.main import Agent
             if isinstance(instance, Agent):
                 sys.exit("live cloud dev for agents isn't wired yet — `cycls run` (Docker) or `cycls deploy`")
             stop = threading.Event()

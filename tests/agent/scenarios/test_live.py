@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 import cycls
-from cycls.app.db import workspace
+from cycls._app.db import workspace
 
 
 SONNET = "anthropic/claude-sonnet-4-6"
@@ -41,7 +41,7 @@ def _ctx(tmp_path, prompt, *, persist=False):
 
 
 async def _collect(llm, ctx):
-    from cycls.agent.harness.events import to_ui
+    from cycls._agent.harness.events import to_ui
     out = []
     async for ev in llm.run(context=ctx):
         out.append(to_ui(ev))
@@ -136,7 +136,7 @@ def test_persisted_chat_loads_clean_after_real_turn(tmp_path):
     persisted history is _valid_prefix-clean (no orphans). This is
     the ultimate end-to-end pin: real model + real persistence +
     load-time repair invariants all converge."""
-    from cycls.agent import state as chat
+    from cycls._agent import state as chat
 
     _, ctx = _ctx(tmp_path, "Say 'ack' and stop.", persist=True)
     llm = cycls.LLM().model(SONNET).max_tokens(50)
@@ -178,7 +178,7 @@ def test_multiturn_tool_chain_real(tmp_path):
     """Two-tool sequential workflow in one _run: create → read.
     Pins multi-turn dispatch + persist-per-turn boundaries with real model.
     Each turn should land cleanly on disk."""
-    from cycls.agent import state as chat
+    from cycls._agent import state as chat
 
     ws_root, ctx = _ctx(tmp_path,
         "Use the editor to create a file `data.txt` with the exact content "
@@ -288,7 +288,7 @@ def test_compaction_real_roundtrip(tmp_path):
     compaction marker, and the post-compact turn — none of which the mocked
     tests actually run end-to-end."""
     from unittest.mock import patch
-    from cycls.agent import state as sessions
+    from cycls._agent import state as sessions
 
     _, ctx = _ctx(tmp_path, "what's 2+2? one word.", persist=True)
 
@@ -309,7 +309,7 @@ def test_compaction_real_roundtrip(tmp_path):
     # COMPACT_BUFFER huge ⇒ threshold negative ⇒ compaction fires immediately.
     # `_cut` snaps recent to a user message, so the post-compact list stays
     # role-alternating (Anthropic rejects two consecutive assistants).
-    with patch("cycls.agent.harness.main.COMPACT_BUFFER", 999_999_999):
+    with patch("cycls._agent.harness.main.COMPACT_BUFFER", 999_999_999):
         events = asyncio.run(_collect(llm, ctx))
 
     assert any(isinstance(e, dict) and e.get("step") == "Compacting context..." for e in events), \

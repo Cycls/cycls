@@ -36,7 +36,7 @@ def test_executor_reentry_drops_schedule_but_keeps_volumes():
     def add(x, y):
         return x + y
 
-    from cycls.function import Function
+    from cycls._function import Function
     executor_spec = {k: v for k, v in add.spec.items() if k not in ("schedule", "timezone")}
     executor = Function(lambda: None, "exec-abc123", **executor_spec)
     assert "schedule" not in executor.spec

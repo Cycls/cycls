@@ -1,5 +1,5 @@
 """Event factories produce the exact wire shapes the FE renders."""
-from cycls.agent.harness import events
+from cycls._agent.harness import events
 
 
 def test_content_shapes():

@@ -11,7 +11,7 @@ Every control below is designed against prompt injection, not against a maliciou
 
 ## Layers
 
-A deployed agent runs inside a per-deploy Docker container. The `bash` tool (`cycls/agent/harness/tools.py::_exec_bash`) adds a second layer inside that container using `bwrap`. So the chain is:
+A deployed agent runs inside a per-deploy Docker container. The `bash` tool (`cycls/_agent/harness/tools.py::_exec_bash`) adds a second layer inside that container using `bwrap`. So the chain is:
 
 ```
 host → docker container (agent runtime) → bwrap sandbox (bash tool)
@@ -100,7 +100,7 @@ The `/dev/net/tun` wall is the load-bearing constraint — it kills every "fresh
 
 ### What we shipped: LD_PRELOAD shim
 
-`cycls/app/sandbox/_blockmeta.c` (~30 LOC C) intercepts libc `connect()` and returns `ECONNREFUSED` for:
+`cycls/_app/sandbox/_blockmeta.c` (~30 LOC C) intercepts libc `connect()` and returns `ECONNREFUSED` for:
 
 - `169.254.0.0/16` (IPv4 link-local — covers GCP/AWS/Azure metadata)
 - `fe80::/10` (IPv6 link-local)
