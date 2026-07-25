@@ -62,10 +62,12 @@ def test_workspace_ws_org_personal(tmp_path):
     assert ws.volume == tmp_path
 
 
-def test_workspace_ws_solo_user(tmp_path):
+def test_workspace_ws_solo_user_is_the_root(tmp_path):
+    """A solo account's personal workspace collapses to the account root —
+    the legacy layout; solo data never migrates for the workspaces flag."""
     ws = db.workspace("user", tmp_path, ws="u-user")
-    assert ws.root == tmp_path / "user" / "ws" / "u-user"
-    assert ws.path == "user/ws/u-user/.db"
+    assert ws.root == tmp_path / "user"
+    assert ws.path == "user/.db"
     assert ws.volume == tmp_path
 
 

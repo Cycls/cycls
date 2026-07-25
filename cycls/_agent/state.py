@@ -426,114 +426,31 @@ async def wipe_workspace(org, ws_id, volume, base):
     await orgdb.delete(f"members/{ws_id}/")
 
 
-# One-time-per-org legacy migration. The in-process cache makes the check
-# free after the first request; the `migrated` marker row makes it once
-# across restarts; the lock keeps concurrent first requests from racing the
-# move within an instance. Cross-instance retries merge instead of nesting
-# (_merge_move) — still, enable the flag during low traffic.
-_migrated = set()
-_migrate_lock = None
+_provisioned = set()
+_provision_lock = None
 
 
-def _merge_move(src, dst):
-    """shutil.move that merges into an existing directory instead of nesting
-    under it. On file conflicts the source wins — an interrupted gcsfuse
-    copy+delete can leave a truncated copy at the destination."""
-    if src.is_dir() and dst.is_dir():
-        for e in list(os.scandir(src)):
-            _merge_move(src / e.name, dst / e.name)
-        os.rmdir(src)
+async def ensure_general(user, volume, base):
+    """Provision the builtin General registry row on an org's first touch.
+    A tombstone row (admin deleted General — permanent) blocks re-creation.
+    Data migration is operator-run via the CLI, never in-request; solo
+    accounts need nothing — their personal workspace IS the account root."""
+    global _provision_lock
+    if not getattr(user, "org_id", None):
         return
-    if dst.is_dir():
-        shutil.rmtree(dst)
-    elif dst.exists():
-        dst.unlink()
-    shutil.move(str(src), str(dst))
-
-
-async def _restore_meta(org, ws_id, base):
-    """gcsfuse moves drop GCS custom metadata, which the scan-backed listings
-    (chat index, shares) read. Bodies are canonical — rewrite the channel."""
-    if not str(base).startswith("gs://"):
-        return
-    store = _store(f"{str(base).rstrip('/')}/{org}/ws/{ws_id}")
-    for key in await store.list_keys():
-        if not (key.endswith("/index") or "share/" in key):
-            continue
-        data = await store.read(key)
-        try:
-            row = json.loads(data)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if isinstance(row, dict) and row:
-            await store.write(key, data, meta={k: v for k, v in row.items() if isinstance(v, str)})
-
-
-async def ensure_migrated(user, volume, base):
-    """First-touch setup: provision the builtin General workspace and move
-    any pre-workspaces trees into the new layout.
-
-    Every org gets a default `t-shared` team workspace ("General", every
-    member an editor via its `builtin: org` row). Legacy content under
-    `{volume}/{org}` (files, `.db`, `.database`) moves into it — that's where
-    old chats' attachments live, so they stay coherent. Solo users migrate
-    into their personal `u-{user.id}` instead and get no team. `ws/` and
-    `.org/` stay org-level. The org marker gates all of it, so an org admin
-    deleting General is permanent.
-
-    A bare-user tree (`{volume}/{user_id}`) is SOLO data: it must never be
-    moved into an org, no matter what org the user's token carries. It
-    surfaces only through the solo leg above, when the user visits in
-    personal (no-org) context."""
-    global _migrate_lock
     org = org_of(user)
-    is_org = bool(getattr(user, "org_id", None))
-    if org in _migrated:
+    if org in _provisioned:
         return
-    if _migrate_lock is None:
-        _migrate_lock = asyncio.Lock()
-    async with _migrate_lock:
-        if org not in _migrated:
+    if _provision_lock is None:
+        _provision_lock = asyncio.Lock()
+    async with _provision_lock:
+        if org not in _provisioned:
             orgdb = org_db(org, volume, base)
-            marker = await orgdb.get("migrated")
-            if marker is None:
-                ws_id = "t-shared" if is_org else f"u-{user.id}"
-                root = Path(volume) / org
-                dest = Path(workspace(org, volume, base=base, ws=ws_id).root)
-
-                def _move():
-                    if not root.is_dir():
-                        return False
-                    entries = [e.name for e in os.scandir(root) if e.name not in ("ws", ".org")]
-                    if not entries:
-                        return False
-                    dest.mkdir(parents=True, exist_ok=True)
-                    for name in entries:
-                        _merge_move(root / name, dest / name)
-                    return True
-
-                moved = await asyncio.to_thread(_move)
-                if moved:
-                    await _restore_meta(org, ws_id, base)
-                if is_org:
-                    await _provision_general(orgdb)
-                marker = {"at": datetime.now(timezone.utc).isoformat(), "moved": str(moved), "v": "2"}
-                await orgdb.put("migrated", marker, meta=marker)
-            elif marker.get("v") != "2":
-                # v1 markers predate the default General workspace — provision it
-                # once (unless a row already exists), then stamp v2 so a later
-                # admin delete stays permanent.
-                if is_org and await orgdb.get("workspaces/t-shared") is None:
-                    await _provision_general(orgdb)
-                marker = {**marker, "v": "2"}
-                await orgdb.put("migrated", marker, meta=marker)
-            _migrated.add(org)
-
-
-async def _provision_general(orgdb):
-    row = {"id": "t-shared", "name": "General", "type": "team", "builtin": "org",
-           "created_by": "cycls", "created_at": datetime.now(timezone.utc).isoformat()}
-    await orgdb.put("workspaces/t-shared", row, meta=row)
+            if await orgdb.get("workspaces/t-shared") is None:
+                row = {"id": "t-shared", "name": "General", "type": "team", "builtin": "org",
+                       "created_by": "cycls", "created_at": datetime.now(timezone.utc).isoformat()}
+                await orgdb.put("workspaces/t-shared", row, meta=row)
+            _provisioned.add(org)
 
 
 # ---- Agent KV (LLM-facing tool) ----
