@@ -1,4 +1,4 @@
-"""Tests for the Agent loop in cycls/agent.py.
+"""Tests for the Agent loop in cycls/_agent.
 
 Mocks the Anthropic streaming API to test incremental history saving
 and crash recovery without hitting a real LLM.
