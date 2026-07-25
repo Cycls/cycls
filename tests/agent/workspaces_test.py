@@ -470,40 +470,26 @@ def test_solo_user_gets_no_general(tmp_path):
     assert _run(state.org_db("solo", tmp_path, f"file://{tmp_path}").get("workspaces/t-shared")) is None
 
 
-def test_migration_org_user_bare_tree_merges_into_general(tmp_path):
-    """A pre-workspaces bare-user tree (old SDK keyed by plain user id)
-    surfaces into General on the user's first org touch: chats into the
-    per-user chat DB, files into the shared tree."""
-    _seed_legacy(tmp_path, org="user_1", user="user_1")
+def test_migration_never_moves_solo_data_into_an_org(tmp_path):
+    """A bare-user tree is SOLO data. An org-context touch must leave it
+    exactly where it is — it belongs to the user's personal (no-org)
+    context, whatever org their token happens to carry. (Regression: a
+    per-user migration leg once pulled these trees into General — personal
+    chats vanished and personal files leaked to the org.)"""
+    _seed_legacy(tmp_path, org="user_1", user="user_1")   # user_1's solo tree
     client = _client(tmp_path)
-    client.get("/workspaces")   # first org touch: org leg + per-user leg
+    client.get("/workspaces")   # user_1 arrives in ORG context (org_1 token)
 
-    assert (tmp_path / "org_1" / "ws" / "t-shared" / "report.md").exists()
-    h = {"X-Workspace": "t-shared"}
+    # solo tree untouched, nothing crossed into the org
+    assert (tmp_path / "user_1" / "report.md").exists()
+    assert not (tmp_path / "org_1" / "ws" / "t-shared" / "report.md").exists()
+    assert client.get("/chats", headers={"X-Workspace": "t-shared"}).json() == []
+
+    # the same user visiting in SOLO context gets their data, workspace-shaped
+    USERS["user_1_solo"] = type(USERS["user_1"])(id="user_1")
+    h = {"X-Test-User": "user_1_solo"}
+    assert [f["name"] for f in client.get("/files", headers=h).json()] == ["report.md"]
     assert [c["id"] for c in client.get("/chats", headers=h).json()] == ["c1"]
-    # chats stay per-user inside General
-    assert client.get("/chats", headers={**h, "X-Test-User": "user_2"}).json() == []
-
-    # marker gates re-runs across restarts
-    assert _run(_orgdb(tmp_path).get("migrated/user_1")) is not None
-    (tmp_path / "user_1").mkdir(exist_ok=True)
-    (tmp_path / "user_1" / "late.txt").write_text("x")
-    state._migrated.clear()
-    client.get("/workspaces")
-    assert (tmp_path / "user_1" / "late.txt").exists()
-
-
-def test_migration_leaves_active_solo_tree_alone(tmp_path):
-    """A bare-user tree that already has the workspace layout belongs to an
-    active solo context — the org leg must not steal it."""
-    (tmp_path / "user_1" / "ws" / "u-user_1").mkdir(parents=True)
-    (tmp_path / "user_1" / "ws" / "u-user_1" / "mine.txt").write_text("solo")
-    client = _client(tmp_path)
-    client.get("/workspaces")
-    assert (tmp_path / "user_1" / "ws" / "u-user_1" / "mine.txt").exists()
-    assert not (tmp_path / "org_1" / "ws" / "t-shared" / "mine.txt").exists()
-    marker = _run(_orgdb(tmp_path).get("migrated/user_1"))
-    assert marker and marker["moved"] == "False"
 
 
 def test_migration_solo_user_goes_to_personal(tmp_path):
