@@ -1,4 +1,4 @@
-"""Tests for cycls/agent/tools/skills.py — frontmatter parsing, discovery,
+"""Tests for cycls/_agent/tools/skills.py — frontmatter parsing, discovery,
 precedence, the sandbox mounts, and the `skill` tool executor."""
 import asyncio
 
