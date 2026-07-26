@@ -237,7 +237,11 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
           .setenv(PATH=path, LANG=lang)
           .network(network).timeout(timeout))
     for src, dst in skills.dev_mounts():   # dev skill scripts/templates, read-only
-        sb = sb.ro_bind(src, dst)
+        # Only bind onto a pre-created mount point (skills.configure); bwrap
+        # can't mkdir it inside its read-only root — one missing dir would
+        # break EVERY bash command, so skip that skill's mount instead.
+        if os.path.isdir(dst):
+            sb = sb.ro_bind(src, dst)
     result = await sb.run(["bash", "-c", command], env={"PATH": path, "LANG": lang})
     if result.timed_out:
         return f"Error: Command timed out after {timeout}s"

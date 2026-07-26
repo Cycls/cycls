@@ -122,6 +122,16 @@ def configure(sources):
         key = str(Path(src).resolve())
         if key not in _dev_cache:
             _dev_cache[key] = _scan_dir(src, "dev")
+    # Pre-create each /skills/<name> mount point OUTSIDE the sandbox: bwrap
+    # can't mkdir them itself — they'd land inside its read-only root bind
+    # ("bwrap: Can't mkdir parents ... Read-only file system"). Best-effort:
+    # on a dev machine without root this fails silently and only the bash
+    # mounts are lost; discovery and the `skill` tool still work.
+    for skill in _dev_skills():
+        try:
+            Path(f"{MOUNT}/{skill.name}").mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
 
 
 def _dev_skills():
