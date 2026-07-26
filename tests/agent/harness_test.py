@@ -408,8 +408,9 @@ def test_openai_to_messages_degrades_document_in_tool_result():
         ]},
     ]
     out, dropped = OpenAIProvider(None, "gpt-x")._to_messages(raw, "")
-    assert dropped == {"document"}
-    assert "[document content not viewable on this provider]" in out[0]["content"]
+    assert dropped == {"document"}   # still reported, for the server-side log
+    # actionable stub: routes a vision model to read-with-pages, not a dead end
+    assert "pages=" in out[0]["content"]
 
 
 def test_openai_to_messages_user_image_sent_when_vision():
@@ -453,8 +454,11 @@ def test_openai_to_messages_user_document_stubbed():
         ]},
     ]
     out, dropped = OpenAIProvider(None, "gpt-x")._to_messages(raw, "")
-    assert dropped == {"document"}
-    assert out[0]["content"][0] == {"type": "text", "text": "[document content not viewable on this provider]"}
+    assert dropped == {"document"}   # still reported, for the server-side log
+    stub = out[0]["content"][0]
+    assert stub["type"] == "text"
+    # actionable stub: points at the saved workspace file, not a dead end
+    assert "saved in the workspace" in stub["text"]
 
 
 def test_openai_to_messages_no_drops_when_text_only():
