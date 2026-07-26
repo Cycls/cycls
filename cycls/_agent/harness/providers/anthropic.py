@@ -43,7 +43,8 @@ class AnthropicProvider:
         if not tools: return []
         return [*tools[:-1], {**tools[-1], "cache_control": _CACHE}]
 
-    async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None, thinking="adaptive"):
+    async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None,
+                     thinking="adaptive", extra_body=None):
         kwargs = {
             "model": self.model,
             "max_tokens": max_tokens,
@@ -61,6 +62,8 @@ class AnthropicProvider:
         if mcp_servers:
             kwargs.setdefault("extra_body", {})["mcp_servers"] = [s._spec() for s in mcp_servers]
             kwargs["extra_headers"] = {"anthropic-beta": "mcp-client-2025-04-04"}
+        if extra_body:  # deployer extras win over the built-in mapping
+            kwargs["extra_body"] = {**kwargs.get("extra_body", {}), **extra_body}
 
         tool_idx, search_idx, search_buf = {}, None, ""
         async with self._client.messages.stream(**kwargs) as stream:

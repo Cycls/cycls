@@ -132,7 +132,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                bash_timeout=600, bash_network=True, client=None,
                base_url=None, api_key=None, handlers=None, mcp_servers=None,
                thinking="adaptive", vision=True, web_search="brave",
-               instructions="AGENT.md", skills=[], price=None, context_window=None):
+               instructions="AGENT.md", skills=[], price=None, context_window=None,
+               extra_body=None):
     vendor, bare_model = model.split("/", 1)
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key,
                              vision=vision)
@@ -204,7 +205,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             try:
                 async for ev in _stream_with_retry(provider, messages=state.normalize(session.context()), system=system_text,
                                                    tools=tools_list, max_tokens=max_tokens,
-                                                   mcp_servers=mcp_servers, thinking=thinking):
+                                                   mcp_servers=mcp_servers, thinking=thinking,
+                                                   extra_body=extra_body):
                     if isinstance(ev, Turn): turn = ev
                     else:
                         if isinstance(ev, str): partial_text += ev

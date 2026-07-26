@@ -344,7 +344,8 @@ async for ev in llm.run(context=context):
 | `.context(n)` | Model context window in tokens — sets when compaction kicks in (default 1M; set it for smaller models) |
 | `.max_tokens(n)` | Max output tokens per request (default 8k) |
 | `.price(input=, output=, cache_read=, cache_write=)` | Token prices in USD per 1M for cost tracking; unset → costs report as $0 |
-| `.thinking(spec)` | Unified reasoning level: `"low"`/`"medium"`/`"high"`, `"adaptive"` (default), or `None` |
+| `.thinking(spec)` | Unified reasoning level: `"low"`/`"medium"`/`"high"`, `"adaptive"` (default), or `None` — translated to each vendor's dialect (OpenAI/Gemini/Grok/Mistral `reasoning_effort`, GLM/DeepSeek toggles, Qwen budgets, Kimi tiers, OpenRouter `reasoning`) |
+| `.extra_body(params)` | Vendor-specific request extras sent with every model call, merged after the built-in thinking mapping — your keys win. The escape hatch for unmapped vendors/params; `None` clears |
 | `.vision(bool)` | Whether the model accepts base64 media (images, PDFs). Default on; pass `False` for text-only models (GLM, most local) — attachments then stay in the workspace and the model gets a note naming the file, instead of the provider rejecting the request |
 | `.web_search(mode)` | `"brave"` (default, any model, needs `BRAVE_API_KEY`) or `"native"` (Anthropic server-side) |
 | `.mcp(*servers)` | Remote MCP servers via `cycls.MCP` (Anthropic models only) |

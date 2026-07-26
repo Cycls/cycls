@@ -37,6 +37,7 @@ class LLM:
         self._web_search = "brave"
         self._instructions = "AGENT.md"
         self._skills = []
+        self._extra_body = None
 
     def _copy(self, **updates):
         new = LLM.__new__(LLM)
@@ -89,6 +90,13 @@ class LLM:
         skills entirely. `skill` is a reserved tool name."""
         if sources == (None,): return self._copy(_skills=None)
         return self._copy(_skills=[*(self._skills or []), *sources])
+
+    def extra_body(self, params):
+        """Vendor-specific request extras sent with every model call, merged
+        after the built-in thinking mapping — your keys win. The escape hatch
+        for unmapped vendors/params, e.g. `.extra_body({"reasoning_effort":
+        "low"})`. None clears."""
+        return self._copy(_extra_body=dict(params) if params else None)
 
     def mcp(self, *servers):
         """Connect to one or more remote MCP servers (cycls.MCP). Their tools
@@ -164,5 +172,6 @@ class LLM:
             skills=self._skills,
             price=self._price,
             context_window=self._context,
+            extra_body=self._extra_body,
         ):
             yield ev
