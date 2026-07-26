@@ -4,7 +4,9 @@ endpoint speaking Chat Completions.
 Translates cycls Message shape (Anthropic JSON) ↔ OpenAI Chat Completions:
   - assistant tool_use blocks ↔ assistant.tool_calls
   - user tool_result blocks ↔ role="tool" messages (text-only)
-  - image/document in tool_results → text stubs (with a warning)
+  - images in tool_results → hoisted into the following user message on
+    vision models (tool messages are text-only by spec); text stubs (with a
+    warning) on vision=False. Documents in tool_results → stubs always.
   - user-content images → image_url data URLs; stubs on vision=False models
   - user-content documents → text stubs (no Chat Completions wire form)
 """
@@ -15,6 +17,42 @@ from ..events import Turn
 from ...tools import tool_step
 
 
+def _thinking_kwargs(vendor, thinking):
+    """Translate the unified .thinking() spec (None | "adaptive" | "low" |
+    "medium" | "high") into the vendor's reasoning dialect. Unknown vendors get
+    {} and the server default applies — control them via the model's own docs.
+    Verified against vendor docs July 2026."""
+    effort = thinking if thinking in ("low", "medium", "high") else None
+    on = bool(thinking)   # None → off; "adaptive"/levels → on
+    if vendor in ("zai", "zhipu", "zhipuai", "glm"):
+        # binary toggle only, non-standard field
+        return {"extra_body": {"thinking": {"type": "enabled" if on else "disabled"}}}
+    if vendor == "deepseek":
+        # V4: same toggle shape as GLM, plus a reasoning_effort level
+        kw = {"extra_body": {"thinking": {"type": "enabled" if on else "disabled"}}}
+        if effort: kw["reasoning_effort"] = effort
+        return kw
+    if vendor in ("qwen", "dashscope", "alibaba"):
+        # Qwen3.x: enable_thinking bool + thinking_budget (tokens) in extra_body
+        extra = {"enable_thinking": on}
+        if effort:
+            extra["thinking_budget"] = {"low": 4_096, "medium": 16_384, "high": 32_768}[effort]
+        return {"extra_body": extra}
+    if vendor in ("kimi", "moonshot", "moonshotai"):
+        # K3 tiers are low/high/max (server default max); can't be disabled
+        return {"reasoning_effort": {"low": "low", "medium": "high", "high": "max"}[effort]} if effort else {}
+    if vendor == "openrouter":
+        # aggregator normalizes to a `reasoning` object
+        return {"extra_body": {"reasoning": {"effort": effort}}} if effort else {}
+    if vendor in ("openai", "azure", "google", "gemini", "xai", "grok",
+                  "mistral", "mistralai", "groq", "perplexity"):
+        # the de-facto standard: top-level reasoning_effort low/medium/high
+        # (gpt-5*/o*, Azure OpenAI, Gemini-compat, Grok 4.5, Mistral Small 4+,
+        # Groq-hosted, Perplexity)
+        return {"reasoning_effort": effort} if effort else {}
+    return {}
+
+
 class OpenAIProvider:
     def __init__(self, client, model, vendor="openai", vision=True):
         self._client = client
@@ -23,20 +61,25 @@ class OpenAIProvider:
         self.vision = vision
 
     @staticmethod
-    def _tool_result_text(content):
-        """tool_result content → text-only string (OpenAI tool messages are
-        text-only). Returns (text, dropped_kinds) so callers can warn."""
-        if isinstance(content, str): return content, set()
-        if not isinstance(content, list): return json.dumps(content), set()
-        parts, dropped = [], set()
+    def _tool_result_text(content, vision=False):
+        """tool_result content → (text, dropped_kinds, images). OpenAI tool
+        messages are text-only by spec; on vision models the image blocks are
+        returned so the caller can hoist them into the user message that
+        follows the tool responses — the model then actually sees them."""
+        if isinstance(content, str): return content, set(), []
+        if not isinstance(content, list): return json.dumps(content), set(), []
+        parts, dropped, images = [], set(), []
         for x in content:
             if not isinstance(x, dict): continue
             t = x.get("type")
             if t == "text": parts.append(x.get("text", ""))
+            elif t == "image" and vision and x.get("source", {}).get("type") == "base64":
+                images.append(x["source"])
+                parts.append("[image attached — it follows in the next user message]")
             elif t in ("image", "document"):
                 dropped.add(t)
                 parts.append(f"[{t} content not viewable on this provider]")
-        return "".join(parts), dropped
+        return "".join(parts), dropped, images
 
     def _to_messages(self, messages, system):
         """cycls Messages → OpenAI Chat Completions messages, prepending system.
@@ -65,9 +108,13 @@ class OpenAIProvider:
                         parts.append({"type": "text",
                                       "text": f"[{t} content not viewable on this provider]"})
                     elif t == "tool_result":
-                        text, d = self._tool_result_text(b.get("content"))
+                        text, d, imgs = self._tool_result_text(b.get("content"), vision=self.vision)
                         dropped |= d
                         tools.append({"role": "tool", "tool_call_id": b["tool_use_id"], "content": text})
+                        # hoisted images ride in the user message after the tool responses
+                        parts.extend({"type": "image_url", "image_url": {
+                            "url": f"data:{src['media_type']};base64,{src['data']}"}}
+                            for src in imgs)
                 out.extend(tools)
                 if parts:
                     out.append({"role": "user", "content": parts})
@@ -98,7 +145,8 @@ class OpenAIProvider:
             for t in (tools or []) if not t.get("type", "").startswith("web_search")
         ]
 
-    async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None, thinking=None):
+    async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None,
+                     thinking=None, extra_body=None):
         api_messages, dropped = self._to_messages(messages, system)
         for kind in sorted(dropped):
             yield events.callout(f"`{kind}` content isn't viewable on this provider — the model sees a text stub.", "warning")
@@ -113,10 +161,10 @@ class OpenAIProvider:
         # else speaks the standard `max_tokens`.
         kwargs["max_completion_tokens" if self.vendor == "openai" else "max_tokens"] = max_tokens
         if (api_tools := self._to_tools(tools)): kwargs["tools"] = api_tools
-        if self.vendor in ("zai", "zhipu", "zhipuai", "glm"):
-            kwargs["extra_body"] = {"thinking": {"type": "enabled" if thinking else "disabled"}}
-        elif thinking in ("low", "medium", "high") and self.vendor in ("openai", "google", "gemini"):
-            kwargs["reasoning_effort"] = thinking  # gpt-5*/o* and Gemini-compat map this natively
+        kwargs.update(_thinking_kwargs(self.vendor, thinking))
+        if extra_body:
+            # merged last — deployer keys win, even over top-level params
+            kwargs["extra_body"] = {**kwargs.get("extra_body", {}), **extra_body}
 
         text_buf, calls, stop, usage = [], {}, "end_turn", None
         async for chunk in await self._client.chat.completions.create(**kwargs):

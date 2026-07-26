@@ -89,6 +89,8 @@ llm = (
     #   register a handler; label renders the UI step line, e.g. render_image(a cat)
     .allowed_tools(["Bash", "Editor", "WebSearch", "DataBase", "Canvas"])
     # .thinking("low")  # unified reasoning across providers: "low" | "medium" | "high"
+    # .vision(False)  # text-only model: attached media stays in the workspace with a note
+    # .extra_body({"reasoning_effort": "low"})  # vendor extras merged last — your keys win
     # .web_search("native")  # Anthropic server-side search; default "brave" runs on any model (BRAVE_API_KEY)
     # .skills("examples/agent/skills")  # ship skill folders (<name>/SKILL.md) with the agent
     # .instructions("AGENT.md")  # workspace instructions file in the system prompt — this is the default
@@ -96,7 +98,7 @@ llm = (
     # .sandbox(network=False)  # opt out of network access for the LLM bash
     # .bash_timeout(600)  # bash sandbox timeout in seconds
     # .api_key(os.environ["ANTHROPIC_API_KEY"])  # override the provider key (default: from env)
-    # .loop(my_loop)  # replace the built-in agent loop entirely (see docs/notes/tutorial.md)
+    # .loop(my_loop)  # replace the built-in agent loop entirely (see docs/tutorial.md)
 )
 
 

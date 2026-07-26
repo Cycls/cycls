@@ -314,9 +314,51 @@ def test_web_fetch_caps_body_size(monkeypatch):
     assert len(out) <= 1_100
 
 
-def test_openai_to_messages_degrades_image_in_tool_result():
-    """OpenAI tool messages are text-only — image/document blocks inside a
-    tool_result get a text stub + the kinds are reported so the loop can warn."""
+def test_thinking_kwargs_vendor_dialects():
+    """One unified knob → each vendor's reasoning dialect; unknown vendors no-op."""
+    from cycls._agent.harness.providers.openai import _thinking_kwargs as tk
+    # standard reasoning_effort pass-through family
+    for v in ("openai", "gemini", "xai", "grok", "mistral", "groq"):
+        assert tk(v, "medium") == {"reasoning_effort": "medium"}, v
+        assert tk(v, "adaptive") == {}, v  # server default
+    # kimi: low/high/max value set
+    assert tk("kimi", "medium") == {"reasoning_effort": "high"}
+    assert tk("kimi", "high") == {"reasoning_effort": "max"}
+    assert tk("kimi", "adaptive") == {}
+    # glm: binary toggle
+    assert tk("glm", "adaptive") == {"extra_body": {"thinking": {"type": "enabled"}}}
+    assert tk("glm", None) == {"extra_body": {"thinking": {"type": "disabled"}}}
+    # deepseek: toggle + effort
+    assert tk("deepseek", "low") == {
+        "extra_body": {"thinking": {"type": "enabled"}}, "reasoning_effort": "low"}
+    assert tk("deepseek", None) == {"extra_body": {"thinking": {"type": "disabled"}}}
+    # qwen: enable_thinking + budget
+    assert tk("qwen", "high") == {
+        "extra_body": {"enable_thinking": True, "thinking_budget": 32_768}}
+    assert tk("qwen", None) == {"extra_body": {"enable_thinking": False}}
+    # openrouter: normalized reasoning object
+    assert tk("openrouter", "low") == {"extra_body": {"reasoning": {"effort": "low"}}}
+    # azure/perplexity ride the standard family
+    assert tk("azure", "low") == {"reasoning_effort": "low"}
+    assert tk("perplexity", "high") == {"reasoning_effort": "high"}
+    # unknown vendor: silent server default
+    assert tk("somevendor", "high") == {}
+
+
+def test_extra_body_passthrough_and_override():
+    """.extra_body() extras reach the request and win over the built-in
+    vendor mapping on collision (unknown vendors get pure passthrough)."""
+    kw = _stream_kwargs("together", extra_body={"enable_thinking": True, "thinking_budget": 8192})
+    assert kw["extra_body"] == {"enable_thinking": True, "thinking_budget": 8192}
+    # collision: qwen mapping says budget 4096 for low; deployer override wins
+    kw = _stream_kwargs("qwen", thinking="low", extra_body={"thinking_budget": 999})
+    assert kw["extra_body"]["thinking_budget"] == 999
+    assert kw["extra_body"]["enable_thinking"] is True  # non-colliding mapped key kept
+
+
+def test_openai_to_messages_hoists_image_in_tool_result_on_vision():
+    """OpenAI tool messages are text-only — on a vision model the image block
+    is hoisted into the user message following the tool responses (no warn)."""
     from cycls._agent.harness.providers.openai import OpenAIProvider
     raw = [
         {"role": "user", "content": [
@@ -327,6 +369,28 @@ def test_openai_to_messages_degrades_image_in_tool_result():
         ]},
     ]
     out, dropped = OpenAIProvider(None, "gpt-x")._to_messages(raw, "")
+    assert dropped == set()
+    tool_msg, user_msg = out[0], out[1]
+    assert tool_msg["role"] == "tool"
+    assert "page 1: " in tool_msg["content"]
+    assert "[image attached" in tool_msg["content"]
+    assert user_msg["role"] == "user"
+    assert user_msg["content"][0]["type"] == "image_url"
+    assert user_msg["content"][0]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_openai_to_messages_degrades_image_in_tool_result_no_vision():
+    """vision=False keeps the old contract: stub + dropped kind so the loop warns."""
+    from cycls._agent.harness.providers.openai import OpenAIProvider
+    raw = [
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": [
+                {"type": "text", "text": "page 1: "},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "..."}},
+            ]},
+        ]},
+    ]
+    out, dropped = OpenAIProvider(None, "gpt-x", vision=False)._to_messages(raw, "")
     assert dropped == {"image"}
     tool_msg = out[0]
     assert tool_msg["role"] == "tool"
@@ -420,13 +484,14 @@ class _CaptureClient:
         return gen()
 
 
-def _stream_kwargs(vendor, thinking=None):
+def _stream_kwargs(vendor, thinking=None, extra_body=None):
     from cycls._agent.harness.providers.openai import OpenAIProvider
     client = _CaptureClient()
     p = OpenAIProvider(client, "some-model", vendor)
     async def drain():
         return [e async for e in p.stream(messages=[{"role": "user", "content": "hi"}],
-                                          system="", tools=[], max_tokens=100, thinking=thinking)]
+                                          system="", tools=[], max_tokens=100, thinking=thinking,
+                                          extra_body=extra_body)]
     asyncio.run(drain())
     return client.kwargs
 
@@ -447,7 +512,8 @@ def test_unified_reasoning_levels():
     assert _stream_kwargs("openai", thinking="low")["reasoning_effort"] == "low"
     assert _stream_kwargs("google", thinking="high")["reasoning_effort"] == "high"
     assert "reasoning_effort" not in _stream_kwargs("openai", thinking="adaptive")
-    assert "reasoning_effort" not in _stream_kwargs("groq", thinking="medium")
+    # groq now maps (it forwards reasoning_effort); use a truly unmapped vendor
+    assert "reasoning_effort" not in _stream_kwargs("together", thinking="medium")
 
 
 def test_glm_thinking_passthrough():
