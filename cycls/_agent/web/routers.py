@@ -223,6 +223,18 @@ def files_router(cycls_app, ws_dep):
         except ValueError:
             raise HTTPException(status_code=403, detail="Path traversal denied")
 
+    def _dir_mtime(path):
+        """gcsfuse synthesizes directory mtimes (≈ its cache-refresh clock, so
+        every folder 'changes' whenever anything is written) — report the
+        newest direct child file instead; empty → ""."""
+        try:
+            times = [e.stat().st_mtime for e in os.scandir(path)
+                     if not e.name.startswith(".") and e.is_file()]
+        except OSError:
+            times = []
+        t = max(times, default=None)
+        return datetime.fromtimestamp(t, tz=timezone.utc).isoformat() if t else ""
+
     @r.get("/files")
     async def list_files(request: Request, ws: Workspace = ws_dep):
         target = _safe_path(ws.root, request.query_params.get("path", ""))
@@ -242,7 +254,7 @@ def files_router(cycls_app, ws_dep):
                         "path": str(full.relative_to(ws.root)),
                         "type": "directory",
                         "size": 0,
-                        "modified": datetime.fromtimestamp(full.stat().st_mtime, tz=timezone.utc).isoformat(),
+                        "modified": _dir_mtime(full),
                     })
                     if len(items) >= 2000:
                         return items
@@ -265,11 +277,13 @@ def files_router(cycls_app, ws_dep):
             if entry.name.startswith("."):
                 continue
             stat = entry.stat()
+            is_dir = entry.is_dir()
             items.append({
                 "name": entry.name,
-                "type": "directory" if entry.is_dir() else "file",
+                "type": "directory" if is_dir else "file",
                 "size": stat.st_size,
-                "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                "modified": _dir_mtime(entry.path) if is_dir
+                            else datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
             })
         items.sort(key=lambda f: f["name"])
         return items

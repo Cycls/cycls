@@ -26,6 +26,7 @@ function formatSize(bytes: number) {
 }
 
 function formatDate(iso: string) {
+  if (!iso) return "";   // empty folders have no meaningful date
   const d = new Date(iso);
   const now = new Date();
   const diff = now.getTime() - d.getTime();
@@ -290,7 +291,7 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onUploadBa
     if (sortKey === "name") cmp = a.name.localeCompare(b.name);
     else if (sortKey === "size") cmp = a.size - b.size;
     else if (sortKey === "type") cmp = fileExt(a.name).localeCompare(fileExt(b.name)) || a.name.localeCompare(b.name);
-    else cmp = new Date(a.modified).getTime() - new Date(b.modified).getTime();
+    else cmp = (a.modified ? new Date(a.modified).getTime() : 0) - (b.modified ? new Date(b.modified).getTime() : 0);
     return sortAsc ? cmp : -cmp;
   });
 
