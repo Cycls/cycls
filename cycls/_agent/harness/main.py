@@ -5,7 +5,7 @@ stops. Yields dict events (and bare strings for text deltas) that the agent
 body forwards as-is. `Turn` is loop-internal (the last event a provider
 stream emits) — never reaches the body.
 """
-import asyncio, json, random, re, time
+import asyncio, json, random, re, time, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -38,6 +38,13 @@ _OVERFLOW_RE = re.compile(
     r"|context[_ ]length[_ ]exceeded|too many tokens", re.I)
 DEFAULT_WINDOW = 1_000_000    # context window when .context() is unset — set it for smaller models
 DEFAULT_MAX_TOKENS = 8_192    # output cap when .max_tokens() is unset — safe on every model
+
+
+def _user_warn(user, chat_id, public, detail):
+    """Chat callout with a reference id; the detail lives only in the log."""
+    ref = uuid.uuid4().hex[:8]
+    log("warn", user=user, chat_id=chat_id, error_id=ref, message=detail)
+    return events.callout(f"{public} Reference: `{ref}`", "warning")
 
 
 def _cost(price, inp, out, cached, cache_create):
@@ -154,7 +161,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             agent_md = await asyncio.to_thread(workspace_instructions, workspace.root, instructions)
             if agent_md: system_text += "\n\n" + fence_instructions(agent_md)
         except Exception as e:
-            yield events.callout(f"Couldn't load {instructions}: {e}", "warning")
+            yield _user_warn(user, session.chat_id,
+                             f"Couldn't load {instructions} — your instructions weren't applied this turn.",
+                             f"couldn't load {instructions}: {e}")
     skill_catalog = {}
     if skills is not None:
         try:
@@ -164,7 +173,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         except Exception:
             skill_catalog = {}
     for _ in vendor_skips(allowed_tools, vendor, web_search):
-        yield events.callout(f"Native web search isn't available on `{vendor}/*` — use `.web_search('brave')` or an anthropic model.", "warning")
+        log("warn", user=user, chat_id=session.chat_id,
+                 message=f"native web search unavailable on {vendor}/* — use .web_search('brave') or an anthropic model")
     tools_list = build_tools(allowed_tools, tools or [], vendor=vendor, web_search=web_search)
     if skill_catalog and not any(t.get("name") == "skill" for t in tools_list):
         tools_list.append(skills_mod.SKILL_TOOL)
@@ -195,9 +205,12 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                             cost=round(c, 6), ms=0, compact=True)
                         if session.chat_id and c:
                             try: await state.add_cost(workspace, session.chat_id, c)
-                            except Exception as e: print(f"[WARN] add_cost failed: {e}")
+                            except Exception as e: log("warn", user=user, chat_id=session.chat_id, message=f"add_cost failed: {e}")
                 except Exception as ce:
-                    yield events.callout(f"Compaction failed: {ce}", "warning")
+                    # degrades the loop until the context hard-overflows — never silent
+                    yield _user_warn(user, session.chat_id,
+                                     "Long-chat compression failed — this chat may hit its length limit sooner.",
+                                     f"compaction failed: {ce}")
 
             turn = None
             partial_text = ""
@@ -239,7 +252,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 cost=round(turn_cost, 6), ms=turn_ms, stop=turn.stop_reason)
             if session.chat_id:
                 try: await state.add_cost(workspace, session.chat_id, turn_cost)
-                except Exception as e: print(f"[WARN] add_cost failed: {e}")
+                except Exception as e: log("warn", user=user, chat_id=session.chat_id, message=f"add_cost failed: {e}")
 
             # max_tokens with zero output means the input filled the window —
             # an overflow in disguise, not a truncation.

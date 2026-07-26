@@ -11,6 +11,7 @@ Translates cycls Message shape (Anthropic JSON) ↔ OpenAI Chat Completions:
   - user-content documents → text stubs (no Chat Completions wire form)
 """
 import json
+import sys
 
 from .. import events
 from ..events import Turn
@@ -76,9 +77,16 @@ class OpenAIProvider:
             elif t == "image" and vision and x.get("source", {}).get("type") == "base64":
                 images.append(x["source"])
                 parts.append("[image attached — it follows in the next user message]")
-            elif t in ("image", "document"):
+            elif t == "document":
                 dropped.add(t)
-                parts.append(f"[{t} content not viewable on this provider]")
+                parts.append("[PDF can't be sent inline on this provider — call `read` "
+                             "again with the pages parameter (e.g. pages='1-5') to view "
+                             "it as page images]" if vision else
+                             "[document content not viewable on this provider — extract "
+                             "its text with bash instead]")
+            elif t == "image":
+                dropped.add(t)
+                parts.append("[image content not viewable on this provider]")
         return "".join(parts), dropped, images
 
     def _to_messages(self, messages, system):
@@ -101,12 +109,22 @@ class OpenAIProvider:
                         if src.get("type") == "base64":
                             parts.append({"type": "image_url", "image_url": {
                                 "url": f"data:{src['media_type']};base64,{src['data']}"}})
-                    elif t in ("image", "document"):
-                        # Text-only model (vision=False) or a document block, which
-                        # has no Chat Completions wire form — stub instead of a 400.
+                    elif t == "document":
+                        # No Chat Completions wire form — stub with a way forward:
+                        # the ingest frames uploads with [Attached: <name>], so the
+                        # model knows which workspace file to open.
+                        dropped.add(t)
+                        parts.append({"type": "text", "text":
+                            "[this document can't be sent inline on this provider — it's "
+                            "saved in the workspace; use `read` with pages='1-5' to view "
+                            "it as page images, or extract its text with bash]" if self.vision else
+                            "[this document can't be viewed by this model — it's saved in "
+                            "the workspace; extract its text with bash]"})
+                    elif t == "image":
+                        # Text-only model (vision=False) — stub instead of a 400.
                         dropped.add(t)
                         parts.append({"type": "text",
-                                      "text": f"[{t} content not viewable on this provider]"})
+                                      "text": "[image content not viewable on this provider]"})
                     elif t == "tool_result":
                         text, d, imgs = self._tool_result_text(b.get("content"), vision=self.vision)
                         dropped |= d
@@ -148,10 +166,14 @@ class OpenAIProvider:
     async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None,
                      thinking=None, extra_body=None):
         api_messages, dropped = self._to_messages(messages, system)
+        # Capability limits are logged, never shown in chat — the model gets an
+        # actionable stub in-context and works around it with tools.
         for kind in sorted(dropped):
-            yield events.callout(f"`{kind}` content isn't viewable on this provider — the model sees a text stub.", "warning")
+            print(f"[provider] {kind} content stubbed for {self.vendor}/{self.model}",
+                  file=sys.stderr, flush=True)
         if mcp_servers:
-            yield events.callout("MCP servers are Anthropic-only — ignored on this provider.", "warning")
+            print(f"[provider] MCP servers are Anthropic-only — ignored on {self.vendor}/{self.model}",
+                  file=sys.stderr, flush=True)
 
         kwargs = {
             "model": self.model, "messages": api_messages,
