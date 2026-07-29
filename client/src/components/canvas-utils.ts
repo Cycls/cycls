@@ -1,7 +1,7 @@
 // Pure helpers for the canvas — kept out of canvas.tsx so that file exports
 // only components (otherwise React Fast Refresh is disabled for it).
 
-const ext = (name: string) => name.split(".").pop()?.toLowerCase() || "";
+export const ext = (name: string) => name.split(".").pop()?.toLowerCase() || "";
 
 export const isHtml = (name: string) => ["html", "htm"].includes(ext(name));
 export const isMd = (name: string) => ["md", "markdown"].includes(ext(name));
@@ -62,9 +62,11 @@ export const codeLang = (name: string): string | null => {
   return CODE_LANG[e] ?? (TEXT_EXTS.has(e) ? "text" : null);
 };
 
-// Extensions the canvas renders inline (markdown, html, pdf, or any source file).
-export const isRenderable = (name: string) =>
-  isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || is3d(name) || codeLang(name) != null;
+// The server's `kind` decides when present; the extension table is the fallback
+// for servers predating it and for files not yet listed (mid-upload rows).
+export const isRenderable = (name: string, kind?: string) =>
+  kind ? kind !== "opaque"
+       : isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || is3d(name) || codeLang(name) != null;
 
 // Trigger a name-preserving download from an authed blob URL. A bare blob URL
 // carries no filename, so opening it instead saves with no extension — the

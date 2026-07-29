@@ -212,6 +212,177 @@ def chats_router(ws_dep):
 
 
 # ---- Files ----
+#
+# The file browser and the @-picker are both served from one cached walk, and
+# matching/ordering/render-class are decided here rather than once per client.
+
+_LIST_CAP = 2000          # flat-listing response cap
+_SEARCH_CAP = 12          # @-picker results per query
+_CATALOG_MAX = 10000      # entries in one cached walk; above it, list per-request
+_CATALOG_WORKSPACES = 8   # workspaces one instance keeps warm
+
+# Serving is serverless, so this cache is per-instance: `_catalog_drop` clears
+# only the instance that handled the write, and agent writes go through the
+# sandbox rather than these routes and so never invalidate at all. The TTL is
+# what bounds both.
+_CATALOG_TTL = 5.0
+
+_catalog = {}   # str(root) -> (deadline, Task[(entries, truncated)])
+
+
+def _norm(text):
+    """Casefolded NFC — a typed query and a name off the mount can arrive in
+    different normal forms and never compare equal. Routine in Arabic."""
+    return unicodedata.normalize("NFC", text).casefold()
+
+
+def _iso(mtime):
+    return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+
+
+# Union of what the web and mobile canvases can each display.
+_KINDS = (
+    ("image",    {"png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "bmp", "svg", "ico", "avif"}),
+    ("pdf",      {"pdf"}),
+    ("csv",      {"csv", "tsv"}),          # delimited text: any client can render it
+    ("sheet",    {"xls", "xlsx", "numbers"}),   # binary: needs a parser
+    ("audio",    {"mp3", "wav", "ogg", "oga", "m4a", "aac", "flac", "opus", "weba"}),
+    ("video",    {"mp4", "webm", "mov", "m4v", "ogv"}),
+    ("model3d",  {"glb", "gltf"}),
+    ("markdown", {"md", "markdown"}),
+    ("html",     {"html", "htm"}),
+    ("code",     {"py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "json", "sh", "bash", "zsh",
+                  "rb", "go", "rs", "java", "c", "h", "cc", "cpp", "cs", "php", "swift", "kt",
+                  "sql", "yaml", "yml", "toml", "css", "scss", "less", "xml", "ipynb"}),
+    ("text",     {"txt", "text", "log", "env", "conf", "cfg", "ini", "rtf"}),
+)
+_KIND_BY_EXT = {ext: kind for kind, exts in _KINDS for ext in exts}
+_SORTS = ("name", "size", "modified", "type")
+_PUBLIC = ("name", "path", "type", "size", "modified", "kind")
+
+
+def _kind(name):
+    return _KIND_BY_EXT.get(name.rpartition(".")[2].lower() if "." in name else "", "opaque")
+
+
+def _public(entry):
+    return {k: entry[k] for k in _PUBLIC}
+
+
+def _walk_catalog(root):
+    """One pass over the tree, a single stat per entry. Folder times come from
+    the newest child seen during the same walk — gcsfuse synthesizes directory
+    mtimes off its cache-refresh clock, and correcting that per request cost a
+    scan of every folder listed."""
+    root = Path(root)
+    entries, newest, truncated = [], {}, False
+    for parent, subdirs, names in os.walk(root):
+        subdirs[:] = sorted(d for d in subdirs if not d.startswith("."))
+        p = Path(parent)
+        rel_dir = "" if p == root else str(p.relative_to(root))
+        for d in subdirs:
+            entries.append({"name": d, "path": str((p / d).relative_to(root)),
+                            "type": "directory", "size": 0, "modified": "",
+                            "kind": "folder", "_dir": rel_dir})
+        for fn in sorted(names):
+            if fn.startswith("."):
+                continue
+            try:
+                st = (p / fn).stat()
+            except OSError:      # vanished mid-walk, or unreadable
+                continue
+            entries.append({"name": fn, "path": str((p / fn).relative_to(root)),
+                            "type": "file", "size": st.st_size,
+                            "modified": _iso(st.st_mtime), "kind": _kind(fn),
+                            "_dir": rel_dir})
+            if st.st_mtime > newest.get(rel_dir, 0):
+                newest[rel_dir] = st.st_mtime
+        if len(entries) >= _CATALOG_MAX:
+            truncated = True
+            break
+    for e in entries:
+        if e["type"] == "directory" and (t := newest.get(e["path"])):
+            e["modified"] = _iso(t)
+    return entries, truncated
+
+
+def _catalog_evict(keep):
+    """One instance is reused across every workspace it serves, so an unbounded
+    dict of walked trees leaks. Nearest deadline first drops expired entries
+    before live ones."""
+    while len(_catalog) > _CATALOG_WORKSPACES:
+        victim = min((k for k in _catalog if k != keep),
+                     key=lambda k: _catalog[k][0], default=None)
+        if victim is None:
+            return
+        del _catalog[victim]
+
+
+async def _catalog_get(root, fresh=False):
+    """The workspace tree, walked at most once per TTL. Caches the task rather
+    than the result so callers arriving mid-walk join it instead of starting
+    their own."""
+    key = str(root)
+    hit = _catalog.get(key)
+    if hit and not fresh and time.monotonic() < hit[0]:
+        return await hit[1]
+    task = asyncio.ensure_future(asyncio.to_thread(_walk_catalog, root))
+    _catalog[key] = (time.monotonic() + _CATALOG_TTL, task)
+    _catalog_evict(key)
+    try:
+        return await task
+    except BaseException:
+        if (cur := _catalog.get(key)) and cur[1] is task:
+            del _catalog[key]      # a failed walk must not be served for the rest of the TTL
+        raise
+
+
+def _catalog_drop(root):
+    """Resolves the root as `_catalog_get` does; a mismatched key would
+    silently never invalidate."""
+    _catalog.pop(str(Path(root).resolve()), None)
+
+
+def _search(entries, query, cap=_SEARCH_CAP):
+    """Files whose path contains every whitespace-separated token, in any order.
+    Tokenized rather than contiguous so a name with spaces doesn't have to be
+    reproduced adjacently and in order. A blank query matches everything, so a
+    bare "@" browses rather than returning nothing."""
+    tokens = _norm(query).split()
+    ranked = []
+    for e in entries:
+        if e["type"] != "file":
+            continue
+        path_n = _norm(e["path"])
+        if not all(t in path_n for t in tokens):
+            continue
+        name_n = _norm(e["name"])
+        ranked.append((
+            0 if all(t in name_n for t in tokens) else 1,
+            0 if tokens and name_n.startswith(tokens[0]) else 1,
+            len(e["path"]),
+            name_n,
+            e,
+        ))
+    ranked.sort(key=lambda row: row[:4])
+    return [row[4] for row in ranked[:cap]]
+
+
+def _sorted(entries, key, desc):
+    """Folders first, then the requested key. `desc` never reverses the
+    grouping."""
+    def sort_key(e):
+        if key == "size":
+            return (e["size"], _norm(e["name"]))
+        if key == "modified":
+            return (e["modified"], _norm(e["name"]))
+        if key == "type":
+            return (e["kind"], _norm(e["name"]))
+        return (_norm(e["name"]), "")
+    groups = ([e for e in entries if e["type"] == "directory"],
+              [e for e in entries if e["type"] == "file"])
+    return [e for g in groups for e in sorted(g, key=sort_key, reverse=desc)]
+
 
 def files_router(cycls_app, ws_dep):
     r = APIRouter()
@@ -235,58 +406,59 @@ def files_router(cycls_app, ws_dep):
         t = max(times, default=None)
         return datetime.fromtimestamp(t, tz=timezone.utc).isoformat() if t else ""
 
-    @r.get("/files")
-    async def list_files(request: Request, ws: Workspace = ws_dep):
-        target = _safe_path(ws.root, request.query_params.get("path", ""))
-        if not target.is_dir():
-            return []
-        # recursive=1 → flat list of every file and folder under `target` with
-        # paths relative to the workspace root (for @-mention search and the
-        # "Move to…" picker). Skips hidden dirs/files (incl. .db/.database).
-        if request.query_params.get("recursive") is not None:
-            items = []
-            for root, dirs, files in os.walk(target):
-                dirs[:] = sorted(d for d in dirs if not d.startswith("."))
-                for d in dirs:
-                    full = Path(root) / d
-                    items.append({
-                        "name": d,
-                        "path": str(full.relative_to(ws.root)),
-                        "type": "directory",
-                        "size": 0,
-                        "modified": _dir_mtime(full),
-                    })
-                    if len(items) >= 2000:
-                        return items
-                for fn in sorted(files):
-                    if fn.startswith("."):
-                        continue
-                    full = Path(root) / fn
-                    items.append({
-                        "name": fn,
-                        "path": str(full.relative_to(ws.root)),
-                        "type": "file",
-                        "size": full.stat().st_size,
-                        "modified": datetime.fromtimestamp(full.stat().st_mtime, tz=timezone.utc).isoformat(),
-                    })
-                    if len(items) >= 2000:   # cap response size
-                        return items
-            return items
-        items = []
+    def _scandir_slice(target, root):
+        """Only reached above _CATALOG_MAX."""
+        out = []
         for entry in os.scandir(target):
             if entry.name.startswith("."):
                 continue
-            stat = entry.stat()
+            st = entry.stat()
             is_dir = entry.is_dir()
-            items.append({
+            out.append({
                 "name": entry.name,
+                "path": str(Path(entry.path).relative_to(root)),
                 "type": "directory" if is_dir else "file",
-                "size": stat.st_size,
-                "modified": _dir_mtime(entry.path) if is_dir
-                            else datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                "size": 0 if is_dir else st.st_size,
+                "modified": _dir_mtime(entry.path) if is_dir else _iso(st.st_mtime),
+                "kind": "folder" if is_dir else _kind(entry.name),
             })
-        items.sort(key=lambda f: f["name"])
-        return items
+        return out
+
+    @r.get("/files")
+    async def list_files(request: Request, response: Response, ws: Workspace = ws_dep):
+        """One folder, the whole tree, or a search across it.
+
+        `search=q` backs the @-picker and returns files only. `recursive=1` still
+        returns the flat tree, so clients predating `search` keep working.
+        `fresh=1` skips the cache — for right after a client's own write, which
+        another instance may have handled, and right after an agent turn.
+        """
+        q = request.query_params
+        root = Path(ws.root).resolve()
+        fresh = q.get("fresh") is not None
+        target = _safe_path(ws.root, q.get("path", ""))
+        rel = "" if target == root else str(target.relative_to(root))
+        under = lambda es: es if not rel else [e for e in es if e["path"].startswith(f"{rel}/")]
+
+        if (search := q.get("search")) is not None:
+            entries, _ = await _catalog_get(root, fresh)
+            # Lets a client distinguish a filtered result from a server that
+            # ignored ?search, rather than guessing from the response shape.
+            response.headers["X-Files-Search"] = "1"
+            return [_public(e) for e in _search(under(entries), search)]
+
+        if q.get("recursive") is not None:
+            entries, _ = await _catalog_get(root, fresh)
+            return [_public(e) for e in under(entries)[:_LIST_CAP]]
+
+        if not target.is_dir():
+            return []
+        sort_key = q.get("sort") if q.get("sort") in _SORTS else "name"
+        desc = q.get("desc") is not None
+        entries, truncated = await _catalog_get(root, fresh)
+        slice_ = (await asyncio.to_thread(_scandir_slice, target, root) if truncated
+                  else [e for e in entries if e["_dir"] == rel])
+        return [_public(e) for e in _sorted(slice_, sort_key, desc)]
 
     @r.get("/files/{path:path}")
     async def get_file(path: str, request: Request, ws: Workspace = ws_dep):
@@ -333,6 +505,7 @@ def files_router(cycls_app, ws_dep):
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
+        _catalog_drop(ws.root)
         return {"ok": True}
 
     @r.post("/files-batch/{path:path}")
@@ -374,6 +547,7 @@ def files_router(cycls_app, ws_dep):
                         await asyncio.to_thread(_do)
 
                 await asyncio.gather(*(_extract(i, d) for i, d in targets))
+        _catalog_drop(ws.root)
         return {"ok": True, "files": len(targets)}
 
     @r.patch("/files/{path:path}")
@@ -390,12 +564,14 @@ def files_router(cycls_app, ws_dep):
         # workspace mount, which doesn't support renaming directories — it falls
         # back to recursive copy + delete.
         shutil.move(str(src), str(dest))
+        _catalog_drop(ws.root)
         return {"ok": True}
 
     @r.post("/files/{path:path}")
     async def mkdir(path: str, ws: Workspace = ws_dep):
         dir_path = _safe_path(ws.root, path)
         dir_path.mkdir(parents=True, exist_ok=True)
+        _catalog_drop(ws.root)
         return {"ok": True}
 
     @r.delete("/files/{path:path}")
@@ -407,6 +583,7 @@ def files_router(cycls_app, ws_dep):
             shutil.rmtree(target)
         else:
             target.unlink()
+        _catalog_drop(ws.root)
         return {"ok": True}
 
     return r

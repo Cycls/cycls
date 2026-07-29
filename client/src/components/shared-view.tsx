@@ -3,7 +3,7 @@ import { MessageBubble } from "./message";
 import { CyclsLogo } from "./cycls-logo";
 import { Icon, IconButton } from "./icon";
 import { useFileContent, CanvasDoc, type CanvasFile } from "./canvas";
-import { isRenderable, saveBlob } from "./canvas-utils";
+import { isHtml, isRenderable, saveBlob } from "./canvas-utils";
 import type { Message } from "../hooks/use-chat";
 import { track } from "../lib/posthog";
 import { toggleDark } from "../lib/utils";
@@ -149,6 +149,13 @@ function SharedFile({ share, getToken }: { share: FileShare; getToken?: () => Pr
   const { content, error } = useFileContent(renderable ? file : null, readFile, openFile);
   const download = () => openFile(share.path).then((url) => saveBlob(url, name)).catch(() => {});
 
+  // A shared page renders HTML in a sandboxed iframe sized to this layout; the
+  // new tab gives it a full window and its own browsing context.
+  const openInTab = () => {
+    if (content == null) return;
+    window.open(URL.createObjectURL(new Blob([content], { type: "text/html" })), "_blank");
+  };
+
   return (
     <div className="h-dvh flex flex-col bg-background">
       <ShareHeader />
@@ -159,6 +166,17 @@ function SharedFile({ share, getToken }: { share: FileShare; getToken?: () => Pr
           <div className="flex items-center gap-2 border-b border-border px-4 sm:px-6 py-3">
             <span className="min-w-0 truncate text-sm font-medium text-foreground">{name}</span>
             <div className="flex-1" />
+            {isHtml(name) && content != null && (
+              <button
+                onClick={openInTab}
+                className="flex items-center gap-1.5 rounded-lg px-2.5 h-8 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+              >
+                Open in new tab
+                <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-7.5 3L21 3m0 0h-5.25M21 3v5.25" />
+                </svg>
+              </button>
+            )}
             <button
               onClick={download}
               className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"

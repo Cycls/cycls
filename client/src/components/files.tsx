@@ -183,7 +183,7 @@ type SortKey = "name" | "size" | "modified" | "type";
 
 const fileExt = (name: string) => (name.includes(".") ? name.split(".").pop()!.toLowerCase() : "");
 
-export function Files({ entries, path, loading, onNavigate, onUpload, onUploadBatch, onMkdir, onRename, onDelete, onOpenFile, onShareFile, onOpenInCanvas, listFolders, maxUpload, org }: FilesPanelProps) {
+export function Files({ entries, path, loading, onNavigate, onReload, onUpload, onUploadBatch, onMkdir, onRename, onDelete, onOpenFile, onShareFile, onOpenInCanvas, listFolders, maxUpload, org }: FilesPanelProps) {
   useLang();
   const { error: toastError } = useToast();
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
@@ -266,8 +266,8 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onUploadBa
       while (i < rest.length) await uploadOne(rest[i++]);
     }));
     setUploading((prev) => prev.filter((n) => !names.includes(n)));
-    onNavigate(path);
-  }, [path, onUpload, onUploadBatch, onNavigate, maxUpload, toastError]);
+    onReload(path);
+  }, [path, onUpload, onUploadBatch, onReload, maxUpload, toastError]);
 
   // Move selected entries (or a single one) into destDir.
   const moveInto = useCallback(async (names: string[], destDir: string) => {
@@ -281,8 +281,8 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onUploadBa
       try { await onRename(path ? `${path}/${n}` : n, destDir ? `${destDir}/${n}` : n); } catch {}
     }
     setSelected(new Set());
-    onNavigate(path);
-  }, [path, onRename, onNavigate]);
+    onReload(path);
+  }, [path, onRename, onReload]);
 
   // ---- selection ----
   const sorted = [...entries].sort((a, b) => {
@@ -317,18 +317,18 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onUploadBa
     setAnchor(name);
   };
 
-  const open = (name: string, isDir: boolean) => {
+  const open = (name: string, isDir: boolean, kind?: string) => {
     const ep = fullPath(name);
     if (isDir) return navigate(ep);
-    if (isRenderable(name) && onOpenInCanvas) return onOpenInCanvas(ep, name);
+    if (isRenderable(name, kind) && onOpenInCanvas) return onOpenInCanvas(ep, name);
     onOpenFile(ep).then((url) => saveBlob(url, name));
   };
 
   const deleteNames = useCallback(async (names: string[]) => {
     for (const n of names) { try { await onDelete(fullPath(n)); } catch {} }
     setSelected(new Set());
-    onNavigate(path);
-  }, [fullPath, onDelete, onNavigate, path]);
+    onReload(path);
+  }, [fullPath, onDelete, onReload, path]);
 
   // Delete / Escape on the selection (ignore while typing in an input).
   useEffect(() => {
@@ -447,7 +447,7 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onUploadBa
             )}
           </div>
           {[
-            { label: t("refresh"),   onClick: () => onNavigate(path),         d: "M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" },
+            { label: t("refresh"),   onClick: () => onReload(path),         d: "M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" },
             { label: t("newFolder"), onClick: () => setCreatingFolder(true),  d: "M12 10.5v6m3-3H9m4.06-7.19l-2.12-2.12a1.5 1.5 0 00-1.06-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" },
           ].map((b) => (
             <button
@@ -546,7 +546,7 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onUploadBa
                 <FolderIcon className="size-5 text-muted-foreground shrink-0" />
                 <InlineInput
                   initial=""
-                  onSubmit={async (name) => { setCreatingFolder(false); await onMkdir(path, name); onNavigate(path); }}
+                  onSubmit={async (name) => { setCreatingFolder(false); await onMkdir(path, name); onReload(path); }}
                   onCancel={() => setCreatingFolder(false)}
                 />
               </div>
@@ -595,7 +595,7 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onUploadBa
                     // thing that works well on touch).
                     if (e.metaKey || e.ctrlKey || e.shiftKey) selectRow(e, entry.name);
                     else if (selected.size > 0) toggleSelect(entry.name);
-                    else open(entry.name, isDir);
+                    else open(entry.name, isDir, entry.kind);
                   }}
                   onContextMenu={(e) => {
                     e.preventDefault();
@@ -621,7 +621,7 @@ export function Files({ entries, path, loading, onNavigate, onUpload, onUploadBa
                         initial={entry.name}
                         onSubmit={async (newName) => {
                           setRenaming(null);
-                          if (newName !== entry.name) { await onRename(entryPath, fullPath(newName)); onNavigate(path); }
+                          if (newName !== entry.name) { await onRename(entryPath, fullPath(newName)); onReload(path); }
                         }}
                         onCancel={() => setRenaming(null)}
                       />

@@ -55,6 +55,8 @@ export interface FilesPanelProps {
   path: string;
   loading: boolean;
   onNavigate: (dir: string) => void;
+  // Re-list bypassing the server's catalog cache; use after our own writes.
+  onReload: (dir: string) => void;
   onUpload: (dir: string, file: File) => Promise<void>;
   onUploadBatch?: (dir: string, files: { rel: string; file: File }[]) => Promise<void>;
   onMkdir: (dir: string, name: string) => Promise<void>;

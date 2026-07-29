@@ -6,6 +6,25 @@ import { Icon } from "./icon";
 import { AttachmentBody } from "./attachment-body";
 import type { Attachment } from "../hooks/use-chat";
 
+const MENTION_DEBOUNCE_MS = 150;
+
+// `(?:^|\s)` not `\b`: \b matches between the "f" and "@" of "mf@cycls.com" and
+// would open the picker on every email address. Spaces are allowed in the query
+// so multi-word filenames are searchable; a double space ends the session.
+export function mentionAt(value: string, caret: number) {
+  const m = value.slice(0, caret).match(/(?:^|\s)@([^\n@]{0,64})$/);
+  if (!m || m[1].includes("  ")) return null;
+  return { query: m[1], start: caret - m[1].length - 1 };
+}
+
+// A dead session swallows anything that extends the query it died on. A blank
+// dead query therefore shuts the session outright — correct for Esc, fatal if
+// reached by searching "".
+export const mentionSuppressed = (
+  mention: { start: number; query: string } | null,
+  dead: { start: number; query: string } | null,
+) => !!(mention && dead && mention.start === dead.start && mention.query.startsWith(dead.query));
+
 // Render composer text with inserted file mentions wrapped in a light-gray
 // highlight. Lives behind a transparent-text-area as an aligned backdrop —
 // a <textarea> can't style substrings itself.
@@ -65,6 +84,12 @@ export function InputBox({
 
   // ---- @-mention file picker ----
   const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
+  // The query that came back with nothing, and the "@" it belonged to. Anything
+  // extending it is dead too, so typing a sentence containing "@" costs one
+  // request rather than one per character — but backspacing to a shorter query
+  // that did have hits revives the picker. An empty query means the whole
+  // session is shut (Esc).
+  const [dead, setDead] = useState<{ start: number; query: string } | null>(null);
   const [results, setResults] = useState<{ name: string; path: string }[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
   const [mentions, setMentions] = useState<string[]>([]);   // inserted paths → highlighted
@@ -75,18 +100,35 @@ export function InputBox({
     setMentions((ms) => ms.filter((m) => input.includes(m)));
   }, [input]);
 
-  // An "@token" right before the caret (at line start or after whitespace).
   const detectMention = (value: string, caret: number) => {
-    const m = value.slice(0, caret).match(/(?:^|\s)@([^\s@]*)$/);
-    setMention(m ? { query: m[1], start: caret - m[1].length - 1 } : null);
+    const next = mentionAt(value, caret);
+    setMention((prev) =>
+      !next ? null
+        : prev && prev.start === next.start && prev.query === next.query ? prev
+        : next);
   };
 
+  const suppressed = mentionSuppressed(mention, dead);
+
   useEffect(() => {
-    if (!mention || !onMentionSearch) { setResults([]); return; }
+    if (!mention || suppressed) setResults([]);
+  }, [mention, suppressed]);
+
+  useEffect(() => {
+    if (!mention || suppressed || !onMentionSearch) return;
     let cancelled = false;
-    onMentionSearch(mention.query).then((r) => { if (!cancelled) { setResults(r); setActiveIdx(0); } });
-    return () => { cancelled = true; };
-  }, [mention?.query, onMentionSearch]);
+    const timer = setTimeout(() => {
+      onMentionSearch(mention.query).then((r) => {
+        if (cancelled) return;
+        setResults(r);
+        setActiveIdx(0);
+        // Only a query that actually searched for something may latch. Latching
+        // on "" would suppress the whole session, since every query extends it.
+        if (!r.length && mention.query.trim()) setDead({ start: mention.start, query: mention.query });
+      });
+    }, MENTION_DEBOUNCE_MS);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [mention?.query, mention?.start, suppressed, onMentionSearch]);
 
   const selectMention = (file: { name: string; path: string }) => {
     if (!mention) return;
@@ -94,6 +136,7 @@ export function InputBox({
     const next = input.slice(0, mention.start) + file.path + " " + input.slice(caret);
     setInput(next);
     setMentions((ms) => (ms.includes(file.path) ? ms : [...ms, file.path]));
+    setDead(null);
     setMention(null);
     setResults([]);
     const pos = mention.start + file.path.length + 1;
@@ -108,13 +151,18 @@ export function InputBox({
     detectMention(e.target.value, e.target.selectionStart ?? e.target.value.length);
   };
 
+  const onSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    const el = e.currentTarget;
+    detectMention(el.value, el.selectionStart ?? el.value.length);
+  };
+
   // Intercept nav keys while the picker is open; otherwise normal handling.
   const onKeyDownInternal = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mention && results.length) {
       if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx((i) => (i + 1) % results.length); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx((i) => (i - 1 + results.length) % results.length); return; }
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); selectMention(results[activeIdx]); return; }
-      if (e.key === "Escape") { e.preventDefault(); setMention(null); return; }
+      if (e.key === "Escape") { e.preventDefault(); setDead({ start: mention.start, query: "" }); setMention(null); return; }
     }
     handleKeyDown(e);
   };
@@ -241,6 +289,7 @@ export function InputBox({
           dir={input ? "auto" : getLang() === "ar" ? "rtl" : "ltr"}
           value={input}
           onChange={onChange}
+          onSelect={onSelect}
           onKeyDown={onKeyDownInternal}
           onPaste={onPaste}
           onScroll={(e) => { if (backdropRef.current) backdropRef.current.scrollTop = e.currentTarget.scrollTop; }}
