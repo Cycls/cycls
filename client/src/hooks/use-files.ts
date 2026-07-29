@@ -8,7 +8,17 @@ export interface FileEntry {
   type: "file" | "directory";
   size: number;
   modified: string;
+  // Render class decided server-side, so web and mobile agree on what can be
+  // previewed. Absent from servers older than the change — callers fall back.
+  kind?: string;
 }
+
+// Same predicate the server applies, for servers that don't apply it yet.
+// NFC because a browser-typed query and a name off the mount can differ in
+// normal form and never compare equal — routine with Arabic.
+const fold = (s: string) => s.normalize("NFC").toLowerCase();
+export const matchTokens = (path: string, tokens: string[]) =>
+  tokens.every((t) => fold(path).includes(t));
 
 export function useFiles(baseUrl: string = "") {
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -16,11 +26,18 @@ export function useFiles(baseUrl: string = "") {
   const [loading, setLoading] = useState(false);
   const { api, setGetToken } = useApi(baseUrl);
 
-  const list = useCallback(async (dir: string = "") => {
+  // `fresh` skips the server's catalog cache. Worth it right after our own
+  // write (serving is serverless, so another instance may have handled it and
+  // this one never saw the invalidation) and after an agent turn, since the
+  // agent writes through its sandbox rather than these routes.
+  const list = useCallback(async (dir: string = "", opts?: { fresh?: boolean }) => {
     setLoading(true);
     try {
-      const q = dir ? `?path=${encodeURIComponent(dir)}` : "";
-      setEntries(await (await api(`/files${q}`)).json());
+      const q = new URLSearchParams();
+      if (dir) q.set("path", dir);
+      if (opts?.fresh) q.set("fresh", "1");
+      const qs = q.toString();
+      setEntries(await (await api(`/files${qs ? `?${qs}` : ""}`)).json());
       setPath(dir);
     } catch {
       setEntries([]);
@@ -28,6 +45,8 @@ export function useFiles(baseUrl: string = "") {
       setLoading(false);
     }
   }, [api]);
+
+  const reload = useCallback((dir: string = "") => list(dir, { fresh: true }), [list]);
 
   // Raw body, not multipart — auth runs before the body is read, so slow uploads can't outlive the JWT.
   const upload = useCallback(async (dir: string, file: File) => {
@@ -92,16 +111,22 @@ export function useFiles(baseUrl: string = "") {
     track("file_saved", { path: filePath });
   }, [api]);
 
-  // Workspace files matching a query — backs the @-mention picker in the
-  // composer. Recursive: matches nested paths like folder/sub/file.md too.
+  // Backs the composer's @-picker. The server matches, ranks and caps, so this
+  // and the mobile client can't disagree about what a query means; `recursive=1`
+  // rides along so a server predating `search` still returns a tree we can
+  // filter here. X-Files-Search tells the two apart — guessing from the shape of
+  // the response would misread a small workspace as a filtered result.
   const searchFiles = useCallback(async (query: string) => {
+    // No early return on a blank query: a bare "@" browses. matchTokens with no
+    // tokens matches everything, which is what the fallback path needs.
+    const tokens = fold(query).split(/\s+/).filter(Boolean);
     try {
-      const all = (await (await api(`/files?recursive=1`)).json()) as (FileEntry & { path: string })[];
-      const q = query.toLowerCase();
-      return all
-        .filter((e) => e.type === "file" && e.path.toLowerCase().includes(q))
-        .slice(0, 12)
-        .map((e) => ({ name: e.name, path: e.path }));
+      const res = await api(`/files?recursive=1&search=${encodeURIComponent(query)}`);
+      const all = (await res.json()) as (FileEntry & { path: string })[];
+      const ranked = res.headers.get("X-Files-Search") === "1"
+        ? all
+        : all.filter((e) => e.type === "file" && matchTokens(e.path, tokens)).slice(0, 12);
+      return ranked.map((e) => ({ name: e.name, path: e.path, kind: e.kind }));
     } catch {
       return [];
     }
@@ -123,5 +148,5 @@ export function useFiles(baseUrl: string = "") {
     return `${window.location.origin}${url}`;
   }, [api]);
 
-  return { entries, path, loading, list, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, searchFiles, listFolders, shareFile, setGetToken };
+  return { entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, searchFiles, listFolders, shareFile, setGetToken };
 }

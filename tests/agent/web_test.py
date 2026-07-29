@@ -1,6 +1,7 @@
 import pytest
 import json
 import asyncio
+import os
 import importlib.resources
 from cycls._agent.web import web, Config, Messages, sse, encoder, openai_encoder
 
@@ -966,3 +967,193 @@ def test_web_builder_brand_and_explore():
 
     with pytest.raises(ValueError):
         Web().brand(logo="missing/logo.svg")
+
+
+# ---- Files: catalog cache, @-search, kind, sort ----
+
+def _seed(tmp_path, tree):
+    """{relpath: bytes} → files under the fixed test workspace root."""
+    root = tmp_path / "org_1" / "ws" / "u-user_1"
+    for rel, data in tree.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+    return root
+
+
+def test_search_matches_tokens_in_any_order(tmp_path):
+    """A filename with spaces is findable by fragments typed in any order —
+    the whole point of allowing spaces in the @ query."""
+    _seed(tmp_path, {"docs/سياسات التحول الرقمي.docx": b"x", "docs/other.txt": b"y"})
+    client = _ws_routers_client(tmp_path)
+
+    hits = client.get("/files", params={"recursive": 1, "search": "سياسات الرقمي"}).json()
+    assert [h["name"] for h in hits] == ["سياسات التحول الرقمي.docx"]
+
+    # first token alone still works, and a trailing space is a no-op
+    assert client.get("/files", params={"search": "سياسات "}).json()[0]["name"].startswith("سياسات")
+
+
+def test_search_is_files_only_and_capped(tmp_path):
+    _seed(tmp_path, {f"notes/note-{i}.md": b"x" for i in range(20)})
+    client = _ws_routers_client(tmp_path)
+    hits = client.get("/files", params={"search": "note"}).json()
+    assert len(hits) == 12                                  # _SEARCH_CAP
+    assert all(h["type"] == "file" for h in hits)           # a mention resolves to a file
+    # A bare "@" sends a blank query and must browse, not come back empty — an
+    # empty result there latches the picker shut for the rest of the session.
+    assert len(client.get("/files", params={"search": ""}).json()) == 12
+    assert len(client.get("/files", params={"search": "   "}).json()) == 12
+
+
+def test_search_ranks_name_matches_over_folder_matches(tmp_path):
+    _seed(tmp_path, {"report/a.txt": b"x", "misc/report.txt": b"y"})
+    client = _ws_routers_client(tmp_path)
+    hits = client.get("/files", params={"search": "report"}).json()
+    assert hits[0]["path"] == "misc/report.txt"     # hit in the filename beats hit in the folder
+
+
+def test_kind_classifies_the_union_of_both_clients(tmp_path):
+    """heic used to preview on mobile and not on web, because each client kept
+    its own extension table. One table now, server-side."""
+    _seed(tmp_path, {"a.heic": b"x", "b.xlsx": b"x", "c.mp3": b"x",
+                     "d.glb": b"x", "e.py": b"x", "f.zip": b"x", "g.csv": b"x"})
+    client = _ws_routers_client(tmp_path)
+    kinds = {e["name"]: e["kind"] for e in client.get("/files").json()}
+    # csv is split from sheet: mobile renders delimited text but not a binary workbook
+    assert kinds == {"a.heic": "image", "b.xlsx": "sheet", "c.mp3": "audio",
+                     "d.glb": "model3d", "e.py": "code", "f.zip": "opaque",
+                     "g.csv": "csv"}
+
+
+def test_listing_sorts_folders_first_and_honours_sort_key(tmp_path):
+    root = _seed(tmp_path, {"big.txt": b"x" * 100, "small.txt": b"x"})
+    (root / "zzz-folder").mkdir()
+    client = _ws_routers_client(tmp_path)
+
+    by_name = client.get("/files").json()
+    assert [e["name"] for e in by_name] == ["zzz-folder", "big.txt", "small.txt"]
+
+    by_size = client.get("/files", params={"sort": "size", "desc": 1}).json()
+    assert [e["name"] for e in by_size if e["type"] == "file"] == ["big.txt", "small.txt"]
+    assert by_size[0]["name"] == "zzz-folder"      # desc never floats files above folders
+
+    # an unknown sort key falls back to name rather than erroring
+    assert client.get("/files", params={"sort": "nonsense"}).json() == by_name
+
+
+def test_folder_time_comes_from_newest_child_without_rescanning(tmp_path):
+    """Folder mtime is derived from the walk that already visited the folder."""
+    root = _seed(tmp_path, {"docs/old.txt": b"x", "docs/new.txt": b"y"})
+    os.utime(root / "docs" / "old.txt", (1_600_000_000, 1_600_000_000))
+    os.utime(root / "docs" / "new.txt", (1_700_000_000, 1_700_000_000))
+    client = _ws_routers_client(tmp_path)
+    docs = next(e for e in client.get("/files").json() if e["name"] == "docs")
+    assert docs["modified"].startswith("2023-11-14")     # 1_700_000_000 UTC
+    assert docs["size"] == 0
+
+
+def test_write_routes_invalidate_the_catalog(tmp_path):
+    """An upload is visible on the next listing, not after the TTL."""
+    _seed(tmp_path, {"a.txt": b"x"})
+    client = _ws_routers_client(tmp_path)
+    assert [e["name"] for e in client.get("/files").json()] == ["a.txt"]
+
+    client.put("/files/b.txt", content=b"y")
+    assert [e["name"] for e in client.get("/files").json()] == ["a.txt", "b.txt"]
+
+    client.post("/files/sub")
+    assert "sub" in [e["name"] for e in client.get("/files").json()]
+
+    client.delete("/files/a.txt")
+    assert "a.txt" not in [e["name"] for e in client.get("/files").json()]
+
+
+def test_fresh_bypasses_a_warm_cache(tmp_path):
+    """Writes that never reach these routes — another instance, or the agent's
+    sandbox — are invisible until the TTL, so clients can force a walk."""
+    from cycls._agent.web import routers
+
+    root = _seed(tmp_path, {"a.txt": b"x"})
+    client = _ws_routers_client(tmp_path)
+    client.get("/files")                                  # warm it
+
+    (root / "agent-made.txt").write_bytes(b"z")            # bypasses the write routes
+    assert "agent-made.txt" not in [e["name"] for e in client.get("/files").json()]
+
+    fresh = client.get("/files", params={"fresh": 1}).json()
+    assert "agent-made.txt" in [e["name"] for e in fresh]
+
+
+def test_catalog_is_bounded_per_instance(tmp_path):
+    """One serverless instance serves many workspaces; the cache must not grow
+    without bound across them."""
+    from cycls._agent.web import routers
+
+    async def warm_many():
+        for i in range(routers._CATALOG_WORKSPACES + 4):
+            root = tmp_path / f"ws{i}"
+            root.mkdir()
+            await routers._catalog_get(root)
+
+    routers._catalog.clear()
+    asyncio.run(warm_many())
+    assert len(routers._catalog) <= routers._CATALOG_WORKSPACES
+
+
+def test_concurrent_misses_share_one_walk(tmp_path):
+    """The stampede this cache exists to stop is a burst of requests for the
+    same tree, so arriving mid-walk must join it rather than start another."""
+    from cycls._agent.web import routers
+
+    root = _seed(tmp_path, {"a.txt": b"x"})
+    walks = 0
+    real = routers._walk_catalog
+
+    def counting(r):
+        nonlocal walks
+        walks += 1
+        return real(r)
+
+    async def race():
+        return await asyncio.gather(*(routers._catalog_get(root) for _ in range(8)))
+
+    routers._catalog.clear()
+    routers._walk_catalog = counting
+    try:
+        results = asyncio.run(race())
+    finally:
+        routers._walk_catalog = real
+    assert walks == 1
+    assert all(r[0] == results[0][0] for r in results)
+
+
+def test_failed_walk_is_not_cached(tmp_path):
+    """A cached exception would keep failing for the rest of the TTL."""
+    from cycls._agent.web import routers
+
+    root = _seed(tmp_path, {"a.txt": b"x"})
+    real = routers._walk_catalog
+    routers._catalog.clear()
+    routers._walk_catalog = lambda r: (_ for _ in ()).throw(OSError("mount gone"))
+    try:
+        with pytest.raises(OSError):
+            asyncio.run(routers._catalog_get(root))
+        assert str(root) not in routers._catalog
+    finally:
+        routers._walk_catalog = real
+
+
+def test_recursive_and_search_stay_scoped_to_path(tmp_path):
+    """?path= scopes the flat listing and the search, as it did before the
+    catalog — the tree is cached from the root either way."""
+    _seed(tmp_path, {"a/keep.txt": b"x", "b/skip.txt": b"y"})
+    client = _ws_routers_client(tmp_path)
+
+    flat = client.get("/files", params={"recursive": 1, "path": "a"}).json()
+    assert [e["path"] for e in flat] == ["a/keep.txt"]
+
+    hits = client.get("/files", params={"search": "txt", "path": "a"}).json()
+    assert [e["path"] for e in hits] == ["a/keep.txt"]
+
+    assert len(client.get("/files", params={"search": "txt"}).json()) == 2

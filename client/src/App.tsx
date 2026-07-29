@@ -34,6 +34,7 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
   return {
     entries: f.entries, path: f.path, loading: f.loading,
     onNavigate: f.list,
+    onReload: f.reload,
     onUpload: f.upload,
     onUploadBatch: f.uploadBatch,
     onMkdir: f.mkdir,

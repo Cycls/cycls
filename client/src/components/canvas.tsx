@@ -7,7 +7,7 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, is3d, codeLang, extTint, saveBlob } from "./canvas-utils";
+import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
 import { usePaneWidth } from "../hooks/use-pane-width";
 import { cn } from "../lib/utils";
@@ -35,11 +35,12 @@ export function useFileContent(
     let blobUrl: string | null = null;
     setContent(null);
     setError(false);
-    // Binary formats (pdf, images, spreadsheets) need bytes → fetch as a blob
-    // URL; text formats fetch source.
-    const load = isPdf(file.name) || isImage(file.name) || isAudio(file.name) || isVideo(file.name) || isSpreadsheet(file.name) || is3d(file.name)
-      ? openFile(file.path).then((url) => { blobUrl = url; return url; })
-      : readFile(file.path);
+    // Only formats we render from source fetch as text. Everything else — pdf,
+    // media, spreadsheets, and anything unrenderable like docx — fetches bytes,
+    // so a binary is never handed to a text renderer.
+    const load = isMd(file.name) || isHtml(file.name) || codeLang(file.name) != null
+      ? readFile(file.path)
+      : openFile(file.path).then((url) => { blobUrl = url; return url; });
     load.then((v) => { if (!cancelled) setContent(v); })
         .catch(() => { if (!cancelled) setError(true); });
     return () => { cancelled = true; if (blobUrl) URL.revokeObjectURL(blobUrl); };
@@ -50,11 +51,13 @@ export function useFileContent(
 
 // Read-only body — renders a loaded file by type. `shared` tightens the html
 // sandbox (drop allow-popups) for content that's untrusted to the viewer.
-export function CanvasDoc({ file, content, error, shared = false }: {
+export function CanvasDoc({ file, content, error, shared = false, onDownload, onShare }: {
   file: CanvasFile;
   content: string | null;
   error: boolean;
   shared?: boolean;
+  onDownload?: () => void;
+  onShare?: () => void;
 }) {
   const lang = codeLang(file.name);
   if (content == null && !error) return <LoadingBar />;
@@ -137,9 +140,34 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
       </div>
     );
   }
+  if (lang == null) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+        <div className="flex size-16 items-center justify-center rounded-2xl bg-secondary text-xs font-bold text-muted-foreground" style={tintTile(file.name)}>
+          <span style={tintLabel(file.name)}>{(ext(file.name) || "file").slice(0, 4).toUpperCase()}</span>
+        </div>
+        <p className="text-sm font-medium text-foreground">{file.name}</p>
+        <p className="text-xs text-muted-foreground">{t("noPreview")}</p>
+        {(onDownload || onShare) && (
+          <div className="mt-1 flex gap-2">
+            {onDownload && (
+              <button onClick={onDownload} className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity cursor-pointer">
+                {t("download")}
+              </button>
+            )}
+            {onShare && (
+              <button onClick={onShare} className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition-colors cursor-pointer">
+                {t("share")}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
   return (
     <div className="h-full overflow-auto">
-      <HighlightedCode code={content ?? ""} language={lang ?? "text"} />
+      <HighlightedCode code={content ?? ""} language={lang} />
     </div>
   );
 }
@@ -207,7 +235,6 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
       <CanvasFileView
         key={file.path}
         file={file}
-        onClose={() => onCloseTab(file.path)}
         readFile={readFile}
         openFile={openFile}
         writeFile={writeFile}
@@ -366,9 +393,8 @@ function AddTab({ onAdd, searchFiles }: {
 }
 
 // Keyed by path from the parent, so per-file state resets on tab switch.
-function CanvasFileView({ file, onClose, readFile, openFile, writeFile, onShareFile }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, onShareFile }: {
   file: CanvasFile;
-  onClose: () => void;
   readFile: (path: string) => Promise<string>;
   openFile: (path: string) => Promise<string>;
   writeFile: (path: string, text: string) => Promise<void>;
@@ -511,9 +537,6 @@ function CanvasFileView({ file, onClose, readFile, openFile, writeFile, onShareF
             )}
           </>
         )}
-        <button onClick={onClose} className={headerBtn} aria-label="Close file" title="Close file">
-          <Icon name="x" className="size-4" />
-        </button>
       </div>
 
       {/* Body */}
@@ -527,7 +550,8 @@ function CanvasFileView({ file, onClose, readFile, openFile, writeFile, onShareF
             className="h-full w-full resize-none border-0 bg-background px-4 py-4 sm:px-6 font-mono text-[13px] leading-relaxed text-foreground focus:outline-none"
           />
         ) : (
-          <CanvasDoc file={file} content={content} error={error} />
+          <CanvasDoc file={file} content={content} error={error}
+                     onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
         )}
       </div>
 
