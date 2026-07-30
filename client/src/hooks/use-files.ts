@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { zip } from "fflate";
 import { useApi } from "./use-api";
 import { track } from "../lib/posthog";
@@ -149,4 +149,15 @@ export function useFiles(baseUrl: string = "") {
   }, [api]);
 
   return { entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, searchFiles, listFolders, shareFile, setGetToken };
+}
+
+// The agent writes through its sandbox, not these routes, so nothing invalidates
+// the server's catalog when a turn produces a file. Re-list fresh when streaming
+// stops — which also means a new deliverable shows up without hitting refresh.
+export function useRefreshOnTurnEnd(files: ReturnType<typeof useFiles>, streaming: boolean) {
+  const was = useRef(false);
+  useEffect(() => {
+    if (was.current && !streaming) files.reload(files.path);
+    was.current = streaming;
+  }, [streaming]);   // only the transition matters; reload/path are read at fire time
 }
