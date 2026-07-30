@@ -22,7 +22,7 @@ import { IconButton } from "./components/icon";
 import { Chat, type AccountInfo, type FilesPanelProps } from "./components/chat";
 import { SharedView } from "./components/shared-view";
 import { useChat, AppConfig } from "./hooks/use-chat";
-import { useFiles } from "./hooks/use-files";
+import { useFiles, useRefreshOnTurnEnd } from "./hooks/use-files";
 import { useWorkspaces } from "./hooks/use-workspaces";
 import { setActiveWorkspace } from "./hooks/use-auth-headers";
 import { useUrlParam } from "./hooks/use-url-param";
@@ -87,6 +87,7 @@ function ChatAppKeyed({ config }: { config: AppConfig | null }) {
 function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: WorkspaceSelection }) {
   const chat = useChat();
   const files = useFiles();
+  useRefreshOnTurnEnd(files, chat.isStreaming);
   const ws = useWorkspaces();
   const { getToken, signOut, isLoaded: authLoaded } = useAuth();
   const { user } = useUser();
@@ -233,6 +234,7 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
 function ChatNoAuth({ config }: { config: AppConfig | null }) {
   const chat = useChat();
   const files = useFiles();
+  useRefreshOnTurnEnd(files, chat.isStreaming);
   useUrlParam("q", (q) => chat.send(q, undefined, "url_param"));
   return <Chat chat={chat} files={filesPanelProps(files, false)} config={config} />;
 }
