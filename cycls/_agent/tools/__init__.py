@@ -143,11 +143,29 @@ _WEB_SEARCH_TOOL = {
         "URL, and the most relevant passages from the page. One call is usually "
         "enough; when a result's passages aren't sufficient, follow up with "
         "`web_fetch` on its URL.\n"
-        "Use for current events, facts, docs, or anything outside your training."
+        "Search BEFORE answering — never from memory — whenever:\n"
+        "- the answer could have changed since training: news, prices, versions, "
+        "people's roles, laws, schedules\n"
+        "- the question involves niche or specialized detail — small entities, "
+        "local info, fan wikis, fiction/lore, regulations. Your memory of "
+        "specifics is unreliable even when the topic feels familiar.\n"
+        "- the user names a source (a wiki, site, or publication) — consulting it "
+        "is mandatory, never answer on its behalf\n"
+        "- the user disputes something you said — verify before re-answering; "
+        "confidence is not a reason to skip\n"
+        "- getting a small detail wrong is costly\n"
+        "Keep queries short and specific (1-6 words), in the language of the "
+        "likely best sources; if results miss, reformulate with different terms "
+        "rather than repeating.\n"
+        "Cite only URLs this tool or `web_fetch` returned. Never attribute a "
+        "claim to a source you did not retrieve; if results don't contain the "
+        "answer, say so — don't fill the gap."
     ),
     "input_schema": {"type": "object", "properties": {
         "query": {"type": "string", "description": "The search query."},
         "count": {"type": "integer", "description": "Number of results (default 5, max 20)."},
+        "country": {"type": "string", "description": "2-letter country code (e.g. 'sa', 'us') — biases ranking toward that region. Set it when regional or local results matter; omit for global topics."},
+        "search_lang": {"type": "string", "description": "2-letter language code (e.g. 'ar', 'en') — restricts result language. Set it only when sources must be in that language; omit to let the query language decide."},
     }, "required": ["query"]}
 }
 _WEB_FETCH_TOOL = {
@@ -155,7 +173,8 @@ _WEB_FETCH_TOOL = {
     "name": "web_fetch",
     "description": (
         "Fetch a web page by URL and return its readable text. Use after "
-        "`web_search` when you need the full page, not just the passages. "
+        "`web_search` when you need the full page, not just the passages — and "
+        "ALWAYS when the user gives a URL or points at a specific page. "
         "Give the exact http(s) URL."
     ),
     "input_schema": {"type": "object", "properties": {
@@ -252,17 +271,23 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
 async def _exec_web_search(inp):
     """Brave web search — one call, native-parity. Each result carries its
     clean passages (description + extra_snippets), so no second fetch is needed
-    for most queries. Key from `BRAVE_API_KEY`."""
+    for most queries. Key from `BRAVE_API_KEY`; `BRAVE_COUNTRY` and
+    `BRAVE_SEARCH_LANG` set deployment-wide defaults the model can override
+    per query."""
     key = os.environ.get("BRAVE_API_KEY")
     if not key: return "Error: web search is unavailable (BRAVE_API_KEY not set)."
     query = (inp.get("query") or "").strip()
     if not query: return "Error: query is required."
     count = min(max(int(inp.get("count") or 5), 1), 20)
+    params = {"q": query, "count": count}
+    for k in ("country", "search_lang"):
+        if v := str(inp.get(k) or os.environ.get(f"BRAVE_{k.upper()}") or "").strip().lower():
+            params[k] = v
     import httpx
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.get("https://api.search.brave.com/res/v1/web/search",
-                                  params={"q": query, "count": count},
+                                  params=params,
                                   headers={"X-Subscription-Token": key, "Accept": "application/json"})
         r.raise_for_status()
         results = ((r.json().get("web") or {}).get("results") or [])[:count]
