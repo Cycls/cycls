@@ -190,10 +190,13 @@ class _FakeResp:
 class _FakeClient:
     """Stands in for httpx.AsyncClient — returns a preset response from .get/.stream."""
     resp = None
+    last_kwargs = None
     def __init__(self, *a, **k): pass
     async def __aenter__(self): return self
     async def __aexit__(self, *a): return False
-    async def get(self, *a, **k): return type(self).resp
+    async def get(self, *a, **k):
+        type(self).last_kwargs = k
+        return type(self).resp
 
     def stream(self, *a, **k):
         resp = type(self).resp
@@ -219,6 +222,102 @@ def test_web_search_formats_passages(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
     out = asyncio.run(_exec_web_search({"query": "hi"}))
     assert "T1" in out and "http://a" in out and "s1" in out and "s2" in out and "T2" in out
+
+
+def test_web_search_locale_params(monkeypatch):
+    """Env vars are deployment defaults; per-query model input overrides them."""
+    import httpx
+    from cycls._agent.tools import _exec_web_search
+    monkeypatch.setenv("BRAVE_API_KEY", "x")
+    monkeypatch.delenv("BRAVE_COUNTRY", raising=False)
+    monkeypatch.delenv("BRAVE_SEARCH_LANG", raising=False)
+    _FakeClient.resp = _FakeResp(data={"web": {"results": [
+        {"title": "T", "url": "http://a", "description": "D"}]}})
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+
+    asyncio.run(_exec_web_search({"query": "q"}))
+    assert _FakeClient.last_kwargs["params"] == {"q": "q", "count": 5}
+
+    monkeypatch.setenv("BRAVE_COUNTRY", "sa")
+    asyncio.run(_exec_web_search({"query": "q"}))
+    assert _FakeClient.last_kwargs["params"]["country"] == "sa"
+
+    asyncio.run(_exec_web_search({"query": "q", "country": "US", "search_lang": "AR"}))
+    assert _FakeClient.last_kwargs["params"]["country"] == "us"
+    assert _FakeClient.last_kwargs["params"]["search_lang"] == "ar"
+
+
+def test_client_cache_keyed_by_full_config(monkeypatch):
+    """Same vendor with different base_url/api_key/headers must not share a client."""
+    from cycls._agent.harness import providers
+    monkeypatch.setattr(providers, "_clients", {})
+    a = providers._client_for("openai", base_url="https://a/v1", api_key="k1")
+    b = providers._client_for("openai", base_url="https://b/v1", api_key="k2")
+    c = providers._client_for("openai", base_url="https://a/v1", api_key="k1")
+    h = providers._client_for("openai", base_url="https://a/v1", api_key="k1",
+                              headers={"Modal-Key": "x"})
+    assert a is not b and a is c and h is not a
+    assert str(a.base_url).startswith("https://a/") and str(b.base_url).startswith("https://b/")
+    assert h.default_headers["Modal-Key"] == "x"
+
+
+def test_thinking_unmapped_vendor_warns_once(monkeypatch, capsys):
+    from cycls._agent.harness.providers import openai as prov
+    monkeypatch.setattr(prov, "_unmapped_thinking_warned", set())
+    assert prov._thinking_kwargs("modal", "medium") == {}
+    assert "no dialect for vendor 'modal'" in capsys.readouterr().err
+    assert prov._thinking_kwargs("modal", "medium") == {}       # deduped
+    assert prov._thinking_kwargs("modal", "adaptive") == {}     # default: quiet
+    assert prov._thinking_kwargs("modal", None) == {}
+    assert capsys.readouterr().err == ""
+    assert prov._thinking_kwargs("kimi", "medium") == {"reasoning_effort": "high"}
+    assert capsys.readouterr().err == ""
+
+
+def test_llm_headers_reach_provider_client(monkeypatch):
+    from cycls._agent.harness import providers
+    from cycls._agent.harness.llm import LLM
+    monkeypatch.setattr(providers, "_clients", {})
+    llm = LLM().model("modal/kimi-k3").api_key("unused").headers({"Modal-Key": "x", "Modal-Secret": "y"})
+    assert llm._headers == {"Modal-Key": "x", "Modal-Secret": "y"}
+    p = providers.make_provider("modal/kimi-k3", api_key="unused", headers=llm._headers)
+    assert p._client.default_headers["Modal-Secret"] == "y"
+    p2 = providers.make_provider("modal/kimi-k3", api_key="unused", headers={"Modal-Key": "z"})
+    assert p2._client is not p._client
+
+
+def test_openai_stream_clamps_cached_above_prompt():
+    """cached_tokens above prompt_tokens (SGLang) must not yield negative input."""
+    import types
+    from cycls._agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.events import Turn
+
+    def chunk(text=None, finish=None, usage=None):
+        delta = types.SimpleNamespace(content=text, tool_calls=None)
+        choices = [types.SimpleNamespace(delta=delta, finish_reason=finish)] if text or finish else []
+        return types.SimpleNamespace(usage=usage, choices=choices)
+
+    usage = types.SimpleNamespace(
+        prompt_tokens=127, completion_tokens=43,
+        prompt_tokens_details=types.SimpleNamespace(cached_tokens=128))
+
+    async def _gen():
+        yield chunk(text="hi")
+        yield chunk(finish="stop")
+        yield chunk(usage=usage)
+
+    async def _create(**kw): return _gen()
+    client = types.SimpleNamespace(chat=types.SimpleNamespace(
+        completions=types.SimpleNamespace(create=_create)))
+
+    async def run():
+        p = OpenAIProvider(client, "kimi-k3", "kimi")
+        return [ev async for ev in p.stream(
+            messages=[{"role": "user", "content": "q"}], system="", tools=[], max_tokens=100)]
+
+    turn = next(e for e in asyncio.run(run()) if isinstance(e, Turn))
+    assert turn.input == 0 and turn.cached == 127 and turn.output == 43
+    assert turn.input + turn.cached + turn.cache_create == 127
 
 
 def test_web_fetch_strips_html_to_text(monkeypatch):

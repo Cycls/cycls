@@ -28,6 +28,7 @@ class LLM:
         self._bash_network = True
         self._base_url = None
         self._api_key = None
+        self._headers = None
         self._handlers = {}
         self._labels = {}
         self._mcp = []
@@ -65,6 +66,11 @@ class LLM:
         return self._copy(_bash_network=network)
     def base_url(self, url):        return self._copy(_base_url=url)
     def api_key(self, key):         return self._copy(_api_key=key)
+    def headers(self, mapping):
+        """Extra HTTP headers sent with every model request — for endpoints
+        that authenticate outside the bearer key (Modal proxy, Cloudflare
+        Access, corporate gateways). None clears."""
+        return self._copy(_headers=dict(mapping) if mapping else None)
     def on(self, name, handler, *, label=None):
         """Register an async handler for a custom tool by name. The handler's
         return value is both yielded to the stream (body sees it as a normal
@@ -143,7 +149,9 @@ class LLM:
         """Run the agent loop with this LLM's configuration, yielding `Event`s.
 
         `context` is the per-invocation input (messages, user, session).
-        `client` is a test-only seam for injecting a mocked provider.
+        `client` injects a pre-built SDK client — used by tests, and by
+        deployments needing configuration the builder doesn't cover (custom
+        transports, proxies, instrumented clients).
         """
         if self._model is None:
             raise ValueError("LLM.model(...) is required before .run()")
@@ -163,6 +171,7 @@ class LLM:
             client=client,
             base_url=self._base_url,
             api_key=self._api_key,
+            headers=self._headers,
             handlers=self._handlers,
             mcp_servers=self._mcp,
             thinking=self._thinking,

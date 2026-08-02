@@ -18,6 +18,9 @@ from ..events import Turn
 from ...tools import tool_step
 
 
+_unmapped_thinking_warned = set()
+
+
 def _thinking_kwargs(vendor, thinking):
     """Translate the unified .thinking() spec (None | "adaptive" | "low" |
     "medium" | "high") into the vendor's reasoning dialect. Unknown vendors get
@@ -51,6 +54,13 @@ def _thinking_kwargs(vendor, thinking):
         # (gpt-5*/o*, Azure OpenAI, Gemini-compat, Grok 4.5, Mistral Small 4+,
         # Groq-hosted, Perplexity)
         return {"reasoning_effort": effort} if effort else {}
+    # Known vendors all return inside their branch — reaching here means the
+    # vendor (often a host prefix like modal/vllm) has no dialect mapping.
+    if effort and vendor not in _unmapped_thinking_warned:
+        _unmapped_thinking_warned.add(vendor)
+        print(f"[provider] .thinking({effort!r}) has no dialect for vendor {vendor!r} — "
+              f'no reasoning parameter sent. Use .extra_body({{"reasoning_effort": {effort!r}}}) '
+              f"if the endpoint supports it.", file=sys.stderr, flush=True)
     return {}
 
 
@@ -228,6 +238,9 @@ class OpenAIProvider:
         # Kimi/Moonshot reports `cached_tokens` at the top level of usage.
         cached = (getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0)
                   or getattr(usage, "cached_tokens", 0) or 0) if usage else 0
+        # Some servers (SGLang) report cached_tokens above prompt_tokens — clamp
+        # so the input/cached split stays non-negative and sums to the prompt size.
+        if usage: cached = min(cached, usage.prompt_tokens)
         yield Turn(content=content, stop_reason=stop,
                    input=(usage.prompt_tokens - cached if usage else 0),
                    output=(usage.completion_tokens if usage else 0),
