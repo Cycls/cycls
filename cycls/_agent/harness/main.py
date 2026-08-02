@@ -137,13 +137,13 @@ async def _stream_with_retry(provider, **kw):
 async def _run(*, context, system="", tools=None, allowed_tools=[],
                model="anthropic/claude-sonnet-4-20250514", max_tokens=None,
                bash_timeout=600, bash_network=True, client=None,
-               base_url=None, api_key=None, handlers=None, mcp_servers=None,
+               base_url=None, api_key=None, headers=None, handlers=None, mcp_servers=None,
                thinking="adaptive", vision=True, web_search="brave",
                instructions="AGENT.md", skills=[], price=None, context_window=None,
                extra_body=None):
     vendor, bare_model = model.split("/", 1)
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key,
-                             vision=vision)
+                             headers=headers, vision=vision)
     if max_tokens is None: max_tokens = DEFAULT_MAX_TOKENS
     workspace = context.workspace
     user = getattr(context, "user", None)
