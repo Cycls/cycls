@@ -69,7 +69,8 @@ async def openai_encoder(stream):
         async for msg in _aiter(stream):
             if msg: yield f"data: {json.dumps({'choices': [{'delta': {'content': msg}}]})}\n\n"
     except Exception as e:
-        yield f"data: {json.dumps({'choices': [{'delta': {'content': f'\n\n[stream failed: {e}]'}}]})}\n\n"
+        note = f"\n\n[stream failed: {e}]"
+        yield f"data: {json.dumps({'choices': [{'delta': {'content': note}}]})}\n\n"
     yield "data: [DONE]\n\n"
 
 def sse(item):

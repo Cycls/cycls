@@ -26,7 +26,9 @@ from ..tools import skills as skills_mod
 MAX_RETRIES = 10
 BASE_DELAY_MS = 500
 MAX_DELAY_MS = 32_000
-_RETRYABLE_STATUSES = {429, 502, 503, 504, 529}
+# 500 included: model servers surface transient capacity failures (CUDA OOM
+# on a saturated GPU) as plain 500s that clear within seconds.
+_RETRYABLE_STATUSES = {429, 500, 502, 503, 504, 529}
 MAX_CONTINUATIONS = 4         # auto-continue rounds after a max_tokens cut
 MAX_PAUSES = 8                # pause_turn resends before giving up
 _CONTINUE = ("Your previous message was cut off at the output-token limit. "
@@ -128,7 +130,7 @@ async def _stream_with_retry(provider, **kw):
             attempt += 1
             if not (_is_retryable(e) and attempt <= MAX_RETRIES): raise
             delay = _retry_delay(attempt, e)
-            yield events.step(f"Rate limited, retrying in {delay:.1f}s... (attempt {attempt}/{MAX_RETRIES})")
+            yield events.step(f"Model endpoint busy, retrying in {delay:.1f}s... (attempt {attempt}/{MAX_RETRIES})")
             await asyncio.sleep(delay)
 
 
