@@ -1056,6 +1056,15 @@ def test_is_retryable_detects_status_codes():
     e529.status_code = 529
     assert _is_retryable(e529)
 
+    e500 = MagicMock()   # model-server capacity failures (CUDA OOM) are plain 500s
+    e500.status_code = 500
+    assert _is_retryable(e500)
+
+    e400 = MagicMock()
+    e400.status_code = 400
+    e400.__str__ = lambda self: "invalid request"
+    assert not _is_retryable(e400)
+
 
 def test_is_retryable_detects_string_fallback():
     """String-based fallback should still work."""
