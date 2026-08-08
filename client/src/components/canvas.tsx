@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { Icon } from "./icon";
+import { AppIcon } from "./app-icon";
 import { LoadingBar } from "./loading-bar";
 import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
@@ -9,13 +10,26 @@ import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
 import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
+import { attachBridge, appScope } from "./mini-app-bridge";
+import { injectShim } from "./mini-app-shim";
+import { SaveDialog } from "./save-dialog";
+import type { MiniAppInfo } from "../hooks/use-apps";
 import { usePaneWidth } from "../hooks/use-pane-width";
 import { cn } from "../lib/utils";
 import { t } from "../lib/i18n";
 
+// Renderer choice comes from the PATH, never the display name: a mini app's tab
+// is titled by its manifest ("Injaz Portfolio"), which has no extension, and
+// every type check would fall through to the unsupported-file card.
+export const fileKind = (file: { path: string; name: string }) => file.path || file.name;
+
 export interface CanvasFile {
   path: string;
   name: string;
+  // Mini apps carry their manifest identity; files fall back to the ext tint dot.
+  icon?: string;      // emoji
+  iconSrc?: string;   // image (data: or blob:)
+  letter?: string;    // first letter of the app name
 }
 
 // Fetch a file's content for the canvas. pdf → blob URL (native viewer);
@@ -38,7 +52,7 @@ export function useFileContent(
     // Only formats we render from source fetch as text. Everything else — pdf,
     // media, spreadsheets, and anything unrenderable like docx — fetches bytes,
     // so a binary is never handed to a text renderer.
-    const load = isMd(file.name) || isHtml(file.name) || codeLang(file.name) != null
+    const load = isMd(fileKind(file)) || isHtml(fileKind(file)) || codeLang(fileKind(file)) != null
       ? readFile(file.path)
       : openFile(file.path).then((url) => { blobUrl = url; return url; });
     load.then((v) => { if (!cancelled) setContent(v); })
@@ -51,30 +65,106 @@ export function useFileContent(
 
 // Read-only body — renders a loaded file by type. `shared` tightens the html
 // sandbox (drop allow-popups) for content that's untrusted to the viewer.
-export function CanvasDoc({ file, content, error, shared = false, onDownload, onShare }: {
+interface PendingSave {
+  name: string;
+  content: string;
+  resolve: (path: string | null) => void;
+}
+
+// Without readFile (shared pages have no workspace) this is a plain sandboxed doc.
+function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders }: {
+  file: CanvasFile;
+  content: string;
+  shared: boolean;
+  readFile?: (path: string, silent?: boolean) => Promise<string>;
+  writeFile?: (path: string, text: string, silent?: boolean) => Promise<void>;
+  listFolders?: () => Promise<{ name: string; path: string }[]>;
+}) {
+  const ref = useRef<HTMLIFrameElement>(null);
+  const [pending, setPending] = useState<PendingSave | null>(null);
+  // Only a mini app gets workspace access; every other html is just a document.
+  const isApp = appScope(file.path) !== null;
+  const canSave = isApp && !shared && !!writeFile && !!listFolders;
+
+  useEffect(() => {
+    if (!ref.current || !readFile || !isApp) return;
+    return attachBridge({
+      frame: ref.current,
+      appPath: file.path,
+      // Silent: the app is told what failed over the bridge and decides what it
+      // means. A missing key-value file on first open is not a host-level error.
+      readFile: (p) => readFile(p, true),
+      writeFile: shared || !writeFile ? undefined : (p, text) => writeFile(p, text, true),
+      // One dialog per save: the app never holds standing permission to write
+      // outside its own folder.
+      requestSave: canSave
+        ? (name, body) => new Promise<string | null>((resolve) =>
+            setPending({ name, content: body, resolve }))
+        : undefined,
+      context: {
+        theme: document.documentElement.classList.contains("dark") ? "dark" : "light",
+        locale: document.documentElement.lang || "en",
+      },
+    });
+  }, [file.path, readFile, writeFile, shared, canSave, isApp]);
+
+  const doc = useMemo(() => (readFile && isApp ? injectShim(content) : content), [content, readFile, isApp]);
+
+  const settle = async (path: string | null) => {
+    if (!pending) return;
+    const { content: body, resolve } = pending;
+    setPending(null);
+    if (!path) return resolve(null);
+    try {
+      await writeFile!(path, body);
+      resolve(path);
+    } catch {
+      resolve(null);
+    }
+  };
+
+  return (
+    <>
+      <iframe
+        ref={ref}
+        sandbox={shared ? "allow-scripts" : "allow-scripts allow-popups"}
+        srcDoc={doc}
+        title={file.name}
+        className="h-full w-full border-0 bg-white"
+      />
+      {pending && listFolders && (
+        <SaveDialog
+          name={pending.name}
+          bytes={new Blob([pending.content]).size}
+          listFolders={listFolders}
+          onConfirm={(path) => void settle(path)}
+          onCancel={() => void settle(null)}
+        />
+      )}
+    </>
+  );
+}
+
+export function CanvasDoc({ file, content, error, shared = false, readFile, writeFile, listFolders, onDownload, onShare }: {
   file: CanvasFile;
   content: string | null;
   error: boolean;
   shared?: boolean;
+  readFile?: (path: string, silent?: boolean) => Promise<string>;
+  writeFile?: (path: string, text: string, silent?: boolean) => Promise<void>;
+  listFolders?: () => Promise<{ name: string; path: string }[]>;
   onDownload?: () => void;
   onShare?: () => void;
 }) {
-  const lang = codeLang(file.name);
+  const lang = codeLang(fileKind(file));
   if (content == null && !error) return <LoadingBar />;
   if (error) {
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Couldn't load this file.</div>;
   }
-  if (isHtml(file.name)) {
-    return (
-      <iframe
-        sandbox={shared ? "allow-scripts" : "allow-scripts allow-popups"}
-        srcDoc={content ?? ""}
-        title={file.name}
-        className="h-full w-full border-0 bg-white"
-      />
-    );
+  if (isHtml(fileKind(file))) {
+    return <HtmlDoc file={file} content={content ?? ""} shared={shared} readFile={readFile} writeFile={writeFile} listFolders={listFolders} />;
   }
-  if (isPdf(file.name)) {
+  if (isPdf(fileKind(file))) {
     // Desktop's native inline viewer is the best PDF UX (search, zoom, print).
     // Phones can't EMBED PDFs (iOS iframes render page 1 only) but render them
     // fine on direct navigation — so on small screens the iframe doubles as a
@@ -93,31 +183,31 @@ export function CanvasDoc({ file, content, error, shared = false, onDownload, on
       </div>
     );
   }
-  if (isImage(file.name)) {
+  if (isImage(fileKind(file))) {
     return (
       <div className="flex h-full items-center justify-center overflow-auto p-4">
         <img src={content ?? ""} alt={file.name} className="max-h-full max-w-full object-contain" />
       </div>
     );
   }
-  if (isVideo(file.name)) {
+  if (isVideo(fileKind(file))) {
     return (
       <div className="flex h-full items-center justify-center bg-black">
         <video src={content ?? ""} controls className="max-h-full max-w-full" />
       </div>
     );
   }
-  if (isAudio(file.name)) {
+  if (isAudio(fileKind(file))) {
     return (
       <div className="flex h-full items-center justify-center p-6">
         <audio src={content ?? ""} controls className="w-full max-w-xl" />
       </div>
     );
   }
-  if (isSpreadsheet(file.name)) {
+  if (isSpreadsheet(fileKind(file))) {
     return content ? <SpreadsheetView url={content} name={file.name} /> : null;
   }
-  if (is3d(file.name)) {
+  if (is3d(fileKind(file))) {
     // model-viewer from CDN inside our own iframe shell — no npm dependency.
     // No sandbox: the srcDoc is our template, and an opaque origin couldn't
     // fetch the parent's blob URL.
@@ -133,7 +223,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
       />
     ) : null;
   }
-  if (isMd(file.name)) {
+  if (isMd(fileKind(file))) {
     return (
       <div className="h-full overflow-y-auto px-6 py-5 sm:px-8">
         <TextPart text={content ?? ""} />
@@ -143,8 +233,8 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
   if (lang == null) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
-        <div className="flex size-16 items-center justify-center rounded-2xl bg-secondary text-xs font-bold text-muted-foreground" style={tintTile(file.name)}>
-          <span style={tintLabel(file.name)}>{(ext(file.name) || "file").slice(0, 4).toUpperCase()}</span>
+        <div className="flex size-16 items-center justify-center rounded-2xl bg-secondary text-xs font-bold text-muted-foreground" style={tintTile(fileKind(file))}>
+          <span style={tintLabel(fileKind(file))}>{(ext(fileKind(file)) || "file").slice(0, 4).toUpperCase()}</span>
         </div>
         <p className="text-sm font-medium text-foreground">{file.name}</p>
         <p className="text-xs text-muted-foreground">{t("noPreview")}</p>
@@ -173,7 +263,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, readFile, openFile, writeFile, onShareFile }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, onShareFile }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -184,10 +274,13 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   onCloseTab: (path: string) => void;
   onHide: () => void;
   onAddFile?: (path: string) => void;
+  apps?: MiniAppInfo[];
+  onAddApp?: (app: MiniAppInfo) => void;
   searchFiles?: (q: string) => Promise<{ name: string; path: string }[]>;
   readFile: (path: string) => Promise<string>;   // authed text fetch (md/html/code source)
   openFile: (path: string) => Promise<string>;    // authed blob URL (pdf / download)
   writeFile: (path: string, text: string) => Promise<void>;  // overwrite (editor)
+  listFolders?: () => Promise<{ name: string; path: string }[]>;  // mini-app save dialog
   onShareFile?: (path: string, audience: string) => Promise<string>;
 }) {
   const file = hidden ? null : tabs.find((f) => f.path === active) ?? tabs[tabs.length - 1] ?? null;
@@ -211,7 +304,9 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
                   on ? "bg-secondary text-foreground font-medium" : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
                 )}
               >
-                {tint && <span className="size-1.5 rounded-full" style={{ backgroundColor: tint }} />}
+                {f.icon || f.iconSrc || f.letter
+                  ? <AppIcon app={f} className="size-3.5 rounded-[3px]" textClassName="text-[13px]" />
+                  : tint && <span className="size-1.5 rounded-full" style={{ backgroundColor: tint }} />}
                 <span className="max-w-40 truncate">{f.name}</span>
                 <button
                   onClick={(e) => { e.stopPropagation(); onCloseTab(f.path); }}
@@ -223,7 +318,9 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
               </div>
             );
           })}
-          {onAddFile && searchFiles && <AddTab onAdd={onAddFile} searchFiles={searchFiles} />}
+          {onAddFile && searchFiles && (
+            <AddTab onAdd={onAddFile} searchFiles={searchFiles} apps={apps} onAddApp={onAddApp} />
+          )}
         </div>
         <button onClick={onToggleExpand} className={cn(stripBtn, "hidden sm:flex")} aria-label={expanded ? t("collapse") : t("expand")} title={expanded ? t("collapse") : t("expand")}>
           <Icon name={expanded ? "collapse" : "expand"} className="size-3.5" />
@@ -238,6 +335,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
         readFile={readFile}
         openFile={openFile}
         writeFile={writeFile}
+        listFolders={listFolders}
         onShareFile={onShareFile}
       />
     </>
@@ -322,13 +420,19 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
 
 // The menu is position:fixed from the button's rect so the pane's
 // overflow-hidden can't clip it.
-function AddTab({ onAdd, searchFiles }: {
+function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
   onAdd: (path: string) => void;
   searchFiles: (q: string) => Promise<{ name: string; path: string }[]>;
+  apps?: MiniAppInfo[];
+  onAddApp?: (app: MiniAppInfo) => void;
 }) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [q, setQ] = useState("");
   const [results, setResults] = useState<{ name: string; path: string }[]>([]);
+  const needle = q.trim().toLowerCase();
+  const matchedApps = onAddApp
+    ? apps.filter((a) => !needle || a.name.toLowerCase().includes(needle) || a.slug.includes(needle))
+    : [];
 
   useEffect(() => {
     if (!pos) return;
@@ -368,7 +472,22 @@ function AddTab({ onAdd, searchFiles }: {
               className="w-full border-b border-border bg-transparent px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
             />
             <div className="max-h-64 overflow-y-auto py-1">
-              {results.length === 0 ? (
+              {matchedApps.length > 0 && (
+                <>
+                  {matchedApps.map((a) => (
+                    <button
+                      key={a.slug}
+                      onClick={() => { onAddApp?.(a); setPos(null); }}
+                      className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-secondary/80"
+                    >
+                      <AppIcon app={a} className="size-3.5 rounded-[3px]" textClassName="text-[13px]" />
+                      <span className="truncate">{a.name}</span>
+                    </button>
+                  ))}
+                  {results.length > 0 && <div className="my-1 border-t border-border" />}
+                </>
+              )}
+              {results.length === 0 && matchedApps.length === 0 ? (
                 <div className="px-3 py-3 text-center text-xs text-muted-foreground">—</div>
               ) : results.map((r) => {
                 const tint = extTint(r.name);
@@ -393,11 +512,12 @@ function AddTab({ onAdd, searchFiles }: {
 }
 
 // Keyed by path from the parent, so per-file state resets on tab switch.
-function CanvasFileView({ file, readFile, openFile, writeFile, onShareFile }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, onShareFile }: {
   file: CanvasFile;
   readFile: (path: string) => Promise<string>;
   openFile: (path: string) => Promise<string>;
   writeFile: (path: string, text: string) => Promise<void>;
+  listFolders?: () => Promise<{ name: string; path: string }[]>;
   onShareFile?: (path: string, audience: string) => Promise<string>;
 }) {
   const { content, setContent, error } = useFileContent(file, readFile, openFile);
@@ -408,8 +528,8 @@ function CanvasFileView({ file, readFile, openFile, writeFile, onShareFile }: {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
-  const md = isMd(file.name);
-  const lang = codeLang(file.name);
+  const md = isMd(fileKind(file));
+  const lang = codeLang(fileKind(file));
   const isText = md || lang != null;   // text-based: editable + copyable
   const dirs = file.path.split("/").slice(0, -1);
 
@@ -420,7 +540,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, onShareFile }: {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const download = () => openFile(file.path).then((url) => saveBlob(url, file.name)).catch(() => {});
+  const download = () => openFile(file.path).then((url) => saveBlob(url, file.path.split('/').pop() || file.name)).catch(() => {});
 
   // Open HTML as a standalone page (its own browsing context) — a stable,
   // full-window render that doesn't reflow with the drawer, plus print/PDF.
@@ -502,7 +622,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, onShareFile }: {
                 </svg>
               </button>
             )}
-            {isHtml(file.name) && content != null && (
+            {isHtml(fileKind(file)) && content != null && (
               <button onClick={openInTab} className={headerBtn} aria-label={t("openInTab")} title={t("openInTab")}>
                 <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
@@ -550,7 +670,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, onShareFile }: {
             className="h-full w-full resize-none border-0 bg-background px-4 py-4 sm:px-6 font-mono text-[13px] leading-relaxed text-foreground focus:outline-none"
           />
         ) : (
-          <CanvasDoc file={file} content={content} error={error}
+          <CanvasDoc file={file} content={content} error={error} readFile={readFile} writeFile={writeFile} listFolders={listFolders}
                      onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
         )}
       </div>

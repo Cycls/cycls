@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { mentionAt, mentionSuppressed } from "../../components/input-box";
-import { matchTokens } from "../use-files";
+import { mentionAt, mentionSuppressed } from "../src/components/input-box";
+import { matchTokens } from "../src/hooks/use-files";
 
 const at = (text: string) => mentionAt(text, text.length);
 

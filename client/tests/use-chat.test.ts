@@ -6,10 +6,10 @@
  */
 import { renderHook, act } from "@testing-library/react";
 import { describe, test, expect, beforeEach, vi } from "vitest";
-import { useChat } from "../use-chat";
+import { useChat } from "../src/hooks/use-chat";
 
 // send() fires posthog events; stub them so tests don't touch analytics.
-vi.mock("../lib/posthog", () => ({ track: vi.fn() }));
+vi.mock("../src/lib/posthog", () => ({ track: vi.fn() }));
 
 
 beforeEach(() => {
