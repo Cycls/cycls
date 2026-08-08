@@ -5,10 +5,10 @@
  */
 import { renderHook } from "@testing-library/react";
 import { describe, test, expect, afterEach, vi } from "vitest";
-import { useAuthHeaders, setActiveWorkspace } from "../use-auth-headers";
-import { useChat } from "../use-chat";
+import { useAuthHeaders, setActiveWorkspace } from "../src/hooks/use-auth-headers";
+import { useChat } from "../src/hooks/use-chat";
 
-vi.mock("../lib/posthog", () => ({ track: vi.fn() }));
+vi.mock("../src/lib/posthog", () => ({ track: vi.fn() }));
 
 afterEach(() => {
   setActiveWorkspace(null);
@@ -43,6 +43,20 @@ describe("X-Workspace header", () => {
     expect(await result.current.authHeaders()).toEqual({
       Authorization: "Bearer tok",
       "X-Workspace": "u-user_1",
+    });
+  });
+
+  // App.tsx wires the token onto three hooks by name. Held per instance, any
+  // FOURTH caller sends no Authorization at all and simply 401s — which is
+  // exactly what happened to useApps and emptied the Apps tab.
+  test("a hook instance nobody wired still authenticates", async () => {
+    const wired = renderHook(() => useAuthHeaders());
+    wired.result.current.setGetToken(async () => "tok");
+    setActiveWorkspace(null);
+
+    const unwired = renderHook(() => useAuthHeaders());
+    expect(await unwired.result.current.authHeaders()).toEqual({
+      Authorization: "Bearer tok",
     });
   });
 });
