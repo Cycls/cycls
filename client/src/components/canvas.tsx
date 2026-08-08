@@ -263,7 +263,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, onShareFile }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, org, onShareFile }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -281,6 +281,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   openFile: (path: string) => Promise<string>;    // authed blob URL (pdf / download)
   writeFile: (path: string, text: string) => Promise<void>;  // overwrite (editor)
   listFolders?: () => Promise<{ name: string; path: string }[]>;  // mini-app save dialog
+  org?: { id: string; name: string } | null;   // lets the share dialog offer the org audience
   onShareFile?: (path: string, audience: string) => Promise<string>;
 }) {
   const file = hidden ? null : tabs.find((f) => f.path === active) ?? tabs[tabs.length - 1] ?? null;
@@ -336,6 +337,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
         openFile={openFile}
         writeFile={writeFile}
         listFolders={listFolders}
+        org={org}
         onShareFile={onShareFile}
       />
     </>
@@ -512,12 +514,13 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
 }
 
 // Keyed by path from the parent, so per-file state resets on tab switch.
-function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, onShareFile }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, org, onShareFile }: {
   file: CanvasFile;
   readFile: (path: string) => Promise<string>;
   openFile: (path: string) => Promise<string>;
   writeFile: (path: string, text: string) => Promise<void>;
   listFolders?: () => Promise<{ name: string; path: string }[]>;
+  org?: { id: string; name: string } | null;
   onShareFile?: (path: string, audience: string) => Promise<string>;
 }) {
   const { content, setContent, error } = useFileContent(file, readFile, openFile);
@@ -691,6 +694,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, onSh
           onClose={() => setShareOpen(false)}
           mode="file"
           subtitle={file.name}
+          org={org}
           onShare={(audience) => onShareFile(file.path, audience)}
         />
       )}
