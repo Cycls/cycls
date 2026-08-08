@@ -145,7 +145,7 @@ tests/
 │       ├── test_load_repair.py  # SlateDB roundtrip + repair invariants
 │       ├── test_database.py     # the `database` tool over the agent KV
 │       └── test_live.py         # @pytest.mark.live, real Anthropic
-└── client/src/hooks/__tests__/  # vitest — useChat + auth-header hooks
+└── client/tests/                # vitest — useChat, auth headers, mentions, apps, mini-app bridge
 ```
 
 **Mocked tier** (default): no API calls, no docker. Runs in ~2min.
