@@ -844,6 +844,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           openFile={files.onOpenFile}
           writeFile={files.writeFile}
           listFolders={files.listFolders}
+          org={files.org}
           onShareFile={files.onShareFile}
         />
       )}
