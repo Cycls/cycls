@@ -4,6 +4,8 @@ import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
 import { Canvas, type CanvasFile } from "./canvas";
+import { AppsPanel } from "./apps-panel";
+import { useApps, type MiniAppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
 import { Icon, IconButton } from "./icon";
 import { CyclsLogo } from "./cycls-logo";
@@ -112,7 +114,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       return next;
     });
   }, []);
-  const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats">(() =>
+  const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats" | "apps">(() =>
     (sessionStorage.getItem("cycls_panel_tab") as "files" | "shares" | "chats") || (account ? "chats" : "files"));
   const [canvasTabs, setCanvasTabs] = useState<CanvasFile[]>([]);
   const [canvasActive, setCanvasActive] = useState<string | null>(null);
@@ -122,8 +124,9 @@ export function Chat({ chat, onShare, files, account, config }: {
   useEffect(() => {
     if (canvasHidden || canvasTabs.length === 0) setCanvasExpanded(false);
   }, [canvasHidden, canvasTabs.length]);
-  const openFileInCanvas = useCallback((path: string, name?: string) => {
-    setCanvasTabs((tabs) => (tabs.some((f) => f.path === path) ? tabs : [...tabs, { path, name: name || path.split("/").pop() || path }]));
+  const openFileInCanvas = useCallback((path: string, name?: string, ident?: Partial<CanvasFile>) => {
+    setCanvasTabs((tabs) => (tabs.some((f) => f.path === path) ? tabs
+      : [...tabs, { ...ident, path, name: name || path.split("/").pop() || path }]));
     setCanvasActive(path);
     setCanvasHidden(false);
   }, []);
@@ -131,6 +134,15 @@ export function Chat({ chat, onShare, files, account, config }: {
     setCanvasTabs((tabs) => tabs.filter((f) => f.path !== path));
     setCanvasActive((a) => (a === path ? null : a));
   }, []);
+  const { apps, loading: appsLoading, refresh: refreshApps } = useApps();
+  // The UI handler resolves an app by path without re-subscribing on every load.
+  const appsRef = useRef<MiniAppInfo[]>([]);
+  useEffect(() => { appsRef.current = apps; }, [apps]);
+  const openApp = useCallback((app: MiniAppInfo) => {
+    openFileInCanvas(app.entry, app.name, {
+      icon: app.icon, iconSrc: app.iconSrc, letter: app.letter,
+    });
+  }, [openFileInCanvas]);
   const [panelExpanded, setPanelExpanded] = useState(false);
   // Drag the panel's left edge to resize; width persists across sessions.
   const { width: panelWidth, startResize } = usePaneWidth("cycls_panel_width", 480, 360, 80);
@@ -175,11 +187,13 @@ export function Chat({ chat, onShare, files, account, config }: {
       if (ev.action === "open_plan_modal") {
         openPricing(activeOrg ? "organization" : "user", "agent_event");
       } else if (ev.action === "open_canvas" && typeof ev.path === "string") {
-        openFileInCanvas(ev.path, typeof ev.name === "string" ? ev.name : undefined);
+        const app = appsRef.current.find((a) => a.entry === ev.path);
+        if (app) openApp(app);
+        else openFileInCanvas(ev.path, typeof ev.name === "string" ? ev.name : undefined);
       }
     });
     return () => setUIHandler(null);
-  }, [setUIHandler, activeOrg, openPricing, openFileInCanvas]);
+  }, [setUIHandler, activeOrg, openPricing, openFileInCanvas, openApp]);
 
   const onSpeechEnd = useCallback((text: string) => {
     if (text.trim()) {
@@ -303,7 +317,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   };
 
   // Switch the side panel's active tab and (re)load its data.
-  const selectTab = (tab: "files" | "shares" | "chats") => {
+  const selectTab = (tab: "files" | "shares" | "chats" | "apps") => {
     setFilesTab(tab);
     sessionStorage.setItem("cycls_panel_tab", tab);
     if (tab === "chats" && onListChats) {
@@ -318,7 +332,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   };
 
   // Open the panel, keeping the last-active tab unless one is given.
-  const openPanel = (tab?: "files" | "shares" | "chats") => {
+  const openPanel = (tab?: "files" | "shares" | "chats" | "apps") => {
     selectTab(tab ?? filesTab);
     setFilesOpen(true);
   };
@@ -644,6 +658,14 @@ export function Chat({ chat, onShare, files, account, config }: {
                       {t("files")}
                     </button>
                   )}
+                  {files && (
+                    <button
+                      onClick={() => { selectTab("apps"); void refreshApps(); }}
+                      className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "apps" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                    >
+                      {t("apps")}
+                    </button>
+                  )}
                   {account && (
                     <button
                       onClick={() => selectTab("shares")}
@@ -672,6 +694,12 @@ export function Chat({ chat, onShare, files, account, config }: {
               )}
               {filesTab === "files" && files ? (
                 <Files {...files} onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
+              ) : filesTab === "apps" ? (
+                <AppsPanel
+                  apps={apps}
+                  loading={appsLoading}
+                  onOpen={(a) => { openApp(a); if (isDesktop) setFilesOpen(false); }}
+                />
               ) : filesTab === "shares" ? (
                 <div className="flex flex-1 min-h-0 flex-col">
                   <div className="flex-1 overflow-y-auto">
@@ -809,10 +837,13 @@ export function Chat({ chat, onShare, files, account, config }: {
           onCloseTab={closeCanvasTab}
           onHide={() => setCanvasHidden(true)}
           onAddFile={openFileInCanvas}
+          apps={apps}
+          onAddApp={openApp}
           searchFiles={files.searchFiles}
           readFile={files.readFile}
           openFile={files.onOpenFile}
           writeFile={files.writeFile}
+          listFolders={files.listFolders}
           onShareFile={files.onShareFile}
         />
       )}

@@ -20,6 +20,12 @@ const fold = (s: string) => s.normalize("NFC").toLowerCase();
 export const matchTokens = (path: string, tokens: string[]) =>
   tokens.every((t) => fold(path).includes(t));
 
+// Mini apps get their own surface, so the browser hides `apps/` at the root.
+// Nested folders called "apps" are ordinary content and stay visible.
+const APPS_DIR = "apps";
+const hideApps = (dir: string, list: FileEntry[]) =>
+  dir === "" ? list.filter((e) => !(e.type === "directory" && e.name === APPS_DIR)) : list;
+
 export function useFiles(baseUrl: string = "") {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [path, setPath] = useState("");
@@ -37,7 +43,7 @@ export function useFiles(baseUrl: string = "") {
       if (dir) q.set("path", dir);
       if (opts?.fresh) q.set("fresh", "1");
       const qs = q.toString();
-      setEntries(await (await api(`/files${qs ? `?${qs}` : ""}`)).json());
+      setEntries(hideApps(dir, await (await api(`/files${qs ? `?${qs}` : ""}`)).json()));
       setPath(dir);
     } catch {
       setEntries([]);
@@ -101,13 +107,16 @@ export function useFiles(baseUrl: string = "") {
   }, [api]);
 
   // Authed text fetch — the canvas renders md/html from source, not a blob URL.
-  const readFile = useCallback(async (filePath: string) => {
-    return (await api(`/files/${filePath}`)).text();
+  // `silent` suppresses the error toast: a mini app reading a file that does not
+  // exist yet (its key-value store, an optional data file) is normal, and the
+  // failure is already reported back to it over the bridge.
+  const readFile = useCallback(async (filePath: string, silent = false) => {
+    return (await api(`/files/${filePath}`, { silent })).text();
   }, [api]);
 
   // Overwrite a text file from the canvas editor.
-  const writeFile = useCallback(async (filePath: string, text: string) => {
-    await api(`/files/${filePath}`, { method: "PUT", body: new Blob([text]) });
+  const writeFile = useCallback(async (filePath: string, text: string, silent = false) => {
+    await api(`/files/${filePath}`, { method: "PUT", body: new Blob([text]), silent });
     track("file_saved", { path: filePath });
   }, [api]);
 
@@ -126,7 +135,9 @@ export function useFiles(baseUrl: string = "") {
       const ranked = res.headers.get("X-Files-Search") === "1"
         ? all
         : all.filter((e) => e.type === "file" && matchTokens(e.path, tokens)).slice(0, 12);
-      return ranked.map((e) => ({ name: e.name, path: e.path, kind: e.kind }));
+      return ranked
+        .filter((e) => !e.path.startsWith(`${APPS_DIR}/`))
+        .map((e) => ({ name: e.name, path: e.path, kind: e.kind }));
     } catch {
       return [];
     }
@@ -136,7 +147,9 @@ export function useFiles(baseUrl: string = "") {
   const listFolders = useCallback(async () => {
     try {
       const all = (await (await api(`/files?recursive=1`)).json()) as (FileEntry & { path: string })[];
-      return all.filter((e) => e.type === "directory").map((e) => ({ name: e.name, path: e.path }));
+      return all
+        .filter((e) => e.type === "directory" && e.path !== APPS_DIR && !e.path.startsWith(`${APPS_DIR}/`))
+        .map((e) => ({ name: e.name, path: e.path }));
     } catch {
       return [];
     }

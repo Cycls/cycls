@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>bridge harness</title>
+<style>body{margin:0;font:13px system-ui}iframe{width:100%;height:640px;border:1px solid #ddd}</style>
+</head><body>
+<iframe id="f" sandbox="allow-scripts"></iframe>
+<script type="module">
+import { attachBridge } from '/src/components/mini-app-bridge.ts';
+const APP = 'projects/PRJ-001/apps/burnup.html';
+const files = {
+  'projects/PRJ-001/apps/data.json': await (await fetch('/examples/miniapp/data.json')).text(),
+  'projects/PRJ-001/.state/commercial.json': '{"evm":{"bac":2400000}}',
+  'projects/PRJ-001/.state/store.json': '{"secret":"delivery"}',
+};
+const f = document.getElementById('f');
+attachBridge({
+  frame: f, appPath: APP,
+  readFile: async (p) => { if (p in files) return files[p]; throw new Error('not found'); },
+  context: { theme: 'light', locale: 'en' },
+  onResize: (h) => { f.style.height = h + 'px'; },
+});
+f.srcdoc = await (await fetch('/examples/miniapp/burnup.html')).text();
+</script>
+</body></html>

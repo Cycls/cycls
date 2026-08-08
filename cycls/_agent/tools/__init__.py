@@ -184,11 +184,44 @@ _WEB_FETCH_TOOL = {
 }
 _NATIVE_WEB_SEARCH = {"type": "web_search_20250305", "name": "web_search"}
 
+_BUILD_APP_TOOL = {
+    "type": "custom",
+    "name": "build_app",
+    "description": (
+        "Bundle mini-app source into a single self-contained HTML file and install "
+        "it as a mini app, which the user opens from the Apps tab.\n\n"
+        "Write the source into the workspace first with the editor — one file per "
+        "component, `index.html` as the entry — then call this with that folder. "
+        "The source stays in the workspace so you can edit and rebuild it later; "
+        "do NOT paste source into this call.\n\n"
+        "The bundler inlines everything (a mini app runs sandboxed, where an "
+        "external script, stylesheet or font is blocked). Available to import: "
+        "react, react-dom, recharts, lucide-react, date-fns, clsx, tailwind-merge, "
+        "and Tailwind v4 via `@import \"tailwindcss\"`. Nothing else — you cannot "
+        "add a dependency.\n\n"
+        "Inside the app, `cycls.read`/`write` reach files in the app's own folder, "
+        "`cycls.get`/`set` are a key-value store, and `cycls.save(name, content)` "
+        "asks the user where to put a file anywhere in the workspace.\n\n"
+        "On failure the build log comes back — fix the source and call again."
+    ),
+    "input_schema": {"type": "object", "properties": {
+        "slug": {"type": "string",
+                 "description": "App folder name under apps/, e.g. `burnup` (lowercase, no spaces)."},
+        "source": {"type": "string",
+                   "description": "Folder holding the source, e.g. `apps/burnup/src`. Must contain index.html."},
+        "name": {"type": "string", "description": "Display name shown in the Apps tab."},
+        "icon": {"type": "string", "description": (
+            "An emoji, or an image file in the app's folder (e.g. `logo.png`). "
+            "Defaults to the first letter of the name.")},
+    }, "required": ["slug", "source"]}
+}
+
 _BUILTINS = {
     "Bash":     [_BASH_TOOL],
     "Editor":   [_READ_TOOL, _EDIT_TOOL],
     "DataBase": [_DATABASE_TOOL],
     "Canvas":   [_CANVAS_TOOL],
+    "MiniApp":  [_BUILD_APP_TOOL],
 }
 
 
@@ -409,7 +442,112 @@ async def _exec_canvas(inp, workspace):
     if not path.exists(): return f"Error: {raw} does not exist"
     if path.is_dir(): return f"Error: {raw} is a directory"
     rel = raw.removeprefix("/workspace/").lstrip("/")
-    return {"type": "ui", "action": "open_canvas", "path": rel, "name": path.name}
+    return {"type": "ui", "action": "open_canvas", "path": rel,
+            **_app_identity(path, path.name)}
+
+
+def _app_identity(path, fallback):
+    """A mini app opens under its manifest name and icon, not `index.html`."""
+    if path.name != "index.html" or path.parent.parent.name != "apps":
+        return {"name": fallback}
+    try:
+        manifest = json.loads((path.parent / "app.json").read_text(encoding="utf-8"))
+    except Exception:
+        manifest = {}
+    if not isinstance(manifest, dict):
+        manifest = {}
+    name = manifest.get("name")
+    icon = manifest.get("icon")
+    out = {"name": (name if isinstance(name, str) and name.strip() else
+                    path.parent.name.replace("-", " ").replace("_", " ").title())[:60]}
+    if isinstance(icon, str) and icon.strip():
+        out["icon"] = icon.strip()[:8]
+    return out
+
+
+# The build runs as a deployed Cycls function; override to point at your own.
+APP_BUILDER = os.environ.get("CYCLS_APP_BUILDER", "miniapp-build")
+_APP_SRC_MAX_FILES = 400
+_APP_SRC_MAX_BYTES = 12_000_000
+_APP_SLUG_OK = set("abcdefghijklmnopqrstuvwxyz0123456789-_")
+
+
+def _collect_source(src_dir):
+    """Text files under `src_dir`, keyed by relative path. Binaries and dot/
+    node_modules folders are skipped — the bundler takes source, not assets."""
+    files, total = {}, 0
+    for p in sorted(src_dir.rglob("*")):
+        if not p.is_file():
+            continue
+        parts = p.relative_to(src_dir).parts
+        if any(part.startswith(".") or part == "node_modules" for part in parts):
+            continue
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        total += len(text.encode())
+        if len(files) >= _APP_SRC_MAX_FILES or total > _APP_SRC_MAX_BYTES:
+            raise ValueError("source folder is too large to build")
+        files["/".join(parts)] = text
+    return files
+
+
+async def _exec_build_app(inp, workspace):
+    import cycls
+
+    slug = str(inp.get("slug", "")).strip().lower()
+    if not slug or set(slug) - _APP_SLUG_OK:
+        return "Error: slug must be lowercase letters, digits, - or _"
+
+    try:
+        src_dir = _resolve_path(inp.get("source", ""), workspace)
+    except ValueError as e:
+        return f"Error: {e}"
+    if not src_dir.is_dir():
+        return f"Error: {inp.get('source')} is not a folder"
+
+    try:
+        files = _collect_source(src_dir)
+    except ValueError as e:
+        return f"Error: {e}"
+    if "index.html" not in files:
+        return f"Error: {inp.get('source')} has no index.html"
+
+    try:
+        result = await asyncio.to_thread(cycls.remote(APP_BUILDER), files=files)
+    except Exception as e:
+        return f"Error: the build service is unavailable ({type(e).__name__}: {e})"
+
+    if not result.get("ok"):
+        return (f"Build failed: {result.get('error')}\n\n{result.get('log', '')}"[:MAX_OUTPUT]
+                + "\n\nFix the source and call build_app again.")
+
+    app_dir = pathlib.Path(workspace) / "apps" / slug
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (app_dir / "index.html").write_text(result["html"], encoding="utf-8")
+
+    manifest_path = app_dir / "app.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            manifest = {}
+    except Exception:
+        manifest = {}
+    if inp.get("name"):
+        manifest["name"] = str(inp["name"])[:60]
+    if inp.get("icon"):
+        manifest["icon"] = str(inp["icon"])[:512]
+    manifest.setdefault("name", slug.replace("-", " ").replace("_", " ").title())
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    kb = result["bytes"] / 1024
+    out = f"Installed apps/{slug}/index.html ({kb:.0f} KB). It is in the Apps tab."
+    if result.get("stray"):
+        out += ("\nWARNING: these assets could not be inlined and will be blocked "
+                f"when the app runs: {', '.join(result['stray'])}")
+    return out
+
 
 def _exec_edit(inp, workspace):
     # Echo the model's own relative path back — resolved paths leak the
@@ -464,6 +602,8 @@ _TOOLS = {
                                 "step": f"{inp.get('command', '')} {inp.get('key') or inp.get('prefix', '')}".strip()}),
     "canvas":     (lambda inp, ws, **_: _exec_canvas(inp, ws.root),
                    lambda inp: {"tool_name": "Canvas", "step": inp.get("path", "")}),
+    "build_app":  (lambda inp, ws, **_: _exec_build_app(inp, ws.root),
+                   lambda inp: {"tool_name": "Building app", "step": inp.get("slug", "")}),
     "skill":      (lambda inp, ws, **_: skills._exec_skill(inp, ws.root),
                    lambda inp: {"tool_name": "Skill", "step": inp.get("name", "")}),
     "web_search": (lambda inp, ws, **_: _exec_web_search(inp),
