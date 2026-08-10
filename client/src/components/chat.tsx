@@ -350,8 +350,18 @@ export function Chat({ chat, onShare, files, account, config }: {
   // document. Two buttons for two surfaces was the thing nobody could read.
   const canvasShowing = canvasTabs.length > 0 && !canvasHidden;
   const rightOpen = filesOpen || canvasShowing;
+  // Collapsed rail keeps its icons while a document is open; with nothing open
+  // the rail IS the right side, so collapsing closes it outright.
+  const [railIcons, setRailIcons] = useState(false);
+  // The agent writes through its sandbox, so nothing tells the canvas its open
+  // document changed. A turn ending is the signal to re-read it.
+  const [reloadKey, setReloadKey] = useState(0);
+  useEffect(() => { if (!isStreaming) setReloadKey((k) => k + 1); }, [isStreaming]);
+  const railIconsOnly = isDesktop && railIcons && canvasShowing;
+  const collapseRail = () => (canvasShowing ? setRailIcons(true) : setFilesOpen(false));
   const closeRight = () => { setFilesOpen(false); setCanvasHidden(true); };
   const openRight = () => {
+    setRailIcons(false);
     if (canvasTabs.length > 0) setCanvasHidden(false);
     // With nothing open to render, the rail IS the right side.
     if (!canvasTabs.length || !filesOpen) openPanel();
@@ -653,6 +663,13 @@ export function Chat({ chat, onShare, files, account, config }: {
         <SettingsDialog account={account} onClose={() => setSettingsOpen(false)} />
       )}
       </div>
+      {/* ONE right-side surface: document and rail share a single card, split
+          by a divider — two cards read as two places to be. */}
+      <div className={cn(
+        "flex min-h-0 overflow-hidden",
+        isDesktop && rightOpen && "my-1 me-1 rounded-xl border border-border bg-background",
+        isDesktop && canvasExpanded && "min-w-0 flex-1",
+      )}>
       {files && (
         <Canvas
           tabs={canvasTabs}
@@ -660,7 +677,6 @@ export function Chat({ chat, onShare, files, account, config }: {
           docked={isDesktop}
           hidden={canvasHidden}
           expanded={canvasExpanded}
-          onToggleExpand={() => setCanvasExpanded((e) => !e)}
           onSelectTab={setCanvasActive}
           onCloseTab={closeCanvasTab}
           onHide={() => setCanvasHidden(true)}
@@ -675,6 +691,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           org={files.org}
           onShareFile={files.onShareFile}
           railWidth={isDesktop && filesOpen ? panelWidth : 0}
+          reloadKey={reloadKey}
         />
       )}
       {/* Chats / Files / Apps / Shares — the rail. Docked at the far right on
@@ -699,13 +716,15 @@ export function Chat({ chat, onShare, files, account, config }: {
               exit={isDesktop ? undefined : { x: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
               className={cn(
-                "rounded-xl border border-border bg-background flex flex-col overflow-hidden",
+                "flex flex-col overflow-hidden",
                 isDesktop
-                  ? "relative my-1 me-1 shrink-0"
-                  : cn("fixed z-50",
+                  // No card of its own — the parent is the card; a start border
+                  // is the divider between document and rail.
+                  ? "relative shrink-0 border-s border-border bg-background"
+                  : cn("fixed z-50 rounded-xl border border-border bg-background",
                        panelExpanded ? "inset-2" : "top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] max-w-[calc(100%-0.5rem)]"),
               )}
-              style={isDesktop ? { width: panelWidth } : undefined}
+              style={isDesktop ? { width: railIconsOnly ? 44 : panelWidth } : undefined}
             >
               {/* Resize handle (left edge) — desktop only */}
               {!panelExpanded && (
@@ -715,8 +734,26 @@ export function Chat({ chat, onShare, files, account, config }: {
                   aria-label="Resize panel"
                 />
               )}
-              {/* Tab bar */}
-              {(files || account) && (
+              {/* Tab bar — a vertical icon strip once collapsed, so sections
+                  stay one click away instead of needing the rail reopened. */}
+              {railIconsOnly ? (
+                <div className="flex flex-col items-center gap-1 py-2">
+                  {([["chats", "list", !!account], ["files", "folder", !!files],
+                     ["apps", "grid", !!files], ["shares", "link", !!account]] as const)
+                    .filter(([, , on]) => on)
+                    .map(([tab, icon]) => (
+                      <button
+                        key={tab}
+                        onClick={() => { setRailIcons(false); selectTab(tab as typeof filesTab); }}
+                        className={`flex size-8 items-center justify-center rounded-lg transition-colors cursor-pointer ${filesTab === tab ? "text-foreground bg-secondary/60" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80"}`}
+                        aria-label={t(tab)}
+                        title={t(tab)}
+                      >
+                        <Icon name={icon} className="size-4" />
+                      </button>
+                    ))}
+                </div>
+              ) : (files || account) && (
                 <div className="flex items-center border-b border-border px-4 sm:px-6">
                   {account && (
                     <button
@@ -752,17 +789,17 @@ export function Chat({ chat, onShare, files, account, config }: {
                   )}
                   <div className="flex-1" />
                   <button
-                    onClick={() => setPanelExpanded((e) => !e)}
+                    onClick={() => isDesktop ? setCanvasExpanded((e) => !e) : setPanelExpanded((e) => !e)}
                     className="hidden sm:flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                    aria-label={panelExpanded ? t("collapse") : t("expand")}
-                    title={panelExpanded ? t("collapse") : t("expand")}
+                    aria-label={(isDesktop ? canvasExpanded : panelExpanded) ? t("collapse") : t("expand")}
+                    title={(isDesktop ? canvasExpanded : panelExpanded) ? t("collapse") : t("expand")}
                   >
-                    <Icon name={panelExpanded ? "collapse" : "expand"} className="size-4" />
+                    <Icon name={(isDesktop ? canvasExpanded : panelExpanded) ? "collapse" : "expand"} className="size-4" />
                   </button>
                   <button
-                    onClick={() => setFilesOpen(false)}
+                    onClick={collapseRail}
                     className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                    aria-label="Close"
+                    aria-label={t("collapse")}
                   >
                     <Icon name="x" className="size-4" />
                   </button>
@@ -862,6 +899,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           </>
         )}
       </AnimatePresence>
+      </div>
       </div>
       </div>
     </div>
