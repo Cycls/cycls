@@ -349,35 +349,34 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   );
 
   if (docked) {
-    // Expanded fills the content row; chat.tsx hides the chat column.
-    if (file && expanded) {
-      return (
-        <aside dir="ltr" className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
-          {inner}
-        </aside>
-      );
-    }
     return (
       <AnimatePresence initial={false}>
         {file && (
+          // ONE element across expanded/normal: returning a different tree
+          // remounted the body, so expanding reloaded the whole document
+          // (and any iframe in it) instead of just resizing.
           <motion.aside
             key="canvas"
             dir="ltr"
             initial={{ width: 0 }}
-            animate={{ width }}
+            animate={expanded ? { width: "100%" } : { width }}
             exit={{ width: 0 }}
             transition={resizing ? { duration: 0 } : { type: "spring", damping: 30, stiffness: 300 }}
-            className="relative shrink-0 overflow-hidden"
+            className={cn("relative overflow-hidden", expanded ? "min-w-0 flex-1" : "shrink-0")}
           >
-            {/* No card of its own — the parent wraps document + rail as ONE
-                surface. Right-anchored fixed width so content doesn't squish
-                while the pane animates. */}
-            <div className="absolute inset-y-0 right-0 flex flex-col overflow-hidden bg-background" style={{ width }}>
-              <div
-                onMouseDown={startResize}
-                className="absolute bottom-0 left-0 top-0 z-20 w-1.5 cursor-ew-resize hover:bg-accent/30"
-                aria-label="Resize canvas"
-              />
+            {/* Right-anchored so content doesn't squish while the pane animates. */}
+            <div
+              className={cn("flex flex-col overflow-hidden bg-background",
+                            expanded ? "h-full w-full" : "absolute inset-y-0 right-0")}
+              style={expanded ? undefined : { width }}
+            >
+              {!expanded && (
+                <div
+                  onMouseDown={startResize}
+                  className="absolute bottom-0 left-0 top-0 z-20 w-1.5 cursor-ew-resize hover:bg-accent/30"
+                  aria-label="Resize canvas"
+                />
+              )}
               {inner}
             </div>
           </motion.aside>
