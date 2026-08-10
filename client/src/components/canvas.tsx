@@ -321,6 +321,9 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
               </div>
             );
           })}
+          {onAddFile && searchFiles && (
+            <AddTab onAdd={onAddFile} searchFiles={searchFiles} apps={apps} onAddApp={onAddApp} />
+          )}
           <button
             onClick={onToggleExpand}
             className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer"
@@ -329,9 +332,6 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
           >
             <Icon name={expanded ? "collapse" : "expand"} className="size-4" />
           </button>
-          {onAddFile && searchFiles && (
-            <AddTab onAdd={onAddFile} searchFiles={searchFiles} apps={apps} onAddApp={onAddApp} />
-          )}
         </div>
       </div>
       <CanvasFileView
@@ -614,56 +614,28 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, org,
         ) : (
           <>
             {saved && <span className="text-xs text-muted-foreground">{t("saved")}</span>}
-            {onShareFile && (
-              <button onClick={() => setShareOpen(true)} className={headerBtn} aria-label={t("share")} title={t("share")}>
-                <Icon name="link" className="size-4" />
-              </button>
-            )}
-            {isText && content != null && (
-              <button onClick={copy} className={headerBtn} aria-label={copied ? t("copied") : t("copy")} title={copied ? t("copied") : t("copy")}>
-                <Icon name={copied ? "check" : "copy"} className="size-4" />
-              </button>
-            )}
-            {isText && content != null && (
-              <button onClick={startEdit} className={headerBtn} aria-label={t("edit")} title={t("edit")}>
-                <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
-                </svg>
-              </button>
-            )}
-            {isHtml(fileKind(file)) && content != null && (
-              <button onClick={openInTab} className={headerBtn} aria-label={t("openInTab")} title={t("openInTab")}>
-                <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-                </svg>
-              </button>
-            )}
-            {/* Extra export options (md → PDF) get a menu; otherwise the
-                icon downloads directly — no single-item dropdown. */}
-            {md ? (
-              <div className="relative shrink-0">
-                <button onClick={() => setMenuOpen((o) => !o)} className={headerBtn} aria-label={t("export")} title={t("export")}>
-                  <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-                  </svg>
-                </button>
-                {menuOpen && (
-                  <DropdownMenu
-                    onClose={() => setMenuOpen(false)}
-                    items={[
-                      { label: t("exportPdf"), onClick: () => window.print() },
-                      { label: t("download"), onClick: download },
-                    ]}
-                  />
-                )}
-              </div>
-            ) : (
-              <button onClick={download} className={headerBtn} aria-label={t("download")} title={t("download")}>
-                <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-                </svg>
-              </button>
-            )}
+            {(() => {
+              const items = [
+                ...(onShareFile ? [{ label: t("share"), onClick: () => setShareOpen(true) }] : []),
+                ...(isText && content != null ? [
+                  { label: copied ? t("copied") : t("copy"), onClick: copy },
+                  { label: t("edit"), onClick: startEdit },
+                ] : []),
+                ...(isHtml(fileKind(file)) && content != null
+                  ? [{ label: t("openInTab"), onClick: openInTab }] : []),
+                ...(md ? [{ label: t("exportPdf"), onClick: () => window.print() }] : []),
+                { label: t("download"), onClick: download },
+              ];
+              return (
+                <div className="relative shrink-0">
+                  <button onClick={() => setMenuOpen((o) => !o)} className={headerBtn}
+                          aria-label={t("more")} title={t("more")}>
+                    <Icon name="more" className="size-4" />
+                  </button>
+                  {menuOpen && <DropdownMenu onClose={() => setMenuOpen(false)} items={items} />}
+                </div>
+              );
+            })()}
           </>
         )}
       </div>
