@@ -21,8 +21,11 @@ export function usePaneWidth(key: string, initial: number, min: number, minGapLe
       const raw = window.innerWidth - ev.clientX - 8 - offsetRef.current;
       // Dragged well past the minimum: fold instead of pinning at min width.
       if (raw < min - 48) onUndersize?.();
+      // minGapLeft is what the content beside this pane must keep. Anything
+      // docked further right eats into that too, so subtract it — otherwise the
+      // chat column's floor was really `minGapLeft - railWidth`.
       setWidth(Math.min(Math.max(raw, min),
-                        window.innerWidth - minGapLeft,
+                        window.innerWidth - minGapLeft - offsetRef.current,
                         window.innerWidth * maxFraction));
     };
     const onUp = () => {
