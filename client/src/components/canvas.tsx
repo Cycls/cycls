@@ -289,10 +289,9 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onSelectTab, on
   const file = hidden ? null : tabs.find((f) => f.path === active) ?? tabs[tabs.length - 1] ?? null;
   const { width, startResize, resizing } = usePaneWidth("cycls_canvas_width", 560, 380, 480, railWidth);
 
-  const stripBtn = "flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer";
   const inner = file && (
     <>
-      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
+      <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-2">
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
           {tabs.map((f) => {
             const on = f.path === file.path;
@@ -325,9 +324,6 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onSelectTab, on
             <AddTab onAdd={onAddFile} searchFiles={searchFiles} apps={apps} onAddApp={onAddApp} />
           )}
         </div>
-        <button onClick={onHide} className={stripBtn} aria-label="Hide canvas" title="Hide canvas">
-          <Icon name="chevron-right" className="size-4" />
-        </button>
       </div>
       <CanvasFileView
         key={file.path}
