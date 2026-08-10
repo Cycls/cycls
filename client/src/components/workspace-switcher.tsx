@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { t } from "../lib/i18n";
 import { Icon } from "./icon";
-import { Popover } from "./popover";
 import { DropdownMenu } from "./files";
 import { EmojiPicker } from "./emoji-picker";
 import type { WorkspaceInfo, MemberInfo } from "../hooks/use-workspaces";
@@ -295,13 +294,16 @@ export function WorkspaceMenu({ workspaces }: { workspaces: WorkspacesMenu }) {
         <span className="truncate">{workspaces.active?.name || t("personal")}</span>
         <Icon name="chevron-down" className="size-3 shrink-0" />
       </button>
-      <Popover
-        open={open}
-        onClose={() => setOpen(false)}
-        className="start-0 top-10 w-56 rounded-lg border border-border bg-background shadow-lg"
-      >
-        <WorkspacePanel workspaces={workspaces} onClose={() => setOpen(false)} />
-      </Popover>
+      {open && (
+        <>
+          {/* Anchored to this button, not the viewport — `Popover` portals to
+              document.body, which put the panel at the far edge of the page. */}
+          <div className="fixed inset-0 z-[70]" onClick={() => setOpen(false)} />
+          <div className="absolute top-full z-[80] mt-1 w-56 ltr:right-0 rtl:left-0 rounded-lg border border-border bg-background shadow-lg">
+            <WorkspacePanel workspaces={workspaces} onClose={() => setOpen(false)} />
+          </div>
+        </>
+      )}
     </div>
   );
 }
