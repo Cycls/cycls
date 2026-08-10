@@ -145,7 +145,8 @@ export function Chat({ chat, onShare, files, account, config }: {
   // Drag the panel's left edge to resize; width persists across sessions.
   // New key: 480 was sized for an overlay. Docked beside the canvas it has to
   // leave the conversation room to breathe, so it starts narrower.
-  const { width: panelWidth, startResize } = usePaneWidth("cycls_rail_width", 320, 240, 80);
+  const { width: panelWidth, startResize } = usePaneWidth("cycls_rail_width", 320, 240, 80, 0,
+    () => canvasShowing && setRailIcons(true));
   const [shareOpen, setShareOpen] = useState(false);
   // Survives the ChatApp remount on org/workspace switch (App keys by org), so
   // changing context inside the settings dialog doesn't close it.
@@ -718,11 +719,12 @@ export function Chat({ chat, onShare, files, account, config }: {
                 isDesktop
                   // No card of its own — the parent is the card; a start border
                   // is the divider between document and rail.
-                  ? "relative shrink-0 border-s border-border bg-background"
+                  ? cn("relative border-s border-border bg-background",
+                       rightExpanded && !canvasShowing ? "min-w-0 flex-1" : "shrink-0")
                   : cn("fixed z-50 rounded-xl border border-border bg-background",
                        panelExpanded ? "inset-2" : "top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] max-w-[calc(100%-0.5rem)]"),
               )}
-              style={isDesktop ? { width: railIconsOnly ? 44 : panelWidth } : undefined}
+              style={isDesktop && !(rightExpanded && !canvasShowing) ? { width: railIconsOnly ? 44 : panelWidth } : undefined}
             >
               {/* Resize handle (left edge) — desktop only */}
               {!panelExpanded && (
@@ -786,6 +788,16 @@ export function Chat({ chat, onShare, files, account, config }: {
                     </button>
                   )}
                   <div className="flex-1" />
+                  {canvasTabs.length > 0 && canvasHidden && (
+                    <button
+                      onClick={() => setCanvasHidden(false)}
+                      className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                      aria-label={t("expand")}
+                      title={`${canvasTabs.length} open`}
+                    >
+                      <Icon name="copy" className="size-4" />
+                    </button>
+                  )}
                   <button
                     onClick={() => isDesktop ? setRightExpanded((e) => !e) : setPanelExpanded((e) => !e)}
                     className="hidden sm:flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
@@ -798,12 +810,13 @@ export function Chat({ chat, onShare, files, account, config }: {
                     onClick={collapseRail}
                     className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                     aria-label={t("collapse")}
+                    title={t("collapse")}
                   >
-                    <Icon name="x" className="size-4" />
+                    <Icon name="chevron-right" className="size-4 rtl:rotate-180" />
                   </button>
                 </div>
               )}
-              {filesTab === "files" && files ? (
+              {!railIconsOnly && (filesTab === "files" && files ? (
                 <Files {...files} onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
               ) : filesTab === "apps" ? (
                 <AppsPanel
@@ -892,7 +905,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                     setChats((prev) => prev.map((x) => x.id === id ? { ...x, favoritedAt: on ? new Date().toISOString() : "" } : x));
                   }}
                 />
-              ) : null}
+              ) : null)}
             </motion.div>
           </>
         )}
