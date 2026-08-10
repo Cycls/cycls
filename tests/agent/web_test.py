@@ -423,7 +423,33 @@ def test_share_router_mint_and_resolve(tmp_path):
 
 def test_share_router_rejects_bogus_token(tmp_path):
     svc, user, client = _share_test_app(tmp_path)
-    assert client.get("/share/user_test/bogus_token/data").status_code == 403
+    # 404, not 403: no such row. 403 is reserved for "exists, not yours".
+    assert client.get("/share/user_test/bogus_token/data").status_code == 404
+
+
+def test_org_share_401_when_anonymous_403_when_wrong_org(tmp_path):
+    """An org-scoped share separates 'we don't know you' from 'not for you' —
+    401 is recoverable by signing in, 403 never is. Collapsing both into 403
+    is what left viewers staring at a dead link with no way forward."""
+    from cycls._agent import state as chat
+    from cycls._app.db import workspace
+    import asyncio
+
+    svc, user, client = _share_test_app(tmp_path)
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    asyncio.run(chat.put_meta(ws, "c1", {"id": "c1", "title": "T"}))
+    token = client.post("/share", json={"path": "chat/c1",
+                                        "audience": "org:org_acme"}).json()["token"]
+
+    # Anonymous: no bearer at all → sign in.
+    assert client.get(f"/share/user_test/{token}/data").status_code == 401
+
+    # Authenticated but in another org → never allowed, no prompt.
+    from cycls._app.auth import User
+    import cycls._agent.state as state
+    assert state.share_allows({"audience": "org:org_acme"}, User(id="u", org_id="org_other")) is False
+    assert state.share_allows({"audience": "org:org_acme"}, User(id="u", org_id="org_acme")) is True
+    assert state.share_allows({"audience": "public"}, None) is True
 
 
 def test_share_router_unknown_chat_404(tmp_path):
@@ -450,8 +476,8 @@ def test_share_router_list_and_delete(tmp_path):
 
     assert client.delete(f"/share/{token}").status_code == 200
     assert client.get("/share").json() == []
-    # Revoke is real — token stops resolving.
-    assert client.get(f"/share/user_test/{token}/data").status_code == 403
+    # Revoke is real — the row is gone, so the link reads as nonexistent.
+    assert client.get(f"/share/user_test/{token}/data").status_code == 404
 
 
 def test_share_router_file_share(tmp_path):

@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 
 from cycls._app.db import DB, Workspace, workspace
 from cycls._agent import state
+from cycls._agent.logs import log
 from cycls._agent.tools import tool_step
 
 DEFAULT_MAX_UPLOAD_MB = 512   # per-file upload cap when not configured
@@ -596,30 +597,41 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
     bearer_scheme = HTTPBearer(auto_error=False)
     mode = getattr(getattr(cycls_app, "config", None), "workspaces", None)
 
-    async def _locate(user: str, token: str, requester, ws_q=None):
+    async def _locate(user: str, token: str, ws_q=None):
         """Find the share row in whichever of the owner's workspaces minted it.
         Minted URLs carry `?ws=`; bare legacy links fall back to the owner's
-        personal workspace, then General."""
+        personal workspace, then General. Audience is NOT checked here."""
         candidates = [ws_q] if ws_q else ([personal_ws(user), "t-shared"] if mode else [None])
         for ws_id in candidates:
             try:
                 ws_owner = workspace(user, volume, base=base, ws=ws_id)
             except ValueError:
                 break
-            row = await state.resolve(ws_owner, token, requester=requester)
+            row = await state.find_share(ws_owner, token)
             if row is not None:
                 return ws_owner, row
         return None
 
     async def _resolve_or_403(user: str, token: str, bearer, ws_q=None):
+        """404 no such share · 401 audience needs a viewer we couldn't identify
+        (sign in) · 403 identified but outside the audience. The client needs
+        these apart: 401 is recoverable by signing in, 403 never is."""
         from cycls._app.auth import authenticate
         requester = None
         if bearer and cycls_app._auth_provider is not None:
-            try: requester = authenticate(cycls_app._auth_provider, cycls_app.prod, bearer.credentials)
-            except Exception: pass
-        found = await _locate(user, token, requester, ws_q)
+            try:
+                requester = authenticate(cycls_app._auth_provider, cycls_app.prod, bearer.credentials)
+            except Exception as e:
+                # Silently dropping this made every cause look like a dead link.
+                log("warn", chat_id=None, message=f"share token rejected: {type(e).__name__}: {e}")
+        found = await _locate(user, token, ws_q)
         if found is None:
-            raise HTTPException(403, "Invalid, expired, or unauthorized link")
+            raise HTTPException(404, "This link doesn't exist")
+        ws_owner, row = found
+        if not state.share_allows(row, requester):
+            if requester is None:
+                raise HTTPException(401, "Sign in to view this")
+            raise HTTPException(403, "This link isn't shared with your account")
         return found
 
     # ---- Owner side ----
@@ -718,10 +730,13 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.post("/share/{user}/{token}/fork")
     async def fork_share(user: str, token: str, ws: Optional[str] = None, forker: Any = user_dep):
-        found = await _locate(user, token, forker, ws)
+        # `forker` is already authenticated (user_dep), so it IS the requester.
+        found = await _locate(user, token, ws)
         if found is None:
-            raise HTTPException(403, "Invalid, expired, or unauthorized link")
+            raise HTTPException(404, "This link doesn't exist")
         ws_source, row = found
+        if not state.share_allows(row, forker):
+            raise HTTPException(403, "This link isn't shared with your account")
         if not row["path"].startswith("chat/"):
             raise HTTPException(400, "Only chat shares can be forked")
         source_id = row["path"][5:]
