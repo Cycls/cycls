@@ -146,7 +146,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   // Drag the panel's left edge to resize; width persists across sessions.
   // New key: 480 was sized for an overlay. Docked beside the canvas it has to
   // leave the conversation room to breathe, so it starts narrower.
-  const { width: panelWidth, startResize } = usePaneWidth("cycls_rail_width", 320, 240, 80, 0,
+  const { width: panelWidth, startResize, resizing: railResizing } = usePaneWidth("cycls_rail_width", 320, 240, 80, 0,
     () => canvasShowing && setRailIcons(true), 0.3);
   const [shareOpen, setShareOpen] = useState(false);
   // Survives the ChatApp remount on org/workspace switch (App keys by org), so
@@ -729,9 +729,13 @@ export function Chat({ chat, onShare, files, account, config }: {
             )}
             <motion.div
               initial={isDesktop ? false : { x: "100%" }}
-              animate={isDesktop ? undefined : { x: 0 }}
-              exit={isDesktop ? undefined : { x: "100%" }}
-              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              // Desktop had no animation at all — width jumped via `style`.
+              // Same spring as the canvas so both panes fold alike.
+              animate={!isDesktop ? { x: 0 }
+                : rightExpanded && !canvasShowing ? {}
+                : { width: railIconsOnly ? RAIL_ICON_W : panelWidth }}
+              exit={!isDesktop ? { x: "100%" } : { width: 0 }}
+              transition={railResizing ? { duration: 0 } : { type: "spring", damping: 30, stiffness: 300 }}
               className={cn(
                 "flex flex-col overflow-hidden",
                 isDesktop
@@ -741,7 +745,6 @@ export function Chat({ chat, onShare, files, account, config }: {
                        rightExpanded && !canvasShowing ? "min-w-0 flex-1" : "shrink-0")
                   : "fixed z-50 rounded-xl border border-border bg-background top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] max-w-[calc(100%-0.5rem)]",
               )}
-              style={isDesktop && !(rightExpanded && !canvasShowing) ? { width: railIconsOnly ? RAIL_ICON_W : panelWidth } : undefined}
             >
               {/* Resize handle (left edge) — desktop only */}
               {isDesktop && (
