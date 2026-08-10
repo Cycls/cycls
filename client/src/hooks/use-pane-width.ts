@@ -7,7 +7,7 @@ import { useCallback, useRef, useState } from "react";
 // right of the canvas), so the drag measures to THIS pane's edge, not the
 // viewport's.
 export function usePaneWidth(key: string, initial: number, min: number, minGapLeft: number, offsetRight = 0,
-                             onUndersize?: () => void) {
+                             onUndersize?: () => void, maxFraction = 1) {
   const [width, setWidth] = useState(() => Number(localStorage.getItem(key)) || initial);
   const [resizing, setResizing] = useState(false);
   const offsetRef = useRef(offsetRight);
@@ -21,7 +21,9 @@ export function usePaneWidth(key: string, initial: number, min: number, minGapLe
       const raw = window.innerWidth - ev.clientX - 8 - offsetRef.current;
       // Dragged well past the minimum: fold instead of pinning at min width.
       if (raw < min - 48) onUndersize?.();
-      setWidth(Math.min(Math.max(raw, min), window.innerWidth - minGapLeft));
+      setWidth(Math.min(Math.max(raw, min),
+                        window.innerWidth - minGapLeft,
+                        window.innerWidth * maxFraction));
     };
     const onUp = () => {
       window.removeEventListener("mousemove", onMove);
@@ -34,5 +36,9 @@ export function usePaneWidth(key: string, initial: number, min: number, minGapLe
     window.addEventListener("mouseup", onUp);
   }, [key, min, minGapLeft]);
 
-  return { width, startResize, resizing };
+  // Clamp on read too: a width stored before the cap existed, or a window that
+  // has since narrowed, would otherwise still hand back an oversized pane.
+  const capped = typeof window === "undefined" ? width
+    : Math.max(Math.min(width, window.innerWidth * maxFraction), min);
+  return { width: capped, startResize, resizing };
 }

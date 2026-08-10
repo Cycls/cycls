@@ -147,7 +147,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   // New key: 480 was sized for an overlay. Docked beside the canvas it has to
   // leave the conversation room to breathe, so it starts narrower.
   const { width: panelWidth, startResize } = usePaneWidth("cycls_rail_width", 320, 240, 80, 0,
-    () => canvasShowing && setRailIcons(true));
+    () => canvasShowing && setRailIcons(true), 0.3);
   const [shareOpen, setShareOpen] = useState(false);
   // Survives the ChatApp remount on org/workspace switch (App keys by org), so
   // changing context inside the settings dialog doesn't close it.
