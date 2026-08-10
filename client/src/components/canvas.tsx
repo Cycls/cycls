@@ -304,17 +304,20 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
                 role="button"
                 onClick={() => onSelectTab(f.path)}
                 className={cn(
-                  "group flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg py-1 pl-2.5 pr-1 text-xs transition-colors",
+                  // Like browser tabs: split the strip evenly, capped so a lone
+                  // tab isn't absurdly wide, floored so they stay readable —
+                  // past the floor the strip scrolls instead of shrinking more.
+                  "group flex min-w-20 max-w-44 flex-1 basis-0 cursor-pointer items-center gap-1.5 rounded-lg py-1 pl-2.5 pr-1 text-xs transition-colors",
                   on ? "bg-secondary text-foreground font-medium" : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
                 )}
               >
                 {f.icon || f.iconSrc || f.letter
                   ? <AppIcon app={f} className="size-3.5 rounded-[3px]" textClassName="text-[13px]" />
                   : tint && <span className="size-1.5 rounded-full" style={{ backgroundColor: tint }} />}
-                <span className="max-w-40 truncate">{f.name}</span>
+                <span className="min-w-0 flex-1 truncate">{f.name}</span>
                 <button
                   onClick={(e) => { e.stopPropagation(); onCloseTab(f.path); }}
-                  className={cn("rounded p-0.5 hover:bg-accent/20", on ? "" : "opacity-0 group-hover:opacity-100")}
+                  className={cn("shrink-0 rounded p-0.5 hover:bg-accent/20", on ? "" : "opacity-0 group-hover:opacity-100")}
                   aria-label={`Close ${f.name}`}
                 >
                   <Icon name="x" className="size-3" />
