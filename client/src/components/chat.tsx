@@ -119,11 +119,9 @@ export function Chat({ chat, onShare, files, account, config }: {
   const [canvasTabs, setCanvasTabs] = useState<CanvasFile[]>([]);
   const [canvasActive, setCanvasActive] = useState<string | null>(null);
   const [canvasHidden, setCanvasHidden] = useState(false);
-  const [canvasExpanded, setCanvasExpanded] = useState(false);
+  const [rightExpanded, setRightExpanded] = useState(false);
   const isDesktop = useMediaQuery("(min-width: 1024px)");
-  useEffect(() => {
-    if (canvasHidden || canvasTabs.length === 0) setCanvasExpanded(false);
-  }, [canvasHidden, canvasTabs.length]);
+
   const openFileInCanvas = useCallback((path: string, name?: string, ident?: Partial<CanvasFile>) => {
     setCanvasTabs((tabs) => (tabs.some((f) => f.path === path) ? tabs
       : [...tabs, { ...ident, path, name: name || path.split("/").pop() || path }]));
@@ -554,7 +552,7 @@ export function Chat({ chat, onShare, files, account, config }: {
 
       {/* rtl:flex-row-reverse keeps the canvas on the right in Arabic */}
       <div className="flex min-h-0 flex-1 rtl:flex-row-reverse">
-      <div className={cn("relative flex h-full min-w-0 flex-1 flex-col", isDesktop && canvasExpanded && !canvasHidden && canvasTabs.length > 0 && "hidden")}>
+      <div className={cn("relative flex h-full min-w-0 flex-1 flex-col", isDesktop && rightExpanded && rightOpen && "hidden")}>
       <LayoutGroup>
         <LoadingBar active={chatLoading} />
         {!chatLoading && (isEmpty ? (
@@ -668,7 +666,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       <div className={cn(
         "flex min-h-0 overflow-hidden",
         isDesktop && rightOpen && "my-1 me-1 rounded-xl border border-border bg-background",
-        isDesktop && canvasExpanded && "min-w-0 flex-1",
+        isDesktop && rightExpanded && "min-w-0 flex-1",
       )}>
       {files && (
         <Canvas
@@ -676,7 +674,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           active={canvasActive}
           docked={isDesktop}
           hidden={canvasHidden}
-          expanded={canvasExpanded}
+          expanded={rightExpanded}
           onSelectTab={setCanvasActive}
           onCloseTab={closeCanvasTab}
           onHide={() => setCanvasHidden(true)}
@@ -737,7 +735,7 @@ export function Chat({ chat, onShare, files, account, config }: {
               {/* Tab bar — a vertical icon strip once collapsed, so sections
                   stay one click away instead of needing the rail reopened. */}
               {railIconsOnly ? (
-                <div className="flex flex-col items-center gap-1 py-2">
+                <div className="flex flex-col items-center gap-1 border-b border-border py-2">
                   {([["chats", "list", !!account], ["files", "folder", !!files],
                      ["apps", "grid", !!files], ["shares", "link", !!account]] as const)
                     .filter(([, , on]) => on)
@@ -754,11 +752,11 @@ export function Chat({ chat, onShare, files, account, config }: {
                     ))}
                 </div>
               ) : (files || account) && (
-                <div className="flex items-center border-b border-border px-4 sm:px-6">
+                <div className="flex h-11 shrink-0 items-center border-b border-border px-2">
                   {account && (
                     <button
                       onClick={() => selectTab("chats")}
-                      className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "chats" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "chats" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                     >
                       {t("chats")}
                     </button>
@@ -766,7 +764,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                   {files && (
                     <button
                       onClick={() => selectTab("files")}
-                      className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "files" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "files" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                     >
                       {t("files")}
                     </button>
@@ -774,7 +772,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                   {files && (
                     <button
                       onClick={() => { selectTab("apps"); void refreshApps(); }}
-                      className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "apps" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "apps" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                     >
                       {t("apps")}
                     </button>
@@ -782,19 +780,19 @@ export function Chat({ chat, onShare, files, account, config }: {
                   {account && (
                     <button
                       onClick={() => selectTab("shares")}
-                      className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                     >
                       {t("shares")}
                     </button>
                   )}
                   <div className="flex-1" />
                   <button
-                    onClick={() => isDesktop ? setCanvasExpanded((e) => !e) : setPanelExpanded((e) => !e)}
+                    onClick={() => isDesktop ? setRightExpanded((e) => !e) : setPanelExpanded((e) => !e)}
                     className="hidden sm:flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                    aria-label={(isDesktop ? canvasExpanded : panelExpanded) ? t("collapse") : t("expand")}
-                    title={(isDesktop ? canvasExpanded : panelExpanded) ? t("collapse") : t("expand")}
+                    aria-label={(isDesktop ? rightExpanded : panelExpanded) ? t("collapse") : t("expand")}
+                    title={(isDesktop ? rightExpanded : panelExpanded) ? t("collapse") : t("expand")}
                   >
-                    <Icon name={(isDesktop ? canvasExpanded : panelExpanded) ? "collapse" : "expand"} className="size-4" />
+                    <Icon name={(isDesktop ? rightExpanded : panelExpanded) ? "collapse" : "expand"} className="size-4" />
                   </button>
                   <button
                     onClick={collapseRail}
