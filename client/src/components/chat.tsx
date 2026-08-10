@@ -393,6 +393,10 @@ export function Chat({ chat, onShare, files, account, config }: {
           )}
           </div>
           <div className="flex items-center gap-1">
+            {/* Leads the right-side group so the icon buttons stay together.
+                Desktop only — a phone header has no room, so there it stays a
+                row inside the user menu. */}
+            {user && workspaces && isDesktop && <WorkspaceMenu workspaces={workspaces} />}
             {messages.length > 0 && (
               <>
                 <button
@@ -467,9 +471,6 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </svg>
               </button>
             )}
-            {/* Its own control on desktop; on a phone the header has no room
-                for it, so it stays a row inside the user menu. */}
-            {user && workspaces && isDesktop && <WorkspaceMenu workspaces={workspaces} />}
             {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} workspaces={isDesktop ? undefined : workspaces} /></div>}
           </div>
         </div>
