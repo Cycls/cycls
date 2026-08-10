@@ -145,7 +145,9 @@ export function Chat({ chat, onShare, files, account, config }: {
   }, [openFileInCanvas]);
   const [panelExpanded, setPanelExpanded] = useState(false);
   // Drag the panel's left edge to resize; width persists across sessions.
-  const { width: panelWidth, startResize } = usePaneWidth("cycls_panel_width", 480, 360, 80);
+  // New key: 480 was sized for an overlay. Docked beside the canvas it has to
+  // leave the conversation room to breathe, so it starts narrower.
+  const { width: panelWidth, startResize } = usePaneWidth("cycls_rail_width", 320, 240, 80);
   const [shareOpen, setShareOpen] = useState(false);
   // Survives the ChatApp remount on org/workspace switch (App keys by org), so
   // changing context inside the settings dialog doesn't close it.
@@ -344,6 +346,17 @@ export function Chat({ chat, onShare, files, account, config }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // One header button owns the whole right side — the rail and any open
+  // document. Two buttons for two surfaces was the thing nobody could read.
+  const canvasShowing = canvasTabs.length > 0 && !canvasHidden;
+  const rightOpen = filesOpen || canvasShowing;
+  const closeRight = () => { setFilesOpen(false); setCanvasHidden(true); };
+  const openRight = () => {
+    if (canvasTabs.length > 0) setCanvasHidden(false);
+    // With nothing open to render, the rail IS the right side.
+    if (!canvasTabs.length || !filesOpen) openPanel();
+  };
+
   const inputProps = {
     textareaRef, input, setInput, handleKeyDown, handleSubmit, isStreaming, onStop,
     onOpenFilePicker: openFilePicker,
@@ -447,27 +460,16 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </button>
               </>
             )}
-            {files && canvasTabs.length > 0 && (
-              <button
-                onClick={() => setCanvasHidden((h) => !h)}
-                className={`${canvasHidden ? "text-muted-foreground" : "text-foreground"} hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer`}
-                aria-label={canvasHidden ? "Show canvas" : "Hide canvas"}
-                title={canvasHidden ? "Show canvas" : "Hide canvas"}
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <rect x="3.75" y="3.75" width="16.5" height="16.5" rx="2" />
-                  <path d="M14.25 4.75h3.5a1.5 1.5 0 011.5 1.5v11.5a1.5 1.5 0 01-1.5 1.5h-3.5z" fill={canvasHidden ? "none" : "currentColor"} stroke="none" />
-                </svg>
-              </button>
-            )}
             {(files || account) && (
               <button
-                onClick={() => filesOpen ? setFilesOpen(false) : openPanel()}
-                className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
-                aria-label="Menu"
+                onClick={() => rightOpen ? closeRight() : openRight()}
+                className={`${rightOpen ? "text-foreground" : "text-muted-foreground"} hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer`}
+                aria-label={rightOpen ? t("collapse") : t("expand")}
+                title={rightOpen ? t("collapse") : t("expand")}
               >
+                {/* Divider on the RIGHT — the panel it opens lives on the right. */}
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v16.5M3.75 3.75h16.5v16.5H3.75M9.75 3.75v16.5" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 3.75v16.5M20.25 3.75H3.75v16.5h16.5M14.25 3.75v16.5" />
                 </svg>
               </button>
             )}
@@ -612,10 +614,76 @@ export function Chat({ chat, onShare, files, account, config }: {
         ))}
       </LayoutGroup>
 
-      {/* Files / Shares / Sessions panel */}
+      {pricingFor && (
+        <Popover open onClose={() => closePricing("backdrop")} dim className="inset-0 flex items-center justify-center pointer-events-none">
+          <div dir="ltr" className="pointer-events-auto fixed top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] flex flex-col rounded-xl border border-border bg-background shadow-xl sm:relative sm:inset-auto sm:w-auto sm:max-h-[90vh] sm:rounded-2xl">
+            <div className="flex items-center justify-between px-6 pt-5 pb-3">
+              <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
+                {pricingFor === "organization" ? (
+                  activeOrg ? (
+                    <>
+                      <span>{t("orgPlansFor")}</span>
+                      <span className="inline-flex items-center gap-1.5 text-sm font-medium bg-secondary text-foreground rounded-lg px-2.5 py-1">
+                        {activeOrg.imageUrl && (
+                          <div
+                            className="size-4 rounded-full bg-secondary shrink-0"
+                            style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }}
+                          />
+                        )}
+                        {activeOrg.name}
+                      </span>
+                    </>
+                  ) : t("orgPlans")
+                ) : t("personalPlans")}
+              </h2>
+              <button
+                onClick={() => closePricing("dismiss")}
+                className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+              >
+                <Icon name="x" className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="px-6 pb-5 overflow-y-auto">
+              <PricingCards payerType={pricingFor} onSelect={() => closePricing("select")} />
+            </div>
+          </div>
+        </Popover>
+      )}
+      {settingsOpen && account && (
+        <SettingsDialog account={account} onClose={() => setSettingsOpen(false)} />
+      )}
+      </div>
+      {files && (
+        <Canvas
+          tabs={canvasTabs}
+          active={canvasActive}
+          docked={isDesktop}
+          hidden={canvasHidden}
+          expanded={canvasExpanded}
+          onToggleExpand={() => setCanvasExpanded((e) => !e)}
+          onSelectTab={setCanvasActive}
+          onCloseTab={closeCanvasTab}
+          onHide={() => setCanvasHidden(true)}
+          onAddFile={openFileInCanvas}
+          apps={apps}
+          onAddApp={openApp}
+          searchFiles={files.searchFiles}
+          readFile={files.readFile}
+          openFile={files.onOpenFile}
+          writeFile={files.writeFile}
+          listFolders={files.listFolders}
+          org={files.org}
+          onShareFile={files.onShareFile}
+          railWidth={isDesktop && filesOpen ? panelWidth : 0}
+        />
+      )}
+      {/* Chats / Files / Apps / Shares — the rail. Docked at the far right on
+          desktop (canvas sits to its left, so everything lives on one side);
+          still an overlay on a phone, where there is no room to dock. */}
       <AnimatePresence>
         {filesOpen && (
           <>
+            {!isDesktop && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -624,16 +692,20 @@ export function Chat({ chat, onShare, files, account, config }: {
               className="fixed inset-0 z-50 bg-black/30 backdrop-blur-[2px]"
               onClick={() => setFilesOpen(false)}
             />
+            )}
             <motion.div
-              initial={{ x: "100%" }}
-              animate={{ x: 0 }}
-              exit={{ x: "100%" }}
+              initial={isDesktop ? false : { x: "100%" }}
+              animate={isDesktop ? undefined : { x: 0 }}
+              exit={isDesktop ? undefined : { x: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
               className={cn(
-                "fixed z-50 rounded-xl border border-border bg-background flex flex-col overflow-hidden",
-                panelExpanded ? "inset-2" : "top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] max-w-[calc(100%-0.5rem)]",
+                "rounded-xl border border-border bg-background flex flex-col overflow-hidden",
+                isDesktop
+                  ? "relative my-1 me-1 shrink-0"
+                  : cn("fixed z-50",
+                       panelExpanded ? "inset-2" : "top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] max-w-[calc(100%-0.5rem)]"),
               )}
-              style={panelExpanded ? undefined : { width: panelWidth }}
+              style={isDesktop ? { width: panelWidth } : undefined}
             >
               {/* Resize handle (left edge) — desktop only */}
               {!panelExpanded && (
@@ -697,12 +769,12 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </div>
               )}
               {filesTab === "files" && files ? (
-                <Files {...files} onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
+                <Files {...files} onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
               ) : filesTab === "apps" ? (
                 <AppsPanel
                   apps={apps}
                   loading={appsLoading}
-                  onOpen={(a) => { openApp(a); if (isDesktop) setFilesOpen(false); }}
+                  onOpen={(a) => { openApp(a); if (!isDesktop) setFilesOpen(false); }}
                 />
               ) : filesTab === "shares" ? (
                 <div className="flex flex-1 min-h-0 flex-col">
@@ -790,68 +862,6 @@ export function Chat({ chat, onShare, files, account, config }: {
           </>
         )}
       </AnimatePresence>
-      {pricingFor && (
-        <Popover open onClose={() => closePricing("backdrop")} dim className="inset-0 flex items-center justify-center pointer-events-none">
-          <div dir="ltr" className="pointer-events-auto fixed top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] flex flex-col rounded-xl border border-border bg-background shadow-xl sm:relative sm:inset-auto sm:w-auto sm:max-h-[90vh] sm:rounded-2xl">
-            <div className="flex items-center justify-between px-6 pt-5 pb-3">
-              <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
-                {pricingFor === "organization" ? (
-                  activeOrg ? (
-                    <>
-                      <span>{t("orgPlansFor")}</span>
-                      <span className="inline-flex items-center gap-1.5 text-sm font-medium bg-secondary text-foreground rounded-lg px-2.5 py-1">
-                        {activeOrg.imageUrl && (
-                          <div
-                            className="size-4 rounded-full bg-secondary shrink-0"
-                            style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }}
-                          />
-                        )}
-                        {activeOrg.name}
-                      </span>
-                    </>
-                  ) : t("orgPlans")
-                ) : t("personalPlans")}
-              </h2>
-              <button
-                onClick={() => closePricing("dismiss")}
-                className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-              >
-                <Icon name="x" className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="px-6 pb-5 overflow-y-auto">
-              <PricingCards payerType={pricingFor} onSelect={() => closePricing("select")} />
-            </div>
-          </div>
-        </Popover>
-      )}
-      {settingsOpen && account && (
-        <SettingsDialog account={account} onClose={() => setSettingsOpen(false)} />
-      )}
-      </div>
-      {files && (
-        <Canvas
-          tabs={canvasTabs}
-          active={canvasActive}
-          docked={isDesktop}
-          hidden={canvasHidden}
-          expanded={canvasExpanded}
-          onToggleExpand={() => setCanvasExpanded((e) => !e)}
-          onSelectTab={setCanvasActive}
-          onCloseTab={closeCanvasTab}
-          onHide={() => setCanvasHidden(true)}
-          onAddFile={openFileInCanvas}
-          apps={apps}
-          onAddApp={openApp}
-          searchFiles={files.searchFiles}
-          readFile={files.readFile}
-          openFile={files.onOpenFile}
-          writeFile={files.writeFile}
-          listFolders={files.listFolders}
-          org={files.org}
-          onShareFile={files.onShareFile}
-        />
-      )}
       </div>
       </div>
     </div>
