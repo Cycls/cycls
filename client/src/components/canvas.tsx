@@ -39,6 +39,7 @@ export function useFileContent(
   file: CanvasFile | null,
   readFile: (p: string) => Promise<string>,
   openFile: (p: string) => Promise<string>,
+  reloadKey: number = 0,   // bump to re-fetch: the agent rewrote the file
 ) {
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState(false);
@@ -58,7 +59,7 @@ export function useFileContent(
     load.then((v) => { if (!cancelled) setContent(v); })
         .catch(() => { if (!cancelled) setError(true); });
     return () => { cancelled = true; if (blobUrl) URL.revokeObjectURL(blobUrl); };
-  }, [file?.path, file?.name, readFile, openFile]);
+  }, [file?.path, file?.name, readFile, openFile, reloadKey]);
 
   return { content, setContent, error };
 }
@@ -263,13 +264,12 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, org, onShareFile, railWidth = 0 }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, org, onShareFile, railWidth = 0, reloadKey }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
   hidden?: boolean;
   expanded: boolean;
-  onToggleExpand: () => void;
   onSelectTab: (path: string) => void;
   onCloseTab: (path: string) => void;
   onHide: () => void;
@@ -284,6 +284,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   org?: { id: string; name: string } | null;   // lets the share dialog offer the org audience
   onShareFile?: (path: string, audience: string) => Promise<string>;
   railWidth?: number;   // pane docked to our right; the drag must account for it
+  reloadKey?: number;  // bump to re-fetch the open document
 }) {
   const file = hidden ? null : tabs.find((f) => f.path === active) ?? tabs[tabs.length - 1] ?? null;
   const { width, startResize, resizing } = usePaneWidth("cycls_canvas_width", 560, 380, 480, railWidth);
@@ -324,9 +325,6 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
             <AddTab onAdd={onAddFile} searchFiles={searchFiles} apps={apps} onAddApp={onAddApp} />
           )}
         </div>
-        <button onClick={onToggleExpand} className={cn(stripBtn, "hidden sm:flex")} aria-label={expanded ? t("collapse") : t("expand")} title={expanded ? t("collapse") : t("expand")}>
-          <Icon name={expanded ? "collapse" : "expand"} className="size-3.5" />
-        </button>
         <button onClick={onHide} className={stripBtn} aria-label="Hide canvas" title="Hide canvas">
           <Icon name="chevron-right" className="size-4" />
         </button>
@@ -340,6 +338,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
         listFolders={listFolders}
         org={org}
         onShareFile={onShareFile}
+        reloadKey={reloadKey}
       />
     </>
   );
@@ -348,10 +347,8 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
     // Expanded fills the content row; chat.tsx hides the chat column.
     if (file && expanded) {
       return (
-        <aside dir="ltr" className="relative min-w-0 flex-1">
-          <div className="absolute inset-x-1 bottom-1 top-1 flex flex-col overflow-hidden rounded-xl border border-border bg-background">
-            {inner}
-          </div>
+        <aside dir="ltr" className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
+          {inner}
         </aside>
       );
     }
@@ -367,8 +364,10 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
             transition={resizing ? { duration: 0 } : { type: "spring", damping: 30, stiffness: 300 }}
             className="relative shrink-0 overflow-hidden"
           >
-            {/* Right-anchored fixed-width card so content doesn't squish while the pane animates. */}
-            <div className="absolute bottom-1 right-1 top-1 flex flex-col overflow-hidden rounded-xl border border-border bg-background" style={{ width: width - 8 }}>
+            {/* No card of its own — the parent wraps document + rail as ONE
+                surface. Right-anchored fixed width so content doesn't squish
+                while the pane animates. */}
+            <div className="absolute inset-y-0 right-0 flex flex-col overflow-hidden bg-background" style={{ width }}>
               <div
                 onMouseDown={startResize}
                 className="absolute bottom-0 left-0 top-0 z-20 w-1.5 cursor-ew-resize hover:bg-accent/30"
@@ -515,7 +514,7 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
 }
 
 // Keyed by path from the parent, so per-file state resets on tab switch.
-function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, org, onShareFile }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, org, onShareFile, reloadKey }: {
   file: CanvasFile;
   readFile: (path: string) => Promise<string>;
   openFile: (path: string) => Promise<string>;
@@ -523,8 +522,9 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, org,
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   org?: { id: string; name: string } | null;
   onShareFile?: (path: string, audience: string) => Promise<string>;
+  reloadKey?: number;
 }) {
-  const { content, setContent, error } = useFileContent(file, readFile, openFile);
+  const { content, setContent, error } = useFileContent(file, readFile, openFile, reloadKey);
   const [menuOpen, setMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
