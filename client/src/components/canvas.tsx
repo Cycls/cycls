@@ -264,13 +264,14 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, org, onShareFile, railWidth = 0, reloadKey }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, org, onShareFile, railWidth = 0, reloadKey }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
   hidden?: boolean;
   expanded: boolean;
   onToggleExpand: () => void;
+  onCloseAll?: () => void;
   onSelectTab: (path: string) => void;
   onCloseTab: (path: string) => void;
   onHide: () => void;
@@ -333,6 +334,16 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
         >
           <Icon name={expanded ? "collapse" : "expand"} className="size-4" />
         </button>
+        {onCloseAll && (
+          <button
+            onClick={onCloseAll}
+            className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer"
+            aria-label={t("close")}
+            title={t("close")}
+          >
+            <Icon name="x" className="size-4" />
+          </button>
+        )}
       </div>
       <CanvasFileView
         key={file.path}

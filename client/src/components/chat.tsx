@@ -75,6 +75,8 @@ export interface FilesPanelProps {
   org?: { id: string; name: string } | null;
 }
 
+const RAIL_ICON_W = 44;   // folded rail: icon strip only
+
 export function Chat({ chat, onShare, files, account, config }: {
   chat: ChatApi;
   onShare?: (audience: string) => Promise<string>;
@@ -145,7 +147,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   // New key: 480 was sized for an overlay. Docked beside the canvas it has to
   // leave the conversation room to breathe, so it starts narrower.
   const { width: panelWidth, startResize } = usePaneWidth("cycls_rail_width", 320, 240, 80, 0,
-    () => (canvasShowing ? setRailIcons(true) : setFilesOpen(false)));
+    () => canvasShowing && setRailIcons(true));
   const [shareOpen, setShareOpen] = useState(false);
   // Survives the ChatApp remount on org/workspace switch (App keys by org), so
   // changing context inside the settings dialog doesn't close it.
@@ -356,6 +358,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   const [reloadKey, setReloadKey] = useState(0);
   useEffect(() => { if (!isStreaming) setReloadKey((k) => k + 1); }, [isStreaming]);
   const railIconsOnly = isDesktop && railIcons && canvasShowing;
+  const railPx = !isDesktop || !filesOpen ? 0 : railIconsOnly ? RAIL_ICON_W : panelWidth;
   const collapseRail = () => (canvasShowing ? setRailIcons(true) : setFilesOpen(false));
   const closeRight = () => {
     setFilesOpen(false);
@@ -690,6 +693,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           hidden={canvasHidden}
           expanded={rightExpanded}
           onToggleExpand={() => setRightExpanded((e) => !e)}
+          onCloseAll={() => { setCanvasTabs([]); setCanvasActive(null); setRightExpanded(false); }}
           onSelectTab={setCanvasActive}
           onCloseTab={closeCanvasTab}
           onHide={() => setCanvasHidden(true)}
@@ -703,7 +707,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           listFolders={files.listFolders}
           org={files.org}
           onShareFile={files.onShareFile}
-          railWidth={isDesktop && filesOpen ? panelWidth : 0}
+          railWidth={railPx}
           reloadKey={reloadKey}
         />
       )}
@@ -737,7 +741,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                        rightExpanded && !canvasShowing ? "min-w-0 flex-1" : "shrink-0")
                   : "fixed z-50 rounded-xl border border-border bg-background top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] max-w-[calc(100%-0.5rem)]",
               )}
-              style={isDesktop && !(rightExpanded && !canvasShowing) ? { width: railIconsOnly ? 44 : panelWidth } : undefined}
+              style={isDesktop && !(rightExpanded && !canvasShowing) ? { width: railIconsOnly ? RAIL_ICON_W : panelWidth } : undefined}
             >
               {/* Resize handle (left edge) — desktop only */}
               {isDesktop && (
