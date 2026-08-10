@@ -263,7 +263,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, org, onShareFile }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, org, onShareFile, railWidth = 0 }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -283,9 +283,10 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   listFolders?: () => Promise<{ name: string; path: string }[]>;  // mini-app save dialog
   org?: { id: string; name: string } | null;   // lets the share dialog offer the org audience
   onShareFile?: (path: string, audience: string) => Promise<string>;
+  railWidth?: number;   // pane docked to our right; the drag must account for it
 }) {
   const file = hidden ? null : tabs.find((f) => f.path === active) ?? tabs[tabs.length - 1] ?? null;
-  const { width, startResize, resizing } = usePaneWidth("cycls_canvas_width", 560, 380, 480);
+  const { width, startResize, resizing } = usePaneWidth("cycls_canvas_width", 560, 380, 480, railWidth);
 
   const stripBtn = "flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer";
   const inner = file && (
