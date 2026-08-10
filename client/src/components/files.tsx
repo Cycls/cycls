@@ -443,8 +443,8 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
               className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
               aria-label={t("more")} title={t("more")}
             >
-              <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 5.5h.01M12 12h.01M12 18.5h.01" />
+              <svg className="size-4" viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="12" cy="5" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="12" cy="19" r="1.5" />
               </svg>
             </button>
             {menu && (
