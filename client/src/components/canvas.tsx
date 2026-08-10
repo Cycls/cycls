@@ -324,15 +324,15 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
           {onAddFile && searchFiles && (
             <AddTab onAdd={onAddFile} searchFiles={searchFiles} apps={apps} onAddApp={onAddApp} />
           )}
-          <button
-            onClick={onToggleExpand}
-            className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer"
-            aria-label={expanded ? t("collapse") : t("expand")}
-            title={expanded ? t("collapse") : t("expand")}
-          >
-            <Icon name={expanded ? "collapse" : "expand"} className="size-4" />
-          </button>
         </div>
+        <button
+          onClick={onToggleExpand}
+          className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer"
+          aria-label={expanded ? t("collapse") : t("expand")}
+          title={expanded ? t("collapse") : t("expand")}
+        >
+          <Icon name={expanded ? "collapse" : "expand"} className="size-4" />
+        </button>
       </div>
       <CanvasFileView
         key={file.path}
@@ -629,7 +629,9 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, org,
                 <div className="relative shrink-0">
                   <button onClick={() => setMenuOpen((o) => !o)} className={headerBtn}
                           aria-label={t("more")} title={t("more")}>
-                    <Icon name="more" className="size-4" />
+                    <svg className="size-4" viewBox="0 0 24 24" fill="currentColor">
+                      <circle cx="12" cy="5" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="12" cy="19" r="1.5" />
+                    </svg>
                   </button>
                   {menuOpen && <DropdownMenu onClose={() => setMenuOpen(false)} items={items} />}
                 </div>
