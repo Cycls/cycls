@@ -15,7 +15,7 @@ import { ShareDialog } from "./share-dialog";
 import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
-import { type WorkspacesMenu } from "./workspace-switcher";
+import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
@@ -467,7 +467,10 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </svg>
               </button>
             )}
-            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} workspaces={workspaces} /></div>}
+            {/* Its own control on desktop; on a phone the header has no room
+                for it, so it stays a row inside the user menu. */}
+            {user && workspaces && isDesktop && <WorkspaceMenu workspaces={workspaces} />}
+            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} workspaces={isDesktop ? undefined : workspaces} /></div>}
           </div>
         </div>
       </header>
