@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { t } from "../lib/i18n";
 import { Icon } from "./icon";
+import { Popover } from "./popover";
 import { DropdownMenu } from "./files";
 import { EmojiPicker } from "./emoji-picker";
 import type { WorkspaceInfo, MemberInfo } from "../hooks/use-workspaces";
@@ -55,12 +56,12 @@ function MemberRole({ role, onChange }: { role: string; onChange: (r: string) =>
   );
 }
 
-// Workspace list + management, rendered as a drill-in view inside the user
-// menu (mirrors the org submenu pattern): `onBack` returns to the menu root,
-// `onClose` closes the whole menu after a switch.
+// Workspace list + management. `onClose` closes the menu after a switch.
+// `onBack` is only for the drill-in case; as its own dropdown there is nothing
+// to go back to, so the row is omitted.
 export function WorkspacePanel({ workspaces, onBack, onClose }: {
   workspaces: WorkspacesMenu;
-  onBack: () => void;
+  onBack?: () => void;
   onClose: () => void;
 }) {
   const [manageWs, setManageWs] = useState<WorkspaceInfo | null>(null);
@@ -191,11 +192,15 @@ export function WorkspacePanel({ workspaces, onBack, onClose }: {
 
   return (
     <div>
-      <button onClick={onBack} className={`${row} py-2.5 ${inactive}`}>
-        <Icon name="chevron-left" className="w-3.5 h-3.5 rtl:rotate-180" />
-        {t("back")}
-      </button>
-      <div className="border-t border-border" />
+      {onBack && (
+        <>
+          <button onClick={onBack} className={`${row} py-2.5 ${inactive}`}>
+            <Icon name="chevron-left" className="w-3.5 h-3.5 rtl:rotate-180" />
+            {t("back")}
+          </button>
+          <div className="border-t border-border" />
+        </>
+      )}
       <div className="py-1">
         <button
           onClick={() => { workspaces.onSwitch(null); onClose(); }}
@@ -269,6 +274,34 @@ export function WorkspacePanel({ workspaces, onBack, onClose }: {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+
+// The switcher as its own control beside the avatar: the active workspace is
+// visible without opening anything, and switching is one click instead of
+// three (avatar → Workspaces → pick).
+export function WorkspaceMenu({ workspaces }: { workspaces: WorkspacesMenu }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex h-8 max-w-40 items-center gap-1.5 rounded-lg px-2 text-sm text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer"
+        aria-label={t("workspaces")}
+      >
+        <WsIcon ws={workspaces.active} />
+        <span className="truncate">{workspaces.active?.name || t("personal")}</span>
+        <Icon name="chevron-down" className="size-3 shrink-0" />
+      </button>
+      <Popover
+        open={open}
+        onClose={() => setOpen(false)}
+        className="start-0 top-10 w-56 rounded-lg border border-border bg-background shadow-lg"
+      >
+        <WorkspacePanel workspaces={workspaces} onClose={() => setOpen(false)} />
+      </Popover>
     </div>
   );
 }
