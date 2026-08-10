@@ -37,7 +37,7 @@ function formatDate(iso: string) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-type MenuItem = { label: string; danger?: boolean; onClick: () => void };
+type MenuItem = { label: string; danger?: boolean; divider?: boolean; onClick: () => void };
 
 // Dropdown menu (anchored under a trigger).
 export function DropdownMenu({ items, onClose }: { items: MenuItem[]; onClose: () => void }) {
@@ -50,6 +50,8 @@ export function DropdownMenu({ items, onClose }: { items: MenuItem[]; onClose: (
             key={item.label}
             onClick={(e) => { e.stopPropagation(); item.onClick(); onClose(); }}
             className={`flex w-full items-center px-3 py-1.5 text-sm transition-colors cursor-pointer ${
+              item.divider ? "mt-1 border-t border-border pt-2" : ""
+            } ${
               item.danger ? "text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20" : "text-foreground hover:bg-secondary/80"
             }`}
           >
@@ -75,6 +77,8 @@ function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: Me
             key={item.label}
             onClick={(e) => { e.stopPropagation(); item.onClick(); onClose(); }}
             className={`flex w-full items-center px-3 py-1.5 text-sm transition-colors cursor-pointer ${
+              item.divider ? "mt-1 border-t border-border pt-2" : ""
+            } ${
               item.danger ? "text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20" : "text-foreground hover:bg-secondary/80"
             }`}
           >
@@ -200,10 +204,9 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
   const [anchor, setAnchor] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortAsc, setSortAsc] = useState(true);
-  const [sortMenu, setSortMenu] = useState(false);
+  const [menu, setMenu] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
-  const [uploadMenu, setUploadMenu] = useState(false);
   const dragCounter = useRef(0);
 
   const segments = path ? path.split("/") : [];
@@ -423,62 +426,40 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
           })}
         </nav>
 
-        {/* Actions */}
+        {/* Actions — refresh stays on the bar; the rest collapse into one menu */}
         <div className="flex items-center gap-1 shrink-0 ml-2">
-          {/* Sort */}
+          <button
+            onClick={() => onReload(path)}
+            className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+            aria-label={t("refresh")} title={t("refresh")}
+          >
+            <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
+            </svg>
+          </button>
           <div className="relative">
             <button
-              onClick={() => setSortMenu((o) => !o)}
+              onClick={() => setMenu((o) => !o)}
               className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-              aria-label={t("sortBy")} title={t("sortBy")}
+              aria-label={t("more")} title={t("more")}
             >
               <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 7h12M3 12h9M3 17h6m6 0l3 3 3-3m-3 3V8" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 5.5h.01M12 12h.01M12 18.5h.01" />
               </svg>
             </button>
-            {sortMenu && (
+            {menu && (
               <DropdownMenu
-                onClose={() => setSortMenu(false)}
-                items={([["name", t("sortName")], ["type", t("sortType")], ["modified", t("sortDate")], ["size", t("sortSize")]] as [SortKey, string][]).map(([k, label]) => ({
-                  label: `${sortKey === k ? (sortAsc ? "↑ " : "↓ ") : ""}${label}`,
-                  onClick: () => { if (sortKey === k) setSortAsc((v) => !v); else { setSortKey(k); setSortAsc(true); } },
-                }))}
-              />
-            )}
-          </div>
-          {[
-            { label: t("refresh"),   onClick: () => onReload(path),         d: "M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" },
-            { label: t("newFolder"), onClick: () => setCreatingFolder(true),  d: "M12 10.5v6m3-3H9m4.06-7.19l-2.12-2.12a1.5 1.5 0 00-1.06-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" },
-          ].map((b) => (
-            <button
-              key={b.label}
-              onClick={b.onClick}
-              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-              aria-label={b.label}
-              title={b.label}
-            >
-              <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d={b.d} />
-              </svg>
-            </button>
-          ))}
-          {/* Upload (file or folder) */}
-          <div className="relative">
-            <button
-              onClick={() => setUploadMenu((o) => !o)}
-              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-              aria-label={t("upload")} title={t("upload")}
-            >
-              <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-              </svg>
-            </button>
-            {uploadMenu && (
-              <DropdownMenu
-                onClose={() => setUploadMenu(false)}
+                onClose={() => setMenu(false)}
                 items={[
-                  { label: t("uploadFile"), onClick: () => fileInputRef.current?.click() },
+                  { label: t("newFolder"),    onClick: () => setCreatingFolder(true) },
+                  { label: t("uploadFile"),   onClick: () => fileInputRef.current?.click() },
                   { label: t("uploadFolder"), onClick: () => folderInputRef.current?.click() },
+                  // Sort options keep their ↑/↓ marker; divider separates them from the actions.
+                  ...([["name", t("sortName")], ["type", t("sortType")], ["modified", t("sortDate")], ["size", t("sortSize")]] as [SortKey, string][]).map(([k, label], i) => ({
+                    label: `${sortKey === k ? (sortAsc ? "↑ " : "↓ ") : ""}${label}`,
+                    divider: i === 0,
+                    onClick: () => { if (sortKey === k) setSortAsc((v) => !v); else { setSortKey(k); setSortAsc(true); } },
+                  })),
                 ]}
               />
             )}
