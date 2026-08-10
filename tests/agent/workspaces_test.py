@@ -507,7 +507,7 @@ def test_share_url_carries_ws_and_resolves(tmp_path):
     r = client.get(f"/share/org_1:user_1/{body['token']}/data?ws={ws_id}")
     assert r.status_code == 200 and r.json()["title"] == "Team chat"
     # without the ws hint the fallbacks (personal, t-shared) don't have the row
-    assert client.get(f"/share/org_1:user_1/{body['token']}/data").status_code == 403
+    assert client.get(f"/share/org_1:user_1/{body['token']}/data").status_code == 404
 
 
 def test_share_bare_link_falls_back_to_personal(tmp_path):

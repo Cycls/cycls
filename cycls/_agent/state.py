@@ -326,16 +326,22 @@ class Session:
 
 # ---- Share tokens (RFC003) ----
 
-async def resolve(workspace, token, requester=None):
-    row = await DB(workspace).get(f"share/{token}")
-    if not row:
-        return None
-    aud = row.get("audience", "public")
+async def find_share(workspace, token):
+    """The share row, audience unchecked — callers gate with `share_allows` so
+    'no such share' stays distinguishable from 'not yours to see'."""
+    return await DB(workspace).get(f"share/{token}")
+
+
+def share_allows(row, requester):
+    aud = (row or {}).get("audience", "public")
     if aud == "public":
-        return row
-    if aud.startswith("org:") and getattr(requester, "org_id", None) == aud[4:]:
-        return row
-    return None
+        return True
+    return aud.startswith("org:") and getattr(requester, "org_id", None) == aud[4:]
+
+
+async def resolve(workspace, token, requester=None):
+    row = await find_share(workspace, token)
+    return row if row and share_allows(row, requester) else None
 
 
 # ---- Workspaces registry + ACL (docs/workspaces.md) ----

@@ -242,15 +242,22 @@ function ChatNoAuth({ config }: { config: AppConfig | null }) {
 const PERSIST_KEYS = ["q", "plans", "fork"] as const;
 const ssKey = (k: string) => `cycls_${k}`;
 
-function stashParams() {
+// OAuth leaves the page entirely, so where to come back to has to survive the
+// round trip. Signing in from a share link must land back on that link, not "/".
+const RETURN_KEY = "cycls_return_to";
+
+function stashParams(returnTo?: string) {
   const params = new URLSearchParams(window.location.search);
   for (const k of PERSIST_KEYS) {
     const v = params.get(k);
     if (v) sessionStorage.setItem(ssKey(k), v);
   }
+  if (returnTo) sessionStorage.setItem(RETURN_KEY, returnTo);
 }
 
 function popParams(): string {
+  const back = sessionStorage.getItem(RETURN_KEY);
+  if (back) { sessionStorage.removeItem(RETURN_KEY); return back; }
   const params = new URLSearchParams();
   for (const k of PERSIST_KEYS) {
     const v = sessionStorage.getItem(ssKey(k));
@@ -260,7 +267,7 @@ function popParams(): string {
 }
 
 function SharedViewAuthed() {
-  const { getToken, isLoaded } = useAuth();
+  const { getToken, isLoaded, isSignedIn } = useAuth();
   // Share URL: /shared/<subject>/<token>. Subject is `<org_id>:<user_id>` for
   // org-context owners, plain `<user_id>` otherwise. Mint the viewer's token
   // for the share's org so the audience check passes regardless of which org
@@ -271,8 +278,17 @@ function SharedViewAuthed() {
     try { return await getToken(orgId ? { organizationId: orgId } : undefined); }
     catch { return null; }
   }, [getToken, orgId]);
+  // An org-scoped share is unreadable until we know who the viewer is; without
+  // this the page just said "private or expired" and left them there. Same
+  // sign-in surface as the app — email/password lands the session in place and
+  // the share loads without a navigation; OAuth returns to this exact link.
+  const [signingIn, setSigningIn] = useState(false);
   if (!isLoaded) return null;
-  return <SharedView getToken={fetchToken} />;
+  if (signingIn && !isSignedIn) return <CustomSignIn returnTo={window.location.href} />;
+  return (
+    <SharedView getToken={fetchToken} signedIn={!!isSignedIn}
+                onSignIn={() => setSigningIn(true)} />
+  );
 }
 
 function SSOCallback() {
@@ -285,7 +301,7 @@ function SSOCallback() {
   );
 }
 
-function CustomSignIn() {
+function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
   const { isLoaded, signIn, setActive } = useSignIn();
   const { signUp, setActive: setSignUpActive } = useSignUp();
   const { client } = useClerk();
@@ -339,9 +355,9 @@ function CustomSignIn() {
       setIsLoading(strategy);
       setError("");
       track("sign_in_attempted", { method: strategy, step: "oauth_redirect" });
-      stashParams();
+      stashParams(returnTo);
       const params = new URLSearchParams(window.location.search);
-      const redirectUrlComplete = params.toString() ? `/?${params}` : "/";
+      const redirectUrlComplete = returnTo ?? (params.toString() ? `/?${params}` : "/");
       await signUp!.authenticateWithRedirect({
         strategy,
         redirectUrl: "/sso-callback",

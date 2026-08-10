@@ -29,15 +29,23 @@ interface FileShare extends Author {
   url: string;
 }
 
-export function SharedView({ getToken }: { getToken?: () => Promise<string | null> } = {}) {
+export function SharedView({ getToken, signedIn, onSignIn }: {
+  getToken?: () => Promise<string | null>;
+  signedIn?: boolean;
+  onSignIn?: () => void;
+} = {}) {
   const [data, setData] = useState<ChatShare | FileShare | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; signIn: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     // /shared/<user>/<token> is the SPA route; JSON lives at /share/<user>/<token>/data.
     // Org-scoped shares need the viewer's bearer so the backend can match `audience: "org:<id>"`
     // against the requester's org_id. Public shares ignore the bearer.
+    // Re-runs when the viewer signs in, so a 401 recovers without a reload.
+    let cancelled = false;
+    setError(null);
+    setLoading(true);
     (async () => {
       try {
         const headers: Record<string, string> = {};
@@ -49,9 +57,14 @@ export function SharedView({ getToken }: { getToken?: () => Promise<string | nul
           `${window.location.pathname.replace("/shared/", "/share/")}/data${window.location.search}`,
           { headers },
         );
-        if (res.status === 403) throw new Error("This share is private or expired");
-        if (!res.ok) throw new Error("Share not found");
+        // 401 is the recoverable one: the link is fine, we just don't know who
+        // you are. 403 means we do, and it isn't for you.
+        if (res.status === 401) throw new Error("SIGN_IN");
+        if (res.status === 403) throw new Error("This link isn't shared with your account");
+        if (res.status === 404) throw new Error("This link doesn't exist");
+        if (!res.ok) throw new Error("Couldn't load this share");
         const d = (await res.json()) as ChatShare | FileShare;
+        if (cancelled) return;
         setData(d);
         if (d.type === "chat") {
           document.title = d.title ? `Cycls | ${d.title}` : "Cycls";
@@ -68,14 +81,18 @@ export function SharedView({ getToken }: { getToken?: () => Promise<string | nul
           referrer: document.referrer || null,
         });
       } catch (err) {
+        if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
-        setError(msg);
+        setError(msg === "SIGN_IN"
+          ? { message: "Sign in to view this", signIn: true }
+          : { message: msg, signIn: false });
         track("share_view_failed", { share_url: window.location.href, error: msg });
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
-  }, [getToken]);
+    return () => { cancelled = true; };
+  }, [getToken, signedIn]);
 
   if (loading) {
     return (
@@ -87,8 +104,16 @@ export function SharedView({ getToken }: { getToken?: () => Promise<string | nul
 
   if (error) {
     return (
-      <div className="flex h-dvh items-center justify-center">
-        <div className="text-muted-foreground text-sm">{error}</div>
+      <div className="flex h-dvh flex-col items-center justify-center gap-3">
+        <div className="text-muted-foreground text-sm">{error.message}</div>
+        {error.signIn && onSignIn && (
+          <button
+            onClick={onSignIn}
+            className="cursor-pointer rounded-lg bg-foreground px-3 py-1.5 text-sm font-medium text-background"
+          >
+            Sign in
+          </button>
+        )}
       </div>
     );
   }
@@ -132,15 +157,18 @@ function SharedFile({ share, getToken }: { share: FileShare; getToken?: () => Pr
   const name = share.path.split("/").pop() || share.path;
   const file = useMemo<CanvasFile>(() => ({ path: share.path, name }), [share.path, name]);
   const renderable = isRenderable(name);
-  const shareBase = window.location.pathname.replace("/shared/", "/share/");  // /share/{user}/{token}
+  // `?ws=` names the workspace that minted the share — without it the server
+  // has to guess, and a share from a team workspace isn't found at all.
+  const shareBase = window.location.pathname.replace("/shared/", "/share/") ;  // /share/{user}/{token}
+  const shareQuery = window.location.search;
 
   const authedFetch = useCallback(async (p: string) => {
     const headers: Record<string, string> = {};
     if (getToken) { const tk = await getToken(); if (tk) headers.Authorization = `Bearer ${tk}`; }
-    const res = await fetch(`${shareBase}/file/${p}`, { headers });
-    if (!res.ok) throw new Error("This share is private or expired");
+    const res = await fetch(`${shareBase}/file/${p}${shareQuery}`, { headers });
+    if (!res.ok) throw new Error("Couldn't load this file");
     return res;
-  }, [getToken, shareBase]);
+  }, [getToken, shareBase, shareQuery]);
 
   const readFile = useCallback(async (p: string) => (await authedFetch(p)).text(), [authedFetch]);
   const openFile = useCallback(async (p: string) => URL.createObjectURL(await (await authedFetch(p)).blob()), [authedFetch]);
