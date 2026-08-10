@@ -141,7 +141,6 @@ export function Chat({ chat, onShare, files, account, config }: {
       icon: app.icon, iconSrc: app.iconSrc, letter: app.letter,
     });
   }, [openFileInCanvas]);
-  const [panelExpanded, setPanelExpanded] = useState(false);
   // Drag the panel's left edge to resize; width persists across sessions.
   // New key: 480 was sized for an overlay. Docked beside the canvas it has to
   // leave the conversation room to breathe, so it starts narrower.
@@ -358,7 +357,21 @@ export function Chat({ chat, onShare, files, account, config }: {
   useEffect(() => { if (!isStreaming) setReloadKey((k) => k + 1); }, [isStreaming]);
   const railIconsOnly = isDesktop && railIcons && canvasShowing;
   const collapseRail = () => (canvasShowing ? setRailIcons(true) : setFilesOpen(false));
-  const closeRight = () => { setFilesOpen(false); setCanvasHidden(true); };
+  const closeRight = () => {
+    setFilesOpen(false);
+    setCanvasHidden(true);
+    setRightExpanded(false);
+    setRailIcons(false);
+  };
+  // Esc is where people reach when a surface takes over the screen — and the
+  // header button is a long way from the keyboard once expanded.
+  useEffect(() => {
+    if (!rightOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeRight(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   const openRight = () => {
     setRailIcons(false);
     if (canvasTabs.length > 0) setCanvasHidden(false);
@@ -676,6 +689,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           docked={isDesktop}
           hidden={canvasHidden}
           expanded={rightExpanded}
+          onToggleExpand={() => setRightExpanded((e) => !e)}
           onSelectTab={setCanvasActive}
           onCloseTab={closeCanvasTab}
           onHide={() => setCanvasHidden(true)}
@@ -721,13 +735,12 @@ export function Chat({ chat, onShare, files, account, config }: {
                   // is the divider between document and rail.
                   ? cn("relative border-s border-border bg-background",
                        rightExpanded && !canvasShowing ? "min-w-0 flex-1" : "shrink-0")
-                  : cn("fixed z-50 rounded-xl border border-border bg-background",
-                       panelExpanded ? "inset-2" : "top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] max-w-[calc(100%-0.5rem)]"),
+                  : "fixed z-50 rounded-xl border border-border bg-background top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] max-w-[calc(100%-0.5rem)]",
               )}
               style={isDesktop && !(rightExpanded && !canvasShowing) ? { width: railIconsOnly ? 44 : panelWidth } : undefined}
             >
               {/* Resize handle (left edge) — desktop only */}
-              {!panelExpanded && (
+              {isDesktop && (
                 <div
                   onMouseDown={startResize}
                   className="absolute left-0 top-0 bottom-0 z-20 hidden sm:block w-1.5 -ml-0.5 cursor-ew-resize hover:bg-accent/30"
@@ -788,24 +801,6 @@ export function Chat({ chat, onShare, files, account, config }: {
                     </button>
                   )}
                   <div className="flex-1" />
-                  {canvasTabs.length > 0 && canvasHidden && (
-                    <button
-                      onClick={() => setCanvasHidden(false)}
-                      className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                      aria-label={t("expand")}
-                      title={`${canvasTabs.length} open`}
-                    >
-                      <Icon name="copy" className="size-4" />
-                    </button>
-                  )}
-                  <button
-                    onClick={() => isDesktop ? setRightExpanded((e) => !e) : setPanelExpanded((e) => !e)}
-                    className="hidden sm:flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                    aria-label={(isDesktop ? rightExpanded : panelExpanded) ? t("collapse") : t("expand")}
-                    title={(isDesktop ? rightExpanded : panelExpanded) ? t("collapse") : t("expand")}
-                  >
-                    <Icon name={(isDesktop ? rightExpanded : panelExpanded) ? "collapse" : "expand"} className="size-4" />
-                  </button>
                   <button
                     onClick={collapseRail}
                     className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
