@@ -681,8 +681,8 @@ export function Chat({ chat, onShare, files, account, config }: {
       {/* ONE right-side surface: document and rail share a single card, split
           by a divider — two cards read as two places to be. */}
       <div className={cn(
-        "flex min-h-0 overflow-hidden",
-        isDesktop && rightOpen && "my-1 me-1 rounded-xl border border-border bg-background",
+        "flex min-h-0 overflow-hidden rtl:flex-row-reverse",
+        isDesktop && rightOpen && "my-1 mr-1 rounded-xl border border-border bg-background",
         isDesktop && rightExpanded && "min-w-0 flex-1",
       )}>
       {files && (
@@ -741,7 +741,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                 isDesktop
                   // No card of its own — the parent is the card; a start border
                   // is the divider between document and rail.
-                  ? cn("relative border-s border-border bg-background",
+                  ? cn("relative border-l border-border bg-background",
                        rightExpanded && !canvasShowing ? "min-w-0 flex-1" : "shrink-0")
                   : "fixed z-50 rounded-xl border border-border bg-background top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] max-w-[calc(100%-0.5rem)]",
               )}
