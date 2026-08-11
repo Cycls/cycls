@@ -1,19 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-// Width of a right-anchored pane, resized by dragging its left edge and
-// persisted per key. `resizing` lets callers disable width animation during a
-// drag.
-//
-// The pane never gets to squeeze the content beside it below its floor —
-// `minGapLeft` px or `minGapFraction` of the viewport, whichever is larger.
-// `offsetRight` is any pane docked further right (the rail sits right of the
-// canvas): it measures the drag to THIS pane's edge and counts against the same
-// floor, since it eats the same space.
-//
-// The floor is applied on every read, not only while dragging: a width restored
-// from localStorage, a narrower window, or a rail that grew afterwards would all
-// otherwise sail past it. The stored value stays untouched, so widening the
-// window gives the preferred width back.
+// Width of a right-anchored pane, dragged by its left edge and persisted per
+// key. The content beside it keeps `minGapLeft` px or `minGapFraction` of the
+// viewport, whichever is larger; `offsetRight` is any pane docked further right
+// and counts against the same floor. Clamped on read, so a stored width or a
+// resized window can't get past it — the stored value itself is left alone.
 export function usePaneWidth(
   key: string, initial: number, min: number, minGapLeft: number,
   offsetRight = 0, onUndersize?: () => void, maxFraction = 1, minGapFraction = 0,

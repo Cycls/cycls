@@ -304,9 +304,6 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
                 role="button"
                 onClick={() => onSelectTab(f.path)}
                 className={cn(
-                  // Like browser tabs: split the strip evenly, capped so a lone
-                  // tab isn't absurdly wide, floored so they stay readable —
-                  // past the floor the strip scrolls instead of shrinking more.
                   "group flex min-w-20 max-w-44 flex-1 basis-0 cursor-pointer items-center gap-1.5 rounded-lg py-1 pl-2.5 pr-1 text-xs transition-colors",
                   on ? "bg-secondary text-foreground font-medium" : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
                 )}
@@ -366,9 +363,6 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
     return (
       <AnimatePresence initial={false}>
         {file && (
-          // ONE element across expanded/normal: returning a different tree
-          // remounted the body, so expanding reloaded the whole document
-          // (and any iframe in it) instead of just resizing.
           <motion.aside
             key="canvas"
             dir="ltr"
@@ -378,7 +372,6 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
             transition={resizing ? { duration: 0 } : { type: "spring", damping: 30, stiffness: 300 }}
             className={cn("relative overflow-hidden", expanded ? "min-w-0 flex-1" : "shrink-0")}
           >
-            {/* Right-anchored so content doesn't squish while the pane animates. */}
             <div
               className={cn("flex flex-col overflow-hidden bg-background",
                             expanded ? "h-full w-full" : "absolute inset-y-0 right-0")}

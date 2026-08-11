@@ -143,9 +143,6 @@ export function Chat({ chat, onShare, files, account, config }: {
       icon: app.icon, iconSrc: app.iconSrc, letter: app.letter,
     });
   }, [openFileInCanvas]);
-  // Drag the panel's left edge to resize; width persists across sessions.
-  // New key: 480 was sized for an overlay. Docked beside the canvas it has to
-  // leave the conversation room to breathe, so it starts narrower.
   const { width: panelWidth, startResize, resizing: railResizing } = usePaneWidth("cycls_rail_width", 320, 240, 80, 0,
     () => canvasShowing && setRailIcons(true), 0.3);
   const [shareOpen, setShareOpen] = useState(false);
@@ -346,15 +343,9 @@ export function Chat({ chat, onShare, files, account, config }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // One header button owns the whole right side — the rail and any open
-  // document. Two buttons for two surfaces was the thing nobody could read.
   const canvasShowing = canvasTabs.length > 0 && !canvasHidden;
   const rightOpen = filesOpen || canvasShowing;
-  // Collapsed rail keeps its icons while a document is open; with nothing open
-  // the rail IS the right side, so collapsing closes it outright.
   const [railIcons, setRailIcons] = useState(false);
-  // The agent writes through its sandbox, so nothing tells the canvas its open
-  // document changed. A turn ending is the signal to re-read it.
   const [reloadKey, setReloadKey] = useState(0);
   useEffect(() => { if (!isStreaming) setReloadKey((k) => k + 1); }, [isStreaming]);
   const railIconsOnly = isDesktop && railIcons && canvasShowing;
@@ -366,8 +357,6 @@ export function Chat({ chat, onShare, files, account, config }: {
     setRightExpanded(false);
     setRailIcons(false);
   };
-  // Esc is where people reach when a surface takes over the screen — and the
-  // header button is a long way from the keyboard once expanded.
   useEffect(() => {
     if (!rightOpen) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeRight(); };
@@ -378,7 +367,6 @@ export function Chat({ chat, onShare, files, account, config }: {
   const openRight = () => {
     setRailIcons(false);
     if (canvasTabs.length > 0) setCanvasHidden(false);
-    // With nothing open to render, the rail IS the right side.
     if (!canvasTabs.length || !filesOpen) openPanel();
   };
 
@@ -431,9 +419,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           )}
           </div>
           <div className="flex items-center gap-1">
-            {/* Leads the right-side group so the icon buttons stay together.
-                Desktop only — a phone header has no room, so there it stays a
-                row inside the user menu. */}
+            {/* Desktop only; on a phone it stays a row inside the user menu */}
             {user && workspaces && isDesktop && <WorkspaceMenu workspaces={workspaces} />}
             {messages.length > 0 && (
               <>
@@ -492,7 +478,6 @@ export function Chat({ chat, onShare, files, account, config }: {
                 aria-label={rightOpen ? t("collapse") : t("expand")}
                 title={rightOpen ? t("collapse") : t("expand")}
               >
-                {/* Divider on the RIGHT — the panel it opens lives on the right. */}
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 3.75v16.5M20.25 3.75H3.75v16.5h16.5M14.25 3.75v16.5" />
                 </svg>
@@ -678,8 +663,6 @@ export function Chat({ chat, onShare, files, account, config }: {
         <SettingsDialog account={account} onClose={() => setSettingsOpen(false)} />
       )}
       </div>
-      {/* ONE right-side surface: document and rail share a single card, split
-          by a divider — two cards read as two places to be. */}
       <div className={cn(
         "flex min-h-0 overflow-hidden rtl:flex-row-reverse",
         isDesktop && rightOpen && "my-1 mr-1 rounded-xl border border-border bg-background",
@@ -711,9 +694,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           reloadKey={reloadKey}
         />
       )}
-      {/* Chats / Files / Apps / Shares — the rail. Docked at the far right on
-          desktop (canvas sits to its left, so everything lives on one side);
-          still an overlay on a phone, where there is no room to dock. */}
+      {/* Chats / Files / Apps / Shares — docked on desktop, overlay on a phone */}
       <AnimatePresence>
         {filesOpen && (
           <>
@@ -729,8 +710,6 @@ export function Chat({ chat, onShare, files, account, config }: {
             )}
             <motion.div
               initial={isDesktop ? false : { x: "100%" }}
-              // Desktop had no animation at all — width jumped via `style`.
-              // Same spring as the canvas so both panes fold alike.
               animate={!isDesktop ? { x: 0 }
                 : rightExpanded && !canvasShowing ? {}
                 : { width: railIconsOnly ? RAIL_ICON_W : panelWidth }}
@@ -739,8 +718,6 @@ export function Chat({ chat, onShare, files, account, config }: {
               className={cn(
                 "flex flex-col overflow-hidden",
                 isDesktop
-                  // No card of its own — the parent is the card; a start border
-                  // is the divider between document and rail.
                   ? cn("relative border-l border-border bg-background",
                        rightExpanded && !canvasShowing ? "min-w-0 flex-1" : "shrink-0")
                   : "fixed z-50 rounded-xl border border-border bg-background top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] max-w-[calc(100%-0.5rem)]",
@@ -754,8 +731,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                   aria-label="Resize panel"
                 />
               )}
-              {/* Tab bar — a vertical icon strip once collapsed, so sections
-                  stay one click away instead of needing the rail reopened. */}
+              {/* Tab bar — icon strip once collapsed */}
               {railIconsOnly ? (
                 <div className="flex flex-col items-center gap-1 border-b border-border py-2">
                   {([["chats", "list", !!account], ["files", "folder", !!files],
@@ -814,8 +790,6 @@ export function Chat({ chat, onShare, files, account, config }: {
                     aria-label={t("collapse")}
                     title={t("collapse")}
                   >
-                    {/* Points at the edge the rail folds into — that edge is the screen's
-                        right in both languages, since this surface doesn't mirror. */}
                     <Icon name="chevron-right" className="size-4" />
                   </button>
                 </div>
