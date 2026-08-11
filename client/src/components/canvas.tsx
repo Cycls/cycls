@@ -289,7 +289,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   reloadKey?: number;  // bump to re-fetch the open document
 }) {
   const file = hidden ? null : tabs.find((f) => f.path === active) ?? tabs[tabs.length - 1] ?? null;
-  const { width, startResize, resizing } = usePaneWidth("cycls_canvas_width", 560, 380, 420, railWidth);
+  const { width, startResize, resizing } = usePaneWidth("cycls_canvas_width", 560, 380, 420, railWidth, undefined, 1, 0.25);
 
   const inner = file && (
     <>
