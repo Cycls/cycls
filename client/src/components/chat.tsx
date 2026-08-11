@@ -814,7 +814,9 @@ export function Chat({ chat, onShare, files, account, config }: {
                     aria-label={t("collapse")}
                     title={t("collapse")}
                   >
-                    <Icon name="chevron-right" className="size-4 rtl:rotate-180" />
+                    {/* Points at the edge the rail folds into — that edge is the screen's
+                        right in both languages, since this surface doesn't mirror. */}
+                    <Icon name="chevron-right" className="size-4" />
                   </button>
                 </div>
               )}
