@@ -18,6 +18,11 @@ from cycls._agent.tools import tool_step
 
 DEFAULT_MAX_UPLOAD_MB = 512   # per-file upload cap when not configured
 
+# FileResponse sets ETag/Last-Modified but no Cache-Control, and heuristic
+# freshness (browsers, iOS URLCache) then serves stale bytes after a write.
+# no-cache keeps the cache but forces revalidation — 304 when unchanged.
+_NO_CACHE = {"Cache-Control": "no-cache"}
+
 
 def to_ui_messages(raw):
     """Stored API messages → FE shape `{role, content: str, parts?, attachments?}`.
@@ -469,8 +474,8 @@ def files_router(cycls_app, ws_dep):
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
         if request.query_params.get("download") is not None:
-            return FileResponse(file_path, filename=file_path.name)
-        return FileResponse(file_path)
+            return FileResponse(file_path, filename=file_path.name, headers=_NO_CACHE)
+        return FileResponse(file_path, headers=_NO_CACHE)
 
     @r.put("/files/{path:path}")
     async def put_file(path: str, request: Request, ws: Workspace = ws_dep):
@@ -782,7 +787,7 @@ def _serve_file(root, file_path):
         raise HTTPException(403, "Path traversal denied")
     if not target.is_file():
         raise HTTPException(404, "File not found")
-    return FileResponse(target)
+    return FileResponse(target, headers=_NO_CACHE)
 
 
 def _zip_dir(dir_path):
@@ -797,7 +802,7 @@ def _zip_dir(dir_path):
             if f.is_file() and not any(p.startswith(".") for p in f.relative_to(dir_path).parts):
                 zf.write(f, f.relative_to(dir_path.parent))   # keep the folder as the top dir
     return FileResponse(tmp.name, filename=f"{dir_path.name}.zip", media_type="application/zip",
-                        background=BackgroundTask(lambda: os.unlink(tmp.name)))
+                        headers=_NO_CACHE, background=BackgroundTask(lambda: os.unlink(tmp.name)))
 
 
 # ---- Workspaces (registry + members — docs/workspaces.md) ----

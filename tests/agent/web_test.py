@@ -496,6 +496,7 @@ def test_share_router_file_share(tmp_path):
     r = client.get(meta["url"])
     assert r.status_code == 200
     assert r.content == b"hello world"
+    assert r.headers["cache-control"] == "no-cache"
 
 
 def test_validator_rejects_query_token(tmp_path):
@@ -758,6 +759,19 @@ def _zip_bytes(members):
         for name, data in members.items():
             zf.writestr(name, data)
     return buf.getvalue()
+
+
+def test_file_get_forces_revalidation(tmp_path):
+    """Every file GET carries no-cache: FileResponse alone has no Cache-Control,
+    so browsers/iOS apply heuristic freshness off Last-Modified and previews
+    show stale bytes after a write (downloads escaped only because ?download is
+    a different cache key)."""
+    client = _ws_routers_client(tmp_path)
+    client.put("/files/docs/doc.txt", content=b"v1")
+    for url in ("/files/docs/doc.txt", "/files/docs/doc.txt?download", "/files/docs"):
+        r = client.get(url)
+        assert r.status_code == 200
+        assert r.headers["cache-control"] == "no-cache"
 
 
 def test_raw_body_upload_streams_to_disk(tmp_path):
