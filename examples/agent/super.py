@@ -23,6 +23,11 @@ image = cycls.Image().copy(".providers.env", ".env")#.rebuild()
 web = (
     cycls.Web()
     .auth(cycls.Clerk())
+    # .iap(cycls.AppleIAP(  # iOS subscriptions — StoreKit 2 JWS sent in the x-apple-entitlement header
+    #     bundle_id="com.cycls.app",
+    #     products={"com.cycls.app.pro.month": "u:ios_pro",   # each SKU grants its own plan
+    #               "com.cycls.app.max.month": "u:ios_max"},  # add/rename SKUs here, no SDK change
+    #     namespace="<uuid the iOS client also uses>"))
     .cms(brand="https://cms.cycls.ai/agents/super", explore="https://cms.cycls.ai/agents")  # any CMS returning the contract JSON; token=... for private ones
     # Static branding — the same knobs without a CMS (static wins, piece by piece):
     # .brand(name="Super", description="The agent for getting things done",
