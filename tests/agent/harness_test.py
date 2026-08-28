@@ -81,6 +81,47 @@ def test_build_tools_database_exposes_kv_tool():
     assert names == {"database"}
 
 
+def test_build_tools_suggest_exposes_tool():
+    tools = build_tools(["Suggest"], None)
+    names = {t.get("name") for t in tools}
+    assert names == {"suggest"}
+
+
+def test_suggest_dispatch_emits_ui_event_with_ack():
+    """`suggest` is a client-driving tool like `canvas`: the dispatch step
+    labels it, the executor returns a ui event, and `ack` (what the model
+    reads back) rides along for the loop to strip."""
+    import asyncio
+    from types import SimpleNamespace
+    from cycls._agent.tools import dispatch
+
+    step, aw = dispatch({"id": "t1", "name": "suggest",
+                         "input": {"text": "Turn this into a document"}},
+                        SimpleNamespace(root="/tmp"), timeout=5)
+    assert step == {"type": "step", "id": "t1", "tool_name": "Suggest",
+                    "step": "Turn this into a document"}
+    out = asyncio.run(_await(aw))
+    assert out == {"type": "ui", "action": "suggest",
+                   "text": "Turn this into a document",
+                   "ack": "Suggestion offered to the user."}
+    # Empty text is a model error, not a client event.
+    _, aw = dispatch({"id": "t2", "name": "suggest", "input": {"text": "  "}},
+                     SimpleNamespace(root="/tmp"), timeout=5)
+    assert asyncio.run(_await(aw)).startswith("Error")
+
+
+async def _await(x):
+    return await x
+
+
+def test_suggest_guidance_rides_with_the_tool():
+    """Opting into the tool is the only switch — the prompt block appends
+    when 'Suggest' is allowed and steers toward finished artifacts."""
+    from cycls._agent.harness.prompts import SUGGEST_GUIDANCE
+    assert "suggest" in SUGGEST_GUIDANCE
+    assert "artifact" in SUGGEST_GUIDANCE
+
+
 def test_build_tools_unknown_name_ignored():
     """Unknown tool names silently drop — don't crash the agent boot."""
     tools = build_tools(["Bash", "NotARealTool"], None)

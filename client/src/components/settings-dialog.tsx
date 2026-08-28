@@ -11,7 +11,7 @@ import { WsIcon, type WorkspacesMenu } from "./workspace-switcher";
 import { EmojiPicker } from "./emoji-picker";
 import type { MemberInfo } from "../hooks/use-workspaces";
 import { t, useLang, setLang, getLang } from "../lib/i18n";
-import { cn, getThemeMode, setThemeMode, type ThemeMode } from "../lib/utils";
+import { cn, getThemeMode, setThemeMode, followUpsEnabled, setFollowUpsEnabled, type ThemeMode } from "../lib/utils";
 import { useDarkMode } from "../hooks/use-dark-mode";
 import { useToast } from "../lib/toast";
 import { track } from "../lib/posthog";
@@ -454,6 +454,7 @@ function Challenge({ prompt, expected, onConfirm, onCancel }: {
 
 function GeneralTab() {
   const [mode, setMode] = useState<ThemeMode>(getThemeMode());
+  const [followUps, setFollowUps] = useState(followUpsEnabled);
   return (
     <ListCard>
       <Row
@@ -477,6 +478,16 @@ function GeneralTab() {
             value={getLang()}
             options={[{ value: "en" as const, label: "English" }, { value: "ar" as const, label: "العربية" }]}
             onChange={(l) => { setLang(l); track("language_changed", { to: l, source: "settings" }); }}
+          />
+        }
+      />
+      <Row
+        label={t("followUps")}
+        control={
+          <Segmented
+            value={followUps ? "on" : "off"}
+            options={[{ value: "on" as const, label: t("on") }, { value: "off" as const, label: t("off") }]}
+            onChange={(v) => { setFollowUps(v === "on"); setFollowUpsEnabled(v === "on", "settings"); }}
           />
         }
       />

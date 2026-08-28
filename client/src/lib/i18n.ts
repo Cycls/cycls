@@ -211,6 +211,11 @@ const translations = {
     usePrompt: "Use prompt",
     viewExample: "View",
     continueConversation: "Continue this conversation",
+    followUps: "Suggested follow-up",
+    followUpHint: "Send — press ↑ to edit",
+    verbSuggest: "suggested a follow-up",
+    on: "On",
+    off: "Off",
   },
   ar: {
     thinking: "يفكر",
@@ -422,6 +427,11 @@ const translations = {
     usePrompt: "استخدم الرسالة",
     viewExample: "عرض",
     continueConversation: "أكمل هذه المحادثة",
+    followUps: "الخطوة التالية المقترحة",
+    followUpHint: "إرسال — اضغط ↑ للتعديل",
+    verbSuggest: "اقترح خطوة تالية",
+    on: "مفعّل",
+    off: "معطّل",
   },
 } as const;
 

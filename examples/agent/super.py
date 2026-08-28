@@ -100,7 +100,9 @@ llm = (
     # .tools(TOOLS)  # custom tool JSON schemas
     # .on("render_image", render_image, label=lambda inp: inp.get("alt", ""))
     #   register a handler; label renders the UI step line, e.g. render_image(a cat)
-    .allowed_tools(["Bash", "Editor", "WebSearch", "DataBase", "Canvas"])
+    .allowed_tools(["Bash", "Editor", "WebSearch", "DataBase", "Canvas", "Suggest"])
+    # "Suggest": ONE follow-up chip above the composer after each answer,
+    # steering toward a finished artifact; users switch it off in Settings.
     # .thinking("low")  # unified reasoning across providers: "low" | "medium" | "high"
     # .vision(False)  # text-only model: attached media stays in the workspace with a note
     # .extra_body({"reasoning_effort": "low"})  # vendor extras merged last — your keys win

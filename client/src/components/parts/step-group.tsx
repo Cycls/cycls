@@ -17,6 +17,7 @@ const VERB_KEYS = {
   Database: "verbDatabase",
   Canvas: "verbCanvas",
   Skill: "verbSkill",
+  Suggest: "verbSuggest",
 } as const;
 
 function summarize(items: Part[]) {

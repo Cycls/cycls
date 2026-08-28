@@ -15,7 +15,7 @@ from . import events
 from .events import Turn
 from .compact import COMPACT_BUFFER
 from ..logs import log
-from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
+from .prompts import DEFAULT_SYSTEM, SUGGEST_GUIDANCE, workspace_instructions, fence_instructions
 from .providers import make_provider
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips
 from ..tools import skills as skills_mod
@@ -158,6 +158,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     messages = session.messages
 
     system_text = DEFAULT_SYSTEM + ("\n\n" + system if system else "")
+    # The behavior rides with the tool: operators opt in via allowed_tools and
+    # never have to remember matching prompt copy.
+    if "Suggest" in (allowed_tools or []):
+        system_text += "\n\n" + SUGGEST_GUIDANCE
     if instructions:
         try:
             agent_md = await asyncio.to_thread(workspace_instructions, workspace.root, instructions)
@@ -313,11 +317,14 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     model=bare_model, tool=block["name"], ms=ms, ok=ok,
                     output_bytes=len(out) if isinstance(out, (str, bytes)) else None)
                 if not ok: out = f"Error: {out}"
-                # A tool that returns a UI event (e.g. `canvas`) drives the client
-                # and the model gets a short ack — keeps tool_result a valid string.
+                # A tool that returns a UI event (e.g. `canvas`, `suggest`) drives
+                # the client and the model gets a short ack — keeps tool_result a
+                # valid string. An `ack` key overrides the default wording and is
+                # stripped before the event reaches the client.
                 if ok and isinstance(out, dict) and out.get("type") == "ui":
+                    ack = out.pop("ack", None)
                     yield out
-                    content = f"Opened {out.get('name') or out.get('path') or 'the file'} for the user."
+                    content = ack or f"Opened {out.get('name') or out.get('path') or 'the file'} for the user."
                 # Custom-handler results flow through the stream for the body to see
                 # (UI rendering) AND serialize into tool_result for the model (data).
                 elif handlers and block["name"] in handlers and ok:
