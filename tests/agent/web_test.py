@@ -499,6 +499,109 @@ def test_share_router_file_share(tmp_path):
     assert r.headers["cache-control"] == "no-cache"
 
 
+def _seed_canvas_chat(ws, chat_id="c1", title="Site build"):
+    """A chat that produced a canvas artifact (site.html), plus one canvas
+    call that errored (broken.html) — the shareable surface is only the
+    successful one."""
+    from cycls._agent import state as chat
+    import asyncio
+
+    async def seed():
+        await chat.put_meta(ws, chat_id, {"id": chat_id, "title": title})
+        await chat.append_messages(ws, chat_id, [
+            {"role": "user", "content": "make a site"},
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "canvas", "input": {"path": "site.html"}},
+                {"type": "tool_use", "id": "t2", "name": "canvas", "input": {"path": "broken.html"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "opened"},
+                {"type": "tool_result", "tool_use_id": "t2", "content": "Error: no such file", "is_error": True},
+            ]},
+            {"role": "assistant", "content": "done"},
+        ], 0)
+    asyncio.run(seed())
+    ws.root.mkdir(parents=True, exist_ok=True)
+    (ws.root / "site.html").write_text("<h1>site</h1>")
+    (ws.root / "broken.html").write_text("half-written")
+    (ws.root / "secret.txt").write_text("not shared")
+
+
+def test_chat_share_serves_canvas_files(tmp_path):
+    """A chat share's file route covers the canvas artifacts the conversation
+    produced — the shared page shows the chat WITH its output on one token.
+    Errored canvas calls and unrelated workspace files stay off-limits."""
+    from cycls._app.db import workspace
+
+    svc, user, client = _share_test_app(tmp_path)
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    _seed_canvas_chat(ws)
+
+    token = client.post("/share", json={"path": "chat/c1"}).json()["token"]
+    r = client.get(f"/share/user_test/{token}/file/site.html")
+    assert r.status_code == 200 and r.content == b"<h1>site</h1>"
+    assert client.get(f"/share/user_test/{token}/file/broken.html").status_code == 403
+    assert client.get(f"/share/user_test/{token}/file/secret.txt").status_code == 403
+
+
+def test_examples_resolves_cards(tmp_path):
+    """/examples turns configured share URLs into gallery cards — title,
+    first prompt, final artifact — with author fields stripped and dead
+    tokens skipped."""
+    from types import SimpleNamespace
+    from cycls._app.db import workspace
+
+    svc, user, client = _share_test_app(tmp_path)
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    _seed_canvas_chat(ws)
+
+    url = client.post("/share", json={"path": "chat/c1", "author_name": "Alice"}).json()["url"]
+    svc.config = SimpleNamespace(examples=[
+        {"label": "Sites", "label_ar": "مواقع", "urls": [url, "/shared/user_test/dead_token"]}])
+
+    data = client.get("/examples").json()
+    assert [c["label"] for c in data["categories"]] == ["Sites"]
+    assert data["categories"][0]["label_ar"] == "مواقع"
+    (item,) = data["categories"][0]["items"]
+    assert item["title"] == "Site build"
+    assert item["prompt"] == "make a site"
+    assert item["file"]["path"] == "site.html"
+    assert "author_name" not in item
+    assert item["share"].endswith("example=1")
+    # The card's pieces are live: the file URL serves and the share resolves.
+    assert client.get(item["file"]["url"]).status_code == 200
+    assert client.get(item["share"].replace("/shared/", "/share/").split("?")[0] + "/data").status_code == 200
+
+
+def test_examples_empty_without_config(tmp_path):
+    svc, user, client = _share_test_app(tmp_path)
+    assert client.get("/examples").json() == {"categories": []}
+
+
+def test_examples_builder_normalizes_labels():
+    """String keys are the label for both locales; a (en, ar) tuple key gives
+    the pill an Arabic label, mirroring explore's title/title_ar."""
+    import cycls
+    w = cycls.Web().examples({"A": ["u1"], ("B", "ب"): ["u2"]})
+    assert w._examples == [{"label": "A", "label_ar": None, "urls": ["u1"]},
+                           {"label": "B", "label_ar": "ب", "urls": ["u2"]}]
+    assert cycls.Web().examples(["u"])._examples == [{"label": "", "label_ar": None, "urls": ["u"]}]
+
+
+def test_examples_skips_non_public_shares(tmp_path):
+    """Org-scoped shares never leak through the public gallery."""
+    from types import SimpleNamespace
+    from cycls._app.db import workspace
+
+    svc, user, client = _share_test_app(tmp_path)
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    _seed_canvas_chat(ws)
+
+    url = client.post("/share", json={"path": "chat/c1", "audience": "org:org_acme"}).json()["url"]
+    svc.config = SimpleNamespace(examples=[{"label": "Sites", "urls": [url]}])
+    assert client.get("/examples").json() == {"categories": []}
+
+
 def test_validator_rejects_query_token(tmp_path):
     """Regression: `?token=` in the query MUST NOT authenticate (Codespace proxy
     can inject stray Bearers; URL tokens leak via logs/Referer). Bearer header only."""

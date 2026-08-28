@@ -27,6 +27,7 @@ import { useUrlParam } from "../hooks/use-url-param";
 import { useMediaQuery } from "../hooks/use-media-query";
 import { usePaneWidth } from "../hooks/use-pane-width";
 import { SUGGESTIONS } from "./suggestions-data";
+import { ExamplesGallery } from "./examples";
 
 export interface PassAgent {
   slug: string;
@@ -86,7 +87,7 @@ export function Chat({ chat, onShare, files, account, config }: {
 }) {
   const { messages, isStreaming, chatLoading, chatId, send: onSend, retry: onRetry, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, setUIHandler } = chat;
   const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
-  const { name, pass_metadata: passMetadata, voice, suggestions } = config ?? {};
+  const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
   const lang = useLang();
   const { error: toastError } = useToast();
@@ -100,7 +101,13 @@ export function Chat({ chat, onShare, files, account, config }: {
   const inputPlaceholder = meta
     ? (isAr ? `اسأل ${meta.name} - اكتب @ لذكر ملف` : `Ask ${meta.name} - @ to mention a file`)
     : undefined;
-  const [input, setInput] = useState("");
+  // A prompt drafted before sign-in (public shell, example card) survives the
+  // auth round-trip here — consumed once, so later remounts start clean.
+  const [input, setInput] = useState(() => {
+    const draft = sessionStorage.getItem("cycls_draft");
+    if (draft) sessionStorage.removeItem("cycls_draft");
+    return draft || "";
+  });
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [exploreOpen, setExploreOpen] = useState(false);
   const [exploreAgents, setExploreAgents] = useState<PassAgent[]>([]);
@@ -558,24 +565,31 @@ export function Chat({ chat, onShare, files, account, config }: {
       <LayoutGroup>
         <LoadingBar active={chatLoading} />
         {!chatLoading && (isEmpty ? (
+          examplesEnabled ? (
+            // With a gallery the empty screen is a page that scrolls: hero and
+            // composer centered in the viewport, category chips and the top of
+            // the cards peeking below the fold.
+            <div className="flex-1 overflow-y-auto">
+              <div className="mx-auto flex w-full max-w-5xl flex-col items-center px-6 pb-16">
+                {/* justify-end + half-viewport height lands the composer's
+                    bottom at mid-page (true center, hero above), and the
+                    gallery hangs right below it. */}
+                <div className="flex min-h-[calc(50dvh-2rem)] w-full flex-col items-center justify-end">
+                  {meta && <EmptyHero meta={meta} />}
+                  <div className="w-full max-w-3xl">
+                    <InputBox {...inputProps} />
+                  </div>
+                </div>
+                <ExamplesGallery
+                  className="mt-5"
+                  onUsePrompt={(text) => { setInput(text); textareaRef.current?.focus(); }}
+                />
+              </div>
+            </div>
+          ) : (
           <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16 pt-40 sm:pt-0">
             <div className="relative max-w-3xl w-full">
-              {meta && (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ delay: 0.4 }}
-                  className="absolute bottom-full left-0 right-0 flex flex-col items-center gap-4 mb-10 text-center"
-                >
-                  {meta.logo && (meta.logo.startsWith("<") ? (
-                    <div className="size-16 rounded-xl overflow-hidden border border-border" dangerouslySetInnerHTML={{ __html: meta.logo }} />
-                  ) : (
-                    <img src={meta.logo} alt="" className="size-16 rounded-xl object-cover border border-border" />
-                  ))}
-                  <h2 className="text-2xl font-semibold text-foreground">{meta.name}</h2>
-                  {meta.description && <p className="text-base text-muted-foreground max-w-lg">{meta.description}</p>}
-                </motion.div>
-              )}
+              {meta && <EmptyHero meta={meta} absolute />}
               <InputBox {...inputProps} />
               {suggestions && (
                 <div className="relative">
@@ -590,6 +604,7 @@ export function Chat({ chat, onShare, files, account, config }: {
               )}
             </div>
           </div>
+          )
         ) : (
           <>
             <div ref={scrollRef} className="isolate relative flex-1 overflow-y-auto" dir="ltr">
@@ -1020,7 +1035,35 @@ function Star({ filled, className }: { filled: boolean; className?: string }) {
   );
 }
 
-function Suggestions({
+// The empty screen's brand hero. `absolute` floats it above the centered
+// input (the classic layout); in flow it stacks over input + gallery. Also
+// rendered by the signed-out public shell (App.tsx), same face both sides.
+export function EmptyHero({ meta, absolute }: {
+  meta: { name: string; description?: string; logo?: string };
+  absolute?: boolean;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ delay: 0.4 }}
+      className={cn(
+        "flex flex-col items-center gap-4 text-center",
+        absolute ? "absolute bottom-full left-0 right-0 mb-10" : "mb-10",
+      )}
+    >
+      {meta.logo && (meta.logo.startsWith("<") ? (
+        <div className="size-16 rounded-xl overflow-hidden border border-border" dangerouslySetInnerHTML={{ __html: meta.logo }} />
+      ) : (
+        <img src={meta.logo} alt="" className="size-16 rounded-xl object-cover border border-border" />
+      ))}
+      <h2 className="text-2xl font-semibold text-foreground">{meta.name}</h2>
+      {meta.description && <p className="text-base text-muted-foreground max-w-lg">{meta.description}</p>}
+    </motion.div>
+  );
+}
+
+export function Suggestions({
   onSelect,
   onPreview,
   input,

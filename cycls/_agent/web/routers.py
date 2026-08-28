@@ -7,6 +7,7 @@ import asyncio, os, secrets, shutil, tempfile, time, unicodedata, uuid, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlsplit, parse_qs
 from fastapi import APIRouter, Depends, Request, Response, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
@@ -86,6 +87,20 @@ def to_ui_messages(raw):
                 out[-1]["content"] += "".join(texts); out[-1]["parts"] += parts
             else:
                 out.append({"role": "assistant", "content": "".join(texts), "parts": parts})
+    return out
+
+
+def canvas_files(messages):
+    """Workspace files produced by the conversation's successful Canvas calls
+    (UI shape from `to_ui_messages`), in order of appearance. These are part
+    of a chat's shareable surface, same as its attachments: a shared chat
+    serves them, a fork copies them."""
+    out = []
+    for m in messages:
+        for p in (m.get("parts") or []):
+            if p.get("type") == "step" and p.get("tool_name") == "Canvas" \
+                    and p.get("step") and p.get("ok") is not False and p["step"] not in out:
+                out.append(p["step"])
     return out
 
 
@@ -721,17 +736,78 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
     ):
         ws_owner, row = await _resolve_or_403(user, token, bearer, ws)
         path = row["path"]
-        # Authorize: file_path must be the share's file (file share) or an attachment of its chat.
+        # Authorize: file_path must be the share's file (file share), or part of
+        # its chat's shareable surface — an attachment, or a canvas artifact the
+        # conversation produced (the shared page shows the chat WITH its output).
         if path.startswith("file/"):
             if file_path != path[5:]:
                 raise HTTPException(403, "Path not in this share")
         else:
-            raw = await state.load_messages(ws_owner, path[5:])
-            allowed = {att.get("path") for m in to_ui_messages(raw)
+            ui = to_ui_messages(await state.load_messages(ws_owner, path[5:]))
+            allowed = {att.get("path") for m in ui
                        for att in (m.get("attachments") or []) if att.get("path")}
+            allowed.update(canvas_files(ui))
             if file_path not in allowed:
                 raise HTTPException(403, "Not an attachment of this share")
         return _serve_file(ws_owner.root, file_path)
+
+    # ---- Examples (curated public shares — the empty-screen gallery) ----
+
+    _examples_cache = {"at": 0.0, "data": None}
+
+    async def _example_card(url):
+        """One configured share URL → a gallery card, or None (bad URL, dead
+        token, non-public, not a chat). Author fields are deliberately absent:
+        examples read as product showcase, not user content."""
+        parts = urlsplit(url)
+        seg = parts.path.strip("/").split("/")
+        if len(seg) != 3 or seg[0] != "shared":
+            log("warn", chat_id=None, message=f"examples: not a share URL: {url}")
+            return None
+        user, token = seg[1], seg[2]
+        ws_q = (parse_qs(parts.query).get("ws") or [None])[0]
+        found = await _locate(user, token, ws_q)
+        if found is None:
+            log("warn", chat_id=None, message=f"examples: share not found: {url}")
+            return None
+        ws_owner, row = found
+        if row.get("audience", "public") != "public" or not row.get("path", "").startswith("chat/"):
+            log("warn", chat_id=None, message=f"examples: needs a public chat share: {url}")
+            return None
+        chat_id = row["path"][5:]
+        meta = await state.get_meta(ws_owner, chat_id)
+        if meta is None:
+            return None
+        messages = to_ui_messages(await state.load_messages(ws_owner, chat_id))
+        prompt = next((m.get("content", "") for m in messages if m.get("role") == "user"), "")
+        suffix = f"?ws={ws_owner.ws}" if ws_owner.ws else ""
+        file = None
+        if produced := canvas_files(messages):
+            fp = produced[-1]   # the conversation's final artifact
+            file = {"path": fp, "name": fp.split("/")[-1],
+                    "url": f"/share/{user}/{token}/file/{fp}{suffix}"}
+        sep = "&" if suffix else "?"
+        return {"share": f"/shared/{user}/{token}{suffix}{sep}example=1",
+                "title": meta.get("title", ""), "prompt": prompt, "file": file}
+
+    @r.get("/examples")
+    async def examples(response: Response):
+        """Resolved example cards for the gallery. Public — this is what the
+        signed-out empty screen renders. Cached like /explore: the cards only
+        move when the operator re-curates or the source chats change."""
+        response.headers["Cache-Control"] = "public, max-age=300"
+        groups = getattr(getattr(cycls_app, "config", None), "examples", None)
+        if not groups:
+            return {"categories": []}
+        if _examples_cache["data"] is None or time.time() - _examples_cache["at"] > 300:
+            cats = []
+            for g in groups:
+                items = [c for u in g.get("urls", []) if (c := await _example_card(u))]
+                if items:
+                    cats.append({"label": g.get("label", ""), "label_ar": g.get("label_ar"),
+                                 "items": items})
+            _examples_cache.update(at=time.time(), data={"categories": cats})
+        return _examples_cache["data"]
 
     @r.post("/share/{user}/{token}/fork")
     async def fork_share(user: str, token: str, ws: Optional[str] = None, forker: Any = user_dep):
@@ -758,17 +834,21 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             "forked_from": f"{user}/{source_id}",
         })
         await state.append_messages(ws_fork, new_id, raw, 0)
-        for m in to_ui_messages(raw):
-            for att in m.get("attachments") or []:
-                if ap := att.get("path"):
-                    try:
-                        src = resolve_path(ws_source.root, ap)
-                        dst = resolve_path(ws_fork.root, ap)
-                        if src.is_file():
-                            dst.parent.mkdir(parents=True, exist_ok=True)
-                            shutil.copy2(src, dst)
-                    except Exception:
-                        pass
+        # The fork gets the conversation's whole surface: attachments AND the
+        # canvas artifacts it produced, so "continue" lands with the output
+        # sitting in the forker's workspace, ready to iterate on.
+        ui = to_ui_messages(raw)
+        paths = [ap for m in ui for att in (m.get("attachments") or []) if (ap := att.get("path"))]
+        paths += canvas_files(ui)
+        for ap in dict.fromkeys(paths):
+            try:
+                src = resolve_path(ws_source.root, ap)
+                dst = resolve_path(ws_fork.root, ap)
+                if src.is_file():
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst)
+            except Exception:
+                pass
         return {"id": new_id}
 
     return r

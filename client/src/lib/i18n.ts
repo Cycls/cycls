@@ -208,6 +208,9 @@ const translations = {
     reportIssue: "Report an issue",
     contactUs: "Contact us",
     addCard: "Add card",
+    usePrompt: "Use prompt",
+    viewExample: "View",
+    continueConversation: "Continue this conversation",
   },
   ar: {
     thinking: "يفكر",
@@ -416,6 +419,9 @@ const translations = {
     reportIssue: "الإبلاغ عن مشكلة",
     contactUs: "تواصل معنا",
     addCard: "إضافة بطاقة",
+    usePrompt: "استخدم الرسالة",
+    viewExample: "عرض",
+    continueConversation: "أكمل هذه المحادثة",
   },
 } as const;
 

@@ -48,6 +48,7 @@ class Web:
         self._seo: Optional[dict] = None
         self._head: Optional[str] = None
         self._explore: Optional[list] = None
+        self._examples: Optional[dict] = None
         self._og_bytes: Optional[bytes] = None
         self._og_url: Optional[str] = None
         self._favicon: Optional[str] = None
@@ -149,6 +150,28 @@ class Web:
                 "link": a.get("url") or a.get("link", ""),
             })
         return self._copy(_explore=out)
+
+    def examples(self, shares):
+        """Curated example gallery on the empty-chat screen — share URLs of
+        real conversations minted by this agent, grouped by category pill:
+        `{"Landing pages": [share_url, ...], ...}`, or a flat list for a
+        single uncategorized grid. A tuple key gives the pill both locales:
+        `{("Data analysis", "تحليل البيانات"): [...]}` — (en, ar), same as
+        the explore menu's title/title_ar. Resolved server-side at
+        GET /examples (title, prompt, artifact); the FE renders each card's
+        artifact through the canvas. Requires auth (shares live in
+        workspaces)."""
+        if isinstance(shares, (list, tuple)):
+            shares = {"": list(shares)}
+        if not isinstance(shares, dict) or not all(
+                isinstance(v, (list, tuple)) and all(isinstance(u, str) for u in v)
+                for v in shares.values()):
+            raise TypeError("examples takes {category: [share_url, ...]} or [share_url, ...]")
+        out = []
+        for k, v in shares.items():
+            label, label_ar = k if isinstance(k, tuple) else (k, None)
+            out.append({"label": label, "label_ar": label_ar, "urls": list(v)})
+        return self._copy(_examples=out or None)
 
     def analytics(self, on: bool = True):
         return self._copy(_analytics=on)
