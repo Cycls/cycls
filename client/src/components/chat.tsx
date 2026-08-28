@@ -20,7 +20,7 @@ import type { Attachment, ChatApi, AppConfig } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
 import { track } from "../lib/posthog";
-import { toggleDark, cn } from "../lib/utils";
+import { toggleDark, cn, followUpsEnabled } from "../lib/utils";
 import { useToast } from "../lib/toast";
 import { useSpeechRecognition } from "../hooks/use-speech";
 import { useUrlParam } from "../hooks/use-url-param";
@@ -125,6 +125,19 @@ export function Chat({ chat, onShare, files, account, config }: {
   }, []);
   const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats" | "apps">(() =>
     (sessionStorage.getItem("cycls_panel_tab") as "files" | "shares" | "chats") || (account ? "chats" : "files"));
+  // The agent's `suggest` tool offers ONE follow-up message at a time — a
+  // chip above the composer; click sends it, ArrowUp pulls it in to edit.
+  const [followUp, setFollowUp] = useState<string | null>(null);
+  const [followUpsOn, setFollowUpsOn] = useState(followUpsEnabled);
+  useEffect(() => {
+    const sync = () => {
+      setFollowUpsOn(followUpsEnabled());
+      if (!followUpsEnabled()) setFollowUp(null);
+    };
+    window.addEventListener("followupschange", sync);
+    return () => window.removeEventListener("followupschange", sync);
+  }, []);
+  useEffect(() => { setFollowUp(null); }, [chatId]);
   const [canvasTabs, setCanvasTabs] = useState<CanvasFile[]>([]);
   const [canvasActive, setCanvasActive] = useState<string | null>(null);
   const [canvasHidden, setCanvasHidden] = useState(false);
@@ -196,6 +209,8 @@ export function Chat({ chat, onShare, files, account, config }: {
         const app = appsRef.current.find((a) => a.entry === ev.path);
         if (app) openApp(app);
         else openFileInCanvas(ev.path, typeof ev.name === "string" ? ev.name : undefined);
+      } else if (ev.action === "suggest" && typeof ev.text === "string") {
+        if (followUpsEnabled()) setFollowUp(ev.text);
       }
     });
     return () => setUIHandler(null);
@@ -283,6 +298,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     const sendAttachments = attachments.length > 0 ? [...attachments] : undefined;
     setInput("");
     setAttachments([]);
+    setFollowUp(null);
     onSend(text, sendAttachments, origin);
     setTimeout(() => scrollToBottom(), 0);
   }, [input, isStreaming, onSend, attachments, scrollToBottom]);
@@ -294,6 +310,14 @@ export function Chat({ chat, onShare, files, account, config }: {
     if (e.key === "Enter" && !e.shiftKey && !isMobile) {
       e.preventDefault();
       handleSubmit();
+    }
+    // Shell-style accept: ArrowUp in an empty composer pulls the suggested
+    // follow-up in for editing; Enter then sends it.
+    if (e.key === "ArrowUp" && !input && followUp) {
+      e.preventDefault();
+      setInput(followUp);
+      setFollowUp(null);
+      track("followup_accepted", { method: "arrow" });
     }
   };
 
@@ -632,6 +656,16 @@ export function Chat({ chat, onShare, files, account, config }: {
             </div>
             <div className="shrink-0 px-6 pb-2 pt-1">
               <div className="max-w-3xl mx-auto">
+                {followUpsOn && followUp && !isStreaming && (
+                  <FollowUpChip
+                    text={followUp}
+                    onAccept={() => {
+                      track("followup_accepted", { method: "click" });
+                      handleSubmit(followUp, "follow_up");
+                    }}
+                    onDismiss={() => setFollowUp(null)}
+                  />
+                )}
                 <InputBox {...inputProps} />
               </div>
             </div>
@@ -1032,6 +1066,44 @@ function Star({ filled, className }: { filled: boolean; className?: string }) {
     <svg className={className} fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
     </svg>
+  );
+}
+
+// The one suggested follow-up (the agent's `suggest` tool) — a single chip
+// above the composer. Click sends it; ArrowUp (empty composer) pulls it in
+// for editing; it clears on any send.
+function FollowUpChip({ text, onAccept, onDismiss }: {
+  text: string;
+  onAccept: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.15 }}
+      className="mb-2 flex justify-start px-1"
+    >
+      {/* Logical padding (ps/pe) so the text side keeps its inset in RTL;
+          long suggestions wrap inside the composer's width. */}
+      <div className="flex max-w-full items-center gap-0.5 rounded-2xl border border-border bg-background py-1.5 ps-3.5 pe-1.5 shadow-sm">
+        <button
+          onClick={onAccept}
+          title={t("followUpHint")}
+          className="min-w-0 text-start text-sm leading-snug break-words text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          dir="auto"
+        >
+          {text}
+        </button>
+        <button
+          onClick={onDismiss}
+          className="shrink-0 rounded-full p-1 text-muted-foreground/60 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+          aria-label="Dismiss"
+        >
+          <Icon name="x" className="size-3" />
+        </button>
+      </div>
+    </motion.div>
   );
 }
 

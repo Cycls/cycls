@@ -216,12 +216,33 @@ _BUILD_APP_TOOL = {
     }, "required": ["slug", "source"]}
 }
 
+_SUGGEST_TOOL = {
+    "type": "custom",
+    "name": "suggest",
+    "description": (
+        "Offer the user ONE suggested follow-up message — the single most "
+        "useful next step, shown as a one-tap chip above the composer. Write "
+        "it as a message the user would send (their voice, their language), "
+        "short enough to read at a glance.\n"
+        "Prefer steps that move the session toward a FINISHED deliverable — "
+        "'Turn this into a document', 'Make this a web page' — over "
+        "open-ended exploration.\n"
+        "Call at most once per turn, as your LAST action, after the answer "
+        "is complete. Skip it when you asked the user a question or the turn "
+        "already ended in the final artifact."
+    ),
+    "input_schema": {"type": "object", "properties": {
+        "text": {"type": "string", "description": "The follow-up message, in the user's voice and language (aim for under 80 characters)."},
+    }, "required": ["text"]}
+}
+
 _BUILTINS = {
     "Bash":     [_BASH_TOOL],
     "Editor":   [_READ_TOOL, _EDIT_TOOL],
     "DataBase": [_DATABASE_TOOL],
     "Canvas":   [_CANVAS_TOOL],
     "MiniApp":  [_BUILD_APP_TOOL],
+    "Suggest":  [_SUGGEST_TOOL],
 }
 
 
@@ -446,6 +467,17 @@ async def _exec_canvas(inp, workspace):
             **_app_identity(path, path.name)}
 
 
+async def _exec_suggest(inp):
+    """No workspace effect — the suggestion drives the client (a one-tap chip
+    above the composer). `ack` is what the model reads back (the loop strips
+    it before forwarding the event)."""
+    text = str(inp.get("text", "")).strip()
+    if not text:
+        return "Error: suggestion text is empty"
+    return {"type": "ui", "action": "suggest", "text": text[:200],
+            "ack": "Suggestion offered to the user."}
+
+
 def _app_identity(path, fallback):
     """A mini app opens under its manifest name and icon, not `index.html`."""
     if path.name != "index.html" or path.parent.parent.name != "apps":
@@ -602,6 +634,8 @@ _TOOLS = {
                                 "step": f"{inp.get('command', '')} {inp.get('key') or inp.get('prefix', '')}".strip()}),
     "canvas":     (lambda inp, ws, **_: _exec_canvas(inp, ws.root),
                    lambda inp: {"tool_name": "Canvas", "step": inp.get("path", "")}),
+    "suggest":    (lambda inp, ws, **_: _exec_suggest(inp),
+                   lambda inp: {"tool_name": "Suggest", "step": inp.get("text", "")}),
     "build_app":  (lambda inp, ws, **_: _exec_build_app(inp, ws.root),
                    lambda inp: {"tool_name": "Building app", "step": inp.get("slug", "")}),
     "skill":      (lambda inp, ws, **_: skills._exec_skill(inp, ws.root),

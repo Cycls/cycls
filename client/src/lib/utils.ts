@@ -29,3 +29,17 @@ export function setThemeMode(mode: ThemeMode, source: string) {
 export function toggleDark(source: string) {
   setThemeMode(document.body.classList.contains("dark") ? "light" : "dark", source);
 }
+
+// Suggested follow-up chip (the agent's `suggest` tool). Per-device
+// preference; a window event keeps the open chat in sync with settings.
+const FOLLOWUPS_KEY = "cycls_followups";
+
+export const followUpsEnabled = () => {
+  try { return localStorage.getItem(FOLLOWUPS_KEY) !== "off"; } catch { return true; }
+};
+
+export function setFollowUpsEnabled(on: boolean, source: string) {
+  localStorage.setItem(FOLLOWUPS_KEY, on ? "on" : "off");
+  window.dispatchEvent(new Event("followupschange"));
+  track("followups_toggled", { to: on, source });
+}
