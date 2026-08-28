@@ -67,6 +67,7 @@ export interface AppConfig {
   max_upload?: number;   // per-file upload cap in MB
   explore_enabled?: boolean;
   explore?: { slug: string; title: string; title_ar?: string; description: string; description_ar?: string; icon_svg?: string; link: string }[] | null;
+  examples_enabled?: boolean;   // curated example gallery on the empty screen (cards from GET /examples)
   workspaces?: string | null;   // multi-workspace mode: null off, else team-create policy ("member"|"admin")
 }
 

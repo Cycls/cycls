@@ -20,6 +20,7 @@ import { useLang, setLang, t } from "./lib/i18n";
 import { toggleDark } from "./lib/utils";
 import { IconButton } from "./components/icon";
 import { Chat, type AccountInfo, type FilesPanelProps } from "./components/chat";
+import { PublicHome } from "./components/public-home";
 import { SharedView } from "./components/shared-view";
 import { useChat, AppConfig } from "./hooks/use-chat";
 import { useFiles, useRefreshOnTurnEnd } from "./hooks/use-files";
@@ -663,8 +664,22 @@ export default function App() {
         <ChatAppKeyed config={config} />
       </SignedIn>
       <SignedOut>
-        <CustomSignIn />
+        <PublicGate config={config} />
       </SignedOut>
     </ClerkProvider>
   );
+}
+
+// No sign-in wall: signed-out visitors get the explorable public shell and
+// meet CustomSignIn only when they act (send, fork, the header button). URLs
+// that already carry intent (?fork= from "continue this conversation", ?q=
+// auto-send, ?plans=) go straight to sign-in — the wall was the right page
+// for those.
+function PublicGate({ config }: { config: AppConfig | null }) {
+  const [signingIn, setSigningIn] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.has("fork") || params.has("q") || params.has("plans");
+  });
+  if (signingIn) return <CustomSignIn />;
+  return <PublicHome config={config} onSignIn={() => setSigningIn(true)} />;
 }

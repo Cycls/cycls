@@ -35,6 +35,8 @@ class Config(BaseModel):
     og: Optional[str] = None          # og:image URL when external; custom bytes ride _og_image
     explore: Optional[list] = None    # static explore menu (contract-shaped entries)
     explore_enabled: bool = False     # FE shows the agents dropdown
+    examples: Optional[list] = None   # [{label, label_ar, urls}] — resolved at GET /examples
+    examples_enabled: bool = False    # FE shows the example gallery on the empty screen
     colors: Optional[dict] = None     # {primary, secondary, primary_dark, secondary_dark}
     _og_image: Optional[bytes] = PrivateAttr(default=None)  # custom og card, served at /og.png
 
@@ -42,9 +44,10 @@ class Config(BaseModel):
         self.prod = prod
 
     def public(self):
-        """Config as sent to the browser — cms (bearer token) and volume
-        (internal mount path) stay server-side."""
-        return self.model_dump(exclude={"cms", "volume"})
+        """Config as sent to the browser — cms (bearer token), volume
+        (internal mount path) and the raw examples mapping (the FE reads the
+        resolved cards from /examples) stay server-side."""
+        return self.model_dump(exclude={"cms", "volume", "examples"})
 
     @property
     def storage(self) -> str:

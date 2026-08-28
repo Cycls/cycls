@@ -535,6 +535,34 @@ def test_fork_team_share_lands_in_forker_personal(tmp_path):
     assert [c["title"] for c in forked] == ["Team chat"]
 
 
+def test_fork_copies_canvas_outputs(tmp_path):
+    """Continue-this-conversation lands with the chat's canvas artifact in the
+    forker's workspace — the fork copies the conversation's whole surface,
+    not just attachments."""
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    h = {"X-Workspace": ws_id}
+    client.put("/chats/c1", json={"title": "Team chat"}, headers=h)
+    from cycls._app.db import workspace as _workspace
+    team_ws = _workspace("org_1:user_1", tmp_path, base=f"file://{tmp_path}", ws=ws_id)
+    _run(state.append_messages(team_ws, "c1", [
+        {"role": "user", "content": "make a site"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "canvas", "input": {"path": "site.html"}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "opened"}]},
+    ], 0))
+    team_ws.root.mkdir(parents=True, exist_ok=True)
+    (team_ws.root / "site.html").write_text("<h1>site</h1>")
+    token = client.post("/share", json={"path": "chat/c1"}, headers=h).json()["token"]
+
+    r = client.post(f"/share/org_1:user_1/{token}/fork?ws={ws_id}",
+                    headers={"X-Test-User": "user_2"})
+    assert r.status_code == 200
+    forker_ws = _workspace("org_1:user_2", tmp_path, base=f"file://{tmp_path}", ws="u-user_2")
+    assert (forker_ws.root / "site.html").read_text() == "<h1>site</h1>"
+
+
 def test_list_chats_heals_wiped_meta(tmp_path, monkeypatch):
     """gcsfuse moves drop GCS custom metadata; the sidebar listing must fall
     back to the canonical body and rewrite the meta channel."""

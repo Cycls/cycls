@@ -3,10 +3,12 @@ import { MessageBubble } from "./message";
 import { CyclsLogo } from "./cycls-logo";
 import { Icon, IconButton } from "./icon";
 import { useFileContent, CanvasDoc, type CanvasFile } from "./canvas";
-import { isHtml, isRenderable, saveBlob } from "./canvas-utils";
+import { isHtml, isRenderable, saveBlob, extTint } from "./canvas-utils";
 import type { Message } from "../hooks/use-chat";
+import { useMediaQuery } from "../hooks/use-media-query";
+import { t } from "../lib/i18n";
 import { track } from "../lib/posthog";
-import { toggleDark } from "../lib/utils";
+import { toggleDark, cn } from "../lib/utils";
 
 interface Author {
   author_name?: string;
@@ -120,30 +122,220 @@ export function SharedView({ getToken, signedIn, onSignIn }: {
 
   if (!data) return null;
   if (data.type === "file") return <SharedFile share={data} getToken={getToken} />;
+  return <SharedChat share={data} getToken={getToken} />;
+}
+
+// Canvas artifacts the conversation produced, in order — same derivation the
+// live chat uses for file cards (message.tsx groupKind).
+export function canvasArtifacts(messages: Message[]) {
+  const out: string[] = [];
+  for (const m of messages)
+    for (const p of m.parts || [])
+      if (p.type === "step" && p.tool_name === "Canvas" && p.step && p.ok !== false && !out.includes(p.step))
+        out.push(p.step);
+  return out;
+}
+
+// Chat share — the conversation WITH its output: transcript beside the canvas,
+// every artifact pre-opened as a tab (same strip as the owner's canvas), the
+// final one active. A floating "continue" pill rides the scroll — the page's
+// one conversion affordance is never out of sight.
+function SharedChat({ share, getToken }: { share: ChatShare; getToken?: () => Promise<string | null> }) {
+  const params = new URLSearchParams(window.location.search);
+  // Curated example (?example=1): product showcase, not user content — no
+  // author chrome. Regular shares keep their attribution.
+  const isExample = params.has("example");
+  const isDesktop = useMediaQuery("(min-width: 1024px)");
+  const artifacts = useMemo(() => canvasArtifacts(share.messages), [share.messages]);
+  const [tabs, setTabs] = useState<string[]>(artifacts);
+  // ?open= deep-links a file (activates everywhere); otherwise the final
+  // artifact is active on desktop, and mobile keeps the transcript first
+  // (file cards open the pane).
+  const [active, setActive] = useState<string | null>(() =>
+    params.get("open")
+    || (window.matchMedia("(min-width: 1024px)").matches ? artifacts[artifacts.length - 1] || null : null));
+
+  const openFromCard = (p: string) => {
+    setTabs((ts) => (ts.includes(p) ? ts : [...ts, p]));
+    setActive(p);
+  };
+  // Browser-tab semantics: closing the active tab activates its neighbor;
+  // closing the last one hides the pane (cards in the transcript reopen it).
+  const closeTab = (p: string) => {
+    setTabs((ts) => {
+      const rest = ts.filter((x) => x !== p);
+      setActive((a) => (a === p ? rest[rest.length - 1] ?? null : a));
+      return rest;
+    });
+  };
+
+  const fork = () => {
+    const userToken = window.location.pathname.replace(/^\/shared\//, "") + window.location.search;
+    track("share_fork_clicked", { share_url: window.location.href, example: isExample });
+    window.location.href = `/?fork=${encodeURIComponent(userToken)}`;
+  };
+
+  const pane = active && (
+    <SharedCanvas
+      tabs={tabs}
+      active={active}
+      getToken={getToken}
+      onSelectTab={setActive}
+      onCloseTab={closeTab}
+      onClose={() => setActive(null)}
+    />
+  );
 
   return (
     <div className="h-dvh flex flex-col bg-background">
       <ShareHeader />
       <div className="shrink-0 h-12" />
 
-      <div className="relative flex-1 overflow-y-auto scrollbar-none">
-        <div className="pointer-events-none sticky top-0 z-10 h-6 -mb-6 bg-[linear-gradient(to_bottom,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
-        <div className="flex w-full flex-col items-center py-4">
-          <ShareChrome {...data} />
-          {data.messages.map((msg, i) => (
-            <MessageBubble key={i} message={msg} isStreaming={false} />
-          ))}
-          <button
-            onClick={() => {
-              const userToken = window.location.pathname.replace(/^\/shared\//, "") + window.location.search;
-              window.location.href = `/?fork=${encodeURIComponent(userToken)}`;
-            }}
-            className="mt-6 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-          >
-            Continue this conversation →
-          </button>
-          <ShareFooter />
+      <div className="flex min-h-0 flex-1">
+        <div className="relative flex h-full min-w-0 flex-1 flex-col">
+          <div className="relative flex-1 overflow-y-auto scrollbar-none">
+            <div className="pointer-events-none sticky top-0 z-10 h-6 -mb-6 bg-[linear-gradient(to_bottom,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
+            <div className="flex w-full flex-col items-center py-4">
+              <ShareChrome {...share} hideAuthor={isExample} />
+              {share.messages.map((msg, i) => (
+                <MessageBubble key={i} message={msg} isStreaming={false} onOpenFile={openFromCard} />
+              ))}
+              <ShareFooter />
+            </div>
+            <div className="pointer-events-none sticky bottom-6 z-20 flex justify-center">
+              <button
+                onClick={fork}
+                className="pointer-events-auto rounded-full bg-foreground px-5 py-2.5 text-sm font-medium text-background shadow-lg hover:opacity-90 transition-opacity cursor-pointer"
+              >
+                {t("continueConversation")}
+              </button>
+            </div>
+          </div>
         </div>
+
+        {pane && (isDesktop ? (
+          <div className="w-[52%] max-w-[880px] min-h-0 shrink-0 p-2 pl-0 sm:p-3 sm:pl-0">{pane}</div>
+        ) : (
+          <div className="fixed inset-0 z-40 bg-background p-2 pt-14">{pane}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Read-only canvas card over the token-scoped /share/.../file/ transport —
+// the same viewer (and the same tab strip) the owner sees, minus the workspace.
+function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose }: {
+  tabs: string[];
+  active: string;
+  getToken?: () => Promise<string | null>;
+  onSelectTab: (path: string) => void;
+  onCloseTab: (path: string) => void;
+  onClose: () => void;
+}) {
+  const path = active;
+  const name = path.split("/").pop() || path;
+  const file = useMemo<CanvasFile>(() => ({ path, name }), [path, name]);
+  const renderable = isRenderable(name);
+  const shareBase = window.location.pathname.replace("/shared/", "/share/");
+  const shareQuery = window.location.search;   // carries ?ws= for team-minted shares
+
+  const authedFetch = useCallback(async (p: string) => {
+    const headers: Record<string, string> = {};
+    if (getToken) { const tk = await getToken(); if (tk) headers.Authorization = `Bearer ${tk}`; }
+    const res = await fetch(`${shareBase}/file/${p}${shareQuery}`, { headers });
+    if (!res.ok) throw new Error("Couldn't load this file");
+    return res;
+  }, [getToken, shareBase, shareQuery]);
+  const readFile = useCallback(async (p: string) => (await authedFetch(p)).text(), [authedFetch]);
+  const openFile = useCallback(async (p: string) => URL.createObjectURL(await (await authedFetch(p)).blob()), [authedFetch]);
+
+  const { content, error } = useFileContent(renderable ? file : null, readFile, openFile);
+  const download = () => openFile(path).then((url) => saveBlob(url, name)).catch(() => {});
+  const openInTab = () => {
+    if (content == null) return;
+    window.open(URL.createObjectURL(new Blob([content], { type: "text/html" })), "_blank");
+  };
+
+  return (
+    <div className="flex h-full min-h-0 flex-col rounded-xl border border-border overflow-hidden bg-background">
+      {/* Tab strip — same anatomy as the owner's canvas (canvas.tsx): one tab
+          per artifact, tint dot, per-tab close revealed on hover. */}
+      <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-2">
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+          {tabs.map((p) => {
+            const tabName = p.split("/").pop() || p;
+            const on = p === path;
+            const tint = extTint(tabName);
+            return (
+              <div
+                key={p}
+                role="button"
+                onClick={() => onSelectTab(p)}
+                className={cn(
+                  "group flex min-w-20 max-w-44 flex-1 basis-0 cursor-pointer items-center gap-1.5 rounded-lg py-1 pl-2.5 pr-1 text-xs transition-colors",
+                  on ? "bg-secondary text-foreground font-medium" : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+                )}
+              >
+                {tint && <span className="size-1.5 rounded-full" style={{ backgroundColor: tint }} />}
+                <span className="min-w-0 flex-1 truncate">{tabName}</span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onCloseTab(p); }}
+                  className={cn("shrink-0 rounded p-0.5 hover:bg-accent/20", on ? "" : "opacity-0 group-hover:opacity-100")}
+                  aria-label={`Close ${tabName}`}
+                >
+                  <Icon name="x" className="size-3" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        {isHtml(name) && content != null && (
+          <button
+            onClick={openInTab}
+            className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer"
+            aria-label="Open in new tab"
+            title="Open in new tab"
+          >
+            <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-7.5 3L21 3m0 0h-5.25M21 3v5.25" />
+            </svg>
+          </button>
+        )}
+        <button
+          onClick={download}
+          className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer"
+          aria-label="Download"
+          title="Download"
+        >
+          <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+          </svg>
+        </button>
+        <button
+          onClick={onClose}
+          className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer"
+          aria-label="Close"
+          title="Close"
+        >
+          <Icon name="x" className="size-4" />
+        </button>
+      </div>
+      <div className="flex-1 overflow-hidden">
+        {renderable ? (
+          <CanvasDoc file={file} content={content} error={error} shared />
+        ) : (
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+            <Icon name="folder" className="size-10 text-muted-foreground/40" strokeWidth={1.5} />
+            <p className="text-sm text-foreground">{name}</p>
+            <button
+              onClick={download}
+              className="mt-1 rounded-lg bg-secondary px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+            >
+              Download {name}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -274,7 +466,17 @@ function ShareChrome({
   author_org_name: authorOrgName,
   author_org_image_url: authorOrgImageUrl,
   shared_at: sharedAt,
-}: Author & { title?: string }) {
+  hideAuthor,
+}: Author & { title?: string; hideAuthor?: boolean }) {
+  // Curated examples show as product, not as someone's share.
+  if (hideAuthor) {
+    if (!title) return null;
+    return (
+      <div className="w-full max-w-3xl px-6 py-10 text-center">
+        <h1 className="text-xl font-medium tracking-tight text-foreground">{title}</h1>
+      </div>
+    );
+  }
   const hasAuthor = !!(authorName || authorImageUrl || authorOrgName || authorOrgImageUrl);
   if (!title && !hasAuthor && !sharedAt) return null;
   return (

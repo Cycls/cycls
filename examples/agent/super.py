@@ -47,6 +47,14 @@ web = (
     .title("The agent for getting things done")
     # .theme("default")   # "default" or "dev"
     # .suggestions(True)  # show starter prompts on the empty chat
+    # Example gallery on the empty screen (docs/notes/examples-gallery.md) —
+    # curate by using the product: chat, Share the conversation (public), paste
+    # the link. One share carries the chat AND its canvas artifact; cards show
+    # the artifact live with "Use prompt" / "View". Takes over from .suggestions().
+    # .examples({
+    #     ("Landing pages", "صفحات هبوط"): ["https://super.cycls.ai/shared/<user>/<token>"],
+    #     ("Data analysis", "تحليل البيانات"): ["https://super.cycls.ai/shared/<user>/<token>"],
+    # })  # tuple key = (en, ar) pill label; a plain string serves both locales
     # .copy_public("assets/logo.png")  # static files served at /public/<name>
     # .workspaces()    # personal + team workspaces (docs/workspaces.md)
     # .max_upload(512) # per-file upload cap in MB
