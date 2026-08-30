@@ -75,10 +75,13 @@ export function ExamplesGallery({ onUsePrompt, className }: {
     <div className={cn("flex w-full flex-col items-center", className)}>
       {/* Category pills — directly under the composer, hanging off its left
           edge like prompt starters, not a centered toolbar. One scrollable
-          row on mobile. */}
-      {labeled.length > 1 && (
+          row on mobile. Shown even for a single category: the pill names what
+          the cards below are, which is worth more than the row it costs.
+          Maps `labeled`, so a category configured without a label can still
+          hold cards without rendering a blank pill. */}
+      {labeled.length > 0 && (
         <div className="flex w-full max-w-3xl justify-start gap-2 overflow-x-auto scrollbar-none px-1 sm:flex-wrap sm:overflow-visible">
-          {categories.map((c) => (
+          {labeled.map((c) => (
             <button
               key={c.label}
               onClick={() => {
