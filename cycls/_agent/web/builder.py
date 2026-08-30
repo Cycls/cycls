@@ -164,13 +164,31 @@ class Web:
         if isinstance(shares, (list, tuple)):
             shares = {"": list(shares)}
         if not isinstance(shares, dict) or not all(
-                isinstance(v, (list, tuple)) and all(isinstance(u, str) for u in v)
-                for v in shares.values()):
+                isinstance(v, (list, tuple)) for v in shares.values()):
             raise TypeError("examples takes {category: [share_url, ...]} or [share_url, ...]")
+
+        def entry(e):
+            # Two kinds of card: a share URL (artifact card — Use prompt /
+            # View), or {"video": url, "title": ...} (tutorial card — a muted
+            # looping preview with one Watch action playing it in-page). The
+            # video is a direct mp4/webm URL, e.g. /public/... or a CDN.
+            if isinstance(e, str):
+                return {"share": e}
+            if isinstance(e, dict) and isinstance(e.get("video"), str) and "share" not in e:
+                out = {"video": e["video"]}
+                if isinstance(e.get("title"), str):
+                    out["title"] = e["title"]
+                return out
+            if isinstance(e, dict) and isinstance(e.get("share"), str) and "video" not in e:
+                return {"share": e["share"]}
+            raise TypeError(
+                "an example entry is a share URL (artifact card) or "
+                f"{{'video': url, 'title': ...}} (tutorial card), not both; got {e!r}")
+
         out = []
         for k, v in shares.items():
             label, label_ar = k if isinstance(k, tuple) else (k, None)
-            out.append({"label": label, "label_ar": label_ar, "urls": list(v)})
+            out.append({"label": label, "label_ar": label_ar, "urls": [entry(e) for e in v]})
         return self._copy(_examples=out or None)
 
     def analytics(self, on: bool = True):

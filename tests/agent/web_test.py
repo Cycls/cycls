@@ -562,6 +562,7 @@ def test_examples_resolves_cards(tmp_path):
     data = client.get("/examples").json()
     assert [c["label"] for c in data["categories"]] == ["Sites"]
     assert data["categories"][0]["label_ar"] == "مواقع"
+    assert "video" not in data["categories"][0]["items"][0]
     (item,) = data["categories"][0]["items"]
     assert item["title"] == "Site build"
     assert item["prompt"] == "make a site"
@@ -571,6 +572,20 @@ def test_examples_resolves_cards(tmp_path):
     # The card's pieces are live: the file URL serves and the share resolves.
     assert client.get(item["file"]["url"]).status_code == 200
     assert client.get(item["share"].replace("/shared/", "/share/").split("?")[0] + "/data").status_code == 200
+
+
+def test_examples_video_entry_is_a_tutorial_card(tmp_path):
+    """A {video, title} entry needs no share resolution — it becomes a
+    tutorial card the FE previews and plays in-page (Watch)."""
+    from types import SimpleNamespace
+
+    svc, user, client = _share_test_app(tmp_path)
+    svc.config = SimpleNamespace(examples=[
+        {"label": "Tutorials", "urls": [
+            {"video": "https://youtu.be/abc123xyz", "title": "Getting started"}]}])
+
+    (item,) = client.get("/examples").json()["categories"][0]["items"]
+    assert item == {"video": "https://youtu.be/abc123xyz", "title": "Getting started"}
 
 
 def test_examples_empty_without_config(tmp_path):
@@ -583,9 +598,19 @@ def test_examples_builder_normalizes_labels():
     the pill an Arabic label, mirroring explore's title/title_ar."""
     import cycls
     w = cycls.Web().examples({"A": ["u1"], ("B", "ب"): ["u2"]})
-    assert w._examples == [{"label": "A", "label_ar": None, "urls": ["u1"]},
-                           {"label": "B", "label_ar": "ب", "urls": ["u2"]}]
-    assert cycls.Web().examples(["u"])._examples == [{"label": "", "label_ar": None, "urls": ["u"]}]
+    assert w._examples == [{"label": "A", "label_ar": None, "urls": [{"share": "u1"}]},
+                           {"label": "B", "label_ar": "ب", "urls": [{"share": "u2"}]}]
+    assert cycls.Web().examples(["u"])._examples == [{"label": "", "label_ar": None, "urls": [{"share": "u"}]}]
+    # Tutorial entries: {"video", "title"} — their own card kind (Watch),
+    # no share involved. share+video in one entry is ambiguous → rejected.
+    w = cycls.Web().examples({"A": [{"video": "/public/tour.mp4", "title": "Getting started"}]})
+    assert w._examples == [{"label": "A", "label_ar": None,
+                            "urls": [{"video": "/public/tour.mp4", "title": "Getting started"}]}]
+    import pytest
+    with pytest.raises(TypeError):
+        cycls.Web().examples({"A": [{"share": "u1", "video": "clip.mp4"}]})
+    with pytest.raises(TypeError):
+        cycls.Web().examples({"A": [{"title": "no url at all"}]})
 
 
 def test_examples_skips_non_public_shares(tmp_path):

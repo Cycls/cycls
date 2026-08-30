@@ -66,7 +66,12 @@ web = cycls.Web().examples({
     ("Data analysis", "تحليل البيانات"): ["/shared/<user>/<tok2>?ws=t-team", ...],
 })
 # tuple key = (en, ar) pill label, mirroring explore's title/title_ar;
-# or uncategorized: .examples(["<share-url>", ...]) — no pills, one grid
+# or uncategorized: .examples(["<share-url>", ...]) — no pills, one grid.
+# An entry may instead be {"video": url, "title": ...}: a TUTORIAL card —
+# not an example. Its preview is the clip (muted/looping for direct files,
+# the thumbnail for YouTube, a play glyph otherwise) and its one action is
+# Watch, which plays it in-page in a lightbox (YouTube/Vimeo embeds, or
+# <video> for any hosted file, e.g. served via .copy_public()).
 ```
 
 URLs must be shares minted by this agent (same deployment); absolute or

@@ -755,10 +755,17 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     _examples_cache = {"at": 0.0, "data": None}
 
-    async def _example_card(url):
-        """One configured share URL → a gallery card, or None (bad URL, dead
-        token, non-public, not a chat). Author fields are deliberately absent:
-        examples read as product showcase, not user content."""
+    async def _example_card(entry):
+        """One configured entry → a gallery card, or None (bad URL, dead
+        token, non-public, not a chat). A {video, title} entry is a tutorial
+        card and needs no resolution — the FE previews the clip and plays it
+        in-page. Author fields are deliberately absent: examples read as
+        product showcase, not user content."""
+        if isinstance(entry, str):
+            entry = {"share": entry}
+        if entry.get("video"):
+            return {"video": entry["video"], "title": entry.get("title", "")}
+        url = entry.get("share", "")
         parts = urlsplit(url)
         seg = parts.path.strip("/").split("/")
         if len(seg) != 3 or seg[0] != "shared":

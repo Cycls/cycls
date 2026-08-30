@@ -54,6 +54,9 @@ web = (
     # .examples({
     #     ("Landing pages", "صفحات هبوط"): ["https://super.cycls.ai/shared/<user>/<token>"],
     #     ("Data analysis", "تحليل البيانات"): ["https://super.cycls.ai/shared/<user>/<token>"],
+    #     ("Tutorials", "دروس"): [  # tutorial cards: one Watch action, plays in-page
+    #         {"video": "https://youtu.be/<id>", "title": "Getting started"},        # YouTube/Vimeo
+    #         {"video": "/public/tour.mp4", "title": "Deep dive"}],                  # or any hosted file (.copy_public())
     # })  # tuple key = (en, ar) pill label; a plain string serves both locales
     # .copy_public("assets/logo.png")  # static files served at /public/<name>
     # .workspaces()    # personal + team workspaces (docs/workspaces.md)
