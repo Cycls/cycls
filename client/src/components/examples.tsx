@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
 import { useFileContent, CanvasDoc } from "./canvas";
 import { isHtml, isRenderable } from "./canvas-utils";
+import { Icon } from "./icon";
 import { track } from "../lib/posthog";
 import { t, getLang } from "../lib/i18n";
 import { cn } from "../lib/utils";
@@ -14,10 +15,22 @@ import { cn } from "../lib/utils";
 // server-side from the operator's `.examples()` share list.
 
 export interface ExampleItem {
-  share: string;   // /shared/<user>/<token>?example=1 — the full story
+  share?: string | null;   // artifact card: /shared/<user>/<token>?example=1
   title: string;
-  prompt: string;
-  file: { path: string; name: string; url: string } | null;
+  prompt?: string;
+  file?: { path: string; name: string; url: string } | null;
+  video?: string | null;   // tutorial card: direct mp4/webm or a YouTube URL
+}
+
+// YouTube in any of its shapes → the video id; null means not YouTube.
+export function youtubeId(url: string): string | null {
+  const m = url.match(/(?:youtube\.com\/(?:watch\?[^#]*v=|shorts\/|embed\/)|youtu\.be\/)([\w-]{6,20})/);
+  return m ? m[1] : null;
+}
+
+export function vimeoId(url: string): string | null {
+  const m = url.match(/vimeo\.com\/(?:video\/)?(\d{6,12})/);
+  return m ? m[1] : null;
 }
 
 export interface ExampleCategory {
@@ -52,6 +65,7 @@ export function ExamplesGallery({ onUsePrompt, className }: {
 }) {
   const categories = useExamples();
   const [active, setActive] = useState<string | null>(null);
+  const [playing, setPlaying] = useState<ExampleItem | null>(null);
   if (!categories.length) return null;
 
   const labeled = categories.filter((c) => c.label);
@@ -88,19 +102,73 @@ export function ExamplesGallery({ onUsePrompt, className }: {
           Desktop: the grid. */}
       <div className="-mx-6 mt-6 flex w-[calc(100%+3rem)] snap-x snap-mandatory gap-3 overflow-x-auto scrollbar-none px-6 sm:mx-0 sm:grid sm:w-full sm:snap-none sm:grid-cols-2 sm:gap-4 sm:overflow-visible sm:px-0 lg:grid-cols-3">
         {current.items.map((item) => (
-          <ExampleCard key={item.share} item={item} category={current.label} onUsePrompt={onUsePrompt} />
+          <ExampleCard key={item.share || item.video || item.title} item={item} category={current.label}
+                       onUsePrompt={onUsePrompt} onWatch={() => setPlaying(item)} />
         ))}
       </div>
+      {playing?.video && <VideoLightbox item={playing} onClose={() => setPlaying(null)} />}
+    </div>
+  );
+}
+
+// In-page player for tutorial cards — dimmed backdrop, Esc/backdrop/X to
+// close. YouTube plays through the privacy embed; files through <video>.
+function VideoLightbox({ item, onClose }: { item: ExampleItem; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const yt = youtubeId(item.video || "");
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 sm:p-8" onClick={onClose}>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.15 }}
+                  className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.96 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.15 }}
+        className="relative w-full max-w-4xl overflow-hidden rounded-xl bg-black shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {yt ? (
+          <iframe
+            src={`https://www.youtube-nocookie.com/embed/${yt}?autoplay=1`}
+            title={item.title || "Tutorial"}
+            className="aspect-video w-full"
+            allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+            allowFullScreen
+          />
+        ) : vimeoId(item.video || "") ? (
+          <iframe
+            src={`https://player.vimeo.com/video/${vimeoId(item.video || "")}?autoplay=1`}
+            title={item.title || "Tutorial"}
+            className="aspect-video w-full"
+            allow="autoplay; fullscreen; picture-in-picture"
+            allowFullScreen
+          />
+        ) : (
+          <video src={item.video || undefined} controls autoPlay playsInline className="aspect-video w-full" />
+        )}
+      </motion.div>
+      <button
+        onClick={onClose}
+        className="absolute top-4 end-4 z-10 flex size-9 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors cursor-pointer"
+        aria-label="Close"
+      >
+        <Icon name="x" className="size-4" />
+      </button>
     </div>
   );
 }
 
 // One card: a live, scaled-down render of the artifact (lazy — fetched when
 // the card scrolls near the viewport), hover/touch actions on top.
-function ExampleCard({ item, category, onUsePrompt }: {
+function ExampleCard({ item, category, onUsePrompt, onWatch }: {
   item: ExampleItem;
   category: string;
   onUsePrompt: (text: string) => void;
+  onWatch: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
@@ -131,26 +199,41 @@ function ExampleCard({ item, category, onUsePrompt }: {
       {/* Hover actions — always reachable on touch, hover-revealed on desktop.
           The scrim is a whisper of background fading from the top, not a sheet. */}
       <div className="absolute inset-0 flex items-center justify-center gap-2 bg-[linear-gradient(to_bottom,color-mix(in_oklab,var(--color-background)_35%,transparent)_0%,color-mix(in_oklab,var(--color-background)_12%,transparent)_45%,transparent_75%)] opacity-100 sm:opacity-0 transition-opacity duration-300 sm:group-hover:opacity-100">
-        {item.prompt && (
+        {item.video ? (
+          // Tutorial card: one action — play it right here on the page.
           <button
             onClick={() => {
-              onUsePrompt(item.prompt);
-              track("example_prompt_used", { category, share: item.share });
+              onWatch();
+              track("example_watched", { category, video: item.video });
             }}
-            className="rounded-full bg-background border border-border px-3.5 py-2 text-sm font-medium text-foreground hover:bg-secondary transition-colors cursor-pointer shadow-sm"
+            className="rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity shadow-sm cursor-pointer"
           >
-            {t("usePrompt")}
+            {t("watch")}
           </button>
+        ) : (
+          <>
+            {item.prompt && (
+              <button
+                onClick={() => {
+                  onUsePrompt(item.prompt!);
+                  track("example_prompt_used", { category, share: item.share });
+                }}
+                className="rounded-full bg-background border border-border px-3.5 py-2 text-sm font-medium text-foreground hover:bg-secondary transition-colors cursor-pointer shadow-sm"
+              >
+                {t("usePrompt")}
+              </button>
+            )}
+            <a
+              href={item.share || "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => track("example_viewed", { category, share: item.share })}
+              className="rounded-full bg-foreground px-3.5 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity shadow-sm"
+            >
+              {t("viewExample")}
+            </a>
+          </>
         )}
-        <a
-          href={item.share}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={() => track("example_viewed", { category, share: item.share })}
-          className="rounded-full bg-foreground px-3.5 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity shadow-sm"
-        >
-          {t("viewExample")}
-        </a>
       </div>
     </motion.div>
   );
@@ -170,7 +253,36 @@ function ExamplePreview({ item, load }: { item: ExampleItem; load: boolean }) {
   }, [file?.url]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const renderable = !!file && isRenderable(file.path);
-  const { content, error } = useFileContent(load && renderable ? file : null, readFile, openFile);
+  const { content, error } = useFileContent(load && renderable && !item.video ? file! : null, readFile, openFile);
+
+  // Tutorial preview — a muted looping clip for direct files, the thumbnail
+  // for YouTube, a play glyph for other hosted players (Vimeo has no free
+  // thumbnail URL); only fetched once the card scrolls into view.
+  if (item.video) {
+    const yt = youtubeId(item.video);
+    const isFile = !yt && !vimeoId(item.video);
+    return (
+      <div className="pointer-events-none flex h-full w-full items-center justify-center bg-secondary/30">
+        {load && (yt ? (
+          <img src={`https://i.ytimg.com/vi/${yt}/hqdefault.jpg`} alt="" className="h-full w-full object-cover" />
+        ) : isFile ? (
+          <video
+            src={item.video}
+            muted
+            loop
+            autoPlay
+            playsInline
+            preload="metadata"
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <svg viewBox="0 0 24 24" className="size-10 text-muted-foreground/60" fill="currentColor">
+            <path d="M8 5.14v13.72c0 .9.98 1.45 1.74.98l10.02-6.86a1.15 1.15 0 000-1.96L9.74 4.16A1.15 1.15 0 008 5.14z" />
+          </svg>
+        ))}
+      </div>
+    );
+  }
 
   // No artifact (or unrenderable): the prompt itself is the preview.
   if (!renderable) {
