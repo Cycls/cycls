@@ -413,6 +413,49 @@ def test_resolve_path_strips_workspace_prefix(tmp_path):
     assert path.name == "hello.txt"
 
 
+def test_resolve_path_rejects_tmp_with_a_reason(tmp_path):
+    """Every other absolute path is read as workspace-relative, so a /tmp write
+    would surface one step later as "does not exist" — pointing at the download
+    rather than at the path. The error names the real rule instead."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+
+    for raw in ("/tmp", "/tmp/report.pdf"):
+        with pytest.raises(ValueError, match="not shared"):
+            _resolve_path(raw, str(ws))
+
+    # A workspace directory that happens to be called tmp is untouched.
+    assert _resolve_path("sub/tmp/x", str(ws)).is_relative_to(ws)
+
+
+def test_resolve_path_expands_home(tmp_path):
+    """HOME is /workspace in the sandbox, so `~/x` names a workspace file —
+    it used to land in a literal `~` directory."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "hello.txt").write_text("world")
+
+    assert _resolve_path("~/hello.txt", str(ws)) == (ws / "hello.txt").resolve()
+
+
+def test_exec_read_surfaces_the_tmp_reason(tmp_path):
+    """The tools return the reason to the model, so it can correct itself."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+
+    out = asyncio.run(_exec_read({"path": "/tmp/report.pdf"}, str(ws)))
+    assert out.startswith("Error:") and "workspace" in out
+
+
+def test_bash_tool_warns_about_tmp():
+    """The model composes the download inside the bash tool, so the rule has to
+    be there — the write itself succeeds, so nothing else corrects it in time."""
+    from cycls._agent.tools import build_tools
+
+    (bash,) = build_tools(["Bash"], None)
+    assert "/tmp" in bash["description"]
+
+
 def test_exec_read_blocks_path_traversal(tmp_path):
     ws = tmp_path / "workspace"
     ws.mkdir()
