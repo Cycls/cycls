@@ -240,6 +240,47 @@ async def put_compaction(workspace, chat_id, data):
     await DB(workspace).put(f"chat/{chat_id}/compaction", data)
 
 
+def _is_plain_user(msg):
+    """A real user turn — not harness scaffolding and not a tool-result batch."""
+    if msg.get("role") != "user" or msg.get("internal"):
+        return False
+    c = msg.get("content")
+    if isinstance(c, list):
+        return not all(isinstance(b, dict) and b.get("type") == "tool_result" for b in c)
+    return True
+
+
+async def truncate_last_exchange(workspace, chat_id):
+    """Drop the last user turn and everything after it. Returns the removed
+    user content, or None when there was nothing to remove.
+
+    Backs `regenerate`: the caller re-sends the same message, so the run that
+    follows is an ordinary send — the loop needs no special case.
+
+    Two invariants make this the only safe shape of deletion here:
+      * Turn files are `{turn:06d}` and `Session._saved` is `len(messages)`, so
+        an in-place delete would leave a numbering gap and the next append
+        would overwrite a live turn. `replace_messages` rewrites contiguously.
+      * The cut lands on a plain user turn, so the removed span starts with an
+        assistant message — no `tool_result` can be orphaned by it.
+    """
+    _validate(chat_id)
+    messages = await load_messages(workspace, chat_id)
+    cut = next((i for i in range(len(messages) - 1, -1, -1) if _is_plain_user(messages[i])), None)
+    if cut is None:
+        return None
+    removed = messages[cut].get("content")
+    await replace_messages(workspace, chat_id, messages[:cut])
+    # `first_kept` is an index into the message list. Session clamps on load,
+    # but the marker on disk must shrink too: a stale value larger than the
+    # new length would re-clamp past the turns appended after this one and
+    # silently hide them from the model's context on the following run.
+    marker = await get_compaction(workspace, chat_id)
+    if marker and int(marker.get("first_kept", 0)) > cut:
+        await put_compaction(workspace, chat_id, {**marker, "first_kept": cut})
+    return removed
+
+
 async def delete_chat(workspace, chat_id):
     """Delete the chat — index and all turns in one subtree wipe."""
     _validate(chat_id)

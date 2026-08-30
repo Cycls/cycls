@@ -15,9 +15,9 @@ from . import events
 from .events import Turn
 from .compact import COMPACT_BUFFER
 from ..logs import log
-from .prompts import DEFAULT_SYSTEM, SUGGEST_GUIDANCE, workspace_instructions, fence_instructions
+from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
-from ..tools import build_tools, dispatch, _exec_read, vendor_skips
+from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal
 from ..tools import skills as skills_mod
 
 
@@ -158,10 +158,6 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     messages = session.messages
 
     system_text = DEFAULT_SYSTEM + ("\n\n" + system if system else "")
-    # The behavior rides with the tool: operators opt in via allowed_tools and
-    # never have to remember matching prompt copy.
-    if "Suggest" in (allowed_tools or []):
-        system_text += "\n\n" + SUGGEST_GUIDANCE
     if instructions:
         try:
             agent_md = await asyncio.to_thread(workspace_instructions, workspace.root, instructions)
@@ -184,6 +180,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     tools_list = build_tools(allowed_tools, tools or [], vendor=vendor, web_search=web_search)
     if skill_catalog and not any(t.get("name") == "skill" for t in tools_list):
         tools_list.append(skills_mod.SKILL_TOOL)
+    for guidance in tool_prompts(tools_list):
+        system_text += "\n\n" + guidance
     window = context_window or DEFAULT_WINDOW
     # Seed from the last stored turn so a long chat compacts before its first
     # call — not only mid-request. The first_kept slice skips stale
@@ -298,7 +296,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 await session.checkpoint(); break
 
             blocks = [b for b in turn.content if isinstance(b, dict) and b.get("type") == "tool_use"]
-            pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network) for b in blocks]
+            # One `seen` per batch; comprehensions run left to right, so the first call wins.
+            seen = set()
+            pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network, seen=seen)
+                     for b in blocks]
             for step, _ in pairs: yield step
             # Heartbeat every 15s while tools run — keeps intermediate
             # proxies from severing the SSE stream during long silent tool
@@ -310,18 +311,24 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 yield {"type": "ping"}
             timed = [t.result() for t in tasks]
 
-            results = []
+            results, terminal = [], False
             for block, (out, ms) in zip(blocks, timed):
                 ok = not isinstance(out, BaseException)
                 log("tool_call", user=user, chat_id=session.chat_id,
                     model=bare_model, tool=block["name"], ms=ms, ok=ok,
                     output_bytes=len(out) if isinstance(out, (str, bytes)) else None)
                 if not ok: out = f"Error: {out}"
+                # Two channels: `_model` lands in tool_result, `_ui` is forwarded
+                # to the client. `web_search` uses it to hand the FE structured
+                # sources without changing what the model reads.
+                if ok and isinstance(out, dict) and "_model" in out:
+                    if ev := out.get("_ui"): yield ev
+                    content = out["_model"]
                 # A tool that returns a UI event (e.g. `canvas`, `suggest`) drives
                 # the client and the model gets a short ack — keeps tool_result a
                 # valid string. An `ack` key overrides the default wording and is
                 # stripped before the event reaches the client.
-                if ok and isinstance(out, dict) and out.get("type") == "ui":
+                elif ok and isinstance(out, dict) and out.get("type") == "ui":
                     ack = out.pop("ack", None)
                     yield out
                     content = ack or f"Opened {out.get('name') or out.get('path') or 'the file'} for the user."
@@ -333,8 +340,14 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 else:
                     content = out
                 results.append({"type": "tool_result", "tool_use_id": block["id"], "content": content})
+                # Only a call that reached the user ends the turn — a malformed
+                # `ask` gets another turn to fix itself.
+                if ok and is_terminal(block["name"]) and not str(content).startswith("Error"):
+                    terminal = True
             messages.append({"role": "user", "content": results})
             await session.checkpoint()
+            if terminal:
+                break
 
         except Exception as e:
             # Most providers report context overflow as an error, not a

@@ -18,6 +18,7 @@ const VERB_KEYS = {
   Canvas: "verbCanvas",
   Skill: "verbSkill",
   Suggest: "verbSuggest",
+  Ask: "verbAsk",
 } as const;
 
 function summarize(items: Part[]) {

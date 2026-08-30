@@ -1,6 +1,6 @@
 """Harness tests — _resolve_path escape hardening, build_tools scoping,
 LLM builder plumbing."""
-import asyncio
+import asyncio, json
 import pytest
 
 import cycls
@@ -120,6 +120,187 @@ def test_suggest_guidance_rides_with_the_tool():
     from cycls._agent.harness.prompts import SUGGEST_GUIDANCE
     assert "suggest" in SUGGEST_GUIDANCE
     assert "artifact" in SUGGEST_GUIDANCE
+
+
+def test_build_tools_ask_exposes_tool():
+    tools = build_tools(["Ask"], None)
+    names = {t.get("name") for t in tools}
+    assert names == {"ask"}
+
+
+def test_ask_dispatch_emits_ui_event_with_options():
+    """`ask` is fire-and-forget like `suggest`: the ui event drives the card
+    and the ack tells the model to end its turn rather than guess an answer."""
+    import asyncio
+    from types import SimpleNamespace
+    from cycls._agent.tools import dispatch
+
+    step, aw = dispatch({"id": "t1", "name": "ask", "input": {
+        "question": "Which format?",
+        "options": [{"label": "PDF", "description": "Print-ready"}, {"label": "Markdown"}],
+    }}, SimpleNamespace(root="/tmp"), timeout=5)
+    assert step == {"type": "step", "id": "t1", "tool_name": "Ask", "step": "Which format?"}
+    out = asyncio.run(_await(aw))
+    assert out["type"] == "ui" and out["action"] == "ask"
+    assert out["question"] == "Which format?"
+    assert out["options"] == [{"label": "PDF", "description": "Print-ready"},
+                              {"label": "Markdown"}]
+    assert out["multi_select"] is False   # single-answer unless asked for
+    assert "End your turn" in out["ack"]
+
+
+def test_ask_multi_select_needs_more_than_one_option():
+    """`multi_select` rides through for a real choice, but a card with one (or
+    zero) options can't be a multi-select — it would render checkboxes over a
+    single row and a Submit that adds nothing to just typing."""
+    import asyncio
+    from types import SimpleNamespace
+    from cycls._agent.tools import dispatch
+
+    _, aw = dispatch({"id": "t1", "name": "ask", "input": {
+        "question": "Which formats?", "multi_select": True,
+        "options": [{"label": "PDF"}, {"label": "Markdown"}, {"label": "HTML"}],
+    }}, SimpleNamespace(root="/tmp"), timeout=5)
+    assert asyncio.run(_await(aw))["multi_select"] is True
+
+    _, aw = dispatch({"id": "t2", "name": "ask", "input": {
+        "question": "Ship it?", "multi_select": True, "options": [{"label": "Yes"}],
+    }}, SimpleNamespace(root="/tmp"), timeout=5)
+    assert asyncio.run(_await(aw))["multi_select"] is False
+
+    _, aw = dispatch({"id": "t3", "name": "ask", "input": {
+        "question": "Open question?", "multi_select": True,
+    }}, SimpleNamespace(root="/tmp"), timeout=5)
+    assert asyncio.run(_await(aw))["multi_select"] is False
+
+
+def test_ask_normalizes_ragged_options():
+    """The model improvises: bare strings, blank labels, more than four, and
+    a missing options key all have to land on the same clean shape."""
+    import asyncio
+    from types import SimpleNamespace
+    from cycls._agent.tools import dispatch
+
+    _, aw = dispatch({"id": "t1", "name": "ask", "input": {
+        "question": "Pick", "options": ["A", {"label": "  "}, None, {"label": "B"},
+                                         {"label": "C"}, {"label": "D"}, {"label": "E"}],
+    }}, SimpleNamespace(root="/tmp"), timeout=5)
+    out = asyncio.run(_await(aw))
+    # First four survive the cap, then blanks/non-dicts drop out.
+    assert out["options"] == [{"label": "A"}, {"label": "B"}]
+
+    _, aw = dispatch({"id": "t2", "name": "ask", "input": {"question": "Open?"}},
+                     SimpleNamespace(root="/tmp"), timeout=5)
+    assert asyncio.run(_await(aw))["options"] == []
+
+    # No question is a model error, not a client event.
+    _, aw = dispatch({"id": "t3", "name": "ask", "input": {"question": "  "}},
+                     SimpleNamespace(root="/tmp"), timeout=5)
+    assert asyncio.run(_await(aw)).startswith("Error")
+
+
+def test_ask_guidance_rides_with_the_tool():
+    from cycls._agent.harness.prompts import ASK_GUIDANCE
+    assert "ask" in ASK_GUIDANCE
+    assert "last action" in ASK_GUIDANCE
+
+
+def test_ask_schema_is_plural():
+    """The model batches: one call carries every question, so it never has to
+    choose between clobbering its first card and burning another round-trip."""
+    (ask,) = build_tools(["Ask"], None)
+    props = ask["input_schema"]["properties"]
+    assert set(ask["input_schema"]["required"]) == {"questions"}
+    assert props["questions"]["type"] == "array"
+    assert props["questions"]["maxItems"] == 3
+    item = props["questions"]["items"]
+    assert set(item["required"]) == {"question"}
+    # multi_select is per question, not per card — "which formats" and "which
+    # section" can sit side by side with different answer arities.
+    assert set(item["properties"]) == {"question", "header", "options", "multi_select"}
+
+
+def test_ask_carries_several_questions_with_headers():
+    import asyncio
+    from types import SimpleNamespace
+    from cycls._agent.tools import dispatch
+
+    step, aw = dispatch({"id": "t1", "name": "ask", "input": {"questions": [
+        {"question": "Which format?", "header": "Format",
+         "options": [{"label": "PDF"}, {"label": "Markdown"}]},
+        {"question": "Which sections?", "header": "Sections", "multi_select": True,
+         "options": [{"label": "Intro"}, {"label": "Methods"}]},
+    ]}}, SimpleNamespace(root="/tmp"), timeout=5)
+    assert step["tool_name"] == "Ask" and step["step"] == "Which format? (+1)"
+    out = asyncio.run(_await(aw))
+    assert [q["question"] for q in out["questions"]] == ["Which format?", "Which sections?"]
+    assert [q["header"] for q in out["questions"]] == ["Format", "Sections"]
+    assert [q["multi_select"] for q in out["questions"]] == [False, True]
+    assert "2 questions" in out["ack"] and "End your turn" in out["ack"]
+    # The old singular keys still ride along, for clients that ship separately.
+    assert out["question"] == "Which format?"
+    assert out["options"] == [{"label": "PDF"}, {"label": "Markdown"}]
+
+
+def test_ask_caps_questions_and_says_so():
+    """Silently dropping questions would leave the model believing it asked
+    them, so the overflow is named in the ack."""
+    import asyncio
+    from types import SimpleNamespace
+    from cycls._agent.tools import dispatch
+
+    _, aw = dispatch({"id": "t1", "name": "ask", "input": {"questions": [
+        {"question": f"Q{i}"} for i in range(5)]}}, SimpleNamespace(root="/tmp"), timeout=5)
+    out = asyncio.run(_await(aw))
+    assert len(out["questions"]) == 3
+    assert "Only the first 3" in out["ack"] and "2 dropped" in out["ack"]
+
+
+def test_ask_second_call_in_a_batch_is_refused():
+    """`ask` is `once`: a model that emits two cards in one turn would have the
+    second silently replace the first in the UI, so the loop refuses it and
+    says how to batch instead."""
+    import asyncio
+    from types import SimpleNamespace
+    from cycls._agent.tools import dispatch
+
+    ws, seen = SimpleNamespace(root="/tmp"), set()
+    first = {"id": "t1", "name": "ask", "input": {"questions": [{"question": "A?"}]}}
+    second = {"id": "t2", "name": "ask", "input": {"questions": [{"question": "B?"}]}}
+
+    _, aw1 = dispatch(first, ws, timeout=5, seen=seen)
+    step2, aw2 = dispatch(second, ws, timeout=5, seen=seen)
+    assert asyncio.run(_await(aw1))["type"] == "ui"
+    out2 = asyncio.run(_await(aw2))
+    assert out2.startswith("Error") and "single call" in out2
+    assert step2["id"] == "t2" and step2["ok"] is False
+
+
+def test_dispatch_without_seen_never_refuses():
+    """`seen` is opt-in, so every non-loop caller (and every existing test)
+    dispatches every block."""
+    import asyncio
+    from types import SimpleNamespace
+    from cycls._agent.tools import dispatch
+
+    ws = SimpleNamespace(root="/tmp")
+    block = {"id": "t1", "name": "ask", "input": {"questions": [{"question": "A?"}]}}
+    for _ in range(2):
+        _, aw = dispatch(block, ws, timeout=5)
+        assert asyncio.run(_await(aw))["type"] == "ui"
+
+
+def test_descriptor_flags_and_prompts():
+    """The three facts the loop acts on live on the tool, so its contract stops
+    being a sentence the model is asked to honor."""
+    from cycls._agent.tools import _TOOLS, is_terminal, tool_prompts
+
+    assert _TOOLS["ask"].once and _TOOLS["ask"].terminal
+    assert _TOOLS["suggest"].once and not _TOOLS["suggest"].terminal
+    assert is_terminal("ask") and not is_terminal("bash")
+    assert not is_terminal("some_custom_tool")
+    assert tool_prompts(build_tools(["Bash"], None)) == []
+    assert len(tool_prompts(build_tools(["Ask", "Suggest"], None))) == 2
 
 
 def test_build_tools_unknown_name_ignored():
@@ -262,7 +443,32 @@ def test_web_search_formats_passages(monkeypatch):
         {"title": "T2", "url": "http://b", "description": "D2"}]}})
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
     out = asyncio.run(_exec_web_search({"query": "hi"}))
-    assert "T1" in out and "http://a" in out and "s1" in out and "s2" in out and "T2" in out
+    # Two channels off one row set: JSON for the model, the same rows as a
+    # `sources` event for the client — so the citations the user sees are
+    # exactly what the search returned.
+    model = json.loads(out["_model"])
+    assert model["query"] == "hi"
+    assert [r["url"] for r in model["results"]] == ["http://a", "http://b"]
+    assert model["results"][0]["title"] == "T1"
+    assert "s1" in model["results"][0]["snippet"] and "s2" in model["results"][0]["snippet"]
+    assert out["_ui"] == {"type": "sources", "sources": model["results"]}
+
+
+def test_web_search_drops_rows_without_a_url(monkeypatch):
+    """A citation chip is a link; a row with no URL can't become one. If none
+    of them can, that's 'no results', not an empty chip row."""
+    import httpx
+    from cycls._agent.tools import _exec_web_search
+    monkeypatch.setenv("BRAVE_API_KEY", "x")
+    _FakeClient.resp = _FakeResp(data={"web": {"results": [
+        {"title": "T1", "url": "", "description": "D1"},
+        {"title": "T2", "url": "http://b", "description": "D2"}]}})
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+    out = asyncio.run(_exec_web_search({"query": "hi"}))
+    assert [r["url"] for r in out["_ui"]["sources"]] == ["http://b"]
+
+    _FakeClient.resp = _FakeResp(data={"web": {"results": [{"title": "T", "url": ""}]}})
+    assert "No results" in asyncio.run(_exec_web_search({"query": "hi"}))
 
 
 def test_web_search_locale_params(monkeypatch):

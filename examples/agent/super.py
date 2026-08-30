@@ -103,9 +103,15 @@ llm = (
     # .tools(TOOLS)  # custom tool JSON schemas
     # .on("render_image", render_image, label=lambda inp: inp.get("alt", ""))
     #   register a handler; label renders the UI step line, e.g. render_image(a cat)
-    .allowed_tools(["Bash", "Editor", "WebSearch", "DataBase", "Canvas", "Suggest"])
+    .allowed_tools(["Bash", "Editor", "WebSearch", "DataBase", "Canvas", "Suggest", "Ask"])
     # "Suggest": ONE follow-up chip above the composer after each answer,
     # steering toward a finished artifact; users switch it off in Settings.
+    # "Ask": up to THREE questions on one card above the composer, when a
+    # choice genuinely can't be defaulted — per-question single- or
+    # multi-select options plus a Submit. Batched because the turn ends there
+    # and the next message is the answer, so asking one at a time costs a full
+    # round-trip each; the options are shortcuts, not a gate (typing any reply
+    # works). Users switch the card off in Settings.
     # .thinking("low")  # unified reasoning across providers: "low" | "medium" | "high"
     # .vision(False)  # text-only model: attached media stays in the workspace with a note
     # .extra_body({"reasoning_effort": "low"})  # vendor extras merged last — your keys win

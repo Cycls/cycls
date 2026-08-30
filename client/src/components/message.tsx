@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import type { Part, Message } from "../hooks/use-chat";
+import type { Part, Message, Source } from "../hooks/use-chat";
 import { TextPart } from "./parts/text-part";
 import { ThinkingPart } from "./parts/thinking-part";
 import { CodePart } from "./parts/code-part";
@@ -10,14 +10,18 @@ import { ImagePart } from "./parts/image-part";
 import { StepPart } from "./parts/step-part";
 import { StepGroup } from "./parts/step-group";
 import { FilePart } from "./parts/file-part";
+import { SourcesPart } from "./parts/sources-part";
 import { AttachmentBody } from "./attachment-body";
 import { Icon } from "./icon";
 import { cn } from "../lib/utils";
+import { urlKey } from "./parts/sources-part";
+import { useMemo } from "react";
+import { t } from "../lib/i18n";
 
-function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: () => void, onOpenFile?: (path: string) => void) {
+function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: () => void, onOpenFile?: (path: string) => void, sources?: Map<string, Source>) {
   switch (part.type) {
     case "text":
-      return <TextPart key={index} text={part.text || ""} onOpenFile={onOpenFile} />;
+      return <TextPart key={index} text={part.text || ""} onOpenFile={onOpenFile} sources={sources} />;
     case "thinking":
       return (
         <ThinkingPart
@@ -51,6 +55,8 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
           caption={part.caption}
         />
       );
+    case "sources":
+      return <SourcesPart key={index} sources={part.sources || []} />;
     case "step":
       return (
         <StepPart
@@ -100,11 +106,15 @@ export function MessageBubble({
   message,
   isStreaming,
   onRetry,
+  onRegenerate,
   onOpenFile,
 }: {
   message: Message;
   isStreaming?: boolean;
   onRetry?: () => void;
+  // Only passed for the last assistant message — regenerating an earlier one
+  // would mean truncating the transcript back to it, which the API doesn't do.
+  onRegenerate?: () => void;
   onOpenFile?: (path: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -147,6 +157,24 @@ export function MessageBubble({
     });
   const isEmpty = parts.length === 0;
 
+  // Every result this turn's searches returned, keyed for link lookup. `parts`
+  // is rebuilt on every streamed token, so the memo keys on the URLs instead —
+  // a churning map identity would re-render every markdown block per token.
+  const sourceKey = parts
+    .filter((p) => p.type === "sources")
+    .map((p) => (p.sources || []).map((s) => s.url).join(","))
+    .join("|");
+  const sourceIndex = useMemo(() => {
+    if (!sourceKey) return undefined;
+    const map = new Map<string, Source>();
+    for (const p of parts) {
+      if (p.type !== "sources") continue;
+      for (const s of p.sources || []) if (s.url) map.set(urlKey(s.url), s);
+    }
+    return map.size ? map : undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceKey]);
+
   const copyAll = () => {
     const text = parts
       .filter((p) => p.type === "text")
@@ -169,7 +197,7 @@ export function MessageBubble({
             return <FilePart key={gi} path={group.items[0].step || ""} onOpen={onOpenFile} />;
           return group.items.map((part, i) =>
             renderPart(part, group.startIndex + i,
-              isStreaming && group.startIndex + i === parts.length - 1, onRetry, onOpenFile));
+              isStreaming && group.startIndex + i === parts.length - 1, onRetry, onOpenFile, sourceIndex));
         })}
 
         {/* Actions */}
@@ -187,6 +215,17 @@ export function MessageBubble({
             >
               <Icon name={copied ? "check" : "copy"} className="w-3.5 h-3.5" />
             </button>
+            {onRegenerate && (
+              <button
+                onClick={onRegenerate}
+                className="hover:bg-secondary text-muted-foreground hover:text-foreground flex size-7 items-center justify-center rounded-full transition cursor-pointer"
+                aria-label={t("regenerate")}
+                title={t("regenerate")}
+                type="button"
+              >
+                <Icon name="refresh" className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         )}
       </div>

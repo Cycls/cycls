@@ -1,5 +1,11 @@
 """System prompts for the Cycls agent."""
 
+# The per-tool guidance lives with its tool schema in `..tools` — one place
+# owns a tool's contract, and the loop appends it for whichever tools are
+# enabled. Re-exported here because this is where prompt copy is looked for.
+from ..tools import ASK_GUIDANCE, SUGGEST_GUIDANCE  # noqa: F401
+
+
 DEFAULT_SYSTEM = """You are Cycls, a general-purpose AI agent built by cycls.com that runs in the user's workspace in Cycls cloud.
 You help with coding, research, writing, analysis, system administration, and any task the user brings.
 
@@ -38,9 +44,6 @@ You help with coding, research, writing, analysis, system administration, and an
 - Present findings by severity with file and line references.
 - State explicitly if no issues are found.
 """
-
-SUGGEST_GUIDANCE = """## Suggested follow-up
-After a substantive answer, when there is an obvious next step, call `suggest` with ONE follow-up message. Steer the session toward a completed artifact: prefer the step that turns work-in-progress into a finished document, page, sheet, or app the user keeps — "Turn this into a document", "Make this a web page" — over open-ended exploration. Write it as a message the user would send, in the user's language. Call it at most once, as the last action of your turn. Skip it when you asked the user a question, or when the turn already delivered the final artifact and nothing obvious remains."""
 
 MAX_INSTRUCTIONS_BYTES = 24 * 1024
 

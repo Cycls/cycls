@@ -58,7 +58,7 @@ cycls/
     ├── main.py             # Agent class + @cycls.agent decorator
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
-    ├── tools/              # tool schemas + execution + dispatch registry (+ pdf.py, skills.py, Brave web search/fetch)
+    ├── tools/              # tool schemas + execution + `Tool` rows: run/step/once/terminal/prompt (docs/notes/tool-rows.md)
     ├── harness/            # the managed LLM loop and the kit a custom loop needs
     │   ├── llm.py          # cycls.LLM fluent builder (.loop(fn) swaps the loop; .price()/.context() set cost rates + window)
     │   ├── main.py         # the default loop (_run) + retry/recover + attachment ingest
@@ -107,7 +107,8 @@ Yield these from app functions:
 - `{"type": "status", "status": "..."}` - Status indicator
 - `{"type": "callout", "callout": "...", "style": "info|warning|error|success"}`
 - `{"type": "image", "src": "...", "alt": "...", "caption": "..."}`
-- `{"type": "ui", "action": "open_plan_modal"}` — fire-and-forget UI trigger; not rendered, not persisted in session history
+- `{"type": "sources", "sources": [{"title": ..., "url": ..., "snippet": ...}]}` - citation chips; emitted by the `WebSearch` builtin
+- `{"type": "ui", "action": "open_plan_modal"}` — fire-and-forget UI trigger; not rendered, not persisted in session history (also `open_canvas`, `suggest`, `ask` — see docs/tutorial.md)
 
 ## Environment Variables
 

@@ -176,3 +176,133 @@ def test_attachment_sidecar_survives_repair(tmp_path):
         {"name": "pic.jpg", "path": "attachments/pic.jpg",
          "type": "image/jpeg", "size": 1234}
     ]
+
+
+# ---- truncate_last_exchange (backs `regenerate`) ----
+
+def _turn_keys(ws, cid):
+    from cycls._app.db import DB
+    async def go():
+        return sorted([k async for k, _ in DB(ws).scan(glob=f"chat/{cid}/[0-9]*")])
+    return _run(go())
+
+
+def test_truncate_drops_last_user_turn_and_everything_after(tmp_path):
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": [{"type": "text", "text": "one"}]},
+        {"role": "user", "content": "second"},
+        {"role": "assistant", "content": [{"type": "text", "text": "two"}]},
+    ], 0))
+    removed = _run(chat.truncate_last_exchange(ws, cid))
+    assert removed == "second"
+    left = _run(chat.load_messages(ws, cid))
+    assert [m["content"] for m in left] == ["first", [{"type": "text", "text": "one"}]]
+
+
+def test_truncate_renumbers_so_the_next_append_cannot_collide(tmp_path):
+    """The corruption this guards: turn files are `{turn:06d}` and the session
+    appends at `len(messages)`. A delete that left a numbering gap would make
+    the next append overwrite a live turn — so the rewrite must be contiguous."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": [{"type": "text", "text": "1"}]},
+        {"role": "user", "content": "b"},
+        {"role": "assistant", "content": [{"type": "text", "text": "2"}]},
+    ], 0))
+    _run(chat.truncate_last_exchange(ws, cid))
+
+    keys = _turn_keys(ws, cid)
+    assert [k.split("/")[-1] for k in keys] == ["000000", "000001"], keys
+
+    # Replay what the session does next: append at len(messages).
+    left = _run(chat.load_messages(ws, cid))
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "b again"},
+        {"role": "assistant", "content": [{"type": "text", "text": "3"}]},
+    ], len(left)))
+    final = _run(chat.load_messages(ws, cid))
+    assert [m["content"] for m in final] == [
+        "a", [{"type": "text", "text": "1"}],
+        "b again", [{"type": "text", "text": "3"}],
+    ], "a stale turn survived the truncate"
+
+
+def test_truncate_shrinks_a_stale_compaction_marker(tmp_path):
+    """`first_kept` is an index. Session clamps on load, but the marker on disk
+    has to shrink too — a value left past the new length would re-clamp beyond
+    the turns appended afterwards and hide them from the model's context."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": [{"type": "text", "text": "1"}]},
+        {"role": "user", "content": "b"},
+        {"role": "assistant", "content": [{"type": "text", "text": "2"}]},
+    ], 0))
+    _run(chat.put_compaction(ws, cid, {"summary": "earlier work", "first_kept": 3}))
+    _run(chat.truncate_last_exchange(ws, cid))
+    marker = _run(chat.get_compaction(ws, cid))
+    assert marker["first_kept"] == 2, marker
+    assert marker["summary"] == "earlier work"
+
+    # And the model's view still contains the turn sent after the truncate.
+    left = _run(chat.load_messages(ws, cid))
+    _run(chat.append_messages(ws, cid, [{"role": "user", "content": "b again"}], len(left)))
+    reloaded = _run(chat.load_messages(ws, cid))
+    session = chat.Session(ws, cid, reloaded, summary=marker["summary"],
+                           first_kept=int(marker["first_kept"]))
+    assert {"role": "user", "content": "b again"} in session.context()
+
+
+def test_truncate_keeps_a_marker_that_still_fits(tmp_path):
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": [{"type": "text", "text": "1"}]},
+        {"role": "user", "content": "b"},
+    ], 0))
+    _run(chat.put_compaction(ws, cid, {"summary": "s", "first_kept": 1}))
+    _run(chat.truncate_last_exchange(ws, cid))
+    assert _run(chat.get_compaction(ws, cid))["first_kept"] == 1
+
+
+def test_truncate_cuts_at_a_plain_user_turn_not_a_tool_result(tmp_path):
+    """A tool-result batch is a user-role message. Cutting there would strand
+    the assistant `tool_use` it answers; the cut has to land on a real turn."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "run it"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "A", "name": "bash", "input": {"command": "ls"}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "A", "content": "out"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "done"}]},
+    ], 0))
+    removed = _run(chat.truncate_last_exchange(ws, cid))
+    assert removed == "run it"
+    assert _run(chat.load_messages(ws, cid)) == []
+
+
+def test_truncate_on_a_chat_with_no_user_turn_is_a_noop(tmp_path):
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+    ], 0))
+    assert _run(chat.truncate_last_exchange(ws, cid)) is None
+    assert len(_run(chat.load_messages(ws, cid))) == 1
+
+
+def test_truncate_ignores_internal_scaffolding_turns(tmp_path):
+    """The output-limit resume prompt is a user-role message the harness wrote.
+    Regenerate must rewind to the user's own last turn, not to that."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "write it"},
+        {"role": "assistant", "content": [{"type": "text", "text": "part one"}]},
+        {"role": "user", "internal": True, "content": "Continue."},
+        {"role": "assistant", "content": [{"type": "text", "text": "part two"}]},
+    ], 0))
+    assert _run(chat.truncate_last_exchange(ws, cid)) == "write it"
+    assert _run(chat.load_messages(ws, cid)) == []
