@@ -20,6 +20,9 @@ _BASH_TOOL = {
         "Execute a shell command in the workspace sandbox.\n\n"
         "Usage:\n"
         "- Working directory is /workspace. Never prefix commands with `cd /workspace`.\n"
+        "- Save files in the workspace, never /tmp — every command gets its own /tmp, "
+        "discarded the moment it exits, and the read/edit/canvas tools cannot see it. "
+        "Download with `curl -o report.pdf <url>`, not `curl -o /tmp/report.pdf <url>`.\n"
         "- Use `rg` or `rg --files` for searching — it's faster than grep.\n"
         "- Use `jq` to extract fields from JSON.\n"
         "- Use the `read` tool (not cat/head/tail) for viewing files.\n"
@@ -346,9 +349,19 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
     tools += [_normalize_tool(t) for t in (custom or [])]
     return tools
 
+_TMP_ERROR = ("/tmp is not shared — every bash command gets its own, discarded when it "
+              "exits, and the file tools cannot see it. Save into the workspace instead "
+              "(relative paths, e.g. report.pdf)")
+
+
 def _resolve_path(raw_path, workspace):
     ws = pathlib.Path(workspace).resolve()
-    rel = raw_path.removeprefix("/workspace/").lstrip("/")
+    # Every other absolute path is silently read as workspace-relative, which
+    # turns a /tmp write into a confusing "does not exist" one step later.
+    if raw_path == "/tmp" or raw_path.startswith("/tmp/"):
+        raise ValueError(_TMP_ERROR)
+    # HOME is /workspace in the sandbox, so `~/x` names a workspace file.
+    rel = raw_path.removeprefix("~/").removeprefix("/workspace/").lstrip("/")
     path = (ws / rel).resolve()
     if not path.is_relative_to(ws): raise ValueError("path escapes workspace")
     for name in (".db", ".database"):
