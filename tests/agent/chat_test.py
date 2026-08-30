@@ -424,3 +424,83 @@ def test_normalize_is_idempotent():
     once = normalize(msgs)
     twice = normalize(once)
     assert once == twice
+
+
+# ---- Citations: the `sources` part on both search paths ----
+
+def test_brave_search_result_projects_sources():
+    """The tool stores its rows as JSON, so refetch rebuilds the same `sources`
+    part the live stream emitted — and it lands on the assistant turn that ran
+    the search, after the step, before the answer."""
+    import json
+    rows = [{"title": "Non-oil GDP up 4.9%", "url": "https://reuters.com/a", "snippet": "Activity expanded…"},
+            {"title": "Q2 review", "url": "https://argaam.com/b", "snippet": "PMI held above 55"}]
+    raw = [
+        {"role": "user", "content": "how did non-oil GDP do?"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "S1", "name": "web_search", "input": {"query": "saudi non-oil gdp"}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "S1",
+             "content": json.dumps({"query": "saudi non-oil gdp", "results": rows})}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "It grew 4.9%."}]},
+    ]
+    out = to_ui_messages(raw)
+    assert [m["role"] for m in out] == ["user", "assistant"]
+    kinds = [p["type"] for p in out[1]["parts"]]
+    assert kinds == ["step", "sources", "text"], kinds
+    assert out[1]["parts"][1]["sources"] == rows
+
+
+def test_search_sources_skip_errors_and_junk():
+    """An errored search, a non-JSON body, and a row with no URL all have to
+    leave the transcript clean rather than render an empty chip row."""
+    raw = [
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "S1", "name": "web_search", "input": {"query": "a"}},
+            {"type": "tool_use", "id": "S2", "name": "web_search", "input": {"query": "b"}},
+            {"type": "tool_use", "id": "S3", "name": "web_search", "input": {"query": "c"}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "S1", "content": "Error: web search failed", "is_error": True},
+            {"type": "tool_result", "tool_use_id": "S2", "content": "No results for 'b'."},
+            {"type": "tool_result", "tool_use_id": "S3", "content": '{"results": [{"title": "T"}]}'}]},
+    ]
+    assert [p["type"] for p in to_ui_messages(raw)[0]["parts"]] == ["step", "step", "step"]
+
+
+def test_only_web_search_results_become_sources():
+    """A tool_result batch is hidden as a whole; only a `web_search` one is
+    allowed to surface as citations. A bash result that happens to be JSON
+    with a `results` key must not turn into source chips."""
+    import json
+    raw = [
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "B1", "name": "bash", "input": {"command": "cat r.json"}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "B1",
+             "content": json.dumps({"results": [{"url": "https://example.com", "title": "x"}]})}]},
+    ]
+    assert [p["type"] for p in to_ui_messages(raw)[0]["parts"]] == ["step"]
+
+
+def test_native_search_result_blocks_project_sources():
+    """Anthropic's server-side search already stores its rows in the assistant
+    turn — project them so citations survive a reload on that path too."""
+    raw = [{"role": "assistant", "content": [
+        {"type": "server_tool_use", "id": "srv1", "name": "web_search", "input": {"query": "q"}},
+        {"type": "web_search_tool_result", "tool_use_id": "srv1", "content": [
+            {"type": "web_search_result", "url": "https://reuters.com/a", "title": "Non-oil GDP up"},
+            {"type": "web_search_result", "url": "https://argaam.com/b", "title": "Q2 review"}]},
+        {"type": "text", "text": "It grew 4.9%."}]}]
+    parts = to_ui_messages(raw)[0]["parts"]
+    assert [p["type"] for p in parts] == ["step", "sources", "text"]
+    assert [s["url"] for s in parts[1]["sources"]] == ["https://reuters.com/a", "https://argaam.com/b"]
+    assert parts[1]["sources"][0]["snippet"] == ""   # no snippet in this shape
+
+
+def test_native_search_error_block_yields_no_sources():
+    raw = [{"role": "assistant", "content": [
+        {"type": "server_tool_use", "id": "srv1", "name": "web_search", "input": {"query": "q"}},
+        {"type": "web_search_tool_result", "tool_use_id": "srv1",
+         "content": {"type": "web_search_tool_result_error", "error_code": "max_uses_exceeded"}},
+        {"type": "text", "text": "Search unavailable."}]}]
+    assert [p["type"] for p in to_ui_messages(raw)[0]["parts"]] == ["step", "text"]

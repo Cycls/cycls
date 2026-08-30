@@ -43,3 +43,17 @@ export function setFollowUpsEnabled(on: boolean, source: string) {
   window.dispatchEvent(new Event("followupschange"));
   track("followups_toggled", { to: on, source });
 }
+
+// Clarifying-question card (the agent's `ask` tool). Off hides the card, not
+// the question: the step line still names it and typing a reply still answers.
+const ASK_KEY = "cycls_ask";
+
+export const askEnabled = () => {
+  try { return localStorage.getItem(ASK_KEY) !== "off"; } catch { return true; }
+};
+
+export function setAskEnabled(on: boolean, source: string) {
+  localStorage.setItem(ASK_KEY, on ? "on" : "off");
+  window.dispatchEvent(new Event("askchange"));
+  track("ask_toggled", { to: on, source });
+}

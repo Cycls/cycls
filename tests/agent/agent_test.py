@@ -1243,3 +1243,159 @@ def test_skill_tool_call_returns_body_in_history(agent_env):
     assert "files in skills/haiku/" in results[0]["content"]
 
 
+
+
+def test_web_search_yields_sources_and_stores_json(agent_env):
+    """The two-channel return: the client gets a `sources` event mid-stream and
+    the model's tool_result is the JSON those same rows came from — so the
+    refetch projection can rebuild identical citations."""
+    import json as _json
+    ws, ctx = agent_env
+
+    rows = [{"title": "Non-oil GDP up", "url": "https://reuters.com/a", "snippet": "Expanded 4.9%"}]
+    round1 = _make_response(
+        [_tool_use_block("s1", name="web_search", inp={"query": "saudi gdp"})],
+        stop_reason="tool_use")
+    final = _make_response([_text_block("It grew 4.9%.")])
+    responses = iter([round1, final])
+
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+
+    search = AsyncMock(return_value={
+        "_model": _json.dumps({"query": "saudi gdp", "results": rows}),
+        "_ui": {"type": "sources", "sources": rows},
+    })
+    with _mock_anthropic(mock_client), \
+         patch("cycls._agent.tools._exec_web_search", new=search):
+        items = asyncio.run(_drain(_run(context=ctx, allowed_tools=["WebSearch"])))
+
+    assert {"type": "sources", "sources": rows} in items
+
+    history = _read_history(ctx)
+    result = next(b for m in history if m["role"] == "user" and isinstance(m["content"], list)
+                  for b in m["content"] if b.get("type") == "tool_result")
+    assert _json.loads(result["content"])["results"] == rows
+
+
+def test_two_channel_tool_without_ui_still_answers_the_model(agent_env):
+    """`_ui` is optional — a tool may use the envelope purely to keep its
+    model-facing payload separate, and the loop must not emit a bare event."""
+    ws, ctx = agent_env
+
+    round1 = _make_response(
+        [_tool_use_block("s1", name="web_search", inp={"query": "q"})], stop_reason="tool_use")
+    final = _make_response([_text_block("ok")])
+    responses = iter([round1, final])
+
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+
+    with _mock_anthropic(mock_client), \
+         patch("cycls._agent.tools._exec_web_search",
+               new=AsyncMock(return_value={"_model": "plain result"})):
+        items = asyncio.run(_drain(_run(context=ctx, allowed_tools=["WebSearch"])))
+
+    assert not any(isinstance(i, dict) and i.get("type") == "sources" for i in items)
+    history = _read_history(ctx)
+    result = next(b for m in history if m["role"] == "user" and isinstance(m["content"], list)
+                  for b in m["content"] if b.get("type") == "tool_result")
+    assert result["content"] == "plain result"
+
+
+# ---------------------------------------------------------------------------
+# Terminal tools — `ask` hands control to the user
+# ---------------------------------------------------------------------------
+
+def _capturing_client(responses):
+    """A mock client that records every request it is asked to stream."""
+    calls, it = [], iter(responses)
+    client = MagicMock()
+
+    def stream(**kw):
+        calls.append(kw)
+        return FakeStream(next(it))
+
+    client.messages.stream = stream
+    return client, calls
+
+
+def test_ask_ends_the_turn(agent_env):
+    """`ask` is terminal: once the card is with the user the loop stops instead
+    of letting the model keep working against a question it hasn't heard back
+    on. The second response is queued and should never be requested."""
+    ws, ctx = agent_env
+    asked = _make_response(
+        [_tool_use_block("t1", name="ask", inp={"questions": [{"question": "Which format?"}]})],
+        stop_reason="tool_use")
+    never = _make_response([_text_block("should not be reached")])
+    client, calls = _capturing_client([asked, never])
+
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Ask"])))
+
+    assert len(calls) == 1, "the loop asked the model for another turn after ask"
+    # Recorded and checkpointed before the break, so the transcript still pairs.
+    history = _read_history(ctx)
+    assert [m["role"] for m in history] == ["user", "assistant", "user"]
+    use_ids, result_ids = _history_tool_ids(history)
+    assert use_ids == result_ids == ["t1"]
+
+
+def test_ask_that_errors_does_not_end_the_turn(agent_env):
+    """Terminal means "the human has it", not "the tool ran". A malformed ask
+    never reached the user, so the model gets another turn to fix it."""
+    ws, ctx = agent_env
+    bad = _make_response(
+        [_tool_use_block("t1", name="ask", inp={"questions": []})], stop_reason="tool_use")
+    final = _make_response([_text_block("Fixed")])
+    client, calls = _capturing_client([bad, final])
+
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Ask"])))
+
+    assert len(calls) == 2
+
+
+def test_second_ask_in_one_batch_is_refused_by_the_loop(agent_env):
+    """Two cards in one turn would leave the user answering only the second, so
+    the loop runs the first and hands the model an error for the rest."""
+    ws, ctx = agent_env
+    both = _make_response([
+        _tool_use_block("t1", name="ask", inp={"questions": [{"question": "A?"}]}),
+        _tool_use_block("t2", name="ask", inp={"questions": [{"question": "B?"}]}),
+    ], stop_reason="tool_use")
+    client, calls = _capturing_client([both, _make_response([_text_block("x")])])
+
+    with _mock_anthropic(client):
+        events = asyncio.run(_drain(_run(context=ctx, allowed_tools=["Ask"])))
+
+    assert len(calls) == 1                      # the first ask is still terminal
+    cards = [e for e in events if isinstance(e, dict) and e.get("action") == "ask"]
+    assert len(cards) == 1 and cards[0]["questions"][0]["question"] == "A?"
+    history = _read_history(ctx)
+    results = [b for m in history if m["role"] == "user" and isinstance(m["content"], list)
+               for b in m["content"] if b.get("type") == "tool_result"]
+    assert len(results) == 2                    # both tool_use blocks stay paired
+    assert results[1]["content"].startswith("Error")
+
+
+def test_tool_guidance_rides_with_the_enabled_tool(agent_env):
+    """Opting into the tool is the only switch — no operator has to remember
+    matching prompt copy, and a tool that isn't enabled contributes nothing."""
+    ws, ctx = agent_env
+
+    client, calls = _capturing_client([_make_response([_text_block("hi")])])
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Ask"])))
+    assert "## Asking the user" in calls[0]["system"][0]["text"]
+
+    ctx2 = _make_context(ws)
+    ctx2.chat_id = "other-chat"
+    # The harness caches one SDK client per vendor; the second run needs its own
+    # or it reuses the first mock, whose responses are spent.
+    _providers._clients.clear()
+    client, calls = _capturing_client([_make_response([_text_block("hi")])])
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx2, allowed_tools=["Bash"])))
+    assert "## Asking the user" not in calls[0]["system"][0]["text"]

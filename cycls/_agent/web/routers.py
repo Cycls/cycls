@@ -3,7 +3,7 @@
 Chat metadata + message log and shares live in the workspace DB — see
 `cycls._agent.state`. Files stay on the workspace filesystem (POSIX-shaped).
 """
-import asyncio, os, secrets, shutil, tempfile, time, unicodedata, uuid, zipfile
+import asyncio, json, os, secrets, shutil, tempfile, time, unicodedata, uuid, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -25,6 +25,22 @@ DEFAULT_MAX_UPLOAD_MB = 512   # per-file upload cap when not configured
 _NO_CACHE = {"Cache-Control": "no-cache"}
 
 
+def _search_rows(body):
+    """Citation rows out of a stored `web_search` tool_result. The tool writes
+    its results as JSON, so this reads back exactly what the live stream sent
+    as a `sources` event — one format, both paths."""
+    if not isinstance(body, str):
+        return []
+    try:
+        data = json.loads(body)
+    except Exception:
+        return []
+    rows = (data or {}).get("results") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return []
+    return [r for r in rows if isinstance(r, dict) and r.get("url")]
+
+
 def to_ui_messages(raw):
     """Stored API messages → FE shape `{role, content: str, parts?, attachments?}`.
     Drops harness scaffolding — messages tagged `internal` (compaction summary,
@@ -35,8 +51,13 @@ def to_ui_messages(raw):
     # tool_use id → its result errored. Lets the FE downgrade failed canvas
     # calls from a file card back to a plain step.
     errored = set()
+    search_ids = set()   # client-side `web_search` calls, by tool_use id
     for msg in raw:
         c = msg.get("content")
+        if msg.get("role") == "assistant" and isinstance(c, list):
+            for b in c:
+                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "web_search":
+                    search_ids.add(b.get("id"))
         if msg.get("role") == "user" and isinstance(c, list):
             for b in c:
                 if isinstance(b, dict) and b.get("type") == "tool_result":
@@ -52,6 +73,16 @@ def to_ui_messages(raw):
         if role == "user":
             if isinstance(c, list):
                 if all(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
+                    # The batch itself stays hidden, but a `web_search` result in
+                    # it carries the sources the answer cites — attach them to the
+                    # assistant turn that ran the search, where the live stream
+                    # put them (after the search step, before the answer).
+                    if out and out[-1]["role"] == "assistant":
+                        for b in c:
+                            if b.get("tool_use_id") not in search_ids or b.get("is_error"):
+                                continue
+                            if rows := _search_rows(b.get("content")):
+                                out[-1]["parts"].append({"type": "sources", "sources": rows})
                     continue
                 text = "".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
             elif isinstance(c, str):
@@ -78,6 +109,17 @@ def to_ui_messages(raw):
                     if b.get("id") in errored:
                         part["ok"] = False
                     parts.append(part)
+                elif t == "web_search_tool_result":
+                    # Anthropic's server-side search stores its rows right here,
+                    # so citations survive a reload for free. No snippet in this
+                    # shape — the card degrades to domain + title.
+                    # An error comes back as a dict, not a list of results.
+                    body = b.get("content")
+                    rows = [{"title": (r.get("title") or "").strip(), "url": r["url"], "snippet": ""}
+                            for r in (body if isinstance(body, list) else [])
+                            if isinstance(r, dict) and r.get("type") == "web_search_result" and r.get("url")]
+                    if rows:
+                        parts.append({"type": "sources", "sources": rows})
                 elif t == "server_tool_use":
                     # Server-side tools (web_search etc.) run Anthropic-side. The live
                     # provider stream yields a Step for these at content_block_stop;
@@ -221,6 +263,16 @@ def chats_router(ws_dep):
         merged.setdefault("updatedAt", now)
         await state.put_meta(ws, chat_id, merged)
         return merged
+
+    @r.delete("/chats/{chat_id}/last-exchange")
+    async def truncate_last_exchange(chat_id: str, ws: Workspace = ws_dep):
+        """Drop the last user turn and everything after it — the persistence
+        half of `regenerate`. The FE then re-sends the same message, so the
+        run that follows is an ordinary send."""
+        if (await state.get_meta(ws, chat_id)) is None:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        removed = await state.truncate_last_exchange(ws, chat_id)
+        return {"ok": removed is not None}
 
     @r.delete("/chats/{chat_id}")
     async def delete_chat(chat_id: str, ws: Workspace = ws_dep):

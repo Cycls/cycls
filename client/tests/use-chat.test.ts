@@ -231,3 +231,149 @@ describe("loadChat (rfc-004 f556eee)", () => {
     expect(created.length).toBe(1);
   });
 });
+
+
+describe("regenerate() — rewind the last exchange, then re-send it", () => {
+  // A complete SSE turn: the server hands back a chat id, then some text.
+  function sseTurn(chatId: string, text: string): any {
+    const body = [
+      `data: ${JSON.stringify({ type: "chat_id", chat_id: chatId })}\n\n`,
+      `data: ${JSON.stringify({ type: "text", text })}\n\n`,
+    ].join("");
+    let sent = false;
+    return {
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (sent) return { done: true, value: undefined };
+            sent = true;
+            return { done: false, value: new TextEncoder().encode(body) };
+          },
+        }),
+      },
+    };
+  }
+
+  test("truncates on the server BEFORE re-sending, and replaces the exchange", async () => {
+    const calls: { url: string; method?: string }[] = [];
+    const fetchMock = vi.fn(async (url: any, init: any) => {
+      calls.push({ url: String(url), method: init?.method });
+      if (String(url).includes("last-exchange")) return { ok: true, json: async () => ({ ok: true }) };
+      return sseTurn("c1", "second answer");
+    });
+    global.fetch = fetchMock as any;
+
+    const { result } = renderHook(() => useChat("http://api.test"));
+    await act(async () => { await result.current.send("hello"); });
+    expect(result.current.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+
+    await act(async () => { await result.current.regenerate(); });
+    // regenerate defers the re-send by a macrotask so the truncated messages
+    // commit (and messagesRef catches up) before send() reads them.
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+
+    const truncateAt = calls.findIndex((c) => c.url.includes("last-exchange"));
+    const resendAt = calls.findIndex((c, i) => i > truncateAt && c.url.includes("/chat"));
+    expect(truncateAt).toBeGreaterThanOrEqual(0);
+    expect(calls[truncateAt].method).toBe("DELETE");
+    expect(calls[truncateAt].url).toContain("/chats/c1/last-exchange");
+    // Ordering is the invariant: re-sending first would double the history.
+    expect(resendAt).toBeGreaterThan(truncateAt);
+
+    // One exchange, not two — the old assistant turn was replaced.
+    expect(result.current.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(result.current.messages[0].content).toBe("hello");
+  });
+
+  test("a failed truncate aborts rather than duplicating history", async () => {
+    const fetchMock = vi.fn(async (url: any) => {
+      if (String(url).includes("last-exchange")) {
+        return { ok: false, status: 500, statusText: "boom", clone: () => ({ json: async () => ({}) }) };
+      }
+      return sseTurn("c1", "answer");
+    });
+    global.fetch = fetchMock as any;
+
+    const { result } = renderHook(() => useChat("http://api.test"));
+    await act(async () => { await result.current.send("hello"); });
+    const sends = () => fetchMock.mock.calls.filter((c: any) => c[1]?.method === "POST").length;
+    const before = sends();
+
+    await act(async () => { await result.current.regenerate(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+
+    // The DELETE 500s, so no re-send follows and history is untouched.
+    expect(sends()).toBe(before);
+    expect(result.current.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
+  test("no-ops on an empty chat", async () => {
+    const fetchMock = vi.fn();
+    global.fetch = fetchMock as any;
+    const { result } = renderHook(() => useChat("http://api.test"));
+    await act(async () => { await result.current.regenerate(); });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("sources — citation parts from web search", () => {
+  function sseLines(lines: string[]): any {
+    const body = lines.map((l) => `data: ${l}\n\n`).join("");
+    let sent = false;
+    return {
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (sent) return { done: true, value: undefined };
+            sent = true;
+            return { done: false, value: new TextEncoder().encode(body) };
+          },
+        }),
+      },
+    };
+  }
+
+  const rows = (host: string) => [{ title: `T ${host}`, url: `https://${host}/a`, snippet: "s" }];
+
+  test("two parallel searches keep separate source lists", async () => {
+    // Same-type parts are normally merged as text deltas; a `sources` array is
+    // a whole value, so back-to-back events must not be concatenated.
+    global.fetch = vi.fn(async () =>
+      sseLines([
+        JSON.stringify({ type: "step", id: "S1", tool_name: "Web Search", step: "a" }),
+        JSON.stringify({ type: "sources", sources: rows("reuters.com") }),
+        JSON.stringify({ type: "sources", sources: rows("argaam.com") }),
+        JSON.stringify({ type: "text", text: "done" }),
+      ]),
+    ) as any;
+
+    const { result } = renderHook(() => useChat("http://api.test"));
+    await act(async () => { await result.current.send("hi"); });
+
+    const parts = result.current.messages[1].parts!;
+    const sources = parts.filter((p: any) => p.type === "sources");
+    expect(sources).toHaveLength(2);
+    expect(sources[0].sources).toEqual(rows("reuters.com"));
+    expect(sources[1].sources).toEqual(rows("argaam.com"));
+  });
+
+  test("a sources part survives alongside the search step and the answer", async () => {
+    global.fetch = vi.fn(async () =>
+      sseLines([
+        JSON.stringify({ type: "step", id: "S1", tool_name: "Web Search", step: "saudi gdp" }),
+        JSON.stringify({ type: "sources", sources: rows("reuters.com") }),
+        JSON.stringify({ type: "text", text: "It grew 4.9%." }),
+      ]),
+    ) as any;
+
+    const { result } = renderHook(() => useChat("http://api.test"));
+    await act(async () => { await result.current.send("hi"); });
+
+    expect(result.current.messages[1].parts!.map((p: any) => p.type))
+      .toEqual(["step", "sources", "text"]);
+    expect(result.current.messages[1].content).toBe("It grew 4.9%.");
+  });
+});

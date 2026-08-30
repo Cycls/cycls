@@ -173,6 +173,13 @@ Supported actions:
 | Action | Fields | Behavior |
 |--------|--------|----------|
 | `open_plan_modal` | — | Opens the pricing modal. FE auto-picks `user` vs `organization` based on the active Clerk org. |
+| `open_canvas` | `path`, `name?` | Opens a workspace file in the canvas viewer. An `apps/<slug>/index.html` path opens under its manifest name and icon. |
+| `suggest` | `text` | One follow-up chip above the composer; click sends it, `↑` in an empty composer edits it. Users switch the chips off in Settings. |
+| `ask` | `questions` | A question card above the composer (up to 3 questions, each with `options` and optional `header`/`multi_select`). Answers arrive as the next user message — the options are shortcuts, not a gate, and typing any reply answers too. Users switch the card off in Settings. |
+
+The `Canvas`, `Suggest` and `Ask` builtins fire these for you; yield them
+directly only from a custom loop. Unlike the rest, `ask` also **ends the turn**
+when the builtin fires it — see [notes/tool-rows.md](notes/tool-rows.md).
 
 ### Component reference
 
@@ -185,6 +192,7 @@ Supported actions:
 | `callout` | `callout`, `style` | Single |
 | `status` | `status` | Replaces previous |
 | `image` | `src` | Single |
+| `sources` | `sources` | Citation chips — `[{title, url, snippet}]`. Emitted by `WebSearch`; a link in the answer matching one of these URLs becomes a chip too |
 | `ui` | `action` | Fire-and-forget client action |
 
 HTML strings pass through for custom styling.
@@ -338,7 +346,7 @@ async for ev in llm.run(context=context):
 | `.system(str)` | System prompt |
 | `.tools(list)` | Custom tool JSON schemas |
 | `.on(name, fn, label=)` | Register async handler for a custom tool; `label` (input → str) renders the step line in the UI, like `Bash(command)` — default is the input's first string value |
-| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `DataBase`, `Canvas`) |
+| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `DataBase`, `Canvas`, `MiniApp`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user |
 | `.instructions(path)` | Workspace instructions file auto-loaded into the system prompt (default `AGENT.md`; `None` disables) |
 | `.skills(*dirs)` | Ship skills with the agent (dirs of `<name>/SKILL.md` folders; `None` disables skills) |
 | `.context(n)` | Model context window in tokens — sets when compaction kicks in (default 1M; set it for smaller models) |

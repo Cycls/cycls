@@ -3,6 +3,15 @@ import { useApi, reasonOf } from "./use-api";
 import { track } from "../lib/posthog";
 import { useToast } from "../lib/toast";
 
+// One search result, as the search engine returned it. A citation chip only
+// ever renders from one of these, so a URL the model invented can't pose as a
+// source — it stays an ordinary link.
+export interface Source {
+  title: string;
+  url: string;
+  snippet?: string;
+}
+
 export interface Part {
   type: string;
   text?: string;
@@ -27,6 +36,7 @@ export interface Part {
   caption?: string;
   chat_id?: string;
   action?: string;
+  sources?: Source[];
 }
 
 export type UIAction = { action: string } & Record<string, unknown>;
@@ -163,9 +173,12 @@ export function useChat(baseUrl: string = "") {
           ...(await authHeaders()),
         };
 
-        // Server loads history from disk; only ship the new user message.
-        const currentMsgs = messagesRef.current;
-        const newUserMsg = currentMsgs[currentMsgs.length - 2]; // -1 is the empty assistant placeholder
+        // Server loads history from disk; only ship the new user message —
+        // the one built above, NOT a re-read of messagesRef. The ref only
+        // catches up when React runs the updater, so a send dispatched from a
+        // deferred callback (retry, regenerate) could otherwise read past the
+        // end of a rewound list and throw before ever reaching fetch.
+        const newUserMsg = userMessage;
         const withPaths = newUserMsg.attachments?.filter((a) => a.path);
         let content: string | Record<string, string>[] = newUserMsg.content;
         if (withPaths && withPaths.length > 0) {
@@ -268,7 +281,10 @@ export function useChat(baseUrl: string = "") {
                   item[type as keyof Part] !== undefined
                 ) {
                   const key = type as keyof Part;
-                  if (type === "step") {
+                  // A non-string payload is a whole value, not a delta — two
+                  // parallel searches each yield a complete `sources` array, and
+                  // concatenating them would stringify both into garbage.
+                  if (type === "step" || typeof item[key] !== "string") {
                     currentPart = { ...item };
                     parts.push(currentPart);
                   } else {
@@ -401,6 +417,28 @@ export function useChat(baseUrl: string = "") {
     // Re-send after state update
     setTimeout(() => send(text, attachments, origin), 0);
   }, [isStreaming, send]);
+
+  // Re-run the last exchange. The server holds the finished turn on disk, so
+  // the old one has to be dropped there BEFORE re-sending — otherwise the
+  // resend appends a duplicate exchange instead of replacing it. A failed
+  // truncate aborts the whole thing (api() has already toasted the reason)
+  // rather than leaving history doubled.
+  const regenerate = useCallback(async () => {
+    if (isStreaming) return;
+    const msgs = messagesRef.current;
+    let i = msgs.length - 1;
+    while (i >= 0 && msgs[i].role !== "user") i--;
+    if (i < 0) return;
+    const { content, attachments } = msgs[i];
+    if (chatIdRef.current) {
+      try {
+        await api(`/chats/${encodeURIComponent(chatIdRef.current)}/last-exchange`, { method: "DELETE" });
+      } catch { return; }
+    }
+    track("message_regenerated", { chat_id: chatIdRef.current, message_count: msgs.length });
+    setMessages(msgs.slice(0, i));
+    setTimeout(() => send(content, attachments, "regenerate"), 0);
+  }, [isStreaming, send, api, setMessages]);
 
   const stop = useCallback(() => {
     if (abortRef.current) {
@@ -539,6 +577,7 @@ export function useChat(baseUrl: string = "") {
     chatId,
     send,
     retry,
+    regenerate,
     stop,
     clear,
     notify,

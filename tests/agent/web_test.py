@@ -1325,3 +1325,47 @@ def test_recursive_and_search_stay_scoped_to_path(tmp_path):
     assert [e["path"] for e in hits] == ["a/keep.txt"]
 
     assert len(client.get("/files", params={"search": "txt"}).json()) == 2
+
+
+# ---- DELETE /chats/{id}/last-exchange (the persistence half of regenerate) ----
+
+def test_last_exchange_route_rewinds_the_chat(tmp_path):
+    import asyncio
+    from cycls._agent import state
+    from cycls._app.db import workspace
+
+    from cycls._app.auth import User
+
+    client = _ws_routers_client(tmp_path)
+    client.put("/chats/c1", json={"title": "hello"})
+    # Same resolution the routers do: personal workspace of the fixed user.
+    ws = workspace(User(id="user_1", org_id="org_1"), tmp_path,
+                   base=f"file://{tmp_path}", ws="u-user_1")
+    asyncio.run(state.append_messages(ws, "c1", [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": [{"type": "text", "text": "one"}]},
+        {"role": "user", "content": "second"},
+        {"role": "assistant", "content": [{"type": "text", "text": "two"}]},
+    ], 0))
+
+    r = client.delete("/chats/c1/last-exchange")
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert [m["content"] for m in client.get("/chats/c1").json()["messages"]] == ["first", "one"]
+
+    # Nothing left to rewind past — the route reports it rather than erroring.
+    client.delete("/chats/c1/last-exchange")
+    assert client.delete("/chats/c1/last-exchange").json() == {"ok": False}
+
+
+def test_last_exchange_route_404s_on_unknown_chat(tmp_path):
+    client = _ws_routers_client(tmp_path)
+    assert client.delete("/chats/nope/last-exchange").status_code == 404
+
+
+def test_last_exchange_route_does_not_shadow_chat_delete(tmp_path):
+    """`/chats/{id}` is registered after the more specific path — make sure a
+    plain delete still wipes the chat rather than matching the sub-route."""
+    client = _ws_routers_client(tmp_path)
+    client.put("/chats/c1", json={"title": "hello"})
+    assert client.delete("/chats/c1").status_code == 200
+    assert client.get("/chats").json() == []

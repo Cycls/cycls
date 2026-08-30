@@ -20,7 +20,7 @@ import type { Attachment, ChatApi, AppConfig } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
 import { track } from "../lib/posthog";
-import { toggleDark, cn, followUpsEnabled } from "../lib/utils";
+import { toggleDark, cn, followUpsEnabled, askEnabled } from "../lib/utils";
 import { useToast } from "../lib/toast";
 import { useSpeechRecognition } from "../hooks/use-speech";
 import { useUrlParam } from "../hooks/use-url-param";
@@ -76,6 +76,14 @@ export interface FilesPanelProps {
   org?: { id: string; name: string } | null;
 }
 
+// A message composed while the agent was still working, waiting its turn.
+interface Queued {
+  id: string;
+  text: string;
+  attachments?: Attachment[];
+  origin: string;
+}
+
 const RAIL_ICON_W = 44;   // folded rail: icon strip only
 
 export function Chat({ chat, onShare, files, account, config }: {
@@ -85,7 +93,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   account?: AccountInfo | null;
   config?: AppConfig | null;
 }) {
-  const { messages, isStreaming, chatLoading, chatId, send: onSend, retry: onRetry, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, setUIHandler } = chat;
+  const { messages, isStreaming, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, setUIHandler } = chat;
   const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
@@ -129,15 +137,41 @@ export function Chat({ chat, onShare, files, account, config }: {
   // chip above the composer; click sends it, ArrowUp pulls it in to edit.
   const [followUp, setFollowUp] = useState<string | null>(null);
   const [followUpsOn, setFollowUpsOn] = useState(followUpsEnabled);
+  // Messages composed while the agent is still working. They flush one at a
+  // time when a run ends on its own; an explicit Stop *holds* the queue
+  // instead, so interrupting a run that went wrong doesn't immediately fire
+  // the next message into it.
+  const [queued, setQueued] = useState<Queued[]>([]);
+  // `queuedRef` is the source of truth every writer updates in the same tick,
+  // so a click can't race the stream-end flush on a stale copy; `queued` is
+  // just its rendered shadow.
+  const queuedRef = useRef<Queued[]>([]);
+  const heldRef = useRef(false);
+  const wasStreamingRef = useRef(false);
+  // The agent's `ask` tool — up to three questions on one card above the
+  // composer. The options are shortcuts, not a constraint: typing any reply
+  // answers it too.
+  const [ask, setAsk] = useState<{ questions: AskQuestion[] } | null>(null);
   useEffect(() => {
     const sync = () => {
       setFollowUpsOn(followUpsEnabled());
       if (!followUpsEnabled()) setFollowUp(null);
+      if (!askEnabled()) setAsk(null);
     };
     window.addEventListener("followupschange", sync);
-    return () => window.removeEventListener("followupschange", sync);
+    window.addEventListener("askchange", sync);
+    return () => {
+      window.removeEventListener("followupschange", sync);
+      window.removeEventListener("askchange", sync);
+    };
   }, []);
-  useEffect(() => { setFollowUp(null); }, [chatId]);
+  useEffect(() => {
+    setFollowUp(null);
+    setAsk(null);
+    queuedRef.current = [];
+    setQueued([]);
+    heldRef.current = false;
+  }, [chatId]);
   const [canvasTabs, setCanvasTabs] = useState<CanvasFile[]>([]);
   const [canvasActive, setCanvasActive] = useState<string | null>(null);
   const [canvasHidden, setCanvasHidden] = useState(false);
@@ -211,6 +245,24 @@ export function Chat({ chat, onShare, files, account, config }: {
         else openFileInCanvas(ev.path, typeof ev.name === "string" ? ev.name : undefined);
       } else if (ev.action === "suggest" && typeof ev.text === "string") {
         if (followUpsEnabled()) setFollowUp(ev.text);
+      } else if (ev.action === "ask") {
+        // The flat singular keys are the same event's back-compat tail.
+        const raw = Array.isArray(ev.questions) ? ev.questions
+                  : typeof ev.question === "string" ? [ev] : [];
+        const questions = (raw as Record<string, unknown>[])
+          .filter((q) => q && typeof q.question === "string")
+          .map((q) => {
+            const options = Array.isArray(q.options)
+              ? (q.options as { label?: unknown; description?: unknown }[])
+                  .filter((o) => o && typeof o.label === "string")
+                  .map((o) => ({ label: o.label as string,
+                                 description: typeof o.description === "string" ? o.description : undefined }))
+              : [];
+            return { question: q.question as string,
+                     header: typeof q.header === "string" ? q.header : undefined,
+                     options, multi: q.multi_select === true && options.length > 1 };
+          });
+        if (questions.length && askEnabled()) setAsk({ questions });
       }
     });
     return () => setUIHandler(null);
@@ -294,14 +346,67 @@ export function Chat({ chat, onShare, files, account, config }: {
 
   const handleSubmit = useCallback((overrideText?: string, origin: string = "keyboard") => {
     const text = (overrideText ?? input).trim();
-    if (!text || isStreaming || attachments.some((a) => a.status === "uploading")) return;
+    if (!text || attachments.some((a) => a.status === "uploading")) return;
     const sendAttachments = attachments.length > 0 ? [...attachments] : undefined;
     setInput("");
     setAttachments([]);
     setFollowUp(null);
+    setAsk(null);
+    // Sending mid-run queues instead: the agent's tool loops are long, and a
+    // thought the user has now shouldn't wait on them.
+    if (isStreaming) {
+      const next = [...queuedRef.current,
+                    { id: crypto.randomUUID(), text, attachments: sendAttachments, origin }];
+      queuedRef.current = next;
+      setQueued(next);
+      track("message_queued", { chat_id: chatId, origin, queue_depth: next.length });
+      return;
+    }
+    heldRef.current = false;
     onSend(text, sendAttachments, origin);
     setTimeout(() => scrollToBottom(), 0);
-  }, [input, isStreaming, onSend, attachments, scrollToBottom]);
+  }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId]);
+
+  // Drain on the falling edge of `isStreaming` — one message per edge, and the
+  // send it triggers raises the flag again, so the rest follow in order.
+  useEffect(() => {
+    const ended = wasStreamingRef.current && !isStreaming;
+    wasStreamingRef.current = isStreaming;
+    if (!ended || heldRef.current) return;
+    const [next, ...rest] = queuedRef.current;
+    if (!next) return;
+    queuedRef.current = rest;
+    setQueued(rest);
+    track("queued_message_sent", { chat_id: chatId, remaining: rest.length });
+    onSend(next.text, next.attachments, "queued");
+    setTimeout(() => scrollToBottom(), 0);
+  }, [isStreaming, onSend, scrollToBottom, chatId]);
+
+  // Stop holds the queue rather than draining into a run the user just killed.
+  const handleStop = useCallback(() => {
+    heldRef.current = true;
+    onStop();
+  }, [onStop]);
+
+  // Pull a queued message back into the composer for editing — the same
+  // gesture as accepting a follow-up, and the only way to send one while the
+  // queue is held.
+  const editQueued = useCallback((id: string) => {
+    const hit = queuedRef.current.find((m) => m.id === id);
+    if (!hit) return;
+    queuedRef.current = queuedRef.current.filter((m) => m.id !== id);
+    setQueued(queuedRef.current);
+    setInput((cur) => (cur ? `${cur} ${hit.text}` : hit.text));
+    if (hit.attachments?.length) setAttachments((cur) => [...cur, ...hit.attachments!]);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+    track("queued_message_edited", { chat_id: chatId });
+  }, [chatId]);
+
+  const dropQueued = useCallback((id: string) => {
+    queuedRef.current = queuedRef.current.filter((m) => m.id !== id);
+    setQueued(queuedRef.current);
+    track("queued_message_dropped", { chat_id: chatId });
+  }, [chatId]);
 
   handleSubmitRef.current = handleSubmit;
 
@@ -402,7 +507,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   };
 
   const inputProps = {
-    textareaRef, input, setInput, handleKeyDown, handleSubmit, isStreaming, onStop,
+    textareaRef, input, setInput, handleKeyDown, handleSubmit, isStreaming, onStop: handleStop,
     onOpenFilePicker: openFilePicker,
     onOpenFiles: files ? () => openPanel("files") : undefined,
     attachments,
@@ -647,6 +752,10 @@ export function Chat({ chat, onShare, files, account, config }: {
                         msg.role === "assistant"
                       }
                       onRetry={isLast && hasError && !isStreaming ? onRetry : undefined}
+                      onRegenerate={
+                        isLast && msg.role === "assistant" && !hasError && !isStreaming && !chatLoading
+                          ? onRegenerate : undefined
+                      }
                       onOpenFile={openFileInCanvas}
                     />
                   );
@@ -656,7 +765,35 @@ export function Chat({ chat, onShare, files, account, config }: {
             </div>
             <div className="shrink-0 px-6 pb-2 pt-1">
               <div className="max-w-3xl mx-auto">
-                {followUpsOn && followUp && !isStreaming && (
+                {ask && (
+                  <AskCard
+                    key={ask.questions.map((q) => q.question).join("|")}
+                    questions={ask.questions}
+                    onSubmit={(lines) => {
+                      track("ask_answered", { method: "option", chat_id: chatId,
+                                              questions: ask.questions.length,
+                                              multi: ask.questions.some((q) => q.multi),
+                                              count: lines.length });
+                      handleSubmit(lines.join("\n"), "ask");
+                    }}
+                    onDismiss={() => {
+                      track("ask_dismissed", { chat_id: chatId });
+                      setAsk(null);
+                    }}
+                  />
+                )}
+                <AnimatePresence initial={false}>
+                  {queued.map((m) => (
+                    <QueuedChip
+                      key={m.id}
+                      text={m.text}
+                      held={heldRef.current}
+                      onEdit={() => editQueued(m.id)}
+                      onDismiss={() => dropQueued(m.id)}
+                    />
+                  ))}
+                </AnimatePresence>
+                {followUpsOn && followUp && !isStreaming && !ask && (
                   <FollowUpChip
                     text={followUp}
                     onAccept={() => {
@@ -1066,6 +1203,180 @@ function Star({ filled, className }: { filled: boolean; className?: string }) {
     <svg className={className} fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
     </svg>
+  );
+}
+
+// A message waiting on the current run. Dashed border marks it as not-yet-
+// sent; clicking pulls it back into the composer (the same gesture that
+// accepts a follow-up), which is also the only way to send one while an
+// explicit Stop is holding the queue.
+function QueuedChip({ text, held, onEdit, onDismiss }: {
+  text: string;
+  held: boolean;
+  onEdit: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 4 }}
+      transition={{ duration: 0.15 }}
+      className="mb-2 flex justify-end px-1"
+    >
+      <div className="flex max-w-full items-center gap-0.5 rounded-2xl border border-dashed border-border bg-secondary/40 py-1.5 ps-3.5 pe-1.5">
+        <button
+          onClick={onEdit}
+          title={held ? t("queuedHeld") : t("queuedHint")}
+          className="min-w-0 text-start text-sm leading-snug break-words text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          dir="auto"
+        >
+          {text}
+        </button>
+        <button
+          onClick={onDismiss}
+          className="shrink-0 rounded-full p-1 text-muted-foreground/60 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+          aria-label={t("dismiss")}
+        >
+          <Icon name="x" className="size-3" />
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
+// The agent's `ask` tool — one question above the composer. Options are
+// shortcuts, never a gate: the composer stays live and typing any reply
+// answers too.
+//
+// The two modes are different interactions, so they look different. A
+// single-select row IS the answer — one tap sends it, and a radio that never
+// gets to show a checked state would be decoration. Multi-select can't send
+// on tap (there's no way to know you're done), so it gets checkboxes and a
+// Submit that commits the set.
+type AskQuestion = {
+  question: string;
+  header?: string;
+  options: { label: string; description?: string }[];
+  multi: boolean;
+};
+
+function AskCard({ questions, onSubmit, onDismiss }: {
+  questions: AskQuestion[];
+  onSubmit: (lines: string[]) => void;
+  onDismiss: () => void;
+}) {
+  const [picked, setPicked] = useState<string[][]>(() => questions.map(() => []));
+
+  // One single-answer question keeps the click-is-submit feel; anything more
+  // needs a Submit, and isn't ready until every question with options has one.
+  const instant = questions.length === 1 && !questions[0].multi && questions[0].options.length > 0;
+  const ready = questions.some((q) => q.options.length > 0)
+    && questions.every((q, i) => q.options.length === 0 || picked[i].length > 0);
+
+  const choose = (qi: number, label: string) => {
+    if (instant) { onSubmit([label]); return; }
+    setPicked((cur) => cur.map((p, i) =>
+      i !== qi ? p
+        : questions[i].multi ? (p.includes(label) ? p.filter((l) => l !== label) : [...p, label])
+        : [label]));
+  };
+
+  // Answers in the options' own order, not click order — the card's order is
+  // the one the user saw. Several questions come back labelled by header; one
+  // sends the bare answer, which reads like a typed message.
+  const submit = () => {
+    const lines = questions.map((q, i) => {
+      const chosen = q.options.filter((o) => picked[i].includes(o.label)).map((o) => o.label);
+      if (!chosen.length) return null;
+      const answer = chosen.join(", ");
+      return questions.length === 1 ? answer : `${q.header || q.question}: ${answer}`;
+    }).filter((l): l is string => l !== null);
+    if (lines.length) onSubmit(lines);
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.15 }}
+      className="mb-2 px-1"
+    >
+      <div className="rounded-2xl border border-border bg-background shadow-sm">
+        {questions.map((q, qi) => (
+          <div key={q.question} className={qi > 0 ? "border-t border-border" : undefined}>
+            <div className="flex items-start gap-2 px-3.5 pt-2.5 pb-1">
+              <div className="min-w-0 flex-1">
+                <p dir="auto" className="text-sm leading-snug text-foreground">{q.question}</p>
+                {q.options.length > 0 && (
+                  <p dir="auto" className="mt-0.5 text-xs leading-snug text-muted-foreground">
+                    {q.multi ? t("selectMany") : t("selectOne")}
+                  </p>
+                )}
+              </div>
+              {qi === 0 && (
+                <button
+                  onClick={onDismiss}
+                  className="-me-1 shrink-0 rounded-full p-1 text-muted-foreground/60 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+                  aria-label={t("dismiss")}
+                >
+                  <Icon name="x" className="size-3" />
+                </button>
+              )}
+            </div>
+
+            {q.options.length > 0 && (
+              <div className="flex flex-col py-1">
+                {q.options.map((o) => {
+                  const on = picked[qi].includes(o.label);
+                  const box = q.multi || questions.length > 1;
+                  return (
+                    <button
+                      key={o.label}
+                      onClick={() => choose(qi, o.label)}
+                      {...(q.multi ? { role: "checkbox", "aria-checked": on }
+                                   : questions.length > 1 ? { role: "radio", "aria-checked": on } : {})}
+                      dir="auto"
+                      className="flex w-full items-start gap-2.5 px-3.5 py-1.5 text-start hover:bg-secondary/60 transition-colors cursor-pointer"
+                    >
+                      {box && (
+                        <span
+                          className={cn(
+                            "mt-0.5 flex size-4 shrink-0 items-center justify-center border transition-colors",
+                            q.multi ? "rounded-[5px]" : "rounded-full",
+                            on ? "border-foreground bg-foreground text-background" : "border-border",
+                          )}
+                        >
+                          {on && <Icon name="check" className="size-2.5" strokeWidth={3} />}
+                        </span>
+                      )}
+                      <span className="min-w-0">
+                        <span className="block text-sm leading-snug text-foreground">{o.label}</span>
+                        {o.description && (
+                          <span className="block text-xs leading-snug text-muted-foreground">{o.description}</span>
+                        )}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ))}
+
+        {!instant && questions.some((q) => q.options.length > 0) && (
+          <div className="flex justify-end px-3.5 pb-2.5 pt-0.5" dir="ltr">
+            <button
+              onClick={submit}
+              disabled={!ready}
+              className="rounded-full bg-foreground px-3.5 py-1.5 text-xs font-medium text-background transition hover:opacity-80 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+            >
+              {t("submit")}{picked.flat().length > 1 ? ` · ${picked.flat().length}` : ""}
+            </button>
+          </div>
+        )}
+      </div>
+    </motion.div>
   );
 }
 

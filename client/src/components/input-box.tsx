@@ -322,7 +322,24 @@ export function InputBox({
         </div>
         <div className="flex items-center gap-1">
           {voice && <MicButton listening={listening} transcribing={transcribing} disabled={isStreaming} onStart={startMic} onStop={stopMic} onCancel={cancelMic} />}
-          {isStreaming ? (
+          {/* A filled composer stays sendable mid-run — the message queues and
+              fires when the reply finishes — so send and stop sit side by
+              side while streaming. Empty composer, streaming: stop only. */}
+          {(!isStreaming || input.trim()) && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); handleSubmit(); }}
+              disabled={!input.trim() || attachments?.some((a) => a.status === "uploading")}
+              className={`flex size-8 items-center justify-center rounded-full transition cursor-pointer disabled:opacity-30 ${isStreaming ? "border border-border text-foreground hover:bg-secondary" : "bg-foreground text-background hover:opacity-80"}`}
+              aria-label={isStreaming ? t("queueMessage") : "Send"}
+              title={isStreaming ? t("queueMessage") : undefined}
+            >
+              <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 12l7-7 7 7M12 5v14" />
+              </svg>
+            </button>
+          )}
+          {isStreaming && (
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); onStop(); }}
@@ -330,18 +347,6 @@ export function InputBox({
               aria-label="Stop"
             >
               <svg className="size-5" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); handleSubmit(); }}
-              disabled={!input.trim() || attachments?.some((a) => a.status === "uploading")}
-              className="flex size-8 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 disabled:opacity-30 transition cursor-pointer"
-              aria-label="Send"
-            >
-              <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 12l7-7 7 7M12 5v14" />
-              </svg>
             </button>
           )}
         </div>
