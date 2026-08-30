@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { fileKind } from "../src/components/canvas";
-import { isHtml, isMd, isPdf, codeLang, ext } from "../src/components/canvas-utils";
+import { isHtml, isMd, isPdf, codeLang, ext, editWorkingPath } from "../src/components/canvas-utils";
 
 // A mini app's canvas tab is titled by its manifest, so the display name has no
 // extension. Every renderer check must therefore key off the path — keyed off
@@ -32,5 +32,28 @@ describe("fileKind", () => {
 
   it("falls back to the name when there is no path", () => {
     expect(fileKind({ path: "", name: "loose.md" })).toBe("loose.md");
+  });
+});
+
+// The canvas "working" trigger: a live edit step names its target either in
+// the finished step label or inside the partial-JSON arg stream. Only
+// deliverable extensions open the pane — helper scripts never do.
+describe("editWorkingPath", () => {
+  it("reads the path from the finished step label", () => {
+    expect(editWorkingPath("report.html", undefined)).toBe("report.html");
+    expect(editWorkingPath("notes/plan.md", undefined)).toBe("notes/plan.md");
+  });
+
+  it("extracts the path from partial streamed args", () => {
+    expect(editWorkingPath("", '{"path": "site.html", "command": "create", "file_text": "<!doct'))
+      .toBe("site.html");
+    expect(editWorkingPath(undefined, '{"path": "data.csv"')).toBe("data.csv");
+  });
+
+  it("ignores non-deliverable files and absent paths", () => {
+    expect(editWorkingPath("analyze.py", undefined)).toBeNull();
+    expect(editWorkingPath("", '{"path": "run.sh", "command"')).toBeNull();
+    expect(editWorkingPath("", '{"command": "create"')).toBeNull();
+    expect(editWorkingPath(undefined, undefined)).toBeNull();
   });
 });

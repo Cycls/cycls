@@ -4,6 +4,7 @@ import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
 import { Canvas, type CanvasFile } from "./canvas";
+import { editWorkingPath } from "./canvas-utils";
 import { AppsPanel } from "./apps-panel";
 import { useApps, type MiniAppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
@@ -184,6 +185,30 @@ export function Chat({ chat, onShare, files, account, config }: {
     setCanvasActive(path);
     setCanvasHidden(false);
   }, []);
+
+  // While the agent writes a deliverable, the canvas opens in a working
+  // state — the user watches the artifact being made instead of a step line.
+  // Live edit steps stream their input as partial JSON, so the target path
+  // is known seconds in; deliverable extensions only (canvas-utils). Desktop
+  // only — on mobile the canvas is an overlay that would bury the chat. The
+  // turn's end (or the agent's own canvas call) swaps skeleton for content.
+  const [workingPaths, setWorkingPaths] = useState<string[]>([]);
+  useEffect(() => {
+    if (!isStreaming) { setWorkingPaths((ws) => (ws.length ? [] : ws)); return; }
+    if (!isDesktop) return;
+    const last = messages[messages.length - 1];
+    if (last?.role !== "assistant") return;
+    for (const p of last.parts || []) {
+      if (p.type !== "step" || p.tool_name !== "Editing") continue;
+      const path = editWorkingPath(p.step, p.args);
+      if (path && !workingPaths.includes(path)) {
+        setWorkingPaths((ws) => (ws.includes(path) ? ws : [...ws, path]));
+        openFileInCanvas(path);
+        track("canvas_working_opened", { path });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, isStreaming, isDesktop]);
   const closeCanvasTab = useCallback((path: string) => {
     setCanvasTabs((tabs) => tabs.filter((f) => f.path !== path));
     setCanvasActive((a) => (a === path ? null : a));
@@ -240,6 +265,9 @@ export function Chat({ chat, onShare, files, account, config }: {
       if (ev.action === "open_plan_modal") {
         openPricing(activeOrg ? "organization" : "user", "agent_event");
       } else if (ev.action === "open_canvas" && typeof ev.path === "string") {
+        // The deliverable is ready — swap its working skeleton for content.
+        const done = ev.path;
+        setWorkingPaths((ws) => ws.filter((x) => x !== done));
         const app = appsRef.current.find((a) => a.entry === ev.path);
         if (app) openApp(app);
         else openFileInCanvas(ev.path, typeof ev.name === "string" ? ev.name : undefined);
@@ -856,6 +884,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       )}>
       {files && (
         <Canvas
+          working={workingPaths}
           tabs={canvasTabs}
           active={canvasActive}
           docked={isDesktop}

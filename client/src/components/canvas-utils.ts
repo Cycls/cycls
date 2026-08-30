@@ -68,6 +68,18 @@ export const isRenderable = (name: string, kind?: string) =>
   kind ? kind !== "opaque"
        : isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || is3d(name) || codeLang(name) != null;
 
+// A live `edit` step whose target is a deliverable the canvas should open in
+// a "working" state while the model writes it. The path arrives within the
+// first streamed arg chunks (partial JSON), long before execution — that's
+// the window the loader covers. Deliverable extensions only: helper scripts
+// and configs never pop the canvas.
+const WORKING_EXTS = new Set(["html", "htm", "md", "markdown", "csv", "tsv"]);
+
+export function editWorkingPath(step?: string, args?: string): string | null {
+  const path = step || args?.match(/"path"\s*:\s*"([^"\\]+)"/)?.[1] || "";
+  return path && WORKING_EXTS.has(ext(path)) ? path : null;
+}
+
 // Trigger a name-preserving download from an authed blob URL. A bare blob URL
 // carries no filename, so opening it instead saves with no extension — the
 // corrupted-download bug. The download attribute restores name + extension.

@@ -264,12 +264,13 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, org, onShareFile, railWidth = 0, reloadKey }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, org, onShareFile, railWidth = 0, reloadKey, working }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
   hidden?: boolean;
   expanded: boolean;
+  working?: string[];   // paths the agent is writing right now — skeleton, not content
   onToggleExpand: () => void;
   onCloseAll?: () => void;
   onSelectTab: (path: string) => void;
@@ -345,17 +346,21 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
           </button>
         )}
       </div>
-      <CanvasFileView
-        key={file.path}
-        file={file}
-        readFile={readFile}
-        openFile={openFile}
-        writeFile={writeFile}
-        listFolders={listFolders}
-        org={org}
-        onShareFile={onShareFile}
-        reloadKey={reloadKey}
-      />
+      {working?.includes(file.path) ? (
+        <CanvasWorking key={file.path} name={file.name} />
+      ) : (
+        <CanvasFileView
+          key={file.path}
+          file={file}
+          readFile={readFile}
+          openFile={openFile}
+          writeFile={writeFile}
+          listFolders={listFolders}
+          org={org}
+          onShareFile={onShareFile}
+          reloadKey={reloadKey}
+        />
+      )}
     </>
   );
 
@@ -428,6 +433,26 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
         </>
       )}
     </AnimatePresence>
+  );
+}
+
+// The file is being written right now — a document skeleton, not a
+// half-broken render. Content mounts when the turn (or the agent's canvas
+// call) says the file is ready.
+function CanvasWorking({ name }: { name: string }) {
+  const widths = ["45%", "92%", "84%", "88%", "62%", "", "78%", "86%", "70%", "40%"];
+  return (
+    <div className="flex h-full flex-col">
+      <LoadingBar active />
+      <div className="flex flex-1 flex-col items-center justify-center gap-10 px-8">
+        <div className="w-full max-w-md space-y-3.5">
+          {widths.map((w, i) => (w === ""
+            ? <div key={i} className="h-2" />
+            : <div key={i} className="h-3 animate-pulse rounded bg-secondary" style={{ width: w, animationDelay: `${i * 140}ms` }} />))}
+        </div>
+        <p className="text-sm text-muted-foreground" dir="auto">{t("workingOn").replace("{name}", name)}</p>
+      </div>
+    </div>
   );
 }
 
