@@ -223,6 +223,9 @@ const translations = {
     dismiss: "Dismiss",
     sources: "Sources",
     submit: "Submit",
+    next: "Next",
+    skip: "Skip",
+    typeAnswer: "Type your answer",
     selectOne: "Pick one, or just type your answer",
     selectMany: "Pick any that apply, or just type your answer",
     verbSuggest: "suggested a follow-up",
@@ -452,6 +455,9 @@ const translations = {
     dismiss: "إغلاق",
     sources: "المصادر",
     submit: "إرسال",
+    next: "التالي",
+    skip: "تخطي",
+    typeAnswer: "اكتب إجابتك",
     selectOne: "اختر واحداً، أو اكتب إجابتك",
     selectMany: "اختر ما ينطبق، أو اكتب إجابتك",
     verbSuggest: "اقترح خطوة تالية",
@@ -475,6 +481,20 @@ export function setLang(lang: Lang) {
 
 export function t(key: keyof typeof translations.en): string {
   return translations[getLang()][key];
+}
+
+// A string in a named locale, for chrome that has to follow *content* rather
+// than the UI toggle — e.g. the ask card's hints, which sit beside a question
+// the model wrote in the user's language, not the browser's.
+export function tIn(lang: Lang, key: keyof typeof translations.en): string {
+  return translations[lang][key];
+}
+
+const _ARABIC = /[\u0600-\u06FF]/;
+
+// The locale a piece of model-written text is in, falling back to the UI's.
+export function langOf(text: string): Lang {
+  return _ARABIC.test(text) ? "ar" : getLang();
 }
 
 export function useLang(): Lang {
