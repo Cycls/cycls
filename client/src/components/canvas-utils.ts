@@ -68,11 +68,8 @@ export const isRenderable = (name: string, kind?: string) =>
   kind ? kind !== "opaque"
        : isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || is3d(name) || codeLang(name) != null;
 
-// A live `edit` step whose target is a deliverable the canvas should open in
-// a "working" state while the model writes it. The path arrives within the
-// first streamed arg chunks (partial JSON), long before execution — that's
-// the window the loader covers. Deliverable extensions only: helper scripts
-// and configs never pop the canvas.
+// Deliverable target of a live edit step — from the finished label or the
+// streamed partial-JSON args. Helper scripts never open the canvas.
 const WORKING_EXTS = new Set(["html", "htm", "md", "markdown", "csv", "tsv"]);
 
 export function editWorkingPath(step?: string, args?: string): string | null {

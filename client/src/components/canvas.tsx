@@ -16,7 +16,7 @@ import { SaveDialog } from "./save-dialog";
 import type { MiniAppInfo } from "../hooks/use-apps";
 import { usePaneWidth } from "../hooks/use-pane-width";
 import { cn } from "../lib/utils";
-import { t } from "../lib/i18n";
+import { t, getLang } from "../lib/i18n";
 
 // Renderer choice comes from the PATH, never the display name: a mini app's tab
 // is titled by its manifest ("Injaz Portfolio"), which has no extension, and
@@ -270,7 +270,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   docked: boolean;
   hidden?: boolean;
   expanded: boolean;
-  working?: string[];   // paths the agent is writing right now — skeleton, not content
+  working?: string[];   // paths being written — skeleton instead of content
   onToggleExpand: () => void;
   onCloseAll?: () => void;
   onSelectTab: (path: string) => void;
@@ -436,11 +436,20 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   );
 }
 
-// The file is being written right now — a document skeleton, not a
-// half-broken render. Content mounts when the turn (or the agent's canvas
-// call) says the file is ready.
+const WORKING_WORDS = {
+  en: ["Writing", "Crafting", "Brewing", "Weaving", "Sculpting", "Conjuring", "Cooking", "Polishing"],
+  ar: ["أكتب", "أشتغل", "أصمّم", "أتفنن", "أبني", "أظبّط", "أنسّق", "ألمّع"],
+} as const;
+
 function CanvasWorking({ name }: { name: string }) {
   const widths = ["45%", "92%", "84%", "88%", "62%", "", "78%", "86%", "70%", "40%"];
+  const words = WORKING_WORDS[getLang()] || WORKING_WORDS.en;
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 1600);
+    return () => clearInterval(id);
+  }, []);
+  const word = words[tick % words.length];
   return (
     <div className="flex h-full flex-col">
       <LoadingBar active />
@@ -450,7 +459,23 @@ function CanvasWorking({ name }: { name: string }) {
             ? <div key={i} className="h-2" />
             : <div key={i} className="h-3 animate-pulse rounded bg-secondary" style={{ width: w, animationDelay: `${i * 140}ms` }} />))}
         </div>
-        <p className="text-sm text-muted-foreground" dir="auto">{t("workingOn").replace("{name}", name)}</p>
+        <div className="flex flex-col items-center gap-1 text-center">
+          <div className="h-8 overflow-hidden">
+            <AnimatePresence mode="popLayout" initial={false}>
+              <motion.div
+                key={word}
+                initial={{ y: 18, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: -18, opacity: 0 }}
+                transition={{ duration: 0.3, ease: "easeOut" }}
+                className="text-xl font-medium text-foreground"
+              >
+                {word}
+              </motion.div>
+            </AnimatePresence>
+          </div>
+          <span className="text-sm text-muted-foreground" dir="auto">{name}</span>
+        </div>
       </div>
     </div>
   );

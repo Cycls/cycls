@@ -186,12 +186,8 @@ export function Chat({ chat, onShare, files, account, config }: {
     setCanvasHidden(false);
   }, []);
 
-  // While the agent writes a deliverable, the canvas opens in a working
-  // state — the user watches the artifact being made instead of a step line.
-  // Live edit steps stream their input as partial JSON, so the target path
-  // is known seconds in; deliverable extensions only (canvas-utils). Desktop
-  // only — on mobile the canvas is an overlay that would bury the chat. The
-  // turn's end (or the agent's own canvas call) swaps skeleton for content.
+  // A deliverable being written opens the canvas in a working state — the
+  // path arrives in the live edit step's streamed args. Desktop only.
   const [workingPaths, setWorkingPaths] = useState<string[]>([]);
   useEffect(() => {
     if (!isStreaming) { setWorkingPaths((ws) => (ws.length ? [] : ws)); return; }
@@ -265,7 +261,6 @@ export function Chat({ chat, onShare, files, account, config }: {
       if (ev.action === "open_plan_modal") {
         openPricing(activeOrg ? "organization" : "user", "agent_event");
       } else if (ev.action === "open_canvas" && typeof ev.path === "string") {
-        // The deliverable is ready — swap its working skeleton for content.
         const done = ev.path;
         setWorkingPaths((ws) => ws.filter((x) => x !== done));
         const app = appsRef.current.find((a) => a.entry === ev.path);
