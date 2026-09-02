@@ -77,6 +77,10 @@ export function SharedView({ getToken, signedIn, onSignIn }: {
           type: d.type,
           chat_id: d.type === "chat" ? d.id : undefined,
           file: d.type === "file" ? d.path : undefined,
+          // Gallery traffic (?example=1) vs organic user-to-user shares.
+          example: new URLSearchParams(window.location.search).has("example"),
+          artifacts: d.type === "chat" ? canvasArtifacts(d.messages).length : 1,
+          signed_in: !!signedIn,
           share_url: window.location.href,
           author_name: d.author_name,
           org_name: d.author_org_name,

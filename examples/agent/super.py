@@ -137,7 +137,7 @@ async def super(context):
     if user.plan == "o:free_org" and not exempt:
         cycls.log("cap_hit", user=user, chat_id=context.chat_id, kind="org_free")
         yield {"type": "text", "text": "🔒 This workspace needs a paid plan."}
-        yield {"type": "ui", "action": "open_plan_modal"}
+        yield {"type": "ui", "action": "open_plan_modal", "reason": "plan_required"}
         return
 
     # Track monthly usage; gate free users at FREE_MONTHLY_LIMIT.
@@ -151,7 +151,7 @@ async def super(context):
                   kind="user_free_monthly", count=entry["count"], limit=FREE_MONTHLY_LIMIT)
         yield {"type": "text",
                "text": f"🚨 Free tier limit reached ({FREE_MONTHLY_LIMIT}/mo). Upgrade for unlimited."}
-        yield {"type": "ui", "action": "open_plan_modal"}
+        yield {"type": "ui", "action": "open_plan_modal", "reason": "limit"}
         return
 
     entry["count"] += 1
