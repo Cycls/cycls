@@ -66,6 +66,14 @@ export function ExamplesGallery({ onUsePrompt, className }: {
   const categories = useExamples();
   const [active, setActive] = useState<string | null>(null);
   const [playing, setPlaying] = useState<ExampleItem | null>(null);
+  // One impression per gallery view — the denominator for example_prompt_used.
+  useEffect(() => {
+    if (!categories.length) return;
+    track("examples_shown", {
+      categories: categories.length,
+      items: categories.reduce((n, c) => n + c.items.length, 0),
+    });
+  }, [categories.length]);   // eslint-disable-line react-hooks/exhaustive-deps
   if (!categories.length) return null;
 
   const labeled = categories.filter((c) => c.label);

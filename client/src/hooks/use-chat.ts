@@ -149,12 +149,19 @@ export function useChat(baseUrl: string = "") {
 
       setMessages((prev) => [...prev, userMessage, assistantMessage]);
       setIsStreaming(true);
+      const sentAt = Date.now();
 
+      let firstEver = false;
+      try {
+        firstEver = !localStorage.getItem("cycls_sent");
+        if (firstEver) localStorage.setItem("cycls_sent", "1");
+      } catch { /* ignore */ }
       track("message_sent", {
         message_length: text.length,
         has_attachments: !!(attachments && attachments.length),
         attachment_count: attachments?.length || 0,
         is_new_chat: !chatIdRef.current,
+        first_ever: firstEver,
         chat_id: chatIdRef.current,
         origin,
       });
@@ -389,10 +396,32 @@ export function useChat(baseUrl: string = "") {
           }
         }
       } finally {
+        const stopped = !!abortRef.current?.signal.aborted;
         setIsStreaming(false);
         abortRef.current = null;
         // Server is the sole writer of chat metadata. The harness stamps
         // updatedAt + first-turn title during the stream — no FE save needed.
+
+        // One event per turn carrying the shape of the work — capability
+        // usage without per-tool-call volume (the server logs those).
+        const last = messagesRef.current[messagesRef.current.length - 1];
+        if (last?.role === "assistant") {
+          const tools: Record<string, number> = {};
+          let calls = 0;
+          for (const p of last.parts || []) {
+            if (p.type === "step" && p.tool_name) { tools[p.tool_name] = (tools[p.tool_name] || 0) + 1; calls++; }
+          }
+          track("turn_completed", {
+            chat_id: chatIdRef.current,
+            duration_s: Math.round((Date.now() - sentAt) / 1000),
+            tool_calls: calls,
+            tools,
+            produced_artifact: (last.parts || []).some((p) => p.type === "step" && p.tool_name === "Canvas" && p.ok !== false),
+            errored: (last.parts || []).some((p) => p.type === "callout" && p.style === "error"),
+            stopped,
+            origin,
+          });
+        }
       }
     },
     // `messages` is read via messagesRef inside; keeping it out of deps
