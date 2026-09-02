@@ -155,7 +155,20 @@ export function MessageBubble({
       const next = all[i + 1];
       return !(next?.type === "step" && next.tool_name === "Canvas" && next.step === p.step);
     });
-  const isEmpty = parts.length === 0;
+  // `sources` parts don't render where they land — one chip row per search
+  // repeated the same domains through the turn. They're merged and deduped
+  // into a single row at the END of the message instead, which is also the
+  // only thing that guarantees provenance is visible: citing inline is the
+  // model's choice, and a turn where it searches but doesn't cite would
+  // otherwise show no sources at all.
+  //
+  // `suggest` and `ask` drive the composer, not the transcript. Their step
+  // line restated a chip or a card the user is already looking at, and padded
+  // the "N steps" count with work that isn't work.
+  const rendered = parts.filter((p) =>
+    p.type !== "sources"
+    && !(p.type === "step" && (p.tool_name === "Suggest" || p.tool_name === "Ask")));
+  const isEmpty = rendered.length === 0;
 
   // Every result this turn's searches returned, keyed for link lookup. `parts`
   // is rebuilt on every streamed token, so the memo keys on the URLs instead —
@@ -175,6 +188,11 @@ export function MessageBubble({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceKey]);
 
+  // Deduped by `urlKey`, so the same article returned by two searches is one
+  // chip. Held back until the turn ends — appended live it would shunt itself
+  // down the page on every streamed token.
+  const allSources = useMemo(() => (sourceIndex ? [...sourceIndex.values()] : []), [sourceIndex]);
+
   const copyAll = () => {
     const text = parts
       .filter((p) => p.type === "text")
@@ -190,15 +208,17 @@ export function MessageBubble({
       <div className="relative flex min-w-0 flex-1 flex-col gap-1">
         {isEmpty && isStreaming && <Loader />}
 
-        {groupParts(parts).map((group, gi, all) => {
+        {groupParts(rendered).map((group, gi, all) => {
           if (group.kind === "step")
             return <StepGroup key={gi} items={group.items} live={isStreaming && gi === all.length - 1} />;
           if (group.kind === "file")
             return <FilePart key={gi} path={group.items[0].step || ""} onOpen={onOpenFile} />;
           return group.items.map((part, i) =>
             renderPart(part, group.startIndex + i,
-              isStreaming && group.startIndex + i === parts.length - 1, onRetry, onOpenFile, sourceIndex));
+              isStreaming && group.startIndex + i === rendered.length - 1, onRetry, onOpenFile, sourceIndex));
         })}
+
+        {!isStreaming && allSources.length > 0 && <SourcesPart sources={allSources} />}
 
         {/* Actions */}
         {!isEmpty && !isStreaming && (
