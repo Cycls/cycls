@@ -164,7 +164,10 @@ _WEB_SEARCH_TOOL = {
         "Cite only URLs this tool or `web_fetch` returned — the user sees them "
         "as source chips, so a URL you invented is visibly unbacked. Never "
         "attribute a claim to a source you did not retrieve; if results don't "
-        "contain the answer, say so — don't fill the gap."
+        "contain the answer, say so — don't fill the gap.\n"
+        "Do NOT end your answer with a 'Sources:' list — the client already "
+        "shows every result the search returned, as chips under your answer. "
+        "Link inline only where a specific claim needs its source named."
     ),
     "input_schema": {"type": "object", "properties": {
         "query": {"type": "string", "description": "The search query."},
