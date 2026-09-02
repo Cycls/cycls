@@ -42,7 +42,9 @@ web = (
     # /robots.txt, /sitemap.xml, /llms.txt, /og.png are served automatically —
     # derived from .seo()/.brand(), with JSON-LD in <head> so the sign-in-gated
     # page stays crawlable.
-    .analytics(True) # "cycls.ai"
+    .analytics(True)  # PostHog default; providers are plugins on one event pipe (docs/notes/analytics.md):
+    # .analytics(cycls.PostHog(), cycls.GTM("GTM-XXXXXXX",
+    #     events=["sign_up_start", "sign_up", "first_agent_use", "checkout_start", "purchase"]))
     .affiliate("059168")  # Rewardful referral tracking
     .title("The agent for getting things done")
     # .theme("default")   # "default" or "dev"

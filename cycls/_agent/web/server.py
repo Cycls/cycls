@@ -1,4 +1,4 @@
-import json, inspect, time, uuid, os
+import json, inspect, re, time, uuid, os
 from pathlib import Path
 from pydantic import BaseModel, PrivateAttr
 from typing import Optional, Any
@@ -21,7 +21,7 @@ class Config(BaseModel):
     prod: bool = False
     auth: bool = False
     cms: Optional[dict] = None        # {brand: url, explore: url, token: bearer} — plain GETs, contract JSON
-    analytics: bool = False
+    analytics: Optional[list] = None  # analytics plugins: [{provider, ...}] — one event pipe, fanned out client-side
     suggestions: bool = False
     voice: bool = False
     pk: Optional[str] = None
@@ -277,6 +277,14 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
                           "image": config.og or "/og.png",
                           "inLanguage": list(config.pass_metadata or {"en": None})}).replace("</", "<\\/")
     _extra_head = f'<script type="application/ld+json">{_jsonld}</script>'
+    _gtm_id = next((p.get("id") for p in (config.analytics or [])
+                    if isinstance(p, dict) and p.get("provider") == "gtm"), None)
+    if _gtm_id and re.fullmatch(r"GTM-[A-Z0-9]{4,10}", str(_gtm_id)):   # shape re-checked: inlined into a script tag
+        _extra_head += (
+            "<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});"
+            "var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';"
+            "j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})"
+            f"(window,document,'script','dataLayer','{_gtm_id}');</script>")
     if config.favicon:
         href = config.favicon if config.favicon.startswith(("http", "data:")) else "/favicon.svg"
         _extra_head += f'<link rel="icon" href="{escape(href)}" />'

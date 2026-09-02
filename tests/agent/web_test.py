@@ -1077,6 +1077,41 @@ def test_seo_overrides_brand(tmp_path):
     assert '<meta name="verify" content="x">' in html
 
 
+def test_gtm_provider_injects_snippet(tmp_path):
+    """A gtm entry in the analytics plugin list puts the container script on
+    every page; without one no marketing bytes ship at all."""
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    cfg = _branded_config(_seo_theme(tmp_path),
+                          analytics=[{"provider": "posthog"}, {"provider": "gtm", "id": "GTM-ABC123"}])
+    html = TestClient(web(dummy_agent, cfg)).get("/").text
+    assert "googletagmanager.com/gtm.js" in html
+    assert "'GTM-ABC123'" in html
+    plain = TestClient(web(dummy_agent, _branded_config(_seo_theme(tmp_path)))).get("/").text
+    assert "googletagmanager" not in plain
+
+
+def test_analytics_providers_are_plugins():
+    """One pipe, providers as config objects: True is PostHog shorthand,
+    provider objects normalize to specs, GTM validates its id (it's inlined
+    into a script tag — the shape check is the injection guard)."""
+    import pytest
+    import cycls
+    assert cycls.Web().analytics(True)._analytics == [{"provider": "posthog"}]
+    assert cycls.Web().analytics(False)._analytics is None
+    w = cycls.Web().analytics(
+        cycls.PostHog(events=["sign_up"]),
+        cycls.GTM("GTM-ABC123", events=["purchase"]))
+    assert w._analytics == [{"provider": "posthog", "events": ["sign_up"]},
+                            {"provider": "gtm", "id": "GTM-ABC123", "events": ["purchase"]}]
+    for bad in ("javascript:alert(1)", "gtm-abc123", "GTM-", "GTM-abc123'"):
+        with pytest.raises(ValueError):
+            cycls.GTM(bad)
+
+
 def test_explore_static_and_disabled():
     from fastapi.testclient import TestClient
 

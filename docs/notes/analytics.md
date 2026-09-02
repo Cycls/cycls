@@ -1,45 +1,177 @@
-# Analytics — event catalog and example queries
+# Analytics — one pipe, plugin providers, the event contract, and queries
 
-Cycls ships a PostHog integration for any agent that opts in via
-`cycls.Web().analytics(True)`. When enabled, the chat UI loads the PostHog
-JS SDK, identifies signed-in users with their email / plan / org, and emits
-the events documented below.
+## Architecture
 
-All events carry these **super properties** automatically (attached at capture
-time, so you can filter *any* event by them without them being on the payload):
+One canonical event stream; destinations are plugins; routing is config.
+Call sites only ever call `track()` (`client/src/lib/posthog.ts`) — it
+enriches once and fans out to the providers the operator configured:
 
-| Property | Source | Notes |
-| --- | --- | --- |
-| `agent_domain` | `window.location.hostname` | e.g. `stock.cycls.ai` |
-| `agent_subdomain` | first DNS label | e.g. `stock` |
-| `agent_name` | `cycls.Web()` slug | `null` if not set |
-| `theme` | `"dark"` \| `"light"` | updates on toggle |
-| `language` | `"en"` \| `"ar"` | updates on toggle |
+```
+track("sign_up", props)                ← canonical names, ONE schema
+        │
+   [enrich once: agent_name, agent_domain, theme, language]
+        │
+   [route: per-provider event allowlist]
+        ├──► posthog plugin   (product analytics)
+        ├──► gtm plugin      (dataLayer.push — same names, verbatim)
+        └──► future: mixpanel / amplitude / webhook / server-side sink
+```
 
-Identified users also carry these **person properties** (set via
-`posthog.identify`): `email`, `name`, `first_name`, `last_name`, `avatar_url`,
-`created_at`, `plan_name`, `plan_status`, `plan_amount`, `plan_period`,
-`plan_period_end`, `plan_canceled_at`, `is_paid`, `org_id`, `org_name`,
-`language`.
+Configured from the builder — providers are config objects, like auth:
+
+```python
+cycls.Web().analytics(True)                      # shorthand: PostHog defaults
+cycls.Web().analytics(
+    cycls.PostHog(),                             # everything
+    cycls.GTM("GTM-XXXXXXX", events=[            # marketing subset only
+        "sign_up_start", "sign_up", "first_agent_use",
+        "checkout_start", "purchase"]),
+)
+```
+
+Rules of the pipe:
+
+- **Names never bend to a destination.** A provider that wants different
+  names owns that mapping in its own tool. We adopted GA4-conventional
+  names for the funnel events (`sign_up`, `checkout_start`, `purchase`) so
+  in practice nothing needs mapping anywhere.
+- **Adding a destination = one plugin factory** in `PLUGINS`
+  (lib/posthog.ts) + a provider class in the builder. Zero call-site edits,
+  ever.
+- **Every event is a small API**: rename a feature or move a button and a
+  dashboard silently flatlines. Update this page in the same commit that
+  touches a call site.
+- **Properties are ids and enums, never content** — no prompts, titles, or
+  emails on events (identify carries person fields separately).
+- Client-side loses ~10-20% to blockers. Directionally sound; never
+  reconcile against billing. The server's `usage` / `tool_call` logs are
+  the authoritative record of turns and tools.
+
+### The GTM provider specifically
+
+- `cycls.GTM("GTM-…")` injects the container script server-side into every
+  page (id shape-checked — it's inlined into a script tag). No container →
+  no `window.dataLayer` → the plugin no-ops. One container serves every
+  agent plus the marketing site (installed there by hand).
+- Page views need no code: GTM's built-in **Page View** trigger fires on
+  every load, and the container only exists on agent pages — that IS
+  `agent_open`.
+- The agency owns everything inside GTM: GA4 tags reading the events
+  verbatim, Google Ads conversions on `purchase`, and the
+  cycls.com ↔ cycls.ai **cross-domain linker** (ads land on .com, checkout
+  happens on .ai). `purchase` is account-level (one subscription unlocks
+  all agents) and attributed to the agent-domain of conversion;
+  `transaction_id` dedupes double-fires.
+
+### Super and person properties
+
+Every event carries these **super properties** (attached at the bus, so any
+event filters by them):
+
+| Property | Source |
+| --- | --- |
+| `agent_domain` | `window.location.hostname` |
+| `agent_subdomain` | first DNS label |
+| `agent_name` | agent config (`null` if unset) |
+| `theme` | `"dark"` \| `"light"` — updates on toggle |
+| `language` | `"en"` \| `"ar"` — updates on toggle |
+
+Identified users also carry **person properties** (via identify): `email`,
+`name`, `first_name`, `last_name`, `avatar_url`, `created_at`, `plan_name`,
+`plan_status`, `plan_amount`, `plan_period`, `plan_period_end`,
+`plan_canceled_at`, `is_paid`, `org_id`, `org_name`, `language`.
+
+---
+
+## Event contract
+
+### Activation
+
+| event | fires when | key props / question |
+|---|---|---|
+| `sign_up_start` | signed-out visitor acts (send, sign-in button) | `has_draft` — does the public shell convert? |
+| `sign_up_attempted` / `sign_in_attempted` | auth form/oauth submitted | `method`, `step` |
+| `sign_up` | account created — Clerk complete for password/code; OAuth inferred on first authed load (account < 5 min old); once per browser | `method` — gate → account conversion |
+| `first_agent_use` | user's first-ever send (per browser+agent) | the marketing funnel's activation tick |
+| `message_sent` | every send | `origin` (keyboard/suggestion/example/follow_up/ask/voice/regenerate/url_param), `is_new_chat` — the funnel spine |
+| `first_artifact` | user's first-ever completed artifact | `kind` — **time-to-first-artifact is the aha metric** |
+| `examples_shown` | gallery renders with cards | `categories`, `items` — denominator for the gallery |
+| `example_category_selected` / `example_prompt_used` / `example_viewed` / `example_watched` | gallery interactions | which examples actually activate |
+| `suggestion_category_selected` / `suggestion_prompt_clicked` | empty-state chips (no-examples fallback) | |
+
+### Conversation
+
+| event | fires when | key props / question |
+|---|---|---|
+| `turn_completed` | stream ends (also when stopped) | `tools` {name: count}, `tool_calls`, `duration_s`, `produced_artifact`, `errored`, `stopped`, `origin` — the shape of the work, without per-tool-call volume |
+| `generation_stopped` | user hits stop mid-stream | impatience / runaway signal |
+| `message_retried` / `message_regenerated` / `message_failed` | recovery paths | friction |
+| `message_queued` / `queued_message_sent` / `queued_message_edited` / `queued_message_dropped` | composing while the agent works | does queueing get used? |
+| `chat_loaded` / `chat_cleared` / `chat_renamed` / `chat_favorited` / `chat_deleted` | sidebar chat ops | retention behavior |
+
+### Deliverables
+
+| event | fires when | key props / question |
+|---|---|---|
+| `artifact_completed` | agent's `canvas` call | `path`, `kind` — output per session |
+| `canvas_working_opened` | working skeleton opens during a live edit | do users see work happening? |
+| `file_saved` / `file_shared` / `file_uploaded` / `file_deleted` / `file_renamed` / `folder_created` | files panel & canvas ops | is the workspace a real home? |
+| `attachment_added` / `file_upload_failed` | composer attachments | `count`, `kinds` |
+
+### Sharing loop (organic acquisition)
+
+`share_created` → `share_viewed` → `share_fork_clicked` → `share_forked`
+
+| event | fires when | key props / question |
+|---|---|---|
+| `share_created` / `share_create_failed` / `share_deleted` | owner mints/revokes | `message_count` |
+| `share_viewed` / `share_view_failed` | share data loads on /shared/… (404s don't count) | `type`, `example` (gallery vs organic — two different funnels), `artifacts`, `signed_in`, `referrer` |
+| `share_fork_clicked` | continue-this-conversation pill | |
+| `share_forked` | fork API succeeds | loop closed. Viewer is anonymous until sign-in — same-device journeys stitch, cross-device shows as two people |
+
+### Agent interventions
+
+| event | fires when | key props / question |
+|---|---|---|
+| `ask_shown` / `ask_answered` / `ask_dismissed` | clarifying-question card | answered ÷ shown decides the feature's fate |
+| `followup_shown` / `followup_accepted` | suggested follow-up chip | accepted ÷ shown, `method` (click/arrow) |
+| `ask_toggled` / `followups_toggled` | settings switches | opt-out rate = annoyance meter |
+| `agent_ui_action` | every `ui` event, generic | raw firehose; prefer the named events above |
+
+### Monetization
+
+| event | fires when | key props / question |
+|---|---|---|
+| `paywall_shown` | the **agent** forces the plan modal | `reason` (`limit` / `plan_required`) — friction, not curiosity |
+| `limit_reached` | free-tier cap specifically | |
+| `plan_modal_opened` / `plan_modal_closed` | any plans view (superset of paywall) | `source`, `method` |
+| `checkout_start` | checkout clicked | `plan_name`, `plan_id`, `billing_period`, `value`, `currency`, `payer_type`, `is_free` |
+| `purchase` | Clerk confirms payment | same, + `transaction_id` |
+| `plan_manage_clicked` | manage-subscription | |
+
+### Voice, settings, misc
+
+`mic_started` / `mic_stopped` / `mic_cancelled` / `mic_transcribed` /
+`mic_transcription_failed` / `mic_permission_denied` · `settings_opened` ·
+`theme_changed` · `language_changed` · `explore_opened` /
+`explore_agent_clicked` · `source_opened` · `user_signed_out` ·
+`user_signed_up` / `user_signed_in` (identify-time; distinct from
+`sign_up`, which is the once-per-browser conversion tick)
+
+---
+
+## Query cookbook (PostHog / HogQL)
 
 Every query below can be scoped to one agent by adding
 `WHERE properties.agent_domain = 'stock.cycls.ai'` (SQL) or the equivalent
 property filter in the insight UI.
 
----
+### Acquisition & auth
 
-## Acquisition & auth
-
-### Sign-up funnel by method
-
-**Business question:** what fraction of sign-up attempts actually complete,
+**Sign-up funnel by method** — what fraction of sign-up attempts complete,
 and which method converts best?
 
-Funnel insight:
-1. `sign_up_attempted` — grouped by property `method`
-2. `user_signed_up`
-
-Also useful as HogQL:
+Funnel insight: `sign_up_attempted` (grouped by `method`) → `user_signed_up`.
 
 ```sql
 SELECT
@@ -54,17 +186,14 @@ GROUP BY method
 ORDER BY attempts DESC
 ```
 
-**Read it as:** low rate on `oauth_google` vs `password` usually means the
-OAuth consent screen is dropping people, or the return redirect is broken.
+Low rate on `oauth_google` vs `password` usually means the OAuth consent
+screen is dropping people, or the return redirect is broken.
 
-### Sign-in funnel by method
+**Sign-in funnel by method** — same shape with `sign_in_attempted` →
+`user_signed_in`.
 
-Same shape as above with `sign_in_attempted` → `user_signed_in`.
-
-### OAuth attrition specifically
-
-**Business question:** of users who click "Continue with Google/Apple", how
-many actually come back signed in?
+**OAuth attrition** — of users who click "Continue with Google/Apple", how
+many come back signed in?
 
 ```sql
 SELECT
@@ -81,58 +210,43 @@ WHERE event = 'sign_in_attempted'
 GROUP BY method
 ```
 
-**Read it as:** if `returned_signed_in / clicks` drops, the OAuth round-trip
-is broken on that provider — likely a Clerk domain / redirect URL config
-issue.
+If `returned_signed_in / clicks` drops, the OAuth round-trip is broken on
+that provider — likely a Clerk domain / redirect URL config issue.
 
-### New vs returning split
+**New vs returning** — `user_signed_up` fires when `user.createdAt` is
+within 5 minutes of identify; otherwise `user_signed_in`. For long-horizon
+cohorts prefer PostHog's native `$first_seen` / cohorts.
 
-`user_signed_up` is emitted when `user.createdAt` is within 5 minutes of
-identify; otherwise `user_signed_in` fires. For long-horizon cohorts prefer
-PostHog's native `$first_seen` / cohort features.
+### Engagement — messaging
 
----
+**Daily / weekly active senders** — trend on `message_sent`, aggregate =
+unique users.
 
-## Engagement — messaging
-
-### Daily / weekly active senders
-
-**Business question:** how many unique people are *actually using* the agent
-(as opposed to just visiting)?
-
-Trend insight: `message_sent`, aggregate = unique users, interval = day.
-
-### Messages per session distribution
-
-**Business question:** are people having one-shot interactions or real
-conversations?
+**Messages per chat** — one-shot interactions or real conversations?
 
 ```sql
 SELECT
-  properties.session_id AS session_id,
+  properties.chat_id AS chat_id,
   count() AS messages,
   any(properties.agent_domain) AS agent
 FROM events
 WHERE event = 'message_sent'
-  AND properties.session_id IS NOT NULL
+  AND properties.chat_id IS NOT NULL
   AND timestamp > now() - INTERVAL 30 DAY
-GROUP BY session_id
+GROUP BY chat_id
 ORDER BY messages DESC
 ```
 
 Histogram the `messages` column. A median of 1 is a red flag — either the
 answer doesn't invite a follow-up, or the agent errors on turn 2.
 
-### New-session starts per user per day
-
-**Business question:** are returning users picking up old threads, or
-starting fresh each time?
+**New-chat starts per day** — picking up old threads, or starting fresh?
 
 ```sql
 SELECT
   toDate(timestamp) AS day,
-  countIf(properties.is_new_session = true)  AS new_chats,
-  countIf(properties.is_new_session = false) AS continued_chats
+  countIf(properties.is_new_chat = true)  AS new_chats,
+  countIf(properties.is_new_chat = false) AS continued_chats
 FROM events
 WHERE event = 'message_sent'
   AND timestamp > now() - INTERVAL 30 DAY
@@ -140,13 +254,23 @@ GROUP BY day
 ORDER BY day
 ```
 
-**Read it as:** a very low `continued_chats` share means sessions aren't
-being resumed — either the session list is hard to find, or conversations
-don't feel worth coming back to.
+**Turn shape** — which capabilities do turns actually exercise?
 
-### Failure rate on message send
+```sql
+SELECT
+  properties.produced_artifact AS made_artifact,
+  count()                      AS turns,
+  avg(toFloat(properties.duration_s))  AS avg_s,
+  avg(toFloat(properties.tool_calls))  AS avg_tools
+FROM events
+WHERE event = 'turn_completed'
+  AND timestamp > now() - INTERVAL 30 DAY
+GROUP BY made_artifact
+```
 
-**Business question:** what share of `message_sent` ends in `message_failed`?
+Cross-cut with retention: do artifact-producing turns retain better?
+
+**Failure rate on send**
 
 ```sql
 SELECT
@@ -161,37 +285,40 @@ GROUP BY day
 ORDER BY day
 ```
 
-Alert if `failure_rate > 0.02` for a day — usually indicates upstream LLM
-outage or a bad deploy.
+Alert if `failure_rate > 0.02` for a day — usually upstream LLM outage or a
+bad deploy.
 
-### Retry / stop behaviour
+**Retry / stop behaviour** — trends for `generation_stopped`,
+`message_retried`, `message_failed`: retries ≈ failures means recovery;
+retries ≫ failures means dissatisfaction.
 
-**Business question:** are people hitting the stop button a lot? Are they
-retrying because streams fail, or because they want a different answer?
+### Activation funnels
 
-Trends for `generation_stopped`, `message_retried`, `message_failed` over
-the same time range will tell you whether retries are recovering from
-failures (retries ≈ failures) or are dissatisfaction-driven (retries ≫
-failures).
+**Gallery → first message**: `examples_shown` → `example_prompt_used` →
+`message_sent` (origin = `example`).
 
----
+**Time to first artifact** — the aha metric:
 
-## Suggestions funnel
+```sql
+SELECT
+  toDate(timestamp) AS day,
+  uniq(distinct_id) AS users_reaching_first_artifact
+FROM events
+WHERE event = 'first_artifact'
+  AND timestamp > now() - INTERVAL 30 DAY
+GROUP BY day
+```
 
-### Starter-prompt conversion
+Pair with `sign_up` per day for a cohort conversion view.
 
-**Business question:** do suggestions actually drive people to send a
-message?
+**Follow-up chip acceptance**: `followup_accepted` ÷ `followup_shown`,
+broken down by `method` (click vs arrow). Same shape for the ask card:
+`ask_answered` ÷ `ask_shown`, with `ask_dismissed` as the negative signal.
 
-Funnel insight:
-1. `suggestion_category_selected`
-2. `suggestion_prompt_clicked`
-3. `message_sent` (same session)
+### Suggestions funnel
 
-### Which suggestions work
-
-**Business question:** which individual prompts generate the most
-engagement, and which are clicked but not sent?
+Funnel: `suggestion_category_selected` → `suggestion_prompt_clicked` →
+`message_sent` (same session).
 
 ```sql
 SELECT
@@ -206,25 +333,14 @@ ORDER BY clicks DESC
 LIMIT 50
 ```
 
-Cross-reference with the low-converting ones from the funnel to prune the
-list in `suggestions-data.tsx`.
+Cross-reference low-converting prompts to prune `suggestions-data.tsx`.
 
----
+### Chat & share mechanics
 
-## Session & share mechanics
+**Chat revisit rate** — trend: `chat_loaded`, unique users. Compare to
+`message_sent` uniques — a low ratio means the chat list isn't being used.
 
-### Session revisit rate
-
-**Business question:** how often does a user reopen a past session?
-
-Trend: `session_loaded`, unique users, interval = day.
-Compare to `message_sent` unique users — low ratio means the session picker
-isn't being used.
-
-### Share link creation → view conversion
-
-**Business question:** when a user shares, do their links actually get
-visited?
+**Share creation → view conversion**
 
 ```sql
 SELECT
@@ -249,13 +365,12 @@ GROUP BY share_path
 ORDER BY views DESC
 ```
 
-**Read it as:** shares with high `views` but zero `external_viewers` are
-the creator testing their own link — exclude them before celebrating
-virality.
+Shares with high `views` but zero `external_viewers` are the creator
+testing their own link — exclude before celebrating virality. Filter
+`properties.example = false` to separate organic shares from gallery
+traffic.
 
-### Share referrers
-
-**Business question:** where does share traffic come from?
+**Share referrers**
 
 ```sql
 SELECT
@@ -269,63 +384,35 @@ GROUP BY referrer
 ORDER BY views DESC
 ```
 
-Empty / null referrers are direct-link opens (iMessage, WhatsApp, copy-
-paste). Twitter and LinkedIn show up with their canonical hostnames.
+Null referrers are direct-link opens (iMessage, WhatsApp, copy-paste).
 
-### Share failures
+**Share failures** — trend on `share_view_failed` grouped by `error`.
 
-Trend on `share_view_failed` grouped by `error` surfaces broken / expired
-shares people are still trying to open.
+### Plan / monetization funnel
 
----
+Funnel insight: `plan_modal_opened` → `checkout_start` → `purchase`.
+Break step 1 down by `source` (`agent_event` vs `user_menu` vs `url_param`).
 
-## Plan / monetization funnel
-
-### Plans modal → subscription funnel
-
-**Business question:** of users who open the plans modal, how many subscribe?
-
-Funnel insight:
-1. `plan_modal_opened`
-2. `plan_checkout_clicked`
-3. `plan_subscription_completed`
-
-Break down step 1 by `source` (`user_menu` vs `url_param`) — driving traffic
-from your landing page with `?plans=b2c` should outperform menu-initiated
-opens (higher intent).
-
-### Which plan do people pick?
+**Which plan do people pick?**
 
 ```sql
 SELECT
   properties.plan_name AS plan,
-  properties.plan_period AS period,
+  properties.billing_period AS period,
   properties.payer_type AS payer,
   count() AS subscriptions
 FROM events
-WHERE event = 'plan_subscription_completed'
+WHERE event = 'purchase'
   AND timestamp > now() - INTERVAL 90 DAY
 GROUP BY plan, period, payer
 ORDER BY subscriptions DESC
 ```
 
-### Abandoned checkouts
+**Abandoned checkouts** — cohort: fired `checkout_start` but no `purchase`
+within 24h. Hot re-engagement targets.
 
-**Business question:** who clicked checkout but never completed?
-
-Cohort: users who fired `plan_checkout_clicked` but never fired
-`plan_subscription_completed` in the following 24 hours. These are hot
-re-engagement targets.
-
-### Agent-driven plan modal opens
-
-**Business question:** when the agent programmatically opens the plans modal
-(e.g. free-tier limit hit via `yield {"type": "ui", "action": "open_plan_modal"}`),
-how often does it convert vs a user-initiated open?
-
-`plan_modal_opened` carries a `source` property. Agent-triggered opens use
-`source = "agent_event"`; user clicks use `source = "user_menu"`; landing-page
-deep links use `source = "url_param"`.
+**Paywall conversion** — does the agent's "you've hit the limit" moment
+convert better than browsing?
 
 ```sql
 SELECT
@@ -334,7 +421,7 @@ SELECT
   uniq(distinct_id) AS users,
   countIf(distinct_id IN (
     SELECT distinct_id FROM events
-    WHERE event = 'plan_subscription_completed'
+    WHERE event = 'purchase'
       AND timestamp > now() - INTERVAL 7 DAY
   )) AS converted
 FROM events
@@ -344,13 +431,10 @@ GROUP BY source
 ORDER BY opens DESC
 ```
 
-**Read it as:** if `agent_event` converts at a higher rate than `user_menu`,
-your agent's "you've hit the limit" moment is hotter than the browsing
-user — prioritize that trigger.
+`paywall_shown.reason` splits the forced opens further (`limit` vs
+`plan_required`).
 
-### Agent UI action audit
-
-**Business question:** which UI actions are agents firing, and how often?
+**Agent UI action audit**
 
 ```sql
 SELECT
@@ -364,11 +448,10 @@ GROUP BY agent, action
 ORDER BY fires DESC
 ```
 
-Every `{"type": "ui", "action": "..."}` yielded from any agent lands here,
-even ones the client doesn't currently handle — useful for discovering
-when someone's started emitting a new action we haven't wired up yet.
+Every `{"type": "ui", "action": ...}` yielded by any agent lands here, even
+actions the client doesn't handle yet.
 
-### Close-method distribution
+**Close-method distribution**
 
 ```sql
 SELECT properties.method AS how_closed, count()
@@ -377,28 +460,14 @@ WHERE event = 'plan_modal_closed'
 GROUP BY how_closed
 ```
 
-Heavy `backdrop` / `dismiss` vs `select` is the "dropped out of pricing"
-signal. If `dismiss > select` by 10×, the pricing page isn't landing.
+`dismiss > select` by 10× means the pricing page isn't landing.
 
----
+### Voice
 
-## Voice
+**Mic adoption** — unique users of `mic_started` ÷ unique users of
+`message_sent`.
 
-### Mic adoption
-
-**Business question:** what share of active users tries voice input?
-
-Trend: unique users of `mic_started` / unique users of `message_sent`.
-
-### Share of messages that came from voice
-
-**Business question:** how much of real usage is keyboard vs voice vs
-suggestions vs URL deep-link?
-
-`message_sent` now carries an `origin` property set at send time:
-`keyboard` (default), `voice` (auto-sent from transcription),
-`suggestion` (clicked starter prompt), `url_param` (landed on the page
-with `?q=...`).
+**Share of messages by origin**
 
 ```sql
 SELECT
@@ -412,44 +481,30 @@ GROUP BY origin
 ORDER BY messages DESC
 ```
 
-**Read it as:** `voice / total` is the real voice adoption metric
-(`mic_started` only tells you they tried; `origin='voice'` tells you they
-actually shipped a message with it). If `mic_started` fires often but
-`origin='voice'` is rare, transcription is probably producing empty
-strings — cross-check with `mic_transcribed.empty`.
+`origin='voice' / total` is real voice adoption (`mic_started` only says
+they tried). If `mic_started` is frequent but `origin='voice'` rare,
+transcription is producing empty strings — cross-check `mic_transcribed.empty`.
 
-### Transcription quality proxy
-
-**Business question:** how often does a recording produce zero text?
+**Transcription quality proxy**
 
 ```sql
 SELECT
   countIf(properties.empty = true)  AS empty,
   countIf(properties.empty = false) AS transcribed,
-  avgIf(toFloat(properties.audio_ms), properties.empty = false)     AS avg_audio_ms,
+  avgIf(toFloat(properties.audio_ms), properties.empty = false)      AS avg_audio_ms,
   avgIf(toFloat(properties.transcribe_ms), properties.empty = false) AS avg_transcribe_ms
 FROM events
 WHERE event = 'mic_transcribed'
   AND timestamp > now() - INTERVAL 14 DAY
 ```
 
-High `empty` share → users don't understand the mic UI, or whisper is
-mishearing. Cross-check with `mic_stopped.reason = 'too_short'`.
+**Mic failure breakdown** — stack `mic_permission_denied`, `mic_cancelled`,
+`mic_transcription_failed`: friction at OS permission, UI intent, or
+backend.
 
-### Mic failure breakdown
+### Files
 
-Trends stack of `mic_permission_denied`, `mic_cancelled`,
-`mic_transcription_failed` — tells you whether friction is at OS permission,
-UI intent, or backend transcription.
-
----
-
-## Files
-
-### Attachments vs standalone file uploads
-
-**Business question:** do people use the files panel at all, or only inline
-attachments?
+**Attachments vs files panel**
 
 ```sql
 SELECT
@@ -462,11 +517,7 @@ WHERE event = 'file_uploaded'
 GROUP BY ctx
 ```
 
-`ctx = chat_attachment` versus `ctx = files_panel` is the split. If the
-panel is near-zero the discovery UI isn't working — or the feature doesn't
-match use cases.
-
-### File-type mix
+**File-type mix**
 
 ```sql
 SELECT
@@ -479,10 +530,7 @@ ORDER BY 2 DESC
 LIMIT 20
 ```
 
-Drives prioritization for which file types deserve better preview / tool
-handling.
-
-### Upload failure rate
+**Upload failure rate**
 
 ```sql
 SELECT
@@ -496,20 +544,9 @@ GROUP BY day
 ORDER BY day
 ```
 
----
+### Cross-agent discovery
 
-## Cross-agent discovery
-
-### Explore-modal CTR
-
-**Business question:** when people open the Explore dropdown, do they click
-through to another agent?
-
-Funnel:
-1. `explore_opened`
-2. `explore_agent_clicked`
-
-### Which agents are most discovered-from / discovered-to
+Funnel: `explore_opened` → `explore_agent_clicked`.
 
 ```sql
 SELECT
@@ -523,17 +560,9 @@ GROUP BY discovered_from, discovered_to
 ORDER BY clicks DESC
 ```
 
-**Read it as:** if users of `stock.cycls.ai` heavily click through to
-`tax.cycls.ai`, it's a product signal that those domains are adjacent —
-worth bundling or cross-linking more prominently.
+### Preferences
 
----
-
-## Preferences
-
-### Dark-vs-light split across the fleet
-
-**Business question:** should we invest more in dark-mode polish?
+**Dark-vs-light across the fleet** (super property, so representative):
 
 ```sql
 SELECT
@@ -545,10 +574,7 @@ WHERE timestamp > now() - INTERVAL 14 DAY
 GROUP BY theme
 ```
 
-Since `theme` is a super property on *every* event, this is representative
-of actual usage, not just toggle clicks.
-
-### Language mix per agent
+**Language mix per agent**
 
 ```sql
 SELECT
@@ -562,7 +588,8 @@ GROUP BY 1, 2
 ORDER BY 1, 3 DESC
 ```
 
-### Who toggles, and in which direction
+**Toggle direction** — heavy correction of one language means
+default-detection is wrong:
 
 ```sql
 SELECT
@@ -576,20 +603,15 @@ GROUP BY switched_to, where
 ORDER BY 3 DESC
 ```
 
-Heavy toggling of one language suggests default-detection is wrong (users
-keep correcting it).
-
----
-
-## Business health dashboards
+### Business health dashboards
 
 A useful starter dashboard per agent:
 
 - Trend: DAU (unique `message_sent` senders)
 - Trend: messages per day, broken down by `is_paid` person property
-- Funnel: `sign_up_attempted` → `user_signed_up` → first `message_sent`
-- Funnel: `plan_modal_opened` → `plan_checkout_clicked` → `plan_subscription_completed`
-- Pie: `theme` and `language` super-property split
+- Funnel: `sign_up_start` → `sign_up` → `first_agent_use` → `first_artifact`
+- Funnel: `plan_modal_opened` → `checkout_start` → `purchase`
+- Rates: `followup_accepted`/`followup_shown`, `ask_answered`/`ask_shown`
 - Table: top 10 `suggestion_prompt_clicked` prompts
-- Table: shares created + views in last 30 days (see Share query above)
+- Table: shares created + views last 30 days (see Share query above)
 - Retention: weekly, based on `message_sent`

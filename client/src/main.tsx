@@ -2,7 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
-import { initPostHog, setAgentDomain } from "./lib/posthog";
+import { initAnalytics, setAgentDomain, type ProviderSpec } from "./lib/posthog";
 import { ToastProvider } from "./lib/toast";
 import { applyTheme, getThemeMode } from "./lib/utils";
 
@@ -17,9 +17,9 @@ if (navigator.language.startsWith("ar")) {
 
 // Initialize analytics synchronously so share page visits are captured
 // before the SharedView fetch resolves.
-const inlinedConfig = (window as unknown as { __CONFIG__?: { analytics?: boolean; name?: string } }).__CONFIG__;
-if (inlinedConfig?.analytics) {
-  initPostHog();
+const inlinedConfig = (window as unknown as { __CONFIG__?: { analytics?: ProviderSpec[] | null; name?: string } }).__CONFIG__;
+if (inlinedConfig?.analytics?.length) {
+  initAnalytics(inlinedConfig.analytics);
   setAgentDomain(inlinedConfig.name);
 }
 
