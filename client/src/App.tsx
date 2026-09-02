@@ -28,7 +28,7 @@ import { useWorkspaces } from "./hooks/use-workspaces";
 import { setActiveWorkspace } from "./hooks/use-auth-headers";
 import { useUrlParam } from "./hooks/use-url-param";
 import { usePostHogIdentify } from "./hooks/use-posthog-identify";
-import { initPostHog, setAgentDomain, track, register } from "./lib/posthog";
+import { initAnalytics, setAgentDomain, track, register } from "./lib/posthog";
 import { initAffiliate } from "./lib/affiliate";
 
 function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org?: { id: string; name: string } | null): FilesPanelProps {
@@ -116,7 +116,7 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
 
   useOAuthSignupDetect(user);
   usePostHogIdentify(
-    !!config?.analytics,
+    !!config?.analytics?.length,
     user,
     subSummary,
     orgSummary,
@@ -248,7 +248,7 @@ function markSignupCompleted(method: string) {
   try {
     if (localStorage.getItem("cycls_signup_tracked")) return;
     localStorage.setItem("cycls_signup_tracked", "1");
-    track("signup_completed", { method });
+    track("sign_up", { method });
   } catch { /* ignore */ }
 }
 
@@ -641,8 +641,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (config?.analytics) {
-      initPostHog();
+    if (config?.analytics?.length) {
+      initAnalytics(config.analytics);
       setAgentDomain(config.name);
     }
   }, [config?.analytics, config?.name]);

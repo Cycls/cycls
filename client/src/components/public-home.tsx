@@ -32,7 +32,7 @@ export function PublicHome({ config, onSignIn }: {
   const gate = (text?: string) => {
     const draft = (text ?? input).trim();
     if (draft) sessionStorage.setItem("cycls_draft", draft);
-    track("public_signin_gate", { has_draft: !!draft });
+    track("sign_up_start", { has_draft: !!draft });
     onSignIn();
   };
 

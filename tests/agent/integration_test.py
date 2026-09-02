@@ -88,7 +88,7 @@ def test_web_builder_propagates_into_config():
         yield "premium"
 
     assert premium_app.config.auth == True
-    assert premium_app.config.analytics == True
+    assert premium_app.config.analytics == [{"provider": "posthog"}]
     assert premium_app.config.cms == {"brand": "https://cms.cycls.ai/agents/x"}
     print("✅ Test passed.")
 
@@ -105,7 +105,7 @@ def test_app_default_config():
         yield "default"
 
     assert default_app.config.auth == False
-    assert default_app.config.analytics == False
+    assert default_app.config.analytics is None
     assert default_app.config.cms is None
     assert default_app.config.title is None
     print("✅ Test passed.")
@@ -280,7 +280,7 @@ def test_app_all_config_options():
 
     assert full_app.config.title == "My App"
     assert full_app.config.auth == True
-    assert full_app.config.analytics == True
+    assert full_app.config.analytics == [{"provider": "posthog"}]
     print("✅ Test passed.")
 
 

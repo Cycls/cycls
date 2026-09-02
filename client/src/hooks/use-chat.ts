@@ -71,7 +71,7 @@ export interface AppConfig {
   auth?: boolean;
   voice?: boolean;
   pk?: string;
-  analytics?: boolean;
+  analytics?: { provider: string; events?: string[]; [k: string]: unknown }[] | null;
   suggestions?: boolean;
   affiliate?: string;
   max_upload?: number;   // per-file upload cap in MB
@@ -151,17 +151,17 @@ export function useChat(baseUrl: string = "") {
       setIsStreaming(true);
       const sentAt = Date.now();
 
-      let firstEver = false;
       try {
-        firstEver = !localStorage.getItem("cycls_sent");
-        if (firstEver) localStorage.setItem("cycls_sent", "1");
+        if (!localStorage.getItem("cycls_sent")) {
+          localStorage.setItem("cycls_sent", "1");
+          track("first_agent_use", {});
+        }
       } catch { /* ignore */ }
       track("message_sent", {
         message_length: text.length,
         has_attachments: !!(attachments && attachments.length),
         attachment_count: attachments?.length || 0,
         is_new_chat: !chatIdRef.current,
-        first_ever: firstEver,
         chat_id: chatIdRef.current,
         origin,
       });

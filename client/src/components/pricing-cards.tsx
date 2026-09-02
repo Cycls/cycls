@@ -129,13 +129,17 @@ export function PricingCards({ payerType = "user", onSelect }: { payerType?: "us
                       planPeriod={period}
                       for={payerType}
                       onSubscriptionComplete={() => {
-                        track("plan_subscription_completed", {
+                        // Canonical commerce props (GA4-shaped: value/currency);
+                        // transaction_id dedupes a double-fired callback.
+                        track("purchase", {
                           plan_id: plan.id,
                           plan_name: plan.name,
-                          plan_period: period,
-                          plan_price: price,
+                          billing_period: period,
+                          value: Number(price) || 0,
+                          currency: "USD",
                           payer_type: payerType,
                           is_free: isFreePlan,
+                          transaction_id: `${user?.id || "anon"}-${plan.id}-${period}-${new Date().toISOString().slice(0, 10)}`,
                         });
                         // Affiliate referral attribution — paid plans only.
                         // Email must match the Stripe customer (Clerk uses the
@@ -147,11 +151,12 @@ export function PricingCards({ payerType = "user", onSelect }: { payerType?: "us
                     >
                       <button
                         onClick={() => {
-                          track("plan_checkout_clicked", {
+                          track("checkout_start", {
                             plan_id: plan.id,
                             plan_name: plan.name,
-                            plan_period: period,
-                            plan_price: price,
+                            billing_period: period,
+                            value: Number(price) || 0,
+                            currency: "USD",
                             payer_type: payerType,
                             is_free: isFreePlan,
                           });

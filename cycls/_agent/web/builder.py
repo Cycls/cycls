@@ -7,6 +7,7 @@ fields can be passed directly on `@cycls.agent` for the simple case —
 """
 import base64
 import mimetypes
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -14,6 +15,29 @@ from cycls._app.auth import JWT
 
 
 THEMES = ["default", "dev"]
+
+
+class PostHog:
+    """Analytics provider: PostHog product analytics. `events` narrows which
+    canonical events reach it (default: all); `key`/`host` override the
+    built-in project."""
+    def __init__(self, key: Optional[str] = None, host: Optional[str] = None,
+                 events: Optional[list] = None):
+        self.spec = {"provider": "posthog"}
+        if key: self.spec["key"] = key
+        if host: self.spec["host"] = host
+        if events: self.spec["events"] = list(events)
+
+
+class GTM:
+    """Analytics provider: Google Tag Manager. Injects the container into
+    every page; the chat client pushes the routed events to the dataLayer
+    under their canonical names."""
+    def __init__(self, container_id: str, events: Optional[list] = None):
+        if not re.fullmatch(r"GTM-[A-Z0-9]{4,10}", container_id):
+            raise ValueError(f"not a GTM container id: {container_id!r}")
+        self.spec = {"provider": "gtm", "id": container_id}
+        if events: self.spec["events"] = list(events)
 
 
 def _asset(value: str) -> str:
@@ -38,7 +62,7 @@ class Web:
         self._title: Optional[str] = None
         self._theme: str = "default"
         self._cms: Optional[dict] = None
-        self._analytics: bool = False
+        self._analytics: Optional[list] = None
         self._suggestions: bool = False
         self._affiliate: Optional[str] = None
         self._max_upload: int = 512
@@ -49,6 +73,7 @@ class Web:
         self._head: Optional[str] = None
         self._explore: Optional[list] = None
         self._examples: Optional[dict] = None
+        self._gtm: Optional[str] = None
         self._og_bytes: Optional[bytes] = None
         self._og_url: Optional[str] = None
         self._favicon: Optional[str] = None
@@ -191,8 +216,17 @@ class Web:
             out.append({"label": label, "label_ar": label_ar, "urls": [entry(e) for e in v]})
         return self._copy(_examples=out or None)
 
-    def analytics(self, on: bool = True):
-        return self._copy(_analytics=on)
+    def analytics(self, *providers):
+        """Analytics as plugins: one canonical event pipe in the client,
+        fanned out to provider objects (cycls.PostHog, cycls.GTM), each
+        optionally scoped to an `events` allowlist. `.analytics(True)` is
+        shorthand for the PostHog default; `False`/empty disables."""
+        if providers == (True,):
+            return self._copy(_analytics=[PostHog().spec])
+        if providers in ((), (False,)):
+            return self._copy(_analytics=None)
+        specs = [p.spec if hasattr(p, "spec") else dict(p) for p in providers]
+        return self._copy(_analytics=specs or None)
 
     def suggestions(self, on: bool = True):
         """Show the prompt-starter suggestions on the empty-chat screen. Off by default."""
