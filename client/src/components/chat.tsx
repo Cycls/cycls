@@ -153,6 +153,20 @@ export function Chat({ chat, onShare, files, account, config }: {
   // composer. The options are shortcuts, not a constraint: typing any reply
   // answers it too.
   const [ask, setAsk] = useState<{ questions: AskQuestion[] } | null>(null);
+  // Typing takes over: the moment the user starts composing, the agent's
+  // chip and card yield — their own words beat our prompts.
+  const prevInputRef = useRef(input);
+  useEffect(() => {
+    const started = !prevInputRef.current.trim() && !!input.trim();
+    prevInputRef.current = input;
+    if (!started) return;
+    setFollowUp(null);
+    setAsk((cur) => {
+      if (cur) track("ask_dismissed", { chat_id: chatId, method: "typed" });
+      return null;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [input]);
   useEffect(() => {
     const sync = () => {
       setFollowUpsOn(followUpsEnabled());
