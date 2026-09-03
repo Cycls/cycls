@@ -7,7 +7,7 @@ import { isHtml, isRenderable, saveBlob, extTint } from "./canvas-utils";
 import type { Message } from "../hooks/use-chat";
 import { useMediaQuery } from "../hooks/use-media-query";
 import { t } from "../lib/i18n";
-import { track } from "../lib/posthog";
+import { track } from "../lib/analytics";
 import { toggleDark, cn } from "../lib/utils";
 
 interface Author {

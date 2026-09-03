@@ -67,6 +67,7 @@ class Agent(App):
         self.config = Config(
             name=name, title=web._title, pass_metadata=brand,
             auth=web._auth is not None, cms=web._cms, analytics=web._analytics,
+            notifications=web._notifications,
             suggestions=web._suggestions, affiliate=web._affiliate,
             max_upload=web._max_upload, workspaces=web._workspaces,
             seo=web._seo, head=web._head, favicon=web._favicon, og=web._og_url,

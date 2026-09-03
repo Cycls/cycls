@@ -8,7 +8,7 @@ import { describe, test, expect, afterEach, vi } from "vitest";
 import { useAuthHeaders, setActiveWorkspace } from "../src/hooks/use-auth-headers";
 import { useChat } from "../src/hooks/use-chat";
 
-vi.mock("../src/lib/posthog", () => ({ track: vi.fn() }));
+vi.mock("../src/lib/analytics", () => ({ track: vi.fn() }));
 
 afterEach(() => {
   setActiveWorkspace(null);

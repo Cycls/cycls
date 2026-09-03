@@ -2,7 +2,7 @@ import { useState } from "react";
 import { SignedIn, useUser } from "@clerk/clerk-react";
 import { usePlans, useSubscription, CheckoutButton, SubscriptionDetailsButton } from "@clerk/clerk-react/experimental";
 import { t, getLang } from "../lib/i18n";
-import { track } from "../lib/posthog";
+import { track } from "../lib/analytics";
 import { convertReferral } from "../lib/affiliate";
 import { Icon } from "./icon";
 

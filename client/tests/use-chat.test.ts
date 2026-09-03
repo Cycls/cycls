@@ -9,7 +9,7 @@ import { describe, test, expect, beforeEach, vi } from "vitest";
 import { useChat } from "../src/hooks/use-chat";
 
 // send() fires posthog events; stub them so tests don't touch analytics.
-vi.mock("../src/lib/posthog", () => ({ track: vi.fn() }));
+vi.mock("../src/lib/analytics", () => ({ track: vi.fn() }));
 
 
 beforeEach(() => {

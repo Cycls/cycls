@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { t, getLang, setLang } from "../lib/i18n";
-import { track } from "../lib/posthog";
+import { track } from "../lib/analytics";
 import { Icon } from "./icon";
 import { AttachmentBody } from "./attachment-body";
 import { extTint } from "./canvas-utils";

@@ -23,6 +23,7 @@ class Config(BaseModel):
     auth: bool = False
     cms: Optional[dict] = None        # {brand: url, explore: url, token: bearer} — plain GETs, contract JSON
     analytics: Optional[list] = None  # analytics plugins: [{provider, ...}] — one event pipe, fanned out client-side
+    notifications: Optional[list] = None  # push plugins: [{provider, app_id}] — the FE owns the prompt UI
     suggestions: bool = False
     voice: bool = False
     pk: Optional[str] = None
@@ -365,6 +366,14 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
     @app.get("/shared/{user}/{token}")
     async def share_index(user: str, token: str):
         return HTMLResponse(_index_html)
+
+    if any(isinstance(p, dict) and p.get("provider") == "onesignal" for p in (config.notifications or [])):
+        # A push service worker must come from the site's own origin; scoped
+        # under /push/onesignal/ so it never intercepts the page itself.
+        @app.get("/push/onesignal/OneSignalSDKWorker.js")
+        async def onesignal_worker():
+            return FastAPIResponse('importScripts("https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js");\n',
+                                   media_type="application/javascript")
 
     # ---- Static mounts (must be last) ----
 

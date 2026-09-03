@@ -1130,6 +1130,39 @@ def test_analytics_providers_are_plugins():
             cycls.GTM(bad)
 
 
+def test_notifications_providers_are_plugins():
+    """Push, same shape as analytics: provider objects normalize to specs and
+    the app id must look like one — it is inlined into the page config."""
+    import pytest
+    import cycls
+    aid = "12345678-1234-1234-1234-123456789abc"
+    assert cycls.Web().notifications()._notifications is None
+    assert cycls.Web().notifications(cycls.OneSignal(aid))._notifications == \
+        [{"provider": "onesignal", "app_id": aid}]
+    for bad in ("not-an-id", "<script>", ""):
+        with pytest.raises(ValueError):
+            cycls.OneSignal(bad)
+
+
+def test_onesignal_worker_route(tmp_path):
+    """The service worker only exists when OneSignal is configured — and it is
+    a one-line import of the vendor worker, served from our origin."""
+    from fastapi.testclient import TestClient
+
+    async def dummy_agent(context):
+        yield "test"
+
+    cfg = _branded_config(_seo_theme(tmp_path),
+                          notifications=[{"provider": "onesignal", "app_id": "x"}])
+    c = TestClient(web(dummy_agent, cfg))
+    r = c.get("/push/onesignal/OneSignalSDKWorker.js")
+    assert r.status_code == 200 and "OneSignalSDK.sw.js" in r.text
+    assert "javascript" in r.headers["content-type"]
+    assert '"notifications":[{"provider":"onesignal"' in c.get("/").text.replace(" ", "")
+    plain = TestClient(web(dummy_agent, _branded_config(_seo_theme(tmp_path))))
+    assert plain.get("/push/onesignal/OneSignalSDKWorker.js").status_code == 404
+
+
 def test_explore_static_and_disabled():
     from fastapi.testclient import TestClient
 

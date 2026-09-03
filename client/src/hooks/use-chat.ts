@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import { useApi, reasonOf } from "./use-api";
-import { track } from "../lib/posthog";
+import { track } from "../lib/analytics";
 import { useToast } from "../lib/toast";
 
 // One search result, as the search engine returned it. A citation chip only
@@ -73,6 +73,7 @@ export interface AppConfig {
   voice?: boolean;
   pk?: string;
   analytics?: { provider: string; events?: string[]; [k: string]: unknown }[] | null;
+  notifications?: { provider: string; [k: string]: unknown }[] | null;   // push plugins
   suggestions?: boolean;
   affiliate?: string;
   max_upload?: number;   // per-file upload cap in MB

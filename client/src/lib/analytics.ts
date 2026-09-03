@@ -1,13 +1,37 @@
 // One pipe of canonical events (docs/notes/analytics.md). track() enriches once
 // and fans out to the providers configured by Web().analytics(...) — each a
-// plugin, each optionally scoped to an event allowlist. Adding a destination
-// means adding a factory to PLUGINS, never touching a call site.
+// plugin, each optionally scoped to an event allowlist. A provider may also
+// bring flags (who sees a prompt or a card, with what payload) and surveys
+// (questions authored on the platform) — docs/notes/engagement.md. Adding a
+// vendor means adding a factory to PLUGINS, never touching a call site.
 import posthog from "posthog-js";
 
 const POSTHOG_KEY = "phc_2qafhOCTgCnygXsPEHOA0RBtJf5nvVsi7yIene4DWaF";
 const POSTHOG_HOST = "https://us.i.posthog.com";
 
 export type ProviderSpec = { provider: string; events?: string[] } & Record<string, unknown>;
+
+export type Flag = { enabled: boolean; payload: unknown };
+
+// A survey as the strip renders it — PostHog's shape is the reference; another
+// vendor's plugin maps its own into this.
+export type SurveyQuestion = {
+  id?: string; type: string; question: string; description?: string | null;
+  choices?: string[]; scale?: number; display?: string;
+  lowerBoundLabel?: string; upperBoundLabel?: string;
+};
+export type Survey = {
+  id: string; name: string; type: string; questions: SurveyQuestion[];
+  current_iteration?: number | null; current_iteration_start_date?: string | null;
+};
+
+export type Flags = { on(cb: () => void): () => void; get(key: string): Flag };
+export type Surveys = {
+  /** The surveys this person should see right now, once the vendor has decided. */
+  on(cb: (surveys: Survey[]) => void): void;
+  /** The vendor's own survey events, in its own vocabulary — not on the pipe. */
+  event(name: string, props: Record<string, unknown>): void;
+};
 
 type Provider = {
   name: string;
@@ -16,6 +40,9 @@ type Provider = {
   register?(props: Record<string, unknown>): void;
   identify?(id: string, props: Record<string, unknown>): void;
   reset?(): void;
+  setPerson?(props: Record<string, unknown>): void;
+  flags?: Flags;
+  surveys?: Surveys;
 };
 
 let initialized = false;   // posthog-js may only init once per page
@@ -39,6 +66,20 @@ const PLUGINS: Record<string, (spec: ProviderSpec) => Provider | null> = {
       register: (p) => posthog.register(p),
       identify: (id, p) => posthog.identify(id, p),
       reset: () => posthog.reset(),
+      setPerson: (p) => posthog.setPersonProperties(p),
+      flags: {
+        on: (cb) => posthog.onFeatureFlags(() => cb()),
+        get: (key) => ({ enabled: !!posthog.isFeatureEnabled(key, { send_event: false }),
+                         payload: posthog.getFeatureFlagPayload(key) }),
+      },
+      surveys: {
+        // Surveys authored with the API presentation: the vendor targets, we render.
+        on: (cb) => posthog.onSurveysLoaded((_, ctx) => {
+          if (ctx?.isLoaded === false) return;
+          posthog.getActiveMatchingSurveys((list) => cb(list as unknown as Survey[]));
+        }),
+        event: (name, props) => posthog.capture(name, props),
+      },
     };
   },
   // GTM reads the same canonical events off the dataLayer, names verbatim —
@@ -60,6 +101,9 @@ export function initAnalytics(specs?: ProviderSpec[] | null) {
     if (p) providers.push(p);
   }
 }
+
+export const flagsProvider = (): Flags | null => providers.find((p) => p.flags)?.flags ?? null;
+export const surveysProvider = (): Surveys | null => providers.find((p) => p.surveys)?.surveys ?? null;
 
 export function _resetProviders() {   // tests only
   providers = [];
@@ -172,9 +216,13 @@ export function track(event: string, props: Record<string, unknown> = {}) {
   }
 }
 
+/** Facts about the person, not the session — what a flag condition can read. */
+export function setPerson(props: Record<string, unknown>) {
+  for (const p of providers) p.setPerson?.(props);
+}
+
 export function register(props: Record<string, unknown>) {
   superProps = { ...superProps, ...props };
   for (const p of providers) p.register?.(props);
 }
 
-export { posthog };

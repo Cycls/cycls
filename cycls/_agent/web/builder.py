@@ -40,6 +40,16 @@ class GTM:
         if events: self.spec["events"] = list(events)
 
 
+class OneSignal:
+    """Push provider: OneSignal web push. The permission prompt is the SDK's
+    own corner card; when it shows is the platform's call
+    (docs/notes/engagement.md)."""
+    def __init__(self, app_id: str):
+        if not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", app_id):
+            raise ValueError(f"not a OneSignal app id: {app_id!r}")
+        self.spec = {"provider": "onesignal", "app_id": app_id}
+
+
 def _asset(value: str) -> str:
     """Inline an image at build time: SVG paths as markup, PNG/JPG/WebP paths
     as data URIs (keep raster logos small — they ride the page config). Raw
@@ -63,6 +73,7 @@ class Web:
         self._theme: str = "default"
         self._cms: Optional[dict] = None
         self._analytics: Optional[list] = None
+        self._notifications: Optional[list] = None
         self._suggestions: bool = False
         self._affiliate: Optional[str] = None
         self._max_upload: int = 512
@@ -227,6 +238,15 @@ class Web:
             return self._copy(_analytics=None)
         specs = [p.spec if hasattr(p, "spec") else dict(p) for p in providers]
         return self._copy(_analytics=specs or None)
+
+    def notifications(self, *providers):
+        """Push notifications as plugins (cycls.OneSignal). The SDK owns the
+        prompt UI and the subscription handshake; who gets pushed, and when,
+        is the platform's job. Empty or False disables."""
+        if providers in ((), (False,)):
+            return self._copy(_notifications=None)
+        specs = [p.spec if hasattr(p, "spec") else dict(p) for p in providers]
+        return self._copy(_notifications=specs or None)
 
     def suggestions(self, on: bool = True):
         """Show the prompt-starter suggestions on the empty-chat screen. Off by default."""
