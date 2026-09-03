@@ -196,13 +196,13 @@ _BUILD_APP_TOOL = {
     "type": "custom",
     "name": "build_app",
     "description": (
-        "Bundle mini-app source into a single self-contained HTML file and install "
-        "it as a mini app, which the user opens from the Apps tab.\n\n"
+        "Bundle app source into a single self-contained HTML file and install "
+        "it as an app, which the user opens from the Apps tab.\n\n"
         "Write the source into the workspace first with the editor — one file per "
         "component, `index.html` as the entry — then call this with that folder. "
         "The source stays in the workspace so you can edit and rebuild it later; "
         "do NOT paste source into this call.\n\n"
-        "The bundler inlines everything (a mini app runs sandboxed, where an "
+        "The bundler inlines everything (an app runs sandboxed, where an "
         "external script, stylesheet or font is blocked). Available to import: "
         "react, react-dom, recharts, lucide-react, date-fns, clsx, tailwind-merge, "
         "and Tailwind v4 via `@import \"tailwindcss\"`. Nothing else — you cannot "
@@ -308,7 +308,8 @@ _BUILTINS = {
     "Editor":   [_READ_TOOL, _EDIT_TOOL],
     "DataBase": [_DATABASE_TOOL],
     "Canvas":   [_CANVAS_TOOL],
-    "MiniApp":  [_BUILD_APP_TOOL],
+    "Apps":     [_BUILD_APP_TOOL],
+    "MiniApp":  [_BUILD_APP_TOOL],   # legacy alias for Apps
     "Suggest":  [_SUGGEST_TOOL],
     "Ask":      [_ASK_TOOL],
 }
@@ -623,7 +624,7 @@ async def _exec_ask(inp):
 
 
 def _app_identity(path, fallback):
-    """A mini app opens under its manifest name and icon, not `index.html`."""
+    """An app opens under its manifest name and icon, not `index.html`."""
     if path.name != "index.html" or path.parent.parent.name != "apps":
         return {"name": fallback}
     try:

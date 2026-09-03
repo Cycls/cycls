@@ -6,7 +6,7 @@ import { Files, InlineInput, DropdownMenu } from "./files";
 import { Canvas, type CanvasFile } from "./canvas";
 import { editWorkingPath, ext } from "./canvas-utils";
 import { AppsPanel } from "./apps-panel";
-import { useApps, type MiniAppInfo } from "../hooks/use-apps";
+import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
 import { Icon, IconButton } from "./icon";
 import { CyclsLogo } from "./cycls-logo";
@@ -200,7 +200,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       if (path && !workingPaths.includes(path)) {
         setWorkingPaths((ws) => (ws.includes(path) ? ws : [...ws, path]));
         openFileInCanvas(path);
-        track("canvas_working_opened", { path });
+        track("canvas_loader_shown", { path });
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -211,9 +211,9 @@ export function Chat({ chat, onShare, files, account, config }: {
   }, []);
   const { apps, loading: appsLoading, refresh: refreshApps } = useApps();
   // The UI handler resolves an app by path without re-subscribing on every load.
-  const appsRef = useRef<MiniAppInfo[]>([]);
+  const appsRef = useRef<AppInfo[]>([]);
   useEffect(() => { appsRef.current = apps; }, [apps]);
-  const openApp = useCallback((app: MiniAppInfo) => {
+  const openApp = useCallback((app: AppInfo) => {
     openFileInCanvas(app.entry, app.name, {
       icon: app.icon, iconSrc: app.iconSrc, letter: app.letter,
     });
@@ -266,12 +266,6 @@ export function Chat({ chat, onShare, files, account, config }: {
       } else if (ev.action === "open_canvas" && typeof ev.path === "string") {
         const done = ev.path;
         track("artifact_completed", { path: done, kind: ext(done) });
-        try {
-          if (!localStorage.getItem("cycls_first_artifact")) {
-            localStorage.setItem("cycls_first_artifact", "1");
-            track("first_artifact", { kind: ext(done) });
-          }
-        } catch { /* ignore */ }
         setWorkingPaths((ws) => ws.filter((x) => x !== done));
         const app = appsRef.current.find((a) => a.entry === ev.path);
         if (app) openApp(app);
@@ -279,7 +273,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       } else if (ev.action === "suggest" && typeof ev.text === "string") {
         if (followUpsEnabled()) {
           setFollowUp(ev.text);
-          track("followup_shown", {});   // denominator for followup_accepted
+          track("ui_action", { action: "suggest" });   // denominator for followup_accepted
         }
       } else if (ev.action === "ask") {
         // The flat singular keys are the same event's back-compat tail.
@@ -300,8 +294,10 @@ export function Chat({ chat, onShare, files, account, config }: {
           });
         if (questions.length && askEnabled()) {
           setAsk({ questions });
-          track("ask_shown", { questions: questions.length });
+          track("ui_action", { action: "ask", questions: questions.length });
         }
+      } else {
+        track("ui_action", { action: ev.action, handled: false });
       }
     });
     return () => setUIHandler(null);
@@ -329,7 +325,6 @@ export function Chat({ chat, onShare, files, account, config }: {
     const skipped = incoming.length - newFiles.length;
     if (skipped) toastError(`${skipped === 1 ? "File" : `${skipped} files`} over the ${maxMb} MB limit ${skipped === 1 ? "was" : "were"} skipped.`);
     if (!newFiles.length) return;
-    track("attachment_added", { count: newFiles.length, kinds: [...new Set(newFiles.map((f) => ext(f.name) || f.type))] });
     if (uploadFile) {
       // Add placeholders immediately — blob URL is a stable key per file
       const placeholders: Attachment[] = newFiles.map((f) => ({

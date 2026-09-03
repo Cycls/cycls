@@ -1,13 +1,13 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useApi } from "./use-api";
 
-// Mini apps live in `apps/<slug>/` at the workspace root, entry `index.html`.
+// Apps live in `apps/<slug>/` at the workspace root, entry `index.html`.
 // A folder rather than a loose file so an app's data sits beside it — which is
 // also exactly the boundary the canvas bridge will read within.
 
 export const APPS_DIR = "apps";
 
-export interface MiniAppInfo {
+export interface AppInfo {
   slug: string;
   name: string;
   /** Emoji or short text, when the icon isn't an image. */
@@ -41,7 +41,7 @@ const titleise = (slug: string) =>
 // too, since we split by code point rather than by UTF-16 unit.
 const firstLetter = (name: string) => [...name][0]?.toUpperCase() ?? "?";
 
-export function parseManifest(slug: string, raw: string | null): MiniAppInfo {
+export function parseManifest(slug: string, raw: string | null): AppInfo {
   let m: Manifest = {};
   if (raw) {
     try {
@@ -53,7 +53,7 @@ export function parseManifest(slug: string, raw: string | null): MiniAppInfo {
   }
   const name = str(m.name, 60) ?? titleise(slug);
   const icon = str(m.icon, 512);
-  const app: MiniAppInfo = {
+  const app: AppInfo = {
     slug,
     name,
     letter: firstLetter(name),
@@ -70,7 +70,7 @@ export function parseManifest(slug: string, raw: string | null): MiniAppInfo {
 }
 
 export function useApps(baseUrl: string = "") {
-  const [apps, setApps] = useState<MiniAppInfo[]>([]);
+  const [apps, setApps] = useState<AppInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const { api } = useApi(baseUrl);
   const blobs = useRef<string[]>([]);

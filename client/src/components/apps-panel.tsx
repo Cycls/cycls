@@ -2,12 +2,12 @@ import { Icon } from "./icon";
 import { AppIcon } from "./app-icon";
 import { LoadingBar } from "./loading-bar";
 import { t } from "../lib/i18n";
-import type { MiniAppInfo } from "../hooks/use-apps";
+import type { AppInfo } from "../hooks/use-apps";
 
 export function AppsPanel({ apps, loading, onOpen }: {
-  apps: MiniAppInfo[];
+  apps: AppInfo[];
   loading: boolean;
-  onOpen: (app: MiniAppInfo) => void;
+  onOpen: (app: AppInfo) => void;
 }) {
   if (loading) return <LoadingBar />;
 

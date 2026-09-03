@@ -3,7 +3,7 @@ import { Icon } from "./icon";
 import { LoadingBar } from "./loading-bar";
 import { t } from "../lib/i18n";
 
-// A mini app can propose a file name. Where it lands is this dialog's answer,
+// An app can propose a file name. Where it lands is this dialog's answer,
 // which is why an app needs no permission to write outside its own folder.
 export function SaveDialog({ name, bytes, listFolders, onConfirm, onCancel }: {
   name: string;

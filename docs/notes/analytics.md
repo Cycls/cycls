@@ -63,6 +63,26 @@ Rules of the pipe:
   all agents) and attributed to the agent-domain of conversion;
   `transaction_id` dedupes double-fires.
 
+### Schema hygiene
+
+- **`$`-prefixed events** (`$pageview`, `$pageleave`, `$identify`, `$set`,
+  `$feature_flag_called`, `$survey_shown`…) are PostHog's own — the SDK
+  emits them, they carry the PostHog icon, and they are not part of this
+  contract. Everything else is ours.
+- `client/tests/events-contract.test.ts` fails the build if the client
+  emits an event this page doesn't list — the contract is enforced.
+- In PostHog → Data management → Events: mark each event here *verified*
+  with its one-line description; **hide** the stale names that linger after
+  renames (`signup_completed`, `public_signin_gate`,
+  `plan_checkout_clicked`, `plan_subscription_completed`,
+  `first_artifact`, `first_artifact_completed`, `attachment_added`,
+  `canvas_working_opened`, `agent_ui_action`, `followup_shown`,
+  `ask_shown`, `ui_action_unknown`). Historical rows can't be deleted;
+  hiding keeps them out of the pickers.
+- Provider-native capabilities (identify, surveys) send provider events —
+  the `$survey_*` family is PostHog's, sent by the PostHog plugin, never
+  through the canonical pipe.
+
 ### Super and person properties
 
 Every event carries these **super properties** (attached at the bus, so any
@@ -92,9 +112,8 @@ Identified users also carry **person properties** (via identify): `email`,
 | `sign_up_start` | signed-out visitor acts (send, sign-in button) | `has_draft` — does the public shell convert? |
 | `sign_up_attempted` / `sign_in_attempted` | auth form/oauth submitted | `method`, `step` |
 | `sign_up` | account created — Clerk complete for password/code; OAuth inferred on first authed load (account < 5 min old); once per browser | `method` — gate → account conversion |
-| `first_agent_use` | user's first-ever send (per browser+agent) | the marketing funnel's activation tick |
+| `first_agent_use` | the account's first chat ever — the server keeps a per-account marker (`activation/first_use_at` in the personal workspace) and flags `first` on the `chat_id` event once (a browser flag would re-fire per device, a per-workspace check per workspace) | the marketing funnel's activation tick; GA can't derive "first" itself |
 | `message_sent` | every send | `origin` (keyboard/suggestion/example/follow_up/ask/voice/regenerate/url_param), `is_new_chat` — the funnel spine |
-| `first_artifact` | user's first-ever completed artifact | `kind` — **time-to-first-artifact is the aha metric** |
 | `examples_shown` | gallery renders with cards | `categories`, `items` — denominator for the gallery |
 | `example_category_selected` / `example_prompt_used` / `example_viewed` / `example_watched` | gallery interactions | which examples actually activate |
 | `suggestion_category_selected` / `suggestion_prompt_clicked` | empty-state chips (no-examples fallback) | |
@@ -114,9 +133,9 @@ Identified users also carry **person properties** (via identify): `email`,
 | event | fires when | key props / question |
 |---|---|---|
 | `artifact_completed` | agent's `canvas` call | `path`, `kind` — output per session |
-| `canvas_working_opened` | working skeleton opens during a live edit | do users see work happening? |
-| `file_saved` / `file_shared` / `file_uploaded` / `file_deleted` / `file_renamed` / `folder_created` | files panel & canvas ops | is the workspace a real home? |
-| `attachment_added` / `file_upload_failed` | composer attachments | `count`, `kinds` |
+| `canvas_loader_shown` | the canvas opens in its loader state during a live edit | do users see work happening? |
+| `file_saved` / `file_shared` / `file_deleted` / `file_renamed` / `folder_created` | files panel & canvas ops | is the workspace a real home? |
+| `file_uploaded` / `file_upload_failed` | uploads, `context` = `chat_attachment` or `files_panel` | `file_type`, `file_size` |
 
 ### Sharing loop (organic acquisition)
 
@@ -133,10 +152,10 @@ Identified users also carry **person properties** (via identify): `email`,
 
 | event | fires when | key props / question |
 |---|---|---|
-| `ask_shown` / `ask_answered` / `ask_dismissed` | clarifying-question card | answered ÷ shown decides the feature's fate |
-| `followup_shown` / `followup_accepted` | suggested follow-up chip | accepted ÷ shown, `method` (click/arrow) |
+| `ui_action` | every minor agent `ui` event: `action` = `suggest`, `ask` (+ `questions`), or anything unhandled (`handled: false`) | the denominator for the chips: `followup_accepted` ÷ `ui_action{suggest}`, `ask_answered` ÷ `ui_action{ask}`. Milestone actions fire their named event instead (`open_canvas` → `artifact_completed`, `open_plan_modal` → `paywall_shown`) |
+| `ask_answered` / `ask_dismissed` | clarifying-question card resolved | answered ÷ shown decides the feature's fate |
+| `followup_accepted` | follow-up chip taken | `method` (click/arrow) |
 | `ask_toggled` / `followups_toggled` | settings switches | opt-out rate = annoyance meter |
-| `agent_ui_action` | every `ui` event, generic | raw firehose; prefer the named events above |
 
 ### Monetization
 
@@ -297,23 +316,16 @@ retries ≫ failures means dissatisfaction.
 **Gallery → first message**: `examples_shown` → `example_prompt_used` →
 `message_sent` (origin = `example`).
 
-**Time to first artifact** — the aha metric:
+**Time to first artifact** — the aha metric. Not a materialized event:
+PostHog derives it — Trends on `artifact_completed` with the *first time
+performed* aggregation, or a funnel `sign_up` → `artifact_completed` with
+the *first time for user* filter. A client-side "first" flag would be
+per-browser and re-fire for existing users on a new device.
 
-```sql
-SELECT
-  toDate(timestamp) AS day,
-  uniq(distinct_id) AS users_reaching_first_artifact
-FROM events
-WHERE event = 'first_artifact'
-  AND timestamp > now() - INTERVAL 30 DAY
-GROUP BY day
-```
-
-Pair with `sign_up` per day for a cohort conversion view.
-
-**Follow-up chip acceptance**: `followup_accepted` ÷ `followup_shown`,
-broken down by `method` (click vs arrow). Same shape for the ask card:
-`ask_answered` ÷ `ask_shown`, with `ask_dismissed` as the negative signal.
+**Follow-up chip acceptance**: `followup_accepted` ÷ `ui_action` where
+`action = suggest`, broken down by `method` (click vs arrow). Same shape for
+the ask card: `ask_answered` ÷ `ui_action{ask}`, with `ask_dismissed` as the
+negative signal.
 
 ### Suggestions funnel
 
@@ -434,22 +446,22 @@ ORDER BY opens DESC
 `paywall_shown.reason` splits the forced opens further (`limit` vs
 `plan_required`).
 
-**Agent UI action audit**
+**Agent UI actions by kind**
 
 ```sql
 SELECT
-  properties.agent_domain AS agent,
-  properties.action       AS action,
-  count()                 AS fires
+  properties.action AS action,
+  count()           AS fires,
+  countIf(properties.handled = false) AS unhandled
 FROM events
-WHERE event = 'agent_ui_action'
+WHERE event = 'ui_action'
   AND timestamp > now() - INTERVAL 30 DAY
-GROUP BY agent, action
+GROUP BY action
 ORDER BY fires DESC
 ```
 
-Every `{"type": "ui", "action": ...}` yielded by any agent lands here, even
-actions the client doesn't handle yet.
+`unhandled > 0` means an agent is emitting a `ui` action the client hasn't
+been taught yet.
 
 **Close-method distribution**
 
@@ -609,9 +621,9 @@ A useful starter dashboard per agent:
 
 - Trend: DAU (unique `message_sent` senders)
 - Trend: messages per day, broken down by `is_paid` person property
-- Funnel: `sign_up_start` → `sign_up` → `first_agent_use` → `first_artifact`
+- Funnel: `sign_up_start` → `sign_up` → `first_agent_use` → `artifact_completed` (first time for user)
 - Funnel: `plan_modal_opened` → `checkout_start` → `purchase`
-- Rates: `followup_accepted`/`followup_shown`, `ask_answered`/`ask_shown`
+- Rates: `followup_accepted`/`ui_action{suggest}`, `ask_answered`/`ui_action{ask}`
 - Table: top 10 `suggestion_prompt_clicked` prompts
 - Table: shares created + views last 30 days (see Share query above)
 - Retention: weekly, based on `message_sent`

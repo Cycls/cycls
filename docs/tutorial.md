@@ -346,7 +346,7 @@ async for ev in llm.run(context=context):
 | `.system(str)` | System prompt |
 | `.tools(list)` | Custom tool JSON schemas |
 | `.on(name, fn, label=)` | Register async handler for a custom tool; `label` (input → str) renders the step line in the UI, like `Bash(command)` — default is the input's first string value |
-| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `DataBase`, `Canvas`, `MiniApp`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user |
+| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user |
 | `.instructions(path)` | Workspace instructions file auto-loaded into the system prompt (default `AGENT.md`; `None` disables) |
 | `.skills(*dirs)` | Ship skills with the agent (dirs of `<name>/SKILL.md` folders; `None` disables skills) |
 | `.context(n)` | Model context window in tokens — sets when compaction kicks in (default 1M; set it for smaller models) |

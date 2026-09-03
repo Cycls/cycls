@@ -588,6 +588,24 @@ def test_examples_video_entry_is_a_tutorial_card(tmp_path):
     assert item == {"video": "https://youtu.be/abc123xyz", "title": "Getting started"}
 
 
+def test_first_use_marker_fires_once_per_account(tmp_path):
+    """first_agent_use is per account, not per device or per workspace: the
+    marker lives in the personal workspace, so a team-workspace first use and
+    a later personal one count as one."""
+    from cycls._agent import state as chat
+    from cycls._app.auth import User
+    import asyncio
+
+    user = User(id="user_1", org_id="org_1")
+    base = f"file://{tmp_path}"
+    assert asyncio.run(chat.mark_first_use(user, tmp_path, base, "member")) is True
+    assert asyncio.run(chat.mark_first_use(user, tmp_path, base, "member")) is False
+    # legacy (no workspaces) mode: same contract on the single workspace
+    solo = User(id="solo")
+    assert asyncio.run(chat.mark_first_use(solo, tmp_path, base, None)) is True
+    assert asyncio.run(chat.mark_first_use(solo, tmp_path, base, None)) is False
+
+
 def test_examples_empty_without_config(tmp_path):
     svc, user, client = _share_test_app(tmp_path)
     assert client.get("/examples").json() == {"categories": []}

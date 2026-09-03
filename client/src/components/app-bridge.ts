@@ -29,7 +29,7 @@ export function safeName(raw: unknown): string | null {
 
 export const APPS_DIR = "apps";
 
-// The folder a mini app may reach, or null if this file is not one. The canvas
+// The folder an app may reach, or null if this file is not one. The canvas
 // renders every HTML file, but only apps/<slug>/ gets a bridge: opening a
 // document must never hand that document your workspace.
 export function appScope(appPath: string): string | null {

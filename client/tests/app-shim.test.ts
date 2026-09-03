@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { injectShim, STATE_FILE } from "../src/components/mini-app-shim";
+import { injectShim, STATE_FILE } from "../src/components/app-shim";
 
 const shimOf = (html: string) => injectShim(html).match(/<script>[\s\S]*?<\/script>/)?.[0] ?? "";
 

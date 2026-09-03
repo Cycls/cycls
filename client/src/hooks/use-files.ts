@@ -20,7 +20,7 @@ const fold = (s: string) => s.normalize("NFC").toLowerCase();
 export const matchTokens = (path: string, tokens: string[]) =>
   tokens.every((t) => fold(path).includes(t));
 
-// Mini apps get their own surface, so the browser hides `apps/` at the root.
+// Apps get their own surface, so the browser hides `apps/` at the root.
 // Nested folders called "apps" are ordinary content and stay visible.
 const APPS_DIR = "apps";
 const hideApps = (dir: string, list: FileEntry[]) =>
@@ -107,7 +107,7 @@ export function useFiles(baseUrl: string = "") {
   }, [api]);
 
   // Authed text fetch — the canvas renders md/html from source, not a blob URL.
-  // `silent` suppresses the error toast: a mini app reading a file that does not
+  // `silent` suppresses the error toast: an app reading a file that does not
   // exist yet (its key-value store, an optional data file) is normal, and the
   // failure is already reported back to it over the bridge.
   const readFile = useCallback(async (filePath: string, silent = false) => {
