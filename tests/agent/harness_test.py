@@ -379,6 +379,24 @@ def test_llm_price_and_context_reach_the_loop():
     assert seen["context_window"] == 1_000_000
 
 
+def test_llm_honours_the_persons_tool_switches():
+    """Settings can switch a tool off for one person: the request carries
+    disabled_tools, and .run() drops those from allowed_tools for the turn
+    — never adding one the operator didn't allow."""
+    from types import SimpleNamespace
+    seen = {}
+    async def fake_loop(**kw):
+        seen.update(kw)
+        yield "ok"
+    llm = cycls.LLM().model("openai/gpt-x").allowed_tools(["Bash", "WebSearch", "Canvas"]).loop(fake_loop)
+    async def drain(ctx):
+        return [ev async for ev in llm.run(context=ctx)]
+    asyncio.run(drain(SimpleNamespace(disabled_tools=["WebSearch", "Editor"])))
+    assert seen["allowed_tools"] == ["Bash", "Canvas"]
+    asyncio.run(drain(SimpleNamespace()))
+    assert seen["allowed_tools"] == ["Bash", "WebSearch", "Canvas"]
+
+
 def test_llm_price_and_context_default_unset():
     assert cycls.LLM()._price is None
     assert cycls.LLM()._context is None

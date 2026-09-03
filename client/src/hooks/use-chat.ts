@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef } from "react";
 import { useApi, reasonOf } from "./use-api";
 import { track } from "../lib/analytics";
+import { webSearchEnabled } from "../lib/utils";
 import { useToast } from "../lib/toast";
 
 // One search result, as the search engine returned it. A citation chip only
@@ -204,7 +205,8 @@ export function useChat(baseUrl: string = "") {
         const response = await fetch(url, {
           method: "POST",
           headers,
-          body: JSON.stringify({ messages: [requestMessage] }),
+          body: JSON.stringify({ messages: [requestMessage],
+                                 ...(webSearchEnabled() ? {} : { disabled_tools: ["WebSearch"] }) }),
           signal: controller.signal,
         });
 

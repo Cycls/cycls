@@ -785,6 +785,24 @@ def test_streaming_multiple_yields():
 # Org path nesting is covered in tests/data_test.py::test_user_id_produces_nested_path.
 # =============================================================================
 
+def test_context_carries_the_persons_tool_switches():
+    """Settings switches ride the request as disabled_tools; the handler
+    keeps only strings, a bounded few, and Context defaults to none."""
+    from fastapi.testclient import TestClient
+
+    captured = {}
+    async def handler(context):
+        captured["off"] = context.disabled_tools
+        yield "ok"
+
+    client = TestClient(web(handler, Config(public_path=THEME_PATH, auth=False)))
+    client.post("/", json={"messages": [{"role": "user", "content": "hi"}]})
+    assert captured["off"] == []
+    client.post("/", json={"messages": [{"role": "user", "content": "hi"}],
+                           "disabled_tools": ["WebSearch", 7, {"x": 1}]})
+    assert captured["off"] == ["WebSearch"]
+
+
 def test_context_workspace_uses_config_volume():
     """Config.volume threads into Context.workspace() at per-request construction."""
     from fastapi.testclient import TestClient

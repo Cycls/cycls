@@ -105,6 +105,7 @@ async def my_agent(context):
     context.chat_id       # current chat session id
     context.prod          # True when running via .deploy(), False on .local() — gate billing/analytics
     context.workspace     # per-user file scope on the /workspace volume
+    context.disabled_tools  # tools the person switched off in Settings, e.g. ["WebSearch"] — LLM.run() drops them for the turn
 ```
 
 ---
