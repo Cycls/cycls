@@ -4,7 +4,7 @@ Chat metadata + message log and shares live in the workspace DB — see
 `cycls._agent.state`. Files stay on the workspace filesystem (POSIX-shaped).
 """
 import asyncio, json, os, secrets, shutil, tempfile, time, unicodedata, uuid, zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlsplit, parse_qs
@@ -13,7 +13,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 
 from cycls._app.db import DB, Workspace, workspace
-from cycls._agent import state
+from cycls._agent import state, trash
 from cycls._agent.logs import log
 from cycls._agent.tools import tool_step
 
@@ -209,7 +209,7 @@ def resolve_path(workspace, rel):
     ws = workspace.resolve()
     if not resolved.is_relative_to(ws):
         raise ValueError("Path traversal denied")
-    for name in (".db", ".database"):
+    for name in (".db", ".database", ".trash"):
         reserved = ws / name
         if resolved == reserved or resolved.is_relative_to(reserved):
             raise ValueError(f"Reserved path: {name}/ is managed by cycls")
@@ -225,6 +225,8 @@ def chats_router(ws_dep):
     async def list_chats(ws: Workspace = ws_dep):
         items = []
         async for cid, data in state.list_chats(ws):
+            if data.get("deletedAt"):   # in the trash
+                continue
             items.append({
                 "id": data.get("id", cid),
                 "title": data.get("title", ""),
@@ -276,10 +278,14 @@ def chats_router(ws_dep):
 
     @r.delete("/chats/{chat_id}")
     async def delete_chat(chat_id: str, ws: Workspace = ws_dep):
-        if (await state.get_meta(ws, chat_id)) is None:
+        """A tombstone, not a wipe — the chat lives on in the trash for
+        TTL_DAYS (see files_router's /trash routes for restore and purge)."""
+        meta = await state.get_meta(ws, chat_id)
+        if meta is None:
             raise HTTPException(status_code=404, detail="Chat not found")
-        await state.delete_chat(ws, chat_id)
-        return {"ok": True}
+        meta["deletedAt"] = datetime.now(timezone.utc).isoformat()
+        await state.put_meta(ws, chat_id, meta)
+        return {"ok": True, "trash_id": f"chat:{chat_id}"}
 
     return r
 
@@ -457,7 +463,7 @@ def _sorted(entries, key, desc):
     return [e for g in groups for e in sorted(g, key=sort_key, reverse=desc)]
 
 
-def files_router(cycls_app, ws_dep):
+def files_router(cycls_app, ws_dep, user_dep, volume, base):
     r = APIRouter()
     max_bytes = (getattr(getattr(cycls_app, "config", None), "max_upload", None) or DEFAULT_MAX_UPLOAD_MB) * 1024 * 1024
 
@@ -647,16 +653,93 @@ def files_router(cycls_app, ws_dep):
         _catalog_drop(ws.root)
         return {"ok": True}
 
+    # ---- Trash: a delete is a move (docs/notes/trash.md) ----
+
+    mode = getattr(getattr(cycls_app, "config", None), "workspaces", None)
+
+    async def _admin(user, ws):
+        """Owner/admin on a team workspace; everyone on their own personal one."""
+        if not mode or not ws.ws or ws.ws.startswith("u-"):
+            return True
+        orgdb = state.org_db(state.org_of(user), volume, base)
+        return (await state.resolve_role(user, ws.ws, orgdb)) in ("owner", "admin")
+
     @r.delete("/files/{path:path}")
-    async def delete_path(path: str, ws: Workspace = ws_dep):
+    async def delete_path(path: str, ws: Workspace = ws_dep, user: Any = user_dep):
         target = _safe_path(ws.root, path)
         if not target.exists():
             raise HTTPException(status_code=404, detail="Not found")
-        if target.is_dir():
-            shutil.rmtree(target)
-        else:
-            target.unlink()
+        rel = str(target.relative_to(Path(ws.root).resolve()))
+        # Apps are shared team assets — only admins remove them.
+        if trash.kind_of(rel, target.is_dir()) == "app" and not await _admin(user, ws):
+            raise HTTPException(status_code=403, detail="Only workspace admins can delete apps")
+        meta = await asyncio.to_thread(trash.trash_path, ws.root, rel, "user")
         _catalog_drop(ws.root)
+        return {"ok": True, "trash_id": meta["id"], "kind": meta["kind"]}
+
+    async def _trashed_chats(ws):
+        rows = []
+        async for cid, data in state.list_chats(ws):
+            if at := data.get("deletedAt"):
+                rows.append({"id": f"chat:{cid}", "path": data.get("title") or cid, "kind": "chat",
+                             "by": "user", "deleted_at": at, "chat_id": cid})
+        return rows
+
+    @r.get("/trash")
+    async def list_trash(ws: Workspace = ws_dep):
+        """Files, apps and chats in one list, newest first. Listing is also the
+        sweep: entries past TTL_DAYS go for good."""
+        rows = await asyncio.to_thread(trash.list_trash, ws.root)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=trash.TTL_DAYS)
+        for c in await _trashed_chats(ws):
+            try:
+                expired = datetime.fromisoformat(c["deleted_at"]) < cutoff
+            except Exception:
+                expired = True
+            if expired:
+                await state.delete_chat(ws, c["chat_id"])
+            else:
+                rows.append(c)
+        rows.sort(key=lambda m: m["deleted_at"], reverse=True)
+        return rows
+
+    @r.post("/trash/{tid}/restore")
+    async def restore_trash(tid: str, ws: Workspace = ws_dep):
+        if tid.startswith("chat:"):
+            cid = tid[5:]
+            meta = await state.get_meta(ws, cid)
+            if meta is None:
+                raise HTTPException(status_code=404, detail="Not found")
+            meta.pop("deletedAt", None)
+            await state.put_meta(ws, cid, meta)
+            return {"ok": True, "path": cid}
+        try:
+            path = await asyncio.to_thread(trash.restore, ws.root, tid)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Not found")
+        _catalog_drop(ws.root)
+        return {"ok": True, "path": path}
+
+    @r.delete("/trash/{tid}")
+    async def purge_trash(tid: str, ws: Workspace = ws_dep, user: Any = user_dep):
+        if not await _admin(user, ws):
+            raise HTTPException(status_code=403, detail="Only workspace admins can delete forever")
+        if tid.startswith("chat:"):
+            await state.delete_chat(ws, tid[5:])
+            return {"ok": True}
+        try:
+            await asyncio.to_thread(trash.purge, ws.root, tid)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Not found")
+        return {"ok": True}
+
+    @r.delete("/trash")
+    async def empty_trash(ws: Workspace = ws_dep, user: Any = user_dep):
+        if not await _admin(user, ws):
+            raise HTTPException(status_code=403, detail="Only workspace admins can delete forever")
+        await asyncio.to_thread(trash.empty, ws.root)
+        for c in await _trashed_chats(ws):
+            await state.delete_chat(ws, c["chat_id"])
         return {"ok": True}
 
     return r
@@ -1152,7 +1235,7 @@ def install_routers(cycls_app, app, required_auth, volume, base):
         return workspace(user, volume, base=base, ws=ws_id)
     ws_dep = Depends(_build_ws)
     app.include_router(chats_router(ws_dep))
-    app.include_router(files_router(cycls_app, ws_dep))
+    app.include_router(files_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))
     if mode:
         app.include_router(workspaces_router(cycls_app, required_auth, volume, base))

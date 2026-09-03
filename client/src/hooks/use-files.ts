@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { zip } from "fflate";
 import { useApi } from "./use-api";
 import { track } from "../lib/posthog";
+import type { TrashRow } from "../components/trash-view";
 
 export interface FileEntry {
   name: string;
@@ -94,9 +95,29 @@ export function useFiles(baseUrl: string = "") {
     track("file_renamed", { from, to });
   }, [api]);
 
+  // A delete is a move into the workspace trash (docs/notes/trash.md).
   const remove = useCallback(async (filePath: string) => {
-    await api(`/files/${filePath}`, { method: "DELETE" });
-    track("file_deleted", { path: filePath });
+    const r = (await (await api(`/files/${filePath}`, { method: "DELETE" })).json()) as { trash_id: string; kind: string };
+    track("file_deleted", { path: filePath, kind: r.kind, by: "user", permanent: false });
+    return r;
+  }, [api]);
+
+  const listTrash = useCallback(async () => (await (await api("/trash")).json()) as TrashRow[], [api]);
+
+  const restoreTrash = useCallback(async (id: string, kind: string, method: string) => {
+    const r = (await (await api(`/trash/${id}/restore`, { method: "POST" })).json()) as { path: string };
+    track("trash_restored", { kind, method });
+    return r.path;
+  }, [api]);
+
+  const purgeTrash = useCallback(async (id: string, kind: string) => {
+    await api(`/trash/${id}`, { method: "DELETE" });
+    track("trash_purged", { kind, all: false });
+  }, [api]);
+
+  const emptyTrash = useCallback(async () => {
+    await api("/trash", { method: "DELETE" });
+    track("trash_purged", { all: true });
   }, [api]);
 
   // /files is bearer-only (JWTs in URLs leak via history/logs/Referer), so
@@ -161,7 +182,7 @@ export function useFiles(baseUrl: string = "") {
     return `${window.location.origin}${url}`;
   }, [api]);
 
-  return { entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, searchFiles, listFolders, shareFile, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, searchFiles, listFolders, shareFile, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

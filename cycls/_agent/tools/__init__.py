@@ -7,6 +7,7 @@ from html.parser import HTMLParser
 from typing import NamedTuple
 from . import pdf, skills
 from ..state import _exec_database
+from .. import trash
 
 MAX_OUTPUT = 30_000
 
@@ -368,7 +369,7 @@ def _resolve_path(raw_path, workspace):
     rel = raw_path.removeprefix("~/").removeprefix("/workspace/").lstrip("/")
     path = (ws / rel).resolve()
     if not path.is_relative_to(ws): raise ValueError("path escapes workspace")
-    for name in (".db", ".database"):
+    for name in (".db", ".database", ".trash"):
         reserved = ws / name
         if path == reserved or path.is_relative_to(reserved):
             raise ValueError(f"{name}/ is managed by cycls")
@@ -380,19 +381,31 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
     from cycls._app.sandbox import Sandbox
     path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     lang = os.environ.get("LANG", "C.UTF-8")
+    # The trash is masked inside /workspace (the model never sees it) and bound
+    # beside it, where the rm shim writes; the shims dir goes first on PATH so
+    # `rm`/`rmdir` move to the trash instead of unlinking.
+    trash_dir = os.path.join(cwd, trash.DIR)
+    os.makedirs(trash_dir, exist_ok=True)
+    shims = str(pathlib.Path(__file__).parent / "shims")
+    env = {"PATH": f"/opt/cycls-bin:{path}", "LANG": lang,
+           "CYCLS_WORKSPACE": "/workspace", "CYCLS_TRASH": "/workspace-trash"}
     sb = (Sandbox()
           .bind(cwd, "/workspace")
           .tmpfs("/workspace/.db")        # cycls state (chat, shares); editor blocks via _resolve_path
           .tmpfs("/workspace/.database")  # agent KV store; same blocking
+          .tmpfs("/workspace/.trash")
+          .bind(trash_dir, "/workspace-trash")
+          .ro_bind(shims, "/opt/cycls-bin")
           .tmpfs("/app")
           .chdir("/workspace")
-          .setenv(PATH=path, LANG=lang)
+          .setenv(**env)
           .network(network).timeout(timeout))
     for src, dst in skills.dev_mounts():   # dev skill scripts/templates, read-only
         # a missing mount point would fail every bash command — skip it instead
         if os.path.isdir(dst):
             sb = sb.ro_bind(src, dst)
-    result = await sb.run(["bash", "-c", command], env={"PATH": path, "LANG": lang})
+    # bwrap's own environ stays PATH/LANG; the trash vars reach only the inner shell (--setenv).
+    result = await sb.run(["bash", "-c", command], env={"PATH": env["PATH"], "LANG": lang})
     if result.timed_out:
         return f"Error: Command timed out after {timeout}s"
     out = result.output
@@ -743,6 +756,9 @@ def _exec_edit(inp, workspace):
         path.write_text(text.replace(old, inp.get("new_str", ""), 1))
         return f"Replaced in {rel}"
     if cmd == "create":
+        if path.exists():   # an overwrite deletes the old content — keep it recoverable
+            trash.trash_path(workspace, str(path.relative_to(pathlib.Path(workspace).resolve())),
+                             by="agent", reason="overwrite")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(inp["file_text"])
         return f"Created {rel}"

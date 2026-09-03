@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { t, useLang } from "../lib/i18n";
+import { t, useLang, getLang } from "../lib/i18n";
 import { LoadingBar } from "./loading-bar";
 import { Icon, Spinner } from "./icon";
 import { ShareDialog } from "./share-dialog";
@@ -10,7 +10,7 @@ import type { FilesPanelProps } from "./chat";
 
 const MOVE_TYPE = "application/x-cycls-move";   // internal drag payload (vs OS file drops)
 
-const FolderIcon = ({ className = "size-5" }: { className?: string }) =>
+export const FolderIcon = ({ className = "size-5" }: { className?: string }) =>
   <Icon name="folder" className={className} strokeWidth={1.5} />;
 
 const IMAGE_EXT = new Set(["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "avif"]);
@@ -44,7 +44,10 @@ export function DropdownMenu({ items, onClose }: { items: MenuItem[]; onClose: (
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
-      <div className="absolute top-full ltr:right-0 rtl:left-0 z-50 mt-1 min-w-[140px] rounded-lg border border-border bg-background shadow-lg py-1">
+      {/* Anchored by the pane's direction (end-0), read in the UI's — the canvas
+          pane is forced LTR for layout, its menu still reads RTL in Arabic. */}
+      <div className="absolute top-full end-0 z-50 mt-1 min-w-[140px] rounded-lg border border-border bg-background shadow-lg py-1"
+           dir={getLang() === "ar" ? "rtl" : "ltr"}>
         {items.map((item) => (
           <button
             key={item.label}
