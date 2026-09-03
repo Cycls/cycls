@@ -1385,6 +1385,29 @@ def test_ask_ends_the_turn(agent_env):
     assert use_ids == result_ids == ["t1"]
 
 
+def test_suggest_ends_the_turn(agent_env):
+    """`suggest` is terminal too: it's documented as the turn's last action, and
+    a model asked for "one more response" after the ack can restart the whole
+    task — a Kimi run re-wrote and re-opened the same article twice. Once the
+    chip is with the user the loop stops; the never-response stays unrequested."""
+    ws, ctx = agent_env
+    suggested = _make_response(
+        [_text_block("Done — here is the article."),
+         _tool_use_block("t1", name="suggest", inp={"text": "Turn this into a document"})],
+        stop_reason="tool_use")
+    never = _make_response([_text_block("should not be reached")])
+    client, calls = _capturing_client([suggested, never])
+
+    with _mock_anthropic(client):
+        events = asyncio.run(_drain(_run(context=ctx, allowed_tools=["Suggest"])))
+
+    assert len(calls) == 1, "the loop asked the model for another turn after suggest"
+    chips = [e for e in events if isinstance(e, dict) and e.get("action") == "suggest"]
+    assert [c["text"] for c in chips] == ["Turn this into a document"]
+    history = _read_history(ctx)
+    assert [m["role"] for m in history] == ["user", "assistant", "user"]   # paired and checkpointed
+
+
 def test_ask_that_errors_does_not_end_the_turn(agent_env):
     """Terminal means "the human has it", not "the tool ran". A malformed ask
     never reached the user, so the model gets another turn to fix it."""
