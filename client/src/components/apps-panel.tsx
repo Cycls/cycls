@@ -7,11 +7,10 @@ import { Icon } from "./icon";
 import { t } from "../lib/i18n";
 import type { AppInfo } from "../hooks/use-apps";
 
-export function AppsPanel({ apps, loading, onOpen, onOpenInTab, onRename, onSetIcon, onUploadIcon, onDelete }: {
+export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUploadIcon, onDelete }: {
   apps: AppInfo[];
   loading: boolean;
   onOpen: (app: AppInfo) => void;
-  onOpenInTab?: (app: AppInfo) => void;
   onRename?: (app: AppInfo, name: string) => void;
   onSetIcon?: (app: AppInfo, icon: string) => void;
   onUploadIcon?: (app: AppInfo, file: File) => void;
@@ -45,7 +44,6 @@ export function AppsPanel({ apps, loading, onOpen, onOpenInTab, onRename, onSetI
           <div className="grid gap-3 sm:grid-cols-2">
             {apps.map((app) => {
               const items = [
-                ...(onOpenInTab ? [{ label: t("openInTab"), onClick: () => onOpenInTab(app) }] : []),
                 ...(onRename ? [{ label: t("rename"), onClick: () => setRenaming(app.slug) }] : []),
                 ...(onSetIcon ? [{ label: t("changeIcon"), onClick: () => setIconFor(app.slug) }] : []),
                 ...(onUploadIcon ? [{ label: t("uploadIcon"), onClick: () => { uploadFor.current = app; fileInput.current?.click(); } }] : []),

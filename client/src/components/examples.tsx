@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import { useFileContent, CanvasDoc } from "./canvas";
 import { isHtml, isRenderable } from "./canvas-utils";
 import { Icon } from "./icon";
-import { track } from "../lib/posthog";
+import { track } from "../lib/analytics";
 import { t, getLang } from "../lib/i18n";
 import { cn } from "../lib/utils";
 

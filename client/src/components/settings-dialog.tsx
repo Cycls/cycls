@@ -12,9 +12,10 @@ import { EmojiPicker } from "./emoji-picker";
 import type { MemberInfo } from "../hooks/use-workspaces";
 import { t, useLang, setLang, getLang } from "../lib/i18n";
 import { cn, getThemeMode, setThemeMode, followUpsEnabled, setFollowUpsEnabled, askEnabled, setAskEnabled, type ThemeMode } from "../lib/utils";
+import { pushProvider, pushStatus, requestPush, answerResult } from "../lib/notifications";
 import { useDarkMode } from "../hooks/use-dark-mode";
 import { useToast } from "../lib/toast";
-import { track } from "../lib/posthog";
+import { track } from "../lib/analytics";
 
 type Tab = "general" | "account" | "organization" | "members" | "workspaces" | "billing" | "security" | "help";
 
@@ -456,6 +457,7 @@ function GeneralTab() {
   const [mode, setMode] = useState<ThemeMode>(getThemeMode());
   const [followUps, setFollowUps] = useState(followUpsEnabled);
   const [askOn, setAskOn] = useState(askEnabled);
+  const [push, setPush] = useState(pushStatus);
   return (
     <ListCard>
       <Row
@@ -502,6 +504,28 @@ function GeneralTab() {
           />
         }
       />
+      {pushProvider() && push !== "unsupported" && (
+        <Row
+          label={t("notifications")}
+          sub={push === "denied" ? t("notifyBlocked") : undefined}
+          control={
+            push === "default" ? (
+              <button
+                onClick={async () => {
+                  const r = await requestPush();
+                  setPush(r);
+                  track("notification_prompt_answered", { placement: "settings", result: answerResult(r) });
+                }}
+                className="rounded-full border border-border px-3 py-1 text-xs font-medium hover:bg-secondary transition-colors cursor-pointer"
+              >
+                {t("turnOn")}
+              </button>
+            ) : (
+              <span className="text-xs text-muted-foreground">{push === "granted" ? t("on") : t("off")}</span>
+            )
+          }
+        />
+      )}
     </ListCard>
   );
 }

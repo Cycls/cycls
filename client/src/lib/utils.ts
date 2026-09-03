@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { track } from "./posthog";
+import { track } from "./analytics";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

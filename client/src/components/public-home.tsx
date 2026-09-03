@@ -7,7 +7,7 @@ import { IconButton } from "./icon";
 import type { AppConfig } from "../hooks/use-chat";
 import { useLang, setLang, t } from "../lib/i18n";
 import { toggleDark } from "../lib/utils";
-import { track } from "../lib/posthog";
+import { track } from "../lib/analytics";
 
 // The signed-out face of the agent — the same empty screen a signed-in user
 // gets (hero, composer, example gallery), fully explorable without an

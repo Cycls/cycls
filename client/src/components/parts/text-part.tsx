@@ -8,7 +8,7 @@ import { unified } from "unified";
 import remarkParse from "remark-parse";
 import { CodePart } from "./code-part";
 import { SourceChip, domainOf, urlKey } from "./sources-part";
-import { track } from "../../lib/posthog";
+import { track } from "../../lib/analytics";
 import type { Source } from "../../hooks/use-chat";
 
 function escapeCurrencyDollars(text: string): string {

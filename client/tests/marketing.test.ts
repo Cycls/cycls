@@ -4,7 +4,7 @@
  * would boot the real SDK).
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { initAnalytics, track, register, _resetProviders } from "../src/lib/posthog";
+import { initAnalytics, track, register, _resetProviders } from "../src/lib/analytics";
 
 type W = { dataLayer?: unknown[] };
 const w = window as unknown as W;

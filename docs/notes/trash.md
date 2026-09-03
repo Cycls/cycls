@@ -58,7 +58,7 @@ bash for file content; these are rare and documented, not covered.
   opening one list of files, apps and chats — what it was, where, when, and
   *who deleted it* (agent or person). Chats also get "Recently deleted" at
   the bottom of the Chats tab, the same view filtered.
-- Apps: a ⋯ menu on the card — Open in new tab, Rename, Change icon (emoji),
+- Apps: a ⋯ menu on the card — Rename, Change icon (emoji),
   Upload image (saved as `apps/<slug>/icon.<ext>`, ≤ 2 MB) — all edit
   `apps/<slug>/app.json`; the slug stays immutable — and an admin-only Delete
   (confirm → trash).

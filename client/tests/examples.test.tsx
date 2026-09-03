@@ -8,7 +8,7 @@ import { canvasArtifacts } from "../src/components/shared-view";
 import { useExamples } from "../src/components/examples";
 import type { Message } from "../src/hooks/use-chat";
 
-vi.mock("../src/lib/posthog", () => ({ track: vi.fn() }));
+vi.mock("../src/lib/analytics", () => ({ track: vi.fn() }));
 
 describe("canvasArtifacts", () => {
   test("collects successful Canvas steps in order, skipping errors and repeats", () => {

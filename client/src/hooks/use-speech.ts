@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { track } from "../lib/posthog";
+import { track } from "../lib/analytics";
 import { useToast } from "../lib/toast";
 import { reasonOf } from "./use-api";
 

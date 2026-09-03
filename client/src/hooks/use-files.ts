@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { zip } from "fflate";
 import { useApi } from "./use-api";
-import { track } from "../lib/posthog";
+import { track } from "../lib/analytics";
 import type { TrashRow } from "../components/trash-view";
 
 export interface FileEntry {

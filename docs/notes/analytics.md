@@ -3,7 +3,7 @@
 ## Architecture
 
 One canonical event stream; destinations are plugins; routing is config.
-Call sites only ever call `track()` (`client/src/lib/posthog.ts`) — it
+Call sites only ever call `track()` (`client/src/lib/analytics.ts`) — it
 enriches once and fans out to the providers the operator configured:
 
 ```
@@ -36,7 +36,7 @@ Rules of the pipe:
   names for the funnel events (`sign_up`, `checkout_start`, `purchase`) so
   in practice nothing needs mapping anywhere.
 - **Adding a destination = one plugin factory** in `PLUGINS`
-  (lib/posthog.ts) + a provider class in the builder. Zero call-site edits,
+  (lib/analytics.ts) + a provider class in the builder. Zero call-site edits,
   ever.
 - **Every event is a small API**: rename a feature or move a button and a
   dashboard silently flatlines. Update this page in the same commit that
@@ -169,6 +169,9 @@ Identified users also carry **person properties** (via identify): `email`,
 | `ask_answered` / `ask_dismissed` | clarifying-question card resolved | answered ÷ shown decides the feature's fate |
 | `followup_accepted` | follow-up chip taken | `method` (click/arrow) |
 | `ask_toggled` / `followups_toggled` | settings switches | opt-out rate = annoyance meter |
+| `notification_prompt_shown` / `notification_prompt_answered` | our push-permission card (docs/notes/engagement.md) | `placement` (`corner`, or `settings` from the Turn on row), `result` (`allowed` / `denied` / `dismissed`). When it shows is the `notification_prompt` flag's call |
+| `announcement_shown` / `announcement_clicked` / `announcement_dismissed` | a What's new modal or a corner tip from the `announcements` flag payload | `id`, `type` (`modal` / `corner`). Seen ids also land on the person as `announcement_seen/<id>` so a flag condition can exclude them |
+| *(PostHog-native)* `survey shown` / `survey sent` / `survey dismissed` | a PostHog survey answered in our strip above the composer | PostHog's own names and `$survey_*` props, sent to the PostHog plugin only — not on the pipe |
 
 ### Monetization
 

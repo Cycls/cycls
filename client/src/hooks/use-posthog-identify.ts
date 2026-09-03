@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
-import { identifyUser, resetUser, track } from "../lib/posthog";
-import type { ClerkUser, SubscriptionSummary, OrgSummary } from "../lib/posthog";
+import { identifyUser, resetUser, track } from "../lib/analytics";
+import type { ClerkUser, SubscriptionSummary, OrgSummary } from "../lib/analytics";
+import { identifyPush, resetPush } from "../lib/notifications";
 
 export function usePostHogIdentify(
   enabled: boolean,
@@ -12,6 +13,8 @@ export function usePostHogIdentify(
   const prevUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
+    // Push targeting is by user id whether or not analytics is on.
+    if (user) identifyPush(user.id); else resetPush();
     if (!enabled) return;
 
     if (user) {

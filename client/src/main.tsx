@@ -2,7 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
-import { initAnalytics, setAgentDomain, type ProviderSpec } from "./lib/posthog";
+import { initAnalytics, setAgentDomain, type ProviderSpec } from "./lib/analytics";
 import { ToastProvider } from "./lib/toast";
 import { applyTheme, getThemeMode } from "./lib/utils";
 

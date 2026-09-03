@@ -1,7 +1,7 @@
 import { useState, useRef, useLayoutEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { t } from "../../lib/i18n";
-import { track } from "../../lib/posthog";
+import { track } from "../../lib/analytics";
 import type { Source } from "../../hooks/use-chat";
 
 // A chip is only ever shown for a URL a search actually returned, so the
