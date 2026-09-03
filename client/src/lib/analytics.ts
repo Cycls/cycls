@@ -76,7 +76,13 @@ const PLUGINS: Record<string, (spec: ProviderSpec) => Provider | null> = {
         // Surveys authored with the API presentation: the vendor targets, we render.
         on: (cb) => posthog.onSurveysLoaded((_, ctx) => {
           if (ctx?.isLoaded === false) return;
-          posthog.getActiveMatchingSurveys((list) => cb(list as unknown as Survey[]));
+          posthog.getActiveMatchingSurveys((list) => {
+            const surveys = list as unknown as Survey[];
+            // Any other presentation makes PostHog draw its own widget over the page.
+            for (const x of surveys) if (x.type !== "api")
+              console.warn(`[cycls] survey "${x.name}" uses PostHog's ${x.type} presentation — set it to API so it renders in the strip`);
+            cb(surveys);
+          });
         }),
         event: (name, props) => posthog.capture(name, props),
       },
