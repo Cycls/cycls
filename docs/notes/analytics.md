@@ -69,6 +69,15 @@ Rules of the pipe:
   `$feature_flag_called`, `$survey_shown`…) are PostHog's own — the SDK
   emits them, they carry the PostHog icon, and they are not part of this
   contract. Everything else is ours.
+- **PostHog owns any fact its SDK already observes** — page views,
+  identity/session, flag evaluations, surveys. We own product facts it
+  cannot know. A custom event that mirrors a `$` event is a duplicate by
+  definition: there is no `agent_open` (that's `$pageview`) and no
+  sign-in event (that's `$identify`). The contract test denylists the
+  usual mirrors. If a *destination* ever needs one of those facts (say GA
+  wants logins), emit a canonical event for it and route it only there —
+  with an exclude on the PostHog provider so it still sees one event per
+  fact.
 - `client/tests/events-contract.test.ts` fails the build if the client
   emits an event this page doesn't list — the contract is enforced.
 - In PostHog → Data management → Events: mark each event here *verified*
@@ -77,7 +86,7 @@ Rules of the pipe:
   `plan_checkout_clicked`, `plan_subscription_completed`,
   `first_artifact`, `first_artifact_completed`, `attachment_added`,
   `canvas_working_opened`, `agent_ui_action`, `followup_shown`,
-  `ask_shown`, `ui_action_unknown`). Historical rows can't be deleted;
+  `ask_shown`, `ui_action_unknown`, `user_signed_up`, `user_signed_in`). Historical rows can't be deleted;
   hiding keeps them out of the pickers.
 - Provider-native capabilities (identify, surveys) send provider events —
   the `$survey_*` family is PostHog's, sent by the PostHog plugin, never
@@ -173,9 +182,7 @@ Identified users also carry **person properties** (via identify): `email`,
 `mic_started` / `mic_stopped` / `mic_cancelled` / `mic_transcribed` /
 `mic_transcription_failed` / `mic_permission_denied` · `settings_opened` ·
 `theme_changed` · `language_changed` · `explore_opened` /
-`explore_agent_clicked` · `source_opened` · `user_signed_out` ·
-`user_signed_up` / `user_signed_in` (identify-time; distinct from
-`sign_up`, which is the once-per-browser conversion tick)
+`explore_agent_clicked` · `source_opened` · `user_signed_out`
 
 ---
 
@@ -190,17 +197,17 @@ property filter in the insight UI.
 **Sign-up funnel by method** — what fraction of sign-up attempts complete,
 and which method converts best?
 
-Funnel insight: `sign_up_attempted` (grouped by `method`) → `user_signed_up`.
+Funnel insight: `sign_up_attempted` (grouped by `method`) → `sign_up`.
 
 ```sql
 SELECT
   properties.method AS method,
   countIf(event = 'sign_up_attempted') AS attempts,
-  countIf(event = 'user_signed_up')   AS completions,
+  countIf(event = 'sign_up')          AS completions,
   completions / nullIf(attempts, 0)   AS rate
 FROM events
 WHERE timestamp > now() - INTERVAL 30 DAY
-  AND event IN ('sign_up_attempted', 'user_signed_up')
+  AND event IN ('sign_up_attempted', 'sign_up')
 GROUP BY method
 ORDER BY attempts DESC
 ```
@@ -209,7 +216,7 @@ Low rate on `oauth_google` vs `password` usually means the OAuth consent
 screen is dropping people, or the return redirect is broken.
 
 **Sign-in funnel by method** — same shape with `sign_in_attempted` →
-`user_signed_in`.
+`$identify` (PostHog's own event for "a known person appeared").
 
 **OAuth attrition** — of users who click "Continue with Google/Apple", how
 many come back signed in?
@@ -220,7 +227,7 @@ SELECT
   count() AS clicks,
   countIf(distinct_id IN (
     SELECT distinct_id FROM events
-    WHERE event = 'user_signed_in' AND timestamp > now() - INTERVAL 1 DAY
+    WHERE event = '$identify' AND timestamp > now() - INTERVAL 1 DAY
   )) AS returned_signed_in
 FROM events
 WHERE event = 'sign_in_attempted'
@@ -232,9 +239,9 @@ GROUP BY method
 If `returned_signed_in / clicks` drops, the OAuth round-trip is broken on
 that provider — likely a Clerk domain / redirect URL config issue.
 
-**New vs returning** — `user_signed_up` fires when `user.createdAt` is
-within 5 minutes of identify; otherwise `user_signed_in`. For long-horizon
-cohorts prefer PostHog's native `$first_seen` / cohorts.
+**New vs returning** — `sign_up` marks a new account (once per
+account); returning sessions are `$identify` without a `sign_up`. For
+long-horizon cohorts prefer PostHog's native `$first_seen` / cohorts.
 
 ### Engagement — messaging
 

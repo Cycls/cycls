@@ -121,7 +121,6 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
     subSummary,
     orgSummary,
     lang,
-    clerk?.client?.lastAuthenticationStrategy,
   );
 
   // Render-time, not an effect — child mount-effects fire requests before

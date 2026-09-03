@@ -8,7 +8,6 @@ export function usePostHogIdentify(
   subscription: SubscriptionSummary | null | undefined,
   organization: OrgSummary | null | undefined,
   language: string,
-  method?: string | null,
 ) {
   const prevUserIdRef = useRef<string | null>(null);
 
@@ -16,26 +15,18 @@ export function usePostHogIdentify(
     if (!enabled) return;
 
     if (user) {
-      const isFirst = prevUserIdRef.current === null;
+      // No sign-in event here: that fact is PostHog's own $identify, and a new
+      // account is our sign_up — a custom twin of either would double-count.
       identifyUser(user, {
         subscription: subscription || undefined,
         organization: organization || undefined,
         language,
       });
-      if (isFirst) {
-        const createdAt = user.createdAt ? new Date(user.createdAt).getTime() : 0;
-        const isNewUser = createdAt > 0 && Date.now() - createdAt < 5 * 60 * 1000;
-        track(isNewUser ? "user_signed_up" : "user_signed_in", {
-          user_id: user.id,
-          org_id: organization?.id,
-          method: method || null,
-        });
-      }
       prevUserIdRef.current = user.id;
     } else if (prevUserIdRef.current !== null) {
       track("user_signed_out", { user_id: prevUserIdRef.current });
       resetUser();
       prevUserIdRef.current = null;
     }
-  }, [enabled, user, subscription, organization, language, method]);
+  }, [enabled, user, subscription, organization, language]);
 }

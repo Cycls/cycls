@@ -28,4 +28,18 @@ describe("events contract", () => {
     expect(missing, `undocumented events: ${missing.join(", ")}`).toEqual([]);
     expect(tracked.size).toBeGreaterThan(40);   // the scan actually found the call sites
   });
+
+  it("never mirrors a fact PostHog's SDK already observes", () => {
+    // $pageview, $identify, $feature_flag_called, $survey_* — PostHog owns
+    // these; a custom twin double-counts. Route a canonical event to another
+    // destination if one needs the fact, never add it for PostHog's sake.
+    const mirrors = ["page_view", "pageview", "page_viewed", "agent_open", "identify", "identified",
+                     "session_start", "session_started", "login", "user_signed_in", "user_signed_up",
+                     "feature_flag_called", "survey_shown", "survey_sent", "survey_dismissed"];
+    const tracked = new Set<string>();
+    for (const f of walk(join(__dirname, "../src"))) {
+      for (const m of readFileSync(f, "utf8").matchAll(/\btrack\(\s*["']([a-z0-9_$]+)["']/g)) tracked.add(m[1]);
+    }
+    expect(mirrors.filter((e) => tracked.has(e))).toEqual([]);
+  });
 });
