@@ -164,6 +164,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
         chat_id: Optional[str] = None
         prod: bool = False
         workspace_id: Optional[str] = None
+        disabled_tools: list = []   # tools the person switched off in Settings (e.g. ["WebSearch"]); LLM.run() honours it
 
         model_config = {"arbitrary_types_allowed": True}
 
@@ -206,7 +207,8 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
                 first = False
 
         context = Context(messages=Messages(messages), user=user, chat_id=chat_id, prod=config.prod,
-                          workspace_id=ws_id)
+                          workspace_id=ws_id,
+                          disabled_tools=[t for t in (data.get("disabled_tools") or []) if isinstance(t, str)][:20])
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
 
         if request.url.path == "/chat/completions":

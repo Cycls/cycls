@@ -159,11 +159,14 @@ class LLM:
         from ..tools import register_labels
         register_labels(self._labels)   # also read by the refetch projection
         loop = self._loop or _run
+        # A switch in Settings turns a tool off for this person; it never
+        # turns one on the operator didn't allow.
+        off = set(getattr(context, "disabled_tools", None) or [])
         async for ev in loop(
             context=context,
             system=self._system,
             tools=self._tools,
-            allowed_tools=self._allowed_tools,
+            allowed_tools=[t for t in self._allowed_tools if t not in off],
             model=self._model,
             max_tokens=self._max_tokens,
             bash_timeout=self._bash_timeout,

@@ -168,7 +168,7 @@ Identified users also carry **person properties** (via identify): `email`,
 | `ui_action` | every minor agent `ui` event: `action` = `suggest`, `ask` (+ `questions`), or anything unhandled (`handled: false`) | the denominator for the chips: `followup_accepted` ÷ `ui_action{suggest}`, `ask_answered` ÷ `ui_action{ask}`. Milestone actions fire their named event instead (`open_canvas` → `artifact_completed`, `open_plan_modal` → `paywall_shown`) |
 | `ask_answered` / `ask_dismissed` | clarifying-question card resolved | answered ÷ shown decides the feature's fate |
 | `followup_accepted` | follow-up chip taken | `method` (click/arrow) |
-| `ask_toggled` / `followups_toggled` | settings switches | opt-out rate = annoyance meter |
+| `ask_toggled` / `followups_toggled` / `web_search_toggled` | settings switches (`to`, `source`) | opt-out rate = annoyance meter; web search off rides the request as `disabled_tools` |
 | `notification_prompt_shown` / `notification_prompt_answered` | our push-permission card (docs/notes/engagement.md) | `placement` (`corner`, or `settings` from the Turn on row), `result` (`allowed` / `denied` / `dismissed`). When it shows is the `notification_prompt` flag's call |
 | `announcement_shown` / `announcement_clicked` / `announcement_dismissed` | a What's new modal or a corner tip from the `announcements` flag payload | `id`, `type` (`modal` / `corner`). Seen ids also land on the person as `announcement_seen/<id>` so a flag condition can exclude them |
 | *(PostHog-native)* `survey shown` / `survey sent` / `survey dismissed` | a PostHog survey answered in our strip above the composer | PostHog's own names and `$survey_*` props, sent to the PostHog plugin only — not on the pipe |

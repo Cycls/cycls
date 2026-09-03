@@ -52,6 +52,19 @@ export const askEnabled = () => {
   try { return localStorage.getItem(ASK_KEY) !== "off"; } catch { return true; }
 };
 
+// Web search, per person. Off rides the request as disabled_tools and the
+// server drops the tool for the turn; it can't enable a tool the agent lacks.
+const WEB_SEARCH_KEY = "cycls_web_search";
+
+export const webSearchEnabled = () => {
+  try { return localStorage.getItem(WEB_SEARCH_KEY) !== "off"; } catch { return true; }
+};
+
+export function setWebSearchEnabled(on: boolean, source: string) {
+  localStorage.setItem(WEB_SEARCH_KEY, on ? "on" : "off");
+  track("web_search_toggled", { to: on, source });
+}
+
 export function setAskEnabled(on: boolean, source: string) {
   localStorage.setItem(ASK_KEY, on ? "on" : "off");
   window.dispatchEvent(new Event("askchange"));

@@ -11,7 +11,7 @@ import { WsIcon, type WorkspacesMenu } from "./workspace-switcher";
 import { EmojiPicker } from "./emoji-picker";
 import type { MemberInfo } from "../hooks/use-workspaces";
 import { t, useLang, setLang, getLang } from "../lib/i18n";
-import { cn, getThemeMode, setThemeMode, followUpsEnabled, setFollowUpsEnabled, askEnabled, setAskEnabled, type ThemeMode } from "../lib/utils";
+import { cn, getThemeMode, setThemeMode, followUpsEnabled, setFollowUpsEnabled, askEnabled, setAskEnabled, webSearchEnabled, setWebSearchEnabled, type ThemeMode } from "../lib/utils";
 import { pushProvider, pushStatus, requestPush, answerResult } from "../lib/notifications";
 import { useDarkMode } from "../hooks/use-dark-mode";
 import { useToast } from "../lib/toast";
@@ -457,6 +457,7 @@ function GeneralTab() {
   const [mode, setMode] = useState<ThemeMode>(getThemeMode());
   const [followUps, setFollowUps] = useState(followUpsEnabled);
   const [askOn, setAskOn] = useState(askEnabled);
+  const [webOn, setWebOn] = useState(webSearchEnabled);
   const [push, setPush] = useState(pushStatus);
   return (
     <ListCard>
@@ -501,6 +502,16 @@ function GeneralTab() {
             value={askOn ? "on" : "off"}
             options={[{ value: "on" as const, label: t("on") }, { value: "off" as const, label: t("off") }]}
             onChange={(v) => { setAskOn(v === "on"); setAskEnabled(v === "on", "settings"); }}
+          />
+        }
+      />
+      <Row
+        label={t("webSearch")}
+        control={
+          <Segmented
+            value={webOn ? "on" : "off"}
+            options={[{ value: "on" as const, label: t("on") }, { value: "off" as const, label: t("off") }]}
+            onChange={(v) => { setWebOn(v === "on"); setWebSearchEnabled(v === "on", "settings"); }}
           />
         }
       />

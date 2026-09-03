@@ -233,27 +233,28 @@ describe("loadChat (rfc-004 f556eee)", () => {
 });
 
 
+function sseTurn(chatId: string, text: string): any {
+  const body = [
+    `data: ${JSON.stringify({ type: "chat_id", chat_id: chatId })}\n\n`,
+    `data: ${JSON.stringify({ type: "text", text })}\n\n`,
+  ].join("");
+  let sent = false;
+  return {
+    ok: true,
+    body: {
+      getReader: () => ({
+        read: async () => {
+          if (sent) return { done: true, value: undefined };
+          sent = true;
+          return { done: false, value: new TextEncoder().encode(body) };
+        },
+      }),
+    },
+  };
+}
+
 describe("regenerate() — rewind the last exchange, then re-send it", () => {
   // A complete SSE turn: the server hands back a chat id, then some text.
-  function sseTurn(chatId: string, text: string): any {
-    const body = [
-      `data: ${JSON.stringify({ type: "chat_id", chat_id: chatId })}\n\n`,
-      `data: ${JSON.stringify({ type: "text", text })}\n\n`,
-    ].join("");
-    let sent = false;
-    return {
-      ok: true,
-      body: {
-        getReader: () => ({
-          read: async () => {
-            if (sent) return { done: true, value: undefined };
-            sent = true;
-            return { done: false, value: new TextEncoder().encode(body) };
-          },
-        }),
-      },
-    };
-  }
 
   test("truncates on the server BEFORE re-sending, and replaces the exchange", async () => {
     const calls: { url: string; method?: string }[] = [];
@@ -375,5 +376,23 @@ describe("sources — citation parts from web search", () => {
     expect(result.current.messages[1].parts!.map((p: any) => p.type))
       .toEqual(["step", "sources", "text"]);
     expect(result.current.messages[1].content).toBe("It grew 4.9%.");
+  });
+});
+
+describe("tool switches", () => {
+  test("web search off rides the request as disabled_tools; on sends nothing extra", async () => {
+    const bodies: any[] = [];
+    global.fetch = vi.fn(async (_url: any, init: any) => {
+      bodies.push(JSON.parse(init.body));
+      return sseTurn("c1", "answer");
+    }) as any;
+    localStorage.setItem("cycls_web_search", "off");
+    const { result } = renderHook(() => useChat("http://api.test"));
+    await act(async () => { await result.current.send("hello"); });
+    expect(bodies[0].disabled_tools).toEqual(["WebSearch"]);
+
+    localStorage.removeItem("cycls_web_search");
+    await act(async () => { await result.current.send("again"); });
+    expect(bodies[1]).not.toHaveProperty("disabled_tools");
   });
 });
