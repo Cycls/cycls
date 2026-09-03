@@ -148,6 +148,7 @@ Identified users also carry **person properties** (via identify): `email`,
 | `file_deleted` | a file/dir/app goes to the trash (never a real delete from the UI) | `kind`, `by: user`, `permanent: false` |
 | `trash_restored` | something comes back from the trash | `kind`, `method` (`toast` / `shortcut` / `trash_tab`) — which undo affordance people actually use |
 | `trash_purged` | delete-forever (admin) | `kind`, or `all: true` for empty-trash |
+| `app_updated` | an app renamed or re-iconed from its ⋯ menu (manifest edit) | `field` (`name` / `icon`) |
 
 ### Sharing loop (organic acquisition)
 

@@ -586,6 +586,28 @@ export function Chat({ chat, onShare, files, account, config }: {
     return () => window.removeEventListener("keydown", onKey);
   }, [undoLast]);
 
+  // App identity lives in its manifest; the slug (folder) stays immutable.
+  const updateApp = useCallback(async (app: AppInfo, patch: { name?: string; icon?: string }) => {
+    if (!files) return;
+    const path = `apps/${app.slug}/app.json`;
+    let manifest: Record<string, unknown> = {};
+    try { manifest = JSON.parse(await files.readFile(path)); } catch { manifest = {}; }
+    const next: Record<string, unknown> = { ...manifest, ...patch };
+    if (patch.icon === "") delete next.icon;
+    await files.writeFile(path, JSON.stringify(next, null, 2));
+    track("app_updated", { field: Object.keys(patch)[0] });
+    await refreshApps();
+  }, [files, refreshApps]);
+
+  // An image icon lives beside the app as `icon.<ext>`; the manifest names it.
+  const uploadAppIcon = useCallback(async (app: AppInfo, file: File) => {
+    if (!files) return;
+    const ext = (file.name.match(/\.(png|jpe?g|svg|webp|gif|avif)$/i)?.[1] ?? "png").toLowerCase();
+    if (file.size > 2 * 1024 * 1024) { toastError(t("iconTooLarge")); return; }
+    await files.onUpload(`apps/${app.slug}`, new File([file], `icon.${ext}`, { type: file.type }));
+    await updateApp(app, { icon: `icon.${ext}` });
+  }, [files, updateApp, toastError]);
+
   const canvasShowing = canvasTabs.length > 0 && !canvasHidden;
   const rightOpen = filesOpen || canvasShowing;
   const [railIcons, setRailIcons] = useState(false);
@@ -1098,6 +1120,10 @@ export function Chat({ chat, onShare, files, account, config }: {
                   apps={apps}
                   loading={appsLoading}
                   onOpen={(a) => { openApp(a); if (!isDesktop) setFilesOpen(false); }}
+                  onOpenInTab={files ? (a) => { files.onOpenFile(a.entry).then((url) => window.open(url, "_blank")).catch(() => {}); } : undefined}
+                  onRename={files ? (a, name) => { void updateApp(a, { name }); } : undefined}
+                  onSetIcon={files ? (a, icon) => { void updateApp(a, { icon }); } : undefined}
+                  onUploadIcon={files ? (a, f) => { uploadAppIcon(a, f).catch(() => toastError(t("uploadFailed"))); } : undefined}
                   onDelete={canPurge && files ? (a) => { void deleteWithUndo(`apps/${a.slug}`).then(() => refreshApps()); } : undefined}
                 />
               ) : filesTab === "shares" ? (
