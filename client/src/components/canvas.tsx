@@ -10,15 +10,15 @@ import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
 import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
-import { attachBridge, appScope } from "./mini-app-bridge";
-import { injectShim } from "./mini-app-shim";
+import { attachBridge, appScope } from "./app-bridge";
+import { injectShim } from "./app-shim";
 import { SaveDialog } from "./save-dialog";
-import type { MiniAppInfo } from "../hooks/use-apps";
+import type { AppInfo } from "../hooks/use-apps";
 import { usePaneWidth } from "../hooks/use-pane-width";
 import { cn } from "../lib/utils";
 import { t, getLang } from "../lib/i18n";
 
-// Renderer choice comes from the PATH, never the display name: a mini app's tab
+// Renderer choice comes from the PATH, never the display name: an app's tab
 // is titled by its manifest ("Injaz Portfolio"), which has no extension, and
 // every type check would fall through to the unsupported-file card.
 export const fileKind = (file: { path: string; name: string }) => file.path || file.name;
@@ -26,7 +26,7 @@ export const fileKind = (file: { path: string; name: string }) => file.path || f
 export interface CanvasFile {
   path: string;
   name: string;
-  // Mini apps carry their manifest identity; files fall back to the ext tint dot.
+  // Apps carry their manifest identity; files fall back to the ext tint dot.
   icon?: string;      // emoji
   iconSrc?: string;   // image (data: or blob:)
   letter?: string;    // first letter of the app name
@@ -83,7 +83,7 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders }: {
 }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const [pending, setPending] = useState<PendingSave | null>(null);
-  // Only a mini app gets workspace access; every other html is just a document.
+  // Only an app gets workspace access; every other html is just a document.
   const isApp = appScope(file.path) !== null;
   const canSave = isApp && !shared && !!writeFile && !!listFolders;
 
@@ -277,13 +277,13 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   onCloseTab: (path: string) => void;
   onHide: () => void;
   onAddFile?: (path: string) => void;
-  apps?: MiniAppInfo[];
-  onAddApp?: (app: MiniAppInfo) => void;
+  apps?: AppInfo[];
+  onAddApp?: (app: AppInfo) => void;
   searchFiles?: (q: string) => Promise<{ name: string; path: string }[]>;
   readFile: (path: string) => Promise<string>;   // authed text fetch (md/html/code source)
   openFile: (path: string) => Promise<string>;    // authed blob URL (pdf / download)
   writeFile: (path: string, text: string) => Promise<void>;  // overwrite (editor)
-  listFolders?: () => Promise<{ name: string; path: string }[]>;  // mini-app save dialog
+  listFolders?: () => Promise<{ name: string; path: string }[]>;  // app save dialog
   org?: { id: string; name: string } | null;   // lets the share dialog offer the org audience
   onShareFile?: (path: string, audience: string) => Promise<string>;
   railWidth?: number;   // pane docked to our right; the drag must account for it
@@ -486,8 +486,8 @@ function CanvasWorking({ name }: { name: string }) {
 function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
   onAdd: (path: string) => void;
   searchFiles: (q: string) => Promise<{ name: string; path: string }[]>;
-  apps?: MiniAppInfo[];
-  onAddApp?: (app: MiniAppInfo) => void;
+  apps?: AppInfo[];
+  onAddApp?: (app: AppInfo) => void;
 }) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [q, setQ] = useState("");

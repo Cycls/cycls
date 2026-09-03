@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { appScope, inScope, canWrite, attachBridge, MSG, MAX_WRITE_BYTES } from "../src/components/mini-app-bridge";
+import { appScope, inScope, canWrite, attachBridge, MSG, MAX_WRITE_BYTES } from "../src/components/app-bridge";
 
 const APP = "apps/burnup/index.html";
 const scope = appScope(APP)!;
@@ -10,11 +10,11 @@ describe("appScope", () => {
   it("stays the app folder for a nested page", () =>
     expect(appScope("apps/burnup/reports/index.html")).toBe("apps/burnup"));
 
-  // The canvas renders every html file. Anything that is not a mini app must
+  // The canvas renders every html file. Anything that is not an app must
   // get no bridge at all: a root file used to scope to "" (the whole
   // workspace), and unlike a built app it carries no CSP, so it could read
   // everything and POST it anywhere.
-  it("refuses anything that is not a mini app", () => {
+  it("refuses anything that is not an app", () => {
     for (const p of [
       "report.html",                    // workspace root
       "projects/PRJ-001/report.html",   // inside a project
@@ -103,7 +103,7 @@ describe("attachBridge", () => {
   let detach: () => void;
   afterEach(() => detach?.());
 
-  it("attaches nothing for a file that is not a mini app", async () => {
+  it("attaches nothing for a file that is not an app", async () => {
     const { frame, sent, contentWindow } = fakeFrame();
     const readFile = vi.fn(async () => "secret");
     detach = attachBridge({ frame, appPath: "report.html", readFile });

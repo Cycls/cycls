@@ -2,13 +2,13 @@ import { describe, it, expect } from "vitest";
 import { fileKind } from "../src/components/canvas";
 import { isHtml, isMd, isPdf, codeLang, ext, editWorkingPath } from "../src/components/canvas-utils";
 
-// A mini app's canvas tab is titled by its manifest, so the display name has no
+// An app's canvas tab is titled by its manifest, so the display name has no
 // extension. Every renderer check must therefore key off the path — keyed off
 // the name, an app falls through to the "no preview for this file type" card.
 describe("fileKind", () => {
   const app = { path: "apps/injaz/index.html", name: "Injaz Portfolio" };
 
-  it("resolves a mini app to its entry, not its title", () => {
+  it("resolves an app to its entry, not its title", () => {
     expect(fileKind(app)).toBe("apps/injaz/index.html");
     expect(isHtml(fileKind(app))).toBe(true);
     expect(isHtml(app.name)).toBe(false);   // the bug this guards

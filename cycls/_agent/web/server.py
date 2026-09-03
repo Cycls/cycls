@@ -5,6 +5,7 @@ from typing import Optional, Any
 from cycls._app.auth import User, validator
 from cycls._app.db import Workspace, workspace
 from cycls._agent.logs import log
+from cycls._agent import state
 
 
 class PassMetadata(BaseModel):
@@ -81,8 +82,8 @@ def sse(item):
     if not isinstance(item, dict): item = {"type": "text", "text": item}
     return f"data: {json.dumps(item)}\n\n"
 
-async def encoder(stream, *, chat_id=None, user=None):
-    if chat_id: yield sse({"type": "chat_id", "chat_id": chat_id})
+async def encoder(stream, *, chat_id=None, user=None, first=False):
+    if chat_id: yield sse({"type": "chat_id", "chat_id": chat_id, **({"first": True} if first else {})})
     try:
         async for item in _aiter(stream):
             if msg := sse(item): yield msg
@@ -193,6 +194,16 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
         ws_id = await resolve_ws_id(user, request.headers.get("x-workspace"), config.workspaces,
                                     volume, config.storage)
 
+        # The account's first agent use — a durable per-account marker, so the
+        # activation tick fires once per user (a browser flag re-fires on
+        # every new device; a per-workspace check re-fires per workspace).
+        first = False
+        if user is not None and not request.query_params.get("id"):
+            try:
+                first = await state.mark_first_use(user, volume, config.storage, config.workspaces)
+            except Exception:
+                first = False
+
         context = Context(messages=Messages(messages), user=user, chat_id=chat_id, prod=config.prod,
                           workspace_id=ws_id)
         stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
@@ -200,7 +211,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
         if request.url.path == "/chat/completions":
             stream = openai_encoder(stream)
         else:
-            stream = encoder(stream, chat_id=chat_id, user=user)
+            stream = encoder(stream, chat_id=chat_id, user=user, first=first)
         return StreamingResponse(stream, media_type="text/event-stream")
 
     @app.get("/config")

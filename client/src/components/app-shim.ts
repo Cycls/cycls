@@ -1,4 +1,4 @@
-// Injected into every mini app, so an app calls `cycls.get`/`set`/`read`/`write`
+// Injected into every app, so an app calls `cycls.get`/`set`/`read`/`write`
 // instead of hand-rolling postMessage. The key-value store is one JSON file in
 // the app's folder; `set` mutates memory and coalesces writes, so a burst of
 // updates costs one PUT rather than one each.

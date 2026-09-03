@@ -47,6 +47,20 @@ async def put_meta(workspace, chat_id, data):
     await DB(workspace).put(f"chat/{chat_id}/index", data, meta=data)
 
 
+async def mark_first_use(user, volume, base, mode):
+    """The account's first agent use, as a durable marker in the user's
+    personal workspace — the one workspace every user always has, whichever
+    one is active. True exactly once per account; also leaves an activated-at
+    timestamp the server can consult later."""
+    personal = workspace(user, volume, base=base, ws=f"u-{user.id}" if mode else None)
+    db = DB(personal)
+    key = "activation/first_use_at"
+    if await db.get(key) is not None:
+        return False
+    await db.put(key, datetime.now(timezone.utc).isoformat())
+    return True
+
+
 async def list_chats(workspace):
     """Yield (chat_id, {title, updatedAt}) for every chat. One LIST via
     object storage; one glob+read on local FS. Rows whose custom-meta channel

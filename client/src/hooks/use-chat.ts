@@ -35,6 +35,7 @@ export interface Part {
   alt?: string;
   caption?: string;
   chat_id?: string;
+  first?: boolean;   // chat_id event: the account's first chat in this workspace
   action?: string;
   sources?: Source[];
 }
@@ -151,12 +152,6 @@ export function useChat(baseUrl: string = "") {
       setIsStreaming(true);
       const sentAt = Date.now();
 
-      try {
-        if (!localStorage.getItem("cycls_sent")) {
-          localStorage.setItem("cycls_sent", "1");
-          track("first_agent_use", {});
-        }
-      } catch { /* ignore */ }
       track("message_sent", {
         message_length: text.length,
         has_attachments: !!(attachments && attachments.length),
@@ -242,6 +237,9 @@ export function useChat(baseUrl: string = "") {
 
               // Capture chat_id from server, don't add as part
               if (type === "chat_id" && item.chat_id) {
+                // The server knows whether this account had any chat before —
+                // a browser flag can't (existing users on a new device).
+                if (item.first) track("first_agent_use", {});
                 chatIdRef.current = item.chat_id;
                 setChatId(item.chat_id);
                 // Reflect in browser URL so the chat is bookmarkable/shareable
@@ -255,10 +253,6 @@ export function useChat(baseUrl: string = "") {
               // don't persist in chat history
               if (type === "ui" && item.action) {
                 const ev = item as unknown as UIAction;
-                track("agent_ui_action", {
-                  ...ev,
-                  chat_id: chatIdRef.current,
-                });
                 uiHandlerRef.current?.(ev);
                 continue;
               }
