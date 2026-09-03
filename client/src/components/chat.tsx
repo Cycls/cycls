@@ -6,6 +6,7 @@ import { Files, InlineInput, DropdownMenu } from "./files";
 import { Canvas, type CanvasFile } from "./canvas";
 import { editWorkingPath, ext } from "./canvas-utils";
 import { AppsPanel } from "./apps-panel";
+import { TrashView, type TrashRow } from "./trash-view";
 import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
 import { Icon, IconButton } from "./icon";
@@ -40,6 +41,8 @@ export interface PassAgent {
   icon_svg?: string;
 }
 
+type PanelTab = "files" | "shares" | "chats" | "apps" | "trash";
+
 export interface AccountInfo {
   user: UserInfo;
   plan?: PlanInfo;
@@ -65,7 +68,11 @@ export interface FilesPanelProps {
   onUploadBatch?: (dir: string, files: { rel: string; file: File }[]) => Promise<void>;
   onMkdir: (dir: string, name: string) => Promise<void>;
   onRename: (from: string, to: string) => Promise<void>;
-  onDelete: (path: string) => Promise<void>;
+  onDelete: (path: string) => Promise<{ trash_id: string; kind: string } | void>;   // a move into the trash
+  onListTrash?: () => Promise<TrashRow[]>;
+  onRestoreTrash?: (id: string, kind: string, method: string) => Promise<string>;
+  onPurgeTrash?: (id: string, kind: string) => Promise<void>;
+  onEmptyTrash?: () => Promise<void>;
   onOpenFile: (path: string) => Promise<string>;
   readFile: (path: string) => Promise<string>;
   writeFile: (path: string, text: string) => Promise<void>;
@@ -99,7 +106,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
   const lang = useLang();
-  const { error: toastError } = useToast();
+  const { error: toastError, info: toastInfo, undo: toastUndo } = useToast();
   const isAr = lang === "ar";
   // logo and brand inherit from en; name/description stay per-locale.
   const _active = passMetadata?.[isAr ? "ar" : "en"];
@@ -132,8 +139,8 @@ export function Chat({ chat, onShare, files, account, config }: {
       return next;
     });
   }, []);
-  const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats" | "apps">(() =>
-    (sessionStorage.getItem("cycls_panel_tab") as "files" | "shares" | "chats") || (account ? "chats" : "files"));
+  const [filesTab, setFilesTab] = useState<PanelTab>(() =>
+    (sessionStorage.getItem("cycls_panel_tab") as PanelTab) || (account ? "chats" : "files"));
   // The agent's `suggest` tool offers ONE follow-up message at a time — a
   // chip above the composer; click sends it, ArrowUp pulls it in to edit.
   const [followUp, setFollowUp] = useState<string | null>(null);
@@ -233,7 +240,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     });
   }, [openFileInCanvas]);
   const { width: panelWidth, startResize, resizing: railResizing } = usePaneWidth("cycls_rail_width", 320, 240, 80, 0,
-    () => canvasShowing && setRailIcons(true), 0.3);
+    () => canvasShowing && setRailIcons(true), 0.5);
   const [shareOpen, setShareOpen] = useState(false);
   // Survives the ChatApp remount on org/workspace switch (App keys by org), so
   // changing context inside the settings dialog doesn't close it.
@@ -501,7 +508,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   };
 
   // Switch the side panel's active tab and (re)load its data.
-  const selectTab = (tab: "files" | "shares" | "chats" | "apps") => {
+  const selectTab = (tab: PanelTab) => {
     setFilesTab(tab);
     sessionStorage.setItem("cycls_panel_tab", tab);
     if (tab === "chats" && onListChats) {
@@ -512,11 +519,14 @@ export function Chat({ chat, onShare, files, account, config }: {
       onListShares().then((items) => { setShares(items); setSharesLoading(false); }).catch(() => setSharesLoading(false));
     } else if (tab === "files" && files) {
       files.onNavigate(files.path);
+      loadTrash();   // footer count; listing is also the 30-day sweep
+    } else if (tab === "trash") {
+      loadTrash();
     }
   };
 
   // Open the panel, keeping the last-active tab unless one is given.
-  const openPanel = (tab?: "files" | "shares" | "chats" | "apps") => {
+  const openPanel = (tab?: PanelTab) => {
     selectTab(tab ?? filesTab);
     setFilesOpen(true);
   };
@@ -527,6 +537,54 @@ export function Chat({ chat, onShare, files, account, config }: {
     if (filesOpen) selectTab(filesTab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ---- Trash: deletes are moves; Undo (toast or ⌘Z, 10s) restores the last one ----
+  const [trashRows, setTrashRows] = useState<TrashRow[]>([]);
+  const [trashLoading, setTrashLoading] = useState(false);
+  const [trashFilter, setTrashFilter] = useState<"chat" | undefined>(undefined);
+  const loadTrash = useCallback(() => {
+    if (!files?.onListTrash) return;
+    setTrashLoading(true);
+    files.onListTrash().then(setTrashRows).catch(() => {}).finally(() => setTrashLoading(false));
+  }, [files]);
+  const wsMenu = account?.workspaces;
+  const canPurge = !wsMenu || !wsMenu.active || ["owner", "admin"].includes(wsMenu.active.role || "") || !!wsMenu.isOrgAdmin;
+  const undoRef = useRef<{ id: string; kind: string; name: string; at: number }[]>([]);
+  const afterRestore = useCallback((kind: string) => {
+    if (kind === "chat") { if (onListChats) onListChats().then(setChats).catch(() => {}); }
+    else if (files) { files.onReload(files.path); if (kind === "app") void refreshApps(); }
+    loadTrash();
+  }, [files, onListChats, refreshApps, loadTrash]);
+  const undoLast = useCallback((method: string) => {
+    const last = undoRef.current.pop();
+    if (!last || !files?.onRestoreTrash) return;
+    files.onRestoreTrash(last.id, last.kind, method)
+      .then(() => { toastInfo(t("restored").replace("{name}", last.name)); afterRestore(last.kind); })
+      .catch(() => toastError(t("restoreFailed")));
+  }, [files, toastInfo, toastError, afterRestore]);
+  const trashed = useCallback((id: string, kind: string, name: string) => {
+    undoRef.current.push({ id, kind, name, at: Date.now() });
+    toastUndo(t("deleted").replace("{name}", name), t("undo"), () => undoLast("toast"));
+  }, [toastUndo, undoLast]);
+  const deleteWithUndo = useCallback(async (path: string) => {
+    const r = await files!.onDelete(path);
+    if (r && r.trash_id) trashed(r.trash_id, r.kind, path.split("/").pop() || path);
+    return r;
+  }, [files, trashed]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z" || e.shiftKey) return;
+      const el = document.activeElement as HTMLElement | null;
+      const tag = (el?.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || el?.isContentEditable) return;   // native text undo
+      const last = undoRef.current[undoRef.current.length - 1];
+      if (!last || Date.now() - last.at > 10_000) return;
+      e.preventDefault();
+      undoLast("shortcut");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undoLast]);
 
   const canvasShowing = canvasTabs.length > 0 && !canvasHidden;
   const rightOpen = filesOpen || canvasShowing;
@@ -1031,12 +1089,16 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </div>
               )}
               {!railIconsOnly && (filesTab === "files" && files ? (
-                <Files {...files} onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
+                <>
+                  <Files {...files} onDelete={deleteWithUndo} onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
+                  <TrashLink label={t("trash")} count={trashRows.length} onClick={() => { setTrashFilter(undefined); selectTab("trash"); }} />
+                </>
               ) : filesTab === "apps" ? (
                 <AppsPanel
                   apps={apps}
                   loading={appsLoading}
                   onOpen={(a) => { openApp(a); if (!isDesktop) setFilesOpen(false); }}
+                  onDelete={canPurge && files ? (a) => { void deleteWithUndo(`apps/${a.slug}`).then(() => refreshApps()); } : undefined}
                 />
               ) : filesTab === "shares" ? (
                 <div className="flex flex-1 min-h-0 flex-col">
@@ -1104,12 +1166,19 @@ export function Chat({ chat, onShare, files, account, config }: {
                   </div>
                 </div>
               ) : filesTab === "chats" ? (
+                <>
                 <ChatsPanel
                   chats={chats}
                   loading={chatsLoading}
                   activeId={chatId}
                   onLoad={(id) => { onLoadChat?.(id); if (window.innerWidth < 640) setFilesOpen(false); }}
-                  onDelete={(id) => { setChatsLoading(true); onDeleteChat?.(id).then(() => setChats((prev) => prev.filter((x) => x.id !== id))).finally(() => setChatsLoading(false)); }}
+                  onDelete={(id) => {
+                    const name = chats.find((x) => x.id === id)?.title || t("untitled");
+                    setChatsLoading(true);
+                    onDeleteChat?.(id)
+                      .then(() => { setChats((prev) => prev.filter((x) => x.id !== id)); trashed(`chat:${id}`, "chat", name); })
+                      .finally(() => setChatsLoading(false));
+                  }}
                   onRename={async (id, title) => {
                     await onRenameChat?.(id, title);
                     setChats((prev) => prev.map((x) => x.id === id ? { ...x, title } : x));
@@ -1118,6 +1187,24 @@ export function Chat({ chat, onShare, files, account, config }: {
                     await onSetFavorite?.(id, on);
                     setChats((prev) => prev.map((x) => x.id === id ? { ...x, favoritedAt: on ? new Date().toISOString() : "" } : x));
                   }}
+                />
+                {files && <TrashLink label={t("recentlyDeleted")} onClick={() => { setTrashFilter("chat"); selectTab("trash"); }} />}
+                </>
+              ) : filesTab === "trash" && files ? (
+                <TrashView
+                  rows={trashRows}
+                  loading={trashLoading}
+                  canPurge={canPurge}
+                  filter={trashFilter}
+                  onBack={() => selectTab(trashFilter === "chat" ? "chats" : "files")}
+                  onRestore={(r) => {
+                    const name = r.kind === "chat" ? r.path : r.path.split("/").pop() || r.path;
+                    files.onRestoreTrash?.(r.id, r.kind, "trash_tab")
+                      .then(() => { toastInfo(t("restored").replace("{name}", name)); afterRestore(r.kind); })
+                      .catch(() => toastError(t("restoreFailed")));
+                  }}
+                  onPurge={(r) => { files.onPurgeTrash?.(r.id, r.kind).then(loadTrash).catch(() => {}); }}
+                  onEmpty={() => { files.onEmptyTrash?.().then(loadTrash).catch(() => {}); }}
                 />
               ) : null)}
             </motion.div>
@@ -1547,6 +1634,21 @@ function FollowUpChip({ text, onAccept, onDismiss }: {
         </button>
       </div>
     </motion.div>
+  );
+}
+
+// Footer link into the trash — Finder/Drive style, from where the loss happened.
+function TrashLink({ label, count, onClick }: { label: string; count?: number; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex shrink-0 items-center gap-2 border-t border-border px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/40 transition-colors cursor-pointer"
+    >
+      <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l.7 12a1 1 0 001 .95h6.6a1 1 0 001-.95L17 7" />
+      </svg>
+      <span>{label}{count ? ` · ${count}` : ""}</span>
+    </button>
   );
 }
 

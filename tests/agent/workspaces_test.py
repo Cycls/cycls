@@ -589,3 +589,69 @@ def test_org_with_stale_migration_marker_still_gets_general(tmp_path):
     client = _client(tmp_path)
     rows = client.get("/workspaces").json()
     assert any(w["id"] == "t-shared" and w["name"] == "General" for w in rows)
+
+
+# ---------------------------------------------------------------------------
+# Trash — deletes are moves; admins delete forever
+# ---------------------------------------------------------------------------
+
+def test_file_delete_goes_to_trash_and_restores(tmp_path):
+    client = _client(tmp_path)
+    from cycls._app.db import workspace as _workspace
+    root = _workspace("org_1:user_1", tmp_path, base=f"file://{tmp_path}", ws="u-user_1").root
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "report.md").write_text("hello")
+
+    r = client.delete("/files/report.md")
+    assert r.status_code == 200 and r.json()["kind"] == "file"
+    tid = r.json()["trash_id"]
+    assert not (root / "report.md").exists()
+    rows = client.get("/trash").json()
+    assert [(x["path"], x["by"], x["kind"]) for x in rows] == [("report.md", "user", "file")]
+
+    assert client.post(f"/trash/{tid}/restore").json()["path"] == "report.md"
+    assert (root / "report.md").read_text() == "hello"
+    assert client.get("/trash").json() == []
+
+
+def test_app_delete_and_purge_are_admin_only(tmp_path):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    _run(_orgdb(tmp_path).put(f"members/{ws_id}/user_2", {"role": "editor"}))
+    from cycls._app.db import workspace as _workspace
+    root = _workspace("org_1:user_1", tmp_path, base=f"file://{tmp_path}", ws=ws_id).root
+    (root / "apps" / "demo").mkdir(parents=True)
+    (root / "apps" / "demo" / "index.html").write_text("<h1>")
+    (root / "notes.md").write_text("n")
+    h = {"X-Workspace": ws_id}
+
+    # editor: ordinary files yes, apps no
+    assert client.delete("/files/notes.md", headers={**h, "X-Test-User": "user_2"}).status_code == 200
+    assert client.delete("/files/apps/demo", headers={**h, "X-Test-User": "user_2"}).status_code == 403
+    # owner: yes, and it lands as an app
+    r = client.delete("/files/apps/demo", headers=h)
+    assert r.status_code == 200 and r.json()["kind"] == "app"
+    tid = r.json()["trash_id"]
+    # delete-forever is admin-only too; restore is for anyone who can edit
+    assert client.delete(f"/trash/{tid}", headers={**h, "X-Test-User": "user_2"}).status_code == 403
+    assert client.delete("/trash", headers={**h, "X-Test-User": "user_2"}).status_code == 403
+    assert client.delete(f"/trash/{tid}", headers=h).status_code == 200
+    assert [x["path"] for x in client.get("/trash", headers=h).json()] == ["notes.md"]
+    assert client.delete("/trash", headers=h).status_code == 200
+    assert client.get("/trash", headers=h).json() == []
+
+
+def test_chat_delete_is_a_tombstone(tmp_path):
+    client = _client(tmp_path)
+    client.put("/chats/c1", json={"title": "Keep me"})
+    r = client.delete("/chats/c1")
+    assert r.status_code == 200 and r.json()["trash_id"] == "chat:c1"
+    assert client.get("/chats").json() == []
+    rows = client.get("/trash").json()
+    assert [(x["id"], x["kind"], x["path"]) for x in rows] == [("chat:c1", "chat", "Keep me")]
+    assert client.post("/trash/chat:c1/restore").status_code == 200
+    assert [c["id"] for c in client.get("/chats").json()] == ["c1"]
+    # purge for good
+    client.delete("/chats/c1")
+    assert client.delete("/trash/chat:c1").status_code == 200
+    assert client.get("/trash").json() == [] and client.get("/chats").json() == []

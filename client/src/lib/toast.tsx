@@ -5,19 +5,20 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 
 type Kind = "error" | "info";
-type Toast = { id: number; kind: Kind; text: string };
+type Action = { label: string; onClick: () => void };
+type Toast = { id: number; kind: Kind; text: string; action?: Action };
 
 // Default to a no-op so callers (and tests) can use the hook even when no
 // provider is mounted — they just won't render any toast UI.
-const ToastContext = createContext<{ show: (kind: Kind, text: string) => void }>({ show: () => {} });
+const ToastContext = createContext<{ show: (kind: Kind, text: string, opts?: { action?: Action; ttl?: number }) => void }>({ show: () => {} });
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const counter = useRef(0);
-  const show = useCallback((kind: Kind, text: string) => {
+  const show = useCallback((kind: Kind, text: string, opts?: { action?: Action; ttl?: number }) => {
     const id = ++counter.current;
-    setToasts((prev) => [...prev, { id, kind, text }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+    setToasts((prev) => [...prev, { id, kind, text, action: opts?.action }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), opts?.ttl ?? 4000);
   }, []);
   return (
     <ToastContext.Provider value={{ show }}>
@@ -31,9 +32,17 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="rounded-lg border border-border bg-background shadow-lg px-3 py-2 pointer-events-auto"
+                className="flex items-center gap-3 rounded-lg border border-border bg-background shadow-lg px-3 py-2 pointer-events-auto"
               >
                 <span className={`text-xs ${t.kind === "error" ? "text-red-500" : "text-foreground"}`}>{t.text}</span>
+                {t.action && (
+                  <button
+                    onClick={() => { t.action!.onClick(); setToasts((prev) => prev.filter((x) => x.id !== t.id)); }}
+                    className="text-xs font-medium text-accent hover:underline cursor-pointer"
+                  >
+                    {t.action.label}
+                  </button>
+                )}
               </motion.div>
             ))}
           </AnimatePresence>
@@ -50,5 +59,7 @@ export function useToast() {
   return useMemo(() => ({
     error: (text: string) => show("error", text),
     info: (text: string) => show("info", text),
+    // A reversible action: 10s to change your mind, then the Trash tab.
+    undo: (text: string, label: string, onUndo: () => void) => show("info", text, { action: { label, onClick: onUndo }, ttl: 10_000 }),
   }), [show]);
 }

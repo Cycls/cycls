@@ -75,11 +75,12 @@ def test_bash_sandbox_clearenv(tmp_path):
 
 
 def test_bash_sandbox_forwards_only_safe_env(tmp_path):
-    """Only PATH / HOME / TERM / LANG / LD_PRELOAD may be forwarded via --setenv.
-    LD_PRELOAD is the metadata-block shim path; everything else risks leaking
-    a secret the caller forgot to strip."""
+    """Only PATH / HOME / TERM / LANG / LD_PRELOAD and the two fixed trash
+    paths (CYCLS_WORKSPACE / CYCLS_TRASH, constants the rm shim reads) may be
+    forwarded via --setenv. LD_PRELOAD is the metadata-block shim path;
+    everything else risks leaking a secret the caller forgot to strip."""
     argv = _capture_bash_argv(tmp_path)
-    safe = {"PATH", "HOME", "TERM", "LANG", "LD_PRELOAD"}
+    safe = {"PATH", "HOME", "TERM", "LANG", "LD_PRELOAD", "CYCLS_WORKSPACE", "CYCLS_TRASH"}
     forwarded = {argv[i + 1] for i, a in enumerate(argv) if a == "--setenv"}
     assert forwarded <= safe, f"unexpected env forwarded: {forwarded - safe}"
 

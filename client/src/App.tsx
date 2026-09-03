@@ -47,6 +47,10 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
     searchFiles: f.searchFiles,
     listFolders: f.listFolders,
     onShareFile: withShare ? f.shareFile : undefined,
+    onListTrash: f.listTrash,
+    onRestoreTrash: f.restoreTrash,
+    onPurgeTrash: f.purgeTrash,
+    onEmptyTrash: f.emptyTrash,
     org: org ?? null,
   };
 }

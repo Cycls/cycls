@@ -4,10 +4,11 @@ import { LoadingBar } from "./loading-bar";
 import { t } from "../lib/i18n";
 import type { AppInfo } from "../hooks/use-apps";
 
-export function AppsPanel({ apps, loading, onOpen }: {
+export function AppsPanel({ apps, loading, onOpen, onDelete }: {
   apps: AppInfo[];
   loading: boolean;
   onOpen: (app: AppInfo) => void;
+  onDelete?: (app: AppInfo) => void;   // admins only — the server enforces it too
 }) {
   if (loading) return <LoadingBar />;
 
@@ -23,10 +24,19 @@ export function AppsPanel({ apps, loading, onOpen }: {
         ) : (
           <div className="grid gap-3 sm:grid-cols-2">
             {apps.map((app) => (
+              <div key={app.slug} className="group relative">
+              {onDelete && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); if (confirm(t("deleteAppConfirm").replace("{name}", app.name))) onDelete(app); }}
+                  className="absolute end-2 top-2 z-10 flex size-6 items-center justify-center rounded-md text-muted-foreground/60 opacity-0 transition-opacity hover:text-red-500 hover:bg-secondary group-hover:opacity-100 cursor-pointer"
+                  aria-label={t("delete")} title={t("delete")}
+                >
+                  <Icon name="x" className="size-3.5" />
+                </button>
+              )}
               <button
-                key={app.slug}
                 onClick={() => onOpen(app)}
-                className="flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-card p-4 text-left transition-colors hover:border-foreground/25"
+                className="flex w-full cursor-pointer items-start gap-3 rounded-xl border border-border bg-card p-4 text-left transition-colors hover:border-foreground/25"
               >
                 <span className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-secondary text-lg">
                   <AppIcon app={app} className="size-full" />
@@ -38,6 +48,7 @@ export function AppsPanel({ apps, loading, onOpen }: {
                   </span>
                 </span>
               </button>
+              </div>
             ))}
           </div>
         )}
