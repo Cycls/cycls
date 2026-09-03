@@ -296,7 +296,7 @@ def test_descriptor_flags_and_prompts():
     from cycls._agent.tools import _TOOLS, is_terminal, tool_prompts
 
     assert _TOOLS["ask"].once and _TOOLS["ask"].terminal
-    assert _TOOLS["suggest"].once and not _TOOLS["suggest"].terminal
+    assert _TOOLS["suggest"].once and _TOOLS["suggest"].terminal   # last action of the turn, enforced
     assert is_terminal("ask") and not is_terminal("bash")
     assert not is_terminal("some_custom_tool")
     assert tool_prompts(build_tools(["Bash"], None)) == []

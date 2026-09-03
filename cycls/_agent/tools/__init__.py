@@ -296,7 +296,7 @@ _ASK_TOOL = {
 # Attached to the `Tool` rows below, so enabling a tool is the only switch.
 
 SUGGEST_GUIDANCE = """## Suggested follow-up
-After a substantive answer, when there is an obvious next step, call `suggest` with ONE follow-up message. Steer the session toward a completed artifact: prefer the step that turns work-in-progress into a finished document, page, sheet, or app the user keeps — "Turn this into a document", "Make this a web page" — over open-ended exploration. Write it as a message the user would send, in the user's language. Call it at most once, as the last action of your turn. Skip it when you asked the user a question, or when the turn already delivered the final artifact and nothing obvious remains."""
+After a substantive answer, when there is an obvious next step, call `suggest` with ONE follow-up message. Steer the session toward a completed artifact: prefer the step that turns work-in-progress into a finished document, page, sheet, or app the user keeps — "Turn this into a document", "Make this a web page" — over open-ended exploration. Write it as a message the user would send, in the user's language. Call it at most once, as the last action of your turn — the turn ends there, so say everything you have to say before calling it. Skip it when you asked the user a question, or when the turn already delivered the final artifact and nothing obvious remains."""
 
 ASK_GUIDANCE = """## Asking the user
 Call `ask` only when you genuinely cannot resolve a choice from the request, the workspace, or a sensible default, AND the readings lead to materially different work. Make routine judgment calls yourself and say which you made. Do everything that does not depend on the answers first.
@@ -807,7 +807,7 @@ _TOOLS = {
                        lambda inp: {"tool_name": "Canvas", "step": inp.get("path", "")}),
     "suggest":    Tool(lambda inp, ws, **_: _exec_suggest(inp),
                        lambda inp: {"tool_name": "Suggest", "step": inp.get("text", "")},
-                       once=True, prompt=SUGGEST_GUIDANCE),
+                       once=True, terminal=True, prompt=SUGGEST_GUIDANCE),
     "ask":        Tool(lambda inp, ws, **_: _exec_ask(inp), _ask_step,
                        once=True, terminal=True, prompt=ASK_GUIDANCE),
     "build_app":  Tool(lambda inp, ws, **_: _exec_build_app(inp, ws.root),
