@@ -73,6 +73,7 @@ export interface AppConfig {
   auth?: boolean;
   voice?: boolean;
   pk?: string;
+  one_tap?: boolean;
   analytics?: { provider: string; events?: string[]; [k: string]: unknown }[] | null;
   notifications?: { provider: string; [k: string]: unknown }[] | null;   // push plugins
   suggestions?: boolean;

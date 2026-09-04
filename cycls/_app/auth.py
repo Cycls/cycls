@@ -42,13 +42,14 @@ class Clerk(JWT):
     _PK       = "pk_live_Y2xlcmsuY3ljbHMuYWkk"
     _DEV_PK   = "pk_test_c2VsZWN0LXNsb3RoLTU4LmNsZXJrLmFjY291bnRzLmRldiQ"
 
-    def __init__(self, *, jwks_url=None, dev_jwks_url=None, pk=None, dev_pk=None):
+    def __init__(self, *, jwks_url=None, dev_jwks_url=None, pk=None, dev_pk=None, one_tap=False):
         super().__init__(jwks_url or self._JWKS, dev_jwks_url or self._DEV_JWKS)
         self.pk = pk or self._PK
         self.dev_pk = dev_pk or self._DEV_PK
+        self.one_tap = one_tap   # Google One Tap on the signed-out page; needs custom Google credentials in Clerk
 
     def resolve(self, prod):
-        return {**super().resolve(prod), "pk": self.pk if prod else self.dev_pk}
+        return {**super().resolve(prod), "pk": self.pk if prod else self.dev_pk, "one_tap": self.one_tap}
 
     def claims_to_user(self, decoded) -> "User":
         org = decoded.get("o") or {}

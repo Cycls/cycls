@@ -27,6 +27,7 @@ class Config(BaseModel):
     suggestions: bool = False
     voice: bool = False
     pk: Optional[str] = None
+    one_tap: bool = False             # Google One Tap on the signed-out page
     affiliate: Optional[str] = None   # affiliate/referral provider key (e.g. Rewardful)
     max_upload: int = 512             # per-file upload cap in MB
     workspaces: Optional[str] = None  # multi-workspace mode: None off, else team-create policy ("member"|"admin")

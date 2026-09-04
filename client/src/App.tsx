@@ -5,6 +5,7 @@ import {
   ClerkProvider,
   SignedIn,
   SignedOut,
+  GoogleOneTap,
   useAuth,
   useClerk,
   useOrganization,
@@ -696,5 +697,10 @@ function PublicGate({ config }: { config: AppConfig | null }) {
     return params.has("fork") || params.has("q") || params.has("plans");
   });
   if (signingIn) return <CustomSignIn />;
-  return <PublicHome config={config} onSignIn={() => setSigningIn(true)} />;
+  return (
+    <>
+      {config?.one_tap && <GoogleOneTap />}
+      <PublicHome config={config} onSignIn={() => setSigningIn(true)} />
+    </>
+  );
 }

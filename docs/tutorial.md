@@ -280,6 +280,7 @@ web = (
 | Method | Purpose |
 |---|---|
 | `.auth(provider)` | Set auth provider (`cycls.Clerk()` or `cycls.JWT(...)`) |
+| `.auth(cycls.Clerk(one_tap=True))` | Google One Tap on the signed-out page — the "Continue as …" card. Needs Google enabled in Clerk with **custom credentials**, and each agent origin in that OAuth client's authorized JavaScript origins |
 | `.title(str)` | Browser tab + app title |
 | `.brand(locale=, name=, description=, logo=, brand=, og=, favicon=)` | Static branding per locale. `logo` is the agent icon (chat hero); `brand` is the wordmark shown in the nav bar (falls back to the Cycls logo when unset); `og`/`favicon` are global |
 | `.theme(name)` | `"default"` or `"dev"` |

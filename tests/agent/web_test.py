@@ -1148,6 +1148,15 @@ def test_analytics_providers_are_plugins():
             cycls.GTM(bad)
 
 
+def test_clerk_one_tap_reaches_the_page_config():
+    """One Tap is opt-in on the provider (it needs the operator's own Google
+    credentials in Clerk) and rides the public config as a plain flag."""
+    import cycls
+    assert cycls.Clerk().resolve(True)["one_tap"] is False
+    assert cycls.Clerk(one_tap=True).resolve(False)["one_tap"] is True
+    assert Config(public_path=THEME_PATH).public()["one_tap"] is False
+
+
 def test_notifications_providers_are_plugins():
     """Push, same shape as analytics: provider objects normalize to specs and
     the app id must look like one — it is inlined into the page config."""

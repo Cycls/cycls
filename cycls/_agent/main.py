@@ -99,6 +99,7 @@ class Agent(App):
         resolved = self._auth_provider.resolve(prod)
         if "pk" in resolved:
             self.config.pk = resolved["pk"]
+            self.config.one_tap = bool(resolved.get("one_tap"))
 
     def _routers(self):
         """State routers (chats, files, share) require auth to be meaningful.
