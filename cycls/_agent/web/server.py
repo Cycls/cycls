@@ -273,7 +273,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
 
     from fastapi.responses import HTMLResponse
     from html import escape
-    _base_html = (Path(config.public_path) / "index.html").read_text()
+    _base_html = (Path(config.public_path) / "index.html").read_text(encoding="utf-8")
 
     config.voice = bool(os.environ.get("OPENAI_API_KEY"))
     # office_edit is on only when the author opted in (Web.office_edit()) AND the

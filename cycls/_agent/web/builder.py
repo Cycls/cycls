@@ -60,7 +60,7 @@ def _asset(value: str) -> str:
     if not p.is_file():
         raise ValueError(f"asset not found: {value}")
     if p.suffix.lower() == ".svg":
-        return p.read_text()
+        return p.read_text(encoding="utf-8")
     mime = mimetypes.guess_type(p.name)[0] or "image/png"
     return f"data:{mime};base64,{base64.b64encode(p.read_bytes()).decode()}"
 
