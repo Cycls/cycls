@@ -12,15 +12,15 @@ from cycls._app.auth import User
 from cycls._agent.web.routers import install_routers
 
 
-# ---- Web.office_edit() opt-in flows to the public config ----
+# ---- Web.office_edit() (on by default when configured) flows to the config ----
 
-def test_office_edit_builder_is_opt_in_and_immutable():
-    assert Web()._office_edit is False                 # off by default
+def test_office_edit_defaults_on_and_is_immutable():
+    assert Web()._office_edit is True                  # on by default
+    assert Web().office_edit(False)._office_edit is False   # opt out
     assert Web().office_edit()._office_edit is True
-    assert Web().office_edit(False)._office_edit is False
     base = Web()
-    base.office_edit()                                 # returns a copy…
-    assert base._office_edit is False                  # …the original is untouched
+    base.office_edit(False)                            # returns a copy…
+    assert base._office_edit is True                   # …the original is untouched
 
 
 def test_config_carries_office_edit_flag():
@@ -28,18 +28,18 @@ def test_config_carries_office_edit_flag():
     assert Config(name="t").public()["office_edit"] is False
 
 
-def test_final_flag_needs_optin_AND_service(monkeypatch):
-    # The bool the client reads = author opted in AND Collabora fully wired (URL
-    # AND a shared secret).
+def test_final_flag_on_when_configured_unless_opted_out(monkeypatch):
+    # The bool the client reads = (author didn't opt out) AND Collabora fully
+    # wired (URL AND a shared secret). Default intent is on.
     final = lambda intent: bool(intent) and wopi.configured()
     monkeypatch.delenv("COLLABORA_URL", raising=False)
     monkeypatch.delenv("WOPI_SECRET", raising=False)
-    assert final(True) is False                        # opted in, no service → off
+    assert final(True) is False                        # default-on, no service → off (PDF preview)
     monkeypatch.setenv("COLLABORA_URL", "https://collabora.cycls.ai")
     assert final(True) is False                        # URL but no shared secret → still off
     monkeypatch.setenv("WOPI_SECRET", "shared")
-    assert final(True) is True                         # opted in + fully wired → on
-    assert final(False) is False                       # wired but not opted in → off
+    assert final(True) is True                         # default-on + fully wired → on
+    assert final(False) is False                       # fully wired but opted out → off
 
 
 # ---- token: signed, single-file scoped, expiring ----
