@@ -39,7 +39,7 @@ export interface CanvasFile {
 export function useFileContent(
   file: CanvasFile | null,
   readFile: (p: string) => Promise<string>,
-  openFile: (p: string) => Promise<string>,
+  openFile: (p: string, silent?: boolean) => Promise<string>,
   reloadKey: number = 0,   // bump to re-fetch: the agent rewrote the file
   skip: boolean = false,   // the Collabora editor owns its own data — don't fetch
 ) {
@@ -57,9 +57,12 @@ export function useFileContent(
     // text renderer. Office docs fetch the server's on-demand PDF render of
     // themselves (?as=pdf) and ride the PDF viewer.
     const kind = fileKind(file);
+    // Office ?as=pdf is fetched silently — if the converter is down it throws,
+    // we set error, and CanvasDoc shows the download card (no scary toast).
     const load = isMd(kind) || isHtml(kind) || codeLang(kind) != null
       ? readFile(file.path)
-      : openFile(isOffice(kind) ? `${file.path}?as=pdf` : file.path).then((url) => { blobUrl = url; return url; });
+      : (isOffice(kind) ? openFile(`${file.path}?as=pdf`, true) : openFile(file.path))
+          .then((url) => { blobUrl = url; return url; });
     load.then((v) => { if (!cancelled) setContent(v); })
         .catch(() => { if (!cancelled) setError(true); });
     return () => { cancelled = true; if (blobUrl) URL.revokeObjectURL(blobUrl); };
