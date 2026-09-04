@@ -385,7 +385,7 @@ async def _office_pdf(root, src, user_id):
     back to the download card."""
     root = Path(root).resolve()   # src is already resolved (resolve_path), so match it
     st = src.stat()
-    stem = hashlib.sha1(str(src.relative_to(root)).encode("utf-8")).hexdigest()[:16]
+    stem = hashlib.sha1(src.relative_to(root).as_posix().encode("utf-8")).hexdigest()[:16]
     cache_dir = root / _OFFICE_CACHE
     dst = cache_dir / f"{stem}-{st.st_mtime_ns}-{st.st_size}.pdf"
     if dst.exists():
@@ -405,9 +405,11 @@ def _walk_catalog(root):
     for parent, subdirs, names in os.walk(root):
         subdirs[:] = sorted(d for d in subdirs if not d.startswith("."))
         p = Path(parent)
-        rel_dir = "" if p == root else str(p.relative_to(root))
+        # POSIX-shaped paths (forward slashes) so scoping/search compare equal on
+        # Windows too — str(relative_to()) would emit backslashes there.
+        rel_dir = "" if p == root else (p.relative_to(root)).as_posix()
         for d in subdirs:
-            entries.append({"name": d, "path": str((p / d).relative_to(root)),
+            entries.append({"name": d, "path": (p / d).relative_to(root).as_posix(),
                             "type": "directory", "size": 0, "modified": "",
                             "kind": "folder", "_dir": rel_dir})
         for fn in sorted(names):
@@ -417,7 +419,7 @@ def _walk_catalog(root):
                 st = (p / fn).stat()
             except OSError:      # vanished mid-walk, or unreadable
                 continue
-            entries.append({"name": fn, "path": str((p / fn).relative_to(root)),
+            entries.append({"name": fn, "path": (p / fn).relative_to(root).as_posix(),
                             "type": "file", "size": st.st_size,
                             "modified": _iso(st.st_mtime), "kind": _kind(fn),
                             "_dir": rel_dir})
@@ -542,7 +544,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             is_dir = entry.is_dir()
             out.append({
                 "name": entry.name,
-                "path": str(Path(entry.path).relative_to(root)),
+                "path": Path(entry.path).relative_to(root).as_posix(),
                 "type": "directory" if is_dir else "file",
                 "size": 0 if is_dir else st.st_size,
                 "modified": _dir_mtime(entry.path) if is_dir else _iso(st.st_mtime),
@@ -563,7 +565,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         root = Path(ws.root).resolve()
         fresh = q.get("fresh") is not None
         target = _safe_path(ws.root, q.get("path", ""))
-        rel = "" if target == root else str(target.relative_to(root))
+        rel = "" if target == root else target.relative_to(root).as_posix()
         under = lambda es: es if not rel else [e for e in es if e["path"].startswith(f"{rel}/")]
 
         if (search := q.get("search")) is not None:
@@ -660,8 +662,12 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
                     raise HTTPException(413, limit_msg)
                 tmp.write(chunk)
             tmp.flush()
+            tmp.seek(0)
             try:
-                zf = zipfile.ZipFile(tmp.name)
+                # Read from the open handle, not tmp.name — reopening a
+                # NamedTemporaryFile by name fails on Windows (the file is still
+                # locked by this handle).
+                zf = zipfile.ZipFile(tmp)
             except zipfile.BadZipFile:
                 raise HTTPException(400, "Body is not a valid zip")
             with zf:

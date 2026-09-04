@@ -244,7 +244,12 @@ CMD ["python", "entrypoint.py"]
                 nocache=force, labels={self.managed_label: "true"}
             ):
                 if 'stream' in chunk:
-                    print(chunk['stream'].strip())
+                    # Docker build output is UTF-8; a Windows console is cp1252.
+                    # Re-encode through the console's codec so a stray glyph in the
+                    # build log can't crash the whole build with UnicodeEncodeError.
+                    text = chunk['stream'].strip()
+                    enc = sys.stdout.encoding or "utf-8"
+                    print(text.encode(enc, "replace").decode(enc, "replace"))
             print("-------------------------")
             print(f"Image built: {tag}")
             return tag
@@ -371,10 +376,22 @@ CMD ["python", "entrypoint.py"]
             # Force rebuild only on first run, then use cache for subsequent reloads
             env['_CYCLS_FORCE_REBUILD'] = '1' if (self.force_rebuild and first_run) else '0'
 
-            # Respawn with the exact argv that launched us — works for both
-            # `python super.py` (argv=['super.py']) and
-            # `cycls run super.py` (argv=['/.../cycls', 'run', 'super.py']).
-            proc = subprocess.Popen([sys.executable, *sys.argv], env=env)
+            # Respawn with the exact argv that launched us. Two shapes:
+            #   `python super.py`     → argv[0] is a .py → run it under this interpreter
+            #   `cycls run super.py`  → argv[0] is the console-script entry → run it
+            #                           DIRECTLY (a shebang script on POSIX, a .exe on
+            #                           Windows). Prefixing sys.executable there makes
+            #                           Python try to open the .exe wrapper as source
+            #                           and fail with "can't open file '...\\cycls'".
+            argv0 = sys.argv[0]
+            if argv0.endswith(".py"):
+                cmd = [sys.executable, *sys.argv]
+            else:
+                exe = argv0
+                if os.name == "nt" and not os.path.exists(exe) and os.path.exists(exe + ".exe"):
+                    exe += ".exe"
+                cmd = [exe, *sys.argv[1:]]
+            proc = subprocess.Popen(cmd, env=env)
             first_run = False
             try:
                 for changes in watchfiles_watch(*watch_paths):
