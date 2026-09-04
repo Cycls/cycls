@@ -22,7 +22,7 @@ import type { Attachment, ChatApi, AppConfig } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
 import { track } from "../lib/analytics";
-import { toggleDark, cn, followUpsEnabled, askEnabled } from "../lib/utils";
+import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
 import { useToast } from "../lib/toast";
 import { useSpeechRecognition } from "../hooks/use-speech";
 import { useUrlParam } from "../hooks/use-url-param";
@@ -1032,7 +1032,7 @@ export function Chat({ chat, onShare, files, account, config }: {
         />
       )}
       {/* Chats / Files / Apps / Shares — docked on desktop, overlay on a phone */}
-      <AnimatePresence>
+      <AnimatePresence initial={false}>
         {filesOpen && (
           <>
             {!isDesktop && (
@@ -1046,12 +1046,12 @@ export function Chat({ chat, onShare, files, account, config }: {
             />
             )}
             <motion.div
-              initial={isDesktop ? false : { x: "100%" }}
+              initial={isDesktop ? { width: 0 } : { x: "100%" }}
               animate={!isDesktop ? { x: 0 }
                 : rightExpanded && !canvasShowing ? {}
                 : { width: railIconsOnly ? RAIL_ICON_W : panelWidth }}
               exit={!isDesktop ? { x: "100%" } : { width: 0 }}
-              transition={railResizing ? { duration: 0 } : { type: "spring", damping: 30, stiffness: 300 }}
+              transition={railResizing ? { duration: 0 } : slide}
               className={cn(
                 "flex flex-col overflow-hidden",
                 isDesktop

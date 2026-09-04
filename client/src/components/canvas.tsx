@@ -15,7 +15,7 @@ import { injectShim } from "./app-shim";
 import { SaveDialog } from "./save-dialog";
 import type { AppInfo } from "../hooks/use-apps";
 import { usePaneWidth } from "../hooks/use-pane-width";
-import { cn } from "../lib/utils";
+import { slide, cn } from "../lib/utils";
 import { t, getLang } from "../lib/i18n";
 
 // Renderer choice comes from the PATH, never the display name: an app's tab
@@ -377,7 +377,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
             initial={{ width: 0 }}
             animate={expanded ? { width: "100%" } : { width }}
             exit={{ width: 0 }}
-            transition={resizing ? { duration: 0 } : { type: "spring", damping: 30, stiffness: 300 }}
+            transition={resizing ? { duration: 0 } : slide}
             className={cn("relative overflow-hidden", expanded ? "min-w-0 flex-1" : "shrink-0")}
           >
             <div
