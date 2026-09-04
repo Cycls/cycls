@@ -122,15 +122,19 @@ export function useFiles(baseUrl: string = "") {
 
   // /files is bearer-only (JWTs in URLs leak via history/logs/Referer), so
   // <img src> / window.open can't hit it directly. Fetch with auth + return
-  // a blob URL the browser can render in any context.
-  const openFile = useCallback(async (filePath: string) => {
-    return URL.createObjectURL(await (await api(`/files/${filePath}`)).blob());
+  // a blob URL the browser can render in any context. `silent` suppresses the
+  // error toast for an expected-and-handled failure — e.g. an Office ?as=pdf
+  // conversion when the converter is down, which falls back to the download card.
+  const openFile = useCallback(async (filePath: string, silent = false) => {
+    return URL.createObjectURL(await (await api(`/files/${filePath}`, { silent })).blob());
   }, [api]);
 
   // Editable Office: ask the server for the Collabora editor URL + a per-file
-  // WOPI token. The canvas embeds the returned URL in an iframe.
+  // WOPI token. The canvas embeds the returned URL in an iframe. `silent`: a
+  // 503/415 here (Collabora not wired) is an expected fallback to the download
+  // card, not an error to toast about.
   const getEditor = useCallback(async (filePath: string) => {
-    return (await api(`/wopi/editor?path=${encodeURIComponent(filePath)}`)).json();
+    return (await api(`/wopi/editor?path=${encodeURIComponent(filePath)}`, { silent: true })).json();
   }, [api]);
 
   // Authed text fetch — the canvas renders md/html from source, not a blob URL.
