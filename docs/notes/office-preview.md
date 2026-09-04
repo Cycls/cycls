@@ -76,20 +76,20 @@ for layout fidelity (print ranges, charts, merged cells); `csv` / `tsv` stay on
 the interactive grid. Apple iWork (`pages` / `key` / `numbers`) is absent —
 LibreOffice can't open it reliably, so it keeps its download card.
 
-## Editable Office (Collabora) — the opt-in upgrade
+## Editable Office (Collabora) — on by default when configured
 
-The PDF above is read-only. To *edit* Word/Excel/PowerPoint on the canvas, an
-agent opts in:
+The PDF above is read-only. Editing Word/Excel/PowerPoint on the canvas is **on
+by default** and lights up wherever the platform has wired the shared
+**Collabora Online** editor — `COLLABORA_URL` + `WOPI_SECRET` in the agent's env
+(the office-render pattern: one platform-run service, agents point at it).
+Without them Office files keep the PDF preview, so it's always safe.
+
+To force the read-only preview even where the editor is available — a compliance
+or intentionally read-only agent — opt out:
 
 ```python
-web = cycls.Web().auth(cycls.Clerk()).office_edit()
+web = cycls.Web().auth(cycls.Clerk()).office_edit(False)
 ```
-
-`office_edit()` is off by default and only lights up when the platform has wired
-the shared **Collabora Online** editor — `COLLABORA_URL` + `WOPI_SECRET` in the
-agent's env (the office-render pattern: one platform-run service, agents point at
-it). Without them the flag stays false and Office files keep the PDF preview, so
-opting in is always safe.
 
 How it works: the file route mints a per-file, HMAC-signed WOPI token
 (`_agent/web/wopi.py`), hands the browser the Collabora editor URL, and Collabora

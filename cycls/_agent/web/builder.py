@@ -75,7 +75,7 @@ class Web:
         self._analytics: Optional[list] = None
         self._notifications: Optional[list] = None
         self._suggestions: bool = False
-        self._office_edit: bool = False
+        self._office_edit: bool = True    # on wherever the platform wired Collabora
         self._affiliate: Optional[str] = None
         self._max_upload: int = 512
         self._copy_public: List[str] = []
@@ -254,13 +254,13 @@ class Web:
         return self._copy(_suggestions=on)
 
     def office_edit(self, on: bool = True):
-        """Open Office files (Word / Excel / PowerPoint) in an editable editor on
-        the canvas instead of the read-only PDF preview. Off by default.
+        """Editable Office (Word / Excel / PowerPoint) on the canvas — **on by
+        default** wherever the platform has wired the shared Collabora editor
+        (`COLLABORA_URL` + `WOPI_SECRET` in the env). Without those it's inert and
+        Office files show the read-only PDF preview, so it's always safe.
 
-        The editor is a shared Collabora Online service the platform runs once
-        (like office-render): set `COLLABORA_URL` and `WOPI_SECRET` in the agent's
-        env and the feature lights up. Without them it stays off and Office files
-        fall back to the PDF preview — so opting in is always safe."""
+        Call `.office_edit(False)` to force the read-only preview even where the
+        editor is available — e.g. a compliance or intentionally read-only agent."""
         return self._copy(_office_edit=on)
 
     def affiliate(self, api_key: str):

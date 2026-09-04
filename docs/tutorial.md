@@ -289,7 +289,7 @@ web = (
 | `.seo(title=, description=)` | Page/SEO copy when it should differ from the brand — the `<title>` tag, meta + og description |
 | `.head(html)` | Append raw HTML to `<head>` — site verification, custom meta. Repeatable |
 | `.suggestions(on=True)` | Show prompt-starter suggestions on the empty-chat screen. Off by default |
-| `.office_edit(on=True)` | Open Office files (Word/Excel/PowerPoint) in an editable editor on the canvas instead of the read-only PDF preview. Off by default; needs `COLLABORA_URL` + `WOPI_SECRET` in the env, else falls back to the preview — see below |
+| `.office_edit(on=True)` | Editable Office (Word/Excel/PowerPoint) on the canvas. **On by default** wherever `COLLABORA_URL` + `WOPI_SECRET` are set; inert (read-only PDF preview) otherwise. Call `.office_edit(False)` to force the read-only preview — see below |
 | `.affiliate(api_key)` | Affiliate/referral tracking (e.g. a Rewardful key); the FE loads the tracker and reports conversions on checkout |
 | `.max_upload(mb)` | Per-file upload cap in MB (default 512). Enforced server-side, pre-checked client-side |
 | `.analytics(bool)` | Enable usage metrics |
@@ -306,26 +306,29 @@ Static files land at `https://your-app.cycls.ai/public/logo.png`.
 `.docx` / `.xlsx` / `.pptx` can't render in a browser, so the canvas shows them
 two ways:
 
-- **Preview (default, no setup):** the file is converted to PDF on demand (via
-  the shared `office-render` service) and shown in the PDF viewer.
-- **Edit (opt-in):** `.office_edit()` opens the file in an embedded
+- **Preview:** the file is converted to PDF on demand (via the shared
+  `office-render` service) and shown in the PDF viewer.
+- **Edit:** the file opens in an embedded
   [Collabora Online](https://www.collaboraonline.com/) editor — real Word/Excel/
   PowerPoint editing, and edits save straight back to the workspace file.
 
-```python
-web = cycls.Web().auth(cycls.Clerk()).office_edit()   # editable Office
-```
-
-Editing needs a shared Collabora service the platform runs once, wired via env:
+Editing is **on by default** wherever the platform has wired a shared Collabora
+service via env:
 
 ```
 COLLABORA_URL=https://collabora.cycls.ai
 WOPI_SECRET=<a shared secret, the same on every agent instance>
 ```
 
-Without them, `.office_edit()` stays inert and Office files fall back to the
-read-only PDF preview — so opting in is always safe. Details:
-[docs/notes/office-preview.md](notes/office-preview.md).
+Without those, Office files simply fall back to the read-only PDF preview.
+To force the read-only preview even where the editor is available — e.g. a
+compliance or intentionally read-only agent — opt out:
+
+```python
+web = cycls.Web().auth(cycls.Clerk()).office_edit(False)   # preview only
+```
+
+Details: [docs/notes/office-preview.md](notes/office-preview.md).
 
 ### Apple IAP entitlements
 
