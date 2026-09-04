@@ -8,6 +8,7 @@ import type { AppConfig } from "../hooks/use-chat";
 import { useLang, setLang, t } from "../lib/i18n";
 import { toggleDark } from "../lib/utils";
 import { track } from "../lib/analytics";
+import { startSignup } from "../lib/signup";
 
 // The signed-out face of the agent — the same empty screen a signed-in user
 // gets (hero, composer, example gallery), fully explorable without an
@@ -29,10 +30,11 @@ export function PublicHome({ config, onSignIn }: {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const noop = () => {};
 
-  const gate = (text?: string) => {
+  // The Sign in button alone is not a sign-up start — returning users press it.
+  const gate = (text?: string, source: "compose" | "suggestion" | "sign_in" = "compose") => {
     const draft = (text ?? input).trim();
     if (draft) sessionStorage.setItem("cycls_draft", draft);
-    track("sign_up_start", { has_draft: !!draft });
+    if (source !== "sign_in") startSignup({ source, has_draft: !!draft });
     onSignIn();
   };
 
@@ -65,7 +67,7 @@ export function PublicHome({ config, onSignIn }: {
             </button>
             <IconButton name="moon" onClick={() => toggleDark("public_home")} label="Toggle theme" />
             <button
-              onClick={() => gate("")}
+              onClick={() => gate("", "sign_in")}
               className="ms-1 rounded-full bg-foreground px-3.5 py-1.5 text-sm font-medium text-background hover:opacity-90 transition-opacity cursor-pointer"
             >
               {t("signIn")}
@@ -100,7 +102,7 @@ export function PublicHome({ config, onSignIn }: {
             {!config?.examples_enabled && config?.suggestions && (
               <div className="relative">
                 <div className="absolute inset-x-0 top-0">
-                  <Suggestions onSelect={(text) => gate(text)} onPreview={setInput} input={input} />
+                  <Suggestions onSelect={(text) => gate(text, "suggestion")} onPreview={setInput} input={input} />
                 </div>
               </div>
             )}

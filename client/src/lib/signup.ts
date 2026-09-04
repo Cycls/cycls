@@ -5,7 +5,18 @@ import { track } from "./analytics";
 
 const KEY = "cycls_signup_tracked";     // JSON list of account ids already counted
 const PENDING = "cycls_signup_pending"; // a form flow fired before the id was known
+const STARTED = "cycls_signup_started"; // sign_up_start, once per visit
 const FRESH_MS = 5 * 60_000;
+
+/** The visitor starts to sign up — from the public shell, or the sign-up form
+ *  itself. Once per visit, whichever comes first. */
+export function startSignup(props: { source: string; has_draft?: boolean }) {
+  try {
+    if (sessionStorage.getItem(STARTED)) return;
+    sessionStorage.setItem(STARTED, "1");
+  } catch { /* private mode */ }
+  track("sign_up_start", props);
+}
 
 function counted(): string[] {
   try { const v = JSON.parse(localStorage.getItem(KEY) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; }
@@ -27,12 +38,12 @@ export function markSignup(method: string, userId?: string | null) {
 
 /** First authed load: a just-created account nobody has counted is a sign-up —
  *  OAuth has no other moment, the redirect swallows it. */
-export function detectSignup(user: { id: string; createdAt?: Date | string | null } | null | undefined) {
+export function detectSignup(user: { id: string; createdAt?: Date | string | null } | null | undefined, provider?: string | null) {
   if (!user?.id || !user.createdAt) return;
   if (counted().includes(user.id)) return;
   remember(user.id);
   let pending = false;
   try { pending = sessionStorage.getItem(PENDING) === "1"; sessionStorage.removeItem(PENDING); } catch { /* private mode */ }
   if (pending) return;   // the form already counted this account
-  if (Date.now() - new Date(user.createdAt).getTime() < FRESH_MS) track("sign_up", { method: "oauth" });
+  if (Date.now() - new Date(user.createdAt).getTime() < FRESH_MS) track("sign_up", { method: provider || "oauth" });
 }

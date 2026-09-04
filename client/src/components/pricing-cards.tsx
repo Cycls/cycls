@@ -4,6 +4,7 @@ import { usePlans, useSubscription, CheckoutButton, SubscriptionDetailsButton } 
 import { t, getLang } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { convertReferral } from "../lib/affiliate";
+import { commerceProps } from "../lib/commerce";
 import { Icon } from "./icon";
 
 function formatPrice(money: { amount: number; currencySymbol: string; currency: string }) {
@@ -32,6 +33,7 @@ export function PricingCards({ payerType = "user", onSelect }: { payerType?: "us
   const plans = plansData?.filter(p => p.publiclyVisible) ?? [];
   const hasAnnual = plans.some(p => p.annualFee);
   const activePlanId = sub?.subscriptionItems?.[0]?.plan?.id;
+  const previousPlan = sub?.subscriptionItems?.[0]?.plan?.name ?? null;
 
   return (
     <div>
@@ -129,16 +131,10 @@ export function PricingCards({ payerType = "user", onSelect }: { payerType?: "us
                       planPeriod={period}
                       for={payerType}
                       onSubscriptionComplete={() => {
-                        // Canonical commerce props (GA4-shaped: value/currency);
+                        // A paid checkout is a purchase; a free plan is not revenue.
                         // transaction_id dedupes a double-fired callback.
-                        track("purchase", {
-                          plan_id: plan.id,
-                          plan_name: plan.name,
-                          billing_period: period,
-                          value: Number(price) || 0,
-                          currency: "USD",
-                          payer_type: payerType,
-                          is_free: isFreePlan,
+                        if (!isFreePlan) track("purchase", {
+                          ...commerceProps(plan, period, payerType, previousPlan),
                           transaction_id: `${user?.id || "anon"}-${plan.id}-${period}-${new Date().toISOString().slice(0, 10)}`,
                         });
                         // Affiliate referral attribution — paid plans only.
@@ -151,15 +147,7 @@ export function PricingCards({ payerType = "user", onSelect }: { payerType?: "us
                     >
                       <button
                         onClick={() => {
-                          track("checkout_start", {
-                            plan_id: plan.id,
-                            plan_name: plan.name,
-                            billing_period: period,
-                            value: Number(price) || 0,
-                            currency: "USD",
-                            payer_type: payerType,
-                            is_free: isFreePlan,
-                          });
+                          track("checkout_start", commerceProps(plan, period, payerType, previousPlan));
                           onSelect();
                         }}
                         className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer"

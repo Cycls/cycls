@@ -18,7 +18,7 @@ import { dark } from "@clerk/themes";
 import { arSA } from "@clerk/localizations";
 import { useLang, setLang, t } from "./lib/i18n";
 import { toggleDark } from "./lib/utils";
-import { markSignup, detectSignup } from "./lib/signup";
+import { markSignup, detectSignup, startSignup } from "./lib/signup";
 import { IconButton } from "./components/icon";
 import { Chat, type AccountInfo, type FilesPanelProps } from "./components/chat";
 import { PublicHome } from "./components/public-home";
@@ -245,8 +245,9 @@ function ChatNoAuth({ config }: { config: AppConfig | null }) {
   return <Chat chat={chat} files={filesPanelProps(files, false)} config={config} />;
 }
 
-function useSignupDetect(user: { id: string; createdAt?: Date | string | null } | null | undefined) {
-  useEffect(() => { detectSignup(user); }, [user?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+function useSignupDetect(user: { id: string; createdAt?: Date | string | null; externalAccounts?: { provider: string }[] } | null | undefined) {
+  // The OAuth provider is the method (google, apple); a password account never gets here fresh.
+  useEffect(() => { detectSignup(user, user?.externalAccounts?.[0]?.provider); }, [user?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 const PERSIST_KEYS = ["q", "plans", "fork"] as const;
@@ -342,6 +343,7 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
   const switchMode = (m: "sign-in" | "sign-up" | "forgot-password") => {
     resetForm();
     setMode(m);
+    if (m === "sign-up") startSignup({ source: "auth_screen" });
   };
 
   const inAppBrowser = (() => {
@@ -364,7 +366,7 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
     try {
       setIsLoading(strategy);
       setError("");
-      track("sign_in_attempted", { method: strategy, step: "oauth_redirect" });
+      track(mode === "sign-up" ? "sign_up_attempted" : "sign_in_attempted", { method: strategy, step: "oauth_redirect" });
       stashParams(returnTo);
       const params = new URLSearchParams(window.location.search);
       const redirectUrlComplete = returnTo ?? (params.toString() ? `/?${params}` : "/");
