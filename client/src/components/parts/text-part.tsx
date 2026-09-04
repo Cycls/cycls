@@ -48,12 +48,44 @@ const markdownComponents = {
   },
 };
 
-const remarkPlugins = [[remarkGfm, { singleTilde: false }], remarkMath] as const;
 const rehypePlugins = [[rehypeKatex, { strict: false }]] as const;
 
-// Relative hrefs are workspace files the agent linked — open them in the
-// canvas instead of navigating. Absolute URLs open in a new tab as usual.
-const _isWorkspacePath = (href: string) => !/^([a-z][a-z0-9+.-]*:|\/\/|#)/i.test(href);
+// A workspace file however the model wrote it — relative, /workspace/…,
+// file://, sandbox:, or our own /files/ URL — as the path the canvas opens.
+// Anything else is the web and gets null.
+export function workspacePath(href: string): string | null {
+  let h = href.replace(/^(file:\/\/|sandbox:)/i, "");
+  if (/^https?:\/\//i.test(h)) {
+    const u = new URL(h);
+    if (u.origin !== location.origin || !u.pathname.startsWith("/files/")) return null;
+    h = u.pathname.slice(7);
+  } else if (/^([a-z][a-z0-9+.-]*:|\/\/|#)/i.test(h)) return null;
+  h = decodeURI(h).replace(/^(\.\/|\/?workspace\/|\/)+/, "");
+  return h || null;
+}
+
+// Bare paths in prose become links: "saved to reports/report.md".
+const PATH = /(^|[\s(])((?:file:\/\/|sandbox:)?\/?(?:workspace\/|\.\/)?(?:[\w.-]+\/)*[\w-]+\.(?:md|html?|csv|tsv|json|txt|pdf|docx|xlsx|pptx|png|jpe?g|svg|gif))(?=[\s).,;:!?]|$)/g;
+type Node = { type: string; value?: string; url?: string; children?: Node[] };
+export function linkifyPaths(node: Node): Node {
+  if (node.type === "text" && node.value) {
+    const out: Node[] = []; let last = 0;
+    for (const m of node.value.matchAll(PATH)) {
+      const at = m.index! + m[1].length;
+      if (at > last) out.push({ type: "text", value: node.value.slice(last, at) });
+      out.push({ type: "link", url: workspacePath(m[2]) ?? m[2], children: [{ type: "text", value: m[2] }] });
+      last = at + m[2].length;
+    }
+    if (!out.length) return node;
+    if (last < node.value.length) out.push({ type: "text", value: node.value.slice(last) });
+    return { type: "paragraph", children: out };
+  }
+  if (node.children && node.type !== "link")
+    node.children = node.children.flatMap((c) => { const n = linkifyPaths(c); return n.type === "paragraph" && c.type === "text" ? n.children! : [n]; });
+  return node;
+}
+const remarkPaths = () => (tree: Node) => { linkifyPaths(tree); };
+const remarkPlugins = [[remarkGfm, { singleTilde: false }], remarkMath, remarkPaths] as const;
 
 const MemoizedMarkdownBlock = memo(
   function MarkdownBlock({ content, onOpenFile, sources }: {
@@ -64,13 +96,10 @@ const MemoizedMarkdownBlock = memo(
     const components = {
       ...markdownComponents,
       a({ href, children }: { href?: string; children?: React.ReactNode }) {
-        if (href && onOpenFile && _isWorkspacePath(href)) {
+        const path = href && onOpenFile ? workspacePath(href) : null;
+        if (path) {
           return (
-            <a
-              href={href}
-              onClick={(e) => { e.preventDefault(); onOpenFile(decodeURI(href)); }}
-              className="cursor-pointer"
-            >
+            <a href={href} onClick={(e) => { e.preventDefault(); onOpenFile!(path); }} className="cursor-pointer">
               {children}
             </a>
           );
