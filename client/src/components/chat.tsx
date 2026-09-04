@@ -118,7 +118,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     ? { ..._active, logo: _active.logo || _en?.logo || "", brand: _active.brand || _en?.brand || "" }
     : _en;
   const inputPlaceholder = meta
-    ? (isAr ? `اسأل ${meta.name} - اكتب @ لذكر ملف` : `Ask ${meta.name} - @ to mention a file`)
+    ? (isAr ? `اسأل ${meta.name}` : `Ask ${meta.name}`)
     : undefined;
   // A prompt drafted before sign-in (public shell, example card) survives the
   // auth round-trip here — consumed once, so later remounts start clean.
