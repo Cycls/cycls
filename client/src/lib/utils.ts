@@ -70,3 +70,6 @@ export function setAskEnabled(on: boolean, source: string) {
   window.dispatchEvent(new Event("askchange"));
   track("ask_toggled", { to: on, source });
 }
+
+// One slide for every pane that opens from an edge.
+export const slide = { type: "tween", duration: 0.35, ease: [0.32, 0.72, 0, 1] } as const;
