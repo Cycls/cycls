@@ -79,6 +79,7 @@ export interface FilesPanelProps {
   onOpenFile: (path: string) => Promise<string>;
   readFile: (path: string) => Promise<string>;
   writeFile: (path: string, text: string) => Promise<void>;
+  getEditor: (path: string) => Promise<{ editor_url: string; access_token: string; access_token_ttl: number }>;
   searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
   listFolders: () => Promise<{ name: string; path: string }[]>;
   onShareFile?: (path: string, audience: string) => Promise<string>;
@@ -1023,6 +1024,8 @@ export function Chat({ chat, onShare, files, account, config }: {
           readFile={files.readFile}
           openFile={files.onOpenFile}
           writeFile={files.writeFile}
+          getEditor={files.getEditor}
+          officeEdit={!!config?.office_edit}
           listFolders={files.listFolders}
           org={files.org}
           onShareFile={files.onShareFile}

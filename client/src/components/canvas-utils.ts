@@ -16,8 +16,21 @@ export const isAudio = (name: string) => AUDIO_EXTS.has(ext(name));
 const VIDEO_EXTS = new Set(["mp4", "webm", "mov", "m4v", "ogv"]);
 export const isVideo = (name: string) => VIDEO_EXTS.has(ext(name));
 
-const SPREADSHEET_EXTS = new Set(["csv", "tsv", "xlsx", "xls", "ods"]);
+// Delimited text renders in-browser (interactive grid). Binary spreadsheets
+// (xls/xlsx/ods) go through isOffice → PDF instead, alongside Word/PowerPoint.
+const SPREADSHEET_EXTS = new Set(["csv", "tsv"]);
 export const isSpreadsheet = (name: string) => SPREADSHEET_EXTS.has(ext(name));
+
+// Office documents a browser can't render — shown by converting to PDF on the
+// server (LibreOffice) and displaying that in the PDF viewer. Kept in sync with
+// CONVERTIBLE in cycls/_agent/web/office.py.
+const OFFICE_EXTS = new Set([
+  "doc", "docx", "odt", "rtf", "fodt",          // word processing
+  "ppt", "pptx", "odp", "fodp",                 // presentations
+  "xls", "xlsx", "xlsm", "ods", "fods",         // spreadsheets
+  "epub",                                       // misc office-ish
+]);
+export const isOffice = (name: string) => OFFICE_EXTS.has(ext(name));
 
 export const is3d = (name: string) => ["glb", "gltf"].includes(ext(name));
 
@@ -66,7 +79,7 @@ export const codeLang = (name: string): string | null => {
 // for servers predating it and for files not yet listed (mid-upload rows).
 export const isRenderable = (name: string, kind?: string) =>
   kind ? kind !== "opaque"
-       : isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || is3d(name) || codeLang(name) != null;
+       : isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || isOffice(name) || is3d(name) || codeLang(name) != null;
 
 // Deliverable target of a live edit step — from the finished label or the
 // streamed partial-JSON args. Helper scripts never open the canvas.

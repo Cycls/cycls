@@ -3,7 +3,7 @@ import { MessageBubble } from "./message";
 import { CyclsLogo } from "./cycls-logo";
 import { Icon, IconButton } from "./icon";
 import { useFileContent, CanvasDoc, type CanvasFile } from "./canvas";
-import { isHtml, isRenderable, saveBlob, extTint } from "./canvas-utils";
+import { isHtml, isRenderable, isOffice, saveBlob, extTint } from "./canvas-utils";
 import type { Message } from "../hooks/use-chat";
 import { useMediaQuery } from "../hooks/use-media-query";
 import { t } from "../lib/i18n";
@@ -240,7 +240,9 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
   const path = active;
   const name = path.split("/").pop() || path;
   const file = useMemo<CanvasFile>(() => ({ path, name }), [path, name]);
-  const renderable = isRenderable(name);
+  // Office → PDF conversion isn't wired through the share transport yet, so a
+  // shared Office file downloads (not a corrupt blob in the PDF viewer).
+  const renderable = isRenderable(name) && !isOffice(name);
   const shareBase = window.location.pathname.replace("/shared/", "/share/");
   const shareQuery = window.location.search;   // carries ?ws= for team-minted shares
 
@@ -352,7 +354,9 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
 function SharedFile({ share, getToken }: { share: FileShare; getToken?: () => Promise<string | null> }) {
   const name = share.path.split("/").pop() || share.path;
   const file = useMemo<CanvasFile>(() => ({ path: share.path, name }), [share.path, name]);
-  const renderable = isRenderable(name);
+  // Shared Office files download rather than preview — conversion isn't wired
+  // through the share transport yet (see SharedCanvas).
+  const renderable = isRenderable(name) && !isOffice(name);
   // `?ws=` names the workspace that minted the share — without it the server
   // has to guess, and a share from a team workspace isn't found at all.
   const shareBase = window.location.pathname.replace("/shared/", "/share/") ;  // /share/{user}/{token}
