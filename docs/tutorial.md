@@ -289,6 +289,7 @@ web = (
 | `.seo(title=, description=)` | Page/SEO copy when it should differ from the brand — the `<title>` tag, meta + og description |
 | `.head(html)` | Append raw HTML to `<head>` — site verification, custom meta. Repeatable |
 | `.suggestions(on=True)` | Show prompt-starter suggestions on the empty-chat screen. Off by default |
+| `.office_edit(on=True)` | Open Office files (Word/Excel/PowerPoint) in an editable editor on the canvas instead of the read-only PDF preview. Off by default; needs `COLLABORA_URL` + `WOPI_SECRET` in the env, else falls back to the preview — see below |
 | `.affiliate(api_key)` | Affiliate/referral tracking (e.g. a Rewardful key); the FE loads the tracker and reports conversions on checkout |
 | `.max_upload(mb)` | Per-file upload cap in MB (default 512). Enforced server-side, pre-checked client-side |
 | `.analytics(bool)` | Enable usage metrics |
@@ -299,6 +300,32 @@ web = (
 | `.iap(cycls.AppleIAP(...))` | Apple In-App Purchase entitlements: a StoreKit 2 signed transaction (JWS) in a header is verified offline against the bundled Apple root cert and, when valid, upgrades the request's `user.plan`. See below |
 
 Static files land at `https://your-app.cycls.ai/public/logo.png`.
+
+### Office files on the canvas
+
+`.docx` / `.xlsx` / `.pptx` can't render in a browser, so the canvas shows them
+two ways:
+
+- **Preview (default, no setup):** the file is converted to PDF on demand (via
+  the shared `office-render` service) and shown in the PDF viewer.
+- **Edit (opt-in):** `.office_edit()` opens the file in an embedded
+  [Collabora Online](https://www.collaboraonline.com/) editor — real Word/Excel/
+  PowerPoint editing, and edits save straight back to the workspace file.
+
+```python
+web = cycls.Web().auth(cycls.Clerk()).office_edit()   # editable Office
+```
+
+Editing needs a shared Collabora service the platform runs once, wired via env:
+
+```
+COLLABORA_URL=https://collabora.cycls.ai
+WOPI_SECRET=<a shared secret, the same on every agent instance>
+```
+
+Without them, `.office_edit()` stays inert and Office files fall back to the
+read-only PDF preview — so opting in is always safe. Details:
+[docs/notes/office-preview.md](notes/office-preview.md).
 
 ### Apple IAP entitlements
 
