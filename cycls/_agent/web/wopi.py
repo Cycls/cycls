@@ -43,7 +43,7 @@ import httpx
 from fastapi import APIRouter, Request, Response, HTTPException
 from fastapi.responses import JSONResponse
 
-from cycls._app.db import workspace
+from cycls._app.db import workspace, DB
 
 # ext → MS mimetype, the key Collabora's discovery lists actions under. Only
 # formats Collabora edits; everything else stays on the PDF/download path.
@@ -79,7 +79,11 @@ def editable(name):
 
 
 def configured():
-    return bool(os.environ.get("COLLABORA_URL"))
+    # Both are required. WOPI_SECRET must be a real SHARED value across a
+    # multi-instance agent (one instance mints a token, another verifies it) —
+    # so we refuse to enable the editor on the per-process random fallback.
+    # Missing secret → editor stays off and Office files use the PDF preview.
+    return bool(os.environ.get("COLLABORA_URL") and os.environ.get("WOPI_SECRET"))
 
 
 def _public_url():
@@ -167,9 +171,11 @@ async def _editor_src(mime):
     return out.get(mime)
 
 
-# In-memory WOPI locks: file_id → lock string. Fine for a single instance; a
-# fleet would move this to shared storage.
-_LOCKS = {}
+# WOPI edit locks live in the workspace DB (shared storage), so a lock taken on
+# one agent instance is visible to every other — correct for a multi-instance,
+# autoscaled agent. Keyed by file id; the value is Collabora's lock token.
+def _lock_key(file_id):
+    return f"wopi/lock/{file_id}"
 
 
 def wopi_router(cycls_app, ws_dep, required_auth, volume, base):
@@ -259,7 +265,7 @@ def wopi_router(cycls_app, ws_dep, required_auth, volume, base):
         if not claims.get("rw"):
             raise HTTPException(403, "read-only token")
         # Honour the edit lock: reject a save whose lock doesn't match ours.
-        held = _LOCKS.get(file_id)
+        held = await DB(ws).get(_lock_key(file_id))
         sent = request.headers.get("x-wopi-lock")
         if held and sent and held != sent:
             return Response(status_code=409, headers={"X-WOPI-Lock": held})
@@ -273,26 +279,28 @@ def wopi_router(cycls_app, ws_dep, required_auth, volume, base):
         """WOPI lock lifecycle (LOCK / UNLOCK / REFRESH_LOCK / GET_LOCK). A single
         in-memory lock per file is enough for one editing session."""
         token = request.query_params.get("access_token", "")
-        _resolve(file_id, token)                    # auth only
+        _claims, ws, _path = _resolve(file_id, token)
+        db, key = DB(ws), _lock_key(file_id)
         op = request.headers.get("x-wopi-override", "")
         lock = request.headers.get("x-wopi-lock", "")
-        held = _LOCKS.get(file_id)
+        held = await db.get(key)
         if op == "GET_LOCK":
             return Response(status_code=200, headers={"X-WOPI-Lock": held or ""})
         if op in ("LOCK", "PUT"):
             old = request.headers.get("x-wopi-oldlock")
             if held and held != (old or lock):
                 return Response(status_code=409, headers={"X-WOPI-Lock": held})
-            _LOCKS[file_id] = lock
+            await db.put(key, lock)
             return Response(status_code=200)
         if op == "REFRESH_LOCK":
             if held != lock:
                 return Response(status_code=409, headers={"X-WOPI-Lock": held or ""})
+            await db.put(key, lock)                  # touch — extend the session lock
             return Response(status_code=200)
         if op == "UNLOCK":
             if held != lock:
                 return Response(status_code=409, headers={"X-WOPI-Lock": held or ""})
-            _LOCKS.pop(file_id, None)
+            await db.delete(key)
             return Response(status_code=200)
         raise HTTPException(400, f"unsupported X-WOPI-Override: {op}")
 

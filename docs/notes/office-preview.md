@@ -109,6 +109,7 @@ else the read-only PDF preview; a failed editor falls back to the download card.
 - **Cold start** — the first call to an idle `office-render` pays LibreOffice
   spawn (~1-2s); caching hides it after the first open. A warm LO (unoserver)
   is the service-side upgrade if that ever bites.
-- **WOPI at fleet scale** — the editor's in-memory locks + per-process
-  `WOPI_SECRET` fallback assume one agent instance; a multi-instance agent needs
-  shared-storage locks and a real shared secret.
+- **WOPI at fleet scale** — handled: edit locks live in the workspace DB (shared
+  across instances), and `office_edit` only turns on when a real shared
+  `WOPI_SECRET` is set — it refuses to enable on the per-process random fallback,
+  so tokens verify across a multi-instance agent.
