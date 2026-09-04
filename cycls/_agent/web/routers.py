@@ -3,7 +3,7 @@
 Chat metadata + message log and shares live in the workspace DB — see
 `cycls._agent.state`. Files stay on the workspace filesystem (POSIX-shaped).
 """
-import asyncio, json, os, secrets, shutil, tempfile, time, unicodedata, uuid, zipfile
+import asyncio, hashlib, json, os, secrets, shutil, tempfile, time, unicodedata, uuid, zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse
 
 from cycls._app.db import DB, Workspace, workspace
 from cycls._agent import state, trash
+from cycls._agent.web import office
 from cycls._agent.logs import log
 from cycls._agent.tools import tool_step
 
@@ -324,7 +325,12 @@ _KINDS = (
     ("image",    {"png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "bmp", "svg", "ico", "avif"}),
     ("pdf",      {"pdf"}),
     ("csv",      {"csv", "tsv"}),          # delimited text: any client can render it
-    ("sheet",    {"xls", "xlsx", "numbers"}),   # binary: needs a parser
+    ("sheet",    {"numbers"}),             # binary spreadsheet a client parses in-browser
+    # Office documents render by converting to PDF on demand (LibreOffice, via
+    # the office-render service) and showing them in the PDF viewer. The ext
+    # set is single-sourced from the converter so labelling and conversion
+    # can't disagree. Binary spreadsheets (xls/xlsx/ods) route here too.
+    ("office",   set(office.CONVERTIBLE)),
     ("audio",    {"mp3", "wav", "ogg", "oga", "m4a", "aac", "flac", "opus", "weba"}),
     ("video",    {"mp4", "webm", "mov", "m4v", "ogv"}),
     ("model3d",  {"glb", "gltf"}),
@@ -333,7 +339,7 @@ _KINDS = (
     ("code",     {"py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "json", "sh", "bash", "zsh",
                   "rb", "go", "rs", "java", "c", "h", "cc", "cpp", "cs", "php", "swift", "kt",
                   "sql", "yaml", "yml", "toml", "css", "scss", "less", "xml", "ipynb"}),
-    ("text",     {"txt", "text", "log", "env", "conf", "cfg", "ini", "rtf"}),
+    ("text",     {"txt", "text", "log", "env", "conf", "cfg", "ini"}),
 )
 _KIND_BY_EXT = {ext: kind for kind, exts in _KINDS for ext in exts}
 _SORTS = ("name", "size", "modified", "type")
@@ -346,6 +352,47 @@ def _kind(name):
 
 def _public(entry):
     return {k: entry[k] for k in _PUBLIC}
+
+
+# Converted-PDF cache for the Office preview. Hidden (dot-prefixed) so the
+# catalog walk skips it, keyed by source path+mtime+size so a rewritten source
+# is a fresh entry and prior renders of the same file are swept on the miss.
+_OFFICE_CACHE = ".cache/office"
+
+
+def _write_office_cache(cache_dir, stem, dst, pdf):
+    """Persist a rendered PDF into the workspace cache and return the served
+    path. On a read-only workspace (e.g. a share) fall back to a temp file so
+    the preview still works, just uncached — matching how folder zips serve."""
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        for old in cache_dir.glob(f"{stem}-*.pdf"):   # sweep prior renders of this file
+            try: old.unlink()
+            except OSError: pass
+        tmp = cache_dir / f".{stem}-{uuid.uuid4().hex}.part"
+        tmp.write_bytes(pdf)
+        tmp.replace(dst)                              # atomic swap into place
+        return dst
+    except OSError:
+        tmp = Path(tempfile.gettempdir()) / f"office-{uuid.uuid4().hex}.pdf"
+        tmp.write_bytes(pdf)
+        return tmp
+
+
+async def _office_pdf(root, src, user_id):
+    """A cached PDF render of one office file, converting on a miss via the
+    office-render service. Raises office.Unavailable so the caller can fall
+    back to the download card."""
+    root = Path(root).resolve()   # src is already resolved (resolve_path), so match it
+    st = src.stat()
+    stem = hashlib.sha1(str(src.relative_to(root)).encode("utf-8")).hexdigest()[:16]
+    cache_dir = root / _OFFICE_CACHE
+    dst = cache_dir / f"{stem}-{st.st_mtime_ns}-{st.st_size}.pdf"
+    if dst.exists():
+        return dst
+    data = await asyncio.to_thread(src.read_bytes)
+    pdf = await office.to_pdf(data, src.name, user_id)
+    return await asyncio.to_thread(_write_office_cache, cache_dir, stem, dst, pdf)
 
 
 def _walk_catalog(root):
@@ -546,6 +593,15 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             return _zip_dir(file_path)   # folders download as <name>.zip
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
+        # ?as=pdf previews an Office document (docx/pptx/xlsx/…) by converting
+        # it to PDF and serving that inline, so the canvas renders it in the
+        # viewer it already has. No filename → inline, not a download.
+        if request.query_params.get("as") == "pdf" and office.convertible(file_path.name):
+            try:
+                pdf = await _office_pdf(ws.root, file_path, ws.subject)
+            except office.Unavailable as e:
+                raise HTTPException(status_code=415, detail=str(e))
+            return FileResponse(pdf, media_type="application/pdf", headers=_NO_CACHE)
         if request.query_params.get("download") is not None:
             return FileResponse(file_path, filename=file_path.name, headers=_NO_CACHE)
         return FileResponse(file_path, headers=_NO_CACHE)
@@ -1237,5 +1293,7 @@ def install_routers(cycls_app, app, required_auth, volume, base):
     app.include_router(chats_router(ws_dep))
     app.include_router(files_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))
+    from cycls._agent.web.wopi import wopi_router   # lazy: wopi imports back into us
+    app.include_router(wopi_router(cycls_app, ws_dep, required_auth, volume, base))
     if mode:
         app.include_router(workspaces_router(cycls_app, required_auth, volume, base))

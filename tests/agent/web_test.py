@@ -1289,13 +1289,159 @@ def test_kind_classifies_the_union_of_both_clients(tmp_path):
     """heic used to preview on mobile and not on web, because each client kept
     its own extension table. One table now, server-side."""
     _seed(tmp_path, {"a.heic": b"x", "b.xlsx": b"x", "c.mp3": b"x",
-                     "d.glb": b"x", "e.py": b"x", "f.zip": b"x", "g.csv": b"x"})
+                     "d.glb": b"x", "e.py": b"x", "f.zip": b"x", "g.csv": b"x",
+                     "h.docx": b"x", "i.pptx": b"x"})
     client = _ws_routers_client(tmp_path)
     kinds = {e["name"]: e["kind"] for e in client.get("/files").json()}
-    # csv is split from sheet: mobile renders delimited text but not a binary workbook
-    assert kinds == {"a.heic": "image", "b.xlsx": "sheet", "c.mp3": "audio",
+    # Office docs — incl. binary spreadsheets (xlsx) — convert to PDF on demand,
+    # so they share one `office` kind. csv stays delimited-text; zip stays opaque.
+    assert kinds == {"a.heic": "image", "b.xlsx": "office", "c.mp3": "audio",
                      "d.glb": "model3d", "e.py": "code", "f.zip": "opaque",
-                     "g.csv": "csv"}
+                     "g.csv": "csv", "h.docx": "office", "i.pptx": "office"}
+
+
+def test_office_preview_converts_caches_and_hides(tmp_path, monkeypatch):
+    """?as=pdf renders an Office doc to PDF once, serves it inline, then serves
+    the cached copy — and the cache never leaks into the listing."""
+    from cycls._agent.web import office
+    _seed(tmp_path, {"deck.pptx": b"raw-pptx-bytes"})
+    calls = []
+    async def fake(data, name, user_id=None):
+        calls.append((data, name, user_id))
+        return b"%PDF-1.7 rendered"
+    monkeypatch.setattr(office, "to_pdf", fake)
+    client = _ws_routers_client(tmp_path)
+
+    r = client.get("/files/deck.pptx", params={"as": "pdf"})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/pdf")
+    assert "attachment" not in r.headers.get("content-disposition", "")   # inline, not a download
+    assert r.content == b"%PDF-1.7 rendered"
+    assert calls == [(b"raw-pptx-bytes", "deck.pptx", "org_1:user_1")]     # bytes+name+attribution
+
+    r2 = client.get("/files/deck.pptx", params={"as": "pdf"})              # served from cache
+    assert r2.status_code == 200 and r2.content == b"%PDF-1.7 rendered"
+    assert len(calls) == 1                                                 # not re-converted
+
+    assert [e["name"] for e in client.get("/files").json()] == ["deck.pptx"]  # .cache hidden
+
+
+def test_office_preview_reconverts_when_source_changes(tmp_path, monkeypatch):
+    """The cache key carries the source size+mtime, so an edited document is a
+    fresh render rather than a stale hit."""
+    from cycls._agent.web import office
+    _seed(tmp_path, {"doc.docx": b"one"})
+    async def fake(data, name, user_id=None):
+        return b"PDF:" + data
+    monkeypatch.setattr(office, "to_pdf", fake)
+    client = _ws_routers_client(tmp_path)
+    assert client.get("/files/doc.docx", params={"as": "pdf"}).content == b"PDF:one"
+    client.put("/files/doc.docx", content=b"two-longer")
+    assert client.get("/files/doc.docx", params={"as": "pdf"}).content == b"PDF:two-longer"
+
+
+def test_office_preview_unavailable_returns_415(tmp_path, monkeypatch):
+    """A converter miss is a 415 the client turns into the download card, not a
+    500."""
+    from cycls._agent.web import office
+    _seed(tmp_path, {"doc.docx": b"x"})
+    async def boom(data, name, user_id=None):
+        raise office.Unavailable("office-render not configured")
+    monkeypatch.setattr(office, "to_pdf", boom)
+    client = _ws_routers_client(tmp_path)
+    assert client.get("/files/doc.docx", params={"as": "pdf"}).status_code == 415
+
+
+def test_as_pdf_ignored_for_non_office(tmp_path, monkeypatch):
+    """?as=pdf on a file LibreOffice can't convert just serves the file — the
+    converter is never touched."""
+    from cycls._agent.web import office
+    _seed(tmp_path, {"a.txt": b"hello"})
+    def tripwire(*a, **k):
+        raise AssertionError("converter must not run for a non-office file")
+    monkeypatch.setattr(office, "to_pdf", tripwire)
+    client = _ws_routers_client(tmp_path)
+    r = client.get("/files/a.txt", params={"as": "pdf"})
+    assert r.status_code == 200 and r.content == b"hello"
+
+
+# ---- office module: the office-render /v1/convert client ----
+
+def test_office_convertible_and_configured(monkeypatch):
+    from cycls._agent.web import office
+    assert office.convertible("a.docx") and office.convertible("B.PPTX") and office.convertible("c.xlsx")
+    assert not office.convertible("d.pdf") and not office.convertible("e.csv") and not office.convertible("f")
+    monkeypatch.delenv("OFFICE_RENDER_URL", raising=False)
+    monkeypatch.delenv("OFFICE_RENDER_SECRET", raising=False)
+    assert office.configured() is False
+    monkeypatch.setenv("OFFICE_RENDER_URL", "https://x")
+    assert office.configured() is False          # needs both halves
+    monkeypatch.setenv("OFFICE_RENDER_SECRET", "s")
+    assert office.configured() is True
+
+
+def test_office_to_pdf_unavailable_paths(monkeypatch):
+    from cycls._agent.web import office
+    monkeypatch.delenv("OFFICE_RENDER_URL", raising=False)
+    monkeypatch.delenv("OFFICE_RENDER_SECRET", raising=False)
+    with pytest.raises(office.Unavailable):       # not configured
+        asyncio.run(office.to_pdf(b"x", "a.docx"))
+    monkeypatch.setenv("OFFICE_RENDER_URL", "https://x")
+    monkeypatch.setenv("OFFICE_RENDER_SECRET", "s")
+    with pytest.raises(office.Unavailable):       # not a convertible type
+        asyncio.run(office.to_pdf(b"x", "a.pdf"))
+
+
+def test_office_to_pdf_posts_to_v1_convert(monkeypatch):
+    """to_pdf hits {URL}/v1/convert with the file, to=pdf, the service bearer,
+    and X-User-Id — matching the office-render contract."""
+    from cycls._agent.web import office
+    monkeypatch.setenv("OFFICE_RENDER_URL", "https://office-render.cycls.ai/")   # trailing slash
+    monkeypatch.setenv("OFFICE_RENDER_SECRET", "sekret")
+    seen = {}
+
+    class FakeResp:
+        status_code = 200
+        content = b"%PDF-rendered"
+        text = ""
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, files=None, data=None, headers=None):
+            seen.update(url=url, files=files, data=data, headers=headers)
+            return FakeResp()
+
+    monkeypatch.setattr(office.httpx, "AsyncClient", FakeClient)
+    out = asyncio.run(office.to_pdf(b"raw", "deck.pptx", user_id="org:u"))
+    assert out == b"%PDF-rendered"
+    assert seen["url"] == "https://office-render.cycls.ai/v1/convert"   # one slash, /v1/convert
+    assert seen["data"] == {"to": "pdf"}
+    assert seen["files"]["file"][0] == "deck.pptx"                      # filename carries the ext
+    assert seen["headers"]["Authorization"] == "Bearer sekret"
+    assert seen["headers"]["X-User-Id"] == "org:u"
+
+
+def test_office_to_pdf_maps_service_error_to_unavailable(monkeypatch):
+    from cycls._agent.web import office
+    monkeypatch.setenv("OFFICE_RENDER_URL", "https://x")
+    monkeypatch.setenv("OFFICE_RENDER_SECRET", "s")
+
+    class FakeResp:
+        status_code = 422
+        content = b""
+        text = "convert failed"
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, *a, **k): return FakeResp()
+
+    monkeypatch.setattr(office.httpx, "AsyncClient", FakeClient)
+    with pytest.raises(office.Unavailable):
+        asyncio.run(office.to_pdf(b"x", "a.docx"))
 
 
 def test_listing_sorts_folders_first_and_honours_sort_key(tmp_path):

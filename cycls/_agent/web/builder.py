@@ -75,6 +75,7 @@ class Web:
         self._analytics: Optional[list] = None
         self._notifications: Optional[list] = None
         self._suggestions: bool = False
+        self._office_edit: bool = False
         self._affiliate: Optional[str] = None
         self._max_upload: int = 512
         self._copy_public: List[str] = []
@@ -251,6 +252,16 @@ class Web:
     def suggestions(self, on: bool = True):
         """Show the prompt-starter suggestions on the empty-chat screen. Off by default."""
         return self._copy(_suggestions=on)
+
+    def office_edit(self, on: bool = True):
+        """Open Office files (Word / Excel / PowerPoint) in an editable editor on
+        the canvas instead of the read-only PDF preview. Off by default.
+
+        The editor is a shared Collabora Online service the platform runs once
+        (like office-render): set `COLLABORA_URL` and `WOPI_SECRET` in the agent's
+        env and the feature lights up. Without them it stays off and Office files
+        fall back to the PDF preview — so opting in is always safe."""
+        return self._copy(_office_edit=on)
 
     def affiliate(self, api_key: str):
         """Enable affiliate/referral tracking with this provider API key (e.g.

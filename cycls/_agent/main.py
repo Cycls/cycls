@@ -68,7 +68,7 @@ class Agent(App):
             name=name, title=web._title, pass_metadata=brand,
             auth=web._auth is not None, cms=web._cms, analytics=web._analytics,
             notifications=web._notifications,
-            suggestions=web._suggestions, affiliate=web._affiliate,
+            suggestions=web._suggestions, office_edit=web._office_edit, affiliate=web._affiliate,
             max_upload=web._max_upload, workspaces=web._workspaces,
             seo=web._seo, head=web._head, favicon=web._favicon, og=web._og_url,
             colors=web._colors, explore=web._explore,

@@ -8,8 +8,9 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob } from "./canvas-utils";
+import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isOffice, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
+import { CollaboraEditor } from "./collabora-editor";
 import { attachBridge, appScope } from "./app-bridge";
 import { injectShim } from "./app-shim";
 import { SaveDialog } from "./save-dialog";
@@ -40,26 +41,29 @@ export function useFileContent(
   readFile: (p: string) => Promise<string>,
   openFile: (p: string) => Promise<string>,
   reloadKey: number = 0,   // bump to re-fetch: the agent rewrote the file
+  skip: boolean = false,   // the Collabora editor owns its own data — don't fetch
 ) {
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    if (!file) { setContent(null); setError(false); return; }
+    if (!file || skip) { setContent(null); setError(false); return; }
     let cancelled = false;
     let blobUrl: string | null = null;
     setContent(null);
     setError(false);
     // Only formats we render from source fetch as text. Everything else — pdf,
-    // media, spreadsheets, and anything unrenderable like docx — fetches bytes,
-    // so a binary is never handed to a text renderer.
-    const load = isMd(fileKind(file)) || isHtml(fileKind(file)) || codeLang(fileKind(file)) != null
+    // media, spreadsheets — fetches bytes, so a binary is never handed to a
+    // text renderer. Office docs fetch the server's on-demand PDF render of
+    // themselves (?as=pdf) and ride the PDF viewer.
+    const kind = fileKind(file);
+    const load = isMd(kind) || isHtml(kind) || codeLang(kind) != null
       ? readFile(file.path)
-      : openFile(file.path).then((url) => { blobUrl = url; return url; });
+      : openFile(isOffice(kind) ? `${file.path}?as=pdf` : file.path).then((url) => { blobUrl = url; return url; });
     load.then((v) => { if (!cancelled) setContent(v); })
         .catch(() => { if (!cancelled) setError(true); });
     return () => { cancelled = true; if (blobUrl) URL.revokeObjectURL(blobUrl); };
-  }, [file?.path, file?.name, readFile, openFile, reloadKey]);
+  }, [file?.path, file?.name, readFile, openFile, reloadKey, skip]);
 
   return { content, setContent, error };
 }
@@ -146,6 +150,38 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders }: {
   );
 }
 
+// Extension tile + download/share — shown for a file with no in-browser
+// renderer, and when an Office file's PDF conversion is unavailable.
+function NoPreviewCard({ file, onDownload, onShare }: {
+  file: CanvasFile;
+  onDownload?: () => void;
+  onShare?: () => void;
+}) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+      <div className="flex size-16 items-center justify-center rounded-2xl bg-secondary text-xs font-bold text-muted-foreground" style={tintTile(fileKind(file))}>
+        <span style={tintLabel(fileKind(file))}>{(ext(fileKind(file)) || "file").slice(0, 4).toUpperCase()}</span>
+      </div>
+      <p className="text-sm font-medium text-foreground">{file.name}</p>
+      <p className="text-xs text-muted-foreground">{t("noPreview")}</p>
+      {(onDownload || onShare) && (
+        <div className="mt-1 flex gap-2">
+          {onDownload && (
+            <button onClick={onDownload} className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity cursor-pointer">
+              {t("download")}
+            </button>
+          )}
+          {onShare && (
+            <button onClick={onShare} className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition-colors cursor-pointer">
+              {t("share")}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function CanvasDoc({ file, content, error, shared = false, readFile, writeFile, listFolders, onDownload, onShare }: {
   file: CanvasFile;
   content: string | null;
@@ -160,12 +196,18 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, writ
   const lang = codeLang(fileKind(file));
   if (content == null && !error) return <LoadingBar />;
   if (error) {
+    // A failed Office conversion (service down / unconvertible) degrades to the
+    // download card rather than a dead error — same as an unrenderable file.
+    if (isOffice(fileKind(file)))
+      return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Couldn't load this file.</div>;
   }
   if (isHtml(fileKind(file))) {
     return <HtmlDoc file={file} content={content ?? ""} shared={shared} readFile={readFile} writeFile={writeFile} listFolders={listFolders} />;
   }
-  if (isPdf(fileKind(file))) {
+  // Office docs arrive here as a converted-PDF blob URL, so they ride the same
+  // native PDF viewer (search / zoom / print, mobile open-in-tab).
+  if (isPdf(fileKind(file)) || isOffice(fileKind(file))) {
     // Desktop's native inline viewer is the best PDF UX (search, zoom, print).
     // Phones can't EMBED PDFs (iOS iframes render page 1 only) but render them
     // fine on direct navigation — so on small screens the iframe doubles as a
@@ -232,29 +274,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
     );
   }
   if (lang == null) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
-        <div className="flex size-16 items-center justify-center rounded-2xl bg-secondary text-xs font-bold text-muted-foreground" style={tintTile(fileKind(file))}>
-          <span style={tintLabel(fileKind(file))}>{(ext(fileKind(file)) || "file").slice(0, 4).toUpperCase()}</span>
-        </div>
-        <p className="text-sm font-medium text-foreground">{file.name}</p>
-        <p className="text-xs text-muted-foreground">{t("noPreview")}</p>
-        {(onDownload || onShare) && (
-          <div className="mt-1 flex gap-2">
-            {onDownload && (
-              <button onClick={onDownload} className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity cursor-pointer">
-                {t("download")}
-              </button>
-            )}
-            {onShare && (
-              <button onClick={onShare} className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition-colors cursor-pointer">
-                {t("share")}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-    );
+    return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
   }
   return (
     <div className="h-full overflow-auto">
@@ -264,7 +284,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, org, onShareFile, railWidth = 0, reloadKey, working }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, getEditor, officeEdit, listFolders, org, onShareFile, railWidth = 0, reloadKey, working }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -283,6 +303,8 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   readFile: (path: string) => Promise<string>;   // authed text fetch (md/html/code source)
   openFile: (path: string) => Promise<string>;    // authed blob URL (pdf / download)
   writeFile: (path: string, text: string) => Promise<void>;  // overwrite (editor)
+  getEditor?: (path: string) => Promise<{ editor_url: string; access_token: string; access_token_ttl: number }>;
+  officeEdit?: boolean;   // Collabora wired → Office files open editable, not as PDF
   listFolders?: () => Promise<{ name: string; path: string }[]>;  // app save dialog
   org?: { id: string; name: string } | null;   // lets the share dialog offer the org audience
   onShareFile?: (path: string, audience: string) => Promise<string>;
@@ -355,6 +377,8 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
           readFile={readFile}
           openFile={openFile}
           writeFile={writeFile}
+          getEditor={getEditor}
+          officeEdit={officeEdit}
           listFolders={listFolders}
           org={org}
           onShareFile={onShareFile}
@@ -575,17 +599,22 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
 }
 
 // Keyed by path from the parent, so per-file state resets on tab switch.
-function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, org, onShareFile, reloadKey }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, getEditor, officeEdit, listFolders, org, onShareFile, reloadKey }: {
   file: CanvasFile;
   readFile: (path: string) => Promise<string>;
   openFile: (path: string) => Promise<string>;
   writeFile: (path: string, text: string) => Promise<void>;
+  getEditor?: (path: string) => Promise<{ editor_url: string; access_token: string; access_token_ttl: number }>;
+  officeEdit?: boolean;
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   org?: { id: string; name: string } | null;
   onShareFile?: (path: string, audience: string) => Promise<string>;
   reloadKey?: number;
 }) {
-  const { content, setContent, error } = useFileContent(file, readFile, openFile, reloadKey);
+  // Editable Office → Collabora editor (owns its own data); everything else
+  // fetches through the read-only viewer.
+  const useEditor = !!officeEdit && !!getEditor && isOffice(fileKind(file));
+  const { content, setContent, error } = useFileContent(file, readFile, openFile, reloadKey, useEditor);
   const [menuOpen, setMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -708,6 +737,8 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, org,
             spellCheck={false}
             className="h-full w-full resize-none border-0 bg-background px-4 py-4 sm:px-6 font-mono text-[13px] leading-relaxed text-foreground focus:outline-none"
           />
+        ) : useEditor ? (
+          <CollaboraEditor file={file} getEditor={getEditor!} onDownload={download} />
         ) : (
           <CanvasDoc file={file} content={content} error={error} readFile={readFile} writeFile={writeFile} listFolders={listFolders}
                      onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />

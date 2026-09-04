@@ -374,6 +374,7 @@ No YAML. No Dockerfiles. No infrastructure repo. The code is the deployment.
 - [CLI](docs/cli.md) — every command
 - [Tutorial](docs/tutorial.md) — comprehensive guide from basics to advanced
 - [Sandbox security](docs/notes/sandbox-security.md) — how the Bash tool is isolated
+- [Office preview](docs/notes/office-preview.md) — how docx/pptx/xlsx render on the canvas
 - [Examples](examples/) — working code samples
 
 ## License

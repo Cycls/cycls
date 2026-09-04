@@ -127,6 +127,12 @@ export function useFiles(baseUrl: string = "") {
     return URL.createObjectURL(await (await api(`/files/${filePath}`)).blob());
   }, [api]);
 
+  // Editable Office: ask the server for the Collabora editor URL + a per-file
+  // WOPI token. The canvas embeds the returned URL in an iframe.
+  const getEditor = useCallback(async (filePath: string) => {
+    return (await api(`/wopi/editor?path=${encodeURIComponent(filePath)}`)).json();
+  }, [api]);
+
   // Authed text fetch — the canvas renders md/html from source, not a blob URL.
   // `silent` suppresses the error toast: an app reading a file that does not
   // exist yet (its key-value store, an optional data file) is normal, and the
@@ -182,7 +188,7 @@ export function useFiles(baseUrl: string = "") {
     return `${window.location.origin}${url}`;
   }, [api]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, searchFiles, listFolders, shareFile, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, getEditor, searchFiles, listFolders, shareFile, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

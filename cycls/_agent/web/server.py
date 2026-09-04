@@ -26,6 +26,7 @@ class Config(BaseModel):
     notifications: Optional[list] = None  # push plugins: [{provider, app_id}] — the FE owns the prompt UI
     suggestions: bool = False
     voice: bool = False
+    office_edit: bool = False          # Collabora wired → office files open in the editor
     pk: Optional[str] = None
     affiliate: Optional[str] = None   # affiliate/referral provider key (e.g. Rewardful)
     max_upload: int = 512             # per-file upload cap in MB
@@ -275,6 +276,10 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
     _base_html = (Path(config.public_path) / "index.html").read_text()
 
     config.voice = bool(os.environ.get("OPENAI_API_KEY"))
+    # office_edit is on only when the author opted in (Web.office_edit()) AND the
+    # Collabora service is wired (env) — else Office files keep the PDF preview.
+    from cycls._agent.web.wopi import configured as _office_configured
+    config.office_edit = bool(config.office_edit) and _office_configured()
     # "</" escaped so CMS-sourced text can't close the script tag
     _config_json = json.dumps(config.public()).replace("</", "<\\/")
     _config_script = f'<script>window.__CONFIG__={_config_json}</script>'

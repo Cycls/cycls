@@ -76,6 +76,7 @@ export interface AppConfig {
   analytics?: { provider: string; events?: string[]; [k: string]: unknown }[] | null;
   notifications?: { provider: string; [k: string]: unknown }[] | null;   // push plugins
   suggestions?: boolean;
+  office_edit?: boolean;   // Collabora wired → Office files open in the editor
   affiliate?: string;
   max_upload?: number;   // per-file upload cap in MB
   explore_enabled?: boolean;
