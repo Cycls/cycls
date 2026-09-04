@@ -970,7 +970,7 @@ def test_batch_upload_extracts_zip(tmp_path):
     root = tmp_path / "org_1" / "ws" / "u-user_1" / "docs"
     assert (root / "a.txt").read_bytes() == b"aaa"
     assert (root / "sub" / "deep" / "b.txt").read_bytes() == b"bbb"
-    assert (root / "ملف.txt").read_text() == "عربي"
+    assert (root / "ملف.txt").read_text(encoding="utf-8") == "عربي"
 
 
 def test_batch_upload_rejects_traversal_member(tmp_path):
