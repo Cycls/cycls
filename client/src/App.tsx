@@ -18,6 +18,7 @@ import { dark } from "@clerk/themes";
 import { arSA } from "@clerk/localizations";
 import { useLang, setLang, t } from "./lib/i18n";
 import { toggleDark } from "./lib/utils";
+import { markSignup, detectSignup } from "./lib/signup";
 import { IconButton } from "./components/icon";
 import { Chat, type AccountInfo, type FilesPanelProps } from "./components/chat";
 import { PublicHome } from "./components/public-home";
@@ -118,7 +119,7 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
     imageUrl: organization.imageUrl,
   } : undefined;
 
-  useOAuthSignupDetect(user);
+  useSignupDetect(user);
   usePostHogIdentify(
     !!config?.analytics?.length,
     user,
@@ -244,27 +245,8 @@ function ChatNoAuth({ config }: { config: AppConfig | null }) {
   return <Chat chat={chat} files={filesPanelProps(files, false)} config={config} />;
 }
 
-// Signup conversion, fired exactly once per browser. Password/code flows call
-// it at Clerk's "complete"; OAuth can't (the redirect swallows the moment), so
-// the first authed load infers it from a just-created account.
-function markSignupCompleted(method: string) {
-  try {
-    if (localStorage.getItem("cycls_signup_tracked")) return;
-    localStorage.setItem("cycls_signup_tracked", "1");
-    track("sign_up", { method });
-  } catch { /* ignore */ }
-}
-
-function useOAuthSignupDetect(user: { id: string; createdAt?: Date | string | null } | null | undefined) {
-  useEffect(() => {
-    if (!user?.createdAt) return;
-    try {
-      if (localStorage.getItem("cycls_signup_tracked")) return;
-      const fresh = Date.now() - new Date(user.createdAt).getTime() < 5 * 60_000;
-      if (fresh) markSignupCompleted("oauth");
-      else localStorage.setItem("cycls_signup_tracked", "1");   // existing account — stop checking
-    } catch { /* ignore */ }
-  }, [user?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+function useSignupDetect(user: { id: string; createdAt?: Date | string | null } | null | undefined) {
+  useEffect(() => { detectSignup(user); }, [user?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 const PERSIST_KEYS = ["q", "plans", "fork"] as const;
@@ -429,7 +411,7 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
     track("sign_up_attempted", { method: "password", step: "form" });
     const result = await signUp!.create({ emailAddress: email, password });
     if (result.status === "complete") {
-      markSignupCompleted("password");
+      markSignup("password", result.createdUserId);
       await setSignUpActive!({ session: result.createdSessionId });
     } else {
       await signUp!.prepareEmailAddressVerification({ strategy: "email_code" });
@@ -441,7 +423,7 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
     track("sign_up_attempted", { method: "email_code", step: "verify" });
     const result = await signUp!.attemptEmailAddressVerification({ code });
     if (result.status === "complete") {
-      markSignupCompleted("email_code");
+      markSignup("email_code", result.createdUserId);
       await setSignUpActive!({ session: result.createdSessionId });
     }
   });
