@@ -103,9 +103,9 @@ else the read-only PDF preview; a failed editor falls back to the download card.
 
 ## Follow-ups
 
-- **Shared Office files** still download rather than preview/edit — neither
-  `?as=pdf` nor the editor is wired through the token-scoped `/share/.../file/`
-  transport yet (see `SharedCanvas` / `SharedFile` in `shared-view.tsx`).
+- **Shared Office files** preview as PDF over the token-scoped `/share/.../file/`
+  transport (`?as=pdf`, read-only — shares aren't editable, so no Collabora
+  there). The Collabora *editor* remains owner-only.
 - **Cold start** — the first call to an idle `office-render` pays LibreOffice
   spawn (~1-2s); caching hides it after the first open. A warm LO (unoserver)
   is the service-side upgrade if that ever bites.

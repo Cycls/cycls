@@ -928,7 +928,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.get("/share/{user}/{token}/file/{file_path:path}")
     async def shared_attachment(
-        user: str, token: str, file_path: str, ws: Optional[str] = None,
+        user: str, token: str, file_path: str, request: Request, ws: Optional[str] = None,
         bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     ):
         ws_owner, row = await _resolve_or_403(user, token, bearer, ws)
@@ -946,6 +946,20 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             allowed.update(canvas_files(ui))
             if file_path not in allowed:
                 raise HTTPException(403, "Not an attachment of this share")
+        # ?as=pdf previews an Office file (read-only — shares aren't editable).
+        # Same convert+cache path as get_file, over the owner's workspace.
+        if request.query_params.get("as") == "pdf" and office.convertible(file_path):
+            try:
+                target = resolve_path(ws_owner.root, file_path)
+            except ValueError:
+                raise HTTPException(403, "Path traversal denied")
+            if not target.is_file():
+                raise HTTPException(404, "File not found")
+            try:
+                pdf = await _office_pdf(ws_owner.root, target, ws_owner.subject)
+            except office.Unavailable as e:
+                raise HTTPException(415, str(e))
+            return FileResponse(pdf, media_type="application/pdf", headers=_NO_CACHE)
         return _serve_file(ws_owner.root, file_path)
 
     # ---- Examples (curated public shares — the empty-screen gallery) ----

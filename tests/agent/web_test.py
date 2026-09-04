@@ -499,6 +499,33 @@ def test_share_router_file_share(tmp_path):
     assert r.headers["cache-control"] == "no-cache"
 
 
+def test_shared_office_file_previews_as_pdf(tmp_path, monkeypatch):
+    """A shared Office file previews as PDF over the share transport (?as=pdf,
+    read-only); without it, the raw bytes still download."""
+    from cycls._app.db import workspace
+    from cycls._agent.web import office
+
+    svc, user, client = _share_test_app(tmp_path)
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    ws.root.mkdir(parents=True, exist_ok=True)
+    (ws.root / "deck.pptx").write_bytes(b"raw-pptx")
+
+    async def fake(data, name, user_id=None):
+        return b"%PDF-shared"
+    monkeypatch.setattr(office, "to_pdf", fake)
+
+    body = client.post("/share", json={"path": "file/deck.pptx"}).json()
+    url = client.get(f"/share/user_test/{body['token']}/data").json()["url"]
+
+    pdf = client.get(url, params={"as": "pdf"})
+    assert pdf.status_code == 200
+    assert pdf.headers["content-type"].startswith("application/pdf")
+    assert pdf.content == b"%PDF-shared"
+
+    raw = client.get(url)                       # no ?as=pdf → the original bytes (download)
+    assert raw.status_code == 200 and raw.content == b"raw-pptx"
+
+
 def _seed_canvas_chat(ws, chat_id="c1", title="Site build"):
     """A chat that produced a canvas artifact (site.html), plus one canvas
     call that errored (broken.html) — the shareable surface is only the
