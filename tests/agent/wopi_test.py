@@ -29,13 +29,17 @@ def test_config_carries_office_edit_flag():
 
 
 def test_final_flag_needs_optin_AND_service(monkeypatch):
-    # The bool the client reads = author opted in AND Collabora is wired (env).
+    # The bool the client reads = author opted in AND Collabora fully wired (URL
+    # AND a shared secret).
     final = lambda intent: bool(intent) and wopi.configured()
     monkeypatch.delenv("COLLABORA_URL", raising=False)
+    monkeypatch.delenv("WOPI_SECRET", raising=False)
     assert final(True) is False                        # opted in, no service → off
     monkeypatch.setenv("COLLABORA_URL", "https://collabora.cycls.ai")
-    assert final(True) is True                         # opted in, service wired → on
-    assert final(False) is False                       # service wired but not opted in → off
+    assert final(True) is False                        # URL but no shared secret → still off
+    monkeypatch.setenv("WOPI_SECRET", "shared")
+    assert final(True) is True                         # opted in + fully wired → on
+    assert final(False) is False                       # wired but not opted in → off
 
 
 # ---- token: signed, single-file scoped, expiring ----
@@ -62,9 +66,14 @@ def test_editable_and_configured(monkeypatch):
     assert wopi.editable("a.docx") and wopi.editable("B.XLSX") and wopi.editable("c.pptx")
     assert not wopi.editable("d.pdf") and not wopi.editable("e.txt")
     monkeypatch.delenv("COLLABORA_URL", raising=False)
+    monkeypatch.delenv("WOPI_SECRET", raising=False)
     assert wopi.configured() is False
     monkeypatch.setenv("COLLABORA_URL", "https://x")
-    assert wopi.configured() is True
+    assert wopi.configured() is False              # URL alone isn't enough
+    monkeypatch.setenv("WOPI_SECRET", "s")
+    assert wopi.configured() is True               # both → on
+    monkeypatch.delenv("COLLABORA_URL")
+    assert wopi.configured() is False              # shared secret alone isn't enough
 
 
 # ---- the WOPI host endpoints, over a real workspace ----
@@ -154,6 +163,28 @@ def test_editor_endpoint_returns_url_and_token(tmp_path, monkeypatch):
 
 def test_editor_rejects_non_office(tmp_path, monkeypatch):
     monkeypatch.setenv("COLLABORA_URL", "https://x")
+    monkeypatch.setenv("WOPI_SECRET", "s")
     _seed(tmp_path, "a.txt", b"X")
     c = _client(tmp_path)
     assert c.get("/wopi/editor", params={"path": "a.txt"}).status_code == 415
+
+
+def test_lock_lifecycle_shared_via_workspace_db(tmp_path, monkeypatch):
+    """Locks live in the workspace DB (shared across instances), not in process
+    memory: LOCK → GET_LOCK → conflicting LOCK 409 → UNLOCK."""
+    monkeypatch.setenv("WOPI_SECRET", "s"); monkeypatch.setattr(wopi, "_SECRET", None)
+    _seed(tmp_path, "doc.docx", b"X")
+    c = _client(tmp_path)
+    fid, tok = _fid("doc.docx"), _tok("doc.docx")
+
+    def op(name, lock):
+        return c.post(f"/wopi/files/{fid}", params={"access_token": tok},
+                      headers={"X-WOPI-Override": name, "X-WOPI-Lock": lock})
+
+    assert op("GET_LOCK", "").headers.get("X-WOPI-Lock", "") == ""     # nothing held yet
+    assert op("LOCK", "LOCK-1").status_code == 200                     # take it
+    assert op("GET_LOCK", "").headers["X-WOPI-Lock"] == "LOCK-1"       # persisted
+    conflict = op("LOCK", "LOCK-2")                                    # someone else tries
+    assert conflict.status_code == 409 and conflict.headers["X-WOPI-Lock"] == "LOCK-1"
+    assert op("UNLOCK", "LOCK-1").status_code == 200                   # release
+    assert op("GET_LOCK", "").headers.get("X-WOPI-Lock", "") == ""     # gone
