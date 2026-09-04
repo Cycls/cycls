@@ -11,6 +11,19 @@ export function usePostHogIdentify(
   language: string,
 ) {
   const prevUserIdRef = useRef<string | null>(null);
+  // canceledAt appearing or clearing while the page is open is the Manage
+  // drawer at work: a cancellation or a resume. Baseline from the first loaded
+  // subscription, so an old cancellation never re-fires.
+  const cancelRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!enabled || !user || !subscription) return;
+    const now = subscription.canceledAt ? String(subscription.canceledAt) : null;
+    if (cancelRef.current !== undefined && cancelRef.current !== now) {
+      track(now ? "subscription_cancelled" : "subscription_resumed",
+            { plan_name: subscription.planName, plan_period: subscription.planPeriod });
+    }
+    cancelRef.current = now;
+  }, [enabled, user?.id, subscription?.canceledAt]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     // Push targeting is by user id whether or not analytics is on.

@@ -118,9 +118,9 @@ Identified users also carry **person properties** (via identify): `email`,
 
 | event | fires when | key props / question |
 |---|---|---|
-| `sign_up_start` | signed-out visitor acts (send, sign-in button) | `has_draft` — does the public shell convert? |
-| `sign_up_attempted` / `sign_in_attempted` | auth form/oauth submitted | `method`, `step` |
-| `sign_up` | account created — Clerk complete for password/code; OAuth inferred on first authed load (account < 5 min old); once per **account** (a browser can host many — a tester's own sign-in must not silence the next registration) | `method` — gate → account conversion |
+| `sign_up_start` | a visitor starts to sign up: sends or picks a suggestion in the public shell, or opens the sign-up form on the auth screen; once per visit, whichever comes first. The Sign in button alone doesn't count — returning users press it | `source` (`compose` / `suggestion` / `auth_screen`), `has_draft` — does the public shell convert? |
+| `sign_up_attempted` / `sign_in_attempted` | auth form or OAuth submitted, named by the screen's mode | `method` (`password` / `email_code` / `oauth_google` / `oauth_apple`), `step` |
+| `sign_up` | account created — Clerk complete for password/code; OAuth inferred on first authed load (account < 5 min old); once per **account** (a browser can host many — a tester's own sign-in must not silence the next registration) | `method` (`password` / `email_code`, or the OAuth provider: `google` / `apple`) — gate → account conversion |
 | `first_agent_use` | the account's first chat ever — the server keeps a per-account marker (`activation/first_use_at` in the personal workspace) and flags `first` on the `chat_id` event once (a browser flag would re-fire per device, a per-workspace check per workspace) | the marketing funnel's activation tick; GA can't derive "first" itself |
 | `message_sent` | every send | `origin` (keyboard/suggestion/example/follow_up/ask/voice/regenerate/url_param), `is_new_chat` — the funnel spine |
 | `examples_shown` | gallery renders with cards | `categories`, `items` — denominator for the gallery |
@@ -180,9 +180,10 @@ Identified users also carry **person properties** (via identify): `email`,
 | `paywall_shown` | the **agent** forces the plan modal | `reason` (`limit` / `plan_required`) — friction, not curiosity |
 | `limit_reached` | free-tier cap specifically | |
 | `plan_modal_opened` / `plan_modal_closed` | any plans view (superset of paywall) | `source`, `method` |
-| `checkout_start` | checkout clicked | `plan_name`, `plan_id`, `billing_period`, `value`, `currency`, `payer_type`, `is_free` |
-| `purchase` | Clerk confirms payment | same, + `transaction_id` |
+| `checkout_start` | checkout clicked | `plan_name`, `plan_id`, `billing_period`, `value` (what the chosen period charges, Clerk's minor units ÷ 100 — annual is the annual total), `currency` (from Clerk), `payer_type`, `is_free`, `previous_plan` when switching plans |
+| `purchase` | Clerk confirms a **paid** checkout — a free plan is not revenue and never purchases | same, + `transaction_id` |
 | `plan_manage_clicked` | manage-subscription | |
+| `subscription_cancelled` / `subscription_resumed` | `canceledAt` appears or clears on the Clerk subscription while the page is open (the Manage drawer); baseline is the first loaded subscription, so an old cancellation never re-fires. Clerk webhooks would be the complete source — a cancellation from Clerk's hosted pages or support is invisible here | `plan_name`, `plan_period` |
 
 ### Voice, settings, misc
 

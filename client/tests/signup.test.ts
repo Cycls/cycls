@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { markSignup, detectSignup } from "../src/lib/signup";
+import { markSignup, detectSignup, startSignup } from "../src/lib/signup";
 
 const track = vi.fn();
 vi.mock("../src/lib/analytics", () => ({ track: (...a: unknown[]) => track(...a) }));
@@ -41,5 +41,22 @@ describe("sign_up, once per account", () => {
     localStorage.setItem("cycls_signup_tracked", "1");
     detectSignup({ id: "user_d", createdAt: fresh() });
     expect(track).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("sign_up_start and the OAuth method", () => {
+  beforeEach(() => { track.mockClear(); localStorage.clear(); sessionStorage.clear(); });
+
+  it("starts once per visit, whichever surface comes first", () => {
+    startSignup({ source: "compose", has_draft: true });
+    startSignup({ source: "auth_screen" });
+    expect(track).toHaveBeenCalledTimes(1);
+    expect(track).toHaveBeenCalledWith("sign_up_start", { source: "compose", has_draft: true });
+  });
+
+  it("names the OAuth provider as the method", () => {
+    detectSignup({ id: "u", createdAt: fresh() }, "google");
+    expect(track).toHaveBeenCalledWith("sign_up", { method: "google" });
   });
 });
