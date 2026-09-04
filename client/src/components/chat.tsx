@@ -1015,6 +1015,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           onCloseAll={() => { setCanvasTabs([]); setCanvasActive(null); setRightExpanded(false); }}
           onSelectTab={setCanvasActive}
           onCloseTab={closeCanvasTab}
+          onReorder={setCanvasTabs}
           onHide={() => setCanvasHidden(true)}
           onAddFile={openFileInCanvas}
           apps={apps}

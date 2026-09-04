@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, Reorder } from "framer-motion";
 import { Icon } from "./icon";
 import { AppIcon } from "./app-icon";
 import { LoadingBar } from "./loading-bar";
@@ -264,7 +264,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, org, onShareFile, railWidth = 0, reloadKey, working }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, org, onShareFile, railWidth = 0, reloadKey, working }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -275,6 +275,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   onCloseAll?: () => void;
   onSelectTab: (path: string) => void;
   onCloseTab: (path: string) => void;
+  onReorder?: (tabs: CanvasFile[]) => void;
   onHide: () => void;
   onAddFile?: (path: string) => void;
   apps?: AppInfo[];
@@ -295,12 +296,14 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   const inner = file && (
     <>
       <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-2">
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+        <Reorder.Group as="div" axis="x" values={tabs} onReorder={(t) => onReorder?.(t)} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
           {tabs.map((f) => {
             const on = f.path === file.path;
             const tint = extTint(f.name);
             return (
-              <div
+              <Reorder.Item
+                as="div"
+                value={f}
                 key={f.path}
                 role="button"
                 onClick={() => onSelectTab(f.path)}
@@ -320,13 +323,13 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
                 >
                   <Icon name="x" className="size-3" />
                 </button>
-              </div>
+              </Reorder.Item>
             );
           })}
           {onAddFile && searchFiles && (
             <AddTab onAdd={onAddFile} searchFiles={searchFiles} apps={apps} onAddApp={onAddApp} />
           )}
-        </div>
+        </Reorder.Group>
         <button
           onClick={onToggleExpand}
           className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer"
