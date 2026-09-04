@@ -244,7 +244,7 @@ def _month_window(spec):
 
 
 def cmd_cost(args):
-    """Aggregate per-turn LLM usage from the cloud — total or grouped
+    """Aggregate per-turn LLM usage from your deployments — total or grouped
     by user / chat / model."""
     import json
     if args.month is not None and args.since:

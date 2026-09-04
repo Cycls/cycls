@@ -11,28 +11,6 @@ from ..events import Turn
 from ...tools import tool_step
 
 
-_WINDOWS = {
-    "claude-sonnet-4-6": 1_000_000,
-    "claude-opus-4-6":   1_000_000,
-    "claude-sonnet":     200_000,
-    "claude-opus":       200_000,
-    "claude-haiku":      200_000,
-}
-
-_MAX_OUTPUT = {
-    "claude-sonnet-4-6": 64_000,
-    "claude-opus-4-6":   64_000,
-    "claude-sonnet":     64_000,   # 4.x with extended
-    "claude-opus":       32_000,
-    "claude-haiku":      8_192,
-}
-
-
-def _lookup(table, model, default):
-    if model in table: return table[model]
-    return next((v for k, v in table.items() if k in model), default)
-
-
 # Cache breakpoint applied to system prompt, last tool, and last user-message
 # tail block. Three of Anthropic's four available breakpoints; each marks the
 # END of a cacheable prefix. ttl 1h matches the persistence we want for chat
@@ -44,14 +22,6 @@ class AnthropicProvider:
     def __init__(self, client, model):
         self._client = client
         self.model = model
-
-    @property
-    def context_window(self):
-        return _lookup(_WINDOWS, self.model, 200_000)
-
-    @property
-    def max_output(self):
-        return _lookup(_MAX_OUTPUT, self.model, 8_192)
 
     def _to_messages(self, messages):
         """Drop FE-only sidecars; attach `cache_control` to the last user
@@ -73,7 +43,8 @@ class AnthropicProvider:
         if not tools: return []
         return [*tools[:-1], {**tools[-1], "cache_control": _CACHE}]
 
-    async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None, thinking="adaptive"):
+    async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None,
+                     thinking="adaptive", extra_body=None):
         kwargs = {
             "model": self.model,
             "max_tokens": max_tokens,
@@ -83,11 +54,16 @@ class AnthropicProvider:
         }
         if isinstance(thinking, int):
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking}
+        elif thinking in ("low", "medium", "high") and "haiku" not in self.model:
+            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["extra_body"] = {"output_config": {"effort": thinking}}
         elif thinking == "adaptive" and "haiku" not in self.model:
             kwargs["thinking"] = {"type": "adaptive"}
         if mcp_servers:
-            kwargs["extra_body"] = {"mcp_servers": [s._spec() for s in mcp_servers]}
+            kwargs.setdefault("extra_body", {})["mcp_servers"] = [s._spec() for s in mcp_servers]
             kwargs["extra_headers"] = {"anthropic-beta": "mcp-client-2025-04-04"}
+        if extra_body:  # deployer extras win over the built-in mapping
+            kwargs["extra_body"] = {**kwargs.get("extra_body", {}), **extra_body}
 
         tool_idx, search_idx, search_buf = {}, None, ""
         async with self._client.messages.stream(**kwargs) as stream:
@@ -132,4 +108,5 @@ class AnthropicProvider:
         r = await self._client.messages.create(
             model=self.model, max_tokens=max_tokens,
             system=[{"type": "text", "text": system}], messages=messages)
+        self.last_usage = (r.usage.input_tokens, r.usage.output_tokens)
         return r.content[0].text

@@ -3,17 +3,42 @@
 Chat metadata + message log and shares live in the workspace DB — see
 `cycls._agent.state`. Files stay on the workspace filesystem (POSIX-shaped).
 """
-import os, secrets, shutil, time, unicodedata, uuid
-from datetime import datetime, timezone
+import asyncio, json, os, secrets, shutil, tempfile, time, unicodedata, uuid, zipfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
-from fastapi import APIRouter, Depends, Request, Response, HTTPException, UploadFile, File
+from urllib.parse import urlsplit, parse_qs
+from fastapi import APIRouter, Depends, Request, Response, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 
 from cycls._app.db import DB, Workspace, workspace
-from cycls._agent import state
+from cycls._agent import state, trash
+from cycls._agent.logs import log
 from cycls._agent.tools import tool_step
+
+DEFAULT_MAX_UPLOAD_MB = 512   # per-file upload cap when not configured
+
+# FileResponse sets ETag/Last-Modified but no Cache-Control, and heuristic
+# freshness (browsers, iOS URLCache) then serves stale bytes after a write.
+# no-cache keeps the cache but forces revalidation — 304 when unchanged.
+_NO_CACHE = {"Cache-Control": "no-cache"}
+
+
+def _search_rows(body):
+    """Citation rows out of a stored `web_search` tool_result. The tool writes
+    its results as JSON, so this reads back exactly what the live stream sent
+    as a `sources` event — one format, both paths."""
+    if not isinstance(body, str):
+        return []
+    try:
+        data = json.loads(body)
+    except Exception:
+        return []
+    rows = (data or {}).get("results") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return []
+    return [r for r in rows if isinstance(r, dict) and r.get("url")]
 
 
 def to_ui_messages(raw):
@@ -23,6 +48,23 @@ def to_ui_messages(raw):
     and merges consecutive assistant messages: a model turn is several
     assistant/tool-result round-trips on disk but one bubble in the UI, the same
     shape the live stream produces."""
+    # tool_use id → its result errored. Lets the FE downgrade failed canvas
+    # calls from a file card back to a plain step.
+    errored = set()
+    search_ids = set()   # client-side `web_search` calls, by tool_use id
+    for msg in raw:
+        c = msg.get("content")
+        if msg.get("role") == "assistant" and isinstance(c, list):
+            for b in c:
+                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "web_search":
+                    search_ids.add(b.get("id"))
+        if msg.get("role") == "user" and isinstance(c, list):
+            for b in c:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    body = b.get("content")
+                    if b.get("is_error") or (isinstance(body, str) and body.startswith("Error")):
+                        errored.add(b.get("tool_use_id"))
+
     out = []
     for msg in raw:
         role, c = msg.get("role"), msg.get("content")
@@ -31,6 +73,16 @@ def to_ui_messages(raw):
         if role == "user":
             if isinstance(c, list):
                 if all(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
+                    # The batch itself stays hidden, but a `web_search` result in
+                    # it carries the sources the answer cites — attach them to the
+                    # assistant turn that ran the search, where the live stream
+                    # put them (after the search step, before the answer).
+                    if out and out[-1]["role"] == "assistant":
+                        for b in c:
+                            if b.get("tool_use_id") not in search_ids or b.get("is_error"):
+                                continue
+                            if rows := _search_rows(b.get("content")):
+                                out[-1]["parts"].append({"type": "sources", "sources": rows})
                     continue
                 text = "".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
             elif isinstance(c, str):
@@ -53,7 +105,21 @@ def to_ui_messages(raw):
                 elif t == "thinking":
                     parts.append({"type": "thinking", "thinking": b.get("thinking", "")})
                 elif t == "tool_use":
-                    parts.append({"type": "step", "id": b.get("id"), **tool_step(b.get("name", ""), b.get("input"))})
+                    part = {"type": "step", "id": b.get("id"), **tool_step(b.get("name", ""), b.get("input"))}
+                    if b.get("id") in errored:
+                        part["ok"] = False
+                    parts.append(part)
+                elif t == "web_search_tool_result":
+                    # Anthropic's server-side search stores its rows right here,
+                    # so citations survive a reload for free. No snippet in this
+                    # shape — the card degrades to domain + title.
+                    # An error comes back as a dict, not a list of results.
+                    body = b.get("content")
+                    rows = [{"title": (r.get("title") or "").strip(), "url": r["url"], "snippet": ""}
+                            for r in (body if isinstance(body, list) else [])
+                            if isinstance(r, dict) and r.get("type") == "web_search_result" and r.get("url")]
+                    if rows:
+                        parts.append({"type": "sources", "sources": rows})
                 elif t == "server_tool_use":
                     # Server-side tools (web_search etc.) run Anthropic-side. The live
                     # provider stream yields a Step for these at content_block_stop;
@@ -66,20 +132,87 @@ def to_ui_messages(raw):
     return out
 
 
+def canvas_files(messages):
+    """Workspace files produced by the conversation's successful Canvas calls
+    (UI shape from `to_ui_messages`), in order of appearance. These are part
+    of a chat's shareable surface, same as its attachments: a shared chat
+    serves them, a fork copies them."""
+    out = []
+    for m in messages:
+        for p in (m.get("parts") or []):
+            if p.get("type") == "step" and p.get("tool_name") == "Canvas" \
+                    and p.get("step") and p.get("ok") is not False and p["step"] not in out:
+                out.append(p["step"])
+    return out
+
+
+# ---- Workspace selection (multi-workspace mode) ----
+
+async def resolve_ws_id(user, header, mode, volume, base):
+    """`X-Workspace` header → workspace id the user may enter, or None in
+    legacy mode. Personal (`u-{user.id}`) is the default and needs no lookup;
+    team ids are checked against the ACL (member row, or implicit org-admin).
+    Everything else — a teammate's personal id, an unknown team, garbage —
+    is 404, not 403, so ids don't leak existence (docs/workspaces.md)."""
+    if not mode or user is None:
+        return None
+    await state.ensure_general(user, volume, base)
+    ws_id = header or f"u-{user.id}"
+    if ws_id == f"u-{user.id}":
+        return ws_id
+    if ws_id.startswith("t-"):
+        orgdb = state.org_db(state.org_of(user), volume, base)
+        if await state.resolve_role(user, ws_id, orgdb) is not None:
+            return ws_id
+    raise HTTPException(404, "Workspace not found")
+
+
+def personal_ws(subject):
+    """Personal workspace id for a `org:user` / `user` subject string."""
+    org, _, user = subject.partition(":")
+    return f"u-{user or org}"
+
+
+# ---- Emoji check (workspace icons) ----
+
+_EMOJI_MODIFIERS = {0x200D, 0xFE0E, 0xFE0F, 0x20E3}   # ZWJ, variation selectors, keycap
+
+
+def _is_emoji(s):
+    """True iff `s` is one emoji: a pictograph, flag pair, or keycap, possibly
+    a ZWJ sequence (family, professions) with skin tones. Codepoint-range
+    check — no emoji dependency; ranges cover Unicode's emoji blocks."""
+    cps = [ord(c) for c in s]
+    base = [c for c in cps if c not in _EMOJI_MODIFIERS and not 0x1F3FB <= c <= 0x1F3FF]
+    if not base or len(base) > 4:   # longest common ZWJ sequence: family of four
+        return False
+    def ok(c):
+        return (0x1F000 <= c <= 0x1FAFF      # emoji, symbols, supplemental
+                or 0x2600 <= c <= 0x27BF     # misc symbols, dingbats
+                or 0x2B00 <= c <= 0x2BFF     # stars, arrows
+                or 0x2190 <= c <= 0x21FF or 0x2300 <= c <= 0x23FF
+                or 0x1F1E6 <= c <= 0x1F1FF   # regional indicators (flags)
+                or c in (0x00A9, 0x00AE, 0x203C, 0x2049, 0x2122, 0x2139,
+                         0x3030, 0x303D, 0x3297, 0x3299)
+                or (0x20E3 in cps and (0x30 <= c <= 0x39 or c in (0x23, 0x2A))))  # keycap digit/#/*
+    return all(ok(c) for c in base)
+
+
 # ---- Path safety ----
 
 def resolve_path(workspace, rel):
     """Resolve *rel* inside *workspace*, raising ValueError on traversal or
-    access to the reserved `.db/` tree (framework-managed)."""
+    access to the reserved `.db/` and `.database/` trees (framework-managed)."""
     workspace = Path(workspace)
     rel = unicodedata.normalize("NFC", rel)
     resolved = (workspace / rel).resolve()
     ws = workspace.resolve()
     if not resolved.is_relative_to(ws):
         raise ValueError("Path traversal denied")
-    reserved = ws / ".db"
-    if resolved == reserved or resolved.is_relative_to(reserved):
-        raise ValueError("Reserved path: .db/ is managed by cycls")
+    for name in (".db", ".database", ".trash"):
+        reserved = ws / name
+        if resolved == reserved or resolved.is_relative_to(reserved):
+            raise ValueError(f"Reserved path: {name}/ is managed by cycls")
     return resolved
 
 
@@ -92,6 +225,8 @@ def chats_router(ws_dep):
     async def list_chats(ws: Workspace = ws_dep):
         items = []
         async for cid, data in state.list_chats(ws):
+            if data.get("deletedAt"):   # in the trash
+                continue
             items.append({
                 "id": data.get("id", cid),
                 "title": data.get("title", ""),
@@ -131,20 +266,206 @@ def chats_router(ws_dep):
         await state.put_meta(ws, chat_id, merged)
         return merged
 
-    @r.delete("/chats/{chat_id}")
-    async def delete_chat(chat_id: str, ws: Workspace = ws_dep):
+    @r.delete("/chats/{chat_id}/last-exchange")
+    async def truncate_last_exchange(chat_id: str, ws: Workspace = ws_dep):
+        """Drop the last user turn and everything after it — the persistence
+        half of `regenerate`. The FE then re-sends the same message, so the
+        run that follows is an ordinary send."""
         if (await state.get_meta(ws, chat_id)) is None:
             raise HTTPException(status_code=404, detail="Chat not found")
-        await state.delete_chat(ws, chat_id)
-        return {"ok": True}
+        removed = await state.truncate_last_exchange(ws, chat_id)
+        return {"ok": removed is not None}
+
+    @r.delete("/chats/{chat_id}")
+    async def delete_chat(chat_id: str, ws: Workspace = ws_dep):
+        """A tombstone, not a wipe — the chat lives on in the trash for
+        TTL_DAYS (see files_router's /trash routes for restore and purge)."""
+        meta = await state.get_meta(ws, chat_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        meta["deletedAt"] = datetime.now(timezone.utc).isoformat()
+        await state.put_meta(ws, chat_id, meta)
+        return {"ok": True, "trash_id": f"chat:{chat_id}"}
 
     return r
 
 
 # ---- Files ----
+#
+# The file browser and the @-picker are both served from one cached walk, and
+# matching/ordering/render-class are decided here rather than once per client.
 
-def files_router(cycls_app, ws_dep, user_dep):
+_LIST_CAP = 2000          # flat-listing response cap
+_SEARCH_CAP = 12          # @-picker results per query
+_CATALOG_MAX = 10000      # entries in one cached walk; above it, list per-request
+_CATALOG_WORKSPACES = 8   # workspaces one instance keeps warm
+
+# Serving is serverless, so this cache is per-instance: `_catalog_drop` clears
+# only the instance that handled the write, and agent writes go through the
+# sandbox rather than these routes and so never invalidate at all. The TTL is
+# what bounds both.
+_CATALOG_TTL = 5.0
+
+_catalog = {}   # str(root) -> (deadline, Task[(entries, truncated)])
+
+
+def _norm(text):
+    """Casefolded NFC — a typed query and a name off the mount can arrive in
+    different normal forms and never compare equal. Routine in Arabic."""
+    return unicodedata.normalize("NFC", text).casefold()
+
+
+def _iso(mtime):
+    return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+
+
+# Union of what the web and mobile canvases can each display.
+_KINDS = (
+    ("image",    {"png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "bmp", "svg", "ico", "avif"}),
+    ("pdf",      {"pdf"}),
+    ("csv",      {"csv", "tsv"}),          # delimited text: any client can render it
+    ("sheet",    {"xls", "xlsx", "numbers"}),   # binary: needs a parser
+    ("audio",    {"mp3", "wav", "ogg", "oga", "m4a", "aac", "flac", "opus", "weba"}),
+    ("video",    {"mp4", "webm", "mov", "m4v", "ogv"}),
+    ("model3d",  {"glb", "gltf"}),
+    ("markdown", {"md", "markdown"}),
+    ("html",     {"html", "htm"}),
+    ("code",     {"py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "json", "sh", "bash", "zsh",
+                  "rb", "go", "rs", "java", "c", "h", "cc", "cpp", "cs", "php", "swift", "kt",
+                  "sql", "yaml", "yml", "toml", "css", "scss", "less", "xml", "ipynb"}),
+    ("text",     {"txt", "text", "log", "env", "conf", "cfg", "ini", "rtf"}),
+)
+_KIND_BY_EXT = {ext: kind for kind, exts in _KINDS for ext in exts}
+_SORTS = ("name", "size", "modified", "type")
+_PUBLIC = ("name", "path", "type", "size", "modified", "kind")
+
+
+def _kind(name):
+    return _KIND_BY_EXT.get(name.rpartition(".")[2].lower() if "." in name else "", "opaque")
+
+
+def _public(entry):
+    return {k: entry[k] for k in _PUBLIC}
+
+
+def _walk_catalog(root):
+    """One pass over the tree, a single stat per entry. Folder times come from
+    the newest child seen during the same walk — gcsfuse synthesizes directory
+    mtimes off its cache-refresh clock, and correcting that per request cost a
+    scan of every folder listed."""
+    root = Path(root)
+    entries, newest, truncated = [], {}, False
+    for parent, subdirs, names in os.walk(root):
+        subdirs[:] = sorted(d for d in subdirs if not d.startswith("."))
+        p = Path(parent)
+        rel_dir = "" if p == root else str(p.relative_to(root))
+        for d in subdirs:
+            entries.append({"name": d, "path": str((p / d).relative_to(root)),
+                            "type": "directory", "size": 0, "modified": "",
+                            "kind": "folder", "_dir": rel_dir})
+        for fn in sorted(names):
+            if fn.startswith("."):
+                continue
+            try:
+                st = (p / fn).stat()
+            except OSError:      # vanished mid-walk, or unreadable
+                continue
+            entries.append({"name": fn, "path": str((p / fn).relative_to(root)),
+                            "type": "file", "size": st.st_size,
+                            "modified": _iso(st.st_mtime), "kind": _kind(fn),
+                            "_dir": rel_dir})
+            if st.st_mtime > newest.get(rel_dir, 0):
+                newest[rel_dir] = st.st_mtime
+        if len(entries) >= _CATALOG_MAX:
+            truncated = True
+            break
+    for e in entries:
+        if e["type"] == "directory" and (t := newest.get(e["path"])):
+            e["modified"] = _iso(t)
+    return entries, truncated
+
+
+def _catalog_evict(keep):
+    """One instance is reused across every workspace it serves, so an unbounded
+    dict of walked trees leaks. Nearest deadline first drops expired entries
+    before live ones."""
+    while len(_catalog) > _CATALOG_WORKSPACES:
+        victim = min((k for k in _catalog if k != keep),
+                     key=lambda k: _catalog[k][0], default=None)
+        if victim is None:
+            return
+        del _catalog[victim]
+
+
+async def _catalog_get(root, fresh=False):
+    """The workspace tree, walked at most once per TTL. Caches the task rather
+    than the result so callers arriving mid-walk join it instead of starting
+    their own."""
+    key = str(root)
+    hit = _catalog.get(key)
+    if hit and not fresh and time.monotonic() < hit[0]:
+        return await hit[1]
+    task = asyncio.ensure_future(asyncio.to_thread(_walk_catalog, root))
+    _catalog[key] = (time.monotonic() + _CATALOG_TTL, task)
+    _catalog_evict(key)
+    try:
+        return await task
+    except BaseException:
+        if (cur := _catalog.get(key)) and cur[1] is task:
+            del _catalog[key]      # a failed walk must not be served for the rest of the TTL
+        raise
+
+
+def _catalog_drop(root):
+    """Resolves the root as `_catalog_get` does; a mismatched key would
+    silently never invalidate."""
+    _catalog.pop(str(Path(root).resolve()), None)
+
+
+def _search(entries, query, cap=_SEARCH_CAP):
+    """Files whose path contains every whitespace-separated token, in any order.
+    Tokenized rather than contiguous so a name with spaces doesn't have to be
+    reproduced adjacently and in order. A blank query matches everything, so a
+    bare "@" browses rather than returning nothing."""
+    tokens = _norm(query).split()
+    ranked = []
+    for e in entries:
+        if e["type"] != "file":
+            continue
+        path_n = _norm(e["path"])
+        if not all(t in path_n for t in tokens):
+            continue
+        name_n = _norm(e["name"])
+        ranked.append((
+            0 if all(t in name_n for t in tokens) else 1,
+            0 if tokens and name_n.startswith(tokens[0]) else 1,
+            len(e["path"]),
+            name_n,
+            e,
+        ))
+    ranked.sort(key=lambda row: row[:4])
+    return [row[4] for row in ranked[:cap]]
+
+
+def _sorted(entries, key, desc):
+    """Folders first, then the requested key. `desc` never reverses the
+    grouping."""
+    def sort_key(e):
+        if key == "size":
+            return (e["size"], _norm(e["name"]))
+        if key == "modified":
+            return (e["modified"], _norm(e["name"]))
+        if key == "type":
+            return (e["kind"], _norm(e["name"]))
+        return (_norm(e["name"]), "")
+    groups = ([e for e in entries if e["type"] == "directory"],
+              [e for e in entries if e["type"] == "file"])
+    return [e for g in groups for e in sorted(g, key=sort_key, reverse=desc)]
+
+
+def files_router(cycls_app, ws_dep, user_dep, volume, base):
     r = APIRouter()
+    max_bytes = (getattr(getattr(cycls_app, "config", None), "max_upload", None) or DEFAULT_MAX_UPLOAD_MB) * 1024 * 1024
 
     def _safe_path(workspace, rel):
         try:
@@ -152,40 +473,161 @@ def files_router(cycls_app, ws_dep, user_dep):
         except ValueError:
             raise HTTPException(status_code=403, detail="Path traversal denied")
 
-    @r.get("/files")
-    async def list_files(request: Request, ws: Workspace = ws_dep):
-        target = _safe_path(ws.root, request.query_params.get("path", ""))
-        if not target.is_dir():
-            return []
-        items = []
+    def _dir_mtime(path):
+        """gcsfuse synthesizes directory mtimes (≈ its cache-refresh clock, so
+        every folder 'changes' whenever anything is written) — report the
+        newest direct child file instead; empty → ""."""
+        try:
+            times = [e.stat().st_mtime for e in os.scandir(path)
+                     if not e.name.startswith(".") and e.is_file()]
+        except OSError:
+            times = []
+        t = max(times, default=None)
+        return datetime.fromtimestamp(t, tz=timezone.utc).isoformat() if t else ""
+
+    def _scandir_slice(target, root):
+        """Only reached above _CATALOG_MAX."""
+        out = []
         for entry in os.scandir(target):
             if entry.name.startswith("."):
                 continue
-            stat = entry.stat()
-            items.append({
+            st = entry.stat()
+            is_dir = entry.is_dir()
+            out.append({
                 "name": entry.name,
-                "type": "directory" if entry.is_dir() else "file",
-                "size": stat.st_size,
-                "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                "path": str(Path(entry.path).relative_to(root)),
+                "type": "directory" if is_dir else "file",
+                "size": 0 if is_dir else st.st_size,
+                "modified": _dir_mtime(entry.path) if is_dir else _iso(st.st_mtime),
+                "kind": "folder" if is_dir else _kind(entry.name),
             })
-        items.sort(key=lambda f: f["name"])
-        return items
+        return out
+
+    @r.get("/files")
+    async def list_files(request: Request, response: Response, ws: Workspace = ws_dep):
+        """One folder, the whole tree, or a search across it.
+
+        `search=q` backs the @-picker and returns files only. `recursive=1` still
+        returns the flat tree, so clients predating `search` keep working.
+        `fresh=1` skips the cache — for right after a client's own write, which
+        another instance may have handled, and right after an agent turn.
+        """
+        q = request.query_params
+        root = Path(ws.root).resolve()
+        fresh = q.get("fresh") is not None
+        target = _safe_path(ws.root, q.get("path", ""))
+        rel = "" if target == root else str(target.relative_to(root))
+        under = lambda es: es if not rel else [e for e in es if e["path"].startswith(f"{rel}/")]
+
+        if (search := q.get("search")) is not None:
+            entries, _ = await _catalog_get(root, fresh)
+            # Lets a client distinguish a filtered result from a server that
+            # ignored ?search, rather than guessing from the response shape.
+            response.headers["X-Files-Search"] = "1"
+            return [_public(e) for e in _search(under(entries), search)]
+
+        if q.get("recursive") is not None:
+            entries, _ = await _catalog_get(root, fresh)
+            return [_public(e) for e in under(entries)[:_LIST_CAP]]
+
+        if not target.is_dir():
+            return []
+        sort_key = q.get("sort") if q.get("sort") in _SORTS else "name"
+        desc = q.get("desc") is not None
+        entries, truncated = await _catalog_get(root, fresh)
+        slice_ = (await asyncio.to_thread(_scandir_slice, target, root) if truncated
+                  else [e for e in entries if e["_dir"] == rel])
+        return [_public(e) for e in _sorted(slice_, sort_key, desc)]
 
     @r.get("/files/{path:path}")
     async def get_file(path: str, request: Request, ws: Workspace = ws_dep):
         file_path = _safe_path(ws.root, path)
+        if file_path.is_dir():
+            return _zip_dir(file_path)   # folders download as <name>.zip
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
         if request.query_params.get("download") is not None:
-            return FileResponse(file_path, filename=file_path.name)
-        return FileResponse(file_path)
+            return FileResponse(file_path, filename=file_path.name, headers=_NO_CACHE)
+        return FileResponse(file_path, headers=_NO_CACHE)
 
     @r.put("/files/{path:path}")
-    async def put_file(path: str, request: Request, file: UploadFile = File(...), ws: Workspace = ws_dep):
+    async def put_file(path: str, request: Request, ws: Workspace = ws_dep):
+        """Streams the raw body to a .part temp, then renames. No File(...)
+        param — that reads the whole body before auth runs, so uploads longer
+        than the JWT lifetime 401 at the end. Multipart kept for old clients."""
         file_path = _safe_path(ws.root, path)
+        limit_msg = f"File exceeds the {max_bytes // (1024 * 1024)} MB limit"
+        if int(request.headers.get("content-length") or 0) > max_bytes:
+            raise HTTPException(413, limit_msg)
+        if request.headers.get("content-type", "").startswith("multipart/form-data"):
+            form = await request.form()
+            up = form.get("file")
+            if up is None or isinstance(up, str):
+                raise HTTPException(400, "multipart body missing 'file' field")
+            async def _form_chunks(f=up):
+                while chunk := await f.read(1 << 20):
+                    yield chunk
+            source = _form_chunks()
+        else:
+            source = request.stream()
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_bytes(await file.read())
+        tmp = file_path.with_name(file_path.name + ".part")
+        size = 0
+        try:
+            with open(tmp, "wb") as out:
+                async for chunk in source:
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise HTTPException(413, limit_msg)
+                    out.write(chunk)
+            tmp.replace(file_path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        _catalog_drop(ws.root)
         return {"ok": True}
+
+    @r.post("/files-batch/{path:path}")
+    async def upload_batch(path: str, request: Request, ws: Workspace = ws_dep):
+        """Zip batch from the FE — one request for a whole folder. Member
+        paths pass the same traversal checks as any upload, all validated
+        before anything is written."""
+        _safe_path(ws.root, path)
+        limit_msg = f"Upload exceeds the {max_bytes // (1024 * 1024)} MB limit"
+        if int(request.headers.get("content-length") or 0) > max_bytes:
+            raise HTTPException(413, limit_msg)
+        size = 0
+        with tempfile.NamedTemporaryFile(suffix=".zip") as tmp:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > max_bytes:
+                    raise HTTPException(413, limit_msg)
+                tmp.write(chunk)
+            tmp.flush()
+            try:
+                zf = zipfile.ZipFile(tmp.name)
+            except zipfile.BadZipFile:
+                raise HTTPException(400, "Body is not a valid zip")
+            with zf:
+                infos = [i for i in zf.infolist() if not i.is_dir()]
+                # Zip-bomb guard: the uncompressed total obeys the same cap.
+                if sum(i.file_size for i in infos) > max_bytes:
+                    raise HTTPException(413, limit_msg)
+                targets = [(i, _safe_path(ws.root, f"{path}/{i.filename}" if path else i.filename))
+                           for i in infos]
+                sem = asyncio.Semaphore(8)
+
+                async def _extract(info, dest):
+                    def _do():
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        with zf.open(info) as src, open(dest, "wb") as out:
+                            shutil.copyfileobj(src, out, 1 << 20)
+                    async with sem:
+                        await asyncio.to_thread(_do)
+
+                await asyncio.gather(*(_extract(i, d) for i, d in targets))
+        _catalog_drop(ws.root)
+        return {"ok": True, "files": len(targets)}
 
     @r.patch("/files/{path:path}")
     async def rename(path: str, request: Request, ws: Workspace = ws_dep):
@@ -194,25 +636,110 @@ def files_router(cycls_app, ws_dep, user_dep):
             raise HTTPException(status_code=404, detail="Not found")
         data = await request.json()
         dest = _safe_path(ws.root, data["to"])
+        if dest.exists():
+            raise HTTPException(status_code=409, detail="Destination already exists")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        src.rename(dest)
+        # shutil.move (not rename) so directory moves work on the gcsfuse
+        # workspace mount, which doesn't support renaming directories — it falls
+        # back to recursive copy + delete.
+        shutil.move(str(src), str(dest))
+        _catalog_drop(ws.root)
         return {"ok": True}
 
     @r.post("/files/{path:path}")
     async def mkdir(path: str, ws: Workspace = ws_dep):
         dir_path = _safe_path(ws.root, path)
         dir_path.mkdir(parents=True, exist_ok=True)
+        _catalog_drop(ws.root)
         return {"ok": True}
 
+    # ---- Trash: a delete is a move (docs/notes/trash.md) ----
+
+    mode = getattr(getattr(cycls_app, "config", None), "workspaces", None)
+
+    async def _admin(user, ws):
+        """Owner/admin on a team workspace; everyone on their own personal one."""
+        if not mode or not ws.ws or ws.ws.startswith("u-"):
+            return True
+        orgdb = state.org_db(state.org_of(user), volume, base)
+        return (await state.resolve_role(user, ws.ws, orgdb)) in ("owner", "admin")
+
     @r.delete("/files/{path:path}")
-    async def delete_path(path: str, ws: Workspace = ws_dep):
+    async def delete_path(path: str, ws: Workspace = ws_dep, user: Any = user_dep):
         target = _safe_path(ws.root, path)
         if not target.exists():
             raise HTTPException(status_code=404, detail="Not found")
-        if target.is_dir():
-            shutil.rmtree(target)
-        else:
-            target.unlink()
+        rel = str(target.relative_to(Path(ws.root).resolve()))
+        # Apps are shared team assets — only admins remove them.
+        if trash.kind_of(rel, target.is_dir()) == "app" and not await _admin(user, ws):
+            raise HTTPException(status_code=403, detail="Only workspace admins can delete apps")
+        meta = await asyncio.to_thread(trash.trash_path, ws.root, rel, "user")
+        _catalog_drop(ws.root)
+        return {"ok": True, "trash_id": meta["id"], "kind": meta["kind"]}
+
+    async def _trashed_chats(ws):
+        rows = []
+        async for cid, data in state.list_chats(ws):
+            if at := data.get("deletedAt"):
+                rows.append({"id": f"chat:{cid}", "path": data.get("title") or cid, "kind": "chat",
+                             "by": "user", "deleted_at": at, "chat_id": cid})
+        return rows
+
+    @r.get("/trash")
+    async def list_trash(ws: Workspace = ws_dep):
+        """Files, apps and chats in one list, newest first. Listing is also the
+        sweep: entries past TTL_DAYS go for good."""
+        rows = await asyncio.to_thread(trash.list_trash, ws.root)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=trash.TTL_DAYS)
+        for c in await _trashed_chats(ws):
+            try:
+                expired = datetime.fromisoformat(c["deleted_at"]) < cutoff
+            except Exception:
+                expired = True
+            if expired:
+                await state.delete_chat(ws, c["chat_id"])
+            else:
+                rows.append(c)
+        rows.sort(key=lambda m: m["deleted_at"], reverse=True)
+        return rows
+
+    @r.post("/trash/{tid}/restore")
+    async def restore_trash(tid: str, ws: Workspace = ws_dep):
+        if tid.startswith("chat:"):
+            cid = tid[5:]
+            meta = await state.get_meta(ws, cid)
+            if meta is None:
+                raise HTTPException(status_code=404, detail="Not found")
+            meta.pop("deletedAt", None)
+            await state.put_meta(ws, cid, meta)
+            return {"ok": True, "path": cid}
+        try:
+            path = await asyncio.to_thread(trash.restore, ws.root, tid)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Not found")
+        _catalog_drop(ws.root)
+        return {"ok": True, "path": path}
+
+    @r.delete("/trash/{tid}")
+    async def purge_trash(tid: str, ws: Workspace = ws_dep, user: Any = user_dep):
+        if not await _admin(user, ws):
+            raise HTTPException(status_code=403, detail="Only workspace admins can delete forever")
+        if tid.startswith("chat:"):
+            await state.delete_chat(ws, tid[5:])
+            return {"ok": True}
+        try:
+            await asyncio.to_thread(trash.purge, ws.root, tid)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Not found")
+        return {"ok": True}
+
+    @r.delete("/trash")
+    async def empty_trash(ws: Workspace = ws_dep, user: Any = user_dep):
+        if not await _admin(user, ws):
+            raise HTTPException(status_code=403, detail="Only workspace admins can delete forever")
+        await asyncio.to_thread(trash.empty, ws.root)
+        for c in await _trashed_chats(ws):
+            await state.delete_chat(ws, c["chat_id"])
         return {"ok": True}
 
     return r
@@ -223,18 +750,44 @@ def files_router(cycls_app, ws_dep, user_dep):
 def share_router(cycls_app, ws_dep, user_dep, volume, base):
     r = APIRouter()
     bearer_scheme = HTTPBearer(auto_error=False)
+    mode = getattr(getattr(cycls_app, "config", None), "workspaces", None)
 
-    async def _resolve_or_403(user: str, token: str, bearer):
+    async def _locate(user: str, token: str, ws_q=None):
+        """Find the share row in whichever of the owner's workspaces minted it.
+        Minted URLs carry `?ws=`; bare legacy links fall back to the owner's
+        personal workspace, then General. Audience is NOT checked here."""
+        candidates = [ws_q] if ws_q else ([personal_ws(user), "t-shared"] if mode else [None])
+        for ws_id in candidates:
+            try:
+                ws_owner = workspace(user, volume, base=base, ws=ws_id)
+            except ValueError:
+                break
+            row = await state.find_share(ws_owner, token)
+            if row is not None:
+                return ws_owner, row
+        return None
+
+    async def _resolve_or_403(user: str, token: str, bearer, ws_q=None):
+        """404 no such share · 401 audience needs a viewer we couldn't identify
+        (sign in) · 403 identified but outside the audience. The client needs
+        these apart: 401 is recoverable by signing in, 403 never is."""
         from cycls._app.auth import authenticate
-        ws_owner = workspace(user, volume, base=base)
         requester = None
         if bearer and cycls_app._auth_provider is not None:
-            try: requester = authenticate(cycls_app._auth_provider, cycls_app.prod, bearer.credentials)
-            except Exception: pass
-        row = await state.resolve(ws_owner, token, requester=requester)
-        if row is None:
-            raise HTTPException(403, "Invalid, expired, or unauthorized link")
-        return ws_owner, row
+            try:
+                requester = authenticate(cycls_app._auth_provider, cycls_app.prod, bearer.credentials)
+            except Exception as e:
+                # Silently dropping this made every cause look like a dead link.
+                log("warn", chat_id=None, message=f"share token rejected: {type(e).__name__}: {e}")
+        found = await _locate(user, token, ws_q)
+        if found is None:
+            raise HTTPException(404, "This link doesn't exist")
+        ws_owner, row = found
+        if not state.share_allows(row, requester):
+            if requester is None:
+                raise HTTPException(401, "Sign in to view this")
+            raise HTTPException(403, "This link isn't shared with your account")
+        return found
 
     # ---- Owner side ----
 
@@ -253,7 +806,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         for k in ("author_name", "author_image_url", "author_org_name", "author_org_image_url"):
             if (v := data.get(k)): row[k] = v
         await DB(ws).put(f"share/{token}", row, meta=row)
-        return {"token": token, "url": f"/shared/{ws.subject}/{token}", **row}
+        return {"token": token, "url": _share_url(ws, token), **row}
 
     @r.get("/share")
     async def list_shares(ws: Workspace = ws_dep):
@@ -264,12 +817,17 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         out = []
         async for key, meta in db.scan(prefix="share/"):
             token = key[6:]
+            if not meta.get("path"):   # meta channel wiped (gcsfuse move) — body is canonical
+                body = await db.get(key)
+                if isinstance(body, dict) and body.get("path"):
+                    meta = body
+                    await db.put(key, body, meta={k: v for k, v in body.items() if isinstance(v, str)})
             path = meta.get("path", "")
             if path.startswith("chat/"):
                 title = chat_titles.get(path[5:], "")
             else:
                 title = path[5:]
-            out.append({"token": token, "url": f"/shared/{ws.subject}/{token}", "title": title, **meta})
+            out.append({"token": token, "url": _share_url(ws, token), "title": title, **meta})
         out.sort(key=lambda s: s.get("shared_at", ""), reverse=True)
         return out
 
@@ -282,14 +840,15 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.get("/share/{user}/{token}/data")
     async def resolve_share(
-        user: str, token: str,
+        user: str, token: str, ws: Optional[str] = None,
         bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     ):
-        ws_owner, row = await _resolve_or_403(user, token, bearer)
+        ws_owner, row = await _resolve_or_403(user, token, bearer, ws)
         path = row["path"]
         common = {k: row[k] for k in
                   ("shared_at", "author_name", "author_image_url", "author_org_name", "author_org_image_url")
                   if k in row}
+        suffix = f"?ws={ws_owner.ws}" if ws_owner.ws else ""
         if path.startswith("chat/"):
             chat_id = path[5:]
             meta = await state.get_meta(ws_owner, chat_id)
@@ -299,37 +858,108 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             for m in messages:
                 for att in m.get("attachments") or []:
                     if ap := att.get("path"):
-                        att["url"] = f"/share/{user}/{token}/file/{ap}"
+                        att["url"] = f"/share/{user}/{token}/file/{ap}{suffix}"
             return {"type": "chat", "id": chat_id, "title": meta.get("title", ""),
                     "messages": messages, **common}
         return {"type": "file", "path": path[5:],
-                "url": f"/share/{user}/{token}/file/{path[5:]}", **common}
+                "url": f"/share/{user}/{token}/file/{path[5:]}{suffix}", **common}
 
     @r.get("/share/{user}/{token}/file/{file_path:path}")
     async def shared_attachment(
-        user: str, token: str, file_path: str,
+        user: str, token: str, file_path: str, ws: Optional[str] = None,
         bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     ):
-        ws_owner, row = await _resolve_or_403(user, token, bearer)
+        ws_owner, row = await _resolve_or_403(user, token, bearer, ws)
         path = row["path"]
-        # Authorize: file_path must be the share's file (file share) or an attachment of its chat.
+        # Authorize: file_path must be the share's file (file share), or part of
+        # its chat's shareable surface — an attachment, or a canvas artifact the
+        # conversation produced (the shared page shows the chat WITH its output).
         if path.startswith("file/"):
             if file_path != path[5:]:
                 raise HTTPException(403, "Path not in this share")
         else:
-            raw = await state.load_messages(ws_owner, path[5:])
-            allowed = {att.get("path") for m in to_ui_messages(raw)
+            ui = to_ui_messages(await state.load_messages(ws_owner, path[5:]))
+            allowed = {att.get("path") for m in ui
                        for att in (m.get("attachments") or []) if att.get("path")}
+            allowed.update(canvas_files(ui))
             if file_path not in allowed:
                 raise HTTPException(403, "Not an attachment of this share")
         return _serve_file(ws_owner.root, file_path)
 
+    # ---- Examples (curated public shares — the empty-screen gallery) ----
+
+    _examples_cache = {"at": 0.0, "data": None}
+
+    async def _example_card(entry):
+        """One configured entry → a gallery card, or None (bad URL, dead
+        token, non-public, not a chat). A {video, title} entry is a tutorial
+        card and needs no resolution — the FE previews the clip and plays it
+        in-page. Author fields are deliberately absent: examples read as
+        product showcase, not user content."""
+        if isinstance(entry, str):
+            entry = {"share": entry}
+        if entry.get("video"):
+            return {"video": entry["video"], "title": entry.get("title", "")}
+        url = entry.get("share", "")
+        parts = urlsplit(url)
+        seg = parts.path.strip("/").split("/")
+        if len(seg) != 3 or seg[0] != "shared":
+            log("warn", chat_id=None, message=f"examples: not a share URL: {url}")
+            return None
+        user, token = seg[1], seg[2]
+        ws_q = (parse_qs(parts.query).get("ws") or [None])[0]
+        found = await _locate(user, token, ws_q)
+        if found is None:
+            log("warn", chat_id=None, message=f"examples: share not found: {url}")
+            return None
+        ws_owner, row = found
+        if row.get("audience", "public") != "public" or not row.get("path", "").startswith("chat/"):
+            log("warn", chat_id=None, message=f"examples: needs a public chat share: {url}")
+            return None
+        chat_id = row["path"][5:]
+        meta = await state.get_meta(ws_owner, chat_id)
+        if meta is None:
+            return None
+        messages = to_ui_messages(await state.load_messages(ws_owner, chat_id))
+        prompt = next((m.get("content", "") for m in messages if m.get("role") == "user"), "")
+        suffix = f"?ws={ws_owner.ws}" if ws_owner.ws else ""
+        file = None
+        if produced := canvas_files(messages):
+            fp = produced[-1]   # the conversation's final artifact
+            file = {"path": fp, "name": fp.split("/")[-1],
+                    "url": f"/share/{user}/{token}/file/{fp}{suffix}"}
+        sep = "&" if suffix else "?"
+        return {"share": f"/shared/{user}/{token}{suffix}{sep}example=1",
+                "title": meta.get("title", ""), "prompt": prompt, "file": file}
+
+    @r.get("/examples")
+    async def examples(response: Response):
+        """Resolved example cards for the gallery. Public — this is what the
+        signed-out empty screen renders. Cached like /explore: the cards only
+        move when the operator re-curates or the source chats change."""
+        response.headers["Cache-Control"] = "public, max-age=300"
+        groups = getattr(getattr(cycls_app, "config", None), "examples", None)
+        if not groups:
+            return {"categories": []}
+        if _examples_cache["data"] is None or time.time() - _examples_cache["at"] > 300:
+            cats = []
+            for g in groups:
+                items = [c for u in g.get("urls", []) if (c := await _example_card(u))]
+                if items:
+                    cats.append({"label": g.get("label", ""), "label_ar": g.get("label_ar"),
+                                 "items": items})
+            _examples_cache.update(at=time.time(), data={"categories": cats})
+        return _examples_cache["data"]
+
     @r.post("/share/{user}/{token}/fork")
-    async def fork_share(user: str, token: str, forker: Any = user_dep):
-        ws_source = workspace(user, volume, base=base)
-        row = await state.resolve(ws_source, token, requester=forker)
-        if row is None:
-            raise HTTPException(403, "Invalid, expired, or unauthorized link")
+    async def fork_share(user: str, token: str, ws: Optional[str] = None, forker: Any = user_dep):
+        # `forker` is already authenticated (user_dep), so it IS the requester.
+        found = await _locate(user, token, ws)
+        if found is None:
+            raise HTTPException(404, "This link doesn't exist")
+        ws_source, row = found
+        if not state.share_allows(row, forker):
+            raise HTTPException(403, "This link isn't shared with your account")
         if not row["path"].startswith("chat/"):
             raise HTTPException(400, "Only chat shares can be forked")
         source_id = row["path"][5:]
@@ -337,7 +967,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         if meta is None:
             raise HTTPException(404, "Chat not found")
         raw = await state.load_messages(ws_source, source_id)
-        ws_fork = workspace(forker, volume, base=base)
+        ws_fork = workspace(forker, volume, base=base, ws=f"u-{forker.id}" if mode else None)
         new_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
         await state.put_meta(ws_fork, new_id, {
@@ -346,20 +976,30 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             "forked_from": f"{user}/{source_id}",
         })
         await state.append_messages(ws_fork, new_id, raw, 0)
-        for m in to_ui_messages(raw):
-            for att in m.get("attachments") or []:
-                if ap := att.get("path"):
-                    try:
-                        src = resolve_path(ws_source.root, ap)
-                        dst = resolve_path(ws_fork.root, ap)
-                        if src.is_file():
-                            dst.parent.mkdir(parents=True, exist_ok=True)
-                            shutil.copy2(src, dst)
-                    except Exception:
-                        pass
+        # The fork gets the conversation's whole surface: attachments AND the
+        # canvas artifacts it produced, so "continue" lands with the output
+        # sitting in the forker's workspace, ready to iterate on.
+        ui = to_ui_messages(raw)
+        paths = [ap for m in ui for att in (m.get("attachments") or []) if (ap := att.get("path"))]
+        paths += canvas_files(ui)
+        for ap in dict.fromkeys(paths):
+            try:
+                src = resolve_path(ws_source.root, ap)
+                dst = resolve_path(ws_fork.root, ap)
+                if src.is_file():
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst)
+            except Exception:
+                pass
         return {"id": new_id}
 
     return r
+
+
+def _share_url(ws, token):
+    """Viewer URL for a share — carries the minting workspace so the viewer
+    endpoints can find the row without guessing."""
+    return f"/shared/{ws.subject}/{token}" + (f"?ws={ws.ws}" if ws.ws else "")
 
 
 def _serve_file(root, file_path):
@@ -369,15 +1009,233 @@ def _serve_file(root, file_path):
         raise HTTPException(403, "Path traversal denied")
     if not target.is_file():
         raise HTTPException(404, "File not found")
-    return FileResponse(target)
+    return FileResponse(target, headers=_NO_CACHE)
+
+
+def _zip_dir(dir_path):
+    """Stream a directory back as a .zip (skips hidden/.db entries). Built to a
+    temp file, then served and cleaned up — avoids holding it all in memory."""
+    import zipfile, tempfile
+    from starlette.background import BackgroundTask
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    tmp.close()
+    with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in dir_path.rglob("*"):
+            if f.is_file() and not any(p.startswith(".") for p in f.relative_to(dir_path).parts):
+                zf.write(f, f.relative_to(dir_path.parent))   # keep the folder as the top dir
+    return FileResponse(tmp.name, filename=f"{dir_path.name}.zip", media_type="application/zip",
+                        headers=_NO_CACHE, background=BackgroundTask(lambda: os.unlink(tmp.name)))
+
+
+# ---- Workspaces (registry + members — docs/workspaces.md) ----
+
+def workspaces_router(cycls_app, user_dep, volume, base):
+    """Workspace lifecycle + member management. Content access control lives in
+    `resolve_ws_id`; this router owns create/rename/delete and the ACL rows."""
+    r = APIRouter()
+    mode = getattr(getattr(cycls_app, "config", None), "workspaces", None)
+
+    def _orgdb(user):
+        return state.org_db(state.org_of(user), volume, base)
+
+    def _is_org_admin(user):
+        return getattr(user, "org_role", None) == "admin"
+
+    def _name_or_400(data):
+        name = (data.get("name") or "").strip()
+        if not 1 <= len(name) <= 80:
+            raise HTTPException(400, "name must be 1-80 characters")
+        return name
+
+    def _icon_or_400(data):
+        """Workspace icon — exactly one emoji (ZWJ sequences, flags, skin
+        tones, keycaps included). Validated server-side so every client shares
+        one icon vocabulary regardless of its picker UI. Loosen deliberately
+        if icons ever grow beyond emoji (e.g. uploaded image URLs)."""
+        icon = data.get("icon")
+        if icon and (not isinstance(icon, str) or len(icon) > 64 or not _is_emoji(icon)):
+            raise HTTPException(400, "icon must be a single emoji")
+        return icon
+
+    async def _reserved_name_or_409(orgdb, name, exclude=None):
+        """Team names are labels, not addresses: workspaces are id-addressed
+        and visibility is membership-scoped, so duplicates are allowed (an
+        org-wide check would also leak hidden workspaces' existence). Only
+        the two names in everyone's list are reserved — Personal and the
+        General workspace's current name. Casefold: Arabic has no case."""
+        if name.casefold() == "personal":
+            raise HTTPException(409, "A workspace with this name already exists")
+        if exclude != "t-shared":
+            general = await orgdb.get("workspaces/t-shared")
+            if general and (general.get("name") or "").casefold() == name.casefold():
+                raise HTTPException(409, "A workspace with this name already exists")
+
+    async def _role_or_404(user, ws_id):
+        role = await state.resolve_role(user, ws_id, _orgdb(user))
+        if role is None:
+            raise HTTPException(404, "Workspace not found")
+        return role
+
+    async def _manager_or_403(user, ws_id):
+        if not ws_id.startswith("t-"):
+            raise HTTPException(404, "Workspace not found")
+        if await _role_or_404(user, ws_id) not in ("owner", "admin"):
+            raise HTTPException(403, "Managing this workspace requires owner or admin")
+
+    @r.get("/workspaces")
+    async def list_workspaces(request: Request, user: Any = user_dep):
+        await state.ensure_general(user, volume, base)
+        orgdb = _orgdb(user)
+        out = [{"id": f"u-{user.id}", "name": "Personal", "type": "personal", "role": "owner"}]
+        if _is_org_admin(user) and request.query_params.get("all") is not None:
+            # Lifecycle view (offboarding): every team workspace + every personal
+            # dir. Names/ids only — content stays behind the owner-only check.
+            async for _, row in orgdb.scan(prefix="workspaces/"):
+                out.append({**row, "role": "admin"})
+            ws_dir = Path(volume) / state.org_of(user) / "ws"
+            dirs = await asyncio.to_thread(
+                lambda: [e.name for e in os.scandir(ws_dir) if e.is_dir()] if ws_dir.is_dir() else [])
+            out += [{"id": d, "name": d[2:], "type": "personal", "role": None}
+                    for d in sorted(dirs) if d.startswith("u-") and d != f"u-{user.id}"]
+            return out
+        # Two LISTs total — my member rows and the registry — joined in
+        # memory; per-team gets would be 2K roundtrips on object storage.
+        members = {k.split("/")[1]: m async for k, m in orgdb.scan(glob=f"members/*/{user.id}")}
+        regs = {k.split("/")[-1]: row async for k, row in orgdb.scan(prefix="workspaces/")}
+        for ws_id, member in members.items():
+            reg = regs.get(ws_id)
+            if reg and not reg.get("builtin") and member.get("role") != "excluded":
+                out.append({**reg, "role": member.get("role")})
+        # General: every org member by default; admins immune to exclusion.
+        if getattr(user, "org_id", None) and (reg := regs.get("t-shared")) and reg.get("builtin"):
+            if _is_org_admin(user):
+                out.append({**reg, "role": "admin"})
+            elif members.get("t-shared", {}).get("role") != "excluded":
+                out.append({**reg, "role": "editor"})
+        return out
+
+    @r.post("/workspaces")
+    async def create_workspace(request: Request, user: Any = user_dep):
+        if mode == "admin" and not _is_org_admin(user):
+            raise HTTPException(403, "Only org admins can create team workspaces")
+        if not getattr(user, "org_id", None):
+            raise HTTPException(400, "Team workspaces require an organization")
+        data = await request.json()
+        name = _name_or_400(data)
+        await state.ensure_general(user, volume, base)
+        orgdb = _orgdb(user)
+        await _reserved_name_or_409(orgdb, name)
+        return await state.create_team_ws(orgdb, name, user.id,
+                                          icon=_icon_or_400(data))
+
+    @r.patch("/workspaces/{ws_id}")
+    async def update_workspace(ws_id: str, request: Request, user: Any = user_dep):
+        await _manager_or_403(user, ws_id)
+        data = await request.json()
+        orgdb = _orgdb(user)
+        row = {**(await orgdb.get(f"workspaces/{ws_id}") or {})}
+        # On General, manager status derives solely from org membership
+        # (resolve_role's builtin branch), so name/icon edits there are
+        # org-admin-only without any extra check.
+        if "name" in data:
+            name = _name_or_400(data)
+            await _reserved_name_or_409(orgdb, name, exclude=ws_id)
+            row["name"] = name
+        if "icon" in data:
+            if icon := _icon_or_400(data):
+                row["icon"] = icon
+            else:
+                row.pop("icon", None)   # empty/null clears it, Notion-style
+        await orgdb.put(f"workspaces/{ws_id}", row, meta=row)
+        return row
+
+    @r.delete("/workspaces/{ws_id}")
+    async def delete_workspace(ws_id: str, user: Any = user_dep):
+        if ws_id.startswith("u-"):
+            # Personal: the owner themselves, or an org admin (lifecycle —
+            # offboarding). Admins never gain content routes on it.
+            if ws_id != f"u-{user.id}" and not _is_org_admin(user):
+                raise HTTPException(404, "Workspace not found")
+        elif await _role_or_404(user, ws_id) != "owner" and not _is_org_admin(user):
+            raise HTTPException(403, "Deleting a team workspace requires its owner")
+        builtin = await _is_builtin(user, ws_id)
+        await state.wipe_workspace(state.org_of(user), ws_id, volume, base)
+        if builtin:
+            # Tombstone: blocks lazy re-provisioning — deleting General is permanent.
+            row = {"id": ws_id, "deleted": datetime.now(timezone.utc).isoformat()}
+            await _orgdb(user).put(f"workspaces/{ws_id}", row, meta=row)
+        return {"ok": True}
+
+    # ---- Members (team workspaces only) ----
+
+    async def _is_builtin(user, ws_id):
+        reg = await _orgdb(user).get(f"workspaces/{ws_id}")
+        return bool(reg and reg.get("builtin"))
+
+    @r.get("/workspaces/{ws_id}/members")
+    async def list_members(ws_id: str, user: Any = user_dep):
+        if not ws_id.startswith("t-"):
+            raise HTTPException(404, "Workspace not found")
+        await _role_or_404(user, ws_id)   # any member (or org admin) may look
+        # On General the rows are exclusions — membership is the org minus these.
+        return [{"user_id": key.rsplit("/", 1)[1], **row}
+                async for key, row in _orgdb(user).scan(prefix=f"members/{ws_id}/")]
+
+    @r.put("/workspaces/{ws_id}/members/{member_id}")
+    async def put_member(ws_id: str, member_id: str, request: Request, user: Any = user_dep):
+        await _manager_or_403(user, ws_id)
+        role = (await request.json()).get("role", "editor")
+        if role not in ("admin", "editor"):
+            raise HTTPException(400, 'role must be "admin" or "editor"')
+        orgdb = _orgdb(user)
+        if await _is_builtin(user, ws_id):
+            # Everyone is in General by default — "adding" clears an exclusion.
+            await orgdb.delete(f"members/{ws_id}/{member_id}")
+            return {"user_id": member_id, "role": "editor"}
+        existing = await orgdb.get(f"members/{ws_id}/{member_id}")
+        if existing and existing.get("role") == "owner":
+            raise HTTPException(403, "The owner's role cannot be changed")
+        row = {"role": role, "added_by": user.id,
+               "added_at": datetime.now(timezone.utc).isoformat()}
+        await orgdb.put(f"members/{ws_id}/{member_id}", row, meta=row)
+        return {"user_id": member_id, **row}
+
+    @r.delete("/workspaces/{ws_id}/members/{member_id}")
+    async def remove_member(ws_id: str, member_id: str, user: Any = user_dep):
+        orgdb = _orgdb(user)
+        builtin = await _is_builtin(user, ws_id)
+        if member_id == user.id and not builtin:
+            await _role_or_404(user, ws_id)   # leaving requires being in it
+        else:
+            await _manager_or_403(user, ws_id)   # on General: org admins only
+        if builtin:
+            # Membership of General is the org itself — removal writes an
+            # exclusion marker instead. Org admins are immune (resolve_role
+            # ignores the marker for them; they could reverse it anyway).
+            row = {"role": "excluded", "added_by": user.id,
+                   "added_at": datetime.now(timezone.utc).isoformat()}
+            await orgdb.put(f"members/{ws_id}/{member_id}", row, meta=row)
+            return {"ok": True}
+        existing = await orgdb.get(f"members/{ws_id}/{member_id}")
+        if existing and existing.get("role") == "owner":
+            raise HTTPException(403, "The owner cannot be removed")
+        await orgdb.delete(f"members/{ws_id}/{member_id}")
+        return {"ok": True}
+
+    return r
 
 
 # ---- Mount ----
 
 def install_routers(cycls_app, app, required_auth, volume, base):
-    def _build_ws(user: Any = required_auth):
-        return workspace(user, volume, base=base)
+    mode = getattr(getattr(cycls_app, "config", None), "workspaces", None)
+
+    async def _build_ws(request: Request, user: Any = required_auth):
+        ws_id = await resolve_ws_id(user, request.headers.get("x-workspace"), mode, volume, base)
+        return workspace(user, volume, base=base, ws=ws_id)
     ws_dep = Depends(_build_ws)
     app.include_router(chats_router(ws_dep))
-    app.include_router(files_router(cycls_app, ws_dep, required_auth))
+    app.include_router(files_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))
+    if mode:
+        app.include_router(workspaces_router(cycls_app, required_auth, volume, base))

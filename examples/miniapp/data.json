@@ -1,0 +1,8 @@
+{
+  "title": "Vendor burn-up",
+  "kpis": [
+    { "label": "Work complete", "value": "38%" },
+    { "label": "Open tasks", "value": 5 },
+    { "label": "Overdue", "value": 5 }
+  ]
+}

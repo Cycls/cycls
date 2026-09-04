@@ -1,7 +1,17 @@
 import { useState, useCallback, useRef } from "react";
 import { useApi, reasonOf } from "./use-api";
-import { track } from "../lib/posthog";
+import { track } from "../lib/analytics";
+import { webSearchEnabled } from "../lib/utils";
 import { useToast } from "../lib/toast";
+
+// One search result, as the search engine returned it. A citation chip only
+// ever renders from one of these, so a URL the model invented can't pose as a
+// source — it stays an ordinary link.
+export interface Source {
+  title: string;
+  url: string;
+  snippet?: string;
+}
 
 export interface Part {
   type: string;
@@ -14,6 +24,7 @@ export interface Part {
   row?: string[];
   step?: string;
   tool_name?: string;
+  ok?: boolean; // false when the tool call errored (refetch projection)
   id?: string;       // tool-call id — threads ToolStart → step_arg → final step
   args?: string;     // accumulated tool-call input (partial JSON), for the live preview
   delta?: string;    // a step_arg chunk on the wire (not stored)
@@ -25,7 +36,9 @@ export interface Part {
   alt?: string;
   caption?: string;
   chat_id?: string;
+  first?: boolean;   // chat_id event: the account's first chat in this workspace
   action?: string;
+  sources?: Source[];
 }
 
 export type UIAction = { action: string } & Record<string, unknown>;
@@ -50,7 +63,8 @@ export interface Message {
 export interface PassMetadata {
   name: string;
   description: string;
-  logo: string;
+  logo: string;    // agent icon — chat hero
+  brand?: string;  // brand wordmark — nav bar
 }
 
 export interface AppConfig {
@@ -59,8 +73,16 @@ export interface AppConfig {
   auth?: boolean;
   voice?: boolean;
   pk?: string;
-  analytics?: boolean;
+  one_tap?: boolean;
+  analytics?: { provider: string; events?: string[]; [k: string]: unknown }[] | null;
+  notifications?: { provider: string; [k: string]: unknown }[] | null;   // push plugins
   suggestions?: boolean;
+  affiliate?: string;
+  max_upload?: number;   // per-file upload cap in MB
+  explore_enabled?: boolean;
+  explore?: { slug: string; title: string; title_ar?: string; description: string; description_ar?: string; icon_svg?: string; link: string }[] | null;
+  examples_enabled?: boolean;   // curated example gallery on the empty screen (cards from GET /examples)
+  workspaces?: string | null;   // multi-workspace mode: null off, else team-create policy ("member"|"admin")
 }
 
 export function useChat(baseUrl: string = "") {
@@ -91,12 +113,11 @@ export function useChat(baseUrl: string = "") {
       const h = await authHeaders();
       const id = crypto.randomUUID().slice(0, 8);
       const uploadPath = `attachments/${id}-${file.name}`;
-      const form = new FormData();
-      form.append("file", file);
+      // Raw body, not multipart — auth runs before the body is read, so slow uploads can't outlive the JWT.
       const res = await fetch(`${baseUrl}/files/${uploadPath}`, {
         method: "PUT",
         headers: h,
-        body: form,
+        body: file,
       });
       if (!res.ok) {
         track("file_upload_failed", {
@@ -132,6 +153,7 @@ export function useChat(baseUrl: string = "") {
 
       setMessages((prev) => [...prev, userMessage, assistantMessage]);
       setIsStreaming(true);
+      const sentAt = Date.now();
 
       track("message_sent", {
         message_length: text.length,
@@ -156,9 +178,12 @@ export function useChat(baseUrl: string = "") {
           ...(await authHeaders()),
         };
 
-        // Server loads history from disk; only ship the new user message.
-        const currentMsgs = messagesRef.current;
-        const newUserMsg = currentMsgs[currentMsgs.length - 2]; // -1 is the empty assistant placeholder
+        // Server loads history from disk; only ship the new user message —
+        // the one built above, NOT a re-read of messagesRef. The ref only
+        // catches up when React runs the updater, so a send dispatched from a
+        // deferred callback (retry, regenerate) could otherwise read past the
+        // end of a rewound list and throw before ever reaching fetch.
+        const newUserMsg = userMessage;
         const withPaths = newUserMsg.attachments?.filter((a) => a.path);
         let content: string | Record<string, string>[] = newUserMsg.content;
         if (withPaths && withPaths.length > 0) {
@@ -181,7 +206,8 @@ export function useChat(baseUrl: string = "") {
         const response = await fetch(url, {
           method: "POST",
           headers,
-          body: JSON.stringify({ messages: [requestMessage] }),
+          body: JSON.stringify({ messages: [requestMessage],
+                                 ...(webSearchEnabled() ? {} : { disabled_tools: ["WebSearch"] }) }),
           signal: controller.signal,
         });
 
@@ -215,6 +241,9 @@ export function useChat(baseUrl: string = "") {
 
               // Capture chat_id from server, don't add as part
               if (type === "chat_id" && item.chat_id) {
+                // The server knows whether this account had any chat before —
+                // a browser flag can't (existing users on a new device).
+                if (item.first) track("first_agent_use", {});
                 chatIdRef.current = item.chat_id;
                 setChatId(item.chat_id);
                 // Reflect in browser URL so the chat is bookmarkable/shareable
@@ -228,10 +257,6 @@ export function useChat(baseUrl: string = "") {
               // don't persist in chat history
               if (type === "ui" && item.action) {
                 const ev = item as unknown as UIAction;
-                track("agent_ui_action", {
-                  ...ev,
-                  chat_id: chatIdRef.current,
-                });
                 uiHandlerRef.current?.(ev);
                 continue;
               }
@@ -261,7 +286,10 @@ export function useChat(baseUrl: string = "") {
                   item[type as keyof Part] !== undefined
                 ) {
                   const key = type as keyof Part;
-                  if (type === "step") {
+                  // A non-string payload is a whole value, not a delta — two
+                  // parallel searches each yield a complete `sources` array, and
+                  // concatenating them would stringify both into garbage.
+                  if (type === "step" || typeof item[key] !== "string") {
                     currentPart = { ...item };
                     parts.push(currentPart);
                   } else {
@@ -366,10 +394,32 @@ export function useChat(baseUrl: string = "") {
           }
         }
       } finally {
+        const stopped = !!abortRef.current?.signal.aborted;
         setIsStreaming(false);
         abortRef.current = null;
         // Server is the sole writer of chat metadata. The harness stamps
         // updatedAt + first-turn title during the stream — no FE save needed.
+
+        // One event per turn carrying the shape of the work — capability
+        // usage without per-tool-call volume (the server logs those).
+        const last = messagesRef.current[messagesRef.current.length - 1];
+        if (last?.role === "assistant") {
+          const tools: Record<string, number> = {};
+          let calls = 0;
+          for (const p of last.parts || []) {
+            if (p.type === "step" && p.tool_name) { tools[p.tool_name] = (tools[p.tool_name] || 0) + 1; calls++; }
+          }
+          track("turn_completed", {
+            chat_id: chatIdRef.current,
+            duration_s: Math.round((Date.now() - sentAt) / 1000),
+            tool_calls: calls,
+            tools,
+            produced_artifact: (last.parts || []).some((p) => p.type === "step" && p.tool_name === "Canvas" && p.ok !== false),
+            errored: (last.parts || []).some((p) => p.type === "callout" && p.style === "error"),
+            stopped,
+            origin,
+          });
+        }
       }
     },
     // `messages` is read via messagesRef inside; keeping it out of deps
@@ -394,6 +444,28 @@ export function useChat(baseUrl: string = "") {
     // Re-send after state update
     setTimeout(() => send(text, attachments, origin), 0);
   }, [isStreaming, send]);
+
+  // Re-run the last exchange. The server holds the finished turn on disk, so
+  // the old one has to be dropped there BEFORE re-sending — otherwise the
+  // resend appends a duplicate exchange instead of replacing it. A failed
+  // truncate aborts the whole thing (api() has already toasted the reason)
+  // rather than leaving history doubled.
+  const regenerate = useCallback(async () => {
+    if (isStreaming) return;
+    const msgs = messagesRef.current;
+    let i = msgs.length - 1;
+    while (i >= 0 && msgs[i].role !== "user") i--;
+    if (i < 0) return;
+    const { content, attachments } = msgs[i];
+    if (chatIdRef.current) {
+      try {
+        await api(`/chats/${encodeURIComponent(chatIdRef.current)}/last-exchange`, { method: "DELETE" });
+      } catch { return; }
+    }
+    track("message_regenerated", { chat_id: chatIdRef.current, message_count: msgs.length });
+    setMessages(msgs.slice(0, i));
+    setTimeout(() => send(content, attachments, "regenerate"), 0);
+  }, [isStreaming, send, api, setMessages]);
 
   const stop = useCallback(() => {
     if (abortRef.current) {
@@ -455,7 +527,9 @@ export function useChat(baseUrl: string = "") {
   }, [api]);
 
   const forkShare = useCallback(async (userToken: string) => {
-    const { id } = await (await api(`/share/${userToken}/fork`, { method: "POST" })).json();
+    // `<user>/<token>` with an optional `?ws=` — reattach it after /fork
+    const [path, query] = userToken.split("?");
+    const { id } = await (await api(`/share/${path}/fork${query ? `?${query}` : ""}`, { method: "POST" })).json();
     track("share_forked", { source: userToken, new_chat_id: id });
     return id as string;
   }, [api]);
@@ -530,6 +604,7 @@ export function useChat(baseUrl: string = "") {
     chatId,
     send,
     retry,
+    regenerate,
     stop,
     clear,
     notify,

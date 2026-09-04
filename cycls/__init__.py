@@ -7,10 +7,10 @@ except ImportError:
 _EXPORTS = {
     "._function": ("function", "Function", "Image", "Volume", "Cron"),
     "._function.remote": ("remote", "local_entrypoint", "RemoteError"),
-    "._app": ("app", "App", "Clerk", "GCP", "JWT", "User",
+    "._app": ("app", "App", "AppleIAP", "Clerk", "GCP", "JWT", "User",
               "Sandbox", "SandboxResult", "DB", "Workspace"),
     "._agent": ("LLM", "MCP", "agent", "Agent", "events", "to_ui"),
-    "._agent.web": ("Web",),
+    "._agent.web": ("Web", "PostHog", "GTM", "OneSignal"),
     "._agent.logs": ("log",),
 }
 

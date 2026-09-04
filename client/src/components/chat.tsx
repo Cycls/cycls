@@ -3,6 +3,11 @@ import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
+import { Canvas, type CanvasFile } from "./canvas";
+import { editWorkingPath, ext } from "./canvas-utils";
+import { AppsPanel } from "./apps-panel";
+import { TrashView, type TrashRow } from "./trash-view";
+import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
 import { Icon, IconButton } from "./icon";
 import { CyclsLogo } from "./cycls-logo";
@@ -11,16 +16,25 @@ import { InputBox } from "./input-box";
 import { ShareDialog } from "./share-dialog";
 import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
+import { SettingsDialog } from "./settings-dialog";
+import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
-import { track } from "../lib/posthog";
-import { toggleDark } from "../lib/utils";
+import { track } from "../lib/analytics";
+import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
+import { useToast } from "../lib/toast";
 import { useSpeechRecognition } from "../hooks/use-speech";
 import { useUrlParam } from "../hooks/use-url-param";
+import { useMediaQuery } from "../hooks/use-media-query";
+import { usePaneWidth } from "../hooks/use-pane-width";
 import { SUGGESTIONS } from "./suggestions-data";
+import { ExamplesGallery } from "./examples";
+import { AskCard, type AskQuestion } from "./ask-card";
+import { Surfaces } from "./surfaces";
+import { SurveyStrip, useSurvey } from "./survey-strip";
 
-interface PassAgent {
+export interface PassAgent {
   slug: string;
   title: string;
   title_ar?: string;
@@ -29,6 +43,8 @@ interface PassAgent {
   link: string;
   icon_svg?: string;
 }
+
+type PanelTab = "files" | "shares" | "chats" | "apps" | "trash";
 
 export interface AccountInfo {
   user: UserInfo;
@@ -41,6 +57,7 @@ export interface AccountInfo {
   onCreateOrg: () => void;
   onManageOrg: () => void;
   onSwitchOrg: (orgId: string | null) => void;
+  workspaces?: WorkspacesMenu;
 }
 
 export interface FilesPanelProps {
@@ -48,14 +65,37 @@ export interface FilesPanelProps {
   path: string;
   loading: boolean;
   onNavigate: (dir: string) => void;
+  // Re-list bypassing the server's catalog cache; use after our own writes.
+  onReload: (dir: string) => void;
   onUpload: (dir: string, file: File) => Promise<void>;
+  onUploadBatch?: (dir: string, files: { rel: string; file: File }[]) => Promise<void>;
   onMkdir: (dir: string, name: string) => Promise<void>;
   onRename: (from: string, to: string) => Promise<void>;
-  onDelete: (path: string) => Promise<void>;
+  onDelete: (path: string) => Promise<{ trash_id: string; kind: string } | void>;   // a move into the trash
+  onListTrash?: () => Promise<TrashRow[]>;
+  onRestoreTrash?: (id: string, kind: string, method: string) => Promise<string>;
+  onPurgeTrash?: (id: string, kind: string) => Promise<void>;
+  onEmptyTrash?: () => Promise<void>;
   onOpenFile: (path: string) => Promise<string>;
+  readFile: (path: string) => Promise<string>;
+  writeFile: (path: string, text: string) => Promise<void>;
+  searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
+  listFolders: () => Promise<{ name: string; path: string }[]>;
   onShareFile?: (path: string, audience: string) => Promise<string>;
+  onOpenInCanvas?: (path: string, name: string) => void;
+  maxUpload?: number;   // per-file cap (MB) for the client pre-check
   org?: { id: string; name: string } | null;
 }
+
+// A message composed while the agent was still working, waiting its turn.
+interface Queued {
+  id: string;
+  text: string;
+  attachments?: Attachment[];
+  origin: string;
+}
+
+const RAIL_ICON_W = 44;   // folded rail: icon strip only
 
 export function Chat({ chat, onShare, files, account, config }: {
   chat: ChatApi;
@@ -64,22 +104,168 @@ export function Chat({ chat, onShare, files, account, config }: {
   account?: AccountInfo | null;
   config?: AppConfig | null;
 }) {
-  const { messages, isStreaming, chatLoading, chatId, send: onSend, retry: onRetry, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, setUIHandler } = chat;
-  const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg } = account ?? ({} as Partial<AccountInfo>);
-  const { name, pass_metadata: passMetadata, voice, suggestions } = config ?? {};
+  const { messages, isStreaming, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, setUIHandler } = chat;
+  const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
+  const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
   const lang = useLang();
+  const { error: toastError, info: toastInfo, undo: toastUndo } = useToast();
   const isAr = lang === "ar";
-  const meta = passMetadata?.[isAr ? "ar" : "en"];
-  const inputPlaceholder = meta ? (isAr ? `اسأل ${meta.name}` : `Ask ${meta.name}`) : undefined;
-  const [input, setInput] = useState("");
+  // logo and brand inherit from en; name/description stay per-locale.
+  const _active = passMetadata?.[isAr ? "ar" : "en"];
+  const _en = passMetadata?.en;
+  const meta = _active
+    ? { ..._active, logo: _active.logo || _en?.logo || "", brand: _active.brand || _en?.brand || "" }
+    : _en;
+  const inputPlaceholder = meta
+    ? (isAr ? `اسأل ${meta.name}` : `Ask ${meta.name}`)
+    : undefined;
+  // A prompt drafted before sign-in (public shell, example card) survives the
+  // auth round-trip here — consumed once, so later remounts start clean.
+  const [input, setInput] = useState(() => {
+    const draft = sessionStorage.getItem("cycls_draft");
+    if (draft) sessionStorage.removeItem("cycls_draft");
+    return draft || "";
+  });
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [exploreOpen, setExploreOpen] = useState(false);
   const [exploreAgents, setExploreAgents] = useState<PassAgent[]>([]);
   const [exploreLoading, setExploreLoading] = useState(false);
-  const [filesOpen, setFilesOpen] = useState(false);
-  const [filesTab, setFilesTab] = useState<"files" | "shares" | "chats">(account ? "chats" : "files");
+  // Panel open state + tab survive the ChatApp remount on workspace/org
+  // switch, so the panel's workspace switcher works in place.
+  const [filesOpen, _setFilesOpen] = useState(() => sessionStorage.getItem("cycls_panel") === "1");
+  const setFilesOpen = useCallback((v: boolean | ((p: boolean) => boolean)) => {
+    _setFilesOpen((prev) => {
+      const next = typeof v === "function" ? v(prev) : v;
+      if (next) sessionStorage.setItem("cycls_panel", "1");
+      else sessionStorage.removeItem("cycls_panel");
+      return next;
+    });
+  }, []);
+  const [filesTab, setFilesTab] = useState<PanelTab>(() =>
+    (sessionStorage.getItem("cycls_panel_tab") as PanelTab) || (account ? "chats" : "files"));
+  // The agent's `suggest` tool offers ONE follow-up message at a time — a
+  // chip above the composer; click sends it, ArrowUp pulls it in to edit.
+  const [followUp, setFollowUp] = useState<string | null>(null);
+  const [followUpsOn, setFollowUpsOn] = useState(followUpsEnabled);
+  // Messages composed while the agent is still working. They flush one at a
+  // time when a run ends on its own; an explicit Stop *holds* the queue
+  // instead, so interrupting a run that went wrong doesn't immediately fire
+  // the next message into it.
+  const [queued, setQueued] = useState<Queued[]>([]);
+  // `queuedRef` is the source of truth every writer updates in the same tick,
+  // so a click can't race the stream-end flush on a stale copy; `queued` is
+  // just its rendered shadow.
+  const queuedRef = useRef<Queued[]>([]);
+  const heldRef = useRef(false);
+  const wasStreamingRef = useRef(false);
+  // The agent's `ask` tool — up to three questions on one card above the
+  // composer. The options are shortcuts, not a constraint: typing any reply
+  // answers it too.
+  const [ask, setAsk] = useState<{ questions: AskQuestion[] } | null>(null);
+  // Typing takes over: the moment the user starts composing, the agent's
+  // chip and card yield — their own words beat our prompts.
+  const prevInputRef = useRef(input);
+  useEffect(() => {
+    const started = !prevInputRef.current.trim() && !!input.trim();
+    prevInputRef.current = input;
+    if (!started) return;
+    setFollowUp(null);
+    setHushed(true);
+    setAsk((cur) => {
+      if (cur) track("ask_dismissed", { chat_id: chatId, method: "typed" });
+      return null;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [input]);
+  useEffect(() => {
+    const sync = () => {
+      setFollowUpsOn(followUpsEnabled());
+      if (!followUpsEnabled()) setFollowUp(null);
+      if (!askEnabled()) setAsk(null);
+    };
+    window.addEventListener("followupschange", sync);
+    window.addEventListener("askchange", sync);
+    return () => {
+      window.removeEventListener("followupschange", sync);
+      window.removeEventListener("askchange", sync);
+    };
+  }, []);
+  useEffect(() => {
+    setFollowUp(null);
+    setAsk(null);
+    queuedRef.current = [];
+    setQueued([]);
+    heldRef.current = false;
+  }, [chatId]);
+  // Prompts and surveys wait for a finished turn: nobody is asked anything
+  // before the product has done something for them.
+  const [turnsDone, setTurnsDone] = useState(0);
+  const wasStreaming = useRef(false);
+  useEffect(() => {
+    if (wasStreaming.current && !isStreaming && messages.length) setTurnsDone((n) => n + 1);
+    wasStreaming.current = isStreaming;
+  }, [isStreaming, messages.length]);
+  const [survey, setSurvey] = useSurvey(turnsDone > 0);
+  // Typing hushes every surface — prompt, tip, survey — until the next turn.
+  const [hushed, setHushed] = useState(false);
+  useEffect(() => { setHushed(false); }, [turnsDone]);
+  const [canvasTabs, setCanvasTabs] = useState<CanvasFile[]>([]);
+  const [canvasActive, setCanvasActive] = useState<string | null>(null);
+  const [canvasHidden, setCanvasHidden] = useState(false);
+  const [rightExpanded, setRightExpanded] = useState(false);
+  const isDesktop = useMediaQuery("(min-width: 1024px)");
+
+  const openFileInCanvas = useCallback((path: string, name?: string, ident?: Partial<CanvasFile>) => {
+    setCanvasTabs((tabs) => (tabs.some((f) => f.path === path) ? tabs
+      : [...tabs, { ...ident, path, name: name || path.split("/").pop() || path }]));
+    setCanvasActive(path);
+    setCanvasHidden(false);
+  }, []);
+
+  // A deliverable being written opens the canvas in a working state — the
+  // path arrives in the live edit step's streamed args. Desktop only.
+  const [workingPaths, setWorkingPaths] = useState<string[]>([]);
+  useEffect(() => {
+    if (!isStreaming) { setWorkingPaths((ws) => (ws.length ? [] : ws)); return; }
+    if (!isDesktop) return;
+    const last = messages[messages.length - 1];
+    if (last?.role !== "assistant") return;
+    for (const p of last.parts || []) {
+      if (p.type !== "step" || p.tool_name !== "Editing") continue;
+      const path = editWorkingPath(p.step, p.args);
+      if (path && !workingPaths.includes(path)) {
+        setWorkingPaths((ws) => (ws.includes(path) ? ws : [...ws, path]));
+        openFileInCanvas(path);
+        track("canvas_loader_shown", { path });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, isStreaming, isDesktop]);
+  const closeCanvasTab = useCallback((path: string) => {
+    setCanvasTabs((tabs) => tabs.filter((f) => f.path !== path));
+    setCanvasActive((a) => (a === path ? null : a));
+  }, []);
+  const { apps, loading: appsLoading, refresh: refreshApps } = useApps();
+  // The UI handler resolves an app by path without re-subscribing on every load.
+  const appsRef = useRef<AppInfo[]>([]);
+  useEffect(() => { appsRef.current = apps; }, [apps]);
+  const openApp = useCallback((app: AppInfo) => {
+    openFileInCanvas(app.entry, app.name, {
+      icon: app.icon, iconSrc: app.iconSrc, letter: app.letter,
+    });
+  }, [openFileInCanvas]);
+  const { width: panelWidth, startResize, resizing: railResizing } = usePaneWidth("cycls_rail_width", 320, 240, 80, 0,
+    () => canvasShowing && setRailIcons(true), 0.5);
   const [shareOpen, setShareOpen] = useState(false);
+  // Survives the ChatApp remount on org/workspace switch (App keys by org), so
+  // changing context inside the settings dialog doesn't close it.
+  const [settingsOpen, _setSettingsOpen] = useState(() => sessionStorage.getItem("cycls_settings") === "1");
+  const setSettingsOpen = useCallback((v: boolean) => {
+    _setSettingsOpen(v);
+    if (v) sessionStorage.setItem("cycls_settings", "1");
+    else sessionStorage.removeItem("cycls_settings");
+  }, []);
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
   const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string; favoritedAt?: string }[]>([]);
@@ -110,11 +296,49 @@ export function Chat({ chat, onShare, files, account, config }: {
     if (!setUIHandler) return;
     setUIHandler((ev) => {
       if (ev.action === "open_plan_modal") {
+        // The agent blocked the user — a paywall, not a curious plans click.
+        track("paywall_shown", { reason: ev.reason || "unspecified" });
+        if (ev.reason === "limit") track("limit_reached", {});
         openPricing(activeOrg ? "organization" : "user", "agent_event");
+      } else if (ev.action === "open_canvas" && typeof ev.path === "string") {
+        const done = ev.path;
+        track("artifact_completed", { path: done, kind: ext(done) });
+        setWorkingPaths((ws) => ws.filter((x) => x !== done));
+        const app = appsRef.current.find((a) => a.entry === ev.path);
+        if (app) openApp(app);
+        else openFileInCanvas(ev.path, typeof ev.name === "string" ? ev.name : undefined);
+      } else if (ev.action === "suggest" && typeof ev.text === "string") {
+        if (followUpsEnabled()) {
+          setFollowUp(ev.text);
+          track("ui_action", { action: "suggest" });   // denominator for followup_accepted
+        }
+      } else if (ev.action === "ask") {
+        // The flat singular keys are the same event's back-compat tail.
+        const raw = Array.isArray(ev.questions) ? ev.questions
+                  : typeof ev.question === "string" ? [ev] : [];
+        const questions = (raw as Record<string, unknown>[])
+          .filter((q) => q && typeof q.question === "string")
+          .map((q) => {
+            const options = Array.isArray(q.options)
+              ? (q.options as { label?: unknown; description?: unknown }[])
+                  .filter((o) => o && typeof o.label === "string")
+                  .map((o) => ({ label: o.label as string,
+                                 description: typeof o.description === "string" ? o.description : undefined }))
+              : [];
+            return { question: q.question as string,
+                     header: typeof q.header === "string" ? q.header : undefined,
+                     options, multi: q.multi_select === true && options.length > 1 };
+          });
+        if (questions.length && askEnabled()) {
+          setAsk({ questions });
+          track("ui_action", { action: "ask", questions: questions.length });
+        }
+      } else {
+        track("ui_action", { action: ev.action, handled: false });
       }
     });
     return () => setUIHandler(null);
-  }, [setUIHandler, activeOrg, openPricing]);
+  }, [setUIHandler, activeOrg, openPricing, openFileInCanvas, openApp]);
 
   const onSpeechEnd = useCallback((text: string) => {
     if (text.trim()) {
@@ -131,7 +355,13 @@ export function Chat({ chat, onShare, files, account, config }: {
     setFilesOpen(false);
   }, [activeOrg?.id]);
 
-  const handleFilesAdded = useCallback(async (newFiles: File[]) => {
+  const handleFilesAdded = useCallback(async (incoming: File[]) => {
+    // Reject oversized files up front (server enforces the same cap).
+    const maxMb = config?.max_upload ?? 512;
+    const newFiles = incoming.filter((f) => f.size <= maxMb * 1024 * 1024);
+    const skipped = incoming.length - newFiles.length;
+    if (skipped) toastError(`${skipped === 1 ? "File" : `${skipped} files`} over the ${maxMb} MB limit ${skipped === 1 ? "was" : "were"} skipped.`);
+    if (!newFiles.length) return;
     if (uploadFile) {
       // Add placeholders immediately — blob URL is a stable key per file
       const placeholders: Attachment[] = newFiles.map((f) => ({
@@ -164,7 +394,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       }));
       setAttachments((prev) => [...prev, ...newAttachments]);
     }
-  }, [uploadFile]);
+  }, [uploadFile, config?.max_upload, toastError]);
 
   const removeFile = useCallback((index: number) => {
     setAttachments((prev) => prev.filter((_, i) => i !== index));
@@ -188,13 +418,67 @@ export function Chat({ chat, onShare, files, account, config }: {
 
   const handleSubmit = useCallback((overrideText?: string, origin: string = "keyboard") => {
     const text = (overrideText ?? input).trim();
-    if (!text || isStreaming || attachments.some((a) => a.status === "uploading")) return;
+    if (!text || attachments.some((a) => a.status === "uploading")) return;
     const sendAttachments = attachments.length > 0 ? [...attachments] : undefined;
     setInput("");
     setAttachments([]);
+    setFollowUp(null);
+    setAsk(null);
+    // Sending mid-run queues instead: the agent's tool loops are long, and a
+    // thought the user has now shouldn't wait on them.
+    if (isStreaming) {
+      const next = [...queuedRef.current,
+                    { id: crypto.randomUUID(), text, attachments: sendAttachments, origin }];
+      queuedRef.current = next;
+      setQueued(next);
+      track("message_queued", { chat_id: chatId, origin, queue_depth: next.length });
+      return;
+    }
+    heldRef.current = false;
     onSend(text, sendAttachments, origin);
     setTimeout(() => scrollToBottom(), 0);
-  }, [input, isStreaming, onSend, attachments, scrollToBottom]);
+  }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId]);
+
+  // Drain on the falling edge of `isStreaming` — one message per edge, and the
+  // send it triggers raises the flag again, so the rest follow in order.
+  useEffect(() => {
+    const ended = wasStreamingRef.current && !isStreaming;
+    wasStreamingRef.current = isStreaming;
+    if (!ended || heldRef.current) return;
+    const [next, ...rest] = queuedRef.current;
+    if (!next) return;
+    queuedRef.current = rest;
+    setQueued(rest);
+    track("queued_message_sent", { chat_id: chatId, remaining: rest.length });
+    onSend(next.text, next.attachments, "queued");
+    setTimeout(() => scrollToBottom(), 0);
+  }, [isStreaming, onSend, scrollToBottom, chatId]);
+
+  // Stop holds the queue rather than draining into a run the user just killed.
+  const handleStop = useCallback(() => {
+    heldRef.current = true;
+    onStop();
+  }, [onStop]);
+
+  // Pull a queued message back into the composer for editing — the same
+  // gesture as accepting a follow-up, and the only way to send one while the
+  // queue is held.
+  const editQueued = useCallback((id: string) => {
+    const hit = queuedRef.current.find((m) => m.id === id);
+    if (!hit) return;
+    queuedRef.current = queuedRef.current.filter((m) => m.id !== id);
+    setQueued(queuedRef.current);
+    setInput((cur) => (cur ? `${cur} ${hit.text}` : hit.text));
+    if (hit.attachments?.length) setAttachments((cur) => [...cur, ...hit.attachments!]);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+    track("queued_message_edited", { chat_id: chatId });
+  }, [chatId]);
+
+  const dropQueued = useCallback((id: string) => {
+    queuedRef.current = queuedRef.current.filter((m) => m.id !== id);
+    setQueued(queuedRef.current);
+    track("queued_message_dropped", { chat_id: chatId });
+  }, [chatId]);
 
   handleSubmitRef.current = handleSubmit;
 
@@ -204,26 +488,45 @@ export function Chat({ chat, onShare, files, account, config }: {
       e.preventDefault();
       handleSubmit();
     }
+    // Shell-style accept: ArrowUp in an empty composer pulls the suggested
+    // follow-up in for editing; Enter then sends it.
+    if (e.key === "ArrowUp" && !input && followUp) {
+      e.preventDefault();
+      setInput(followUp);
+      setFollowUp(null);
+      track("followup_accepted", { method: "arrow" });
+    }
   };
 
   const isEmpty = messages.length === 0;
+
+  // Static config, then the 1h localStorage cache, then the network.
+  const loadExplore = useCallback(async (): Promise<PassAgent[]> => {
+    if (config?.explore?.length) return config.explore;  // static: no network
+    const CACHE_KEY = "cycls_explore";
+    try {
+      const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
+      if (cached && Date.now() - cached.at < 3_600_000 && cached.agents?.length) return cached.agents;
+    } catch { /* ignore */ }
+    const res = await fetch("/explore");
+    const data = await res.json();
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), agents: data.agents || [] }));
+    return data.agents || [];
+  }, [config]);
 
   const openExplore = async () => {
     setExploreOpen(true);
     track("explore_opened", { cached: exploreAgents.length > 0 });
     if (exploreAgents.length > 0) return;
     setExploreLoading(true);
-    try {
-      const res = await fetch("https://cms.cycls.ai/agents");
-      const data = await res.json();
-      setExploreAgents(data.agents || []);
-    } catch { /* silent */ }
+    try { setExploreAgents(await loadExplore()); } catch { /* silent */ }
     setExploreLoading(false);
   };
 
   // Switch the side panel's active tab and (re)load its data.
-  const selectTab = (tab: "files" | "shares" | "chats") => {
+  const selectTab = (tab: PanelTab) => {
     setFilesTab(tab);
+    sessionStorage.setItem("cycls_panel_tab", tab);
     if (tab === "chats" && onListChats) {
       setChatsLoading(true);
       onListChats().then((items) => { setChats(items); setChatsLoading(false); }).catch(() => setChatsLoading(false));
@@ -232,49 +535,173 @@ export function Chat({ chat, onShare, files, account, config }: {
       onListShares().then((items) => { setShares(items); setSharesLoading(false); }).catch(() => setSharesLoading(false));
     } else if (tab === "files" && files) {
       files.onNavigate(files.path);
+      loadTrash();   // footer count; listing is also the 30-day sweep
+    } else if (tab === "trash") {
+      loadTrash();
     }
   };
 
   // Open the panel, keeping the last-active tab unless one is given.
-  const openPanel = (tab?: "files" | "shares" | "chats") => {
+  const openPanel = (tab?: PanelTab) => {
     selectTab(tab ?? filesTab);
     setFilesOpen(true);
   };
 
+  // Restored-open panel (workspace/org switch remounts Chat): load the
+  // active tab's data, same as the click path would have.
+  useEffect(() => {
+    if (filesOpen) selectTab(filesTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---- Trash: deletes are moves; Undo (toast or ⌘Z, 10s) restores the last one ----
+  const [trashRows, setTrashRows] = useState<TrashRow[]>([]);
+  const [trashLoading, setTrashLoading] = useState(false);
+  const [trashFilter, setTrashFilter] = useState<"chat" | undefined>(undefined);
+  const loadTrash = useCallback(() => {
+    if (!files?.onListTrash) return;
+    setTrashLoading(true);
+    files.onListTrash().then(setTrashRows).catch(() => {}).finally(() => setTrashLoading(false));
+  }, [files]);
+  const wsMenu = account?.workspaces;
+  const canPurge = !wsMenu || !wsMenu.active || ["owner", "admin"].includes(wsMenu.active.role || "") || !!wsMenu.isOrgAdmin;
+  const undoRef = useRef<{ id: string; kind: string; name: string; at: number }[]>([]);
+  const afterRestore = useCallback((kind: string) => {
+    if (kind === "chat") { if (onListChats) onListChats().then(setChats).catch(() => {}); }
+    else if (files) { files.onReload(files.path); if (kind === "app") void refreshApps(); }
+    loadTrash();
+  }, [files, onListChats, refreshApps, loadTrash]);
+  const undoLast = useCallback((method: string) => {
+    const last = undoRef.current.pop();
+    if (!last || !files?.onRestoreTrash) return;
+    files.onRestoreTrash(last.id, last.kind, method)
+      .then(() => { toastInfo(t("restored").replace("{name}", last.name)); afterRestore(last.kind); })
+      .catch(() => toastError(t("restoreFailed")));
+  }, [files, toastInfo, toastError, afterRestore]);
+  const trashed = useCallback((id: string, kind: string, name: string) => {
+    undoRef.current.push({ id, kind, name, at: Date.now() });
+    toastUndo(t("deleted").replace("{name}", name), t("undo"), () => undoLast("toast"));
+  }, [toastUndo, undoLast]);
+  const deleteWithUndo = useCallback(async (path: string) => {
+    const r = await files!.onDelete(path);
+    if (r && r.trash_id) trashed(r.trash_id, r.kind, path.split("/").pop() || path);
+    return r;
+  }, [files, trashed]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z" || e.shiftKey) return;
+      const el = document.activeElement as HTMLElement | null;
+      const tag = (el?.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || el?.isContentEditable) return;   // native text undo
+      const last = undoRef.current[undoRef.current.length - 1];
+      if (!last || Date.now() - last.at > 10_000) return;
+      e.preventDefault();
+      undoLast("shortcut");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undoLast]);
+
+  // App identity lives in its manifest; the slug (folder) stays immutable.
+  const updateApp = useCallback(async (app: AppInfo, patch: { name?: string; icon?: string }) => {
+    if (!files) return;
+    const path = `apps/${app.slug}/app.json`;
+    let manifest: Record<string, unknown> = {};
+    try { manifest = JSON.parse(await files.readFile(path)); } catch { manifest = {}; }
+    const next: Record<string, unknown> = { ...manifest, ...patch };
+    if (patch.icon === "") delete next.icon;
+    await files.writeFile(path, JSON.stringify(next, null, 2));
+    track("app_updated", { field: Object.keys(patch)[0] });
+    await refreshApps();
+  }, [files, refreshApps]);
+
+  // An image icon lives beside the app as `icon.<ext>`; the manifest names it.
+  const uploadAppIcon = useCallback(async (app: AppInfo, file: File) => {
+    if (!files) return;
+    const ext = (file.name.match(/\.(png|jpe?g|svg|webp|gif|avif)$/i)?.[1] ?? "png").toLowerCase();
+    if (file.size > 2 * 1024 * 1024) { toastError(t("iconTooLarge")); return; }
+    await files.onUpload(`apps/${app.slug}`, new File([file], `icon.${ext}`, { type: file.type }));
+    await updateApp(app, { icon: `icon.${ext}` });
+  }, [files, updateApp, toastError]);
+
+  const canvasShowing = canvasTabs.length > 0 && !canvasHidden;
+  const rightOpen = filesOpen || canvasShowing;
+  const [railIcons, setRailIcons] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  useEffect(() => { if (!isStreaming) setReloadKey((k) => k + 1); }, [isStreaming]);
+  const railIconsOnly = isDesktop && railIcons && canvasShowing;
+  const railPx = !isDesktop || !filesOpen ? 0 : railIconsOnly ? RAIL_ICON_W : panelWidth;
+  const collapseRail = () => (canvasShowing ? setRailIcons(true) : setFilesOpen(false));
+  const closeRight = () => {
+    setFilesOpen(false);
+    setCanvasHidden(true);
+    setRightExpanded(false);
+    setRailIcons(false);
+  };
+  useEffect(() => {
+    if (!rightOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeRight(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  const openRight = () => {
+    setRailIcons(false);
+    if (canvasTabs.length > 0) setCanvasHidden(false);
+    if (!canvasTabs.length || !filesOpen) openPanel();
+  };
+
   const inputProps = {
-    textareaRef, input, setInput, handleKeyDown, handleSubmit, isStreaming, onStop,
+    textareaRef, input, setInput, handleKeyDown, handleSubmit, isStreaming, onStop: handleStop,
     onOpenFilePicker: openFilePicker,
     onOpenFiles: files ? () => openPanel("files") : undefined,
     attachments,
     onRemoveFile: removeFile,
     listening, transcribing, startMic, stopMic, cancelMic, voice,
     onFilesAdded: handleFilesAdded,
+    onMentionSearch: files?.searchFiles,
     placeholder: inputPlaceholder,
   };
 
   return (
-    <div className="h-dvh flex flex-col">
-      {/* Header */}
-      <header className="pointer-events-none fixed top-0 right-0 left-0 h-12" dir="ltr">
-        <div className="pointer-events-auto mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
+    <div className="h-dvh flex">
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+      <header className="relative z-30 h-12 shrink-0" dir="ltr">
+        <div className="mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
           <div className="flex items-center gap-2">
-          <a href="https://cycls.ai" className="flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity">
-            <CyclsLogo className="h-5 fill-muted-foreground" />
-          </a>
+          {meta?.brand ? (
+            <span className="flex h-6 items-center">
+              {meta.brand.startsWith("<") ? (
+                <span className="flex h-6 items-center [&>svg]:h-6 [&>svg]:w-auto" dangerouslySetInnerHTML={{ __html: meta.brand }} />
+              ) : (
+                <img src={meta.brand} alt="" className="h-6 w-auto object-contain" />
+              )}
+            </span>
+          ) : (
+            <a href="https://cycls.ai" className="flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity">
+              <CyclsLogo className="h-5 fill-muted-foreground" />
+            </a>
+          )}
           {name && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <span className="text-muted-foreground/40">|</span>
-              <button
-                onClick={openExplore}
-                className="flex items-center gap-1 text-foreground font-medium capitalize hover:opacity-70 transition-opacity cursor-pointer"
-              >
-                {meta?.name || name}
-                <Icon name="chevron-down" className="w-3 h-3 text-muted-foreground" />
-              </button>
+              {config?.explore_enabled ? (
+                <button
+                  onClick={openExplore}
+                  className="flex items-center gap-1 text-foreground font-medium capitalize hover:opacity-70 transition-opacity cursor-pointer"
+                >
+                  {meta?.name || name}
+                  <Icon name="chevron-down" className="w-3 h-3 text-muted-foreground" />
+                </button>
+              ) : (
+                <span className="text-foreground font-medium capitalize">{meta?.name || name}</span>
+              )}
             </div>
           )}
           </div>
           <div className="flex items-center gap-1">
+            {/* Desktop only; on a phone it stays a row inside the user menu */}
+            {user && workspaces && isDesktop && <WorkspaceMenu workspaces={workspaces} />}
             {messages.length > 0 && (
               <>
                 <button
@@ -327,19 +754,21 @@ export function Chat({ chat, onShare, files, account, config }: {
             )}
             {(files || account) && (
               <button
-                onClick={() => filesOpen ? setFilesOpen(false) : openPanel()}
-                className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
-                aria-label="Menu"
+                onClick={() => rightOpen ? closeRight() : openRight()}
+                className={`${rightOpen ? "text-foreground" : "text-muted-foreground"} hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer`}
+                aria-label={rightOpen ? t("collapse") : t("expand")}
+                title={rightOpen ? t("collapse") : t("expand")}
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v16.5M3.75 3.75h16.5v16.5H3.75M9.75 3.75v16.5" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 3.75v16.5M20.25 3.75H3.75v16.5h16.5M14.25 3.75v16.5" />
                 </svg>
               </button>
             )}
-            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} /></div>}
+            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} workspaces={isDesktop ? undefined : workspaces} /></div>}
           </div>
         </div>
       </header>
+      <Surfaces config={config ?? null} ready={turnsDone > 0} active={!isStreaming && !ask && !hushed} />
 
       {/* Explore agents dropdown */}
       <Popover open={exploreOpen} onClose={() => setExploreOpen(false)} className="left-4 sm:left-6 top-12 mt-1 w-72 rounded-lg border border-border bg-background shadow-lg overflow-hidden">
@@ -369,9 +798,15 @@ export function Chat({ chat, onShare, files, account, config }: {
                     className="flex items-start gap-3 px-3 py-2.5 text-sm hover:bg-secondary/80 transition-colors cursor-pointer"
                   >
                     {agent.icon_svg ? (
-                      <div className="size-8 shrink-0 rounded-md overflow-hidden" dangerouslySetInnerHTML={{ __html: agent.icon_svg }} />
+                      agent.icon_svg.startsWith("<") ? (
+                        <div className="size-8 shrink-0 rounded-md overflow-hidden" dangerouslySetInnerHTML={{ __html: agent.icon_svg }} />
+                      ) : (
+                        <img src={agent.icon_svg} alt="" className="size-8 shrink-0 rounded-md object-cover" />
+                      )
                     ) : (
-                      <div className="size-8 shrink-0 rounded-md bg-secondary" />
+                      <div className="size-8 shrink-0 rounded-md bg-secondary flex items-center justify-center text-xs font-medium uppercase text-muted-foreground">
+                        {agentTitle?.[0]}
+                      </div>
                     )}
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-foreground truncate">{agentTitle}</p>
@@ -384,9 +819,6 @@ export function Chat({ chat, onShare, files, account, config }: {
           )}
         </div>
       </Popover>
-
-      {/* Spacer for fixed header */}
-      <div className="shrink-0 h-12" />
 
       {/* Stable file input — lives outside LayoutGroup so it survives remounts */}
       <input
@@ -402,23 +834,37 @@ export function Chat({ chat, onShare, files, account, config }: {
         }}
       />
 
+      {/* rtl:flex-row-reverse keeps the canvas on the right in Arabic */}
+      <div className="flex min-h-0 flex-1 rtl:flex-row-reverse">
+      <div className={cn("relative flex h-full min-w-0 flex-1 flex-col", isDesktop && rightExpanded && rightOpen && "hidden")}>
       <LayoutGroup>
         <LoadingBar active={chatLoading} />
         {!chatLoading && (isEmpty ? (
+          examplesEnabled ? (
+            // With a gallery the empty screen is a page that scrolls: hero and
+            // composer centered in the viewport, category chips and the top of
+            // the cards peeking below the fold.
+            <div className="flex-1 overflow-y-auto">
+              <div className="mx-auto flex w-full max-w-5xl flex-col items-center px-6 pb-16">
+                {/* justify-end + half-viewport height lands the composer's
+                    bottom at mid-page (true center, hero above), and the
+                    gallery hangs right below it. */}
+                <div className="flex min-h-[calc(50dvh-2rem)] w-full flex-col items-center justify-end">
+                  {meta && <EmptyHero meta={meta} />}
+                  <div className="w-full max-w-3xl">
+                    <InputBox {...inputProps} />
+                  </div>
+                </div>
+                <ExamplesGallery
+                  className="mt-5"
+                  onUsePrompt={(text) => { setInput(text); textareaRef.current?.focus(); }}
+                />
+              </div>
+            </div>
+          ) : (
           <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16 pt-40 sm:pt-0">
             <div className="relative max-w-3xl w-full">
-              {meta && (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ delay: 0.4 }}
-                  className="absolute bottom-full left-0 right-0 flex flex-col items-center gap-4 mb-10 text-center"
-                >
-                  {meta.logo && <div className="size-16 rounded-xl overflow-hidden border border-border" dangerouslySetInnerHTML={{ __html: meta.logo }} />}
-                  <h2 className="text-2xl font-semibold text-foreground">{meta.name}</h2>
-                  {meta.description && <p className="text-base text-muted-foreground max-w-lg">{meta.description}</p>}
-                </motion.div>
-              )}
+              {meta && <EmptyHero meta={meta} absolute />}
               <InputBox {...inputProps} />
               {suggestions && (
                 <div className="relative">
@@ -433,6 +879,7 @@ export function Chat({ chat, onShare, files, account, config }: {
               )}
             </div>
           </div>
+          )
         ) : (
           <>
             <div ref={scrollRef} className="isolate relative flex-1 overflow-y-auto" dir="ltr">
@@ -451,6 +898,11 @@ export function Chat({ chat, onShare, files, account, config }: {
                         msg.role === "assistant"
                       }
                       onRetry={isLast && hasError && !isStreaming ? onRetry : undefined}
+                      onRegenerate={
+                        isLast && msg.role === "assistant" && !hasError && !isStreaming && !chatLoading
+                          ? onRegenerate : undefined
+                      }
+                      onOpenFile={openFileInCanvas}
                     />
                   );
                 })}
@@ -459,6 +911,47 @@ export function Chat({ chat, onShare, files, account, config }: {
             </div>
             <div className="shrink-0 px-6 pb-2 pt-1">
               <div className="max-w-3xl mx-auto">
+                {ask && (
+                  <AskCard
+                    key={ask.questions.map((q) => q.question).join("|")}
+                    questions={ask.questions}
+                    onSubmit={(lines) => {
+                      track("ask_answered", { method: "option", chat_id: chatId,
+                                              questions: ask.questions.length,
+                                              multi: ask.questions.some((q) => q.multi),
+                                              count: lines.length });
+                      handleSubmit(lines.join("\n"), "ask");
+                    }}
+                    onDismiss={() => {
+                      track("ask_dismissed", { chat_id: chatId });
+                      setAsk(null);
+                    }}
+                  />
+                )}
+                {!ask && survey && !hushed && !isStreaming && (
+                  <SurveyStrip survey={survey} onDone={() => setSurvey(null)} />
+                )}
+                <AnimatePresence initial={false}>
+                  {queued.map((m) => (
+                    <QueuedChip
+                      key={m.id}
+                      text={m.text}
+                      held={heldRef.current}
+                      onEdit={() => editQueued(m.id)}
+                      onDismiss={() => dropQueued(m.id)}
+                    />
+                  ))}
+                </AnimatePresence>
+                {followUpsOn && followUp && !isStreaming && !ask && (
+                  <FollowUpChip
+                    text={followUp}
+                    onAccept={() => {
+                      track("followup_accepted", { method: "click" });
+                      handleSubmit(followUp, "follow_up");
+                    }}
+                    onDismiss={() => setFollowUp(null)}
+                  />
+                )}
                 <InputBox {...inputProps} />
               </div>
             </div>
@@ -466,10 +959,83 @@ export function Chat({ chat, onShare, files, account, config }: {
         ))}
       </LayoutGroup>
 
-      {/* Files / Shares / Sessions panel */}
-      <AnimatePresence>
+      {pricingFor && (
+        <Popover open onClose={() => closePricing("backdrop")} dim className="inset-0 flex items-center justify-center pointer-events-none">
+          <div dir="ltr" className="pointer-events-auto fixed top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] flex flex-col rounded-xl border border-border bg-background shadow-xl sm:relative sm:inset-auto sm:w-auto sm:max-h-[90vh] sm:rounded-2xl">
+            <div className="flex items-center justify-between px-6 pt-5 pb-3">
+              <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
+                {pricingFor === "organization" ? (
+                  activeOrg ? (
+                    <>
+                      <span>{t("orgPlansFor")}</span>
+                      <span className="inline-flex items-center gap-1.5 text-sm font-medium bg-secondary text-foreground rounded-lg px-2.5 py-1">
+                        {activeOrg.imageUrl && (
+                          <div
+                            className="size-4 rounded-full bg-secondary shrink-0"
+                            style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }}
+                          />
+                        )}
+                        {activeOrg.name}
+                      </span>
+                    </>
+                  ) : t("orgPlans")
+                ) : t("personalPlans")}
+              </h2>
+              <button
+                onClick={() => closePricing("dismiss")}
+                className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+              >
+                <Icon name="x" className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="px-6 pb-5 overflow-y-auto">
+              <PricingCards payerType={pricingFor} onSelect={() => closePricing("select")} />
+            </div>
+          </div>
+        </Popover>
+      )}
+      {settingsOpen && account && (
+        <SettingsDialog account={account} onClose={() => setSettingsOpen(false)} />
+      )}
+      </div>
+      <div className={cn(
+        "flex min-h-0 overflow-hidden rtl:flex-row-reverse",
+        isDesktop && rightOpen && "my-1 mr-1 rounded-xl border border-border bg-background",
+        isDesktop && rightExpanded && "min-w-0 flex-1",
+      )}>
+      {files && (
+        <Canvas
+          working={workingPaths}
+          tabs={canvasTabs}
+          active={canvasActive}
+          docked={isDesktop}
+          hidden={canvasHidden}
+          expanded={rightExpanded}
+          onToggleExpand={() => setRightExpanded((e) => !e)}
+          onCloseAll={() => { setCanvasTabs([]); setCanvasActive(null); setRightExpanded(false); }}
+          onSelectTab={setCanvasActive}
+          onCloseTab={closeCanvasTab}
+          onReorder={setCanvasTabs}
+          onHide={() => setCanvasHidden(true)}
+          onAddFile={openFileInCanvas}
+          apps={apps}
+          onAddApp={openApp}
+          searchFiles={files.searchFiles}
+          readFile={files.readFile}
+          openFile={files.onOpenFile}
+          writeFile={files.writeFile}
+          listFolders={files.listFolders}
+          org={files.org}
+          onShareFile={files.onShareFile}
+          railWidth={railPx}
+          reloadKey={reloadKey}
+        />
+      )}
+      {/* Chats / Files / Apps / Shares — docked on desktop, overlay on a phone */}
+      <AnimatePresence initial={false}>
         {filesOpen && (
           <>
+            {!isDesktop && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -478,20 +1044,54 @@ export function Chat({ chat, onShare, files, account, config }: {
               className="fixed inset-0 z-50 bg-black/30 backdrop-blur-[2px]"
               onClick={() => setFilesOpen(false)}
             />
+            )}
             <motion.div
-              initial={{ x: "100%" }}
-              animate={{ x: 0 }}
-              exit={{ x: "100%" }}
-              transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="fixed top-1 right-1 bottom-1 z-50 w-[calc(100%-0.5rem)] sm:w-[480px] rounded-xl border border-border bg-background flex flex-col overflow-hidden"
+              initial={isDesktop ? { width: 0 } : { x: "100%" }}
+              animate={!isDesktop ? { x: 0 }
+                : rightExpanded && !canvasShowing ? {}
+                : { width: railIconsOnly ? RAIL_ICON_W : panelWidth }}
+              exit={!isDesktop ? { x: "100%" } : { width: 0 }}
+              transition={railResizing ? { duration: 0 } : slide}
+              className={cn(
+                "flex flex-col overflow-hidden",
+                isDesktop
+                  ? cn("relative border-l border-border bg-background",
+                       rightExpanded && !canvasShowing ? "min-w-0 flex-1" : "shrink-0")
+                  : "fixed z-50 rounded-xl border border-border bg-background top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] max-w-[calc(100%-0.5rem)]",
+              )}
             >
-              {/* Tab bar */}
-              {(files || account) && (
-                <div className="flex items-center border-b border-border px-4 sm:px-6">
+              {/* Resize handle (left edge) — desktop only */}
+              {isDesktop && (
+                <div
+                  onMouseDown={startResize}
+                  className="absolute left-0 top-0 bottom-0 z-20 hidden sm:block w-1.5 -ml-0.5 cursor-ew-resize hover:bg-accent/30"
+                  aria-label="Resize panel"
+                />
+              )}
+              {/* Tab bar — icon strip once collapsed */}
+              {railIconsOnly ? (
+                <div className="flex flex-col items-center gap-1 border-b border-border py-2">
+                  {([["chats", "list", !!account], ["files", "folder", !!files],
+                     ["apps", "grid", !!files], ["shares", "link", !!account]] as const)
+                    .filter(([, , on]) => on)
+                    .map(([tab, icon]) => (
+                      <button
+                        key={tab}
+                        onClick={() => { setRailIcons(false); selectTab(tab as typeof filesTab); }}
+                        className={`flex size-8 items-center justify-center rounded-lg transition-colors cursor-pointer ${filesTab === tab ? "text-foreground bg-secondary/60" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80"}`}
+                        aria-label={t(tab)}
+                        title={t(tab)}
+                      >
+                        <Icon name={icon} className="size-4" />
+                      </button>
+                    ))}
+                </div>
+              ) : (files || account) && (
+                <div className="flex h-11 shrink-0 items-center border-b border-border px-2">
                   {account && (
                     <button
                       onClick={() => selectTab("chats")}
-                      className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "chats" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "chats" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                     >
                       {t("chats")}
                     </button>
@@ -499,33 +1099,55 @@ export function Chat({ chat, onShare, files, account, config }: {
                   {files && (
                     <button
                       onClick={() => selectTab("files")}
-                      className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "files" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "files" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                     >
                       {t("files")}
+                    </button>
+                  )}
+                  {files && (
+                    <button
+                      onClick={() => { selectTab("apps"); void refreshApps(); }}
+                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "apps" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                    >
+                      {t("apps")}
                     </button>
                   )}
                   {account && (
                     <button
                       onClick={() => selectTab("shares")}
-                      className={`px-3 py-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                     >
                       {t("shares")}
                     </button>
                   )}
                   <div className="flex-1" />
                   <button
-                    onClick={() => setFilesOpen(false)}
+                    onClick={collapseRail}
                     className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                    aria-label="Close"
+                    aria-label={t("collapse")}
+                    title={t("collapse")}
                   >
-                    <Icon name="x" className="size-4" />
+                    <Icon name="chevron-right" className="size-4" />
                   </button>
                 </div>
               )}
-              {filesTab === "files" && files ? (
-                <Files {...files} />
+              {!railIconsOnly && (filesTab === "files" && files ? (
+                <>
+                  <Files {...files} onDelete={deleteWithUndo} onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
+                  <TrashLink label={t("trash")} count={trashRows.length} onClick={() => { setTrashFilter(undefined); selectTab("trash"); }} />
+                </>
+              ) : filesTab === "apps" ? (
+                <AppsPanel
+                  apps={apps}
+                  loading={appsLoading}
+                  onOpen={(a) => { openApp(a); if (!isDesktop) setFilesOpen(false); }}
+                  onRename={files ? (a, name) => { void updateApp(a, { name }); } : undefined}
+                  onSetIcon={files ? (a, icon) => { void updateApp(a, { icon }); } : undefined}
+                  onUploadIcon={files ? (a, f) => { uploadAppIcon(a, f).catch(() => toastError(t("uploadFailed"))); } : undefined}
+                  onDelete={canPurge && files ? (a) => { void deleteWithUndo(`apps/${a.slug}`).then(() => refreshApps()); } : undefined}
+                />
               ) : filesTab === "shares" ? (
-                <div className="flex h-full flex-col">
+                <div className="flex flex-1 min-h-0 flex-col">
                   <div className="flex-1 overflow-y-auto">
                     {sharesLoading ? (
                       <LoadingBar />
@@ -590,12 +1212,19 @@ export function Chat({ chat, onShare, files, account, config }: {
                   </div>
                 </div>
               ) : filesTab === "chats" ? (
+                <>
                 <ChatsPanel
                   chats={chats}
                   loading={chatsLoading}
                   activeId={chatId}
                   onLoad={(id) => { onLoadChat?.(id); if (window.innerWidth < 640) setFilesOpen(false); }}
-                  onDelete={(id) => { setChatsLoading(true); onDeleteChat?.(id).then(() => setChats((prev) => prev.filter((x) => x.id !== id))).finally(() => setChatsLoading(false)); }}
+                  onDelete={(id) => {
+                    const name = chats.find((x) => x.id === id)?.title || t("untitled");
+                    setChatsLoading(true);
+                    onDeleteChat?.(id)
+                      .then(() => { setChats((prev) => prev.filter((x) => x.id !== id)); trashed(`chat:${id}`, "chat", name); })
+                      .finally(() => setChatsLoading(false));
+                  }}
                   onRename={async (id, title) => {
                     await onRenameChat?.(id, title);
                     setChats((prev) => prev.map((x) => x.id === id ? { ...x, title } : x));
@@ -605,46 +1234,32 @@ export function Chat({ chat, onShare, files, account, config }: {
                     setChats((prev) => prev.map((x) => x.id === id ? { ...x, favoritedAt: on ? new Date().toISOString() : "" } : x));
                   }}
                 />
-              ) : null}
+                {files && <TrashLink label={t("recentlyDeleted")} onClick={() => { setTrashFilter("chat"); selectTab("trash"); }} />}
+                </>
+              ) : filesTab === "trash" && files ? (
+                <TrashView
+                  rows={trashRows}
+                  loading={trashLoading}
+                  canPurge={canPurge}
+                  filter={trashFilter}
+                  onBack={() => selectTab(trashFilter === "chat" ? "chats" : "files")}
+                  onRestore={(r) => {
+                    const name = r.kind === "chat" ? r.path : r.path.split("/").pop() || r.path;
+                    files.onRestoreTrash?.(r.id, r.kind, "trash_tab")
+                      .then(() => { toastInfo(t("restored").replace("{name}", name)); afterRestore(r.kind); })
+                      .catch(() => toastError(t("restoreFailed")));
+                  }}
+                  onPurge={(r) => { files.onPurgeTrash?.(r.id, r.kind).then(loadTrash).catch(() => {}); }}
+                  onEmpty={() => { files.onEmptyTrash?.().then(loadTrash).catch(() => {}); }}
+                />
+              ) : null)}
             </motion.div>
           </>
         )}
       </AnimatePresence>
-      {pricingFor && (
-        <Popover open onClose={() => closePricing("backdrop")} dim className="inset-0 flex items-center justify-center pointer-events-none">
-          <div dir="ltr" className="pointer-events-auto fixed top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] flex flex-col rounded-xl border border-border bg-background shadow-xl sm:relative sm:inset-auto sm:w-auto sm:max-h-[90vh] sm:rounded-2xl">
-            <div className="flex items-center justify-between px-6 pt-5 pb-3">
-              <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
-                {pricingFor === "organization" ? (
-                  activeOrg ? (
-                    <>
-                      <span>{t("orgPlansFor")}</span>
-                      <span className="inline-flex items-center gap-1.5 text-sm font-medium bg-secondary text-foreground rounded-lg px-2.5 py-1">
-                        {activeOrg.imageUrl && (
-                          <div
-                            className="size-4 rounded-full bg-secondary shrink-0"
-                            style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }}
-                          />
-                        )}
-                        {activeOrg.name}
-                      </span>
-                    </>
-                  ) : t("orgPlans")
-                ) : t("personalPlans")}
-              </h2>
-              <button
-                onClick={() => closePricing("dismiss")}
-                className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-              >
-                <Icon name="x" className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="px-6 pb-5 overflow-y-auto">
-              <PricingCards payerType={pricingFor} onSelect={() => closePricing("select")} />
-            </div>
-          </div>
-        </Popover>
-      )}
+      </div>
+      </div>
+      </div>
     </div>
   );
 }
@@ -774,7 +1389,137 @@ function Star({ filled, className }: { filled: boolean; className?: string }) {
   );
 }
 
-function Suggestions({
+// A message waiting on the current run. Dashed border marks it as not-yet-
+// sent; clicking pulls it back into the composer (the same gesture that
+// accepts a follow-up), which is also the only way to send one while an
+// explicit Stop is holding the queue.
+function QueuedChip({ text, held, onEdit, onDismiss }: {
+  text: string;
+  held: boolean;
+  onEdit: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 4 }}
+      transition={{ duration: 0.15 }}
+      className="mb-2 flex justify-end px-1"
+    >
+      <div className="flex max-w-full items-center gap-0.5 rounded-2xl border border-dashed border-border bg-secondary/40 py-1.5 ps-3.5 pe-1.5">
+        <button
+          onClick={onEdit}
+          title={held ? t("queuedHeld") : t("queuedHint")}
+          className="min-w-0 text-start text-sm leading-snug break-words text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          dir="auto"
+        >
+          {text}
+        </button>
+        <button
+          onClick={onDismiss}
+          className="shrink-0 rounded-full p-1 text-muted-foreground/60 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+          aria-label={t("dismiss")}
+        >
+          <Icon name="x" className="size-3" />
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
+// The agent's `ask` tool — a question card above the composer. Options are
+// shortcuts, never a gate: the composer stays live and typing any reply
+// answers too.
+//
+// Several questions step one at a time rather than stacking. Stacked, a
+// three-question card is a form the user has to scan before answering any of
+// it, and it crowds the composer off small screens; one at a time keeps each
+// question the only thing being asked.
+//
+// How a step commits depends on what it is. A single-select row IS the answer,
+// so tapping it advances (and on the last step, sends) — a radio that never
+// gets to show a checked state would be decoration. Multi-select and open
+// questions can't know when you're done, so they get an explicit Next/Submit.
+function FollowUpChip({ text, onAccept, onDismiss }: {
+  text: string;
+  onAccept: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.15 }}
+      className="mb-2 flex justify-start px-1"
+    >
+      {/* Logical padding (ps/pe) so the text side keeps its inset in RTL;
+          long suggestions wrap inside the composer's width. */}
+      <div className="flex max-w-full items-center gap-0.5 rounded-2xl border border-border bg-background py-1.5 ps-3.5 pe-1.5 shadow-sm">
+        <button
+          onClick={onAccept}
+          title={t("followUpHint")}
+          className="min-w-0 text-start text-sm leading-snug break-words text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          dir="auto"
+        >
+          {text}
+        </button>
+        <button
+          onClick={onDismiss}
+          className="shrink-0 rounded-full p-1 text-muted-foreground/60 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+          aria-label="Dismiss"
+        >
+          <Icon name="x" className="size-3" />
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
+// Footer link into the trash — Finder/Drive style, from where the loss happened.
+function TrashLink({ label, count, onClick }: { label: string; count?: number; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex shrink-0 items-center gap-2 border-t border-border px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/40 transition-colors cursor-pointer"
+    >
+      <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l.7 12a1 1 0 001 .95h6.6a1 1 0 001-.95L17 7" />
+      </svg>
+      <span>{label}{count ? ` · ${count}` : ""}</span>
+    </button>
+  );
+}
+
+// The empty screen's brand hero. `absolute` floats it above the centered
+// input (the classic layout); in flow it stacks over input + gallery. Also
+// rendered by the signed-out public shell (App.tsx), same face both sides.
+export function EmptyHero({ meta, absolute }: {
+  meta: { name: string; description?: string; logo?: string };
+  absolute?: boolean;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ delay: 0.4 }}
+      className={cn(
+        "flex flex-col items-center gap-4 text-center",
+        absolute ? "absolute bottom-full left-0 right-0 mb-10" : "mb-10",
+      )}
+    >
+      {meta.logo && (meta.logo.startsWith("<") ? (
+        <div className="size-16 rounded-xl overflow-hidden border border-border" dangerouslySetInnerHTML={{ __html: meta.logo }} />
+      ) : (
+        <img src={meta.logo} alt="" className="size-16 rounded-xl object-cover border border-border" />
+      ))}
+      <h2 className="text-2xl font-semibold text-foreground">{meta.name}</h2>
+      {meta.description && <p className="text-base text-muted-foreground max-w-lg">{meta.description}</p>}
+    </motion.div>
+  );
+}
+
+export function Suggestions({
   onSelect,
   onPreview,
   input,

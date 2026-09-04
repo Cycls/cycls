@@ -45,6 +45,50 @@ def test_workspace_url_with_bucket_org(tmp_path):
     assert ws.base == "gs://cycls-ws-myagent"
 
 
+def test_workspace_volume_property(tmp_path):
+    assert db.workspace("org:member_1", tmp_path).volume == tmp_path
+    assert db.workspace("user", tmp_path).volume == tmp_path
+
+
+# ---------------------------------------------------------------------------
+# Multi-workspace mode (ws=) — docs/workspaces.md
+# ---------------------------------------------------------------------------
+
+def test_workspace_ws_org_personal(tmp_path):
+    ws = db.workspace("org:member_1", tmp_path, base=f"file://{tmp_path}", ws="u-member_1")
+    assert ws.root == tmp_path / "org" / "ws" / "u-member_1"
+    assert ws.path == "org/ws/u-member_1/.db/member_1"
+    assert ws.ws == "u-member_1"
+    assert ws.volume == tmp_path
+
+
+def test_workspace_ws_solo_user_is_the_root(tmp_path):
+    """A solo account's personal workspace collapses to the account root —
+    the legacy layout; solo data never migrates for the workspaces flag."""
+    ws = db.workspace("user", tmp_path, ws="u-user")
+    assert ws.root == tmp_path / "user"
+    assert ws.path == "user/.db"
+    assert ws.volume == tmp_path
+
+
+def test_workspace_ws_team_id(tmp_path):
+    ws = db.workspace("org:member_1", tmp_path, ws="t-abc123")
+    assert ws.root == tmp_path / "org" / "ws" / "t-abc123"
+    assert ws.path == "org/ws/t-abc123/.db/member_1"
+
+
+def test_workspace_ws_invalid_id_raises(tmp_path):
+    for bad in ("..", "u-", "t-", "shared", "u-a/b", "u-a.b", "x-abc", "u-../evil", ""):
+        with pytest.raises(ValueError):
+            db.workspace("org:member_1", tmp_path, ws=bad)
+
+
+def test_workspace_subject_traversal_raises(tmp_path):
+    for bad in ("..", ".", "../evil", "a/b", "org:..", "org:a/b", "..\\evil"):
+        with pytest.raises(ValueError):
+            db.workspace(bad, tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # Basic ops
 # ---------------------------------------------------------------------------

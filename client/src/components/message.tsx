@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import type { Part, Message } from "../hooks/use-chat";
+import type { Part, Message, Source } from "../hooks/use-chat";
 import { TextPart } from "./parts/text-part";
 import { ThinkingPart } from "./parts/thinking-part";
 import { CodePart } from "./parts/code-part";
@@ -8,19 +8,26 @@ import { TablePart } from "./parts/table-part";
 import { CalloutPart } from "./parts/callout-part";
 import { ImagePart } from "./parts/image-part";
 import { StepPart } from "./parts/step-part";
+import { StepGroup } from "./parts/step-group";
+import { FilePart } from "./parts/file-part";
+import { SourcesPart } from "./parts/sources-part";
 import { AttachmentBody } from "./attachment-body";
 import { Icon } from "./icon";
 import { cn } from "../lib/utils";
+import { urlKey } from "./parts/sources-part";
+import { useMemo } from "react";
+import { t } from "../lib/i18n";
 
-function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: () => void) {
+function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: () => void, onOpenFile?: (path: string) => void, sources?: Map<string, Source>) {
   switch (part.type) {
     case "text":
-      return <TextPart key={index} text={part.text || ""} />;
+      return <TextPart key={index} text={part.text || ""} onOpenFile={onOpenFile} sources={sources} />;
     case "thinking":
       return (
         <ThinkingPart
           key={index}
           thinking={part.thinking || ""}
+          isStreaming={isStreaming}
         />
       );
     case "code":
@@ -48,6 +55,8 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
           caption={part.caption}
         />
       );
+    case "sources":
+      return <SourcesPart key={index} sources={part.sources || []} />;
     case "step":
       return (
         <StepPart
@@ -72,14 +81,22 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
   }
 }
 
+// Successful canvas calls are deliverables — they render as file cards and
+// must never fold into a step group.
+function groupKind(p: Part) {
+  if (p.type === "step" && p.tool_name === "Canvas" && p.step && p.ok !== false) return "file";
+  return p.type;
+}
+
 function groupParts(parts: Part[]) {
-  const groups: { type: string; items: Part[]; startIndex: number }[] = [];
+  const groups: { kind: string; items: Part[]; startIndex: number }[] = [];
   for (let i = 0; i < parts.length; i++) {
+    const kind = groupKind(parts[i]);
     const last = groups[groups.length - 1];
-    if (parts[i].type === "step" && last?.type === "step") {
+    if (kind === "step" && last?.kind === "step") {
       last.items.push(parts[i]);
     } else {
-      groups.push({ type: parts[i].type, items: [parts[i]], startIndex: i });
+      groups.push({ kind, items: [parts[i]], startIndex: i });
     }
   }
   return groups;
@@ -89,10 +106,16 @@ export function MessageBubble({
   message,
   isStreaming,
   onRetry,
+  onRegenerate,
+  onOpenFile,
 }: {
   message: Message;
   isStreaming?: boolean;
   onRetry?: () => void;
+  // Only passed for the last assistant message — regenerating an earlier one
+  // would mean truncating the transcript back to it, which the API doesn't do.
+  onRegenerate?: () => void;
+  onOpenFile?: (path: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -124,8 +147,51 @@ export function MessageBubble({
     );
   }
 
-  const parts = (message.parts || []).filter((p) => p.type !== "chat_id");
-  const isEmpty = parts.length === 0;
+  const parts = (message.parts || [])
+    .filter((p) => p.type !== "chat_id")
+    // Collapse consecutive canvas cards for the same file (retries) into one.
+    .filter((p, i, all) => {
+      if (p.type !== "step" || p.tool_name !== "Canvas") return true;
+      const next = all[i + 1];
+      return !(next?.type === "step" && next.tool_name === "Canvas" && next.step === p.step);
+    });
+  // `sources` parts don't render where they land — one chip row per search
+  // repeated the same domains through the turn. They're merged and deduped
+  // into a single row at the END of the message instead, which is also the
+  // only thing that guarantees provenance is visible: citing inline is the
+  // model's choice, and a turn where it searches but doesn't cite would
+  // otherwise show no sources at all.
+  //
+  // `suggest` and `ask` drive the composer, not the transcript. Their step
+  // line restated a chip or a card the user is already looking at, and padded
+  // the "N steps" count with work that isn't work.
+  const rendered = parts.filter((p) =>
+    p.type !== "sources"
+    && !(p.type === "step" && (p.tool_name === "Suggest" || p.tool_name === "Ask")));
+  const isEmpty = rendered.length === 0;
+
+  // Every result this turn's searches returned, keyed for link lookup. `parts`
+  // is rebuilt on every streamed token, so the memo keys on the URLs instead —
+  // a churning map identity would re-render every markdown block per token.
+  const sourceKey = parts
+    .filter((p) => p.type === "sources")
+    .map((p) => (p.sources || []).map((s) => s.url).join(","))
+    .join("|");
+  const sourceIndex = useMemo(() => {
+    if (!sourceKey) return undefined;
+    const map = new Map<string, Source>();
+    for (const p of parts) {
+      if (p.type !== "sources") continue;
+      for (const s of p.sources || []) if (s.url) map.set(urlKey(s.url), s);
+    }
+    return map.size ? map : undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceKey]);
+
+  // Deduped by `urlKey`, so the same article returned by two searches is one
+  // chip. Held back until the turn ends — appended live it would shunt itself
+  // down the page on every streamed token.
+  const allSources = useMemo(() => (sourceIndex ? [...sourceIndex.values()] : []), [sourceIndex]);
 
   const copyAll = () => {
     const text = parts
@@ -142,15 +208,17 @@ export function MessageBubble({
       <div className="relative flex min-w-0 flex-1 flex-col gap-1">
         {isEmpty && isStreaming && <Loader />}
 
-        {groupParts(parts).map((group, gi) =>
-          group.type === "step" ? (
-            <div key={gi} className="my-3 flex flex-col">
-              {group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming, onRetry))}
-            </div>
-          ) : (
-            group.items.map((part, i) => renderPart(part, group.startIndex + i, isStreaming, onRetry))
-          )
-        )}
+        {groupParts(rendered).map((group, gi, all) => {
+          if (group.kind === "step")
+            return <StepGroup key={gi} items={group.items} live={isStreaming && gi === all.length - 1} />;
+          if (group.kind === "file")
+            return <FilePart key={gi} path={group.items[0].step || ""} onOpen={onOpenFile} />;
+          return group.items.map((part, i) =>
+            renderPart(part, group.startIndex + i,
+              isStreaming && group.startIndex + i === rendered.length - 1, onRetry, onOpenFile, sourceIndex));
+        })}
+
+        {!isStreaming && allSources.length > 0 && <SourcesPart sources={allSources} />}
 
         {/* Actions */}
         {!isEmpty && !isStreaming && (
@@ -167,6 +235,17 @@ export function MessageBubble({
             >
               <Icon name={copied ? "check" : "copy"} className="w-3.5 h-3.5" />
             </button>
+            {onRegenerate && (
+              <button
+                onClick={onRegenerate}
+                className="hover:bg-secondary text-muted-foreground hover:text-foreground flex size-7 items-center justify-center rounded-full transition cursor-pointer"
+                aria-label={t("regenerate")}
+                title={t("regenerate")}
+                type="button"
+              >
+                <Icon name="refresh" className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         )}
       </div>

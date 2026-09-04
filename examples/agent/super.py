@@ -1,14 +1,13 @@
 # uv run cycls run examples/agent/super.py
 # uv run cycls deploy examples/agent/super.py
 # cd client && npm run dev
-# uv run pytest tests/agent_test.py -v
+# uv run pytest tests/agent/ -v
 
 from datetime import datetime, timezone
 
 import cycls
 
 FREE_MONTHLY_LIMIT = 5
-DOMAIN = "cycls.ai"
 EXEMPT_USERS = {
     "user_2yY1NGlkgUtCgYiPLSHQUriCWrr",
     "user_2yXuICg28R0J2xXMDb6csQ0iEu9",
@@ -17,14 +16,53 @@ EXEMPT_USERS = {
     "user_3C4OrVnUh3PbayK89C73tqYPzOD",
 }
 
+# .pip("pandas")/.apt("ffmpeg")/.run("...") add deps + build steps; .volume("/data")
+# moves the workspace mount; .rebuild() forces a no-cache build.
 image = cycls.Image().copy(".providers.env", ".env")#.rebuild()
 
 web = (
     cycls.Web()
     .auth(cycls.Clerk())
-    .cms(DOMAIN)
-    .analytics(True) # "cycls.ai"
+    # .iap(cycls.AppleIAP(  # iOS subscriptions — StoreKit 2 JWS sent in the x-apple-entitlement header
+    #     bundle_id="com.cycls.app",
+    #     products={"com.cycls.app.pro.month": "u:ios_pro",   # each SKU grants its own plan
+    #               "com.cycls.app.max.month": "u:ios_max"},  # add/rename SKUs here, no SDK change
+    #     namespace="<uuid the iOS client also uses>"))
+    .cms(brand="https://cms.cycls.ai/agents/super", explore="https://cms.cycls.ai/agents")  # any CMS returning the contract JSON; token=... for private ones
+    # Static branding — the same knobs without a CMS (static wins, piece by piece):
+    # .brand(name="Super", description="The agent for getting things done",
+    #        logo="assets/icon.svg",   # agent icon, shown in the chat hero
+    #        brand="assets/logo.svg",  # brand wordmark, shown in the nav bar
+    #        og="assets/og.png", favicon="assets/favicon.svg")
+    # .brand(locale="ar", name="سوبر", description="وكيلك لإنجاز المهام")
+    # .seo(title="Super — AI agent", description="Automate research, files and documents.")
+    # .colors(primary="#7c3aed", secondary="#f3e8ff", primary_dark="#a78bfa")  # theme accents (any CSS color)
+    # .head('<meta name="google-site-verification" content="...">')
+    # .explore({"name": "Coder", "url": "https://coder.cycls.ai", "logo": "assets/coder.svg"})
+    # /robots.txt, /sitemap.xml, /llms.txt, /og.png are served automatically —
+    # derived from .seo()/.brand(), with JSON-LD in <head> so the sign-in-gated
+    # page stays crawlable.
+    .analytics(True)  # PostHog default; providers are plugins on one event pipe (docs/notes/analytics.md):
+    # .analytics(cycls.PostHog(), cycls.GTM("GTM-PVCPD38W",
+    #     events=["sign_up_start", "sign_up", "first_agent_use", "checkout_start", "purchase"]))
+    .affiliate("059168")  # Rewardful referral tracking
     .title("The agent for getting things done")
+    # .theme("default")   # "default" or "dev"
+    # .suggestions(True)  # show starter prompts on the empty chat
+    # Example gallery on the empty screen (docs/notes/examples-gallery.md) —
+    # curate by using the product: chat, Share the conversation (public), paste
+    # the link. One share carries the chat AND its canvas artifact; cards show
+    # the artifact live with "Use prompt" / "View". Takes over from .suggestions().
+    # .examples({
+    #     ("Landing pages", "صفحات هبوط"): ["https://super.cycls.ai/shared/<user>/<token>"],
+    #     ("Data analysis", "تحليل البيانات"): ["https://super.cycls.ai/shared/<user>/<token>"],
+    #     ("Tutorials", "دروس"): [  # tutorial cards: one Watch action, plays in-page
+    #         {"video": "https://youtu.be/<id>", "title": "Getting started"},        # YouTube/Vimeo
+    #         {"video": "/public/tour.mp4", "title": "Deep dive"}],                  # or any hosted file (.copy_public())
+    # })  # tuple key = (en, ar) pill label; a plain string serves both locales
+    # .copy_public("assets/logo.png")  # static files served at /public/<name>
+    # .workspaces()    # personal + team workspaces (docs/workspaces.md)
+    # .max_upload(512) # per-file upload cap in MB
 )
 
 SYSTEM = """
@@ -58,12 +96,35 @@ llm = (
     cycls.LLM()
     .model("anthropic/claude-sonnet-4-6")
     # .model("openai/gpt-5.4")
+    # .model("zai/glm-5.2").base_url("https://api.z.ai/api/paas/v4/")  # any OpenAI-compatible API
+    # .model("google/gemini-3.1-pro-preview").base_url("https://generativelanguage.googleapis.com/v1beta/openai/")
+    # .context(200_000)   # window → compaction timing (default 1M; set for smaller models)
+    .max_tokens(64_000)   # output cap per request (default 8k)
+    .price(input=3, output=15, cache_read=0.30, cache_write=6)  # USD/1M, for cost tracking
     .system(SYSTEM)
-    # .tools(TOOLS)  # skills+safe_keys
-    # .on("render_image", render_image)
-    .allowed_tools(["Bash", "Editor", "WebSearch", "DataBase"])  # "Canvas"
-    # .mcp(cycls.MCP("https://figma-mcp.example/mcp").name("figma").token(os.environ["FIGMA_TOKEN"]))  # remote MCP, anthropic/* only
+    # .tools(TOOLS)  # custom tool JSON schemas
+    # .on("render_image", render_image, label=lambda inp: inp.get("alt", ""))
+    #   register a handler; label renders the UI step line, e.g. render_image(a cat)
+    .allowed_tools(["Bash", "Editor", "WebSearch", "DataBase", "Canvas", "Suggest", "Ask"])
+    # "Suggest": ONE follow-up chip above the composer after each answer,
+    # steering toward a finished artifact; users switch it off in Settings.
+    # "Ask": up to THREE questions on one card above the composer, when a
+    # choice genuinely can't be defaulted — per-question single- or
+    # multi-select options plus a Submit. Batched because the turn ends there
+    # and the next message is the answer, so asking one at a time costs a full
+    # round-trip each; the options are shortcuts, not a gate (typing any reply
+    # works). Users switch the card off in Settings.
+    # .thinking("low")  # unified reasoning across providers: "low" | "medium" | "high"
+    # .vision(False)  # text-only model: attached media stays in the workspace with a note
+    # .extra_body({"reasoning_effort": "low"})  # vendor extras merged last — your keys win
+    # .web_search("native")  # Anthropic server-side search; default "brave" runs on any model (BRAVE_API_KEY)
+    # .skills("examples/agent/skills")  # ship skill folders (<name>/SKILL.md) with the agent
+    # .instructions("AGENT.md")  # workspace instructions file in the system prompt — this is the default
+    # .mcp(cycls.MCP("https://figma-mcp.example/mcp").name("figma").token(os.environ["FIGMA_TOKEN"]))  # remote MCP, anthropic/* only (needs `import os`)
     # .sandbox(network=False)  # opt out of network access for the LLM bash
+    # .bash_timeout(600)  # bash sandbox timeout in seconds
+    # .api_key(os.environ["ANTHROPIC_API_KEY"])  # override the provider key (default: from env)
+    # .loop(my_loop)  # replace the built-in agent loop entirely (see docs/tutorial.md)
 )
 
 
@@ -71,14 +132,14 @@ llm = (
              volumes={"/workspace": cycls.Volume("super")})
 async def super(context):
     user = context.user
-    # Local dev is shalways exempted so prototyping isn't blocked by gates.
+    # Local dev is always exempted so prototyping isn't blocked by gates.
     exempt = user.id in EXEMPT_USERS or not context.prod
 
     # b2b: free orgs blocked (no compute, no tracking)
     if user.plan == "o:free_org" and not exempt:
         cycls.log("cap_hit", user=user, chat_id=context.chat_id, kind="org_free")
         yield {"type": "text", "text": "🔒 This workspace needs a paid plan."}
-        yield {"type": "ui", "action": "open_plan_modal"}
+        yield {"type": "ui", "action": "open_plan_modal", "reason": "plan_required"}
         return
 
     # Track monthly usage; gate free users at FREE_MONTHLY_LIMIT.
@@ -92,7 +153,7 @@ async def super(context):
                   kind="user_free_monthly", count=entry["count"], limit=FREE_MONTHLY_LIMIT)
         yield {"type": "text",
                "text": f"🚨 Free tier limit reached ({FREE_MONTHLY_LIMIT}/mo). Upgrade for unlimited."}
-        yield {"type": "ui", "action": "open_plan_modal"}
+        yield {"type": "ui", "action": "open_plan_modal", "reason": "limit"}
         return
 
     entry["count"] += 1

@@ -51,8 +51,12 @@ def test_agent_server_routes_cross_pickle_as_data():
     app = FastAPI()
     for r in routers:
         r(app, None)
-    paths = {route.path for route in app.routes}
-    assert {"/health", "/webhook"} <= paths
+    # Assert functionally — newer FastAPI defers included routers in
+    # app.routes (_IncludedRouter), so path introspection is version-fragile.
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    assert client.get("/health").json() == {"ok": True}
+    assert client.post("/webhook").status_code != 404   # registered
     print("✅ Test passed.")
 
 
@@ -77,15 +81,15 @@ def test_web_builder_propagates_into_config():
     """Tests that cycls.Web().auth().analytics().cms() fields land on Config."""
     print("\n--- Running test: test_web_builder_propagates_into_config ---")
 
-    web = cycls.Web().auth(cycls.Clerk()).analytics(True).cms("cycls.ai")
+    web = cycls.Web().auth(cycls.Clerk()).analytics(True).cms(brand="https://cms.cycls.ai/agents/x")
 
     @cycls.agent(web=web, volumes=WS)
     async def premium_app(context):
         yield "premium"
 
     assert premium_app.config.auth == True
-    assert premium_app.config.analytics == True
-    assert premium_app.config.cms == "cycls.ai"
+    assert premium_app.config.analytics == [{"provider": "posthog"}]
+    assert premium_app.config.cms == {"brand": "https://cms.cycls.ai/agents/x"}
     print("✅ Test passed.")
 
 
@@ -101,7 +105,7 @@ def test_app_default_config():
         yield "default"
 
     assert default_app.config.auth == False
-    assert default_app.config.analytics == False
+    assert default_app.config.analytics is None
     assert default_app.config.cms is None
     assert default_app.config.title is None
     print("✅ Test passed.")
@@ -276,7 +280,7 @@ def test_app_all_config_options():
 
     assert full_app.config.title == "My App"
     assert full_app.config.auth == True
-    assert full_app.config.analytics == True
+    assert full_app.config.analytics == [{"provider": "posthog"}]
     print("✅ Test passed.")
 
 
