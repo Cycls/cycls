@@ -1243,8 +1243,8 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.get("/connectors")
     async def list_connectors(ws: Workspace = ws_dep):
-        return [{"name": n, "scope": o.scope, "connected": await credentials.get(ws, n) is not None}
-                for n, o in reg.items()]
+        return [{"name": n, "scope": o.scope, "description": o.description, "icon": o.icon,
+                 "connected": await credentials.get(ws, n) is not None} for n, o in reg.items()]
 
     @r.post("/connectors/{name}/authorize")
     async def authorize(name: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
@@ -1273,7 +1273,9 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
         grant = await o.exchange(code, pending["redirect"], pending["verifier"])
         await credentials.put(ws, name, grant, shared=o.shared)
         log("connector", action="connected", connector=name, scope=o.scope, subject=p["s"], ws=p["w"])
-        return HTMLResponse("<p>Connected — you can close this tab.</p><script>window.close()</script>")
+        return HTMLResponse("<p>Connected — you can close this tab.</p><script>"
+                            f"window.opener&&window.opener.postMessage({{type:'cycls:connected',connector:{json.dumps(name)}}},location.origin);"
+                            "window.close()</script>")
 
     @r.delete("/connectors/{name}")
     async def disconnect(name: str, ws: Workspace = ws_dep, user: Any = user_dep):

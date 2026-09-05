@@ -165,8 +165,9 @@ Identified users also carry **person properties** (via identify): `email`,
 
 | event | fires when | key props / question |
 |---|---|---|
-| `ui_action` | every minor agent `ui` event: `action` = `suggest`, `ask` (+ `questions`), or anything unhandled (`handled: false`) | the denominator for the chips: `followup_accepted` ÷ `ui_action{suggest}`, `ask_answered` ÷ `ui_action{ask}`. Milestone actions fire their named event instead (`open_canvas` → `artifact_completed`, `open_plan_modal` → `paywall_shown`) |
+| `ui_action` | every minor agent `ui` event: `action` = `suggest`, `ask` (+ `questions`), `connect` (+ `connector`), or anything unhandled (`handled: false`) | the denominator for the chips: `followup_accepted` ÷ `ui_action{suggest}`, `ask_answered` ÷ `ui_action{ask}`. Milestone actions fire their named event instead (`open_canvas` → `artifact_completed`, `open_plan_modal` → `paywall_shown`) |
 | `ask_answered` / `ask_dismissed` | clarifying-question card resolved | answered ÷ shown decides the feature's fate |
+| `connector_connect_clicked` / `connector_dismissed` | connect card resolved — the person opened the provider, or declined (+ `connector`) | clicked ÷ `ui_action{connect}` is the connect rate; a high dismiss rate on one connector says its card isn't earning trust |
 | `followup_accepted` | follow-up chip taken | `method` (click/arrow) |
 | `ask_toggled` / `followups_toggled` / `web_search_toggled` | settings switches (`to`, `source`) | opt-out rate = annoyance meter; web search off rides the request as `disabled_tools` |
 | `notification_prompt_shown` / `notification_prompt_answered` | our push-permission card (docs/notes/engagement.md) | `placement` (`corner`, or `settings` from the Turn on row), `result` (`allowed` / `denied` / `dismissed`). When it shows is the `notification_prompt` flag's call |
