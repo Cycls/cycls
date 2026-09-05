@@ -102,7 +102,14 @@ class Function:
                 "functions ship as cloudpickle bytecode, which only loads on the same "
                 "major.minor Python.")
         self.python_version = python_version or host_py
-        self.base_image = f"python:{self.python_version}-slim"
+        # Pin Debian 12 "bookworm". The default `-slim` tag has moved to Debian 13
+        # "trixie", which ships bubblewrap 0.12 — it opens every bind-mount source
+        # via openat2(2), a syscall the gVisor-based deploy runtime doesn't implement
+        # (ENOSYS). That breaks the bash sandbox entirely: every `bash` call dies with
+        # "Can't open source /: Function not implemented". bookworm's bubblewrap 0.8
+        # uses classic open()+mount(), which the runtime supports. Revisit once the
+        # runtime implements openat2 or bwrap no longer requires it.
+        self.base_image = f"python:{self.python_version}-slim-bookworm"
         self.apt = sorted([*self._base_apt, *image.get("apt", [])])
         self.run_commands = list(image.get("run_commands", []))
         self.copy = image.get("copy", {})

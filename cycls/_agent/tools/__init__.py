@@ -386,6 +386,19 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
     # `rm`/`rmdir` move to the trash instead of unlinking.
     trash_dir = os.path.join(cwd, trash.DIR)
     os.makedirs(trash_dir, exist_ok=True)
+    # bwrap can't create bind mount points inside its read-only root (`--ro-bind /
+    # /`), so every top-level bind target must already exist on the real fs. The
+    # dev-skill mounts below are guarded by `os.path.isdir`; /workspace comes from
+    # the volume mount; but /workspace-trash and /opt/cycls-bin are always bound and
+    # nothing else creates them — so bwrap dies with "Can't mkdir /workspace-trash:
+    # Read-only file system". Pre-create them here (cf. skills.configure, which does
+    # the same for /skills/<name>). Best-effort: a read-only container root would
+    # only cost the bash tool, not crash the agent.
+    for _mnt in ("/workspace-trash", "/opt/cycls-bin"):
+        try:
+            os.makedirs(_mnt, exist_ok=True)
+        except OSError:
+            pass
     shims = str(pathlib.Path(__file__).parent / "shims")
     env = {"PATH": f"/opt/cycls-bin:{path}", "LANG": lang,
            "CYCLS_WORKSPACE": "/workspace", "CYCLS_TRASH": "/workspace-trash"}
