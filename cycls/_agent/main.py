@@ -43,7 +43,7 @@ class _Routes:
 
 
 class Agent(App):
-    _base_pip = [*App._base_pip, "resvg-py", "anthropic", "openai", "python-dotenv"]
+    _base_pip = [*App._base_pip, "resvg-py", "anthropic", "openai", "python-dotenv", "mcp==2.1.1"]
     _base_apt = [*App._base_apt, "fonts-noto-core",
                  "poppler-utils", "ripgrep", "jq", "curl"]
 

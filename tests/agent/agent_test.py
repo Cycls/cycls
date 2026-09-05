@@ -1446,6 +1446,30 @@ def test_second_ask_in_one_batch_is_refused_by_the_loop(agent_env):
     assert results[1]["content"].startswith("Error")
 
 
+def test_mcp_tools_reach_the_model_and_dispatch(agent_env):
+    """Client-side MCP: the discovered schema is in the request's tools and a
+    call to it runs through the handler path — on whatever provider, with
+    nothing handed to the Anthropic connector."""
+    from cycls._agent import mcp as m
+    ws, ctx = agent_env
+    m._discovered.clear()
+    tool = types.SimpleNamespace(name="orders", description="d", input_schema={"type": "object"})
+    call = _make_response([_tool_use_block("t1", name="salla_orders", inp={"since": "2026-08"})],
+                          stop_reason="tool_use")
+    client, calls = _capturing_client([call, _make_response([_text_block("done")])])
+
+    with _mock_anthropic(client), \
+         patch.object(m, "_list", AsyncMock(return_value=[tool])), \
+         patch.object(m, "_call", AsyncMock(return_value="3 orders")):
+        asyncio.run(_drain(_run(context=ctx, mcp_servers=[m.MCP("https://x/mcp").name("salla")])))
+
+    assert "salla_orders" in [t["name"] for t in calls[0]["tools"]]
+    assert "mcp_servers" not in calls[0].get("extra_body", {})
+    result = next(b for msg in _read_history(ctx) if msg["role"] == "user" and isinstance(msg["content"], list)
+                  for b in msg["content"] if b.get("type") == "tool_result")
+    assert result["content"] == "3 orders"
+
+
 def test_tool_guidance_rides_with_the_enabled_tool(agent_env):
     """Opting into the tool is the only switch — no operator has to remember
     matching prompt copy, and a tool that isn't enabled contributes nothing."""
