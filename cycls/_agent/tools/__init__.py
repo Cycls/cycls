@@ -24,7 +24,7 @@ _BASH_TOOL = {
         "Execute a shell command in the workspace sandbox.\n\n"
         "Usage:\n"
         "- Working directory is /workspace. Never prefix commands with `cd /workspace`.\n"
-        "- Scratch goes in `.tmp/` (it is `$TMPDIR`): downloads, intermediate data, anything "
+        "- Scratch goes in `.tmp/`: downloads, intermediate data, anything "
         "the user should not see in their files — it is hidden and cleaned up. Files the user "
         "keeps go in the workspace root. Never /tmp: every command gets its own, gone when it exits.\n"
         "- Use `rg` or `rg --files` for searching — it's faster than grep.\n"
@@ -358,8 +358,8 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
     return tools
 
 _TMP_ERROR = ("/tmp is not shared — every bash command gets its own, discarded when it "
-              "exits, and the file tools cannot see it. Use .tmp/ for scratch (it is $TMPDIR "
-              "in bash) and the workspace root for files the user keeps")
+              "exits, and the file tools cannot see it. Use .tmp/ for scratch and the workspace "
+              "root for files the user keeps")
 
 
 def _resolve_path(raw_path, workspace):
@@ -392,9 +392,8 @@ async def _exec_bash(command, cwd, timeout=600, network=False, chat_id=None):
     shims = str(pathlib.Path(__file__).parent / "shims")
     env = {"PATH": f"{SHIMS_MOUNT}:{path}", "LANG": lang,
            "CYCLS_WORKSPACE": "/workspace", "CYCLS_TRASH": TRASH_MOUNT}
-    if chat_id:   # the chat's scratch: persists across commands, swept with its spills
+    if chat_id:   # the chat's scratch, swept with its spills
         os.makedirs(os.path.join(cwd, spill.DIR, chat_id), exist_ok=True)
-        env["TMPDIR"] = f"/workspace/{spill.DIR}/{chat_id}"
     sb = (Sandbox()
           .bind(cwd, "/workspace")
           .tmpfs("/workspace/.db")        # cycls state (chat, shares); editor blocks via _resolve_path
