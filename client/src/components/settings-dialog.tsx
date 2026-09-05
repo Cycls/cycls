@@ -10,6 +10,7 @@ import type { AccountInfo } from "./chat";
 import { WsIcon, type WorkspacesMenu } from "./workspace-switcher";
 import { EmojiPicker } from "./emoji-picker";
 import type { MemberInfo } from "../hooks/use-workspaces";
+import type { ChatApi } from "../hooks/use-chat";
 import { t, useLang, setLang, getLang } from "../lib/i18n";
 import { cn, getThemeMode, setThemeMode, followUpsEnabled, setFollowUpsEnabled, askEnabled, setAskEnabled, webSearchEnabled, setWebSearchEnabled, type ThemeMode } from "../lib/utils";
 import { pushProvider, pushStatus, requestPush, answerResult } from "../lib/notifications";
@@ -17,9 +18,10 @@ import { useDarkMode } from "../hooks/use-dark-mode";
 import { useToast } from "../lib/toast";
 import { track } from "../lib/analytics";
 
-type Tab = "general" | "account" | "organization" | "members" | "workspaces" | "billing" | "security" | "help";
+type Tab = "general" | "account" | "connectors" | "organization" | "members" | "workspaces" | "billing" | "security" | "help";
 
 const TAB_ICONS: Record<Tab, React.ReactNode> = {
+  connectors: <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />,
   general: <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.28zM15 12a3 3 0 11-6 0 3 3 0 016 0z" />,
   account: <path strokeLinecap="round" strokeLinejoin="round" d="M17.982 18.725A7.488 7.488 0 0012 15.75a7.488 7.488 0 00-5.982 2.975m11.963 0a9 9 0 10-11.963 0m11.963 0A8.966 8.966 0 0112 21a8.966 8.966 0 01-5.982-2.275M15 9.75a3 3 0 11-6 0 3 3 0 016 0z" />,
   organization: <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21" />,
@@ -40,8 +42,9 @@ const dateLocale = () => (getLang() === "ar" ? "ar" : "en");
 const fmtDate = (d: string | Date) => new Date(d).toLocaleDateString(dateLocale(), { month: "short", day: "numeric", year: "numeric" });
 const fmtDateTime = (d: string | Date) => new Date(d).toLocaleString(dateLocale(), { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
-export function SettingsDialog({ account, onClose }: {
+export function SettingsDialog({ account, api, onClose }: {
   account: AccountInfo;
+  api: ChatApi["api"];
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("account");
@@ -52,7 +55,7 @@ export function SettingsDialog({ account, onClose }: {
   const isAdmin = !inOrg || membership?.role === "org:admin";
 
   const tabs: Tab[] = [
-    "account", "general",
+    "account", "general", "connectors",
     ...(inOrg ? ["organization" as Tab, "members" as Tab] : []),
     ...(inOrg && account.workspaces ? ["workspaces" as Tab] : []),
     ...(isAdmin ? ["billing" as Tab] : []),
@@ -115,6 +118,7 @@ export function SettingsDialog({ account, onClose }: {
           <div className="min-w-0 flex-1 overflow-y-auto px-5 py-5 sm:px-8">
             <h2 className="mb-4 hidden text-lg font-semibold text-foreground sm:block">{t(tab)}</h2>
             {tab === "general" && <GeneralTab />}
+            {tab === "connectors" && <ConnectorsTab api={api} />}
             {tab === "account" && <AccountTab account={account} />}
             {tab === "organization" && <OrganizationTab account={account} isAdmin={isAdmin} />}
             {tab === "members" && <MembersTab isAdmin={isAdmin} />}
@@ -451,6 +455,59 @@ function Challenge({ prompt, expected, onConfirm, onCancel }: {
       </div>
     </div>
   );
+}
+
+type Connector = { name: string; scope: "user" | "workspace"; description: string | null; icon: string | null; connected: boolean };
+
+// The directory: what the deployment offers, split into what you have and what
+// you could add. Connect opens the provider in a new tab; the callback tab
+// posts back and the list refreshes itself.
+function ConnectorsTab({ api }: { api: ChatApi["api"] }) {
+  const [items, setItems] = useState<Connector[] | null>(null);
+  const load = () => api("/connectors", { silent: true }).then((r) => r.json()).then(setItems).catch(() => setItems([]));
+  useEffect(() => { load(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const done = (e: MessageEvent) => { if (e.origin === window.location.origin && e.data?.type === "cycls:connected") load(); };
+    window.addEventListener("message", done);
+    return () => window.removeEventListener("message", done);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const connect = async (c: Connector) => {
+    track("connector_connect_clicked", { connector: c.name, source: "directory" });
+    const { url } = await (await api(`/connectors/${c.name}/authorize`, { method: "POST" })).json();
+    window.open(url, "_blank", "noopener");
+  };
+  const disconnect = async (c: Connector) => {
+    await api(`/connectors/${c.name}`, { method: "DELETE" });
+    track("connector_disconnected", { connector: c.name });
+    load();
+  };
+  const label = (n: string) => n.charAt(0).toUpperCase() + n.slice(1);
+  const section = (title: string, list: Connector[], connected: boolean) => list.length > 0 && (
+    <div className="mt-5 first:mt-0">
+      <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{title}</h3>
+      <ListCard>
+        {list.map((c) => (
+          <Row
+            key={c.name}
+            label={<span className="flex items-center gap-2">
+              {c.icon ? <img src={c.icon} alt="" className="size-5 rounded" /> : <Icon name="link" className="size-4 text-muted-foreground" />}
+              {label(c.name)}
+              {connected && <span className="size-2 rounded-full bg-green-500" />}
+            </span>}
+            sub={[c.description, c.scope === "workspace" ? t("sharedWithWorkspace") : null].filter(Boolean).join(" · ") || undefined}
+            control={connected
+              ? <button onClick={() => disconnect(c)} className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">{t("disconnect")}</button>
+              : <button onClick={() => connect(c)} className="cursor-pointer rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background hover:opacity-80">{t("connect")}</button>}
+          />
+        ))}
+      </ListCard>
+    </div>
+  );
+
+  if (items === null) return null;
+  if (!items.length) return <p className="text-sm text-muted-foreground">{t("noConnectors")}</p>;
+  return <>{section(t("yours"), items.filter((c) => c.connected), true)}{section(t("discover"), items.filter((c) => !c.connected), false)}</>;
 }
 
 function GeneralTab() {
