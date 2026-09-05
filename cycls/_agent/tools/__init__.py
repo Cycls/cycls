@@ -8,7 +8,7 @@ from html.parser import HTMLParser
 from typing import NamedTuple
 from . import pdf, skills
 from ..state import _exec_database
-from .. import trash
+from .. import credentials, trash
 
 MAX_OUTPUT = 30_000
 
@@ -370,7 +370,7 @@ def _resolve_path(raw_path, workspace):
     rel = raw_path.removeprefix("~/").removeprefix("/workspace/").lstrip("/")
     path = (ws / rel).resolve()
     if not path.is_relative_to(ws): raise ValueError("path escapes workspace")
-    for name in (".db", ".database", ".trash"):
+    for name in (".db", ".database", ".trash", credentials.USER, credentials.SHARED):
         reserved = ws / name
         if path == reserved or path.is_relative_to(reserved):
             raise ValueError(f"{name}/ is managed by cycls")
@@ -395,6 +395,8 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
           .tmpfs("/workspace/.db")        # cycls state (chat, shares); editor blocks via _resolve_path
           .tmpfs("/workspace/.database")  # agent KV store; same blocking
           .tmpfs("/workspace/.trash")
+          .tmpfs(f"/workspace/{credentials.USER}")
+          .tmpfs(f"/workspace/{credentials.SHARED}")
           .bind(trash_dir, "/workspace-trash")
           .ro_bind(shims, "/opt/cycls-bin")
           .tmpfs("/app")
@@ -882,6 +884,9 @@ class ToolContext:
     user: object
     workspace: object
     chat_id: str | None = None
+
+    async def secret(self, name):
+        return await credentials.get(self.workspace, name)
 
 
 def _takes_ctx(fn):
