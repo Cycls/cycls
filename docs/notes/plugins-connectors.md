@@ -102,7 +102,8 @@ warning: the provider our deployed agents actually run on.
     their own segment, resolved only for their own requests, and invisible to everyone
     else — a workspace admin can no more list a member's Gmail grant than read their chats. `scope="workspace"` for accounts a team shares (the Salla store, the
     PostHog project): a workspace admin connects it once and every member's agent uses it.
-    `scope="either"` for metered keys, where the user's own wins. The workspace, not the
+    `scope="either"` — a metered key where the user's own wins — is not built; add it
+    when a connector needs it. The workspace, not the
     org, is the unit — an org can run several stores in several workspaces, files and the
     agent KV are already workspace-scoped, and the workspace ACL is the thing that actually
     governs who can use a shared credential. Most specific wins, the rule
@@ -229,7 +230,7 @@ is the dominant productivity platform in Saudi organisations (~48% of enterprise
 | **PostHog, Canva, Slack, Notion, Linear, Figma** | MCP | none — hosted, OAuth, free |
 | **Zoho / Odoo** | MCP | none, but per-user endpoints (15). Strong MENA SME presence |
 | **Meta / TikTok / Google / Amazon Ads** | MCP + plugin | Meta is read+write, free in beta. Google's server reads only, so writes go through plugin tools on the Ads API (decision 4) — a developer token at **Basic** access already allows production writes, 15,000 ops/day; Standard lifts the cap |
-| **Google `drive.file`** | MCP | none — not a restricted scope, no CASA |
+| **Google `drive.file`** | MCP | none — not a restricted scope, no CASA. **The phase-1 proof**: a test-mode client, `drivemcp.googleapis.com/mcp/v1` |
 | **Gmail send** | MCP | *sensitive*: app review, weeks, no fee |
 | **Gmail/Drive read, full Calendar** | MCP | **restricted**: CASA Tier 2, ~$540–1,000/yr, 4–12 weeks, **annual** |
 | **Google Analytics** | plugin | no API-key path — OAuth or a service account; the Admin API and an edit scope are what writes need |
@@ -238,135 +239,105 @@ is the dominant productivity platform in Saudi organisations (~48% of enterprise
 ## Setup
 
 Four layers, each owned by a different person. Nothing below is a new primitive: connectors
-ride on `cycls.LLM` where tools, skills and MCP already live.
+ride on `cycls.LLM` and `cycls.Web`, where tools and auth already live. This is the surface
+as shipped; the plugin half (`cycls.Key`, `auth=` and `writes=` on `.on()`) is phase 2.
 
-**1. Declared in code** — by the developer, pickled with the agent. This is *what exists*:
-which connectors, how each authenticates, which tools need which grant, and what is a write.
-
-```python
-# An OAuth connector. Endpoints and scopes are the provider's; the client id and
-# secret are references, resolved from env at runtime — never pickled with the value.
-salla = cycls.OAuth2("salla",
-    authorize="https://accounts.salla.sa/oauth2/auth",
-    token="https://accounts.salla.sa/oauth2/token",
-    client_id=cycls.env("SALLA_CLIENT_ID"), secret=cycls.env("SALLA_CLIENT_SECRET"),
-    scope="workspace",                          # one store per workspace (decision 13)
-    # What the directory shows. An MCP server supplies name, description and version
-    # from `initialize`, and its `prompts/list` seeds the examples; a plugin declares
-    # them here. Either way the developer may override, and examples are theirs to write.
-    description="طلبات متجرك ومنتجاته وعملاؤه",
-    examples=["أي منتج ربحيته أعلى هذا الربع؟",
-              "كم طلب لم يُشحن بعد؟ اعرضهم مع عمر كل طلب"],
-    category="commerce")
-
-# An API-key connector. No flow — a masked field in the directory, encrypted at rest.
-posthog_key = cycls.Key("posthog", label="PostHog", scope="workspace")
-
-llm = (cycls.LLM()
-    .model("anthropic/claude-sonnet-4-6")
-    .allowed_tools(["Bash", "Editor", "WebSearch", "Ask"])
-    # MCP connectors. A server that speaks OAuth 2.1 describes its own auth — nothing
-    # to declare. `.connector()` binds one to a grant declared above instead.
-    .mcp(cycls.MCP("https://mcp.posthog.com/mcp"))
-    .mcp(cycls.MCP("https://mcp.canva.com/mcp"))
-    # Plugin tools. `auth=` names the grant and scope; `writes=True` is what the
-    # permission preset and the guard key on.
-    .tools(SALLA_TOOLS)
-    .on("salla_orders", salla_orders, auth=salla("orders.read"))
-    .on("salla_refund", salla_refund, auth=salla("orders.write"), writes=True)
-    .key(posthog_key)
-    .skills("skills/"))
-```
+**1. Declared in code** — by the developer, pickled with the agent:
 
 ```python
-async def salla_orders(args, ctx):
-    token = await ctx.token(salla)          # refreshed; raises NotConnected
-    ...
+google = cycls.OAuth2("google",
+    authorize="https://accounts.google.com/o/oauth2/v2/auth",
+    token="https://oauth2.googleapis.com/token",
+    client_id=cycls.env("GOOGLE_CLIENT_ID"), secret=cycls.env("GOOGLE_CLIENT_SECRET"),
+    scopes=["https://www.googleapis.com/auth/drive.file"],
+    scope="user",                                   # or "workspace": one grant, every member
+    extra={"access_type": "offline", "prompt": "consent"})
+
+web = cycls.Web().auth(cycls.Clerk()).connectors(google)
+
+llm = (cycls.LLM().model("anthropic/claude-sonnet-4-6")
+    .mcp(cycls.MCP("https://drivemcp.googleapis.com/mcp/v1").name("drive").connector(google)))
 ```
 
-That is the whole developer surface for phase 1 — `auth=` and `writes=` on `.on()`, `.key()`
-on the builder, and `cycls.OAuth2` / `cycls.Key` to declare a grant. `Plugin` (decision 6)
-bundles the same things later; it adds nothing a connector needs.
+`cycls.env("NAME")` is a reference resolved at use — the value is never pickled. Discovery
+is anonymous, so the server's tools are known before anyone connects; each call fetches the
+caller's bearer, refreshes a stale one, and with nothing stored returns the connect card and
+tells the model to end its turn. A plugin tool reaches the same grant through
+`ctx.secret("google")` on its `ToolContext`.
 
-**2. Configured at deploy** — by the operator, in env. Client ids, client secrets, and the
-encryption key (`CYCLS_SECRET_KEY`), shipped the way provider keys already are:
-`Image().copy(".providers.env", ".env")`. The relay is the platform's; a developer never
-touches it, and the redirect URI is implicit.
+**2. Configured at deploy** — by the operator, in env: `GOOGLE_CLIENT_ID`,
+`GOOGLE_CLIENT_SECRET`, and `CYCLS_SECRET_KEY`, shipped the way provider keys already are.
+Locally, `.providers.env` must be sourced — `load_dotenv()` reads only `.env`.
 
-**3. Configured by a workspace admin** — in the directory. Which connectors are enabled in
-this workspace (decision 14), and the credential for any `scope="workspace"` connector. An
-admin connects the team's Salla store once; every member's agent uses it.
+**3. Configured by a workspace admin** — in the directory: which connectors are enabled here
+(decision 14, not yet built) and the grant for any `scope="workspace"` connector (built:
+`authorize` and `disconnect` refuse a non-admin).
 
-**4. Configured by the user** — in the directory. Their own credential for any `scope="user"`
-or `scope="either"` connector: Connect for OAuth, paste for a key, a URL for a per-user
-endpoint (decision 15).
+**4. Configured by the user** — in the directory: their own grant for a `scope="user"`
+connector. The routes exist; the directory (phase-1 item 5) is what calls them.
 
-The developer writes none of the connect flow, the panel, or the not-connected handling.
-Declaring a connector is what makes it appear in the directory; the loop does the rest.
+The developer writes none of the flow, the panel, or the not-connected handling.
 
 ## Runtime
 
-The mechanics the decisions above depend on but do not state.
+The mechanics the decisions depend on, with what is built.
 
-**Discovered tools are derived, not stored.** "Sticky per chat" (22) needs the discovered set
-back at the top of the next `_run`, and `tools_list` is a local. Rather than a new key, the
-set is rebuilt from the transcript: every `find_tools` block in the log names its matches,
-and the tool lists are cached (24), so the rebuild is deterministic and costs nothing. It is
-the same rule the rest of the harness runs on — model-visible means logged.
+**The workspace is gcsfuse.** One large write is fine; many small files, or a stat per call,
+is not — `TMPDIR` pointed at `.tmp/{chat}` turned every `pip` and `tar` temp file into a
+network write and swelled the sweep, and was reverted. Spill and the credential store are
+single writes; the sweep is throttled; a bash call touches nothing on the volume for scratch.
+Anything future that walks or touches the volume per request goes on tmpfs or behind a
+throttle.
 
-**MCP tools dispatch through `handlers`.** `_TOOLS` is the static builtin registry; MCP tools
-are dynamic and per-user, so they register on the `handlers` path `dispatch` already has,
-named `{server}_{tool}`, with `tool_step` rendering `Server · tool` — the label the
-server-side path already uses.
+**MCP tools dispatch through `handlers`** — built. `_TOOLS` is the static builtin registry;
+discovered tools register on the `handlers` path `dispatch` already had, named
+`{server}_{tool}`, with `tool_step` rendering `server · tool`.
 
-**`http_request` requires a connector, and the connector bounds the host.** The tool takes an
-explicit `connector` argument; the URL must match that connector's declared base host, and
-`_is_public_host` still applies. There is no unbound form — that would be a server-side fetch
-to any URL the model chooses, which is the SSRF `web_fetch` already guards against.
+**Discovery is cached; connections are not pooled** — built. The tool list is cached ten
+minutes per url and token; a session is opened only when a tool is called.
 
-**Refresh is single-flight.** Queued messages can run two turns close together; both see an
-expired token and both refresh, and providers that rotate refresh tokens invalidate the old
-one on use — the second refresh fails and clobbers the first. One refresh per (user,
-connector) at a time, and the record write is compare-and-swap on `obtained_at`.
+**Discovered tools are derived, not stored** — phase 3, with `find_tools`. Until then a
+connected server's tools are injected directly.
 
-**401 is `NotConnected`, not an error.** A connector call answered 401 (or a 403 carrying
-`invalid_grant`) refreshes once; if that fails the record is marked stale and the tool raises
-`NotConnected`, so the user gets the connect card rather than the model reasoning around a
-raw error.
+**`http_request` requires a connector, and the connector bounds the host** — phase 2. There
+is no unbound form; that would be the SSRF `web_fetch` already guards against.
 
-**Calls are budgeted.** A per-connector cap per turn in the guard layer, and an org-wide cap
-for `scope="workspace"` credentials — one user's runaway loop must not burn the company's quota.
-A provider 429 becomes a tool_result with the retry-after, not an error the model retries in
-a tight loop.
+**Refresh is single-flight** — not yet. `bearer()` refreshes a stale grant and keeps a refresh
+token the provider omits, but two concurrent turns can both refresh. Needed before a
+provider that rotates refresh tokens on use.
+
+**401 is `NotConnected`, not an error** — half. No grant → the connect card and a stop for
+the model, built. A 401 answered mid-call is not yet caught; it surfaces as the tool's error.
+
+**Calls are budgeted** — not yet. Needed with the guard layer.
 
 ## Storage and scoping
 
 ```
-{org}/.db/{user}/           chat log, shares            (existing)
-{org}/ws/{ws}/.database/…   agent KV                    (existing, workspace-scoped)
-{org}/.secrets/{user}/             user credentials — follow the user     (new)
-{org}/.org/connectors/{name}       org policy: allowed or blocked           (new)
-{workspace.root}/.connectors/      workspace credentials — admin-set        (new)
-{workspace.root}/.tmp/{chat_id}/   spilled tool output                      (new)
+{org}/.db/{user}/                     chat log, shares            (existing)
+{org}/ws/{ws}/.database/…             agent KV                    (existing, workspace-scoped)
+{org}/.secrets/{user}/{name}          user grants — follow the user      (built)
+{org}/.secrets/{user}/_pending/{n}    PKCE verifier + redirect, spent on callback
+{workspace.root}/.connectors/{name}   workspace grants — admin-set        (built)
+{workspace.root}/.tmp/{chat_id}/      spilled tool output                 (built)
 ```
 
-Neither path needs a new mechanism — `workspace()` already yields `{org}/{slot}/{user}` for
-the first and `{workspace.root}` is the second. They are different slots on purpose: had
-both used `.secrets`, the workspace path would be a prefix of every user's and one scan
-would return them mixed. User credentials sit at the org root so they are the same record
-from every workspace, and under the user's own segment so nobody else's request can reach
-them — the `{user}` in the path is the isolation boundary, as it is for `.db/{user}/chat/`.
-No route resolves another user's segment; the panel lists only the requester's own.
-Workspace credentials sit under the workspace, beside its files, its KV and its trash. A solo account's root *is* its user id, so both resolve there too. Records are
-`{kind: "key"|"grant"|"endpoint", payload, scopes, obtained_at}`. Env is the last fallback
-(decision 13); a stored value wins over it.
+Neither secret path needed a new mechanism — `workspace()` yields `{org}/{slot}/{user}` for
+the first and `{workspace.root}` for the second. They are different slots on purpose: had
+both used `.secrets`, the workspace path would be a prefix of every user's and one scan would
+return them mixed. User grants sit at the org root so they are the same record from every
+workspace, and under the user's own segment so no other user's request can reach them — the
+`{user}` in the path is the isolation boundary, as it is for `.db/{user}/chat/`. A solo
+account's root *is* its user id, so both resolve there too.
 
-`.secrets` and `.connectors` get **both** guards `.db` has — the bwrap `--tmpfs` mask *and* the
-`_resolve_path` rejection — because [sandbox-security.md](sandbox-security.md) is explicit
-that the tmpfs is defence in depth on top of the path check.
+A record is `{access_token, refresh_token, expires_at}`, Fernet-encrypted under a key derived
+from `CYCLS_SECRET_KEY`; one the current key cannot decrypt reads as absent, so rotation
+means re-auth, never a crash. Resolution is user → workspace; env is not consulted for grants.
 
-`.tmp` gets **neither**: bash must read it and `read` must reach it. It is a normal directory
-that is merely hidden — `_walk_catalog` already skips dot-prefixed entries.
+`.secrets` and `.connectors` get **both** guards `.db` has — the bwrap `--tmpfs` mask *and*
+the `_resolve_path` rejection, in the tool and file-route path checks alike. `.tmp` gets
+neither: bash must read it and `read` must reach it. It is hidden from listings, deleted for
+real by the `rm` shim, refused by `canvas`, and removed on chat purge.
 
 ## The connect relay
 
@@ -535,55 +506,44 @@ decision 12 owns storage.
 
 ## Audit
 
-Every tool call is already logged with its caller — `log("tool_call", user=…, chat_id=…,
-tool=…, ms=…, ok=…)` in `_run`, emitted as structured JSON carrying `user_id`, `org_id` and
-`plan`. Connectors need three additions.
+Every tool call was already logged with its caller. Connectors add three things.
 
-**`tool_call` gains `connector`, `credential_scope` and `tool_use_id`.** The tool name alone
-doesn't say whether the call resolved to the user's own credential, the org's, or the
-deployment's — and with `scope="workspace"` ten people share one account, so `user_id` says whose
-agent called but not what it acted as.
+**`tool_call` carries `connector`, `credential_scope` and `tool_use_id`** — built. A call
+through a connector names the grant it acted with and its scope, so a shared credential is
+attributable; the `tool_use_id` joins the line to the `tool_use` block in the transcript,
+which is where the arguments live. That is the right split: identity and timing in the log,
+what was sent in the transcript, and user data copied nowhere new.
 
-**A `connector` event** on connect, disconnect and denied: which connector, which scope, by
-whom. Granting a business account to an agent is the highest-value security event in the
-system and nothing currently records it.
+**A `connector` event on connect and disconnect** — built, from the callback and disconnect
+routes: action, connector, scope, and who.
 
-**An `approval` event** on granted and declined, carrying the tool, the `tool_use_id` and the
-preset mode in force. The client already fires `track("ask_answered", …)`, but that is
-product analytics — it can be blocked, dropped, or simply not sent. **Analytics is not an
-audit trail**, and "a human authorised this refund" has to be durable and server-side.
+**An `approval` event on granted and declined** — waits for the guard layer; there is nothing
+to approve yet. The client's `track("ask_answered", …)` is product analytics, not an audit
+trail, and will not stand in for it.
 
-**The transcript and the log are two halves.** Arguments — what was sent, and to whom — are
-already persisted in the `tool_use` block; identity and timing live in the log. Carrying
-`tool_use_id` in both is what lets them join, and it is the right split: copying arguments
-into Cloud Logging would move user data somewhere new for no gain.
+**A credential is never a log field.** `log()` splats `**fields` straight to JSON.
 
-**A credential is never a log field.** `log()` splats `**fields` straight into JSON, so one
-careless `args=inp` on a connector tool writes an Authorization header into Cloud Logging
-permanently.
+## Phase 1 — a first connector, end to end
 
-## Phase 1 — Salla
+Proven with Google Drive on `drive.file`: a test-mode client needs no review, the server lists
+its tools anonymously, and it is a `scope="user"` connector, so it exercises the isolation
+path Salla would not have. Salla is next, on the same machinery.
 
-One connector, end to end, on its official server. That pulls two things forward that a
-key-only warm-up would have deferred — OAuth and the MCP client — and leaves `find_tools`
-for later: with one connector, Salla's tools are injected directly, gated on connection.
+| # | item | state |
+|---|---|---|
+| 1 | `ToolContext` — the second handler argument | done |
+| 2 | the credential store, both slots, both guards | done |
+| 3 | `cycls.OAuth2`, `Web().connectors()`, the three routes | done |
+| 4 | the MCP client, cached discovery, connect on call | done, live against DeepWiki |
+| 5 | **the directory modal** | not started |
+| 6 | `NotConnected` → card + stop | done |
+| 7 | spill to `.tmp/{chat_id}/`, shim exemption, purge | done |
+| 8 | audit: `tool_call` fields and the `connector` event | done |
 
-1. `ToolContext` — the second handler argument, detected by signature.
-2. The credential store: `.secrets/{user}` and `.connectors/`, encrypted, both sandbox
-   guards, env override.
-3. `cycls.OAuth2` with `scope="workspace"`, and the callback route. **For one deployment the
-   agent's own callback can be registered with Salla directly**; the relay is what the
-   second deployment needs, not the first.
-4. The client-side MCP client — Streamable HTTP, `tools/list` cached, connect on call —
-   and `.mcp(...).connector(salla)` binding it to the grant.
-5. The directory modal: Discover and Yours, the detail page, enable/disable for workspace
-   admins, allow/block for org admins, and the shared credential.
-6. `NotConnected` → tool_result + connect card, using `ask` as it is; 401 → refresh → card.
-7. Spill to `.tmp/{chat_id}/` with the preview, the `rm`-shim exemption, purge cleanup.
-8. The audit fields and the `connector` / `approval` events.
-
-Phase 2 is the relay and a second connector. Phase 3 is `find_tools`. `Plugin` is phase 4,
-if anyone asks for it.
+Outstanding: a live run against Google (client id and secret in `.providers.env`, the agent's
+callback registered as the redirect URI), and the directory. Phase 2 is the relay, the
+plugin half (`cycls.Key`, `auth=` on `.on()`, `http_request`), single-flight refresh, and a
+second connector. Phase 3 is `find_tools`. `Plugin` is phase 4, if anyone asks for it.
 
 ## Open questions
 

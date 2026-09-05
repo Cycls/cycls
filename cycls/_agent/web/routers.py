@@ -1272,6 +1272,7 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
         await credentials.delete(ws, f"_pending/{p['n']}")
         grant = await o.exchange(code, pending["redirect"], pending["verifier"])
         await credentials.put(ws, name, grant, shared=o.shared)
+        log("connector", action="connected", connector=name, scope=o.scope, subject=p["s"], ws=p["w"])
         return HTMLResponse("<p>Connected — you can close this tab.</p><script>window.close()</script>")
 
     @r.delete("/connectors/{name}")
@@ -1280,6 +1281,7 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
         if o.shared and not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can disconnect a shared connector")
         await credentials.delete(ws, name, shared=o.shared)
+        log("connector", user=user, action="disconnected", connector=name, scope=o.scope)
         return {"ok": True}
 
     return r

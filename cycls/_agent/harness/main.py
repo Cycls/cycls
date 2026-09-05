@@ -181,6 +181,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     tools_list = build_tools(allowed_tools, tools or [], vendor=vendor, web_search=web_search)
     if skill_catalog and not any(t.get("name") == "skill" for t in tools_list):
         tools_list.append(skills_mod.SKILL_TOOL)
+    owners = {}   # tool name -> the OAuth2 it acts with, for the audit line
     for server in [s for s in mcp_servers or [] if not s._server_side]:
         try:
             schemas, fns, names = await server.discover()
@@ -191,6 +192,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         tools_list += schemas
         handlers = {**(handlers or {}), **fns}
         register_labels({}, names)
+        if server._connector:
+            owners.update(dict.fromkeys(fns, server._connector))
     mcp_servers = [s for s in mcp_servers or [] if s._server_side] or None
     for guidance in tool_prompts(tools_list):
         system_text += "\n\n" + guidance
@@ -326,8 +329,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             results, terminal = [], False
             for block, (out, ms) in zip(blocks, timed):
                 ok = not isinstance(out, BaseException)
+                o = owners.get(block["name"])
                 log("tool_call", user=user, chat_id=session.chat_id,
-                    model=bare_model, tool=block["name"], ms=ms, ok=ok,
+                    model=bare_model, tool=block["name"], tool_use_id=block["id"], ms=ms, ok=ok,
+                    connector=o.name if o else None, credential_scope=o.scope if o else None,
                     output_bytes=len(out) if isinstance(out, (str, bytes)) else None)
                 if not ok: out = f"Error: {out}"
                 # Two channels: `_model` lands in tool_result, `_ui` is forwarded

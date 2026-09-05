@@ -101,6 +101,19 @@ def test_routes_connect_list_and_disconnect(tmp_path):
     assert asyncio.run(credentials.get(ws, "google")) is None
 
 
+def test_connect_and_disconnect_are_audited(tmp_path):
+    client, _ = _app(tmp_path, _google())
+    state = parse_qs(urlparse(client.post("/connectors/google/authorize").json()["url"]).query)["state"][0]
+    grant = {"access_token": "tok", "refresh_token": "r", "expires_at": time.time() + 3600}
+    lines = []
+    with patch.object(c.OAuth2, "exchange", AsyncMock(return_value=grant)), \
+         patch("cycls._agent.web.routers.log", lambda level, **f: lines.append((level, f))):
+        client.get("/connectors/google/callback", params={"code": "c", "state": state})
+        client.delete("/connectors/google")
+    assert [(l, f["action"], f["connector"]) for l, f in lines if l == "connector"] == \
+        [("connector", "connected", "google"), ("connector", "disconnected", "google")]
+
+
 def test_routes_refuse_a_bad_state_and_a_non_admin_on_shared(tmp_path):
     client, _ = _app(tmp_path, _google("workspace"))
     assert client.get("/connectors/google/callback", params={"code": "c", "state": "nope.bad"}).status_code == 400

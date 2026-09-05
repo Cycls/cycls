@@ -380,7 +380,7 @@ def _resolve_path(raw_path, workspace):
 
 # ---- Tool execution ----
 
-async def _exec_bash(command, cwd, timeout=600, network=False, chat_id=None):
+async def _exec_bash(command, cwd, timeout=600, network=False):
     from cycls._app.sandbox import Sandbox
     path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     lang = os.environ.get("LANG", "C.UTF-8")
@@ -392,8 +392,6 @@ async def _exec_bash(command, cwd, timeout=600, network=False, chat_id=None):
     shims = str(pathlib.Path(__file__).parent / "shims")
     env = {"PATH": f"{SHIMS_MOUNT}:{path}", "LANG": lang,
            "CYCLS_WORKSPACE": "/workspace", "CYCLS_TRASH": TRASH_MOUNT}
-    if chat_id:   # the chat's scratch, swept with its spills
-        os.makedirs(os.path.join(cwd, spill.DIR, chat_id), exist_ok=True)
     sb = (Sandbox()
           .bind(cwd, "/workspace")
           .tmpfs("/workspace/.db")        # cycls state (chat, shares); editor blocks via _resolve_path
@@ -802,10 +800,9 @@ class Tool(NamedTuple):
     prompt: str = ""
 
 
-def _run_bash(inp, workspace, *, timeout, network, ctx=None):
+def _run_bash(inp, workspace, *, timeout, network, **_):
     t = inp.get("timeout")
-    return _exec_bash(inp.get("command", ""), workspace.root, timeout=t / 1000 if t else timeout,
-                      network=network, chat_id=getattr(ctx, "chat_id", None))
+    return _exec_bash(inp.get("command", ""), workspace.root, timeout=t / 1000 if t else timeout, network=network)
 
 
 def _ask_step(inp):

@@ -56,12 +56,13 @@ def test_bash_sandbox_hides_credentials(tmp_path):
     assert {"/workspace/.secrets", "/workspace/.connectors"} <= masked
 
 
-def test_bash_scratch_dir_exists_and_tmpdir_stays_in_memory(tmp_path):
-    """.tmp/{chat} is there for spills and kept work; TMPDIR is left alone so
-    pip, tar and tempfile stay on the sandbox tmpfs, not the gcsfuse workspace."""
-    argv = _capture_bash_argv(tmp_path, chat_id="c1")
-    assert (tmp_path / ".tmp" / "c1").is_dir()
+def test_bash_touches_nothing_on_the_workspace_for_scratch(tmp_path):
+    """The workspace is gcsfuse in production. TMPDIR stays on the sandbox
+    tmpfs so pip, tar and tempfile never write there, and a bash call creates
+    no .tmp/ of its own — spill makes the directory when it has something to put in it."""
+    argv = _capture_bash_argv(tmp_path)
     assert "TMPDIR" not in argv
+    assert not (tmp_path / ".tmp").exists()
 
 
 def test_bash_sandbox_network_off_by_default(tmp_path):
