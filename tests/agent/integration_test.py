@@ -313,3 +313,17 @@ print(os.environ.get('CYCLS_TEST_VAR', 'NOT_FOUND'))
         assert result.stdout.strip() == "loaded_from_dotenv", f"Expected 'loaded_from_dotenv', got '{result.stdout.strip()}'"
 
     print("✅ Test passed.")
+
+
+def test_agent_image_creates_sandbox_mount_points(monkeypatch):
+    from cycls._function.main import Function
+
+    @cycls.agent(volumes=WS)
+    async def a(context):
+        yield ""
+
+    assert "RUN mkdir -p /workspace-trash /opt/cycls-bin" in a._dockerfile_preamble()
+    assert "mkdir" not in Function(lambda: None, "f")._dockerfile_preamble()
+    tag = a._image_tag()
+    monkeypatch.setattr(cycls.Agent, "_base_run", [])
+    assert a._image_tag() != tag

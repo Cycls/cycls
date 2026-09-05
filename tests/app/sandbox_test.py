@@ -187,3 +187,14 @@ def test_bash_sandbox_bwrap_pid_environ_is_clean_live(tmp_path, monkeypatch):
         "bwrap's own environ leaked parent-process secret — env= sanitization "
         "on subprocess_exec is broken"
     )
+
+
+def test_bash_sandbox_bind_targets_ship_in_the_image(tmp_path):
+    """bwrap can't mkdir inside `--ro-bind / /`: a bind target outside /workspace,
+    /tmp or /skills must be created by the image, or every bash call dies."""
+    from cycls._agent.main import Agent
+    argv = _capture_bash_argv(tmp_path)
+    targets = {dst for flag, _, dst in zip(argv, argv[1:], argv[2:]) if flag in ("--bind", "--ro-bind")}
+    baked = " ".join(Agent._base_run).split()
+    for t in targets - {"/", "/workspace"}:
+        assert t.startswith(("/workspace/", "/tmp/", "/skills/")) or t in baked, t

@@ -86,6 +86,7 @@ class Function:
 
     _base_pip = []
     _base_apt = []
+    _base_run = []
     _serves = False
 
     def __init__(self, func, name, python_version=None, image=None,
@@ -102,7 +103,7 @@ class Function:
                 "functions ship as cloudpickle bytecode, which only loads on the same "
                 "major.minor Python.")
         self.python_version = python_version or host_py
-        self.base_image = f"python:{self.python_version}-slim"
+        self.base_image = f"python:{self.python_version}-slim-bookworm"   # trixie's bwrap needs openat2, which gVisor lacks
         self.apt = sorted([*self._base_apt, *image.get("apt", [])])
         self.run_commands = list(image.get("run_commands", []))
         self.copy = image.get("copy", {})
@@ -183,6 +184,8 @@ class Function:
     def _image_tag(self, extra_parts=None) -> str:
         parts = [self.base_image, self.python_version, self.pip,
                  self.apt, self.run_commands]
+        if self._base_run:
+            parts.append(self._base_run)
         for src, dst in sorted(self.copy.items()):
             if not Path(src).exists():
                 raise FileNotFoundError(f"Path in 'copy' not found: {src}")
@@ -201,6 +204,9 @@ class Function:
 
         if self.apt:
             lines.append(f"RUN apt-get update && apt-get install -y --no-install-recommends {' '.join(self.apt)}")
+
+        for cmd in self._base_run:
+            lines.append(f"RUN {cmd}")
 
         pip = sorted(set(self.pip) | set(extra_pip))
         if pip:
