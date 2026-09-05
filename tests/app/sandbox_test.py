@@ -50,6 +50,12 @@ def test_bash_sandbox_hides_db(tmp_path):
         f"expected --tmpfs /workspace/.db in argv, got: {argv}"
 
 
+def test_bash_sandbox_hides_credentials(tmp_path):
+    argv = _capture_bash_argv(tmp_path)
+    masked = {argv[i + 1] for i, a in enumerate(argv) if a == "--tmpfs"}
+    assert {"/workspace/.secrets", "/workspace/.connectors"} <= masked
+
+
 def test_bash_sandbox_network_off_by_default(tmp_path):
     """Default: --unshare-user + --unshare-net → fresh userns owns the new
     netns so bwrap has NET_ADMIN to bring up lo. No host net access."""

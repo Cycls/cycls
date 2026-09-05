@@ -358,8 +358,8 @@ from every workspace, and under the user's own segment so nobody else's request 
 them — the `{user}` in the path is the isolation boundary, as it is for `.db/{user}/chat/`.
 No route resolves another user's segment; the panel lists only the requester's own.
 Workspace credentials sit under the workspace, beside its files, its KV and its trash. A solo account's root *is* its user id, so both resolve there too. Records are
-`{kind: "key"|"grant"|"endpoint", payload, scopes, obtained_at}`. Deployment env wins over
-stored values, so a per-run override always applies.
+`{kind: "key"|"grant"|"endpoint", payload, scopes, obtained_at}`. Env is the last fallback
+(decision 13); a stored value wins over it.
 
 `.secrets` and `.connectors` get **both** guards `.db` has — the bwrap `--tmpfs` mask *and* the
 `_resolve_path` rejection — because [sandbox-security.md](sandbox-security.md) is explicit
