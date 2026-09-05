@@ -535,13 +535,13 @@ path Salla would not have. Salla is next, on the same machinery.
 | 2 | the credential store, both slots, both guards | done |
 | 3 | `cycls.OAuth2`, `Web().connectors()`, the three routes | done |
 | 4 | the MCP client, cached discovery, connect on call | done, live against DeepWiki |
-| 5 | **the directory modal** | not started |
+| 5 | the directory | done — a Connectors tab in settings (Yours / Discover, Connect, Disconnect); the standalone modal is a lift-out from it |
 | 6 | `NotConnected` → card + stop | done |
 | 7 | spill to `.tmp/{chat_id}/`, shim exemption, purge | done |
 | 8 | audit: `tool_call` fields and the `connector` event | done |
 
 Outstanding: a live run against Google (client id and secret in `.providers.env`, the agent's
-callback registered as the redirect URI), and the directory. Phase 2 is the relay, the
+callback registered as the redirect URI). Phase 2 is the relay, the
 plugin half (`cycls.Key`, `auth=` on `.on()`, `http_request`), single-flight refresh, and a
 second connector. Phase 3 is `find_tools`. `Plugin` is phase 4, if anyone asks for it.
 
