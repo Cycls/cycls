@@ -3,7 +3,7 @@
 Mocks the Anthropic streaming API to test incremental history saving
 and crash recovery without hitting a real LLM.
 """
-import asyncio
+import asyncio, os
 import sys
 import types
 from pathlib import Path
@@ -1468,6 +1468,28 @@ def test_mcp_tools_reach_the_model_and_dispatch(agent_env):
     result = next(b for msg in _read_history(ctx) if msg["role"] == "user" and isinstance(msg["content"], list)
                   for b in msg["content"] if b.get("type") == "tool_result")
     assert result["content"] == "3 orders"
+
+
+def test_unconnected_connector_yields_the_card_and_stops_the_model(agent_env):
+    """No grant → the loop forwards the connect event to the client and the
+    model reads an ack telling it to end the turn, in the transcript."""
+    from cycls._agent import mcp as m, connectors as c
+    ws, ctx = agent_env
+    m._discovered.clear()
+    google = c.OAuth2("google", authorize="a", token="t", client_id="i", secret="s")
+    tool = types.SimpleNamespace(name="search_files", description="d", input_schema={"type": "object"})
+    call = _make_response([_tool_use_block("t1", name="drive_search_files", inp={"q": "x"})], stop_reason="tool_use")
+    client, calls = _capturing_client([call, _make_response([_text_block("ok")])])
+
+    with _mock_anthropic(client), patch.object(m, "_list", AsyncMock(return_value=[tool])), \
+         patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}):
+        events = asyncio.run(_drain(_run(context=ctx, mcp_servers=[m.MCP("https://d/mcp").name("drive").connector(google)])))
+
+    cards = [e for e in events if isinstance(e, dict) and e.get("action") == "connect"]
+    assert cards == [{"type": "ui", "action": "connect", "connector": "google"}]
+    result = next(b for msg in _read_history(ctx) if msg["role"] == "user" and isinstance(msg["content"], list)
+                  for b in msg["content"] if b.get("type") == "tool_result")
+    assert "not connected" in result["content"] and "end your turn" in result["content"]
 
 
 def test_tool_guidance_rides_with_the_enabled_tool(agent_env):
