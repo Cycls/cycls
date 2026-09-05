@@ -20,9 +20,19 @@ EXEMPT_USERS = {
 # moves the workspace mount; .rebuild() forces a no-cache build.
 image = cycls.Image().copy(".providers.env", ".env")#.rebuild()
 
+# A connector: the person connects their own Google Drive (scope="user"), and
+# every call the drive tools make carries their grant. Secrets stay in env.
+google = cycls.OAuth2("google",
+    authorize="https://accounts.google.com/o/oauth2/v2/auth",
+    token="https://oauth2.googleapis.com/token",
+    client_id=cycls.env("GOOGLE_CLIENT_ID"), secret=cycls.env("GOOGLE_CLIENT_SECRET"),
+    scopes=["https://www.googleapis.com/auth/drive.file"],
+    extra={"access_type": "offline", "prompt": "consent"})   # Google issues a refresh token only with these
+
 web = (
     cycls.Web()
     .auth(cycls.Clerk())
+    .connectors(google)  # offered in the directory; served by /connectors/google/{authorize,callback}
     # .iap(cycls.AppleIAP(  # iOS subscriptions — StoreKit 2 JWS sent in the x-apple-entitlement header
     #     bundle_id="com.cycls.app",
     #     products={"com.cycls.app.pro.month": "u:ios_pro",   # each SKU grants its own plan
@@ -120,7 +130,8 @@ llm = (
     # .web_search("native")  # Anthropic server-side search; default "brave" runs on any model (BRAVE_API_KEY)
     # .skills("examples/agent/skills")  # ship skill folders (<name>/SKILL.md) with the agent
     # .instructions("AGENT.md")  # workspace instructions file in the system prompt — this is the default
-    # .mcp(cycls.MCP("https://figma-mcp.example/mcp").name("figma").token(os.environ["FIGMA_TOKEN"]))  # remote MCP, anthropic/* only (needs `import os`)
+    .mcp(cycls.MCP("https://drivemcp.googleapis.com/mcp/v1").name("drive").connector(google))  # remote MCP, any provider; tools are `drive_*`
+    # .mcp(cycls.MCP("https://x/mcp").name("x").token("…").server_side())  # let the Anthropic connector run it instead (anthropic/* only)
     # .sandbox(network=False)  # opt out of network access for the LLM bash
     # .bash_timeout(600)  # bash sandbox timeout in seconds
     # .api_key(os.environ["ANTHROPIC_API_KEY"])  # override the provider key (default: from env)
