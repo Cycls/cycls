@@ -77,6 +77,7 @@ class Agent(App):
         )
         self.config._og_image = web._og_bytes
         self._iap = web._iap
+        self.connectors = web._connectors
 
         # Merge Web's copy_public files under public/. App.__init__ adds
         # the cycls source tree on top.

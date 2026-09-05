@@ -9,6 +9,7 @@ only. Immutable fluent, like cycls.LLM / cycls.Web / cycls.Image.
 """
 import time
 from typing import List, Optional
+from .connectors import not_connected
 
 DISCOVERY_TTL = 600
 _discovered = {}   # (url, token) -> (deadline, [Tool])
@@ -59,6 +60,7 @@ class MCP:
         self._token: Optional[str] = None
         self._allow: Optional[List[str]] = None
         self._server_side = False
+        self._connector = None
 
     def _copy(self, **updates):
         new = MCP.__new__(MCP)
@@ -81,6 +83,11 @@ class MCP:
         """Let the Anthropic connector run this server — fewer hops, one
         deploy-time bearer, `anthropic/*` only."""
         return self._copy(_server_side=True)
+
+    def connector(self, oauth):
+        """Send each call with the caller's grant for *oauth* (a cycls.OAuth2);
+        discovery stays anonymous, so the tools are known before anyone connects."""
+        return self._copy(_connector=oauth)
 
     def _headers(self):
         return {"Authorization": f"Bearer {self._token}"} if self._token else {}
@@ -105,7 +112,13 @@ class MCP:
 
     def _handler(self, raw):
         async def call(inp, ctx):
-            return await _call(self._url, self._headers(), raw, inp)
+            headers = self._headers()
+            if self._connector:
+                token = await self._connector.bearer(ctx.workspace)
+                if not token:
+                    return not_connected(self._connector.name)
+                headers = {"Authorization": f"Bearer {token}"}
+            return await _call(self._url, headers, raw, inp)
         return call
 
     def _spec(self) -> dict:

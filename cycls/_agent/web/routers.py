@@ -13,7 +13,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 
 from cycls._app.db import DB, Workspace, workspace
-from cycls._agent import spill, state, trash
+from cycls._agent import connectors as oauth, credentials, spill, state, trash
 from cycls._agent.logs import log
 from cycls._agent.tools import tool_step
 
@@ -463,6 +463,15 @@ def _sorted(entries, key, desc):
     return [e for g in groups for e in sorted(g, key=sort_key, reverse=desc)]
 
 
+async def _admin(cycls_app, user, ws, volume, base):
+    """Owner/admin on a team workspace; everyone on their own personal one."""
+    mode = getattr(getattr(cycls_app, "config", None), "workspaces", None)
+    if not mode or not ws.ws or ws.ws.startswith("u-"):
+        return True
+    orgdb = state.org_db(state.org_of(user), volume, base)
+    return (await state.resolve_role(user, ws.ws, orgdb)) in ("owner", "admin")
+
+
 def files_router(cycls_app, ws_dep, user_dep, volume, base):
     r = APIRouter()
     max_bytes = (getattr(getattr(cycls_app, "config", None), "max_upload", None) or DEFAULT_MAX_UPLOAD_MB) * 1024 * 1024
@@ -655,15 +664,6 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
 
     # ---- Trash: a delete is a move (docs/notes/trash.md) ----
 
-    mode = getattr(getattr(cycls_app, "config", None), "workspaces", None)
-
-    async def _admin(user, ws):
-        """Owner/admin on a team workspace; everyone on their own personal one."""
-        if not mode or not ws.ws or ws.ws.startswith("u-"):
-            return True
-        orgdb = state.org_db(state.org_of(user), volume, base)
-        return (await state.resolve_role(user, ws.ws, orgdb)) in ("owner", "admin")
-
     @r.delete("/files/{path:path}")
     async def delete_path(path: str, ws: Workspace = ws_dep, user: Any = user_dep):
         target = _safe_path(ws.root, path)
@@ -671,7 +671,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             raise HTTPException(status_code=404, detail="Not found")
         rel = str(target.relative_to(Path(ws.root).resolve()))
         # Apps are shared team assets — only admins remove them.
-        if trash.kind_of(rel, target.is_dir()) == "app" and not await _admin(user, ws):
+        if trash.kind_of(rel, target.is_dir()) == "app" and not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can delete apps")
         meta = await asyncio.to_thread(trash.trash_path, ws.root, rel, "user")
         _catalog_drop(ws.root)
@@ -722,7 +722,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.delete("/trash/{tid}")
     async def purge_trash(tid: str, ws: Workspace = ws_dep, user: Any = user_dep):
-        if not await _admin(user, ws):
+        if not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can delete forever")
         if tid.startswith("chat:"):
             await state.delete_chat(ws, tid[5:])
@@ -736,7 +736,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.delete("/trash")
     async def empty_trash(ws: Workspace = ws_dep, user: Any = user_dep):
-        if not await _admin(user, ws):
+        if not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can delete forever")
         await asyncio.to_thread(trash.empty, ws.root)
         for c in await _trashed_chats(ws):
@@ -1226,6 +1226,65 @@ def workspaces_router(cycls_app, user_dep, volume, base):
     return r
 
 
+# ---- Connectors ----
+
+def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
+    """Connect, list and disconnect grants. The callback is reached by the
+    provider's redirect — no JWT — so it trusts the signed state, which names
+    the user and workspace; the PKCE verifier waits in the user's own slot."""
+    from fastapi.responses import HTMLResponse
+    r = APIRouter()
+    reg = {o.name: o for o in cycls_app.connectors}
+
+    def _get(name):
+        if name not in reg:
+            raise HTTPException(status_code=404, detail="Unknown connector")
+        return reg[name]
+
+    @r.get("/connectors")
+    async def list_connectors(ws: Workspace = ws_dep):
+        return [{"name": n, "scope": o.scope, "connected": await credentials.get(ws, n) is not None}
+                for n, o in reg.items()]
+
+    @r.post("/connectors/{name}/authorize")
+    async def authorize(name: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        o = _get(name)
+        if o.shared and not await _admin(cycls_app, user, ws, volume, base):
+            raise HTTPException(status_code=403, detail="Only workspace admins can connect a shared connector")
+        nonce, verifier = secrets.token_urlsafe(16), secrets.token_urlsafe(48)
+        redirect = f"{request.base_url}connectors/{name}/callback"
+        await credentials.put(ws, f"_pending/{nonce}", {"verifier": verifier, "redirect": redirect})
+        state_ = oauth.sign({"c": name, "s": ws.subject, "w": ws.ws, "n": nonce})
+        return {"url": o.authorize_url(redirect, state_, verifier)}
+
+    @r.get("/connectors/{name}/callback")
+    async def callback(name: str, code: str, state: str):
+        try:
+            p = oauth.verify(state)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if p["c"] != name:
+            raise HTTPException(status_code=400, detail="bad state")
+        o, ws = _get(name), workspace(p["s"], volume, base=base, ws=p["w"])
+        pending = await credentials.get(ws, f"_pending/{p['n']}")
+        if not pending:
+            raise HTTPException(status_code=400, detail="unknown or used state")
+        await credentials.delete(ws, f"_pending/{p['n']}")
+        grant = await o.exchange(code, pending["redirect"], pending["verifier"])
+        await credentials.put(ws, name, grant, shared=o.shared)
+        return HTMLResponse("<p>Connected — you can close this tab.</p><script>window.close()</script>")
+
+    @r.delete("/connectors/{name}")
+    async def disconnect(name: str, ws: Workspace = ws_dep, user: Any = user_dep):
+        o = _get(name)
+        if o.shared and not await _admin(cycls_app, user, ws, volume, base):
+            raise HTTPException(status_code=403, detail="Only workspace admins can disconnect a shared connector")
+        await credentials.delete(ws, name, shared=o.shared)
+        return {"ok": True}
+
+    return r
+
+
 # ---- Mount ----
 
 def install_routers(cycls_app, app, required_auth, volume, base):
@@ -1240,3 +1299,5 @@ def install_routers(cycls_app, app, required_auth, volume, base):
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))
     if mode:
         app.include_router(workspaces_router(cycls_app, required_auth, volume, base))
+    if getattr(cycls_app, "connectors", None):
+        app.include_router(connectors_router(cycls_app, ws_dep, required_auth, volume, base))
