@@ -1470,6 +1470,26 @@ def test_mcp_tools_reach_the_model_and_dispatch(agent_env):
     assert result["content"] == "3 orders"
 
 
+def test_connector_calls_are_attributable_in_the_log(agent_env):
+    """A call through a connector logs which grant it acted with, its scope, and
+    the tool_use id that joins the line to the transcript."""
+    from cycls._agent import mcp as m, connectors as c, credentials
+    ws, ctx = agent_env
+    m._discovered.clear()
+    google = c.OAuth2("google", authorize="a", token="t", client_id="i", secret="s")
+    tool = types.SimpleNamespace(name="search_files", description="d", input_schema={"type": "object"})
+    call = _make_response([_tool_use_block("t1", name="drive_search_files", inp={"q": "x"})], stop_reason="tool_use")
+    client, _ = _capturing_client([call, _make_response([_text_block("ok")])])
+    lines = []
+    with _mock_anthropic(client), patch.object(m, "_list", AsyncMock(return_value=[tool])), \
+         patch.object(m, "_call", AsyncMock(return_value="found")), patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}), \
+         patch("cycls._agent.harness.main.log", lambda level, **f: lines.append((level, f))):
+        asyncio.run(credentials.put(ctx.workspace, "google", {"access_token": "tok", "refresh_token": "r", "expires_at": 9e12}))
+        asyncio.run(_drain(_run(context=ctx, mcp_servers=[m.MCP("https://d/mcp").name("drive").connector(google)])))
+    f = next(f for level, f in lines if level == "tool_call")
+    assert (f["tool_use_id"], f["connector"], f["credential_scope"]) == ("t1", "google", "user")
+
+
 def test_unconnected_connector_yields_the_card_and_stops_the_model(agent_env):
     """No grant → the loop forwards the connect event to the client and the
     model reads an ack telling it to end the turn, in the transcript."""
