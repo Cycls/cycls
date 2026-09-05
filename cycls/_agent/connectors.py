@@ -56,12 +56,14 @@ def not_connected(name):
 
 
 class OAuth2:
-    def __init__(self, name, *, authorize, token, client_id, secret, scopes=(), scope="user", extra=None):
+    def __init__(self, name, *, authorize, token, client_id, secret, scopes=(), scope="user", extra=None,
+                 description=None, icon=None):
         if scope not in ("user", "workspace"):
             raise ValueError(f'scope must be "user" or "workspace"; got {scope!r}')
         self.name, self.authorize, self.token = name, authorize, token
         self.client_id, self.secret, self.scopes = client_id, secret, list(scopes)
         self.scope, self.extra = scope, dict(extra or {})
+        self.description, self.icon = description, icon   # what the directory card shows
 
     @property
     def shared(self):

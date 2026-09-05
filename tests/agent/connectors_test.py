@@ -83,14 +83,15 @@ def _app(tmp_path, *oauths):
 
 def test_routes_connect_list_and_disconnect(tmp_path):
     client, ws = _app(tmp_path, _google())
-    assert client.get("/connectors").json() == [{"name": "google", "scope": "user", "connected": False}]
+    assert client.get("/connectors").json() == [{"name": "google", "scope": "user", "description": None,
+                                                 "icon": None, "connected": False}]
     url = client.post("/connectors/google/authorize").json()["url"]
     q = parse_qs(urlparse(url).query)
     assert q["redirect_uri"] == ["http://testserver/connectors/google/callback"]
     grant = {"access_token": "tok", "refresh_token": "r", "expires_at": time.time() + 3600}
     with patch.object(c.OAuth2, "exchange", AsyncMock(return_value=grant)) as ex:
         r = client.get("/connectors/google/callback", params={"code": "the-code", "state": q["state"][0]})
-    assert r.status_code == 200 and "Connected" in r.text
+    assert r.status_code == 200 and "Connected" in r.text and "cycls:connected" in r.text
     ex.assert_awaited_once()
     assert ex.await_args.args[0] == "the-code" and ex.await_args.args[1] == q["redirect_uri"][0]
     assert asyncio.run(credentials.get(ws, "google")) == grant

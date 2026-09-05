@@ -10,6 +10,7 @@ import { TrashView, type TrashRow } from "./trash-view";
 import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
 import { Icon, IconButton } from "./icon";
+import { ConnectCard } from "./connect-card";
 import { CyclsLogo } from "./cycls-logo";
 import { LoadingBar } from "./loading-bar";
 import { InputBox } from "./input-box";
@@ -104,7 +105,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   account?: AccountInfo | null;
   config?: AppConfig | null;
 }) {
-  const { messages, isStreaming, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, setUIHandler } = chat;
+  const { messages, isStreaming, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler } = chat;
   const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
@@ -163,6 +164,15 @@ export function Chat({ chat, onShare, files, account, config }: {
   // composer. The options are shortcuts, not a constraint: typing any reply
   // answers it too.
   const [ask, setAsk] = useState<{ questions: AskQuestion[] } | null>(null);
+  // The agent's connect card: a tool needed an account the user hasn't linked.
+  const [connect, setConnect] = useState<{ name: string } | null>(null);
+  useEffect(() => {   // the callback tab reports success, and the card goes away
+    const done = (e: MessageEvent) => {
+      if (e.origin === window.location.origin && e.data?.type === "cycls:connected") setConnect(null);
+    };
+    window.addEventListener("message", done);
+    return () => window.removeEventListener("message", done);
+  }, []);
   // Typing takes over: the moment the user starts composing, the agent's
   // chip and card yield — their own words beat our prompts.
   const prevInputRef = useRef(input);
@@ -194,6 +204,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   useEffect(() => {
     setFollowUp(null);
     setAsk(null);
+    setConnect(null);
     queuedRef.current = [];
     setQueued([]);
     heldRef.current = false;
@@ -333,6 +344,9 @@ export function Chat({ chat, onShare, files, account, config }: {
           setAsk({ questions });
           track("ui_action", { action: "ask", questions: questions.length });
         }
+      } else if (ev.action === "connect" && typeof ev.connector === "string") {
+        setConnect({ name: ev.connector });
+        track("ui_action", { action: "connect", connector: ev.connector });
       } else {
         track("ui_action", { action: ev.action, handled: false });
       }
@@ -928,7 +942,19 @@ export function Chat({ chat, onShare, files, account, config }: {
                     }}
                   />
                 )}
-                {!ask && survey && !hushed && !isStreaming && (
+                {connect && !ask && (
+                  <ConnectCard
+                    key={connect.name}
+                    name={connect.name}
+                    onConnect={async () => {
+                      track("connector_connect_clicked", { connector: connect.name, chat_id: chatId });
+                      const { url } = await (await api(`/connectors/${connect.name}/authorize`, { method: "POST" })).json();
+                      window.open(url, "_blank", "noopener");
+                    }}
+                    onDismiss={() => { track("connector_dismissed", { connector: connect.name }); setConnect(null); }}
+                  />
+                )}
+                {!ask && !connect && survey && !hushed && !isStreaming && (
                   <SurveyStrip survey={survey} onDone={() => setSurvey(null)} />
                 )}
                 <AnimatePresence initial={false}>

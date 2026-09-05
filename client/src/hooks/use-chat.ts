@@ -620,6 +620,7 @@ export function useChat(baseUrl: string = "") {
     setGetToken,
     uploadFile,
     authHeaders,
+    api,
     setUIHandler,
   };
 }
