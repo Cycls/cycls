@@ -230,7 +230,7 @@ is the dominant productivity platform in Saudi organisations (~48% of enterprise
 | **PostHog, Canva, Slack, Notion, Linear, Figma** | MCP | none — hosted, OAuth, free |
 | **Zoho / Odoo** | MCP | none, but per-user endpoints (15). Strong MENA SME presence |
 | **Meta / TikTok / Google / Amazon Ads** | MCP + plugin | Meta is read+write, free in beta. Google's server reads only, so writes go through plugin tools on the Ads API (decision 4) — a developer token at **Basic** access already allows production writes, 15,000 ops/day; Standard lifts the cap |
-| **Google `drive.file`** | MCP | none — not a restricted scope, no CASA. **The phase-1 proof**: a test-mode client, `drivemcp.googleapis.com/mcp/v1` |
+| **Google Drive** | MCP | **the phase-1 proof**, `drivemcp.googleapis.com/mcp/v1`. Google's server requires `drive.file` **and** `drive.readonly` together — a `drive.file`-only token is refused on every tool, `create_file` included. `drive.readonly` is restricted: a test-mode client works for test users, publishing means CASA |
 | **Gmail send** | MCP | *sensitive*: app review, weeks, no fee |
 | **Gmail/Drive read, full Calendar** | MCP | **restricted**: CASA Tier 2, ~$540–1,000/yr, 4–12 weeks, **annual** |
 | **Google Analytics** | plugin | no API-key path — OAuth or a service account; the Admin API and an edit scope are what writes need |
@@ -525,9 +525,11 @@ trail, and will not stand in for it.
 
 ## Phase 1 — a first connector, end to end
 
-Proven with Google Drive on `drive.file`: a test-mode client needs no review, the server lists
-its tools anonymously, and it is a `scope="user"` connector, so it exercises the isolation
-path Salla would not have. Salla is next, on the same machinery.
+Proven with Google Drive: the server lists its tools anonymously, and it is a `scope="user"`
+connector, so it exercises the isolation path Salla would not have. One finding from the live
+run: Google's MCP needs `drive.readonly` alongside `drive.file` — so the no-review scope was
+not enough after all, and CASA is a production question for Drive. Salla is next, on the same
+machinery.
 
 | # | item | state |
 |---|---|---|
