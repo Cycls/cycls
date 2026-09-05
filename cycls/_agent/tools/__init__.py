@@ -2,7 +2,8 @@
 API shape (`type` / `name` / `description` / `input_schema`) and registered in
 `_BUILTINS`; `build_tools` emits them as-is. User-supplied custom tools come
 through `_normalize_tool` (accepts the camelCase `inputSchema` form too)."""
-import asyncio, base64, ipaddress, json, os, pathlib, socket
+import asyncio, base64, inspect, ipaddress, json, os, pathlib, socket
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import NamedTuple
 from . import pdf, skills
@@ -874,13 +875,28 @@ def tool_step(name, input):
     return {"tool_name": name, "step": step if len(step) <= 120 else step[:117] + "..."}
 
 
-def dispatch(block, workspace, timeout, handlers=None, network=False, seen=None):
+@dataclass(frozen=True)
+class ToolContext:
+    """Who a custom tool acts for. Handlers that declare a second parameter
+    receive it; one-argument handlers are called as before."""
+    user: object
+    workspace: object
+    chat_id: str | None = None
+
+
+def _takes_ctx(fn):
+    kinds = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    return sum(p.kind in kinds for p in inspect.signature(fn).parameters.values()) > 1
+
+
+def dispatch(block, workspace, timeout, handlers=None, network=False, seen=None, ctx=None):
     """*block* is a tool_use content block (dict): {type, id, name, input}.
     Returns (step_event_dict, awaitable_result). The step carries the block's
     `id` so the FE can fold it into the `ToolStart`/`ToolArgs` it already showed.
 
     *seen* is the caller's per-batch set of dispatched `once` tools; omitting
-    it (the default) dispatches every block."""
+    it (the default) dispatches every block. *ctx* is the `ToolContext` handed
+    to handlers that take one."""
     bid, name, inp = block["id"], block["name"], block.get("input") or {}
     entry = _TOOLS.get(name)
     if entry and entry.once and seen is not None:
@@ -894,5 +910,6 @@ def dispatch(block, workspace, timeout, handlers=None, network=False, seen=None)
     if entry and entry.run:
         return {"type": "step", "id": bid, **entry.step(inp)}, entry.run(inp, workspace, timeout=timeout, network=network)
     if handlers and name in handlers:
-        return {"type": "step", "id": bid, **tool_step(name, inp)}, handlers[name](inp)
+        fn = handlers[name]
+        return {"type": "step", "id": bid, **tool_step(name, inp)}, fn(inp, ctx) if _takes_ctx(fn) else fn(inp)
     return {"type": "tool_call", "id": bid, "tool": name, "args": inp}, asyncio.sleep(0, result=f"{name} executed")

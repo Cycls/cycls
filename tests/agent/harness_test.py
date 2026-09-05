@@ -303,6 +303,28 @@ def test_descriptor_flags_and_prompts():
     assert len(tool_prompts(build_tools(["Ask", "Suggest"], None))) == 2
 
 
+def test_dispatch_hands_context_only_to_handlers_that_take_it():
+    """A second positional parameter opts a handler into the ToolContext.
+    One-arg handlers, and `**kw`, are called exactly as before."""
+    import asyncio
+    from types import SimpleNamespace
+    from cycls._agent.tools import dispatch, ToolContext
+
+    ws = SimpleNamespace(root="/tmp")
+    ctx = ToolContext(SimpleNamespace(id="u1"), ws, "c1")
+    async def two(args, c): return c.user.id
+    async def one(args): return "one"
+    async def kw(args, **extra): return "kw"
+    run = lambda name, **k: asyncio.run(_await(dispatch(
+        {"id": name, "name": name, "input": {}}, ws, timeout=5,
+        handlers={"two": two, "one": one, "kw": kw}, **k)[1]))
+
+    assert run("two", ctx=ctx) == "u1"
+    assert run("one", ctx=ctx) == "one"
+    assert run("kw", ctx=ctx) == "kw"
+    assert run("one") == "one"          # every existing caller passes no ctx
+
+
 def test_build_tools_unknown_name_ignored():
     """Unknown tool names silently drop — don't crash the agent boot."""
     tools = build_tools(["Bash", "NotARealTool"], None)

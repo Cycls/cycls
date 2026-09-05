@@ -17,7 +17,7 @@ from .compact import COMPACT_BUFFER
 from ..logs import log
 from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
-from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal
+from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, ToolContext
 from ..tools import skills as skills_mod
 
 
@@ -152,6 +152,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     Path(workspace.root).mkdir(parents=True, exist_ok=True)
 
     session = await Session.open(context)
+    ctx = ToolContext(user, workspace, session.chat_id)
     incoming = context.messages.raw[-1]
     await session.add_user(await _ingest(incoming.get("content", ""), workspace.root, vision),
                            attachments=incoming.get("attachments"))
@@ -298,7 +299,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             blocks = [b for b in turn.content if isinstance(b, dict) and b.get("type") == "tool_use"]
             # One `seen` per batch; comprehensions run left to right, so the first call wins.
             seen = set()
-            pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network, seen=seen)
+            pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network, seen=seen, ctx=ctx)
                      for b in blocks]
             for step, _ in pairs: yield step
             # Heartbeat every 15s while tools run — keeps intermediate
