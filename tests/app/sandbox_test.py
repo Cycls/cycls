@@ -56,6 +56,15 @@ def test_bash_sandbox_hides_credentials(tmp_path):
     assert {"/workspace/.secrets", "/workspace/.connectors"} <= masked
 
 
+def test_bash_scratch_is_the_chats_tmp_dir(tmp_path):
+    """TMPDIR points at .tmp/{chat}: mktemp, tempfile and friends land in
+    scratch that persists across commands and is swept with the spills."""
+    argv = _capture_bash_argv(tmp_path, chat_id="c1")
+    assert ("--setenv", "TMPDIR", "/workspace/.tmp/c1") in zip(argv, argv[1:], argv[2:])
+    assert (tmp_path / ".tmp" / "c1").is_dir()
+    assert "TMPDIR" not in _capture_bash_argv(tmp_path)
+
+
 def test_bash_sandbox_network_off_by_default(tmp_path):
     """Default: --unshare-user + --unshare-net → fresh userns owns the new
     netns so bwrap has NET_ADMIN to bring up lo. No host net access."""

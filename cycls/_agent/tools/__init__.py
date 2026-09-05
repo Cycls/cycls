@@ -22,15 +22,15 @@ _BASH_TOOL = {
         "Execute a shell command in the workspace sandbox.\n\n"
         "Usage:\n"
         "- Working directory is /workspace. Never prefix commands with `cd /workspace`.\n"
-        "- Save files in the workspace, never /tmp — every command gets its own /tmp, "
-        "discarded the moment it exits, and the read/edit/canvas tools cannot see it. "
-        "Download with `curl -o report.pdf <url>`, not `curl -o /tmp/report.pdf <url>`.\n"
+        "- Scratch goes in `.tmp/` (it is `$TMPDIR`): downloads, intermediate data, anything "
+        "the user should not see in their files — it is hidden and cleaned up. Files the user "
+        "keeps go in the workspace root. Never /tmp: every command gets its own, gone when it exits.\n"
         "- Use `rg` or `rg --files` for searching — it's faster than grep.\n"
         "- Use `jq` to extract fields from JSON.\n"
         "- Use the `read` tool (not cat/head/tail) for viewing files.\n"
         "- Use the `edit` tool to create OR modify files — never `cat >`, `echo >`, heredocs, or `sed`/`awk`. Bash for files bypasses safety checks and blows the output-token budget on long content.\n"
         "- Always quote paths containing spaces with double quotes.\n"
-        "- Large output is saved under .tmp/ and you get a preview — analyse it with jq, rg or python.\n"
+        "- Large output is saved to `.tmp/` with a preview — analyse it with jq, rg or python.\n"
         "- Default timeout is 600s; adjust via `timeout` parameter (milliseconds).\n"
         "- Avoid destructive commands (`rm -rf`) unless the user explicitly asks.\n"
         "- When issuing multiple independent commands, send multiple bash tool calls in parallel rather than chaining with &&."
@@ -356,8 +356,8 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
     return tools
 
 _TMP_ERROR = ("/tmp is not shared — every bash command gets its own, discarded when it "
-              "exits, and the file tools cannot see it. Save into the workspace instead "
-              "(relative paths, e.g. report.pdf)")
+              "exits, and the file tools cannot see it. Use .tmp/ for scratch (it is $TMPDIR "
+              "in bash) and the workspace root for files the user keeps")
 
 
 def _resolve_path(raw_path, workspace):
@@ -378,7 +378,7 @@ def _resolve_path(raw_path, workspace):
 
 # ---- Tool execution ----
 
-async def _exec_bash(command, cwd, timeout=600, network=False):
+async def _exec_bash(command, cwd, timeout=600, network=False, chat_id=None):
     from cycls._app.sandbox import Sandbox
     path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     lang = os.environ.get("LANG", "C.UTF-8")
@@ -390,6 +390,9 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
     shims = str(pathlib.Path(__file__).parent / "shims")
     env = {"PATH": f"/opt/cycls-bin:{path}", "LANG": lang,
            "CYCLS_WORKSPACE": "/workspace", "CYCLS_TRASH": "/workspace-trash"}
+    if chat_id:   # the chat's scratch: persists across commands, swept with its spills
+        os.makedirs(os.path.join(cwd, spill.DIR, chat_id), exist_ok=True)
+        env["TMPDIR"] = f"/workspace/{spill.DIR}/{chat_id}"
     sb = (Sandbox()
           .bind(cwd, "/workspace")
           .tmpfs("/workspace/.db")        # cycls state (chat, shares); editor blocks via _resolve_path
@@ -798,9 +801,10 @@ class Tool(NamedTuple):
     prompt: str = ""
 
 
-def _run_bash(inp, workspace, *, timeout, network):
+def _run_bash(inp, workspace, *, timeout, network, ctx=None):
     t = inp.get("timeout")
-    return _exec_bash(inp.get("command", ""), workspace.root, timeout=t / 1000 if t else timeout, network=network)
+    return _exec_bash(inp.get("command", ""), workspace.root, timeout=t / 1000 if t else timeout,
+                      network=network, chat_id=getattr(ctx, "chat_id", None))
 
 
 def _ask_step(inp):
@@ -915,7 +919,7 @@ def dispatch(block, workspace, timeout, handlers=None, network=False, seen=None,
                         "call ran. Send everything in a single call.")))
         seen.add(name)
     if entry and entry.run:
-        return {"type": "step", "id": bid, **entry.step(inp)}, entry.run(inp, workspace, timeout=timeout, network=network)
+        return {"type": "step", "id": bid, **entry.step(inp)}, entry.run(inp, workspace, timeout=timeout, network=network, ctx=ctx)
     if handlers and name in handlers:
         fn = handlers[name]
         return {"type": "step", "id": bid, **tool_step(name, inp)}, fn(inp, ctx) if _takes_ctx(fn) else fn(inp)
