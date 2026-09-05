@@ -10,6 +10,8 @@ from . import pdf, skills
 from ..state import _exec_database
 from .. import credentials, spill, trash
 
+TRASH_MOUNT, SHIMS_MOUNT = "/workspace-trash", "/opt/cycls-bin"   # created by the image (Agent._base_run)
+
 MAX_OUTPUT = 2_000_000   # memory ceiling; the loop spills anything large to .tmp/
 
 _IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
@@ -388,8 +390,8 @@ async def _exec_bash(command, cwd, timeout=600, network=False, chat_id=None):
     trash_dir = os.path.join(cwd, trash.DIR)
     os.makedirs(trash_dir, exist_ok=True)
     shims = str(pathlib.Path(__file__).parent / "shims")
-    env = {"PATH": f"/opt/cycls-bin:{path}", "LANG": lang,
-           "CYCLS_WORKSPACE": "/workspace", "CYCLS_TRASH": "/workspace-trash"}
+    env = {"PATH": f"{SHIMS_MOUNT}:{path}", "LANG": lang,
+           "CYCLS_WORKSPACE": "/workspace", "CYCLS_TRASH": TRASH_MOUNT}
     if chat_id:   # the chat's scratch: persists across commands, swept with its spills
         os.makedirs(os.path.join(cwd, spill.DIR, chat_id), exist_ok=True)
         env["TMPDIR"] = f"/workspace/{spill.DIR}/{chat_id}"
@@ -400,8 +402,8 @@ async def _exec_bash(command, cwd, timeout=600, network=False, chat_id=None):
           .tmpfs("/workspace/.trash")
           .tmpfs(f"/workspace/{credentials.USER}")
           .tmpfs(f"/workspace/{credentials.SHARED}")
-          .bind(trash_dir, "/workspace-trash")
-          .ro_bind(shims, "/opt/cycls-bin")
+          .bind(trash_dir, TRASH_MOUNT)
+          .ro_bind(shims, SHIMS_MOUNT)
           .tmpfs("/app")
           .chdir("/workspace")
           .setenv(**env)

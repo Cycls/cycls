@@ -13,6 +13,7 @@ from cycls._app.main import App, _make_decorator, _serve
 from .web.routers import install_routers
 from .web import Web, web, Config
 from .web.server import PassMetadata
+from .tools import TRASH_MOUNT, SHIMS_MOUNT
 
 CYCLS_PATH = importlib.resources.files('cycls')
 
@@ -46,6 +47,7 @@ class Agent(App):
     _base_pip = [*App._base_pip, "resvg-py", "anthropic", "openai", "python-dotenv", "mcp==2.1.1"]
     _base_apt = [*App._base_apt, "fonts-noto-core",
                  "poppler-utils", "ripgrep", "jq", "curl"]
+    _base_run = [f"mkdir -p {TRASH_MOUNT} {SHIMS_MOUNT}"]   # bwrap can't mkdir bind targets inside its ro root
 
     def __init__(self, func, name, web=None, image=None, memory="1Gi", volumes=None):
         if not volumes or "/workspace" not in volumes:
