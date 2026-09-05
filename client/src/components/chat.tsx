@@ -1021,7 +1021,7 @@ export function Chat({ chat, onShare, files, account, config }: {
         </Popover>
       )}
       {settingsOpen && account && (
-        <SettingsDialog account={account} onClose={() => setSettingsOpen(false)} />
+        <SettingsDialog account={account} api={api} onClose={() => setSettingsOpen(false)} />
       )}
       </div>
       <div className={cn(
