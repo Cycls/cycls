@@ -13,7 +13,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 
 from cycls._app.db import DB, Workspace, workspace
-from cycls._agent import state, trash
+from cycls._agent import spill, state, trash
 from cycls._agent.logs import log
 from cycls._agent.tools import tool_step
 
@@ -726,6 +726,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can delete forever")
         if tid.startswith("chat:"):
             await state.delete_chat(ws, tid[5:])
+            spill.purge(ws.root, tid[5:])
             return {"ok": True}
         try:
             await asyncio.to_thread(trash.purge, ws.root, tid)

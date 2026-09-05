@@ -29,6 +29,9 @@ def main(argv):
                 sys.stderr.write(f"rm: cannot remove '{t}': No such file or directory\n"); rc = 1
             continue
         rel = os.path.relpath(p, WS)
+        if rel.split(os.sep)[0] == ".tmp":   # scratch: a real delete, not a move
+            outside.append(t)
+            continue
         if rel.split(os.sep)[0] in (".trash", ".db", ".database"):
             sys.stderr.write(f"rm: cannot remove '{t}': managed by cycls\n"); rc = 1
             continue
