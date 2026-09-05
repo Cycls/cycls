@@ -8,9 +8,9 @@ from html.parser import HTMLParser
 from typing import NamedTuple
 from . import pdf, skills
 from ..state import _exec_database
-from .. import credentials, trash
+from .. import credentials, spill, trash
 
-MAX_OUTPUT = 30_000
+MAX_OUTPUT = 2_000_000   # memory ceiling; the loop spills anything large to .tmp/
 
 _IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
 _DOC_EXTS = {"pdf"}
@@ -30,7 +30,7 @@ _BASH_TOOL = {
         "- Use the `read` tool (not cat/head/tail) for viewing files.\n"
         "- Use the `edit` tool to create OR modify files — never `cat >`, `echo >`, heredocs, or `sed`/`awk`. Bash for files bypasses safety checks and blows the output-token budget on long content.\n"
         "- Always quote paths containing spaces with double quotes.\n"
-        "- Output over 30K chars is truncated in the middle — use head/grep/tail in the command to keep results focused.\n"
+        "- Large output is saved under .tmp/ and you get a preview — analyse it with jq, rg or python.\n"
         "- Default timeout is 600s; adjust via `timeout` parameter (milliseconds).\n"
         "- Avoid destructive commands (`rm -rf`) unless the user explicitly asks.\n"
         "- When issuing multiple independent commands, send multiple bash tool calls in parallel rather than chaining with &&."
@@ -572,6 +572,8 @@ async def _exec_canvas(inp, workspace):
     if not path.exists(): return f"Error: {raw} does not exist"
     if path.is_dir(): return f"Error: {raw} is a directory"
     rel = raw.removeprefix("/workspace/").lstrip("/")
+    if path.relative_to(pathlib.Path(workspace).resolve()).parts[:1] == (spill.DIR,):
+        return f"Error: {spill.DIR}/ is scratch that may be deleted — write the deliverable elsewhere and open that"
     return {"type": "ui", "action": "open_canvas", "path": rel,
             **_app_identity(path, path.name)}
 

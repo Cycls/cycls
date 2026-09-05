@@ -9,7 +9,7 @@ import asyncio, json, random, re, time, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import state
+from .. import spill, state
 from ..state import Session
 from . import events
 from .events import Turn
@@ -340,6 +340,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     content = out if isinstance(out, str) else json.dumps(out, default=str)
                 else:
                     content = out
+                if isinstance(content, str) and block["name"] not in ("read", "skill"):
+                    content = spill.spill(content, workspace.root, session.chat_id, f"{block['name']}-{block['id'][-6:]}")
                 results.append({"type": "tool_result", "tool_use_id": block["id"], "content": content})
                 # Only a call that reached the user ends the turn — a malformed
                 # `ask` gets another turn to fix itself.
