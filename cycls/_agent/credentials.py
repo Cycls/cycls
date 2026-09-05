@@ -11,11 +11,15 @@ from cycls._app.db import DB, workspace
 USER, SHARED = ".secrets", ".connectors"
 
 
-def _fernet():
-    key = os.environ.get("CYCLS_SECRET_KEY")
-    if not key:
+def key():
+    k = os.environ.get("CYCLS_SECRET_KEY")
+    if not k:
         raise RuntimeError("CYCLS_SECRET_KEY is required to store credentials")
-    return Fernet(base64.urlsafe_b64encode(hashlib.sha256(key.encode()).digest()))
+    return k.encode()
+
+
+def _fernet():
+    return Fernet(base64.urlsafe_b64encode(hashlib.sha256(key()).digest()))
 
 
 def _db(ws, shared):

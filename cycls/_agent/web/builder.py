@@ -89,6 +89,7 @@ class Web:
         self._og_url: Optional[str] = None
         self._favicon: Optional[str] = None
         self._colors: Optional[dict] = None
+        self._connectors: list = []
 
     def _copy(self, **updates):
         new = Web.__new__(Web)
@@ -226,6 +227,10 @@ class Web:
             label, label_ar = k if isinstance(k, tuple) else (k, None)
             out.append({"label": label, "label_ar": label_ar, "urls": [entry(e) for e in v]})
         return self._copy(_examples=out or None)
+
+    def connectors(self, *oauths):
+        """Connectors the directory offers and the connect routes serve (cycls.OAuth2)."""
+        return self._copy(_connectors=[*self._connectors, *oauths])
 
     def analytics(self, *providers):
         """Analytics as plugins: one canonical event pipe in the client,
