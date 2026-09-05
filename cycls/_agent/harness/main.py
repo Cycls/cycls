@@ -17,7 +17,7 @@ from .compact import COMPACT_BUFFER
 from ..logs import log
 from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
-from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, ToolContext
+from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, register_labels, ToolContext
 from ..tools import skills as skills_mod
 
 
@@ -181,6 +181,17 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     tools_list = build_tools(allowed_tools, tools or [], vendor=vendor, web_search=web_search)
     if skill_catalog and not any(t.get("name") == "skill" for t in tools_list):
         tools_list.append(skills_mod.SKILL_TOOL)
+    for server in [s for s in mcp_servers or [] if not s._server_side]:
+        try:
+            schemas, fns, names = await server.discover()
+        except Exception as e:
+            yield _user_warn(user, session.chat_id, f"Couldn't reach {server._name or server._url} — its tools are off this turn.",
+                             f"mcp discovery failed for {server._url}: {e}")
+            continue
+        tools_list += schemas
+        handlers = {**(handlers or {}), **fns}
+        register_labels({}, names)
+    mcp_servers = [s for s in mcp_servers or [] if s._server_side] or None
     for guidance in tool_prompts(tools_list):
         system_text += "\n\n" + guidance
     window = context_window or DEFAULT_WINDOW

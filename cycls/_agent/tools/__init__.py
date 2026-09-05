@@ -859,13 +859,15 @@ def is_terminal(name):
     return bool(row and row.terminal)
 
 
-_custom_labels = {}
+_custom_labels, _custom_names = {}, {}
 
 
-def register_labels(labels):
-    """UI step labels for custom tools: name → (input dict → str). Registered
-    by LLM.run() so both live steps and the refetch projection render them."""
+def register_labels(labels, names=None):
+    """UI step labels for custom tools: name → (input dict → str), and an
+    optional display name. Registered by LLM.run() and by MCP discovery so
+    both live steps and the refetch projection render them."""
     _custom_labels.update(labels or {})
+    _custom_names.update(names or {})
 
 
 def tool_step(name, input):
@@ -873,14 +875,15 @@ def tool_step(name, input):
     entry = _TOOLS.get(name)
     if entry:
         return entry.step(inp)
+    shown = _custom_names.get(name, name)
     if fn := _custom_labels.get(name):
         try:
-            return {"tool_name": name, "step": str(fn(inp))}
+            return {"tool_name": shown, "step": str(fn(inp))}
         except Exception:
             pass
     # No label — show the first string value, like Bash(command).
     step = next((v for v in inp.values() if isinstance(v, str) and v.strip()), "")
-    return {"tool_name": name, "step": step if len(step) <= 120 else step[:117] + "..."}
+    return {"tool_name": shown, "step": step if len(step) <= 120 else step[:117] + "..."}
 
 
 @dataclass(frozen=True)

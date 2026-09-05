@@ -1,14 +1,55 @@
 """cycls.MCP — a remote MCP server the agent connects to.
 
-Consumption is server-side: the spec is passed through to the Anthropic
-Messages API's MCP connector (`mcp_servers`, `anthropic-beta:
-mcp-client-2025-04-04`). Anthropic does the connecting, tool discovery, and
-tool-call round-trip; results come back in the stream as `mcp_tool_use` /
-`mcp_tool_result` content blocks. So: HTTP/SSE remote servers only, and only
-with `anthropic/*` models (the harness's OpenAI path is Chat Completions,
-which has no MCP). Immutable fluent, like cycls.LLM / cycls.Web / cycls.Image.
+Client-side by default: the harness speaks Streamable HTTP itself, discovers
+tools once (cached DISCOVERY_TTL seconds per url and token) and opens a
+session only when a tool is called — so every provider gets MCP, and a turn
+that uses no server costs nothing. `.server_side()` hands the server to the
+Anthropic connector instead: fewer hops, one deploy-time bearer, anthropic/*
+only. Immutable fluent, like cycls.LLM / cycls.Web / cycls.Image.
 """
+import time
 from typing import List, Optional
+
+DISCOVERY_TTL = 600
+_discovered = {}   # (url, token) -> (deadline, [Tool])
+
+
+def _session(url, headers):
+    import httpx2
+    from mcp.client.streamable_http import streamable_http_client
+    return streamable_http_client(url, http_client=httpx2.AsyncClient(
+        headers=headers, timeout=httpx2.Timeout(30.0, read=300.0)))
+
+
+async def _list(url, headers):
+    from mcp import ClientSession
+    from mcp.types import PaginatedRequestParams
+    tools, cursor = [], None
+    async with _session(url, headers) as (r, w), ClientSession(r, w) as s:
+        await s.initialize()
+        while True:
+            page = await s.list_tools(params=PaginatedRequestParams(cursor=cursor) if cursor else None)
+            tools += page.tools
+            if not (cursor := page.next_cursor):
+                return tools
+
+
+async def _call(url, headers, name, args):
+    from mcp import ClientSession
+    async with _session(url, headers) as (r, w), ClientSession(r, w) as s:
+        await s.initialize()
+        return _shape(await s.call_tool(name, args))
+
+
+def _shape(result):
+    """Text blocks joined; `is_error` → `Error: …` so the loop and the model both see it."""
+    blocks = getattr(result, "content", None) or []
+    text = "\n".join(b.text for b in blocks if getattr(b, "text", None))
+    if other := sum(1 for b in blocks if not getattr(b, "text", None)):
+        text = f"{text}\n[{other} non-text block(s) omitted]".strip()
+    if getattr(result, "is_error", False):
+        return f"Error: {text or 'tool failed'}"
+    return text or "(no output)"
 
 
 class MCP:
@@ -17,6 +58,7 @@ class MCP:
         self._name: Optional[str] = None
         self._token: Optional[str] = None
         self._allow: Optional[List[str]] = None
+        self._server_side = False
 
     def _copy(self, **updates):
         new = MCP.__new__(MCP)
@@ -24,7 +66,7 @@ class MCP:
         return new
 
     def name(self, alias: str):
-        """Label for this server — used to namespace its tools (default `mcp`)."""
+        """Label for this server — prefixes its tools and heads their step lines (default `mcp`)."""
         return self._copy(_name=alias)
 
     def token(self, bearer: str):
@@ -34,6 +76,37 @@ class MCP:
     def allow(self, *tool_names: str):
         """Expose only these tools from the server (omit to expose all)."""
         return self._copy(_allow=list(tool_names))
+
+    def server_side(self):
+        """Let the Anthropic connector run this server — fewer hops, one
+        deploy-time bearer, `anthropic/*` only."""
+        return self._copy(_server_side=True)
+
+    def _headers(self):
+        return {"Authorization": f"Bearer {self._token}"} if self._token else {}
+
+    async def discover(self):
+        """(schemas, handlers, names) for this server's tools, prefixed `{name}_`."""
+        key = (self._url, self._token)
+        hit = _discovered.get(key)
+        if not hit or hit[0] < time.monotonic():
+            _discovered[key] = hit = (time.monotonic() + DISCOVERY_TTL, await _list(self._url, self._headers()))
+        label = self._name or "mcp"
+        schemas, handlers, names = [], {}, {}
+        for t in hit[1]:
+            if self._allow and t.name not in self._allow:
+                continue
+            full = f"{label}_{t.name}"
+            schemas.append({"type": "custom", "name": full, "description": t.description or "",
+                            "input_schema": t.input_schema})
+            handlers[full] = self._handler(t.name)
+            names[full] = f"{label} · {t.name}"
+        return schemas, handlers, names
+
+    def _handler(self, raw):
+        async def call(inp, ctx):
+            return await _call(self._url, self._headers(), raw, inp)
+        return call
 
     def _spec(self) -> dict:
         """The Anthropic MCP-connector entry for this server."""
