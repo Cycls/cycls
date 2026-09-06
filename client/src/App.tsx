@@ -93,11 +93,12 @@ function ChatAppKeyed({ config }: { config: AppConfig | null }) {
 
 function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: WorkspaceSelection }) {
   const chat = useChat();
-  const files = useFiles();
+  const { user } = useUser();
+  // Identity labels this user's cursor when co-editing Office files in Collabora.
+  const files = useFiles(undefined, { name: user?.fullName || user?.firstName || "", avatar: user?.imageUrl || "" });
   useRefreshOnTurnEnd(files, chat.isStreaming);
   const ws = useWorkspaces();
   const { getToken, signOut, isLoaded: authLoaded } = useAuth();
-  const { user } = useUser();
   const clerk = useClerk();
   const { organization, membership, memberships } = useOrganization(
     workspace ? { memberships: { infinite: true } } : {});

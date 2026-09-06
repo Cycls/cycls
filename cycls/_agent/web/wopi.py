@@ -120,10 +120,18 @@ def _b64d(s):
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
-def mint(subject, ws_id, rel, user_id, can_write):
-    """A signed token binding one file (subject/ws/path) to a permission + expiry."""
+def mint(subject, ws_id, rel, user_id, can_write, *, name=None, avatar=None, origin=None):
+    """A signed token binding one file (subject/ws/path) to a permission + expiry.
+
+    The optional identity (`name`/`avatar`) and page `origin` ride in the token
+    because WOPI calls come from Collabora, not the browser — CheckFileInfo has
+    only the token to read them back from (co-editor cursor labels; the origin
+    Collabora may postMessage the host page)."""
     body = {"s": subject, "w": ws_id, "p": rel, "u": user_id,
             "rw": bool(can_write), "exp": int(time.time()) + _TOKEN_TTL}
+    if name:   body["n"] = name
+    if avatar: body["a"] = avatar
+    if origin: body["o"] = origin
     payload = _b64e(json.dumps(body, separators=(",", ":")).encode())
     sig = _b64e(hmac.new(_secret(), payload.encode(), hashlib.sha256).digest())
     return f"{payload}.{sig}"
@@ -147,9 +155,39 @@ def verify(token):
     return body
 
 
+# --- editor UI language -------------------------------------------------------
+
+# App locale (what the client sends) → the code Collabora wants on the URL. A
+# whitelist, not a passthrough: the value lands in a browser-facing URL, so
+# echoing arbitrary client input would let it inject extra query params. Unknown
+# or missing → English, the safe default.
+_COOL_LANGS = {"en": "en-US", "ar": "ar"}
+
+
+def _lang(raw):
+    return _COOL_LANGS.get((raw or "").strip().lower()[:2], "en-US")
+
+
 # --- Collabora discovery: mimetype → editor urlsrc ----------------------------
 
 _discovery = {"at": 0, "map": {}}
+
+
+def _parse_discovery(text):
+    """mimetype → editor `urlsrc` from Collabora's /hosting/discovery XML. Prefer
+    the 'edit' action, falling back to whatever action the mimetype lists. Uses
+    explicit `is None` checks — an empty <action/> element is *falsy* in
+    ElementTree, so `find(edit) or find(action)` would skip a real edit action."""
+    root = ET.fromstring(text)
+    out = {}
+    for app in root.iter("app"):
+        name = app.get("name")
+        action = app.find("action[@name='edit']")
+        if action is None:
+            action = app.find("action")
+        if name and action is not None and action.get("urlsrc"):
+            out[name] = action.get("urlsrc")
+    return out
 
 
 async def _editor_src(mime):
@@ -160,13 +198,7 @@ async def _editor_src(mime):
     base = _internal_url()
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(f"{base}/hosting/discovery")
-    root = ET.fromstring(resp.text)
-    out = {}
-    for app in root.iter("app"):
-        name = app.get("name")
-        action = app.find("action[@name='edit']") or app.find("action")
-        if name and action is not None and action.get("urlsrc"):
-            out[name] = action.get("urlsrc")
+    out = _parse_discovery(resp.text)
     _discovery.update(at=time.time(), map=out)
     return out.get(mime)
 
@@ -201,9 +233,12 @@ def wopi_router(cycls_app, ws_dep, required_auth, volume, base):
         return claims, ws, path
 
     @r.get("/wopi/editor")
-    async def editor(path: str, request: Request, ws=ws_dep, user=required_auth):
+    async def editor(path: str, request: Request, lang: str = "", name: str = "",
+                     avatar: str = "", ws=ws_dep, user=required_auth):
         """Browser-facing, authed: mint a token for `path` and return the Collabora
-        editor URL to drop into an iframe."""
+        editor URL to drop into an iframe. `lang` is the caller's UI locale so the
+        editor chrome matches the rest of the app; `name`/`avatar` label this user's
+        cursor when several people co-edit the same file."""
         if not configured():
             raise HTTPException(503, "Collabora not configured")
         if not editable(path):
@@ -216,12 +251,22 @@ def wopi_router(cycls_app, ws_dep, required_auth, volume, base):
         if not src:
             raise HTTPException(502, f"Collabora advertises no editor for {mime}")
         uid = getattr(user, "id", "user")
-        token = mint(ws.subject, ws.ws, path, uid, can_write=True)
+        # Prefer the verified JWT identity; fall back to what the client sent (it
+        # has the Clerk profile but is spoofable — fine for a cosmetic cursor
+        # label within a workspace the user already belongs to).
+        display = getattr(user, "name", None) or name or uid
+        pic = getattr(user, "image_url", None) or avatar or None
+        # Reaching here means ws_dep already admitted this user to the workspace,
+        # and every current role (owner/admin/editor) writes — there is no
+        # read-only role. Wire can_write off the role here if one is ever added.
+        token = mint(ws.subject, ws.ws, path, uid, can_write=True,
+                     name=display, avatar=pic, origin=request.headers.get("origin"))
         file_id = _b64e(path.encode("utf-8"))
         wopi_src = f"{_host_url(request)}/wopi/files/{file_id}"
-        # urlsrc ends with '?' or '&'; append our params.
+        # urlsrc ends with '?' or '&'; append our params. closebutton=false: the
+        # canvas owns the close affordance (its own tab chrome).
         sep = "" if src.endswith(("?", "&")) else ("&" if "?" in src else "?")
-        editor_url = f"{src}{sep}WOPISrc={wopi_src}&lang=ar"
+        editor_url = f"{src}{sep}WOPISrc={wopi_src}&lang={_lang(lang)}&closebutton=false"
         return {"editor_url": editor_url, "access_token": token,
                 "access_token_ttl": (int(time.time()) + _TOKEN_TTL) * 1000}
 
@@ -233,19 +278,29 @@ def wopi_router(cycls_app, ws_dep, required_auth, volume, base):
         if not Path(path).is_file():
             raise HTTPException(404, "file not found")
         st = Path(path).stat()
-        return JSONResponse({
+        info = {
             "BaseFileName": Path(path).name,
             "Size": st.st_size,
             "Version": str(st.st_mtime_ns),         # changes on every save → cache-busts
-            "OwnerId": claims.get("s", "owner"),
-            "UserId": claims.get("u", "user"),
-            "UserFriendlyName": claims.get("u", "user"),
+            # Stable across every co-editor of the same file (the workspace, not
+            # the requester) — a per-requester OwnerId would make Collabora think
+            # each viewer owns a different document.
+            "OwnerId": claims.get("w") or claims.get("s", "owner"),
+            "UserId": claims.get("u", "user"),      # distinct per user → distinct cursors
+            "UserFriendlyName": claims.get("n") or claims.get("u", "user"),
             "UserCanWrite": bool(claims.get("rw")),
             "UserCanNotWriteRelative": True,        # no "save as" into the workspace
             "SupportsUpdate": True,
             "SupportsLocks": True,
             "SupportsGetLock": True,
-        })
+            "DisableInactiveMessages": True,        # no idle nag over our canvas
+            # Origin of the host page, so Collabora will postMessage the canvas
+            # (loading status, UI hooks). "*" only if we never learned it.
+            "PostMessageOrigin": claims.get("o") or "*",
+        }
+        if avatar := claims.get("a"):
+            info["UserExtraInfo"] = {"avatar": avatar}   # cursor/label picture in co-edit
+        return JSONResponse(info)
 
     @r.get("/wopi/files/{file_id}/contents")
     async def get_file(file_id: str, request: Request):

@@ -117,6 +117,59 @@ def test_checkfileinfo_and_getfile(tmp_path, monkeypatch):
     assert body.status_code == 200 and body.content == b"PPTXBYTES"
 
 
+def test_checkfileinfo_carries_identity_and_postmessage(tmp_path, monkeypatch):
+    """Co-editor cursor labels + host integration: real name/avatar, a stable
+    OwnerId (the workspace, not the requester), and the page's PostMessageOrigin."""
+    monkeypatch.setenv("WOPI_SECRET", "s"); monkeypatch.setattr(wopi, "_SECRET", None)
+    _seed(tmp_path, "deck.pptx", b"X")
+    c = _client(tmp_path)
+    fid = _fid("deck.pptx")
+    tok = wopi.mint("org_1:user_1", "u-user_1", "deck.pptx", "user_1", True,
+                    name="Sara Ali", avatar="https://img/a.png", origin="https://app.cycls.ai")
+    j = c.get(f"/wopi/files/{fid}", params={"access_token": tok}).json()
+    assert j["UserFriendlyName"] == "Sara Ali"
+    assert j["UserId"] == "user_1"                    # distinct per user → distinct cursors
+    assert j["OwnerId"] == "u-user_1"                 # the workspace: same for every co-editor
+    assert j["UserExtraInfo"]["avatar"] == "https://img/a.png"
+    assert j["PostMessageOrigin"] == "https://app.cycls.ai"
+    assert j["DisableInactiveMessages"] is True
+    # No identity in the token → falls back to the id, and PostMessageOrigin to "*".
+    j2 = c.get(f"/wopi/files/{fid}", params={"access_token": _tok("deck.pptx")}).json()
+    assert j2["UserFriendlyName"] == "user_1" and "UserExtraInfo" not in j2
+    assert j2["PostMessageOrigin"] == "*"
+
+
+def test_editor_passes_identity_and_closebutton(tmp_path, monkeypatch):
+    monkeypatch.setenv("WOPI_SECRET", "s"); monkeypatch.setattr(wopi, "_SECRET", None)
+    monkeypatch.setenv("COLLABORA_URL", "https://collabora.cycls.ai")
+    async def fake_src(mime):
+        return "https://collabora.cycls.ai/browser/abc/cool.html?"
+    monkeypatch.setattr(wopi, "_editor_src", fake_src)
+    _seed(tmp_path, "deck.pptx", b"X")
+    c = _client(tmp_path)
+    r = c.get("/wopi/editor",
+              params={"path": "deck.pptx", "name": "Sara", "avatar": "https://img/a.png"},
+              headers={"origin": "https://app.cycls.ai"})
+    j = r.json()
+    assert "closebutton=false" in j["editor_url"]     # the canvas owns the close button
+    claims = wopi.verify(j["access_token"])
+    assert claims["n"] == "Sara" and claims["a"] == "https://img/a.png"
+    assert claims["o"] == "https://app.cycls.ai"      # captured for PostMessageOrigin
+
+
+def test_same_file_yields_one_session_for_every_coeditor():
+    """Live co-editing hinges on one property: every user opening the same file
+    produces the same WOPI file id (→ same WOPISrc), so Collabora joins them into
+    a single session. The id is a pure function of the path, and two users in one
+    team workspace hit the same path — so it cannot diverge, while their tokens
+    still carry distinct identities for distinct cursors."""
+    a = wopi.mint("org_1:user_1", "t-team", "shared/report.docx", "user_1", True, name="A")
+    b = wopi.mint("org_1:user_2", "t-team", "shared/report.docx", "user_2", True, name="B")
+    assert wopi.verify(a)["p"] == wopi.verify(b)["p"] == "shared/report.docx"  # same file scope
+    assert wopi.verify(a)["u"] != wopi.verify(b)["u"]                          # distinct users
+    assert _fid("shared/report.docx") == "c2hhcmVkL3JlcG9ydC5kb2N4"           # id from path alone
+
+
 def test_putfile_saves_back_to_workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("WOPI_SECRET", "s"); monkeypatch.setattr(wopi, "_SECRET", None)
     p = _seed(tmp_path, "doc.docx", b"OLD")
@@ -158,7 +211,42 @@ def test_editor_endpoint_returns_url_and_token(tmp_path, monkeypatch):
     assert r.status_code == 200
     j = r.json()
     assert "cool.html?" in j["editor_url"] and "WOPISrc=" in j["editor_url"]
+    assert "lang=en-US" in j["editor_url"]            # no lang → English, not a leftover default
     assert wopi.verify(j["access_token"])["p"] == "deck.pptx"
+
+
+def test_editor_url_carries_the_caller_locale(tmp_path, monkeypatch):
+    """The editor chrome follows the app's UI language; an unknown/absent locale
+    falls back to English (the value lands in a URL, so it's a whitelist)."""
+    monkeypatch.setenv("WOPI_SECRET", "s"); monkeypatch.setattr(wopi, "_SECRET", None)
+    monkeypatch.setenv("COLLABORA_URL", "https://collabora.cycls.ai")
+    async def fake_src(mime):
+        return "https://collabora.cycls.ai/browser/abc/cool.html?"
+    monkeypatch.setattr(wopi, "_editor_src", fake_src)
+    _seed(tmp_path, "deck.pptx", b"X")
+    c = _client(tmp_path)
+    assert "lang=ar" in c.get("/wopi/editor", params={"path": "deck.pptx", "lang": "ar"}).json()["editor_url"]
+    assert "lang=en-US" in c.get("/wopi/editor", params={"path": "deck.pptx", "lang": "en"}).json()["editor_url"]
+    # a locale we don't ship (or a would-be injection) never reaches the URL raw
+    assert "lang=en-US" in c.get("/wopi/editor", params={"path": "deck.pptx", "lang": "fr&x=1"}).json()["editor_url"]
+
+
+def test_discovery_prefers_the_edit_action(monkeypatch):
+    """An empty <action/> is falsy in ElementTree, so selection must use
+    `is None`, not `or` — otherwise the 'view' action listed first would win."""
+    xml = """<wopi-discovery><net-zone>
+      <app name="application/vnd.openxmlformats-officedocument.presentationml.presentation">
+        <action name="view" ext="pptx" urlsrc="https://c/view.html?"/>
+        <action name="edit" ext="pptx" urlsrc="https://c/edit.html?"/>
+      </app>
+      <app name="application/vnd.oasis.opendocument.text">
+        <action name="view" ext="odt" urlsrc="https://c/only-view.html?"/>
+      </app>
+    </net-zone></wopi-discovery>"""
+    m = wopi._parse_discovery(xml)
+    assert m["application/vnd.openxmlformats-officedocument.presentationml.presentation"] == "https://c/edit.html?"
+    # no edit action → fall back to whatever the mimetype lists
+    assert m["application/vnd.oasis.opendocument.text"] == "https://c/only-view.html?"
 
 
 def test_editor_rejects_non_office(tmp_path, monkeypatch):

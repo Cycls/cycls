@@ -2,7 +2,7 @@
  * CollaboraEditor — fetches the WOPI editor URL and embeds it via a token
  * form-POST; falls back to a download card when the editor is unavailable.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, test, expect, vi, beforeAll } from "vitest";
 import { CollaboraEditor } from "../src/components/collabora-editor";
 
@@ -37,6 +37,22 @@ describe("CollaboraEditor", () => {
     });
     expect(container.querySelector('iframe[name="cycls-collabora"]')).toBeTruthy();
     expect(HTMLFormElement.prototype.submit).toHaveBeenCalled();      // auto-submitted on load
+  });
+
+  test("sends the Host_PostmessageReady handshake when the editor frame loads", async () => {
+    const getEditor = vi.fn().mockResolvedValue(CFG);
+    const { container } = render(
+      <CollaboraEditor file={{ path: "a/deck.pptx", name: "deck.pptx" }} getEditor={getEditor} />,
+    );
+    // Wait for the config to land (the form only mounts once cfg is set).
+    await waitFor(() => expect(container.querySelector("form")).toBeTruthy());
+    const frame = container.querySelector('iframe[name="cycls-collabora"]') as HTMLIFrameElement;
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    fireEvent.load(frame);   // Collabora page finished loading in the iframe
+    expect(post).toHaveBeenCalled();
+    const [payload, origin] = post.mock.calls[0];
+    expect(JSON.parse(payload as string).MessageId).toBe("Host_PostmessageReady");
+    expect(origin).toBe("https://collabora.cycls.ai");   // posted only to Collabora's origin
   });
 
   test("falls back to a download action when the editor is unavailable", async () => {

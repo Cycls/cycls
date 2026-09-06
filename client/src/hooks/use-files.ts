@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { zip } from "fflate";
 import { useApi } from "./use-api";
 import { track } from "../lib/analytics";
+import { getLang } from "../lib/i18n";
 import type { TrashRow } from "../components/trash-view";
 
 export interface FileEntry {
@@ -27,7 +28,11 @@ const APPS_DIR = "apps";
 const hideApps = (dir: string, list: FileEntry[]) =>
   dir === "" ? list.filter((e) => !(e.type === "directory" && e.name === APPS_DIR)) : list;
 
-export function useFiles(baseUrl: string = "") {
+// `identity` labels this user's cursor when several people co-edit an Office
+// file in Collabora. Verified server-side from the JWT when it carries a name;
+// this is the client-side fallback (the Clerk profile), so the editor shows a
+// real name/avatar today without waiting on a JWT-template change.
+export function useFiles(baseUrl: string = "", identity?: { name?: string; avatar?: string }) {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [path, setPath] = useState("");
   const [loading, setLoading] = useState(false);
@@ -130,12 +135,16 @@ export function useFiles(baseUrl: string = "") {
   }, [api]);
 
   // Editable Office: ask the server for the Collabora editor URL + a per-file
-  // WOPI token. The canvas embeds the returned URL in an iframe. `silent`: a
-  // 503/415 here (Collabora not wired) is an expected fallback to the download
-  // card, not an error to toast about.
+  // WOPI token. The canvas embeds the returned URL in an iframe. `lang` carries
+  // our UI locale so the editor chrome matches the app. `silent`: a 503/415 here
+  // (Collabora not wired) is an expected fallback to the download card, not an
+  // error to toast about.
   const getEditor = useCallback(async (filePath: string) => {
-    return (await api(`/wopi/editor?path=${encodeURIComponent(filePath)}`, { silent: true })).json();
-  }, [api]);
+    const q = new URLSearchParams({ path: filePath, lang: getLang() });
+    if (identity?.name) q.set("name", identity.name);
+    if (identity?.avatar) q.set("avatar", identity.avatar);
+    return (await api(`/wopi/editor?${q}`, { silent: true })).json();
+  }, [api, identity?.name, identity?.avatar]);
 
   // Authed text fetch — the canvas renders md/html from source, not a blob URL.
   // `silent` suppresses the error toast: an app reading a file that does not
