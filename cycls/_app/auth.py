@@ -19,6 +19,8 @@ class User(BaseModel):
     org_permissions: Optional[list] = None
     plan: Optional[str] = None
     features: Optional[list] = None
+    name: Optional[str] = None        # display name, when the JWT carries one
+    image_url: Optional[str] = None   # avatar URL, when the JWT carries one
 
 
 class JWT:
@@ -59,6 +61,9 @@ class Clerk(JWT):
             id=decoded.get("sub"), plan=decoded.get("pla"), features=fea,
             org_id=org.get("id"), org_slug=org.get("slg"),
             org_role=org.get("rol"), org_permissions=org.get("per"),
+            # Populated only if the Clerk JWT template adds them (short claims,
+            # like the rest); absent by default → editor falls back to the id.
+            name=decoded.get("nam"), image_url=decoded.get("img"),
         )
 
 

@@ -100,6 +100,54 @@ agent image; the SDK only carries the thin WOPI proxy + the canvas editor iframe
 
 The canvas picks the path per file: `office_edit` on → the Collabora editor;
 else the read-only PDF preview; a failed editor falls back to the download card.
+The client passes its UI locale to `GET /wopi/editor` (`?lang=`), so the editor
+chrome matches the rest of the app; the host maps it through a whitelist before it
+reaches the browser-facing URL, defaulting to English for anything it doesn't ship.
+
+## Live co-editing (multiple people, same file)
+
+Two people opening the **same file in a shared (team) workspace** land in one
+real-time Collabora session — live cursors, simultaneous typing. This is
+Collabora's native co-editing; the host just has to hand both browsers the *same*
+document. It does: a team workspace root is `{volume}/{org}/ws/{ws}` (user-
+independent), and the WOPI file id is `base64(path)` — so both users produce the
+identical `WOPISrc`, and Collabora joins them. The DB edit lock is per file, which
+is correct: Collabora holds **one** lock for the whole session and funnels every
+save through a single WOPI connection.
+
+Identity rides in the access token so `CheckFileInfo` can label each cursor:
+`UserId` (distinct per user), `UserFriendlyName` + `UserExtraInfo.avatar` (the
+name/avatar — verified from the JWT when it carries `nam`/`img`, else the client's
+Clerk profile via `?name=`/`?avatar=`), and a stable `OwnerId` (the workspace, so
+every co-editor sees the same owner). Personal workspaces (`u-…`) are single-user
+by ACL — no one else can open the file — so co-editing there is moot, by design.
+
+*Deploy prereq (not this SDK):* co-editing needs the same document routed to the
+same Collabora backend. The single shared container satisfies it; a scaled
+Collabora cluster needs `WOPISrc`-affinity routing.
+
+## Theming the editor
+
+The editing surface is LibreOffice rendered server-side — you theme its *shell*,
+not the canvas. SDK-side levers, all on the load form / editor URL:
+
+- **Light/dark match.** `CollaboraEditor` posts `ui_defaults=UITheme=(light|dark)`
+  mirroring the app's mode (the `.dark` class is on `<body>`). Without it Collabora
+  falls back to its **blue light theme** even when Cycls is dark — verified live: a
+  fresh open now comes up dark. `UITheme` (Collabora PR #6436) is the reliable
+  lever; **`css_variables` is a no-op** here (tested by injecting a blatant palette
+  — the ribbon didn't budge) because the container ships `use_integration_theme`
+  without the integrator palette wired.
+- `?lang=` + `?closebutton=false` on the editor URL (the canvas owns the close),
+  and `DisableInactiveMessages` in CheckFileInfo.
+- `PostMessageOrigin` unlocks Collabora's postMessage API: `CollaboraEditor` sends
+  the `Host_PostmessageReady` handshake on frame load and holds its "opening…"
+  overlay until `App_LoadingStatus: Document_Loaded` (8s fallback); it's also the
+  hook for `Hide_Menu_Item`/`Insert_Button` trims.
+
+**Deeper brand parity** — a custom accent, fonts, logo (recolouring the whole
+`--co-*` palette) — needs the integrator theme wired **in the Collabora container**
+(`collabora-service`), not this SDK; `css_variables` starts applying once it is.
 
 ## Follow-ups
 
