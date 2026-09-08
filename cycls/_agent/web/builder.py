@@ -75,7 +75,6 @@ class Web:
         self._analytics: Optional[list] = None
         self._notifications: Optional[list] = None
         self._suggestions: bool = False
-        self._office_edit: bool = True    # on wherever the platform wired Collabora
         self._affiliate: Optional[str] = None
         self._max_upload: int = 512
         self._copy_public: List[str] = []
@@ -252,16 +251,6 @@ class Web:
     def suggestions(self, on: bool = True):
         """Show the prompt-starter suggestions on the empty-chat screen. Off by default."""
         return self._copy(_suggestions=on)
-
-    def office_edit(self, on: bool = True):
-        """Editable Office (Word / Excel / PowerPoint) on the canvas — **on by
-        default** wherever the platform has wired the shared Collabora editor
-        (`COLLABORA_URL` + `WOPI_SECRET` in the env). Without those it's inert and
-        Office files show the read-only PDF preview, so it's always safe.
-
-        Call `.office_edit(False)` to force the read-only preview even where the
-        editor is available — e.g. a compliance or intentionally read-only agent."""
-        return self._copy(_office_edit=on)
 
     def affiliate(self, api_key: str):
         """Enable affiliate/referral tracking with this provider API key (e.g.

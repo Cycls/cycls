@@ -1313,7 +1313,5 @@ def install_routers(cycls_app, app, required_auth, volume, base):
     app.include_router(chats_router(ws_dep))
     app.include_router(files_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))
-    from cycls._agent.web.wopi import wopi_router   # lazy: wopi imports back into us
-    app.include_router(wopi_router(cycls_app, ws_dep, required_auth, volume, base))
     if mode:
         app.include_router(workspaces_router(cycls_app, required_auth, volume, base))
