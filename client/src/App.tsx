@@ -45,7 +45,6 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
     onOpenFile: f.openFile,
     readFile: f.readFile,
     writeFile: f.writeFile,
-    getEditor: f.getEditor,
     searchFiles: f.searchFiles,
     listFolders: f.listFolders,
     onShareFile: withShare ? f.shareFile : undefined,
@@ -94,8 +93,7 @@ function ChatAppKeyed({ config }: { config: AppConfig | null }) {
 function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: WorkspaceSelection }) {
   const chat = useChat();
   const { user } = useUser();
-  // Identity labels this user's cursor when co-editing Office files in Collabora.
-  const files = useFiles(undefined, { name: user?.fullName || user?.firstName || "", avatar: user?.imageUrl || "" });
+  const files = useFiles();
   useRefreshOnTurnEnd(files, chat.isStreaming);
   const ws = useWorkspaces();
   const { getToken, signOut, isLoaded: authLoaded } = useAuth();

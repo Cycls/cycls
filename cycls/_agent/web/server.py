@@ -26,7 +26,6 @@ class Config(BaseModel):
     notifications: Optional[list] = None  # push plugins: [{provider, app_id}] — the FE owns the prompt UI
     suggestions: bool = False
     voice: bool = False
-    office_edit: bool = False          # Collabora wired → office files open in the editor
     pk: Optional[str] = None
     affiliate: Optional[str] = None   # affiliate/referral provider key (e.g. Rewardful)
     max_upload: int = 512             # per-file upload cap in MB
@@ -276,20 +275,6 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
     _base_html = (Path(config.public_path) / "index.html").read_text(encoding="utf-8")
 
     config.voice = bool(os.environ.get("OPENAI_API_KEY"))
-    # office_edit is on only when the author opted in (Web.office_edit()) AND the
-    # Collabora editor is wired (COLLABORA_URL + a shared WOPI_SECRET). Missing →
-    # keep the read-only PDF preview.
-    from cycls._agent.web.wopi import configured as _office_configured
-    _want_edit = bool(config.office_edit)
-    config.office_edit = _want_edit and _office_configured()
-    if _want_edit and not config.office_edit and os.environ.get("COLLABORA_URL"):
-        # The classic misconfig: editor URL set, shared secret forgotten. Say so
-        # loudly rather than silently signing tokens with a per-process random
-        # secret that a sibling instance couldn't verify.
-        from cycls._agent.logs import log
-        log("warn", message="office_edit requested and COLLABORA_URL is set, but WOPI_SECRET "
-                            "is missing — editor disabled, Office files fall back to the PDF "
-                            "preview. Set a shared WOPI_SECRET across all instances to enable editing.")
     # "</" escaped so CMS-sourced text can't close the script tag
     _config_json = json.dumps(config.public()).replace("</", "<\\/")
     _config_script = f'<script>window.__CONFIG__={_config_json}</script>'

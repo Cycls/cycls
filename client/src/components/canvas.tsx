@@ -10,7 +10,6 @@ import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
 import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isOffice, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
-import { CollaboraEditor } from "./collabora-editor";
 import { attachBridge, appScope } from "./app-bridge";
 import { injectShim } from "./app-shim";
 import { SaveDialog } from "./save-dialog";
@@ -41,13 +40,12 @@ export function useFileContent(
   readFile: (p: string) => Promise<string>,
   openFile: (p: string, silent?: boolean) => Promise<string>,
   reloadKey: number = 0,   // bump to re-fetch: the agent rewrote the file
-  skip: boolean = false,   // the Collabora editor owns its own data — don't fetch
 ) {
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    if (!file || skip) { setContent(null); setError(false); return; }
+    if (!file) { setContent(null); setError(false); return; }
     let cancelled = false;
     let blobUrl: string | null = null;
     setContent(null);
@@ -66,7 +64,7 @@ export function useFileContent(
     load.then((v) => { if (!cancelled) setContent(v); })
         .catch(() => { if (!cancelled) setError(true); });
     return () => { cancelled = true; if (blobUrl) URL.revokeObjectURL(blobUrl); };
-  }, [file?.path, file?.name, readFile, openFile, reloadKey, skip]);
+  }, [file?.path, file?.name, readFile, openFile, reloadKey]);
 
   return { content, setContent, error };
 }
@@ -287,7 +285,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, getEditor, officeEdit, listFolders, org, onShareFile, railWidth = 0, reloadKey, working }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, org, onShareFile, railWidth = 0, reloadKey, working }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -306,8 +304,6 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   readFile: (path: string) => Promise<string>;   // authed text fetch (md/html/code source)
   openFile: (path: string) => Promise<string>;    // authed blob URL (pdf / download)
   writeFile: (path: string, text: string) => Promise<void>;  // overwrite (editor)
-  getEditor?: (path: string) => Promise<{ editor_url: string; access_token: string; access_token_ttl: number }>;
-  officeEdit?: boolean;   // Collabora wired → Office files open editable, not as PDF
   listFolders?: () => Promise<{ name: string; path: string }[]>;  // app save dialog
   org?: { id: string; name: string } | null;   // lets the share dialog offer the org audience
   onShareFile?: (path: string, audience: string) => Promise<string>;
@@ -380,8 +376,6 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
           readFile={readFile}
           openFile={openFile}
           writeFile={writeFile}
-          getEditor={getEditor}
-          officeEdit={officeEdit}
           listFolders={listFolders}
           org={org}
           onShareFile={onShareFile}
@@ -602,22 +596,17 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
 }
 
 // Keyed by path from the parent, so per-file state resets on tab switch.
-function CanvasFileView({ file, readFile, openFile, writeFile, getEditor, officeEdit, listFolders, org, onShareFile, reloadKey }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, org, onShareFile, reloadKey }: {
   file: CanvasFile;
   readFile: (path: string) => Promise<string>;
   openFile: (path: string) => Promise<string>;
   writeFile: (path: string, text: string) => Promise<void>;
-  getEditor?: (path: string) => Promise<{ editor_url: string; access_token: string; access_token_ttl: number }>;
-  officeEdit?: boolean;
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   org?: { id: string; name: string } | null;
   onShareFile?: (path: string, audience: string) => Promise<string>;
   reloadKey?: number;
 }) {
-  // Editable Office → Collabora editor (owns its own data); everything else
-  // fetches through the read-only viewer.
-  const useEditor = !!officeEdit && !!getEditor && isOffice(fileKind(file));
-  const { content, setContent, error } = useFileContent(file, readFile, openFile, reloadKey, useEditor);
+  const { content, setContent, error } = useFileContent(file, readFile, openFile, reloadKey);
   const [menuOpen, setMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -740,8 +729,6 @@ function CanvasFileView({ file, readFile, openFile, writeFile, getEditor, office
             spellCheck={false}
             className="h-full w-full resize-none border-0 bg-background px-4 py-4 sm:px-6 font-mono text-[13px] leading-relaxed text-foreground focus:outline-none"
           />
-        ) : useEditor ? (
-          <CollaboraEditor file={file} getEditor={getEditor!} onDownload={download} />
         ) : (
           <CanvasDoc file={file} content={content} error={error} readFile={readFile} writeFile={writeFile} listFolders={listFolders}
                      onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
