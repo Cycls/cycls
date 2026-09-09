@@ -2,7 +2,7 @@
 API shape (`type` / `name` / `description` / `input_schema`) and registered in
 `_BUILTINS`; `build_tools` emits them as-is. User-supplied custom tools come
 through `_normalize_tool` (accepts the camelCase `inputSchema` form too)."""
-import asyncio, base64, ipaddress, json, os, pathlib, socket
+import asyncio, base64, ipaddress, json, os, pathlib, socket, uuid
 from html.parser import HTMLParser
 from typing import NamedTuple
 from . import pdf, skills
@@ -193,6 +193,42 @@ _WEB_FETCH_TOOL = {
 }
 _NATIVE_WEB_SEARCH = {"type": "web_search_20250305", "name": "web_search"}
 
+# Full browser automation, backed by the shared real-Chrome service (see
+# cycls/_agent/browser). Enabled by "Browser" in allowed_tools, but only offered
+# to the model when the service is configured — else it's silently absent, like
+# an unconfigured office-render. The page persists BETWEEN calls in a turn, so
+# the model works step by step; it acts on elements by the number `read` prints.
+_BROWSER_TOOL = {
+    "type": "custom",
+    "name": "browser",
+    "description": (
+        "Drive a REAL web browser for things a plain fetch can't do: pages "
+        "behind JavaScript, logins, search boxes, forms, multi-step flows. The "
+        "page stays OPEN between calls this turn — work step by step:\n"
+        "- open {url}        go to a page\n"
+        "- read              get the page text + a NUMBERED list of the "
+        "clickable/typable elements\n"
+        "- click {ref}       click element number `ref` from the last read\n"
+        "- type {ref,text}   type text into element `ref`\n"
+        "- press {key}       press a key, e.g. 'Enter'\n"
+        "- back              go back\n"
+        "- screenshot        save a PNG of the page into the workspace\n"
+        "Always `read` first to learn the element numbers, then act by number. "
+        "After each click/type the page is re-read for you — use the fresh "
+        "numbers. Prefer this over web_fetch whenever a site needs interaction "
+        "or renders its content with JavaScript."
+    ),
+    "input_schema": {"type": "object", "properties": {
+        "action": {"type": "string",
+                   "enum": ["open", "read", "click", "type", "press", "back", "screenshot"],
+                   "description": "What to do."},
+        "url": {"type": "string", "description": "For `open`: the full http(s) URL."},
+        "ref": {"type": "integer", "description": "For `click`/`type`: the element number from the last `read`."},
+        "text": {"type": "string", "description": "For `type`: the text to enter."},
+        "key": {"type": "string", "description": "For `press`: the key, e.g. 'Enter'."},
+    }, "required": ["action"]}
+}
+
 _BUILD_APP_TOOL = {
     "type": "custom",
     "name": "build_app",
@@ -349,6 +385,12 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
     for name in allowed_tools:
         if name == "WebSearch":
             tools += _web_search_tools(vendor, web_search)
+        elif name == "Browser":
+            # Only offered when the shared browser service is wired — else the
+            # tool is silently absent, exactly like an unconfigured office-render.
+            from cycls._agent import browser as _browser
+            if _browser.configured():
+                tools.append(_BROWSER_TOOL)
         else:
             tools += _BUILTINS.get(name, [])
     tools += [_normalize_tool(t) for t in (custom or [])]
@@ -809,7 +851,89 @@ def _ask_step(inp):
     return {"tool_name": "Ask", "step": inp.get("question", "")}
 
 
+def _browser_snapshot_text(snap):
+    """A page snapshot → the compact text the model reads: title/url, the
+    visible text, then the numbered interactive elements it acts on by ref."""
+    lines = [f"{snap['title']} — {snap['url']}"]
+    if snap.get("text"):
+        lines += ["", snap["text"] + (" …(truncated)" if snap.get("text_truncated") else "")]
+    lines += ["", "Interactive elements (act by ref):"]
+    for e in snap.get("refs", []):
+        typ = f"({e['type']})" if e.get("type") else ""
+        label = f' "{e["label"]}"' if e.get("label") else ""
+        lines.append(f"[{e['ref']}] {e['tag']}{typ}{label}")
+    if not snap.get("refs"):
+        lines.append("(none)")
+    elif snap.get("refs_truncated"):
+        lines.append("… (more elements not shown — narrow the page or scroll)")
+    return "\n".join(lines)
+
+
+async def _browser_read(s):
+    return _browser_snapshot_text(await s.snapshot())
+
+
+async def _exec_browser(inp, workspace):
+    """Drive the shared browser service one action at a time. State lives in the
+    remote page (which persists between calls), so every navigational action
+    returns a fresh read — the numbered elements the model acts on next."""
+    from cycls._agent import browser
+    action = (inp.get("action") or "").lower()
+    subject = getattr(workspace, "subject", None)
+    try:
+        async with await browser.session(subject) as s:
+            if action == "open":
+                if not inp.get("url"):
+                    return "Error: `open` needs a `url`."
+                await s.goto(inp["url"])
+                return await _browser_read(s)
+            if action == "read":
+                return await _browser_read(s)
+            if action == "click":
+                if inp.get("ref") is None:
+                    return "Error: `click` needs a `ref` (an element number from `read`)."
+                await s.click_ref(inp["ref"])
+                return await _browser_read(s)
+            if action == "type":
+                if inp.get("ref") is None or inp.get("text") is None:
+                    return "Error: `type` needs a `ref` and `text`."
+                await s.type_ref(inp["ref"], inp["text"])
+                return await _browser_read(s)
+            if action == "press":
+                await s.press(inp.get("key") or "Enter")
+                return await _browser_read(s)
+            if action == "back":
+                await s.back()
+                return await _browser_read(s)
+            if action == "screenshot":
+                png = await s.screenshot(full_page=bool(inp.get("full_page")))
+                info = await s.info()
+                rel = f"screenshots/{uuid.uuid4().hex[:12]}.png"
+                dst = pathlib.Path(workspace.root) / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                await asyncio.to_thread(dst.write_bytes, png)
+                name = rel.rsplit("/", 1)[-1]
+                # Two channels: the model reads the ack; the client opens the PNG
+                # on the canvas (same open_canvas event the Canvas tool uses).
+                return {"_model": f"Screenshot of {info['url']} saved to {rel} "
+                                  f"({len(png) // 1024} KB) and opened on the canvas.",
+                        "_ui": {"type": "ui", "action": "open_canvas", "path": rel, "name": name}}
+            return f"Error: unknown browser action {action!r}."
+    except browser.Unavailable as e:
+        return f"Error: browser unavailable — {e}"
+    except Exception as e:
+        return f"Error: browser {action or '?'} failed — {type(e).__name__}: {e}"
+
+
+def _browser_step(inp):
+    a = inp.get("action", "")
+    detail = (inp.get("url") or (f"[{inp['ref']}]" if inp.get("ref") is not None else "")
+              or inp.get("key") or "")
+    return {"tool_name": "Browser", "step": f"{a} {detail}".strip()}
+
+
 _TOOLS = {
+    "browser":    Tool(lambda inp, ws, **_: _exec_browser(inp, ws), _browser_step),
     "bash":       Tool(_run_bash,
                        lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
     "read":       Tool(lambda inp, ws, **_: _exec_read(inp, ws.root),

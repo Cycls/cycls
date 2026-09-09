@@ -322,6 +322,41 @@ OFFICE_RENDER_SECRET=<the shared service secret>
 A failed render always falls back to the download card, never a broken page.
 Details: [docs/notes/office-preview.md](notes/office-preview.md).
 
+### Browser automation
+
+Give an agent a **real browser** — open pages behind JavaScript, read them, click,
+fill forms, log in, run multi-step flows, screenshot — without shipping Chromium
+in the image. The heavy part (real Chrome) runs in a shared service the agent
+calls over CDP; the SDK ships only the client and the built-in `Browser` tool.
+
+Enable it by adding `"Browser"` to `allowed_tools` and pointing two env vars at a
+browser service:
+
+```python
+llm = cycls.LLM().model(...).allowed_tools(["Bash", "Editor", "Browser"])
+```
+```
+BROWSER_URL=http://your-steel-host:3000     # self-hosted Steel, or a managed API
+BROWSER_SECRET=<the shared service secret>
+```
+
+The model drives one stateful `browser` tool step by step — `open` a url, `read`
+it (returns the page text + a numbered list of clickable/typable elements), then
+`click`/`type` by number, `press`, `back`, or `screenshot` (which renders on the
+canvas). The page persists between calls in the turn, so logins and forms work.
+Unset the env and the tool simply isn't offered — no crash, exactly like the
+office fallback.
+
+Stand up the service (Apache-2.0 Steel Browser) as a shared "office-render
+sibling":
+
+```bash
+docker run -d --shm-size=2g --cap-add=SYS_ADMIN -p 3000:3000 \
+  ghcr.io/steel-dev/steel-browser
+```
+
+Details: [docs/notes/browser.md](notes/browser.md).
+
 ### Apple IAP entitlements
 
 For agents that sell subscriptions through Apple In-App Purchase, `.iap(...)`
@@ -370,7 +405,7 @@ async for ev in llm.run(context=context):
 | `.system(str)` | System prompt |
 | `.tools(list)` | Custom tool JSON schemas |
 | `.on(name, fn, label=)` | Register async handler for a custom tool; `label` (input → str) renders the step line in the UI, like `Bash(command)` — default is the input's first string value |
-| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user |
+| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `Browser`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user. `Browser` is offered only when a browser service is configured (see below) |
 | `.instructions(path)` | Workspace instructions file auto-loaded into the system prompt (default `AGENT.md`; `None` disables) |
 | `.skills(*dirs)` | Ship skills with the agent (dirs of `<name>/SKILL.md` folders; `None` disables skills) |
 | `.context(n)` | Model context window in tokens — sets when compaction kicks in (default 1M; set it for smaller models) |
