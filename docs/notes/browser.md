@@ -61,16 +61,50 @@ against a real Steel Browser container.
 |--------------------|----------------------------------------------------------|
 | `BROWSER_URL`      | service base URL (self-hosted Steel, or a managed API)   |
 | `BROWSER_SECRET`   | shared service secret (Bearer)                           |
-| `BROWSER_PROVIDER` | optional: `steel` (default) · `cdp` · `browserbase`      |
+| `BROWSER_PROVIDER` | optional: `cycls` · `steel` (default) · `cdp` · `browserbase` |
 
-Unset either of the first two and `browser.configured()` is false: the Browser
-tool is simply **not offered to the model**, and any direct call raises
-`Unavailable` → the agent gets a clear "browsing isn't configured" result. No
-crash, no regression — exactly today's office behaviour. The workspace `subject`
-rides along as `X-User-Id` for attribution/quota. (The `cdp` provider needs only
-`BROWSER_URL` — a raw CDP endpoint — and no secret; `steel`/managed need both.)
+Providers:
+- **`cycls`** — a REST browser service **deployed on Cycls infra** (`cycls deploy`,
+  the office-render sibling). The agent talks plain HTTP; **no Playwright/Chromium
+  in the agent** at all. This is the recommended shared backing (see below).
+- **`steel`** (default) — a Steel Browser service (self-hosted or managed); the
+  agent connects over CDP. `playwright` (library) rides in the base image.
+- **`cdp`** — a raw CDP endpoint (`http://host:9222`); no secret needed. Dev.
+- **`browserbase`** — managed (Phase 4 stub).
+
+Unset `BROWSER_URL`/`BROWSER_SECRET` and `browser.configured()` is false: the
+Browser tool is simply **not offered to the model**, and any direct call raises
+`Unavailable` → a clear "browsing isn't configured" result. No crash, no
+regression — exactly today's office behaviour. The workspace `subject` rides along
+as `X-User-Id` for attribution/quota. (`cdp` needs only `BROWSER_URL`; the others
+need the secret too.)
 
 ## Deploy the service
+
+### `cycls` — a browser service deployed on Cycls infra (recommended)
+
+`browser_service.py` is a small FastAPI + Playwright app packaged as a
+`@cycls.function` (the image installs real Chromium at build). It owns Chrome and
+exposes a REST API — create a session, goto, snapshot (text + numbered refs),
+click/type by ref, screenshot — that the SDK's `cycls` provider (`RestSession`)
+calls over HTTP. Deploy it like office-render, with your `CYCLS_API_KEY`:
+
+```bash
+python browser_service.py        # → https://cycls-browser.cycls.ai
+```
+
+Then on agents: `BROWSER_PROVIDER=cycls`, `BROWSER_URL=https://cycls-browser.cycls.ai`,
+`BROWSER_SECRET=<the baked secret>`.
+
+**`max_instances=1` is required.** Sessions live in the instance's memory (an
+isolated browser context each), and Cloud Run's router doesn't know which instance
+owns a session — a second instance would 404 sessions made on the first, breaking
+multi-step flows. One instance serves **many isolated sessions concurrently**
+(3 agents → 3 separate contexts, no interference), bounded by its RAM (~15–20
+sessions on 2–4 Gi). Scaling past one instance needs session-aware routing (a
+control plane / affinity) — what managed services provide.
+
+### `steel` — self-host Steel Browser (alternative)
 
 Self-host **Steel Browser** (Apache-2.0) as the shared "office-render sibling":
 
