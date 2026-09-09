@@ -17,6 +17,7 @@ from cycls._agent.browser import client
 def _clear_env(monkeypatch):
     for k in ("BROWSER_URL", "BROWSER_SECRET", "BROWSER_PROVIDER"):
         monkeypatch.delenv(k, raising=False)
+    client._STEEL_SESSIONS.clear()   # module-level session cache — isolate tests
 
 
 # ---- configured() gate ----
@@ -131,6 +132,27 @@ def test_steel_missing_ws_url_is_unavailable(monkeypatch):
     _mock_httpx(monkeypatch, _FakeResp(200, {"id": "sess_1"}))   # no websocketUrl/connectUrl
     with pytest.raises(browser.Unavailable):
         asyncio.run(client._cdp_endpoint())
+
+
+def test_steel_session_reused_across_calls(monkeypatch):
+    """The same caller reuses its live session (no re-POST) so page state
+    persists across the stateless per-call cycles; a different caller mints its
+    own."""
+    monkeypatch.setenv("BROWSER_URL", "https://steel.internal")
+    monkeypatch.setenv("BROWSER_SECRET", "s")
+    posts = {"n": 0}
+
+    class _Counting(_FakeClient):
+        async def post(self, url, headers=None, json=None):
+            posts["n"] += 1
+            return _FakeResp(200, {"websocketUrl": f"ws://steel/{posts['n']}"})
+
+    monkeypatch.setattr(client.httpx, "AsyncClient", lambda **k: _Counting(None, **k))
+    a = asyncio.run(client._cdp_endpoint("u1"))
+    b = asyncio.run(client._cdp_endpoint("u1"))
+    assert a == b == "ws://steel/1" and posts["n"] == 1     # reused, one POST
+    c = asyncio.run(client._cdp_endpoint("u2"))
+    assert c == "ws://steel/2" and posts["n"] == 2          # other caller → own session
 
 
 def test_session_helper_raises_when_unconfigured():

@@ -66,6 +66,23 @@ def _provider():
     return (os.environ.get("BROWSER_PROVIDER") or "steel").lower()
 
 
+# A service session holds page state (the open page, cookies, the `data-cy-ref`
+# markers), so the SAME session is REUSED across the stateless connect/act/
+# disconnect cycles a turn makes — else every call would mint a fresh blank page
+# and multi-step flows (open → read → click → screenshot) would fall apart. Keyed
+# by the caller's user_id; a stale entry is evicted and re-minted on the next
+# connect failure. The `cdp` provider is one browser by design and needs no cache.
+_STEEL_SESSIONS = {}
+
+
+def _skey(user_id):
+    return str(user_id or "default")
+
+
+def _evict_steel(user_id):
+    _STEEL_SESSIONS.pop(_skey(user_id), None)
+
+
 def configured():
     """Wired when a service URL is set — plus a secret for providers that need
     one. The raw `cdp` provider (a self-managed endpoint) needs only the URL."""
@@ -91,11 +108,12 @@ async def _cdp_endpoint(user_id=None):
         return url
 
     if provider == "steel":
-        # Steel: mint a session, then connect to its CDP websocket. (Validated
-        # end-to-end against a real Steel service in Phase 4; the CDP client
-        # path below is what Phase 1 proves.)
+        # Steel: reuse this caller's live session (so page state persists across
+        # calls); mint one on a miss and cache its CDP websocket.
         if not secret:
             raise Unavailable("browser not configured (BROWSER_SECRET)")
+        if cached := _STEEL_SESSIONS.get(_skey(user_id)):
+            return cached
         headers = {"Authorization": f"Bearer {secret}"}
         if user_id:
             headers["X-User-Id"] = str(user_id)
@@ -110,6 +128,7 @@ async def _cdp_endpoint(user_id=None):
         ws = data.get("websocketUrl") or data.get("connectUrl") or data.get("wsEndpoint")
         if not ws:
             raise Unavailable(f"browser service returned no CDP url: {str(data)[:200]}")
+        _STEEL_SESSIONS[_skey(user_id)] = ws
         return ws
 
     raise Unavailable(f"unknown BROWSER_PROVIDER: {provider!r}")
@@ -127,29 +146,24 @@ class Session:
         self._user_id = user_id
         self._pw = self._browser = self._context = self._page = None
 
-    async def __aenter__(self):
+    async def _connect(self):
         from playwright.async_api import async_playwright
-        try:
-            self._pw = await async_playwright().start()
-            self._browser = await self._pw.chromium.connect_over_cdp(
-                self._endpoint, timeout=_CONNECT_TIMEOUT)
-            # REUSE the endpoint's existing context + page, so page state (the
-            # open page, cookies, DOM, the `data-cy-ref` markers we inject)
-            # PERSISTS across the separate connect/act/disconnect cycles a
-            # stateless tool makes. Isolation is the service's job — a Steel
-            # session per turn; a raw `cdp` endpoint is one browser by design.
-            self._context = (self._browser.contexts[0] if self._browser.contexts
-                             else await self._browser.new_context())
-            self._context.set_default_timeout(_NAV_TIMEOUT)
-            self._page = (self._context.pages[0] if self._context.pages
-                          else await self._context.new_page())
-        except Unavailable:
-            await self._safe_teardown()
-            raise
-        except Exception as e:
-            await self._safe_teardown()
-            raise Unavailable(f"browser connect failed: {e}") from e
-        return self
+        self._pw = await async_playwright().start()
+        self._browser = await self._pw.chromium.connect_over_cdp(
+            self._endpoint, timeout=_CONNECT_TIMEOUT)
+        # REUSE the endpoint's existing context + page, so page state (the open
+        # page, cookies, DOM, the `data-cy-ref` markers we inject) PERSISTS across
+        # the separate connect/act/disconnect cycles a stateless tool makes.
+        # Isolation is the service's job — a Steel session per caller; a raw `cdp`
+        # endpoint is one browser by design.
+        self._context = (self._browser.contexts[0] if self._browser.contexts
+                         else await self._browser.new_context())
+        self._context.set_default_timeout(_NAV_TIMEOUT)
+        self._page = (self._context.pages[0] if self._context.pages
+                      else await self._context.new_page())
+
+    async def __aenter__(self):
+        return self   # already connected by session()
 
     async def __aexit__(self, *exc):
         await self._safe_teardown()
@@ -230,8 +244,25 @@ class Session:
 
 
 async def session(user_id=None):
-    """Open a browser session against the configured service. Raises
-    `Unavailable` when unconfigured/unreachable. Use as an async context
-    manager: `async with await browser.session(uid) as s: await s.goto(...)`."""
-    endpoint = await _cdp_endpoint(user_id)
-    return Session(endpoint, user_id)
+    """Open a connected browser session against the configured service. Raises
+    `Unavailable` when unconfigured/unreachable. Use as an async context manager:
+    `async with await browser.session(uid) as s: await s.goto(...)`.
+
+    Connects here (not in __aenter__) so a stale cached Steel session — whose
+    server-side browser has since expired — is evicted and re-minted once, rather
+    than failing the call."""
+    for attempt in (1, 2):
+        endpoint = await _cdp_endpoint(user_id)
+        s = Session(endpoint, user_id)
+        try:
+            await s._connect()
+            return s
+        except Exception as e:
+            await s._safe_teardown()
+            # A dead cached Steel session: drop it and retry with a fresh one.
+            if _provider() == "steel" and _STEEL_SESSIONS.get(_skey(user_id)) == endpoint and attempt == 1:
+                _evict_steel(user_id)
+                continue
+            if isinstance(e, Unavailable):
+                raise
+            raise Unavailable(f"browser connect failed: {e}") from e
