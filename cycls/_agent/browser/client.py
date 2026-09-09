@@ -85,6 +85,19 @@ def _evict_steel(user_id):
     _STEEL_SESSIONS.pop(_skey(user_id), None)
 
 
+def _dlname(url, cdisp):
+    """Best filename for a download: Content-Disposition (incl. RFC-5987
+    `filename*`, so non-ASCII names survive), else the URL's last path segment."""
+    import re
+    from urllib.parse import urlparse, unquote
+    if cdisp:
+        m = (re.search(r"filename\*=(?:UTF-8'')?([^;]+)", cdisp, re.I)
+             or re.search(r'filename="?([^";]+)"?', cdisp, re.I))
+        if m:
+            return unquote(m.group(1).strip().strip('"')) or "download"
+    return unquote(os.path.basename(urlparse(url).path)) or "download"
+
+
 def configured():
     """Wired when a service URL is set — plus a secret for providers that need
     one. The raw `cdp` provider (a self-managed endpoint) needs only the URL."""
@@ -228,6 +241,23 @@ class Session:
         await self._page.go_back(timeout=_NAV_TIMEOUT)
         return await self.info()
 
+    async def download(self, ref=None, url=None):
+        """Fetch a file → (filename, bytes). `url` uses the page's request context
+        (its cookies/session apply, so authed downloads work); `ref` clicks the
+        element and captures the download it triggers. Over a REMOTE cdp browser
+        the `ref` path needs the file readable locally; the `url` path always works."""
+        if url:
+            resp = await self._context.request.get(url, timeout=_NAV_TIMEOUT)
+            if not resp.ok:
+                raise RuntimeError(f"download {url}: HTTP {resp.status}")
+            return _dlname(url, resp.headers.get("content-disposition")), await resp.body()
+        import pathlib
+        async with self._page.expect_download(timeout=_NAV_TIMEOUT) as di:
+            await self._page.click(f'[data-cy-ref="{int(ref)}"]', timeout=_NAV_TIMEOUT)
+        dl = await di.value
+        data = pathlib.Path(await dl.path()).read_bytes()
+        return (dl.suggested_filename or _dlname(dl.url, None)), data
+
     async def _safe_teardown(self):
         # Disconnect the client but leave the remote context/page ALIVE — its
         # state must survive to the next tool call in the turn. `close()` on a
@@ -299,7 +329,10 @@ class RestSession:
 
     async def _act(self, path, **kw):
         """One action against the current session; a 404 (session expired
-        server-side) evicts the cache and retries once with a fresh session."""
+        server-side) evicts the cache and retries once with a fresh session. A
+        non-200 that ISN'T a session miss is an action-level failure (e.g. a click
+        timeout → 409): raised as a plain error so the tool reports "browser
+        <action> failed — …" rather than "unavailable" (the service is up)."""
         for attempt in (1, 2):
             try:
                 r = await self._http.post(f"{self._base}/v1/sessions/{self._sid}{path}",
@@ -310,9 +343,13 @@ class RestSession:
                 _REST_SESSIONS.pop(_skey(self._user_id), None)
                 await self._ensure_session()
                 continue
-            if r.status_code != 200:
-                raise Unavailable(f"browser service {r.status_code}: {r.text[:200]}")
-            return r
+            if r.status_code == 200:
+                return r
+            try:
+                detail = (r.json() or {}).get("detail")
+            except Exception:
+                detail = None
+            raise RuntimeError(detail or f"browser service {r.status_code}: {r.text[:200]}")
 
     async def goto(self, url, wait_until="load"):
         return (await self._act("/goto", json={"url": url, "wait_until": wait_until})).json()
@@ -338,6 +375,16 @@ class RestSession:
 
     async def screenshot(self, full_page=False):
         return (await self._act("/screenshot")).content
+
+    async def download(self, ref=None, url=None):
+        body = {}
+        if url:
+            body["url"] = url
+        if ref is not None:
+            body["ref"] = int(ref)
+        r = await self._act("/download", json=body)
+        from urllib.parse import unquote
+        return (unquote(r.headers.get("X-Cycls-Filename", "")) or "download"), r.content
 
 
 async def session(user_id=None):
