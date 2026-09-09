@@ -1,4 +1,5 @@
 import pytest
+import base64
 import json
 import asyncio
 import os
@@ -1390,6 +1391,56 @@ def test_as_pdf_ignored_for_non_office(tmp_path, monkeypatch):
     client = _ws_routers_client(tmp_path)
     r = client.get("/files/a.txt", params={"as": "pdf"})
     assert r.status_code == 200 and r.content == b"hello"
+
+
+def test_office_slides_renders_caches_and_hides(tmp_path, monkeypatch):
+    """?as=slides renders a presentation to per-slide PNG data-URIs once, serves
+    the JSON manifest, then serves the cached copy — cache stays out of the list."""
+    from cycls._agent.web import office
+    _seed(tmp_path, {"deck.pptx": b"raw-pptx-bytes"})
+    calls = []
+    async def fake(data, name, user_id=None):
+        calls.append((data, name, user_id))
+        return [b"\x89PNG-slide-1", b"\x89PNG-slide-2"]
+    monkeypatch.setattr(office, "to_slides", fake)
+    client = _ws_routers_client(tmp_path)
+
+    r = client.get("/files/deck.pptx", params={"as": "slides"})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/json")
+    body = r.json()
+    assert body["count"] == 2
+    assert body["slides"][0].startswith("data:image/png;base64,")
+    assert base64.b64decode(body["slides"][0].split(",", 1)[1]) == b"\x89PNG-slide-1"
+    assert calls == [(b"raw-pptx-bytes", "deck.pptx", "org_1:user_1")]
+
+    r2 = client.get("/files/deck.pptx", params={"as": "slides"})     # cache hit
+    assert r2.status_code == 200 and r2.json()["count"] == 2
+    assert len(calls) == 1                                           # not re-rendered
+    assert [e["name"] for e in client.get("/files").json()] == ["deck.pptx"]   # .cache hidden
+
+
+def test_office_slides_only_for_presentations(tmp_path, monkeypatch):
+    """?as=slides on a non-presentation office file (a spreadsheet) never calls
+    the render service — it just serves the raw bytes."""
+    from cycls._agent.web import office
+    _seed(tmp_path, {"book.xlsx": b"xlsx-bytes"})
+    async def tripwire(*a, **k):
+        raise AssertionError("render must not run for a non-presentation")
+    monkeypatch.setattr(office, "to_slides", tripwire)
+    client = _ws_routers_client(tmp_path)
+    r = client.get("/files/book.xlsx", params={"as": "slides"})
+    assert r.status_code == 200 and r.content == b"xlsx-bytes"
+
+
+def test_office_slides_unavailable_returns_415(tmp_path, monkeypatch):
+    """A render miss is a 415 the client turns into the download card."""
+    from cycls._agent.web import office
+    _seed(tmp_path, {"deck.pptx": b"x"})
+    async def boom(data, name, user_id=None):
+        raise office.Unavailable("office-render down")
+    monkeypatch.setattr(office, "to_slides", boom)
+    client = _ws_routers_client(tmp_path)
+    assert client.get("/files/deck.pptx", params={"as": "slides"}).status_code == 415
 
 
 # ---- office module: the office-render /v1/convert client ----

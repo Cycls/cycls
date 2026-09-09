@@ -302,16 +302,24 @@ Static files land at `https://your-app.cycls.ai/public/logo.png`.
 
 ### Office files on the canvas
 
-`.docx` / `.xlsx` / `.pptx` can't render in a browser, so the canvas converts
-them to PDF on demand — via the shared `office-render` service — and shows them
-read-only in the PDF viewer it already has. A failed conversion falls back to the
-download card, never a broken page. Wired by env (unset → download card):
+Office files can't render in a browser directly, so the canvas renders each in
+the form that fits it (read-only):
+
+- **Spreadsheets** (`csv/xls/xlsx/ods`) → an interactive grid with sheet tabs.
+- **Word** (`.docx`) → a formatted document (pages, fonts, tables, images).
+- **Presentations** (`.pptx/.odp`) → a slide viewer (big slide + thumbnail rail).
+- Everything else (`doc/rtf/odt/epub`) → a read-only PDF.
+
+Spreadsheets and `.docx` render in the browser from the raw bytes; presentations
+and the PDF fallback go through the shared `office-render` service, wired by env
+(unset → those two fall back to the download card, grid/docx still work):
 
 ```
 OFFICE_RENDER_URL=https://office-render.cycls.ai
 OFFICE_RENDER_SECRET=<the shared service secret>
 ```
 
+A failed render always falls back to the download card, never a broken page.
 Details: [docs/notes/office-preview.md](notes/office-preview.md).
 
 ### Apple IAP entitlements

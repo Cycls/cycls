@@ -8,8 +8,10 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isOffice, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob } from "./canvas-utils";
+import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
+import { DocxView } from "./docx-view";
+import { SlidesView } from "./slides-view";
 import { attachBridge, appScope } from "./app-bridge";
 import { injectShim } from "./app-shim";
 import { SaveDialog } from "./save-dialog";
@@ -37,7 +39,7 @@ export interface CanvasFile {
 // file=null to fetch nothing (e.g. unrenderable file shown as a download card).
 export function useFileContent(
   file: CanvasFile | null,
-  readFile: (p: string) => Promise<string>,
+  readFile: (p: string, silent?: boolean) => Promise<string>,
   openFile: (p: string, silent?: boolean) => Promise<string>,
   reloadKey: number = 0,   // bump to re-fetch: the agent rewrote the file
 ) {
@@ -55,10 +57,15 @@ export function useFileContent(
     // text renderer. Office docs fetch the server's on-demand PDF render of
     // themselves (?as=pdf) and ride the PDF viewer.
     const kind = fileKind(file);
-    // Office ?as=pdf is fetched silently — if the converter is down it throws,
-    // we set error, and CanvasDoc shows the download card (no scary toast).
+    // Office ?as=pdf / ?as=slides is fetched silently — if the converter is down
+    // it throws, we set error, and CanvasDoc shows the download card (no toast).
+    // Presentations fetch the slide manifest as text; .docx and spreadsheets
+    // fetch their raw bytes (a blob URL) for the native renderer; other office
+    // files fetch the server's PDF render.
     const load = isMd(kind) || isHtml(kind) || codeLang(kind) != null
       ? readFile(file.path)
+      : isPresentation(kind)
+      ? readFile(`${file.path}?as=slides`, true)
       : (isOffice(kind) ? openFile(`${file.path}?as=pdf`, true) : openFile(file.path))
           .then((url) => { blobUrl = url; return url; });
     load.then((v) => { if (!cancelled) setContent(v); })
@@ -197,14 +204,25 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, writ
   const lang = codeLang(fileKind(file));
   if (content == null && !error) return <LoadingBar />;
   if (error) {
-    // A failed Office conversion (service down / unconvertible) degrades to the
-    // download card rather than a dead error — same as an unrenderable file.
-    if (isOffice(fileKind(file)))
+    // A failed Office conversion / render (service down, unconvertible, parse
+    // error) degrades to the download card rather than a dead error — same as an
+    // unrenderable file.
+    if (isOffice(fileKind(file)) || isDocx(fileKind(file)) || isPresentation(fileKind(file)))
       return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Couldn't load this file.</div>;
   }
   if (isHtml(fileKind(file))) {
     return <HtmlDoc file={file} content={content ?? ""} shared={shared} readFile={readFile} writeFile={writeFile} listFolders={listFolders} />;
+  }
+  // Word .docx renders natively as formatted HTML (docx-preview) from its raw
+  // bytes — a document view, not a flat PDF.
+  if (isDocx(fileKind(file))) {
+    return content ? <DocxView url={content} /> : null;
+  }
+  // Presentations render as a slide viewer from the ?as=slides manifest (per-
+  // slide images), not a flat PDF. `content` here is that JSON, fetched as text.
+  if (isPresentation(fileKind(file))) {
+    return content ? <SlidesView data={content} /> : null;
   }
   // Office docs arrive here as a converted-PDF blob URL, so they ride the same
   // native PDF viewer (search / zoom / print, mobile open-in-tab).
