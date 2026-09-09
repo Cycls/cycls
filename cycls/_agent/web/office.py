@@ -20,6 +20,7 @@ If either is unset the feature is simply off: `to_pdf` raises `Unavailable`,
 the route answers 415, and the client falls back to the download card — exactly
 today's behaviour, no regression.
 """
+import base64
 import os
 
 import httpx
@@ -33,6 +34,16 @@ CONVERTIBLE = frozenset({
     "xls", "xlsx", "xlsm", "ods", "fods",         # spreadsheets
     "epub",                                       # misc office-ish
 })
+
+# Presentations render as a slide viewer (per-slide images) rather than a flat
+# PDF — via the office-render /v1/render endpoint. Kept in sync with
+# PRESENTATION_EXTS in client/src/components/canvas-utils.ts.
+PRESENTATION = frozenset({"ppt", "pptx", "odp", "fodp"})
+
+# Slide-viewer defaults: enough dpi to read a deck on screen without bloating the
+# payload, and a page cap so a giant deck can't blow up the response.
+_SLIDE_DPI = 110
+_SLIDE_MAX_PAGES = 100
 
 # Conversions run inside a warm container but pay a soffice spawn (~1-2s), and a
 # large deck takes longer; give the request real headroom.
@@ -50,6 +61,10 @@ def _ext(name):
 
 def convertible(name):
     return _ext(name) in CONVERTIBLE
+
+
+def presentation(name):
+    return _ext(name) in PRESENTATION
 
 
 def configured():
@@ -83,3 +98,38 @@ async def to_pdf(data, name, user_id=None):
     if resp.status_code != 200:
         raise Unavailable(f"office-render {resp.status_code}: {resp.text[:300]}")
     return resp.content
+
+
+async def to_slides(data, name, user_id=None, dpi=_SLIDE_DPI, max_pages=_SLIDE_MAX_PAGES):
+    """Render a presentation (`data` named `name`) to per-slide PNGs via the
+    office-render `/v1/render` endpoint. Returns a list of PNG byte strings, one
+    per slide, in order. `user_id` rides along as X-User-Id for attribution (not
+    auth). Raises `Unavailable` on any miss so the caller can fall back."""
+    if not presentation(name):
+        raise Unavailable(f"not a presentation: .{_ext(name) or '?'}")
+    url = os.environ.get("OFFICE_RENDER_URL")
+    secret = os.environ.get("OFFICE_RENDER_SECRET")
+    if not (url and secret):
+        raise Unavailable("office-render not configured (OFFICE_RENDER_URL / OFFICE_RENDER_SECRET)")
+    headers = {"Authorization": f"Bearer {secret}"}
+    if user_id:
+        headers["X-User-Id"] = str(user_id)
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(
+                f"{url.rstrip('/')}/v1/render",
+                files={"file": (name, data)},
+                data={"dpi": str(dpi), "pages": f"1-{max_pages}"},
+                headers=headers,
+            )
+    except httpx.HTTPError as e:
+        raise Unavailable(f"office-render unreachable: {e}") from e
+    if resp.status_code != 200:
+        raise Unavailable(f"office-render {resp.status_code}: {resp.text[:300]}")
+    try:
+        pages = resp.json().get("pages", [])
+        # The service returns pages in request order; sort by page# to be safe.
+        pages = sorted(pages, key=lambda p: p.get("page", 0))
+        return [base64.b64decode(p["png_base64"]) for p in pages if p.get("png_base64")]
+    except (ValueError, KeyError) as e:
+        raise Unavailable(f"office-render bad render payload: {e}") from e

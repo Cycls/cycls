@@ -16,18 +16,30 @@ export const isAudio = (name: string) => AUDIO_EXTS.has(ext(name));
 const VIDEO_EXTS = new Set(["mp4", "webm", "mov", "m4v", "ogv"]);
 export const isVideo = (name: string) => VIDEO_EXTS.has(ext(name));
 
-// Delimited text renders in-browser (interactive grid). Binary spreadsheets
-// (xls/xlsx/ods) go through isOffice → PDF instead, alongside Word/PowerPoint.
-const SPREADSHEET_EXTS = new Set(["csv", "tsv"]);
+// Spreadsheets render in-browser as an interactive grid (values + sheet tabs)
+// via SheetJS — delimited text (csv/tsv) and binary workbooks (xls/xlsx/ods)
+// alike. `fods` (flat-XML ODS) stays on the PDF path; SheetJS doesn't read it.
+const SPREADSHEET_EXTS = new Set(["csv", "tsv", "xls", "xlsx", "xlsm", "ods"]);
 export const isSpreadsheet = (name: string) => SPREADSHEET_EXTS.has(ext(name));
 
-// Office documents a browser can't render — shown by converting to PDF on the
-// server (LibreOffice) and displaying that in the PDF viewer. Kept in sync with
-// CONVERTIBLE in cycls/_agent/web/office.py.
+// Word .docx renders natively as formatted HTML (docx-preview), so it feels
+// like the document rather than a flat PDF. Older/other word formats
+// (doc/odt/rtf/fodt) keep the PDF path.
+export const isDocx = (name: string) => ext(name) === "docx";
+
+// Presentations render as a slide viewer — per-slide images from the
+// office-render service (?as=slides), navigable with thumbnails.
+const PRESENTATION_EXTS = new Set(["ppt", "pptx", "odp", "fodp"]);
+export const isPresentation = (name: string) => PRESENTATION_EXTS.has(ext(name));
+
+// Remaining office documents a browser can't render natively — shown by
+// converting to PDF on the server (LibreOffice) and displaying that in the PDF
+// viewer. Spreadsheets, .docx and presentations are handled above; what's left
+// here is the PDF fallback. Kept in sync with CONVERTIBLE in
+// cycls/_agent/web/office.py.
 const OFFICE_EXTS = new Set([
-  "doc", "docx", "odt", "rtf", "fodt",          // word processing
-  "ppt", "pptx", "odp", "fodp",                 // presentations
-  "xls", "xlsx", "xlsm", "ods", "fods",         // spreadsheets
+  "doc", "odt", "rtf", "fodt",                  // word processing (non-docx)
+  "fods",                                       // flat-XML spreadsheet
   "epub",                                       // misc office-ish
 ]);
 export const isOffice = (name: string) => OFFICE_EXTS.has(ext(name));
@@ -79,7 +91,7 @@ export const codeLang = (name: string): string | null => {
 // for servers predating it and for files not yet listed (mid-upload rows).
 export const isRenderable = (name: string, kind?: string) =>
   kind ? kind !== "opaque"
-       : isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || isOffice(name) || is3d(name) || codeLang(name) != null;
+       : isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || isDocx(name) || isPresentation(name) || isOffice(name) || is3d(name) || codeLang(name) != null;
 
 // Deliverable target of a live edit step — from the finished label or the
 // streamed partial-JSON args. Helper scripts never open the canvas.
