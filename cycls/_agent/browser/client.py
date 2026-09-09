@@ -73,6 +73,8 @@ def _provider():
 # by the caller's user_id; a stale entry is evicted and re-minted on the next
 # connect failure. The `cdp` provider is one browser by design and needs no cache.
 _STEEL_SESSIONS = {}
+# Same idea for the `cycls` REST provider — cache the server-side session id.
+_REST_SESSIONS = {}
 
 
 def _skey(user_id):
@@ -243,14 +245,117 @@ class Session:
                 pass
 
 
+class RestSession:
+    """A session against the `cycls` browser service (a cycls-deployed FastAPI +
+    Playwright service). Same method surface as the CDP `Session`, so the tool
+    executor doesn't care which provider is live — but all the browser work
+    happens SERVER-SIDE (the agent just makes HTTP calls; no Playwright needed).
+    The service-side session id is cached per caller so page state persists across
+    the stateless per-call cycles; a stale (404) session is re-minted once."""
+
+    def __init__(self, base, secret, user_id=None):
+        self._base = base.rstrip("/")
+        self._secret = secret
+        self._user_id = user_id
+        self._sid = None
+        self._http = None
+
+    def _headers(self):
+        h = {}
+        if self._secret:
+            h["Authorization"] = f"Bearer {self._secret}"
+        if self._user_id:
+            h["X-User-Id"] = str(self._user_id)
+        return h
+
+    async def _ensure_session(self):
+        if sid := _REST_SESSIONS.get(_skey(self._user_id)):
+            self._sid = sid
+            return
+        r = await self._http.post(f"{self._base}/v1/sessions", headers=self._headers(), json={})
+        if r.status_code not in (200, 201):
+            raise Unavailable(f"browser service {r.status_code}: {r.text[:200]}")
+        self._sid = r.json().get("id")
+        if not self._sid:
+            raise Unavailable("browser service returned no session id")
+        _REST_SESSIONS[_skey(self._user_id)] = self._sid
+
+    async def _connect(self):
+        self._http = httpx.AsyncClient(timeout=_NAV_TIMEOUT / 1000 + 15)
+        try:
+            await self._ensure_session()
+        except httpx.HTTPError as e:
+            raise Unavailable(f"browser service unreachable: {e}") from e
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        if self._http:
+            try:
+                await self._http.aclose()
+            except Exception:
+                pass
+
+    async def _act(self, path, **kw):
+        """One action against the current session; a 404 (session expired
+        server-side) evicts the cache and retries once with a fresh session."""
+        for attempt in (1, 2):
+            try:
+                r = await self._http.post(f"{self._base}/v1/sessions/{self._sid}{path}",
+                                          headers=self._headers(), **kw)
+            except httpx.HTTPError as e:
+                raise Unavailable(f"browser service unreachable: {e}") from e
+            if r.status_code == 404 and attempt == 1:
+                _REST_SESSIONS.pop(_skey(self._user_id), None)
+                await self._ensure_session()
+                continue
+            if r.status_code != 200:
+                raise Unavailable(f"browser service {r.status_code}: {r.text[:200]}")
+            return r
+
+    async def goto(self, url, wait_until="load"):
+        return (await self._act("/goto", json={"url": url, "wait_until": wait_until})).json()
+
+    async def info(self):
+        s = await self.snapshot()
+        return {"url": s.get("url"), "title": s.get("title")}
+
+    async def snapshot(self):
+        return (await self._act("/snapshot")).json()
+
+    async def click_ref(self, ref):
+        await self._act("/click", json={"ref": int(ref)})
+
+    async def type_ref(self, ref, value):
+        await self._act("/type", json={"ref": int(ref), "text": value})
+
+    async def press(self, key):
+        return (await self._act("/press", json={"key": key})).json()
+
+    async def back(self):
+        return (await self._act("/back")).json()
+
+    async def screenshot(self, full_page=False):
+        return (await self._act("/screenshot")).content
+
+
 async def session(user_id=None):
     """Open a connected browser session against the configured service. Raises
     `Unavailable` when unconfigured/unreachable. Use as an async context manager:
     `async with await browser.session(uid) as s: await s.goto(...)`.
 
-    Connects here (not in __aenter__) so a stale cached Steel session — whose
+    Connects here (not in __aenter__) so a stale cached session — whose
     server-side browser has since expired — is evicted and re-minted once, rather
     than failing the call."""
+    if _provider() in ("cycls", "rest"):
+        url = os.environ.get("BROWSER_URL")
+        if not url:
+            raise Unavailable("browser not configured (BROWSER_URL)")
+        s = RestSession(url, os.environ.get("BROWSER_SECRET"), user_id)
+        await s._connect()
+        return s
+
     for attempt in (1, 2):
         endpoint = await _cdp_endpoint(user_id)
         s = Session(endpoint, user_id)
