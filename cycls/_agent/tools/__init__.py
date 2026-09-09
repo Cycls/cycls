@@ -217,6 +217,11 @@ _BROWSER_TOOL = {
         "a download button/link `ref` (from the last read), or a direct file "
         "`url` (uses the page's session, so files behind a login work); then "
         "open it with bash/python (e.g. pandas for .xlsx)\n"
+        "- evaluate {script} run JavaScript in the page and get its return value "
+        "— for SCRAPING structured data the `read` text truncates (e.g. every row "
+        "of a table). `script` is a JS expression or arrow function returning "
+        "JSON-serializable data, e.g. "
+        "\"[...document.querySelectorAll('table tr')].map(r=>[...r.cells].map(c=>c.innerText))\"\n"
         "Always `read` first to learn the element numbers, then act by number. "
         "After each click/type the page is re-read for you — use the fresh "
         "numbers. Prefer this over web_fetch whenever a site needs interaction "
@@ -224,12 +229,14 @@ _BROWSER_TOOL = {
     ),
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string",
-                   "enum": ["open", "read", "click", "type", "press", "back", "screenshot", "download"],
+                   "enum": ["open", "read", "click", "type", "press", "back",
+                            "screenshot", "download", "evaluate"],
                    "description": "What to do."},
-        "url": {"type": "string", "description": "For `open`: the full http(s) URL."},
-        "ref": {"type": "integer", "description": "For `click`/`type`: the element number from the last `read`."},
+        "url": {"type": "string", "description": "For `open`/`download`: the full http(s) URL."},
+        "ref": {"type": "integer", "description": "For `click`/`type`/`download`: the element number from the last `read`."},
         "text": {"type": "string", "description": "For `type`: the text to enter."},
         "key": {"type": "string", "description": "For `press`: the key, e.g. 'Enter'."},
+        "script": {"type": "string", "description": "For `evaluate`: JavaScript returning JSON-serializable data."},
     }, "required": ["action"]}
 }
 
@@ -948,6 +955,15 @@ async def _exec_browser(inp, workspace):
                 await asyncio.to_thread(dst.write_bytes, data)
                 return (f"Downloaded {rel} ({len(data) // 1024} KB) — open it from the "
                         f"workspace (e.g. read it in bash/python; .xlsx via pandas).")
+            if action == "evaluate":
+                if not inp.get("script"):
+                    return ("Error: `evaluate` needs a `script` (JS expression/function "
+                            "returning JSON-serializable data).")
+                out = await s.evaluate(inp["script"])
+                text = out.get("result") or "(no result)"
+                if out.get("truncated"):
+                    text += "\n… (result truncated — narrow the script, e.g. slice/filter)"
+                return text
             return f"Error: unknown browser action {action!r}."
     except browser.Unavailable as e:
         return f"Error: browser unavailable — {e}"
