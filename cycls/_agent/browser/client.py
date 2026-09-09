@@ -31,6 +31,7 @@ import httpx
 _CONNECT_TIMEOUT = 30_000     # ms — Playwright connect
 _NAV_TIMEOUT = 45_000         # ms — page.goto / actions
 _SESSION_TIMEOUT = 30         # s  — service session-create HTTP call
+_EVAL_MAX = 50_000            # chars — cap on a serialized evaluate() result
 
 
 # Tags every visible interactive element with `data-cy-ref="N"` (document order)
@@ -258,6 +259,17 @@ class Session:
         data = pathlib.Path(await dl.path()).read_bytes()
         return (dl.suggested_filename or _dlname(dl.url, None)), data
 
+    async def evaluate(self, script):
+        """Run JS in the page → {'result': <json string>, 'truncated': bool}. For
+        scraping structured data the compact snapshot truncates."""
+        import json
+        result = await self._page.evaluate(script)
+        try:
+            s = json.dumps(result, ensure_ascii=False, default=str)
+        except Exception:
+            s = str(result)
+        return {"result": s[:_EVAL_MAX], "truncated": len(s) > _EVAL_MAX}
+
     async def _safe_teardown(self):
         # Disconnect the client but leave the remote context/page ALIVE — its
         # state must survive to the next tool call in the turn. `close()` on a
@@ -385,6 +397,9 @@ class RestSession:
         r = await self._act("/download", json=body)
         from urllib.parse import unquote
         return (unquote(r.headers.get("X-Cycls-Filename", "")) or "download"), r.content
+
+    async def evaluate(self, script):
+        return (await self._act("/evaluate", json={"script": script})).json()
 
 
 async def session(user_id=None):
