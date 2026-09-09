@@ -213,6 +213,10 @@ _BROWSER_TOOL = {
         "- press {key}       press a key, e.g. 'Enter'\n"
         "- back              go back\n"
         "- screenshot        save a PNG of the page into the workspace\n"
+        "- download {ref|url} save a file the page offers into the workspace — "
+        "a download button/link `ref` (from the last read), or a direct file "
+        "`url` (uses the page's session, so files behind a login work); then "
+        "open it with bash/python (e.g. pandas for .xlsx)\n"
         "Always `read` first to learn the element numbers, then act by number. "
         "After each click/type the page is re-read for you — use the fresh "
         "numbers. Prefer this over web_fetch whenever a site needs interaction "
@@ -220,7 +224,7 @@ _BROWSER_TOOL = {
     ),
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string",
-                   "enum": ["open", "read", "click", "type", "press", "back", "screenshot"],
+                   "enum": ["open", "read", "click", "type", "press", "back", "screenshot", "download"],
                    "description": "What to do."},
         "url": {"type": "string", "description": "For `open`: the full http(s) URL."},
         "ref": {"type": "integer", "description": "For `click`/`type`: the element number from the last `read`."},
@@ -429,15 +433,22 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
     trash_dir = os.path.join(cwd, trash.DIR)
     os.makedirs(trash_dir, exist_ok=True)
     shims = str(pathlib.Path(__file__).parent / "shims")
-    env = {"PATH": f"/opt/cycls-bin:{path}", "LANG": lang,
-           "CYCLS_WORKSPACE": "/workspace", "CYCLS_TRASH": "/workspace-trash"}
+    # Mount points must live under a writable parent. bwrap ro-binds `/`, so a
+    # mount point that doesn't already exist on the host root can't be created
+    # (on a read-only root like Cloud Run, EVERY command then fails at setup with
+    # `bwrap: Can't create file …: Read-only file system`). `/tmp` is a tmpfs here
+    # (writable on any host), so the trash + shims mount cleanly. They stay outside
+    # /workspace, so the model never sees them; the underlying trash is still the
+    # persistent `trash_dir` bound in.
+    env = {"PATH": f"/tmp/.cycls-bin:{path}", "LANG": lang,
+           "CYCLS_WORKSPACE": "/workspace", "CYCLS_TRASH": "/tmp/.cycls-trash"}
     sb = (Sandbox()
           .bind(cwd, "/workspace")
           .tmpfs("/workspace/.db")        # cycls state (chat, shares); editor blocks via _resolve_path
           .tmpfs("/workspace/.database")  # agent KV store; same blocking
           .tmpfs("/workspace/.trash")
-          .bind(trash_dir, "/workspace-trash")
-          .ro_bind(shims, "/opt/cycls-bin")
+          .bind(trash_dir, "/tmp/.cycls-trash")
+          .ro_bind(shims, "/tmp/.cycls-bin")
           .tmpfs("/app")
           .chdir("/workspace")
           .setenv(**env)
@@ -873,6 +884,13 @@ async def _browser_read(s):
     return _browser_snapshot_text(await s.snapshot())
 
 
+def _safe_filename(name, default="download"):
+    """A filename safe to write under the workspace: basename only (no path
+    traversal via `/`, `\\`, or `..`), trimmed, with a fallback."""
+    base = os.path.basename((name or "").replace("\\", "/")).strip().strip(".")
+    return base or default
+
+
 async def _exec_browser(inp, workspace):
     """Drive the shared browser service one action at a time. State lives in the
     remote page (which persists between calls), so every navigational action
@@ -918,6 +936,18 @@ async def _exec_browser(inp, workspace):
                 return {"_model": f"Screenshot of {info['url']} saved to {rel} "
                                   f"({len(png) // 1024} KB) and opened on the canvas.",
                         "_ui": {"type": "ui", "action": "open_canvas", "path": rel, "name": name}}
+            if action == "download":
+                ref, url = inp.get("ref"), inp.get("url")
+                if ref is None and not url:
+                    return ("Error: `download` needs a `ref` (a download button/link "
+                            "from the last `read`) or a `url`.")
+                fname, data = await s.download(ref=ref, url=url)
+                rel = f"downloads/{_safe_filename(fname)}"
+                dst = pathlib.Path(workspace.root) / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                await asyncio.to_thread(dst.write_bytes, data)
+                return (f"Downloaded {rel} ({len(data) // 1024} KB) — open it from the "
+                        f"workspace (e.g. read it in bash/python; .xlsx via pandas).")
             return f"Error: unknown browser action {action!r}."
     except browser.Unavailable as e:
         return f"Error: browser unavailable — {e}"

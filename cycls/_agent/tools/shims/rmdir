@@ -8,7 +8,7 @@ recover. Also installed as `rmdir`.
 import json, os, shutil, subprocess, sys, time, uuid
 
 WS = os.environ.get("CYCLS_WORKSPACE", "/workspace")
-TRASH = os.environ.get("CYCLS_TRASH", "/workspace-trash")
+TRASH = os.environ.get("CYCLS_TRASH", "/tmp/.cycls-trash")
 REAL = "/bin/rm" if os.path.exists("/bin/rm") else "/usr/bin/rm"
 
 
