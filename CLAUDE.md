@@ -58,6 +58,7 @@ cycls/
     ├── main.py             # Agent class + @cycls.agent decorator
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
+    ├── browser/            # cycls Browser tool — thin CDP client to a shared real-Chrome service (Steel); docs/notes/browser.md
     ├── tools/              # tool schemas + execution + `Tool` rows: run/step/once/terminal/prompt (docs/notes/tool-rows.md)
     ├── harness/            # the managed LLM loop and the kit a custom loop needs
     │   ├── llm.py          # cycls.LLM fluent builder (.loop(fn) swaps the loop; .price()/.context() set cost rates + window)
@@ -136,6 +137,7 @@ tests/
 │   ├── agent_test.py            # _run loop, retry, recovery, ingest, exec/_resolve_path
 │   ├── chat_test.py             # to_ui_messages (FE projection) + _valid_prefix repair
 │   ├── harness_test.py          # build_tools, web search/fetch, cost math, _resolve_path, LLM builder
+│   ├── browser_test.py          # Browser tool: client config/providers, steel session parse, executor dispatch, gating
 │   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
 │   ├── events_test.py           # to_ui wire shapes for the typed events
 │   ├── pdf_test.py              # PDF page parsing
