@@ -327,7 +327,7 @@ Details: [docs/notes/office-preview.md](notes/office-preview.md).
 Give an agent a **real browser** — open pages behind JavaScript, read them, click,
 fill forms, log in, run multi-step flows, screenshot — without shipping Chromium
 in the image. The heavy part (real Chrome) runs in a shared service the agent
-calls over CDP; the SDK ships only the client and the built-in `Browser` tool.
+calls over HTTP; the SDK ships only the client and the built-in `Browser` tool.
 
 Enable it by adding `"Browser"` to `allowed_tools` and pointing two env vars at a
 browser service:
@@ -336,7 +336,8 @@ browser service:
 llm = cycls.LLM().model(...).allowed_tools(["Bash", "Editor", "Browser"])
 ```
 ```
-BROWSER_URL=http://your-steel-host:3000     # self-hosted Steel, or a managed API
+BROWSER_PROVIDER=cycls
+BROWSER_URL=https://cycls-browser.cycls.ai   # your deployed browser service
 BROWSER_SECRET=<the shared service secret>
 ```
 
@@ -347,15 +348,17 @@ canvas). The page persists between calls in the turn, so logins and forms work.
 Unset the env and the tool simply isn't offered — no crash, exactly like the
 office fallback.
 
-Stand up the service (Apache-2.0 Steel Browser) as a shared "office-render
-sibling":
+The service is a small FastAPI + Playwright app deployed **as a cycls function**
+(the office-render sibling), so it ships with your `CYCLS_API_KEY` and no separate
+cloud creds — real Chromium lives in it, not in any agent image. Deploy it once,
+pinned to a single instance (sessions are in-memory):
 
 ```bash
-docker run -d --shm-size=2g --cap-add=SYS_ADMIN -p 3000:3000 \
-  ghcr.io/steel-dev/steel-browser
+python browser_service.py        # → https://cycls-browser.cycls.ai
 ```
 
-Details: [docs/notes/browser.md](notes/browser.md).
+(Self-hosted **Steel Browser** over CDP is an alternative backing — set
+`BROWSER_PROVIDER=steel`.) Details: [docs/notes/browser.md](notes/browser.md).
 
 ### Apple IAP entitlements
 
