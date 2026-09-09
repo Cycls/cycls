@@ -17,7 +17,8 @@ from cycls._agent.browser import client
 def _clear_env(monkeypatch):
     for k in ("BROWSER_URL", "BROWSER_SECRET", "BROWSER_PROVIDER"):
         monkeypatch.delenv(k, raising=False)
-    client._STEEL_SESSIONS.clear()   # module-level session cache — isolate tests
+    client._STEEL_SESSIONS.clear()   # module-level session caches — isolate tests
+    client._REST_SESSIONS.clear()
 
 
 # ---- configured() gate ----
@@ -153,6 +154,30 @@ def test_steel_session_reused_across_calls(monkeypatch):
     assert a == b == "ws://steel/1" and posts["n"] == 1     # reused, one POST
     c = asyncio.run(client._cdp_endpoint("u2"))
     assert c == "ws://steel/2" and posts["n"] == 2          # other caller → own session
+
+
+def test_cycls_provider_configured(monkeypatch):
+    monkeypatch.setenv("BROWSER_PROVIDER", "cycls")
+    monkeypatch.setenv("BROWSER_URL", "https://browser.cycls.ai")
+    assert browser.configured() is False          # needs a secret too
+    monkeypatch.setenv("BROWSER_SECRET", "s")
+    assert browser.configured() is True
+
+
+def test_cycls_provider_dispatches_to_rest_session(monkeypatch):
+    """The `cycls` provider talks to the REST browser service (RestSession),
+    not CDP — the tool executor gets the same method surface either way."""
+    monkeypatch.setenv("BROWSER_PROVIDER", "cycls")
+    monkeypatch.setenv("BROWSER_URL", "https://browser.cycls.ai")
+    monkeypatch.setenv("BROWSER_SECRET", "s")
+
+    async def _fake_connect(self):
+        self._sid = "sess-1"
+
+    monkeypatch.setattr(client.RestSession, "_connect", _fake_connect)
+    s = asyncio.run(browser.session("org_1:user_1"))
+    assert isinstance(s, client.RestSession)
+    assert s._sid == "sess-1" and s._user_id == "org_1:user_1"
 
 
 def test_session_helper_raises_when_unconfigured():
