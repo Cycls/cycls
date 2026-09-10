@@ -359,11 +359,12 @@ class RestSession:
     The service-side session id is cached per caller so page state persists across
     the stateless per-call cycles; a stale (404) session is re-minted once."""
 
-    def __init__(self, base, secret, user_id=None):
+    def __init__(self, base, secret, user_id=None, nav_url=None):
         self._base = base.rstrip("/")
         self._secret = secret
         self._user_id = user_id
-        self._sid = None
+        self._nav_url = nav_url   # first goto URL — forwarded so the service can
+        self._sid = None          # route this session to the proxy by domain
         self._http = None
 
     def _headers(self):
@@ -378,8 +379,10 @@ class RestSession:
         if sid := _REST_SESSIONS.get(_skey(self._user_id)):
             self._sid = sid
             return
-        r = await self._http.post(f"{self._base}/v1/sessions", headers=self._headers(),
-                                  json=_session_body())
+        body = _session_body()
+        if self._nav_url:
+            body["url"] = self._nav_url
+        r = await self._http.post(f"{self._base}/v1/sessions", headers=self._headers(), json=body)
         if r.status_code not in (200, 201):
             raise Unavailable(f"browser service {r.status_code}: {r.text[:200]}")
         self._sid = r.json().get("id")
@@ -467,19 +470,21 @@ class RestSession:
         return (await self._act("/evaluate", json={"script": script})).json()
 
 
-async def session(user_id=None):
+async def session(user_id=None, nav_url=None):
     """Open a connected browser session against the configured service. Raises
     `Unavailable` when unconfigured/unreachable. Use as an async context manager:
     `async with await browser.session(uid) as s: await s.goto(...)`.
 
-    Connects here (not in __aenter__) so a stale cached session — whose
-    server-side browser has since expired — is evicted and re-minted once, rather
-    than failing the call."""
+    `nav_url` is the turn's first navigation target (the `open` URL); it's
+    forwarded at session-create so the service can route this session through the
+    proxy by domain (per-site routing). Connects here (not in __aenter__) so a
+    stale cached session — whose server-side browser has since expired — is
+    evicted and re-minted once, rather than failing the call."""
     if _provider() in ("cycls", "rest"):
         url = os.environ.get("BROWSER_URL")
         if not url:
             raise Unavailable("browser not configured (BROWSER_URL)")
-        s = RestSession(url, os.environ.get("BROWSER_SECRET"), user_id)
+        s = RestSession(url, os.environ.get("BROWSER_SECRET"), user_id, nav_url=nav_url)
         await s._connect()
         return s
 

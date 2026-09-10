@@ -194,6 +194,28 @@ def _env_proxy():
 _PROXY = _env_proxy()
 
 
+def _proxy_domains():
+    """Hosts that should route through the proxy — comma-separated, glob-ish
+    suffixes in BROWSER_PROXY_DOMAINS (e.g. '*.gov.sa,my.gov.sa'). Empty list =
+    proxy EVERY site (the pre-routing behaviour)."""
+    raw = os.environ.get("BROWSER_PROXY_DOMAINS", "")
+    return [p.strip().lstrip("*").lstrip(".").lower() for p in raw.split(",") if p.strip()]
+
+
+_PROXY_DOMAINS = _proxy_domains()   # baked at deploy, like _PROXY
+
+
+def _should_proxy(url, domains):
+    """Whether this navigation goes through the proxy. No list → every site.
+    URL unknown (an older client that doesn't forward it) → yes, so proxy-only
+    sites keep working during a rollout. Otherwise only when the host matches."""
+    if not domains or not url:
+        return True
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").lower()
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
 def _dlname(url, cdisp):
     """Best filename for a download: Content-Disposition (incl. RFC-5987
     `filename*`), else the URL's last path segment."""
@@ -267,7 +289,8 @@ async def _human_settle(page):
         pass
 
 
-def build_app(secret=None, default_proxy=None):
+def build_app(secret=None, default_proxy=None, proxy_domains=None):
+    _domains = proxy_domains if proxy_domains is not None else _PROXY_DOMAINS
     import asyncio
     import time
     import uuid
@@ -357,10 +380,16 @@ def build_app(secret=None, default_proxy=None):
             body = await request.json()
         except Exception:
             body = {}
-        # proxy (the IP layer): the caller's forwarded proxy wins; else the one
-        # baked at deploy time; else the live env (local runs). Applied per-context,
-        # so different callers can browse through different proxies on one browser.
-        proxy = (body or {}).get("proxy") or default_proxy or _env_proxy()
+        # proxy (the IP layer): the caller's forwarded proxy wins; else the baked/
+        # env proxy, but only when this navigation's host is on the routing list
+        # (BROWSER_PROXY_DOMAINS) — so ordinary sites browse free/direct and only
+        # geo/hard domains pay for the proxy. `url` is the first goto, forwarded by
+        # the client at session-create. Applied per-context.
+        proxy = (body or {}).get("proxy")
+        if not proxy:
+            baked = default_proxy or _env_proxy()
+            if baked and _should_proxy((body or {}).get("url"), _domains):
+                proxy = baked
         # accept_downloads for the download action; UA + locale + viewport +
         # init-script stealth so the page looks like an ordinary browser.
         kw = dict(accept_downloads=True, user_agent=st["ua"], locale="en-US",
@@ -506,19 +535,19 @@ def build_app(secret=None, default_proxy=None):
     return app
 
 
-def _serve(port, secret=None, proxy=None):
+def _serve(port, secret=None, proxy=None, domains=None):
     import asyncio
 
     from hypercorn.asyncio import serve
     from hypercorn.config import Config
     cfg = Config()
     cfg.bind = [f"0.0.0.0:{port}"]
-    asyncio.run(serve(build_app(secret, proxy), cfg))
+    asyncio.run(serve(build_app(secret, proxy, domains), cfg))
 
 
 @cycls.function(name="cycls-browser", image=image, memory="4Gi", cpu=2, concurrency=30)
 def serve(port):
-    _serve(port, _SECRET, _PROXY)   # baked-in secret + proxy (closure)
+    _serve(port, _SECRET, _PROXY, _PROXY_DOMAINS)   # baked secret + proxy + routing (closure)
 
 # max_instances=1 is REQUIRED: sessions are in-memory + instance-local, so a
 # second instance would 404 sessions created on the first (multi-step flows
@@ -538,6 +567,8 @@ if __name__ == "__main__":
         if _PROXY:
             print("PROXY baked in       :", _PROXY.get("server"),
                   "(user:", (_PROXY.get("username") or "-").split(":")[0] + ")")
+            print("PROXY routing        :",
+                  (", ".join(_PROXY_DOMAINS) if _PROXY_DOMAINS else "ALL sites (no BROWSER_PROXY_DOMAINS)"))
         else:
             print("PROXY                : none (set BROWSER_PROXY_* to route through one)")
         print("=" * 60)

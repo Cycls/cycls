@@ -236,8 +236,9 @@ class _FakeSession:
 
 def _use_fake(monkeypatch):
     fake = _FakeSession()
-    async def _session(user_id=None):
+    async def _session(user_id=None, nav_url=None):
         _session.subject = user_id
+        _session.nav_url = nav_url
         return fake
     monkeypatch.setattr("cycls._agent.browser.session", _session)
     return fake, _session
@@ -294,7 +295,7 @@ def test_action_arg_validation(tmp_path, monkeypatch):
 
 
 def test_executor_reports_unavailable(tmp_path, monkeypatch):
-    async def _boom(user_id=None):
+    async def _boom(user_id=None, nav_url=None):
         raise browser.Unavailable("service down")
     monkeypatch.setattr("cycls._agent.browser.session", _boom)
     out = asyncio.run(_exec_browser({"action": "read"}, _ws(tmp_path)))
@@ -535,6 +536,65 @@ def test_rest_session_forwards_proxy_on_create(monkeypatch):
     asyncio.run(s._ensure_session())
     assert captured["json"] == {"proxy": {"server": "http://gw:7"}}
     assert s._sid == "sid-9"
+
+
+def test_open_forwards_nav_url_for_routing(tmp_path, monkeypatch):
+    """The `open` URL is forwarded to session() so the service can route by domain;
+    non-navigational actions carry no URL."""
+    _, sess = _use_fake(monkeypatch)
+    asyncio.run(_exec_browser({"action": "open", "url": "https://my.gov.sa/ar"}, _ws(tmp_path)))
+    assert sess.nav_url == "https://my.gov.sa/ar"
+    asyncio.run(_exec_browser({"action": "read"}, _ws(tmp_path)))
+    assert sess.nav_url is None
+
+
+def test_rest_session_forwards_nav_url(monkeypatch):
+    """RestSession sends the first-navigation URL in the session-create body."""
+    captured = {}
+
+    class _H:
+        async def post(self, url, headers=None, json=None):
+            captured["json"] = json
+            return _FakeResp(200, {"id": "sid-2"})
+
+    s = client.RestSession("https://svc", "sek", "u1", nav_url="https://my.gov.sa/ar")
+    s._http = _H()
+    asyncio.run(s._ensure_session())
+    assert captured["json"].get("url") == "https://my.gov.sa/ar"
+
+
+def test_service_domain_routing():
+    """The service's per-site routing: only listed hosts take the proxy; no list or
+    an unknown URL falls back to proxying (so a rollout can't break geo sites)."""
+    import importlib.util
+    import pathlib
+    svc = (pathlib.Path(__file__).resolve().parents[2]
+           / "examples" / "browser_service" / "browser_service.py")
+    if not svc.exists():
+        pytest.skip("browser_service.py not present")
+    spec = importlib.util.spec_from_file_location("_bs_route", svc)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    doms = ["gov.sa", "my.gov.sa"]                       # as _proxy_domains() would parse "*.gov.sa,my.gov.sa"
+    assert m._should_proxy("https://my.gov.sa/ar", doms) is True
+    assert m._should_proxy("https://x.gov.sa/", doms) is True     # suffix match
+    assert m._should_proxy("https://example.com/", doms) is False  # off-list → free/direct
+    assert m._should_proxy("https://example.com/", []) is True     # no list → proxy all
+    assert m._should_proxy(None, doms) is True                     # url unknown → safe fallback
+
+
+def test_service_proxy_domains_parse(monkeypatch):
+    import importlib.util
+    import pathlib
+    svc = (pathlib.Path(__file__).resolve().parents[2]
+           / "examples" / "browser_service" / "browser_service.py")
+    if not svc.exists():
+        pytest.skip("browser_service.py not present")
+    spec = importlib.util.spec_from_file_location("_bs_route2", svc)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    monkeypatch.setenv("BROWSER_PROXY_DOMAINS", "*.gov.sa, my.gov.sa , ")
+    assert m._proxy_domains() == ["gov.sa", "my.gov.sa"]
 
 
 def test_service_env_proxy(monkeypatch):
