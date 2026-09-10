@@ -905,8 +905,11 @@ async def _exec_browser(inp, workspace):
     from cycls._agent import browser
     action = (inp.get("action") or "").lower()
     subject = getattr(workspace, "subject", None)
+    # Forward the first navigation's URL so the service can route this session to
+    # the proxy by domain (per-site routing). Only `open` carries a target URL.
+    nav_url = inp.get("url") if action == "open" else None
     try:
-        async with await browser.session(subject) as s:
+        async with await browser.session(subject, nav_url=nav_url) as s:
             if action == "open":
                 if not inp.get("url"):
                     return "Error: `open` needs a `url`."
