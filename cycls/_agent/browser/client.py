@@ -99,6 +99,40 @@ def _dlname(url, cdisp):
     return unquote(os.path.basename(urlparse(url).path)) or "download"
 
 
+def _proxy_config():
+    """A Playwright proxy dict from env (the operator supplies the proxy — we only
+    plumb it through), or None. Either `BROWSER_PROXY` as a full URL
+    (`scheme://user:pass@host:port`) or the split `BROWSER_PROXY_SERVER` +
+    `BROWSER_PROXY_USERNAME` / `BROWSER_PROXY_PASSWORD`. This is the IP layer —
+    the only thing that moves a WAF/IP-level block (a residential/mobile pool you
+    bring); it can't be manufactured, only pointed at."""
+    server = os.environ.get("BROWSER_PROXY_SERVER")
+    username = os.environ.get("BROWSER_PROXY_USERNAME")
+    password = os.environ.get("BROWSER_PROXY_PASSWORD")
+    if not server and (url := os.environ.get("BROWSER_PROXY")):
+        from urllib.parse import urlparse
+        p = urlparse(url if "://" in url else f"http://{url}")
+        if p.hostname:
+            server = f"{p.scheme or 'http'}://{p.hostname}" + (f":{p.port}" if p.port else "")
+            username = username or p.username
+            password = password or p.password
+    if not server:
+        return None
+    cfg = {"server": server}
+    if username:
+        cfg["username"] = username
+    if password:
+        cfg["password"] = password
+    return cfg
+
+
+def _session_body():
+    """The session-create request body — forwards the proxy config to the service
+    so it applies per-context (each caller can browse through its own proxy)."""
+    cfg = _proxy_config()
+    return {"proxy": cfg} if cfg else {}
+
+
 def configured():
     """Wired when a service URL is set — plus a secret for providers that need
     one. The raw `cdp` provider (a self-managed endpoint) needs only the URL."""
@@ -163,7 +197,13 @@ class Session:
         self._pw = self._browser = self._context = self._page = None
 
     async def _connect(self):
-        from playwright.async_api import async_playwright
+        # Prefer the CDP-leak-hardened Playwright fork (rebrowser-playwright) when
+        # it's installed — it fixes the Runtime.enable leak that stock Playwright
+        # exposes to bot-management; falls back to stock Playwright otherwise.
+        try:
+            from rebrowser_playwright.async_api import async_playwright
+        except Exception:
+            from playwright.async_api import async_playwright
         self._pw = await async_playwright().start()
         self._browser = await self._pw.chromium.connect_over_cdp(
             self._endpoint, timeout=_CONNECT_TIMEOUT)
@@ -175,6 +215,17 @@ class Session:
         self._context = (self._browser.contexts[0] if self._browser.contexts
                          else await self._browser.new_context())
         self._context.set_default_timeout(_NAV_TIMEOUT)
+        # Reduce this browser's automation tells (navigator.webdriver, WebGL,
+        # plugins, …) before we navigate. Registered per-connect: connect_over_cdp
+        # opens a fresh CDP session each cycle, so a prior connect's init script is
+        # gone — re-adding doesn't stack. UA / launch-flag / locale stealth needs a
+        # context WE create; a reused CDP context can't take those, so that half is
+        # the browser service's job (the cycls service and Steel both do it).
+        try:
+            from . import stealth
+            await stealth.apply(self._context)
+        except Exception:
+            pass
         self._page = (self._context.pages[0] if self._context.pages
                       else await self._context.new_page())
 
@@ -188,6 +239,9 @@ class Session:
 
     async def goto(self, url, wait_until="load"):
         await self._page.goto(url, wait_until=wait_until, timeout=_NAV_TIMEOUT)
+        from . import behavior
+        if behavior.enabled():
+            await behavior.human_settle(self._page)
         return await self.info()
 
     async def info(self):
@@ -233,10 +287,20 @@ class Session:
                 "refs": refs[:max_refs], "refs_truncated": len(refs) > max_refs}
 
     async def click_ref(self, ref):
-        await self._page.click(f'[data-cy-ref="{int(ref)}"]', timeout=_NAV_TIMEOUT)
+        sel = f'[data-cy-ref="{int(ref)}"]'
+        from . import behavior
+        if behavior.enabled():
+            await behavior.human_click(self._page, sel, _NAV_TIMEOUT)
+        else:
+            await self._page.click(sel, timeout=_NAV_TIMEOUT)
 
     async def type_ref(self, ref, value):
-        await self._page.fill(f'[data-cy-ref="{int(ref)}"]', value, timeout=_NAV_TIMEOUT)
+        sel = f'[data-cy-ref="{int(ref)}"]'
+        from . import behavior
+        if behavior.enabled():
+            await behavior.human_type(self._page, sel, value, _NAV_TIMEOUT)
+        else:
+            await self._page.fill(sel, value, timeout=_NAV_TIMEOUT)
 
     async def back(self):
         await self._page.go_back(timeout=_NAV_TIMEOUT)
@@ -314,7 +378,8 @@ class RestSession:
         if sid := _REST_SESSIONS.get(_skey(self._user_id)):
             self._sid = sid
             return
-        r = await self._http.post(f"{self._base}/v1/sessions", headers=self._headers(), json={})
+        r = await self._http.post(f"{self._base}/v1/sessions", headers=self._headers(),
+                                  json=_session_body())
         if r.status_code not in (200, 201):
             raise Unavailable(f"browser service {r.status_code}: {r.text[:200]}")
         self._sid = r.json().get("id")
