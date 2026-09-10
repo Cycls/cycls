@@ -86,13 +86,10 @@ need the secret too.)
 
 ### `cycls` — a browser service deployed on Cycls infra (recommended)
 
-`browser_service.py` is a small FastAPI + Playwright app packaged as a
-`@cycls.function` (the image installs real Chromium at build). It owns Chrome and
-exposes a REST API — create a session, goto, snapshot (text + numbered refs),
-click/type by ref, screenshot — that the SDK's `cycls` provider (`RestSession`)
-calls over HTTP. Deploy it like office-render, with your `CYCLS_API_KEY`:
+The service lives in its own repo — **[`Cycls/cycls-browser`](https://github.com/Cycls/cycls-browser)** (the office-render sibling). It's a small FastAPI + Playwright app packaged as a `@cycls.function` (the image installs real Chromium at build). It owns Chrome and exposes a REST API — session create, goto, snapshot, click/type by ref, screenshot, download, evaluate — that the SDK's `cycls` provider (`RestSession`) calls over HTTP, and it applies stealth + behavior + proxy/routing server-side. Deploy it like office-render, with your `CYCLS_API_KEY`:
 
 ```bash
+git clone https://github.com/Cycls/cycls-browser && cd cycls-browser
 python browser_service.py        # → https://cycls-browser.cycls.ai
 ```
 
@@ -162,7 +159,7 @@ Managed providers also win for anti-bot sites (they bring stealth + proxies).
 | 5 | `client/src/…` | **No change** — the screenshot reuses the existing `open_canvas` + image renderer. |
 | 6 | `tests/agent/browser_test.py` · `scenarios/test_browser_live.py` | Mocked (26) + gated-live tests. |
 | 7 | `docs/notes/browser.md` (this) · `docs/tutorial.md` · `examples/` | Docs. |
-| 8 | `examples/browser_service/browser_service.py` | The `cycls`-provider service (FastAPI + Playwright + real Chromium) — the shared "office-render sibling". Applies full stealth server-side. Deploy recipe above. |
+| 8 | [`Cycls/cycls-browser`](https://github.com/Cycls/cycls-browser) (separate repo) | The `cycls`-provider service (FastAPI + Playwright + real Chromium) — the "office-render sibling". Applies stealth + behavior + proxy/routing server-side. Deploy recipe above. |
 
 ## As built (decisions taken)
 
