@@ -30,8 +30,9 @@ against a real Steel Browser container.
 
 - Not building or bundling a browser engine.
 - Not shipping Chromium per agent.
-- Phase 1 does not chase hard anti-bot / Cloudflare-Turnstile (needs stealth +
-  residential proxies — a later, opt-in concern).
+- Basic **stealth is applied** (JS/DOM fingerprint patches + a normalized UA +
+  locale — see below), but hard anti-bot / Cloudflare-Turnstile is still out of
+  scope: that needs residential proxies + CAPTCHA solving (paid, opt-in, later).
 
 ## Architecture
 
@@ -62,6 +63,8 @@ against a real Steel Browser container.
 | `BROWSER_URL`      | service base URL (self-hosted Steel, or a managed API)   |
 | `BROWSER_SECRET`   | shared service secret (Bearer)                           |
 | `BROWSER_PROVIDER` | optional: `cycls` · `steel` (default) · `cdp` · `browserbase` |
+| `BROWSER_HUMANIZE` | optional: `0` disables human-like input (default on)     |
+| `BROWSER_PROXY` *(or* `BROWSER_PROXY_SERVER` + `_USERNAME`/`_PASSWORD`*)* | optional: route browsing through a proxy — the IP layer; you supply the pool |
 
 Providers:
 - **`cycls`** — a REST browser service **deployed on Cycls infra** (`cycls deploy`,
@@ -151,13 +154,15 @@ Managed providers also win for anti-bot sites (they bring stealth + proxies).
 
 | # | File | Role |
 |---|------|------|
-| 1 | `cycls/_agent/browser/client.py` | Service client — session create/connect (CDP), the actions + `snapshot`/`click_ref`/`type_ref`, `configured()` / `Unavailable`. Sibling of `web/office.py`. |
-| 2 | `cycls/_agent/tools/__init__.py` | `_BROWSER_TOOL` schema, `_exec_browser` executor, `build_tools` gating on `configured()`, `_TOOLS["browser"]` + step label. |
-| 3 | `cycls/_app/main.py` (`App._base_pip`) | `playwright==1.62.0` (library only) added to the base image. |
-| 4 | `client/src/…` | **No change** — the screenshot reuses the existing `open_canvas` + image renderer. |
-| 5 | `tests/agent/browser_test.py` · `scenarios/test_browser_live.py` | Mocked (19) + gated-live tests. |
-| 6 | `docs/notes/browser.md` (this) · `docs/tutorial.md` · `examples/` | Docs. |
-| 7 | The service (separate) | Steel Browser as the shared "office-render sibling" (deploy recipe above). |
+| 1 | `cycls/_agent/browser/client.py` | Service client — session create/connect (CDP + REST), the actions + `snapshot`/`click_ref`/`type_ref`/`download`/`evaluate`, `configured()` / `Unavailable`. Sibling of `web/office.py`. |
+| 2 | `cycls/_agent/browser/stealth.py` | Fingerprint patches: the `STEALTH_JS` init script (webdriver/WebGL/plugins/…), `LAUNCH_ARGS`, `chrome_ua`, `context_kwargs`, `apply(context)`. Single source of truth; the service duplicates the JS with a "kept in sync" note. |
+| 2b | `cycls/_agent/browser/behavior.py` | Human-like input: `human_click` (mouse approach path), `human_type` (per-key cadence), `human_settle` (move + scroll after load). Gated by `BROWSER_HUMANIZE` (default on). Tunables mirrored into the service. |
+| 3 | `cycls/_agent/tools/__init__.py` | `_BROWSER_TOOL` schema, `_exec_browser` executor, `build_tools` gating on `configured()`, `_TOOLS["browser"]` + step label. |
+| 4 | `cycls/_app/main.py` (`App._base_pip`) | `playwright==1.62.0` (library only) added to the base image. |
+| 5 | `client/src/…` | **No change** — the screenshot reuses the existing `open_canvas` + image renderer. |
+| 6 | `tests/agent/browser_test.py` · `scenarios/test_browser_live.py` | Mocked (26) + gated-live tests. |
+| 7 | `docs/notes/browser.md` (this) · `docs/tutorial.md` · `examples/` | Docs. |
+| 8 | `examples/browser_service/browser_service.py` | The `cycls`-provider service (FastAPI + Playwright + real Chromium) — the shared "office-render sibling". Applies full stealth server-side. Deploy recipe above. |
 
 ## As built (decisions taken)
 
@@ -191,6 +196,94 @@ provider, P5 docs/tests/example. Each phase was validated before the next.
    built in); managed provider via `BROWSER_PROVIDER` for zero-infra.
 -->
 
+## Stealth (fingerprint fidelity, not anti-bot bypass)
+
+A real browser still leaks that it's *automated*. `cycls/_agent/browser/
+stealth.py` applies the free, open-source layer that closes the loudest tells —
+applied where Chrome is actually driven (the `cycls` service, and the client's
+CDP `Session`):
+
+- **JS/DOM patches** (`STEALTH_JS`, run before page scripts on every navigation):
+  `navigator.webdriver` native-`false` (via the launch flag), `vendor` =
+  `Google Inc.`, `platform` consistent with the UA, real `languages` /
+  `hardwareConcurrency` / `deviceMemory`, a full `window.chrome`
+  (`app`/`csi`/`loadTimes`/`runtime`), a consistent Notification-permission query,
+  a spoofed WebGL vendor/renderer (headless otherwise reports Google SwiftShader),
+  and non-zero `outerWidth/Height`. **The patches are made undetectable**: each is
+  defined on `Navigator.prototype` (not the instance) and reports `[native code]`
+  from `toString()`, so `getParameter.toString()` / the getter source / even
+  `Function.prototype.toString.toString()` all look native. (`navigator.plugins`
+  is deliberately left native — an honest empty `PluginArray`.)
+- **Launch + context** (only where WE launch Chrome — the service): the
+  `--disable-blink-features=AutomationControlled` flag, a **normalized
+  User-Agent** (the `HeadlessChrome` token stripped — the biggest header tell),
+  and an explicit locale / timezone / viewport (an unset locale, and its missing
+  `Accept-Language`, is itself a tell). The client's CDP `Session` reuses the
+  service's context, so it gets the JS patches but leaves UA/launch stealth to
+  the service (or Steel, which brings its own).
+
+### Behavioral emulation (`behavior.py`, `BROWSER_HUMANIZE`)
+
+Pure `click()`/`fill()` flatten the behavioral signals bot-management scores on —
+the cursor teleports, text appears instantly, nothing moves before an action.
+`behavior.py` re-introduces motion and timing:
+
+- **`human_click`** — scroll to the element, move the cursor to a jittered point
+  inside it via a two-leg interpolated path, pause, then click through the locator
+  (keeping Playwright's actionability checks, so the right element is still hit).
+- **`human_type`** — focus the field (scroll + click), clear it, and type
+  character-by-character with a randomized 35–110 ms cadence.
+- **`human_settle`** — after a page loads, one cursor move + a small scroll (what
+  Cloudflare's non-interactive challenge watches for).
+
+Every step is best-effort (falls back to the plain action). On by default; set
+`BROWSER_HUMANIZE=0` to disable (faster, but flatter behavioral signals). Validated
+live: a full saucedemo login typed at ~114 ms/char and clicked via a mouse path,
+landing authenticated. Applied both in the client `Session` (steel/cdp) and the
+service (`/goto` · `/click` · `/type`).
+
+### Proxy (the IP layer, `BROWSER_PROXY`)
+
+Fingerprint and behavior are the *browser* layers; neither moves a block keyed to
+the **IP/ASN** (a datacenter IP flagged by reputation, or a hard WAF rule — e.g.
+`my.gov.sa` returns Cloudflare's `Sorry, you have been blocked` no matter how
+clean the browser looks). That needs a different egress IP, which you **supply**
+(a residential/mobile pool — it can't be manufactured, only pointed at).
+
+Set `BROWSER_PROXY=scheme://user:pass@host:port` (or the split
+`BROWSER_PROXY_SERVER` + `_USERNAME`/`_PASSWORD`) on the agent. The client reads
+it and forwards it in the session-create body; the service applies it **per
+context** (`new_context(proxy=…)`), so different callers on the one shared browser
+can egress through different proxies. The service also honors the same env itself
+as a fallback. Validated: a dead proxy surfaces `ERR_PROXY_CONNECTION_FAILED`,
+confirming the config reaches real Chrome.
+
+### CDP-leak hardening (`rebrowser-playwright`)
+
+Stock Playwright drives Chrome with `Runtime.enable`, which bot-management can
+detect (the `console.debug` / `Error.stack` probe) — a leak no init-script fully
+closes. The fix is a **patched Playwright** that avoids it. Both the client and
+the service import Playwright through a seam: `rebrowser_playwright` is used when
+installed, else stock Playwright. To turn it on, add `rebrowser-playwright` to the
+service image's `.pip(...)` (and the agent env if you use the `cdp`/`steel`
+providers) — the import seam activates it automatically, no code change. (The
+Selenium-style `cdc_` leak doesn't apply here — Playwright never injects it.)
+
+### TLS
+
+**TLS is deliberately untouched.** A real Chromium already sends a genuine Chrome
+ClientHello (JA3/JA4); there is nothing to "spoof" — a spoofer would make it
+*less* authentic. TLS-impersonation libraries (`curl_cffi`, `tls-client`) exist
+only to make *non-browser HTTP clients* look like Chrome, which doesn't apply
+here. The one non-Chrome network path is `download {url}` (Playwright's driver
+HTTP via `context.request`); we keep it because it shares the page's cookies and
+isn't CORS-bound — routing downloads through in-page `fetch` for a marginal TLS
+gain would break cross-origin downloads.
+
+This is enough for **non-hostile sites and authenticated flows you're allowed to
+automate**. It will **not** defeat Cloudflare/DataDome on its own — that needs
+residential proxies + CAPTCHA solving (paid, opt-in; see Risks).
+
 ## Security
 
 - **Isolation is the whole point**: untrusted web JS runs in the *service*, never
@@ -204,9 +297,11 @@ provider, P5 docs/tests/example. Each phase was validated before the next.
 
 ## Risks / open questions
 
-- **Anti-bot / Cloudflare** fidelity isn't solved by the base setup — needs Steel
-  stealth + residential proxies (or a managed provider that specialises). Opt-in,
-  later, and budget for it.
+- **Anti-bot / Cloudflare**: base stealth (above) closes the JS/UA/locale tells,
+  but the hard cases still need **residential proxies + CAPTCHA solving** (paid)
+  or a managed provider that specialises (Steel Cloud / Browserbase bring stealth
+  + proxies). Opt-in, later, and budget for it. TLS itself is already authentic
+  (real Chrome).
 - **Service sizing / cost** under agent-platform load — measured empirically, like
   office-render (warm pool, session reuse).
 - **Revisit Obscura in ~12 months** as a *local, trusted-JS, low-fidelity* fast

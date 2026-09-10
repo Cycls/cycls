@@ -15,7 +15,9 @@ from cycls._agent.browser import client
 
 @pytest.fixture(autouse=True)
 def _clear_env(monkeypatch):
-    for k in ("BROWSER_URL", "BROWSER_SECRET", "BROWSER_PROVIDER"):
+    for k in ("BROWSER_URL", "BROWSER_SECRET", "BROWSER_PROVIDER", "BROWSER_HUMANIZE",
+              "BROWSER_PROXY", "BROWSER_PROXY_SERVER", "BROWSER_PROXY_USERNAME",
+              "BROWSER_PROXY_PASSWORD"):
         monkeypatch.delenv(k, raising=False)
     client._STEEL_SESSIONS.clear()   # module-level session caches — isolate tests
     client._REST_SESSIONS.clear()
@@ -311,3 +313,241 @@ def test_build_tools_gates_on_configured(monkeypatch):
 def test_browser_step_label():
     assert tool_step("browser", {"action": "open", "url": "example.com"})["step"] == "open example.com"
     assert tool_step("browser", {"action": "click", "ref": 3})["step"] == "click [3]"
+
+
+# ---- stealth (fingerprint patches applied where Chrome is driven) ----
+
+from cycls._agent.browser import stealth
+
+
+def test_chrome_ua_drops_headless_and_uses_major():
+    ua = stealth.chrome_ua("141.0.7390.54")
+    assert "Chrome/141.0.0.0" in ua and "Headless" not in ua
+    assert stealth.chrome_ua("") .startswith("Mozilla/5.0")   # empty → a sane default major
+
+
+def test_context_kwargs_shape():
+    kw = stealth.context_kwargs()
+    assert kw["locale"] == "en-US" and "timezone_id" in kw and "viewport" in kw
+    assert "user_agent" not in kw                              # omitted unless given
+    assert stealth.context_kwargs("UA/1")["user_agent"] == "UA/1"
+
+
+def test_apply_registers_iife_init_script():
+    """apply() must register the arrow-function source WRAPPED in an IIFE — a bare
+    arrow passed to add_init_script would define, not run, the patches."""
+    class _Ctx:
+        def __init__(self):
+            self.scripts = []
+        async def add_init_script(self, script):
+            self.scripts.append(script)
+
+    ctx = _Ctx()
+    asyncio.run(stealth.apply(ctx))
+    assert len(ctx.scripts) == 1
+    s = ctx.scripts[0]
+    assert s.startswith("(") and s.rstrip().endswith(")();")   # invoked, not just defined
+    assert "navigator" in s and "webdriver" in s
+
+
+def test_service_js_kept_in_sync():
+    """The cycls browser service duplicates _SNAPSHOT_JS / _STEALTH_JS / launch
+    args (it deploys standalone). Guard the "kept in sync" contract so a patch to
+    one side can't silently diverge from the other."""
+    import importlib.util
+    import pathlib
+
+    svc = (pathlib.Path(__file__).resolve().parents[2]
+           / "examples" / "browser_service" / "browser_service.py")
+    if not svc.exists():
+        pytest.skip("browser_service.py not present")
+    spec = importlib.util.spec_from_file_location("_bs_sync_check", svc)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    from cycls._agent.browser import behavior
+    assert m._SNAPSHOT_JS == client._SNAPSHOT_JS
+    assert m._STEALTH_JS == stealth.STEALTH_JS
+    assert m._STEALTH_ARGS == stealth.LAUNCH_ARGS
+    # behavioral-emulation tunables mirrored into the standalone service
+    assert m._MOVE_STEPS == behavior.MOVE_STEPS
+    assert m._TYPE_DELAY_MS == behavior.TYPE_DELAY_MS
+    assert m._PRE_DELAY_MS == behavior.PRE_DELAY_MS
+    assert m._CLICK_JITTER == behavior.CLICK_JITTER
+
+
+def test_session_connect_applies_stealth(monkeypatch):
+    """The CDP Session applies stealth to its context before navigating (so the
+    steel/cdp providers get the fingerprint patches too)."""
+    import playwright.async_api as pa
+
+    applied = {"ctx": None}
+
+    async def _fake_apply(context):
+        applied["ctx"] = context
+    monkeypatch.setattr(stealth, "apply", _fake_apply)
+
+    async def _co(v):
+        return v
+
+    class _Ctx:
+        pages = []
+        def set_default_timeout(self, _): pass
+        def new_page(self): return _co("page")
+    ctx = _Ctx()
+
+    class _Browser:
+        contexts = [ctx]
+        def connect_over_cdp(self, *a, **k): return _co(self)   # placeholder
+
+    browser_obj = types.SimpleNamespace(contexts=[ctx])
+    chromium = types.SimpleNamespace(connect_over_cdp=lambda *a, **k: _co(browser_obj))
+    pw = types.SimpleNamespace(chromium=chromium, stop=lambda: _co(None))
+    monkeypatch.setattr(pa, "async_playwright", lambda: types.SimpleNamespace(start=lambda: _co(pw)))
+
+    s = client.Session("ws://x")
+    asyncio.run(s._connect())
+    assert applied["ctx"] is ctx          # stealth applied to the connected context
+
+
+# ---- behavioral emulation (human-like click/type/settle) ----
+
+from cycls._agent.browser import behavior
+
+
+async def _noop(*a, **k):
+    return None
+
+
+class _FakeEl:
+    def __init__(self, page):
+        self.page = page
+    async def scroll_into_view_if_needed(self, timeout=None):
+        self.page.calls.append("scroll")
+    async def bounding_box(self):
+        return {"x": 100, "y": 200, "width": 40, "height": 20}
+    async def click(self, timeout=None):
+        self.page.calls.append("el.click")
+    async def fill(self, v, timeout=None):
+        self.page.calls.append(("fill", v))
+
+
+class _FakeMouse:
+    def __init__(self, page):
+        self.page = page
+    async def move(self, x, y, steps=None):
+        self.page.calls.append(("move", round(x), round(y)))
+    async def click(self, x, y):
+        self.page.calls.append("mouse.click")
+    async def wheel(self, dx, dy):
+        self.page.calls.append(("wheel", dy))
+
+
+class _FakeKeyboard:
+    def __init__(self, page):
+        self.page = page
+    async def type(self, ch):
+        self.page.calls.append(("key", ch))
+
+
+class _FakePage:
+    viewport_size = {"width": 1280, "height": 800}
+
+    def __init__(self):
+        self.calls = []
+        self.mouse = _FakeMouse(self)
+        self.keyboard = _FakeKeyboard(self)
+
+    def locator(self, sel):
+        return types.SimpleNamespace(first=_FakeEl(self))
+
+
+def test_behavior_enabled_env(monkeypatch):
+    monkeypatch.delenv("BROWSER_HUMANIZE", raising=False)
+    assert behavior.enabled() is True
+    monkeypatch.setenv("BROWSER_HUMANIZE", "0")
+    assert behavior.enabled() is False
+
+
+def test_human_click_moves_then_clicks(monkeypatch):
+    monkeypatch.setattr(behavior, "_sleep_ms", _noop)
+    p = _FakePage()
+    asyncio.run(behavior.human_click(p, '[data-cy-ref="1"]', 1000))
+    assert "scroll" in p.calls
+    assert any(isinstance(c, tuple) and c[0] == "move" for c in p.calls)   # cursor approach
+    assert "el.click" in p.calls                                           # reliable click (actionability)
+
+
+def test_human_type_focuses_clears_then_types(monkeypatch):
+    monkeypatch.setattr(behavior, "_sleep_ms", _noop)
+    p = _FakePage()
+    asyncio.run(behavior.human_type(p, '[data-cy-ref="2"]', "hi", 1000))
+    assert "el.click" in p.calls and ("fill", "") in p.calls               # focus + clear
+    keys = [c for c in p.calls if isinstance(c, tuple) and c[0] == "key"]
+    assert keys == [("key", "h"), ("key", "i")]                            # per-character
+
+
+def test_human_settle_moves_and_scrolls(monkeypatch):
+    monkeypatch.setattr(behavior, "_sleep_ms", _noop)
+    p = _FakePage()
+    asyncio.run(behavior.human_settle(p))
+    assert any(isinstance(c, tuple) and c[0] == "move" for c in p.calls)
+    assert any(isinstance(c, tuple) and c[0] == "wheel" for c in p.calls)
+
+
+# ---- proxy plumbing (the IP layer — operator supplies the pool) ----
+
+def test_proxy_config_none_when_unset():
+    assert client._proxy_config() is None
+
+
+def test_proxy_config_split_env(monkeypatch):
+    monkeypatch.setenv("BROWSER_PROXY_SERVER", "http://gw.example:8000")
+    monkeypatch.setenv("BROWSER_PROXY_USERNAME", "u")
+    monkeypatch.setenv("BROWSER_PROXY_PASSWORD", "p")
+    assert client._proxy_config() == {
+        "server": "http://gw.example:8000", "username": "u", "password": "p"}
+
+
+def test_proxy_config_url_form(monkeypatch):
+    monkeypatch.setenv("BROWSER_PROXY", "http://user:pass@gw.example:9000")
+    assert client._proxy_config() == {
+        "server": "http://gw.example:9000", "username": "user", "password": "pass"}
+
+
+def test_session_body_carries_proxy(monkeypatch):
+    assert client._session_body() == {}
+    monkeypatch.setenv("BROWSER_PROXY_SERVER", "http://gw:1")
+    assert client._session_body() == {"proxy": {"server": "http://gw:1"}}
+
+
+def test_rest_session_forwards_proxy_on_create(monkeypatch):
+    """RestSession sends the configured proxy to the service at session-create."""
+    monkeypatch.setenv("BROWSER_PROXY_SERVER", "http://gw:7")
+    captured = {}
+
+    class _H:
+        async def post(self, url, headers=None, json=None):
+            captured["json"] = json
+            return _FakeResp(200, {"id": "sid-9"})
+
+    s = client.RestSession("https://svc", "sek", "u1")
+    s._http = _H()
+    asyncio.run(s._ensure_session())
+    assert captured["json"] == {"proxy": {"server": "http://gw:7"}}
+    assert s._sid == "sid-9"
+
+
+def test_service_env_proxy(monkeypatch):
+    import importlib.util
+    import pathlib
+    svc = (pathlib.Path(__file__).resolve().parents[2]
+           / "examples" / "browser_service" / "browser_service.py")
+    if not svc.exists():
+        pytest.skip("browser_service.py not present")
+    spec = importlib.util.spec_from_file_location("_bs_proxy", svc)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    assert m._env_proxy() is None
+    monkeypatch.setenv("BROWSER_PROXY_SERVER", "http://s:1")
+    monkeypatch.setenv("BROWSER_PROXY_USERNAME", "x")
+    assert m._env_proxy() == {"server": "http://s:1", "username": "x"}
