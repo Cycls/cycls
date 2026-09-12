@@ -359,12 +359,16 @@ class Session:
             await put_compaction(self.workspace, self.chat_id,
                                  {"summary": self.summary, "first_kept": self.first_kept})
 
-    async def add_user(self, content, *, attachments=None):
+    async def add_user(self, content, *, attachments=None, internal=False):
+        """`internal` marks a turn the person did not type — an approval carried back from a confirm
+        card. The model reads it, the chat never shows it, and it never becomes the chat's title."""
         msg = {"role": "user", "content": content}
+        if internal:
+            msg["internal"] = True
         if attachments:
             msg["attachments"] = attachments
         self.messages.append(msg)
-        if self.chat_id:
+        if self.chat_id and not internal:
             try: await touch_meta(self.workspace, self.chat_id, content)
             except Exception as e: print(f"[WARN] meta touch failed: {e}")
 

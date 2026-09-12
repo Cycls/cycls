@@ -28,15 +28,19 @@ def _db(ws, shared):
     return DB(workspace(ws.subject, ws.volume, base=ws.base, slot=USER))
 
 
-async def get(ws, name):
-    """The user's record, else the workspace's, else None."""
+async def find(ws, name):
+    """(record, shared): the user's own first, else the workspace's, else (None, False)."""
     for shared in (False, True):
         if (row := await _db(ws, shared).get(name)) is not None:
             try:
-                return json.loads(_fernet().decrypt(row["v"].encode()))
+                return json.loads(_fernet().decrypt(row["v"].encode())), shared
             except InvalidToken:
                 pass
-    return None
+    return None, False
+
+
+async def get(ws, name):
+    return (await find(ws, name))[0]
 
 
 async def put(ws, name, value, *, shared=False):

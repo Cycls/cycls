@@ -70,7 +70,7 @@ def test_web_search_tool_use_renders_as_step():
     ]}]
     out = to_ui_messages(raw)
     assert out == [{"role": "assistant", "content": "",
-                    "parts": [{"type": "step", "tool_name": "Web Search", "step": "rust async"}]}]
+                    "parts": [{"type": "step", "id": "1", "tool_name": "Web Search", "step": "rust async"}]}]
 
 
 def test_bash_tool_use_preserves_command_on_refetch():
@@ -504,3 +504,30 @@ def test_native_search_error_block_yields_no_sources():
          "content": {"type": "web_search_tool_result_error", "error_code": "max_uses_exceeded"}},
         {"type": "text", "text": "Search unavailable."}]}]
     assert [p["type"] for p in to_ui_messages(raw)[0]["parts"]] == ["step", "text"]
+
+
+def test_a_connector_step_carries_its_request_and_response():
+    from cycls._agent.tools import register_labels
+    register_labels({}, {"drive_search_files": "drive · search_files"}, {"drive_search_files": "google"}, details={"drive_search_files"})
+    out = to_ui_messages([
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "drive_search_files", "input": {"q": "Q3 deck"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "x" * 4000}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Found it."}]},
+    ])
+    step = out[0]["parts"][0]
+    assert (step["tool_name"], step["connector"], step["args"]) == ("drive · search_files", "google", '{"q": "Q3 deck"}')
+    assert step["result"].endswith("…") and len(step["result"]) == 3002              # bounded, never the whole payload
+    assert step["step"] == ""                                                       # raw arguments stay off the line
+
+
+def test_a_search_result_carries_the_id_of_the_call_that_ran_it():
+    """The chip row at the end of a turn and the results inside the search's own step read the same
+    rows; the id is what says which search returned them."""
+    raw = [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "s1", "name": "web_search", "input": {"query": "riyadh metro"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "s1",
+                                      "content": '{"results": [{"title": "Line 1 opens", "url": "https://spa.gov.sa/a", "snippet": "Riyadh"}]}'}]},
+    ]
+    parts = to_ui_messages(raw)[0]["parts"]
+    assert parts[0]["id"] == "s1"                                    # the step
+    assert (parts[1]["type"], parts[1]["id"]) == ("sources", "s1")   # its results
