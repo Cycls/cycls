@@ -102,7 +102,7 @@ class Function:
                 "functions ship as cloudpickle bytecode, which only loads on the same "
                 "major.minor Python.")
         self.python_version = python_version or host_py
-        self.base_image = f"python:{self.python_version}-slim"
+        self.base_image = f"python:{self.python_version}-slim-bookworm"   # trixie's bwrap needs openat2, which gVisor lacks
         self.apt = sorted([*self._base_apt, *image.get("apt", [])])
         self.run_commands = list(image.get("run_commands", []))
         self.copy = image.get("copy", {})
