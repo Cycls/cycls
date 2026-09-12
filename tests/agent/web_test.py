@@ -1018,6 +1018,20 @@ def test_ws_mode_foreign_workspace_is_404(tmp_path):
         assert client.get("/chats", headers={"X-Workspace": header}).status_code == 404
 
 
+def test_ws_mode_fork_lands_in_the_active_workspace(tmp_path):
+    """The client opens the fork with the header it sent. A fork that always
+    went to personal 204'd from a team workspace and read as a dead share link."""
+    client = _ws_routers_client(tmp_path)
+    assert client.put("/chats/c1", json={"title": "t"}).status_code == 200
+    share = client.post("/share", json={"path": "chat/c1"}).json()
+    team = client.post("/workspaces", json={"name": "Team"}).json()["id"]
+    h = {"X-Workspace": team}
+    path = share["url"].replace("/shared/", "/share/").split("?")[0]
+    r = client.post(f"{path}/fork?ws=u-user_1", headers=h)
+    assert r.status_code == 200, r.text
+    assert client.get(f"/chats/{r.json()['id']}", headers=h).status_code == 200
+
+
 def test_ws_mode_files_land_in_personal_workspace(tmp_path):
     client = _ws_routers_client(tmp_path)
     r = client.put("/files/notes.txt", files={"file": ("notes.txt", b"hi")})

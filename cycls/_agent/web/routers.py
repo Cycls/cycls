@@ -953,7 +953,8 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         return _examples_cache["data"]
 
     @r.post("/share/{user}/{token}/fork")
-    async def fork_share(user: str, token: str, ws: Optional[str] = None, forker: Any = user_dep):
+    async def fork_share(user: str, token: str, ws: Optional[str] = None,
+                         forker: Any = user_dep, ws_fork: Workspace = ws_dep):
         # `forker` is already authenticated (user_dep), so it IS the requester.
         found = await _locate(user, token, ws)
         if found is None:
@@ -968,7 +969,6 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         if meta is None:
             raise HTTPException(404, "Chat not found")
         raw = await state.load_messages(ws_source, source_id)
-        ws_fork = workspace(forker, volume, base=base, ws=f"u-{forker.id}" if mode else None)
         new_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
         await state.put_meta(ws_fork, new_id, {
