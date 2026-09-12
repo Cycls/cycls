@@ -1313,7 +1313,7 @@ def test_web_search_yields_sources_and_stores_json(agent_env):
          patch("cycls._agent.tools._exec_web_search", new=search):
         items = asyncio.run(_drain(_run(context=ctx, allowed_tools=["WebSearch"])))
 
-    assert {"type": "sources", "sources": rows} in items
+    assert {"type": "sources", "sources": rows, "id": "s1"} in items   # the id threads them onto the search's own step
 
     history = _read_history(ctx)
     result = next(b for m in history if m["role"] == "user" and isinstance(m["content"], list)
@@ -1531,3 +1531,74 @@ def test_tool_guidance_rides_with_the_enabled_tool(agent_env):
     with _mock_anthropic(client):
         asyncio.run(_drain(_run(context=ctx2, allowed_tools=["Bash"])))
     assert "## Asking the user" not in calls[0]["system"][0]["text"]
+
+
+def test_a_connector_result_reaches_the_model_but_never_the_chat(agent_env):
+    """A custom `.on()` result streams to the chat (it may be a table); a connector's result is data for the model only."""
+    ws, ctx = agent_env
+    server = types.SimpleNamespace(_server_side=False, _connector=None, _guidance=None, label="x",
+                             discover=AsyncMock(return_value=([{"type": "custom", "name": "x_t", "description": "", "input_schema": {"type": "object"}}],
+                                                              {"x_t": AsyncMock(return_value="RAW CONNECTOR RESULT")}, {"x_t": "x · t"})))
+    round1 = _make_response([_tool_use_block("t1", name="x_t", inp={}), _tool_use_block("t2", name="custom", inp={})], stop_reason="tool_use")
+    final = _make_response([_text_block("done")])
+    responses = iter([round1, final])
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+    with _mock_anthropic(mock_client):
+        events = asyncio.run(_drain(_run(context=ctx, mcp_servers=[server], handlers={"custom": AsyncMock(return_value="CUSTOM RESULT")})))
+    texts = [e.get("text", "") if isinstance(e, dict) else str(e) for e in events]
+    assert not any("RAW CONNECTOR RESULT" in t for t in texts)
+    assert any("CUSTOM RESULT" in t for t in texts)
+    assert {"type": "step", "id": "t1", "ok": True, "result": "RAW CONNECTOR RESULT"} in events   # the step's Response, not a bubble
+    history = _read_history(ctx)
+    results = [b["content"] for m in history if m["role"] == "user" for b in (m["content"] if isinstance(m["content"], list) else []) if b.get("type") == "tool_result"]
+    assert "RAW CONNECTOR RESULT" in results                               # the model still gets it
+
+
+def test_a_custom_tool_can_carry_an_icon_and_its_own_request_and_response(agent_env):
+    """`.on(icon=…, details=True)` gives a custom tool the connector treatment: an image on the step,
+    the result in the block instead of the chat, and the whole thing still reaching the model."""
+    from cycls._agent.tools import register_labels, tool_step, detailed
+    register_labels({}, icons={"moj_lookup": "https://moj.gov.sa/icon.svg"}, details={"moj_lookup"})
+    assert tool_step("moj_lookup", {"query": "zakat"})["icon"] == "https://moj.gov.sa/icon.svg"
+    assert detailed("moj_lookup") and not detailed("some_other_tool")
+
+    ws, ctx = agent_env
+    round1 = _make_response([_tool_use_block("t1", name="moj_lookup", inp={"query": "zakat"})], stop_reason="tool_use")
+    responses = iter([round1, _make_response([_text_block("done")])])
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+    with _mock_anthropic(mock_client):
+        events = asyncio.run(_drain(_run(context=ctx, handlers={"moj_lookup": AsyncMock(return_value="RAW ROWS")})))
+    texts = [e.get("text", "") if isinstance(e, dict) else str(e) for e in events]
+    assert not any("RAW ROWS" in t for t in texts)                                   # not in the chat
+    assert {"type": "step", "id": "t1", "ok": True, "result": "RAW ROWS"} in events   # in the block
+    results = [b["content"] for m in _read_history(ctx) if m["role"] == "user"
+               for b in (m["content"] if isinstance(m["content"], list) else []) if b.get("type") == "tool_result"]
+    assert "RAW ROWS" in results                                                     # and whole, for the model
+
+
+def test_a_confirm_card_ends_the_turn_instead_of_inviting_a_retry(agent_env):
+    """The ack asked the model to stop and Kimi K3 called straight through it, card after card. The card
+    is a question put to the person, so the loop ends the turn the way `ask` does."""
+    ws, ctx = agent_env
+    calls = [_make_response([_tool_use_block(f"b{i}", name="bash",
+                                             inp={"command": "git clean -fdx", "description": f"try {i}"})],
+                            stop_reason="tool_use") for i in range(3)]
+    responses = iter(calls + [_make_response([_text_block("done")])])
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+    with _mock_anthropic(mock_client):
+        events = asyncio.run(_drain(_run(context=ctx)))
+    cards = [e for e in events if isinstance(e, dict) and e.get("action") == "confirm"]
+    assert len(cards) == 1                      # one question, not a queue of them
+    assert cards[0]["tool"] == "bash"
+
+
+def test_one_approval_survives_the_model_rewording_its_own_description():
+    """The key covers the command, not the sentence the model wrote about it."""
+    from cycls._agent.connectors import approval_key
+    a = approval_key("bash", {"command": "git clean -fdx", "description": "Check installed PDF tools"})
+    b = approval_key("bash", {"command": "git clean -fdx", "description": "Check available PDF conversion tools"})
+    c = approval_key("bash", {"command": "git clean -fdxn", "description": "Check installed PDF tools"})
+    assert a == b and a != c

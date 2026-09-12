@@ -9,7 +9,7 @@ import asyncio, json, random, re, time, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import spill, state
+from .. import connectors, spill, state
 from ..state import Session
 from . import events
 from .events import Turn
@@ -17,7 +17,7 @@ from .compact import COMPACT_BUFFER
 from ..logs import log
 from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
-from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, register_labels, ToolContext
+from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, register_labels, detailed, excerpt, ToolContext
 from ..tools import skills as skills_mod
 
 
@@ -66,6 +66,17 @@ async def _timed(coro):
 
 
 # ---- Ingest ----
+
+# A gated builtin's name, as the tool list knows it — `never` drops the whole row, read included.
+_SETTINGS_NAME = {"bash": "Bash", "edit": "Editor", "database": "DataBase", "build_app": "Apps"}
+
+
+def _with_mention(content, line):
+    """The @-pill in the transcript: one line the model reads and a replay keeps."""
+    if isinstance(content, list):
+        return [*content, {"type": "text", "text": line}]
+    return f"{content}\n\n{line}" if content else line
+
 
 async def _ingest(content, workspace, vision=True):
     """Resolve attachment refs in an incoming user message to inline blocks,
@@ -142,7 +153,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                base_url=None, api_key=None, headers=None, handlers=None, mcp_servers=None,
                thinking="adaptive", vision=True, web_search="brave",
                instructions="AGENT.md", skills=[], price=None, context_window=None,
-               extra_body=None):
+               extra_body=None, approvals=(), mentions=(), auto=True):
     vendor, bare_model = model.split("/", 1)
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key,
                              headers=headers, vision=vision)
@@ -152,10 +163,17 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     Path(workspace.root).mkdir(parents=True, exist_ok=True)
 
     session = await Session.open(context)
-    ctx = ToolContext(user, workspace, session.chat_id)
+    # the person's own allow / ask / never for the builtins, read once — no subject means no per-user store
+    modes = await connectors.permissions(workspace, "_builtin") if getattr(workspace, "subject", None) else {}
+    if off := {_SETTINGS_NAME[k] for k, v in modes.items() if v == "never" and k in _SETTINGS_NAME}:
+        allowed_tools = [t for t in allowed_tools if t not in off]
+    ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes)
     incoming = context.messages.raw[-1]
-    await session.add_user(await _ingest(incoming.get("content", ""), workspace.root, vision),
-                           attachments=incoming.get("attachments"))
+    content = await _ingest(incoming.get("content", ""), workspace.root, vision)
+    if mentions:
+        titles = {s._connector.name: s._connector.title or s._connector.name for s in mcp_servers or [] if s._connector}
+        content = _with_mention(content, "[Using: " + ", ".join(titles.get(m, m) for m in mentions) + "]")
+    await session.add_user(content, attachments=incoming.get("attachments"), internal=bool(approvals))
     messages = session.messages
 
     system_text = DEFAULT_SYSTEM + ("\n\n" + system if system else "")
@@ -182,18 +200,28 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     if skill_catalog and not any(t.get("name") == "skill" for t in tools_list):
         tools_list.append(skills_mod.SKILL_TOOL)
     owners = {}   # tool name -> the OAuth2 it acts with, for the audit line
-    for server in [s for s in mcp_servers or [] if not s._server_side]:
+    mcp_names = set()   # a server's results are the model's, never the chat's
+    client_side = [s for s in mcp_servers or [] if not s._server_side]
+    off = await connectors.blocked(workspace) if any(s._connector for s in client_side) else set()
+    for server in client_side:
+        if server._connector and server._connector.name in off:
+            continue
         try:
-            schemas, fns, names = await server.discover()
+            schemas, fns, names = await connectors.tools_for(server, workspace)
         except Exception as e:
+            cause = e
+            while getattr(cause, "exceptions", None): cause = cause.exceptions[0]   # the TaskGroup wrapper says nothing
             yield _user_warn(user, session.chat_id, f"Couldn't reach {server._name or server._url} — its tools are off this turn.",
-                             f"mcp discovery failed for {server._url}: {e}")
+                             f"mcp discovery failed for {server._url}: {cause}")
             continue
         tools_list += schemas
         handlers = {**(handlers or {}), **fns}
-        register_labels({}, names)
+        mcp_names |= fns.keys()
+        register_labels({}, names, dict.fromkeys(fns, server._connector.name) if server._connector else None, details=fns.keys())
         if server._connector:
             owners.update(dict.fromkeys(fns, server._connector))
+        if server._guidance and schemas:
+            system_text += "\n\n" + server._guidance
     mcp_servers = [s for s in mcp_servers or [] if s._server_side] or None
     for guidance in tool_prompts(tools_list):
         system_text += "\n\n" + guidance
@@ -326,7 +354,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 yield {"type": "ping"}
             timed = [t.result() for t in tasks]
 
-            results, terminal = [], False
+            results, terminal, waiting = [], False, False
             for block, (out, ms) in zip(blocks, timed):
                 ok = not isinstance(out, BaseException)
                 o = owners.get(block["name"])
@@ -339,7 +367,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 # to the client. `web_search` uses it to hand the FE structured
                 # sources without changing what the model reads.
                 if ok and isinstance(out, dict) and "_model" in out:
-                    if ev := out.get("_ui"): yield ev
+                    if ev := out.get("_ui"): yield {**ev, "id": block["id"]}   # threads onto its step row
                     content = out["_model"]
                 # A tool that returns a UI event (e.g. `canvas`, `suggest`) drives
                 # the client and the model gets a short ack — keeps tool_result a
@@ -349,9 +377,12 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     ack = out.pop("ack", None)
                     yield out
                     content = ack or f"Opened {out.get('name') or out.get('path') or 'the file'} for the user."
+                    if out.get("action") in ("confirm", "connect"):
+                        waiting = True   # the person has to answer before anything else can happen
                 # Custom-handler results flow through the stream for the body to see
                 # (UI rendering) AND serialize into tool_result for the model (data).
-                elif handlers and block["name"] in handlers and ok:
+                # A connector's result is data for the model only — the chat sees the step.
+                elif handlers and block["name"] in handlers and block["name"] not in mcp_names and not detailed(block["name"]) and ok:
                     yield out
                     content = out if isinstance(out, str) else json.dumps(out, default=str)
                 else:
@@ -359,12 +390,17 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 if isinstance(content, str) and block["name"] not in ("read", "skill"):
                     content = spill.spill(content, workspace.root, session.chat_id, f"{block['name']}-{block['id'][-6:]}")
                 results.append({"type": "tool_result", "tool_use_id": block["id"], "content": content})
+                if block["name"] in mcp_names or detailed(block["name"]):   # the step shows the outcome, bounded; a card (a ui dict) is its own outcome
+                    yield {"type": "step", "id": block["id"], "ok": ok,
+                           **({} if isinstance(out, dict) and out.get("type") == "ui" else {"result": excerpt(content)})}
                 # Only a call that reached the user ends the turn — a malformed
                 # `ask` gets another turn to fix itself.
                 if ok and is_terminal(block["name"]) and not str(content).startswith("Error"):
                     terminal = True
             messages.append({"role": "user", "content": results})
             await session.checkpoint()
+            if waiting:
+                terminal = True
             if terminal:
                 break
 

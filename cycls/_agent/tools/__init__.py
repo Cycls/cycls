@@ -2,11 +2,13 @@
 API shape (`type` / `name` / `description` / `input_schema`) and registered in
 `_BUILTINS`; `build_tools` emits them as-is. User-supplied custom tools come
 through `_normalize_tool` (accepts the camelCase `inputSchema` form too)."""
-import asyncio, base64, inspect, ipaddress, json, os, pathlib, socket
+import asyncio, base64, inspect, ipaddress, json, os, pathlib, re, socket
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import NamedTuple
 from . import pdf, skills
+from ..connectors import approval_key
+from ..logs import log
 from ..state import _exec_database
 from .. import credentials, spill, trash
 
@@ -857,15 +859,30 @@ def is_terminal(name):
     return bool(row and row.terminal)
 
 
-_custom_labels, _custom_names = {}, {}
+_custom_labels, _custom_names, _custom_owners, _custom_icons = {}, {}, {}, {}
+_detailed = set()   # tools whose step row carries Request and Response — every MCP tool, and `.on(details=True)`
 
 
-def register_labels(labels, names=None):
-    """UI step labels for custom tools: name → (input dict → str), and an
-    optional display name. Registered by LLM.run() and by MCP discovery so
-    both live steps and the refetch projection render them."""
+def register_labels(labels, names=None, owners=None, icons=None, details=()):
+    """UI step labels for custom tools: name → (input dict → str), an optional display name, the connector a tool
+    acts with, an icon url, and whether the row opens into request and response. Registered by LLM.run() and by
+    MCP discovery so both live steps and the refetch projection render them."""
     _custom_labels.update(labels or {})
     _custom_names.update(names or {})
+    _custom_owners.update(owners or {})
+    _custom_icons.update(icons or {})
+    _detailed.update(details)
+
+
+def detailed(name):
+    """Does this tool's row open into its request and response? Its result is then the model's, not the chat's."""
+    return name in _detailed
+
+
+def excerpt(content, limit=3000):
+    """What the chat shows of a tool's result: its text, cut to `limit`."""
+    s = content if isinstance(content, str) else json.dumps(content, default=str, ensure_ascii=False)
+    return s if len(s) <= limit else s[:limit] + "\n…"
 
 
 def tool_step(name, input):
@@ -879,9 +896,54 @@ def tool_step(name, input):
             return {"tool_name": shown, "step": str(fn(inp))}
         except Exception:
             pass
-    # No label — show the first string value, like Bash(command).
-    step = next((v for v in inp.values() if isinstance(v, str) and v.strip()), "")
-    return {"tool_name": shown, "step": step if len(step) <= 120 else step[:117] + "..."}
+    # No label. A connector's tool (it registered a display name) shows the `context` line its server asks the model
+    # for, never the raw arguments; a custom tool shows the first string, like Bash(command).
+    if name in _custom_names:
+        step = inp.get("context") if isinstance(inp.get("context"), str) else ""
+    else:
+        step = next((v for v in inp.values() if isinstance(v, str) and v.strip()), "")
+    out = {"tool_name": shown, "step": step if len(step) <= 120 else step[:117] + "..."}
+    if name in _custom_owners:
+        out["connector"] = _custom_owners[name]
+    if name in _custom_icons:
+        out["icon"] = _custom_icons[name]
+    return out
+
+
+# ---- What a builtin risks (docs/notes/plugins-connectors.md, Approvals) ----
+# `rm` and `rmdir` are not here: the sandbox shims them into the trash (30 days, restorable), so a
+# delete is a move and Auto lets it run. These have no trash behind them.
+_DESTRUCTIVE_CMD = re.compile(r"\b(shred|mkfs|dd\s+if=|truncate\s|drop\s+(table|database)|"
+                              r"git\s+(push\s+(-f|--force)|reset\s+--hard|clean\s+-\w*[fdx])|killall\s|>\s*/dev/)", re.I)
+_READ_CMD = re.compile(r"^\s*(ls|cat|head|tail|wc|grep|rg|find|stat|file|du|df|pwd|echo|which|type|tree|sort|uniq|diff|awk|sed\s+-n)\b", re.I)
+
+
+def risk(name, inp):
+    """None (a read — always runs), "write" (follows the composer switch) or "destructive" (asks in both modes)."""
+    if name == "bash":
+        cmd = str(inp.get("command") or "")
+        return "destructive" if _DESTRUCTIVE_CMD.search(cmd) else None if _READ_CMD.match(cmd) else "write"
+    if name == "database":
+        return {"delete": "destructive", "put": "write"}.get(inp.get("command"))
+    return "write" if name in ("edit", "build_app") else None
+
+
+def _gate(name, inp, ctx, step):
+    """The card a builtin returns instead of running, or None to run — the builtin half of `connectors.gated`."""
+    r = risk(name, inp)
+    if r is None or ctx is None:
+        return None
+    key, chosen = approval_key(name, inp), (getattr(ctx, "modes", None) or {}).get(name)
+    how = ("approved" if key in ctx.approvals else "allow" if chosen == "allow"
+           else "asked" if chosen == "ask" else "auto" if getattr(ctx, "auto", True) and r != "destructive" else "asked")
+    log("approval", user=ctx.user, chat_id=ctx.chat_id, tool=name, risk=r, how=how)
+    if how != "asked":
+        return None
+    label = f"{step['tool_name']} · {step['step']}".strip(" ·")[:80]
+    return {"type": "ui", "action": "confirm", "tool": name, "key": key, "label": label, "args": inp,
+            "ack": f"{label} needs the user's approval — a card is asking them. End your turn now. "
+                       "If they approve, make this call again with exactly the same arguments: the approval covers "
+                       "this call, so any change to the arguments asks them a second time."}
 
 
 @dataclass(frozen=True)
@@ -891,6 +953,9 @@ class ToolContext:
     user: object
     workspace: object
     chat_id: str | None = None
+    approvals: frozenset = frozenset()   # approval keys from the confirm card, this turn only
+    auto: bool = True                    # the composer's switch: writes run on their own, destructive ones still ask
+    modes: dict = None                   # the person's own allow/ask per builtin, read once a turn
 
     async def secret(self, name):
         return await credentials.get(self.workspace, name)
@@ -920,7 +985,10 @@ def dispatch(block, workspace, timeout, handlers=None, network=False, seen=None,
                         "call ran. Send everything in a single call.")))
         seen.add(name)
     if entry and entry.run:
-        return {"type": "step", "id": bid, **entry.step(inp)}, entry.run(inp, workspace, timeout=timeout, network=network, ctx=ctx)
+        step = {"type": "step", "id": bid, **entry.step(inp)}
+        if card := _gate(name, inp, ctx, step):
+            return step, asyncio.sleep(0, result=card)
+        return step, entry.run(inp, workspace, timeout=timeout, network=network, ctx=ctx)
     if handlers and name in handlers:
         fn = handlers[name]
         return {"type": "step", "id": bid, **tool_step(name, inp)}, fn(inp, ctx) if _takes_ctx(fn) else fn(inp)

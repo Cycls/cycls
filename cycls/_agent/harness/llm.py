@@ -31,6 +31,8 @@ class LLM:
         self._headers = None
         self._handlers = {}
         self._labels = {}
+        self._icons = {}
+        self._details = frozenset()
         self._mcp = []
         self._loop = None
         self._thinking = "adaptive"
@@ -71,15 +73,21 @@ class LLM:
         that authenticate outside the bearer key (Modal proxy, Cloudflare
         Access, corporate gateways). None clears."""
         return self._copy(_headers=dict(mapping) if mapping else None)
-    def on(self, name, handler, *, label=None):
+    def on(self, name, handler, *, label=None, icon=None, details=False):
         """Register an async handler for a custom tool by name. The handler's
         return value is both yielded to the stream (body sees it as a normal
         event) and packaged as the tool_result sent back to the model.
         `label` renders the step line in the UI from the tool input
         (input dict → str), like Bash(command) for builtins; without it the
-        first string value of the input is shown."""
+        first string value of the input is shown.
+        `icon` is an image url shown where a connector's logo goes.
+        `details=True` gives the step the connector treatment — it opens into
+        Request and Response — and the result then goes there instead of into
+        the chat; the model still receives all of it."""
         return self._copy(_handlers={**self._handlers, name: handler},
-                          _labels={**self._labels, name: label} if label else self._labels)
+                          _labels={**self._labels, name: label} if label else self._labels,
+                          _icons={**self._icons, name: icon} if icon else self._icons,
+                          _details=self._details | {name} if details else self._details)
 
     def instructions(self, path):
         """Workspace instructions file auto-loaded into the system prompt each
@@ -157,7 +165,7 @@ class LLM:
             raise ValueError("LLM.model(...) is required before .run()")
         from .main import _run
         from ..tools import register_labels
-        register_labels(self._labels)   # also read by the refetch projection
+        register_labels(self._labels, icons=self._icons, details=self._details)   # also read by the refetch projection
         loop = self._loop or _run
         # A switch in Settings turns a tool off for this person; it never
         # turns one on the operator didn't allow.
@@ -177,6 +185,8 @@ class LLM:
             headers=self._headers,
             handlers=self._handlers,
             mcp_servers=self._mcp,
+            approvals=getattr(context, "approvals", None) or (), auto=getattr(context, "auto", True),
+            mentions=getattr(context, "connectors", None) or (),
             thinking=self._thinking,
             vision=self._vision,
             web_search=self._web_search,

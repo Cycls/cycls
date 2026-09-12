@@ -1092,3 +1092,61 @@ def test_llm_loop_runs_custom_loop():
 def test_harness_kit_exposes_building_blocks():
     from cycls._agent.harness import default_loop, make_provider, Session, build_tools, dispatch, compact, events, to_ui
     assert callable(default_loop) and callable(make_provider) and callable(build_tools)
+
+
+def test_a_mention_becomes_one_line_the_model_reads():
+    from cycls._agent.harness.main import _with_mention
+    assert _with_mention("list my files", "[Using: Google Drive]") == "list my files\n\n[Using: Google Drive]"
+    assert _with_mention("", "[Using: Salla]") == "[Using: Salla]"
+    assert _with_mention([{"type": "text", "text": "hi"}], "[Using: Salla]")[-1] == {"type": "text", "text": "[Using: Salla]"}
+
+
+def test_a_mention_becomes_one_line_the_model_reads():
+    from cycls._agent.harness.main import _with_mention
+    assert _with_mention("list my files", "[Using: Google Drive]") == "list my files\n\n[Using: Google Drive]"
+    assert _with_mention("", "[Using: Salla]") == "[Using: Salla]"
+    assert _with_mention([{"type": "text", "text": "hi"}], "[Using: Salla]")[-1] == {"type": "text", "text": "[Using: Salla]"}
+
+
+def test_a_connector_step_shows_the_human_line_never_the_raw_command():
+    from cycls._agent import tools
+    tools.register_labels({}, {"posthog_exec": "posthog · exec"})
+    cmd = 'call execute-sql {"query": "SELECT event, count() FROM events"}'
+    s = tools.tool_step("posthog_exec", {"command": cmd, "context": "Counting events by type over the last day."})
+    assert (s["tool_name"], s["step"]) == ("posthog · exec", "Counting events by type over the last day.")
+    assert tools.tool_step("posthog_exec", {"command": cmd})["step"] == ""          # no human line: the name alone
+    tools._custom_names.pop("posthog_exec", None)
+
+
+def test_a_builtin_follows_the_composer_switch_and_always_stops_for_the_destructive():
+    """Reads run in both modes; a write runs under Auto and asks under Manual. A delete the sandbox
+    shims into the trash is a move, so Auto runs it; what has no trash behind it asks in both."""
+    import asyncio
+    from types import SimpleNamespace
+    from cycls._agent import tools
+    from cycls._agent.tools import ToolContext, dispatch, risk
+    assert (risk("bash", {"command": "ls -la"}), risk("bash", {"command": "python build.py"}),
+            risk("bash", {"command": "rm -rf build"}),        # rm is shimmed into the trash: recoverable
+            risk("bash", {"command": "git reset --hard"})) == (None, "write", "write", "destructive")
+    assert (risk("database", {"command": "get"}), risk("database", {"command": "put"}),
+            risk("database", {"command": "delete"})) == (None, "write", "destructive")
+    assert risk("edit", {"path": "a.md"}) == "write" and risk("read", {"path": "a.md"}) is None
+
+    def card(cmd, ctx):
+        return tools._gate("bash", {"command": cmd}, ctx, {"tool_name": "Bash", "step": cmd})
+
+    auto, manual = ToolContext(None, None), ToolContext(None, None, auto=False)
+    assert card("git clean -fdx", auto)["action"] == "confirm"   # no trash behind it: asks even on Auto
+    assert card("rm -rf build", auto) is None                    # trashed, so it runs
+    assert card("ls -la", manual) is None                        # a read runs in both
+    assert card("python build.py", manual)["action"] == "confirm"
+
+    key = tools.approval_key("bash", {"command": "git clean -fdx"})
+    approved = ToolContext(None, None, approvals=frozenset({key}), auto=False)
+    assert card("git clean -fdx", approved) is None                    # approved: this call
+    assert card("git reset --hard", approved)["action"] == "confirm"   # not another
+
+    # and the gate sits in dispatch, so a stopped call never reaches the sandbox
+    block = {"id": "b1", "name": "bash", "input": {"command": "git clean -fdx"}}
+    _, coro = dispatch(block, SimpleNamespace(root="/tmp"), 5, ctx=auto)
+    assert asyncio.run(coro)["action"] == "confirm"
