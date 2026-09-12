@@ -65,6 +65,19 @@ export function setWebSearchEnabled(on: boolean, source: string) {
   track("web_search_toggled", { to: on, source });
 }
 
+// Approvals, per person. Auto lets a connector's writes run and pauses only for the destructive;
+// Manual asks for every write. Manual rides the request as `auto: false`; absent means Auto.
+const AUTO_KEY = "cycls_auto_approve";
+
+export const autoApprove = () => {
+  try { return localStorage.getItem(AUTO_KEY) !== "off"; } catch { return true; }
+};
+
+export function setAutoApprove(on: boolean, source: string) {
+  localStorage.setItem(AUTO_KEY, on ? "on" : "off");
+  track("approve_mode_changed", { to: on ? "auto" : "manual", source });
+}
+
 export function setAskEnabled(on: boolean, source: string) {
   localStorage.setItem(ASK_KEY, on ? "on" : "off");
   window.dispatchEvent(new Event("askchange"));

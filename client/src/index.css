@@ -128,6 +128,20 @@ body {
   .print-root { display: block !important; }
 }
 
+/* Logo shimmer — a connector's logo while its call runs; rides the loading bar's keyframes */
+.logo-shimmer {
+  background: linear-gradient(100deg, transparent 30%, rgb(255 255 255 / 0.75) 50%, transparent 70%);
+  animation: slide 1.4s linear infinite;
+}
+
+/* Icon shimmer — a built-in step's glyph while it runs. The logo's sweep needs an image; a line
+   glyph carries the same 1.4s cadence as a pulse of light instead. */
+@keyframes icon-shimmer {
+  0%, 100% { color: var(--color-muted-foreground); }
+  50% { color: var(--color-foreground); }
+}
+.icon-shimmer { animation: icon-shimmer 1.4s ease-in-out infinite; }
+
 /* Text shimmer — the streaming "Thinking" label */
 @keyframes text-shimmer {
   0% { background-position: 150% center; }

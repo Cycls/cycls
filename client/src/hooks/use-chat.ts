@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from "react";
 import { useApi, reasonOf } from "./use-api";
 import { track } from "../lib/analytics";
-import { webSearchEnabled } from "../lib/utils";
+import { webSearchEnabled, autoApprove } from "../lib/utils";
 import { useToast } from "../lib/toast";
 
 // One search result, as the search engine returned it. A citation chip only
@@ -27,6 +27,9 @@ export interface Part {
   ok?: boolean; // false when the tool call errored (refetch projection)
   id?: string;       // tool-call id — threads ToolStart → step_arg → final step
   args?: string;     // accumulated tool-call input (partial JSON), for the live preview
+  connector?: string; // a connector's tool: the name whose logo heads the call block
+  icon?: string;     // a custom tool's own image, from `.on(icon=…)`
+  result?: string;   // a connector call's outcome, bounded — the block's Response
   delta?: string;    // a step_arg chunk on the wire (not stored)
   status?: string;
   callout?: string;
@@ -42,6 +45,7 @@ export interface Part {
 }
 
 export type UIAction = { action: string } & Record<string, unknown>;
+export type SendExtra = { approvals?: string[]; connectors?: string[] };
 export type UIHandler = (ev: UIAction) => void;
 
 export interface Attachment {
@@ -141,7 +145,7 @@ export function useChat(baseUrl: string = "") {
   );
 
   const send = useCallback(
-    async (text: string, attachments?: Attachment[], origin: string = "keyboard") => {
+    async (text: string, attachments?: Attachment[], origin: string = "keyboard", extra?: SendExtra) => {
       if (isStreaming) return;
 
       const userMessage: Message = { role: "user", content: text, attachments };
@@ -151,7 +155,10 @@ export function useChat(baseUrl: string = "") {
         parts: [],
       };
 
-      setMessages((prev) => [...prev, userMessage, assistantMessage]);
+      // An approval carried back from a confirm card is machinery, not something the person typed —
+      // it goes to the model and the server stores it `internal`, so the chat shows no bubble for it.
+      const silent = origin === "confirm";
+      setMessages((prev) => [...prev, ...(silent ? [] : [userMessage]), assistantMessage]);
       setIsStreaming(true);
       const sentAt = Date.now();
 
@@ -207,7 +214,10 @@ export function useChat(baseUrl: string = "") {
           method: "POST",
           headers,
           body: JSON.stringify({ messages: [requestMessage],
-                                 ...(webSearchEnabled() ? {} : { disabled_tools: ["WebSearch"] }) }),
+                                 ...(webSearchEnabled() ? {} : { disabled_tools: ["WebSearch"] }),
+                                 ...(autoApprove() ? {} : { auto: false }),
+                                 ...(extra?.approvals?.length ? { approvals: extra.approvals } : {}),
+                                 ...(extra?.connectors?.length ? { connectors: extra.connectors } : {}) }),
           signal: controller.signal,
         });
 

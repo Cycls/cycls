@@ -4,6 +4,7 @@ import App from "./App";
 import "./index.css";
 import { initAnalytics, setAgentDomain, type ProviderSpec } from "./lib/analytics";
 import { ToastProvider } from "./lib/toast";
+import { ErrorBoundary } from "./components/error-boundary";
 import { applyTheme, getThemeMode } from "./lib/utils";
 
 applyTheme();
@@ -26,7 +27,9 @@ if (inlinedConfig?.analytics?.length) {
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ToastProvider>
-      <App />
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
     </ToastProvider>
   </StrictMode>,
 );

@@ -11,6 +11,9 @@ import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
 import { Icon, IconButton } from "./icon";
 import { ConnectCard } from "./connect-card";
+import { ConfirmCard } from "./confirm-card";
+import { ConnectorsContext } from "./parts/tool-call";
+import { ConnectorsDialog, connectorLabel, type Connector } from "./connectors-dialog";
 import { CyclsLogo } from "./cycls-logo";
 import { LoadingBar } from "./loading-bar";
 import { InputBox } from "./input-box";
@@ -19,7 +22,7 @@ import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
-import type { Attachment, ChatApi, AppConfig } from "../hooks/use-chat";
+import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
 import { track } from "../lib/analytics";
@@ -90,6 +93,7 @@ export interface FilesPanelProps {
 
 // A message composed while the agent was still working, waiting its turn.
 interface Queued {
+  extra?: SendExtra;
   id: string;
   text: string;
   attachments?: Attachment[];
@@ -166,13 +170,39 @@ export function Chat({ chat, onShare, files, account, config }: {
   const [ask, setAsk] = useState<{ questions: AskQuestion[] } | null>(null);
   // The agent's connect card: a tool needed an account the user hasn't linked.
   const [connect, setConnect] = useState<{ name: string } | null>(null);
-  useEffect(() => {   // the callback tab reports success, and the card goes away
+  // A tool the user set to "ask": approve sends the next turn with the approval attached.
+  const [confirm, setConfirm] = useState<{ tool: string; key: string; connector?: string; label: string; args: unknown } | null>(null);
+  // The directory: what the deployment offers, refreshed whenever a grant changes.
+  const [connectors, setConnectors] = useState<Connector[] | null>(null);
+  const [connectorsOpen, setConnectorsOpen] = useState<{ name?: string } | null>(null);
+  // @-pills: connectors this message is about. They ride the request and clear on send.
+  const [pills, setPills] = useState<Connector[]>([]);
+  const pillsRef = useRef<Connector[]>([]);
+  useEffect(() => { pillsRef.current = pills; }, [pills]);
+  // The composer's text, read by the mention search without making it a dependency — a callback that
+  // changed per keystroke would restart the picker's debounce.
+  const inputRef = useRef(input);
+  useEffect(() => { inputRef.current = input; }, [input]);
+  const addPill = (c: Connector, source: string) => {
+    setPills((ps) => (ps.some((p) => p.name === c.name) ? ps : [...ps, c]));
+    track("connector_mentioned", { connector: c.name, source });
+  };
+  const loadConnectors = useCallback(() => {
+    if (account) api("/connectors", { silent: true }).then((r) => r.json()).then(setConnectors).catch(() => setConnectors([]));
+  }, [account?.activeOrg?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadConnectors(); }, [loadConnectors]);
+  const openConnectors = (source: string, name?: string) => {
+    track("connector_directory_opened", { source });
+    loadConnectors();
+    setConnectorsOpen({ name });
+  };
+  useEffect(() => {   // the callback tab reports success: the card goes away, the directory refreshes
     const done = (e: MessageEvent) => {
-      if (e.origin === window.location.origin && e.data?.type === "cycls:connected") setConnect(null);
+      if (e.origin === window.location.origin && e.data?.type === "cycls:connected") { setConnect(null); loadConnectors(); }
     };
     window.addEventListener("message", done);
     return () => window.removeEventListener("message", done);
-  }, []);
+  }, [loadConnectors]);
   // Typing takes over: the moment the user starts composing, the agent's
   // chip and card yield — their own words beat our prompts.
   const prevInputRef = useRef(input);
@@ -205,6 +235,8 @@ export function Chat({ chat, onShare, files, account, config }: {
     setFollowUp(null);
     setAsk(null);
     setConnect(null);
+    setConfirm(null);
+    setPills([]);
     queuedRef.current = [];
     setQueued([]);
     heldRef.current = false;
@@ -347,6 +379,10 @@ export function Chat({ chat, onShare, files, account, config }: {
       } else if (ev.action === "connect" && typeof ev.connector === "string") {
         setConnect({ name: ev.connector });
         track("ui_action", { action: "connect", connector: ev.connector });
+      } else if (ev.action === "confirm" && typeof ev.tool === "string" && typeof ev.key === "string") {
+        setConfirm({ tool: ev.tool, key: ev.key, connector: typeof ev.connector === "string" ? ev.connector : undefined,
+                     label: typeof ev.label === "string" ? ev.label : ev.tool, args: ev.args });
+        track("ui_action", { action: "confirm", tool: ev.tool });
       } else {
         track("ui_action", { action: ev.action, handled: false });
       }
@@ -430,10 +466,25 @@ export function Chat({ chat, onShare, files, account, config }: {
     textareaRef.current?.focus();
   }, []);
 
-  const handleSubmit = useCallback((overrideText?: string, origin: string = "keyboard") => {
+  const searchFiles = files?.searchFiles;
+  // Connected connectors rank above files when the query matches a name. Memoised: the picker's debounce
+  // depends on this callback, and a new closure per streamed token would restart it.
+  const searchMentions = useCallback(async (q: string) => {
+    const needle = q.toLowerCase();
+    // Hidden only while its token is still in the line — delete the token and the connector is offered again.
+    const hits = (connectors ?? [])
+      .filter((c) => c.connected && c.allowed && connectorLabel(c).toLowerCase().includes(needle)
+        && !inputRef.current.includes(`@${connectorLabel(c)}`))
+      .map((c) => ({ name: connectorLabel(c), path: "", connector: c }));
+    return [...(account ? hits : []), ...(searchFiles ? await searchFiles(q) : [])];
+  }, [account, connectors, searchFiles]);
+
+  const handleSubmit = useCallback((overrideText?: string, origin: string = "keyboard", extra?: SendExtra) => {
     const text = (overrideText ?? input).trim();
     if (!text || attachments.some((a) => a.status === "uploading")) return;
     const sendAttachments = attachments.length > 0 ? [...attachments] : undefined;
+    const mentioned = pillsRef.current.filter((p) => text.includes(`@${connectorLabel(p)}`)).map((p) => p.name);
+    if (mentioned.length) { extra = { ...extra, connectors: mentioned }; setPills([]); }
     setInput("");
     setAttachments([]);
     setFollowUp(null);
@@ -442,14 +493,14 @@ export function Chat({ chat, onShare, files, account, config }: {
     // thought the user has now shouldn't wait on them.
     if (isStreaming) {
       const next = [...queuedRef.current,
-                    { id: crypto.randomUUID(), text, attachments: sendAttachments, origin }];
+                    { id: crypto.randomUUID(), text, attachments: sendAttachments, origin, extra }];
       queuedRef.current = next;
       setQueued(next);
       track("message_queued", { chat_id: chatId, origin, queue_depth: next.length });
       return;
     }
     heldRef.current = false;
-    onSend(text, sendAttachments, origin);
+    onSend(text, sendAttachments, origin, extra);
     setTimeout(() => scrollToBottom(), 0);
   }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId]);
 
@@ -464,7 +515,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     queuedRef.current = rest;
     setQueued(rest);
     track("queued_message_sent", { chat_id: chatId, remaining: rest.length });
-    onSend(next.text, next.attachments, "queued");
+    onSend(next.text, next.attachments, "queued", next.extra);
     setTimeout(() => scrollToBottom(), 0);
   }, [isStreaming, onSend, scrollToBottom, chatId]);
 
@@ -673,12 +724,26 @@ export function Chat({ chat, onShare, files, account, config }: {
     onRemoveFile: removeFile,
     listening, transcribing, startMic, stopMic, cancelMic, voice,
     onFilesAdded: handleFilesAdded,
-    onMentionSearch: files?.searchFiles,
+    onMentionSearch: account || searchFiles ? searchMentions : undefined,
+    connectors: connectors?.filter((c) => c.connected),
+    approveSwitch: !!connectors?.length,
+    onOpenConnectors: account ? () => openConnectors("plus") : undefined,
+    onAddConnector: (c: Connector) => addPill(c, "picker"),
     placeholder: inputPlaceholder,
   };
 
   return (
     <div className="h-dvh flex">
+      {connectorsOpen && (
+        <ConnectorsDialog
+          api={api}
+          items={connectors}
+          reload={loadConnectors}
+          initial={connectorsOpen.name}
+          onClose={() => setConnectorsOpen(null)}
+          onUsePrompt={(text, c) => { setInput(text); addPill(c, "prompt"); textareaRef.current?.focus(); }}
+        />
+      )}
       <div className="flex h-full min-w-0 flex-1 flex-col">
       <header className="relative z-30 h-12 shrink-0" dir="ltr">
         <div className="mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
@@ -899,7 +964,7 @@ export function Chat({ chat, onShare, files, account, config }: {
             <div ref={scrollRef} className="isolate relative flex-1 overflow-y-auto" dir="ltr">
               <div className="pointer-events-none sticky top-0 z-10 h-6 -mb-6 bg-[linear-gradient(to_bottom,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
               <div ref={contentRef} className="flex w-full flex-col items-center py-4">
-                {messages.map((msg, i) => {
+                <ConnectorsContext.Provider value={connectors ?? []}>{messages.map((msg, i) => {
                   const isLast = i === messages.length - 1;
                   const hasError = msg.role === "assistant" && msg.parts?.some((p) => p.type === "callout" && p.style === "error");
                   return (
@@ -919,7 +984,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                       onOpenFile={openFileInCanvas}
                     />
                   );
-                })}
+                })}</ConnectorsContext.Provider>
               </div>
               <div className="pointer-events-none sticky bottom-0 z-10 h-6 -mt-6 bg-[linear-gradient(to_top,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
             </div>
@@ -947,11 +1012,34 @@ export function Chat({ chat, onShare, files, account, config }: {
                     key={connect.name}
                     name={connect.name}
                     onConnect={async () => {
-                      track("connector_connect_clicked", { connector: connect.name, chat_id: chatId });
+                      track("connector_connect_clicked", { connector: connect.name, source: "card", chat_id: chatId });
+                      if (connectors?.find((x) => x.name === connect.name)?.kind === "key") { setConnect(null); openConnectors("card", connect.name); return; }
                       const { url } = await (await api(`/connectors/${connect.name}/authorize`, { method: "POST" })).json();
                       window.open(url, "_blank", "noopener");
                     }}
                     onDismiss={() => { track("connector_dismissed", { connector: connect.name }); setConnect(null); }}
+                  />
+                )}
+                {confirm && !ask && !connect && (
+                  <ConfirmCard
+                    key={confirm.tool}
+                    label={confirm.label}
+                    args={confirm.args}
+                    onApprove={() => {
+                      track("confirm_approved", { tool: confirm.tool, chat_id: chatId });
+                      const c = confirm;
+                      setConfirm(null);
+                      handleSubmit(`${t("approved")}: ${c.label}`, "confirm", { approvals: [c.key] });
+                    }}
+                    onAlways={() => {
+                      track("connector_permissions_changed", { connector: confirm.connector ?? "_builtin", scope: "card", to: "allow" });
+                      const c = confirm;
+                      setConfirm(null);
+                      const path = c.connector ? `/connectors/${c.connector}/tools/${c.tool}` : `/tools/${c.tool}`;
+                      api(path, { method: "PUT", json: { mode: "allow" } }).catch(() => {});
+                      handleSubmit(`${t("approved")}: ${c.label}`, "confirm", { approvals: [c.key] });
+                    }}
+                    onDismiss={() => { track("confirm_dismissed", { tool: confirm.tool }); setConfirm(null); }}
                   />
                 )}
                 {!ask && !connect && survey && !hushed && !isStreaming && (
@@ -1021,7 +1109,7 @@ export function Chat({ chat, onShare, files, account, config }: {
         </Popover>
       )}
       {settingsOpen && account && (
-        <SettingsDialog account={account} api={api} onClose={() => setSettingsOpen(false)} />
+        <SettingsDialog account={account} onClose={() => setSettingsOpen(false)} onOpenConnectors={() => { setSettingsOpen(false); openConnectors("settings"); }} />
       )}
       </div>
       <div className={cn(
@@ -1318,15 +1406,17 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
 
-  if (loading) return <LoadingBar />;
+  if (loading) return <div className="flex-1"><LoadingBar /></div>;
 
   if (chats.length === 0) {
     return (
-      <EmptyState
-        icon={<Icon name="list" className="size-full" strokeWidth={1.5} />}
-        title={t("noChats")}
-        subtitle={t("noChatsSub")}
-      />
+      <div className="flex-1">
+        <EmptyState
+          icon={<Icon name="list" className="size-full" strokeWidth={1.5} />}
+          title={t("noChats")}
+          subtitle={t("noChatsSub")}
+        />
+      </div>
     );
   }
 
