@@ -349,7 +349,7 @@ const translations = {
     off: "Off",
   },
   ar: {
-    thinking: "يفكر",
+    thinking: "أفكر",
     steps: "خطوات",
     usedConnectors: "استخدم {names}",
     request: "الطلب",
