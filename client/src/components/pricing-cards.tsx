@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { SignedIn } from "@clerk/clerk-react";
+import { SignedIn, useUser } from "@clerk/clerk-react";
 import { usePlans, useSubscription, CheckoutButton, SubscriptionDetailsButton } from "@clerk/clerk-react/experimental";
 import { t, getLang } from "../lib/i18n";
-import { track } from "../lib/posthog";
+import { track } from "../lib/analytics";
+import { convertReferral } from "../lib/affiliate";
+import { commerceProps } from "../lib/commerce";
 import { Icon } from "./icon";
 
 function formatPrice(money: { amount: number; currencySymbol: string; currency: string }) {
@@ -17,6 +19,7 @@ function formatPrice(money: { amount: number; currencySymbol: string; currency: 
 export function PricingCards({ payerType = "user", onSelect }: { payerType?: "user" | "organization"; onSelect: () => void }) {
   const { data: plansData, isLoading } = usePlans({ for: payerType });
   const { data: sub } = useSubscription({ for: payerType });
+  const { user } = useUser();
   const [period, setPeriod] = useState<"month" | "annual">("month");
 
   if (isLoading) {
@@ -30,6 +33,7 @@ export function PricingCards({ payerType = "user", onSelect }: { payerType?: "us
   const plans = plansData?.filter(p => p.publiclyVisible) ?? [];
   const hasAnnual = plans.some(p => p.annualFee);
   const activePlanId = sub?.subscriptionItems?.[0]?.plan?.id;
+  const previousPlan = sub?.subscriptionItems?.[0]?.plan?.name ?? null;
 
   return (
     <div>
@@ -127,27 +131,23 @@ export function PricingCards({ payerType = "user", onSelect }: { payerType?: "us
                       planPeriod={period}
                       for={payerType}
                       onSubscriptionComplete={() => {
-                        track("plan_subscription_completed", {
-                          plan_id: plan.id,
-                          plan_name: plan.name,
-                          plan_period: period,
-                          plan_price: price,
-                          payer_type: payerType,
-                          is_free: isFreePlan,
+                        // A paid checkout is a purchase; a free plan is not revenue.
+                        // transaction_id dedupes a double-fired callback.
+                        if (!isFreePlan) track("purchase", {
+                          ...commerceProps(plan, period, payerType, previousPlan),
+                          transaction_id: `${user?.id || "anon"}-${plan.id}-${period}-${new Date().toISOString().slice(0, 10)}`,
                         });
+                        // Affiliate referral attribution — paid plans only.
+                        // Email must match the Stripe customer (Clerk uses the
+                        // user's primary email). No-op if affiliate isn't enabled.
+                        const email = user?.primaryEmailAddress?.emailAddress;
+                        if (!isFreePlan && email) convertReferral(email);
                         onSelect();
                       }}
                     >
                       <button
                         onClick={() => {
-                          track("plan_checkout_clicked", {
-                            plan_id: plan.id,
-                            plan_name: plan.name,
-                            plan_period: period,
-                            plan_price: price,
-                            payer_type: payerType,
-                            is_free: isFreePlan,
-                          });
+                          track("checkout_start", commerceProps(plan, period, payerType, previousPlan));
                           onSelect();
                         }}
                         className="w-full py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-secondary/80 transition-colors cursor-pointer"

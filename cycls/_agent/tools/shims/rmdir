@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""`rm` inside the agent sandbox — a delete is a move. Targets inside the
+workspace go to the trash (same layout as cycls._agent.trash, mirrored here
+in stdlib only: the package dir is masked in the sandbox); anything outside
+falls through to the real rm. The model still thinks it deleted; the user can
+recover. Also installed as `rmdir`.
+"""
+import json, os, shutil, subprocess, sys, time, uuid
+
+WS = os.environ.get("CYCLS_WORKSPACE", "/workspace")
+TRASH = os.environ.get("CYCLS_TRASH", "/workspace-trash")
+REAL = "/bin/rm" if os.path.exists("/bin/rm") else "/usr/bin/rm"
+
+
+def main(argv):
+    flags = [a for a in argv if a.startswith("-") and a != "--"]
+    targets = [a for a in argv if not a.startswith("-") or a == "--"]
+    targets = [t for t in targets if t != "--"]
+    force = any(f in ("-f", "-rf", "-fr", "--force") or ("f" in f and f.startswith("-") and not f.startswith("--")) for f in flags)
+    rc = 0
+    outside = []
+    for t in targets:
+        p = os.path.realpath(t)
+        if not p.startswith(WS.rstrip("/") + "/"):
+            outside.append(t)
+            continue
+        if not os.path.lexists(p):
+            if not force:
+                sys.stderr.write(f"rm: cannot remove '{t}': No such file or directory\n"); rc = 1
+            continue
+        rel = os.path.relpath(p, WS)
+        if rel.split(os.sep)[0] in (".trash", ".db", ".database"):
+            sys.stderr.write(f"rm: cannot remove '{t}': managed by cycls\n"); rc = 1
+            continue
+        tid = f"{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        entry = os.path.join(TRASH, tid)
+        dest = os.path.join(entry, "data", rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        is_dir = os.path.isdir(p) and not os.path.islink(p)
+        shutil.move(p, dest)
+        parts = rel.split(os.sep)
+        kind = "app" if len(parts) == 2 and parts[0] == "apps" and is_dir else ("dir" if is_dir else "file")
+        with open(os.path.join(entry, "meta.json"), "w") as f:
+            json.dump({"id": tid, "path": rel, "kind": kind, "by": "agent", "reason": "delete",
+                       "deleted_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())}, f)
+    if outside:
+        rc = subprocess.run([REAL, *flags, *outside]).returncode or rc
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

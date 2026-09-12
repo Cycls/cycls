@@ -12,6 +12,8 @@ from fastapi import APIRouter
 from cycls._app.main import App, _make_decorator, _serve
 from .web.routers import install_routers
 from .web import Web, web, Config
+from .web.server import PassMetadata
+from .tools import TRASH_MOUNT, SHIMS_MOUNT
 
 CYCLS_PATH = importlib.resources.files('cycls')
 
@@ -42,9 +44,10 @@ class _Routes:
 
 
 class Agent(App):
-    _base_pip = [*App._base_pip, "resvg-py", "anthropic", "openai", "python-dotenv"]
+    _base_pip = [*App._base_pip, "resvg-py", "anthropic", "openai", "python-dotenv", "mcp==2.1.1"]
     _base_apt = [*App._base_apt, "fonts-noto-core",
                  "poppler-utils", "ripgrep", "jq", "curl"]
+    _base_run = [f"mkdir -p {TRASH_MOUNT} {SHIMS_MOUNT}"]   # bwrap can't mkdir bind targets inside its ro root
 
     def __init__(self, func, name, web=None, image=None, memory="1Gi", volumes=None):
         if not volumes or "/workspace" not in volumes:
@@ -54,14 +57,29 @@ class Agent(App):
                 "(existing agents: the volume shown by `cycls volume ls`)")
         if web is None:
             web = Web()
+        if web._workspaces and web._auth is None:
+            raise ValueError("Web().workspaces() requires Web().auth(...) — "
+                             "workspaces are keyed on the authenticated user")
         self.theme = web._theme
         self.copy_public = web._copy_public
         self.server = _Routes()
+        brand = {loc: PassMetadata(name=d.get("name", ""), description=d.get("description", ""),
+                                   logo=d.get("logo", ""), brand=d.get("brand", ""))
+                 for loc, d in web._brand.items()} or None
         self.config = Config(
-            name=name, title=web._title,
+            name=name, title=web._title, pass_metadata=brand,
             auth=web._auth is not None, cms=web._cms, analytics=web._analytics,
-            suggestions=web._suggestions,
+            notifications=web._notifications,
+            suggestions=web._suggestions, affiliate=web._affiliate,
+            max_upload=web._max_upload, workspaces=web._workspaces,
+            seo=web._seo, head=web._head, favicon=web._favicon, og=web._og_url,
+            colors=web._colors, explore=web._explore,
+            explore_enabled=bool(web._explore or (web._cms or {}).get("explore")),
+            examples=web._examples, examples_enabled=bool(web._examples),
         )
+        self.config._og_image = web._og_bytes
+        self._iap = web._iap
+        self.connectors = web._connectors
 
         # Merge Web's copy_public files under public/. App.__init__ adds
         # the cycls source tree on top.
@@ -84,6 +102,7 @@ class Agent(App):
         resolved = self._auth_provider.resolve(prod)
         if "pk" in resolved:
             self.config.pk = resolved["pk"]
+            self.config.one_tap = bool(resolved.get("one_tap"))
 
     def _routers(self):
         """State routers (chats, files, share) require auth to be meaningful.
@@ -105,12 +124,13 @@ class Agent(App):
         user_func, config, name = self.user_func, self.config, self.name
         routers = self._routers()
         provider = self._auth_provider
+        iap = self._iap
 
         def runner(port):
             from dotenv import load_dotenv
             load_dotenv()
             print(f"\n🔨 {name} => http://localhost:{port}\n")
-            _serve(web(user_func, config, extra_routers=routers, auth=provider), port)
+            _serve(web(user_func, config, extra_routers=routers, auth=provider, iap=iap), port)
 
         self.func = runner
 
@@ -127,7 +147,7 @@ class Agent(App):
         self.config.public_path = str(CYCLS_PATH.joinpath(f"_agent/web/themes/{self.theme}"))
         import uvicorn
         uvicorn.run(web(self.user_func, self.config, extra_routers=self._routers(),
-                        auth=self._auth_provider),
+                        auth=self._auth_provider, iap=self._iap),
                     host="0.0.0.0", port=port)
 
 

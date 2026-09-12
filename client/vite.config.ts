@@ -2,8 +2,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-const backend = "http://localhost:8080";
-const apis = ["/config", "/chat", "/sessions", "/files", "/shared-assets", "/transcribe"];
+const backend = process.env.CYCLS_BACKEND || "http://localhost:8080";
+const apis = ["/config", "/explore", "/chat", "/chats", "/sessions", "/files", "/shared-assets", "/transcribe", "/workspaces", "/connectors"];
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],

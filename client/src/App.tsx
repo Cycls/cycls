@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDarkMode } from "./hooks/use-dark-mode";
 import {
   AuthenticateWithRedirectCallback,
   ClerkProvider,
   SignedIn,
   SignedOut,
+  GoogleOneTap,
   useAuth,
   useClerk,
   useOrganization,
@@ -18,48 +19,88 @@ import { dark } from "@clerk/themes";
 import { arSA } from "@clerk/localizations";
 import { useLang, setLang, t } from "./lib/i18n";
 import { toggleDark } from "./lib/utils";
+import { markSignup, detectSignup, startSignup } from "./lib/signup";
 import { IconButton } from "./components/icon";
 import { Chat, type AccountInfo, type FilesPanelProps } from "./components/chat";
+import { PublicHome } from "./components/public-home";
 import { SharedView } from "./components/shared-view";
 import { useChat, AppConfig } from "./hooks/use-chat";
-import { useFiles } from "./hooks/use-files";
+import { useFiles, useRefreshOnTurnEnd } from "./hooks/use-files";
+import { useWorkspaces } from "./hooks/use-workspaces";
+import { setActiveWorkspace } from "./hooks/use-auth-headers";
 import { useUrlParam } from "./hooks/use-url-param";
 import { usePostHogIdentify } from "./hooks/use-posthog-identify";
-import { initPostHog, setAgentDomain, track, register } from "./lib/posthog";
+import { initAnalytics, setAgentDomain, track, register } from "./lib/analytics";
+import { initAffiliate } from "./lib/affiliate";
 
 function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org?: { id: string; name: string } | null): FilesPanelProps {
   return {
     entries: f.entries, path: f.path, loading: f.loading,
     onNavigate: f.list,
+    onReload: f.reload,
     onUpload: f.upload,
+    onUploadBatch: f.uploadBatch,
     onMkdir: f.mkdir,
     onRename: f.rename,
     onDelete: f.remove,
     onOpenFile: f.openFile,
+    readFile: f.readFile,
+    writeFile: f.writeFile,
+    searchFiles: f.searchFiles,
+    listFolders: f.listFolders,
     onShareFile: withShare ? f.shareFile : undefined,
+    onListTrash: f.listTrash,
+    onRestoreTrash: f.restoreTrash,
+    onPurgeTrash: f.purgeTrash,
+    onEmptyTrash: f.emptyTrash,
     org: org ?? null,
   };
 }
 
+// Workspace selection lives above the remount boundary so switching remounts
+// ChatApp with fresh chat/files state, same as the org switch. Persisted per org.
+export type WorkspaceSelection = { id: string | null; switch: (id: string | null) => void };
+
 function ChatAppKeyed({ config }: { config: AppConfig | null }) {
   const { organization, isLoaded } = useOrganization();
   const orgKey = organization?.id || "personal";
+  const wsEnabled = !!config?.workspaces;
+  const wsKey = (org: string) => `cycls_ws_${org}`;
+  const [wsId, setWsId] = useState<string | null>(() => wsEnabled ? localStorage.getItem(wsKey(orgKey)) : null);
   const prevKey = useRef(orgKey);
   if (prevKey.current !== orgKey) {
     window.history.replaceState({}, "", window.location.pathname);
     prevKey.current = orgKey;
+    setWsId(wsEnabled ? localStorage.getItem(wsKey(orgKey)) : null);
   }
+  // Personal context has one workspace — never restore/persist a selection
+  // (a stale team id in the personal bucket 404'd every request).
+  const effectiveWs = organization ? wsId : null;
+  setActiveWorkspace(wsEnabled ? effectiveWs : null);   // before children render/fetch
+  const switchWorkspace = useCallback((id: string | null) => {
+    if (!organization) { setWsId(null); return; }
+    if (id) localStorage.setItem(wsKey(orgKey), id);
+    else localStorage.removeItem(wsKey(orgKey));
+    window.history.replaceState({}, "", window.location.pathname);
+    setWsId(id);
+  }, [orgKey, organization]);
+  const workspace = useMemo<WorkspaceSelection | undefined>(
+    () => wsEnabled ? { id: effectiveWs, switch: switchWorkspace } : undefined,
+    [wsEnabled, effectiveWs, switchWorkspace]);
   if (!isLoaded) return null;
-  return <ChatApp key={orgKey} config={config} />;
+  return <ChatApp key={`${orgKey}:${effectiveWs || "personal"}`} config={config} workspace={workspace} />;
 }
 
-function ChatApp({ config }: { config: AppConfig | null }) {
+function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: WorkspaceSelection }) {
   const chat = useChat();
   const files = useFiles();
+  useRefreshOnTurnEnd(files, chat.isStreaming);
+  const ws = useWorkspaces();
   const { getToken, signOut, isLoaded: authLoaded } = useAuth();
   const { user } = useUser();
   const clerk = useClerk();
-  const { organization } = useOrganization();
+  const { organization, membership, memberships } = useOrganization(
+    workspace ? { memberships: { infinite: true } } : {});
   const { userMemberships, setActive } = useOrganizationList({ userMemberships: true });
   const { data: subscription } = useSubscription({ for: organization ? "organization" : "user" });
   const lang = useLang();
@@ -79,19 +120,28 @@ function ChatApp({ config }: { config: AppConfig | null }) {
     imageUrl: organization.imageUrl,
   } : undefined;
 
+  useSignupDetect(user);
   usePostHogIdentify(
-    !!config?.analytics,
+    !!config?.analytics?.length,
     user,
     subSummary,
     orgSummary,
     lang,
-    clerk?.client?.lastAuthenticationStrategy,
   );
 
+  // Render-time, not an effect — child mount-effects fire requests before
+  // parent effects would register the token getter.
+  chat.setGetToken(() => getToken());
+  files.setGetToken(() => getToken());
+  ws.setGetToken(() => getToken());
+
+  // A persisted selection that no longer resolves falls back to personal.
   useEffect(() => {
-    chat.setGetToken(() => getToken());
-    files.setGetToken(() => getToken());
-  }, [getToken, chat, files]);
+    if (!workspace || !organization || !authLoaded) return;
+    ws.list().then((rows) => {
+      if (workspace.id && !rows.some((r) => r.id === workspace.id)) workspace.switch(null);
+    }).catch(() => {});
+  }, [workspace, organization?.id, authLoaded, ws.list]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useUrlParam("q", (q) => chat.send(q, undefined, "url_param"));
 
@@ -155,6 +205,26 @@ function ChatApp({ config }: { config: AppConfig | null }) {
     onCreateOrg: () => clerk.openCreateOrganization(),
     onManageOrg: () => clerk.openOrganizationProfile(),
     onSwitchOrg: (orgId: string | null) => setActive?.({ organization: orgId || null }),
+    workspaces: workspace && organization ? {
+      active: ws.workspaces.find((w) => w.id === workspace.id) || null,
+      items: ws.workspaces,
+      canCreate: config?.workspaces === "member" || membership?.role === "org:admin",
+      isOrgAdmin: membership?.role === "org:admin",
+      orgMembers: (memberships?.data || [])
+        .map((m) => ({
+          id: m.publicUserData?.userId || "",
+          name: [m.publicUserData?.firstName, m.publicUserData?.lastName].filter(Boolean).join(" ")
+            || m.publicUserData?.identifier || m.publicUserData?.userId || "",
+        }))
+        .filter((m) => m.id),
+      onSwitch: workspace.switch,
+      onCreate: ws.create,
+      onUpdate: ws.update,
+      onDelete: ws.remove,
+      fetchMembers: ws.members,
+      onSetMember: ws.setMember,
+      onRemoveMember: ws.removeMember,
+    } : undefined,
   };
 
   return (
@@ -171,22 +241,35 @@ function ChatApp({ config }: { config: AppConfig | null }) {
 function ChatNoAuth({ config }: { config: AppConfig | null }) {
   const chat = useChat();
   const files = useFiles();
+  useRefreshOnTurnEnd(files, chat.isStreaming);
   useUrlParam("q", (q) => chat.send(q, undefined, "url_param"));
   return <Chat chat={chat} files={filesPanelProps(files, false)} config={config} />;
+}
+
+function useSignupDetect(user: { id: string; createdAt?: Date | string | null; externalAccounts?: { provider: string }[] } | null | undefined) {
+  // The OAuth provider is the method (google, apple); a password account never gets here fresh.
+  useEffect(() => { detectSignup(user, user?.externalAccounts?.[0]?.provider); }, [user?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 const PERSIST_KEYS = ["q", "plans", "fork"] as const;
 const ssKey = (k: string) => `cycls_${k}`;
 
-function stashParams() {
+// OAuth leaves the page entirely, so where to come back to has to survive the
+// round trip. Signing in from a share link must land back on that link, not "/".
+const RETURN_KEY = "cycls_return_to";
+
+function stashParams(returnTo?: string) {
   const params = new URLSearchParams(window.location.search);
   for (const k of PERSIST_KEYS) {
     const v = params.get(k);
     if (v) sessionStorage.setItem(ssKey(k), v);
   }
+  if (returnTo) sessionStorage.setItem(RETURN_KEY, returnTo);
 }
 
 function popParams(): string {
+  const back = sessionStorage.getItem(RETURN_KEY);
+  if (back) { sessionStorage.removeItem(RETURN_KEY); return back; }
   const params = new URLSearchParams();
   for (const k of PERSIST_KEYS) {
     const v = sessionStorage.getItem(ssKey(k));
@@ -196,7 +279,7 @@ function popParams(): string {
 }
 
 function SharedViewAuthed() {
-  const { getToken, isLoaded } = useAuth();
+  const { getToken, isLoaded, isSignedIn } = useAuth();
   // Share URL: /shared/<subject>/<token>. Subject is `<org_id>:<user_id>` for
   // org-context owners, plain `<user_id>` otherwise. Mint the viewer's token
   // for the share's org so the audience check passes regardless of which org
@@ -207,8 +290,17 @@ function SharedViewAuthed() {
     try { return await getToken(orgId ? { organizationId: orgId } : undefined); }
     catch { return null; }
   }, [getToken, orgId]);
+  // An org-scoped share is unreadable until we know who the viewer is; without
+  // this the page just said "private or expired" and left them there. Same
+  // sign-in surface as the app — email/password lands the session in place and
+  // the share loads without a navigation; OAuth returns to this exact link.
+  const [signingIn, setSigningIn] = useState(false);
   if (!isLoaded) return null;
-  return <SharedView getToken={fetchToken} />;
+  if (signingIn && !isSignedIn) return <CustomSignIn returnTo={window.location.href} />;
+  return (
+    <SharedView getToken={fetchToken} signedIn={!!isSignedIn}
+                onSignIn={() => setSigningIn(true)} />
+  );
 }
 
 function SSOCallback() {
@@ -221,7 +313,7 @@ function SSOCallback() {
   );
 }
 
-function CustomSignIn() {
+function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
   const { isLoaded, signIn, setActive } = useSignIn();
   const { signUp, setActive: setSignUpActive } = useSignUp();
   const { client } = useClerk();
@@ -252,6 +344,7 @@ function CustomSignIn() {
   const switchMode = (m: "sign-in" | "sign-up" | "forgot-password") => {
     resetForm();
     setMode(m);
+    if (m === "sign-up") startSignup({ source: "auth_screen" });
   };
 
   const inAppBrowser = (() => {
@@ -274,10 +367,10 @@ function CustomSignIn() {
     try {
       setIsLoading(strategy);
       setError("");
-      track("sign_in_attempted", { method: strategy, step: "oauth_redirect" });
-      stashParams();
+      track(mode === "sign-up" ? "sign_up_attempted" : "sign_in_attempted", { method: strategy, step: "oauth_redirect" });
+      stashParams(returnTo);
       const params = new URLSearchParams(window.location.search);
-      const redirectUrlComplete = params.toString() ? `/?${params}` : "/";
+      const redirectUrlComplete = returnTo ?? (params.toString() ? `/?${params}` : "/");
       await signUp!.authenticateWithRedirect({
         strategy,
         redirectUrl: "/sso-callback",
@@ -321,6 +414,7 @@ function CustomSignIn() {
     track("sign_up_attempted", { method: "password", step: "form" });
     const result = await signUp!.create({ emailAddress: email, password });
     if (result.status === "complete") {
+      markSignup("password", result.createdUserId);
       await setSignUpActive!({ session: result.createdSessionId });
     } else {
       await signUp!.prepareEmailAddressVerification({ strategy: "email_code" });
@@ -331,7 +425,10 @@ function CustomSignIn() {
   const handleSignUpVerify = (e: React.FormEvent) => runAuth(e, "Verification failed", async () => {
     track("sign_up_attempted", { method: "email_code", step: "verify" });
     const result = await signUp!.attemptEmailAddressVerification({ code });
-    if (result.status === "complete") await setSignUpActive!({ session: result.createdSessionId });
+    if (result.status === "complete") {
+      markSignup("email_code", result.createdUserId);
+      await setSignUpActive!({ session: result.createdSessionId });
+    }
   });
 
   const handleForgotPassword = (e: React.FormEvent) => runAuth(e, "Reset failed", async () => {
@@ -532,11 +629,17 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (config?.analytics) {
-      initPostHog();
+    if (config?.analytics?.length) {
+      initAnalytics(config.analytics);
       setAgentDomain(config.name);
     }
   }, [config?.analytics, config?.name]);
+
+  // Affiliate/referral tracking — loads the provider so an incoming ?via= is
+  // captured and convert() can fire on checkout.
+  useEffect(() => {
+    if (config?.affiliate) initAffiliate(config.affiliate);
+  }, [config?.affiliate]);
 
   useEffect(() => {
     register({ theme: isDark ? "dark" : "light", language: lang });
@@ -577,8 +680,27 @@ export default function App() {
         <ChatAppKeyed config={config} />
       </SignedIn>
       <SignedOut>
-        <CustomSignIn />
+        <PublicGate config={config} />
       </SignedOut>
     </ClerkProvider>
+  );
+}
+
+// No sign-in wall: signed-out visitors get the explorable public shell and
+// meet CustomSignIn only when they act (send, fork, the header button). URLs
+// that already carry intent (?fork= from "continue this conversation", ?q=
+// auto-send, ?plans=) go straight to sign-in — the wall was the right page
+// for those.
+function PublicGate({ config }: { config: AppConfig | null }) {
+  const [signingIn, setSigningIn] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.has("fork") || params.has("q") || params.has("plans");
+  });
+  if (signingIn) return <CustomSignIn />;
+  return (
+    <>
+      {config?.one_tap && <GoogleOneTap />}
+      <PublicHome config={config} onSignIn={() => setSigningIn(true)} />
+    </>
   );
 }

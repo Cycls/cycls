@@ -1,0 +1,657 @@
+"""Multi-workspace Phase 2 — registry, ACL, team workspaces, admin lifecycle.
+
+Spec: docs/workspaces.md. The stub app mounts the real routers with a
+header-switched fake auth (`X-Test-User`) so one client can act as several
+org members: a regular member, a second member, an org admin, and an
+outsider from another org.
+"""
+import asyncio
+
+from cycls._agent import state
+from cycls._app.auth import User
+
+USERS = {
+    "user_1": User(id="user_1", org_id="org_1"),
+    "user_2": User(id="user_2", org_id="org_1"),
+    "admin_1": User(id="admin_1", org_id="org_1", org_role="admin"),
+    "outsider": User(id="outsider", org_id="org_2"),
+    "solo": User(id="solo"),   # no org
+}
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+def _orgdb(tmp_path, org="org_1"):
+    return state.org_db(org, tmp_path, f"file://{tmp_path}")
+
+
+def _client(tmp_path, workspaces="member"):
+    from types import SimpleNamespace
+    from fastapi import Depends, FastAPI, Request
+    from fastapi.testclient import TestClient
+    from cycls._agent.web.routers import install_routers
+
+    def fake_auth(request: Request):
+        return USERS[request.headers.get("x-test-user", "user_1")]
+
+    stub = SimpleNamespace(prod=False, _auth_provider=None,
+                           config=SimpleNamespace(workspaces=workspaces, max_upload=512))
+    fapp = FastAPI()
+    install_routers(stub, fapp, Depends(fake_auth), tmp_path, f"file://{tmp_path}")
+    return TestClient(fapp)
+
+
+def _mk_team(client, name="Research", as_user="user_1"):
+    r = client.post("/workspaces", json={"name": name}, headers={"X-Test-User": as_user})
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+# ---------------------------------------------------------------------------
+# state.resolve_role — the access matrix
+# ---------------------------------------------------------------------------
+
+def test_resolve_role_personal_owner_only(tmp_path):
+    orgdb = _orgdb(tmp_path)
+    assert _run(state.resolve_role(USERS["user_1"], "u-user_1", orgdb)) == "owner"
+    assert _run(state.resolve_role(USERS["user_2"], "u-user_1", orgdb)) is None
+    # org admin gets NO content role on someone else's personal workspace
+    assert _run(state.resolve_role(USERS["admin_1"], "u-user_1", orgdb)) is None
+
+
+def test_resolve_role_team_membership(tmp_path):
+    orgdb = _orgdb(tmp_path)
+    row = _run(state.create_team_ws(orgdb, "Research", "user_1"))
+    ws_id = row["id"]
+    assert _run(state.resolve_role(USERS["user_1"], ws_id, orgdb)) == "owner"
+    assert _run(state.resolve_role(USERS["user_2"], ws_id, orgdb)) is None
+    # org admin: implicit admin on any registered team workspace
+    assert _run(state.resolve_role(USERS["admin_1"], ws_id, orgdb)) == "admin"
+    # unknown team: nothing, even for the admin
+    assert _run(state.resolve_role(USERS["admin_1"], "t-unknown", orgdb)) is None
+
+
+def test_member_of_scans_across_teams(tmp_path):
+    orgdb = _orgdb(tmp_path)
+    a = _run(state.create_team_ws(orgdb, "A", "user_1"))["id"]
+    b = _run(state.create_team_ws(orgdb, "B", "user_2"))["id"]
+    _run(orgdb.put(f"members/{b}/user_1", {"role": "editor"}))
+    assert sorted(_run(state.member_of(orgdb, "user_1"))) == sorted([a, b])
+    assert _run(state.member_of(orgdb, "outsider")) == []
+
+
+# ---------------------------------------------------------------------------
+# /workspaces — create, list, rename
+# ---------------------------------------------------------------------------
+
+def test_create_team_and_list(tmp_path):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    assert ws_id.startswith("t-")
+    rows = client.get("/workspaces").json()
+    assert rows[0] == {"id": "u-user_1", "name": "Personal", "type": "personal", "role": "owner"}
+    team = next(r for r in rows if r["id"] == ws_id)
+    assert team["name"] == "Research" and team["role"] == "owner"
+    # user_2 is not a member — sees only their personal + the builtin General
+    rows2 = client.get("/workspaces", headers={"X-Test-User": "user_2"}).json()
+    assert [r["id"] for r in rows2] == ["u-user_2", "t-shared"]
+
+
+def test_create_policy_admin_mode(tmp_path):
+    client = _client(tmp_path, workspaces="admin")
+    r = client.post("/workspaces", json={"name": "X"})
+    assert r.status_code == 403
+    r = client.post("/workspaces", json={"name": "X"}, headers={"X-Test-User": "admin_1"})
+    assert r.status_code == 200
+
+
+def test_create_requires_org(tmp_path):
+    client = _client(tmp_path)
+    r = client.post("/workspaces", json={"name": "X"}, headers={"X-Test-User": "solo"})
+    assert r.status_code == 400
+
+
+def test_create_validates_name(tmp_path):
+    client = _client(tmp_path)
+    assert client.post("/workspaces", json={"name": ""}).status_code == 400
+    assert client.post("/workspaces", json={"name": "x" * 81}).status_code == 400
+
+
+def test_workspace_names_duplicates_ok_reserved_blocked(tmp_path):
+    """Names are labels, not addresses — unrelated teams may share one.
+    Only the names in everyone's list are reserved: Personal and General's."""
+    client = _client(tmp_path)
+    ws_id = _mk_team(client, "Research")
+    assert client.post("/workspaces", json={"name": "Research"}).status_code == 200   # duplicate allowed
+    other = _mk_team(client, "Design")
+    assert client.patch(f"/workspaces/{other}", json={"name": "research"}).status_code == 200
+    assert client.patch(f"/workspaces/{ws_id}", json={"name": "Research"}).status_code == 200
+    # reserved, case-insensitively
+    assert client.post("/workspaces", json={"name": "Personal"}).status_code == 409
+    assert client.post("/workspaces", json={"name": "personal"}).status_code == 409
+    assert client.post("/workspaces", json={"name": "General"}).status_code == 409
+    assert client.patch(f"/workspaces/{other}", json={"name": "general"}).status_code == 409
+    # renaming General tracks the reservation: its new name becomes reserved
+    admin = {"X-Test-User": "admin_1"}
+    assert client.patch("/workspaces/t-shared", json={"name": "HQ"}, headers=admin).status_code == 200
+    assert client.post("/workspaces", json={"name": "hq"}).status_code == 409
+    assert client.post("/workspaces", json={"name": "General"}).status_code == 200   # freed
+
+
+def test_workspace_icon_lifecycle(tmp_path):
+    """Create with an emoji icon, see it in the list, PATCH a new one,
+    clear it with icon: "" — old rows never grow an icon key."""
+    client = _client(tmp_path)
+    r = client.post("/workspaces", json={"name": "Launch", "icon": "🚀"})
+    assert r.status_code == 200 and r.json()["icon"] == "🚀"
+    ws_id = r.json()["id"]
+
+    team = next(w for w in client.get("/workspaces").json() if w["id"] == ws_id)
+    assert team["icon"] == "🚀"
+
+    r = client.patch(f"/workspaces/{ws_id}", json={"icon": "🔬"})
+    assert r.json()["icon"] == "🔬" and r.json()["name"] == "Launch"
+    # rename alone leaves the icon in place
+    assert client.patch(f"/workspaces/{ws_id}", json={"name": "Lab"}).json()["icon"] == "🔬"
+
+    r = client.patch(f"/workspaces/{ws_id}", json={"icon": ""})
+    assert "icon" not in r.json()
+    assert "icon" not in next(w for w in client.get("/workspaces").json() if w["id"] == ws_id)
+
+    # icon-less create stays icon-less; oversized icon is a 400
+    plain = client.post("/workspaces", json={"name": "Plain"}).json()
+    assert "icon" not in plain
+    assert client.post("/workspaces", json={"name": "X", "icon": "x" * 65}).status_code == 400
+
+
+def test_builtin_general_exclusions(tmp_path):
+    """Everyone is in General by default; org admins may remove (exclude)
+    anyone; re-adding clears the exclusion. Members can't remove."""
+    client = _client(tmp_path)
+    client.get("/workspaces")   # provisions General
+    admin = {"X-Test-User": "admin_1"}
+    u2 = {"X-Test-User": "user_2"}
+
+    assert client.delete("/workspaces/t-shared/members/user_2").status_code == 403   # member can't
+    assert client.delete("/workspaces/t-shared/members/user_2", headers=admin).status_code == 200
+
+    # excluded: General gone from their list, content access 404s
+    assert all(w["id"] != "t-shared" for w in client.get("/workspaces", headers=u2).json())
+    assert client.get("/chats", headers={**u2, "X-Workspace": "t-shared"}).status_code == 404
+
+    # the exclusion is visible in the member list; others keep access
+    rows = client.get("/workspaces/t-shared/members", headers=admin).json()
+    assert [(r["user_id"], r["role"]) for r in rows] == [("user_2", "excluded")]
+    assert any(w["id"] == "t-shared" for w in client.get("/workspaces").json())
+
+    # re-add restores the default
+    assert client.put("/workspaces/t-shared/members/user_2", json={"role": "editor"}, headers=admin).status_code == 200
+    assert any(w["id"] == "t-shared" for w in client.get("/workspaces", headers=u2).json())
+    assert client.get("/workspaces/t-shared/members", headers=admin).json() == []
+
+    # org admins are immune to exclusion
+    client.delete("/workspaces/t-shared/members/admin_1", headers=admin)
+    assert any(w["id"] == "t-shared" for w in client.get("/workspaces", headers=admin).json())
+
+
+def test_builtin_roles_ignore_member_rows(tmp_path):
+    """On General only the `excluded` marker matters — stray role rows must
+    not change anyone's role (a row could otherwise downgrade an org admin)."""
+    orgdb = _orgdb(tmp_path)
+    _run(orgdb.put("workspaces/t-shared", {"id": "t-shared", "name": "General", "type": "team", "builtin": "org"}))
+    _run(orgdb.put("members/t-shared/admin_1", {"role": "editor"}))   # would downgrade the admin
+    _run(orgdb.put("members/t-shared/user_1", {"role": "admin"}))     # would elevate a member
+    _run(orgdb.put("members/t-shared/user_2", {"role": "excluded"}))
+    assert _run(state.resolve_role(USERS["admin_1"], "t-shared", orgdb)) == "admin"
+    assert _run(state.resolve_role(USERS["user_1"], "t-shared", orgdb)) == "editor"
+    assert _run(state.resolve_role(USERS["user_2"], "t-shared", orgdb)) is None
+    assert _run(state.resolve_role(USERS["solo"], "t-shared", orgdb)) is None
+
+
+def test_builtin_general_org_admin_only_edits(tmp_path):
+    """General's name and icon are editable by org admins only — members 403
+    (their builtin role is editor, never a manager role)."""
+    client = _client(tmp_path)
+    client.get("/workspaces")   # provisions General
+    admin = {"X-Test-User": "admin_1"}
+    r = client.patch("/workspaces/t-shared", json={"name": "HQ", "icon": "🏠"}, headers=admin)
+    assert r.status_code == 200 and r.json()["name"] == "HQ" and r.json()["icon"] == "🏠"
+    assert client.patch("/workspaces/t-shared", json={"name": "Ours"}).status_code == 403   # plain member
+    assert client.patch("/workspaces/t-shared", json={"icon": "🚀"}).status_code == 403
+
+
+def test_workspace_icon_emoji_only(tmp_path):
+    """One shared icon vocabulary across clients: single emoji only —
+    ZWJ sequences, flags, skin tones, keycaps pass; text and URLs 400."""
+    client = _client(tmp_path)
+    for i, good in enumerate(["🚀", "👨‍👩‍👧‍👦", "🇸🇦", "1️⃣", "👍🏽", "✍️", "⭐"]):
+        r = client.post("/workspaces", json={"name": f"G{i}", "icon": good})
+        assert r.status_code == 200, (good, r.text)
+        assert r.json()["icon"] == good
+    for bad in ["abc", "x", "https://x.com/a.png", "a🚀", "🚀🚀🚀🚀🚀", ":)"]:
+        assert client.post("/workspaces", json={"name": "B", "icon": bad}).status_code == 400, bad
+
+
+def test_rename_requires_manager(tmp_path):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    client.put(f"/workspaces/{ws_id}/members/user_2", json={"role": "editor"})
+    r = client.patch(f"/workspaces/{ws_id}", json={"name": "New"},
+                     headers={"X-Test-User": "user_2"})
+    assert r.status_code == 403
+    r = client.patch(f"/workspaces/{ws_id}", json={"name": "New"})
+    assert r.status_code == 200 and r.json()["name"] == "New"
+
+
+def test_admin_lifecycle_listing(tmp_path):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    # user_2 touches their personal workspace so its dir exists
+    client.put("/files/hi.txt", files={"file": ("hi.txt", b"x")},
+               headers={"X-Test-User": "user_2"})
+    rows = client.get("/workspaces?all=1", headers={"X-Test-User": "admin_1"}).json()
+    ids = {r["id"] for r in rows}
+    assert {ws_id, "u-admin_1", "u-user_2"} <= ids
+    # non-admins don't get the lifecycle view
+    rows = client.get("/workspaces?all=1").json()
+    assert "u-user_2" not in {r["id"] for r in rows}
+
+
+# ---------------------------------------------------------------------------
+# Team content access end-to-end (X-Workspace on chats/files)
+# ---------------------------------------------------------------------------
+
+def test_team_access_via_membership(tmp_path):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    h1 = {"X-Workspace": ws_id}
+    h2 = {"X-Workspace": ws_id, "X-Test-User": "user_2"}
+
+    # owner writes a file into the team workspace
+    r = client.put("/files/plan.md", files={"file": ("plan.md", b"go")}, headers=h1)
+    assert r.status_code == 200
+    assert (tmp_path / "org_1" / "ws" / ws_id / "plan.md").read_bytes() == b"go"
+
+    # non-member: 404 before, 200 after being added
+    assert client.get("/files", headers=h2).status_code == 404
+    client.put(f"/workspaces/{ws_id}/members/user_2", json={"role": "editor"})
+    names = [f["name"] for f in client.get("/files", headers=h2).json()]
+    assert names == ["plan.md"]
+
+    # outsider from another org never resolves the team (their org has no row)
+    r = client.get("/files", headers={"X-Workspace": ws_id, "X-Test-User": "outsider"})
+    assert r.status_code == 404
+
+
+def test_org_admin_gets_team_content_but_not_personal(tmp_path):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    admin = {"X-Test-User": "admin_1"}
+    assert client.get("/files", headers={**admin, "X-Workspace": ws_id}).status_code == 200
+    # lifecycle-only: someone else's personal content stays 404 for the admin
+    client.put("/files/secret.txt", files={"file": ("secret.txt", b"s")})   # user_1 personal
+    r = client.get("/files", headers={**admin, "X-Workspace": "u-user_1"})
+    assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Members
+# ---------------------------------------------------------------------------
+
+def test_member_management_and_owner_protection(tmp_path):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    client.put(f"/workspaces/{ws_id}/members/user_2", json={"role": "editor"})
+
+    members = client.get(f"/workspaces/{ws_id}/members").json()
+    assert {m["user_id"]: m["role"] for m in members} == {"user_1": "owner", "user_2": "editor"}
+
+    # editors can't manage members
+    r = client.put(f"/workspaces/{ws_id}/members/outsider", json={"role": "editor"},
+                   headers={"X-Test-User": "user_2"})
+    assert r.status_code == 403
+
+    # the owner row is immutable
+    assert client.put(f"/workspaces/{ws_id}/members/user_1",
+                      json={"role": "editor"}).status_code == 403
+    assert client.delete(f"/workspaces/{ws_id}/members/user_1").status_code == 403
+
+    # members can leave; access drops immediately
+    r = client.delete(f"/workspaces/{ws_id}/members/user_2", headers={"X-Test-User": "user_2"})
+    assert r.status_code == 200
+    r = client.get("/files", headers={"X-Workspace": ws_id, "X-Test-User": "user_2"})
+    assert r.status_code == 404
+
+
+def test_invalid_role_rejected(tmp_path):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    r = client.put(f"/workspaces/{ws_id}/members/user_2", json={"role": "owner"})
+    assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Delete / wipe
+# ---------------------------------------------------------------------------
+
+def test_delete_team_requires_owner(tmp_path):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    client.put(f"/workspaces/{ws_id}/members/user_2", json={"role": "admin"})
+    # ws-level admin manages members, but delete stays with the owner (+ org admin)
+    r = client.delete(f"/workspaces/{ws_id}", headers={"X-Test-User": "user_2"})
+    assert r.status_code == 403
+
+    client.put("/files/a.txt", files={"file": ("a.txt", b"a")}, headers={"X-Workspace": ws_id})
+    assert client.delete(f"/workspaces/{ws_id}").status_code == 200
+    assert not (tmp_path / "org_1" / "ws" / ws_id).exists()
+    # registry + ACL rows are gone: the team resolves for nobody
+    r = client.get("/files", headers={"X-Workspace": ws_id})
+    assert r.status_code == 404
+    assert _run(_orgdb(tmp_path).get(f"workspaces/{ws_id}")) is None
+
+
+def test_org_admin_can_delete_team(tmp_path):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    r = client.delete(f"/workspaces/{ws_id}", headers={"X-Test-User": "admin_1"})
+    assert r.status_code == 200
+
+
+def test_personal_delete_lifecycle(tmp_path):
+    client = _client(tmp_path)
+    client.put("/files/mine.txt", files={"file": ("mine.txt", b"m")})   # user_1 personal
+    root = tmp_path / "org_1" / "ws" / "u-user_1"
+    assert root.exists()
+
+    # another member can't delete it — 404, no existence leak
+    r = client.delete("/workspaces/u-user_1", headers={"X-Test-User": "user_2"})
+    assert r.status_code == 404
+
+    # org admin can (offboarding), despite never having content access
+    r = client.delete("/workspaces/u-user_1", headers={"X-Test-User": "admin_1"})
+    assert r.status_code == 200
+    assert not root.exists()
+
+
+def test_workspaces_router_absent_in_legacy_mode(tmp_path):
+    client = _client(tmp_path, workspaces=None)
+    assert client.get("/workspaces").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# General provisioning (t-shared) + builtin org role
+# ---------------------------------------------------------------------------
+
+def _seed_legacy(tmp_path, org="org_1", user="user_1"):
+    """A pre-workspaces tree: loose files + per-user chat DB at the org root."""
+    from cycls._app.db import workspace
+    root = tmp_path / org
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "report.md").write_text("legacy")
+    legacy_ws = workspace(f"{org}:{user}" if org != user else user,
+                          tmp_path, base=f"file://{tmp_path}")
+    _run(state.put_meta(legacy_ws, "c1", {"id": "c1", "title": "Old chat"}))
+    _run(state.append_messages(legacy_ws, "c1", [{"role": "user", "content": "hi"}], 0))
+
+
+def test_org_legacy_data_stays_until_cli_migration(tmp_path):
+    """The SDK never moves data: legacy org content stays at the org root
+    (invisible in workspace mode) until the operator migrates via the CLI.
+    General is provisioned as an empty registry row."""
+    _seed_legacy(tmp_path)
+    client = _client(tmp_path)
+
+    rows = client.get("/workspaces").json()
+    shared = next(r for r in rows if r["id"] == "t-shared")
+    assert shared["builtin"] == "org" and shared["role"] == "editor"
+    assert (tmp_path / "org_1" / "report.md").exists()   # untouched
+    h = {"X-Workspace": "t-shared"}
+    assert client.get("/files", headers=h).json() == []
+    assert client.get("/chats", headers=h).json() == []
+    rows = client.get("/workspaces", headers={"X-Test-User": "admin_1"}).json()
+    assert next(r for r in rows if r["id"] == "t-shared")["role"] == "admin"
+
+
+def test_fresh_org_gets_general_once(tmp_path):
+    client = _client(tmp_path)
+    general = next(r for r in client.get("/workspaces").json() if r["id"] == "t-shared")
+    assert general["name"] == "General" and general["role"] == "editor"
+    row = _run(_orgdb(tmp_path).get("workspaces/t-shared"))
+    state._provisioned.clear()   # restart: existing row is not overwritten
+    client.get("/workspaces")
+    assert _run(_orgdb(tmp_path).get("workspaces/t-shared")) == row
+
+
+def test_deleting_general_is_permanent(tmp_path):
+    client = _client(tmp_path)
+    client.get("/workspaces")
+    r = client.delete("/workspaces/t-shared", headers={"X-Test-User": "admin_1"})
+    assert r.status_code == 200
+    state._provisioned.clear()
+    rows = client.get("/workspaces").json()   # tombstone blocks re-provisioning
+    assert not any(w["id"] == "t-shared" for w in rows)
+    assert client.get("/chats", headers={"X-Workspace": "t-shared"}).status_code == 404
+
+
+def test_solo_user_gets_no_general(tmp_path):
+    client = _client(tmp_path)
+    client.get("/workspaces", headers={"X-Test-User": "solo"})
+    assert _run(state.org_db("solo", tmp_path, f"file://{tmp_path}").get("workspaces/t-shared")) is None
+
+
+def test_migration_never_moves_solo_data_into_an_org(tmp_path):
+    """A bare-user tree is SOLO data. An org-context touch must leave it
+    exactly where it is — it belongs to the user's personal (no-org)
+    context, whatever org their token happens to carry. (Regression: a
+    per-user migration leg once pulled these trees into General — personal
+    chats vanished and personal files leaked to the org.)"""
+    _seed_legacy(tmp_path, org="user_1", user="user_1")   # user_1's solo tree
+    client = _client(tmp_path)
+    client.get("/workspaces")   # user_1 arrives in ORG context (org_1 token)
+
+    # solo tree untouched, nothing crossed into the org
+    assert (tmp_path / "user_1" / "report.md").exists()
+    assert not (tmp_path / "org_1" / "ws" / "t-shared" / "report.md").exists()
+    assert client.get("/chats", headers={"X-Workspace": "t-shared"}).json() == []
+
+    # the same user visiting in SOLO context gets their data, workspace-shaped
+    USERS["user_1_solo"] = type(USERS["user_1"])(id="user_1")
+    h = {"X-Test-User": "user_1_solo"}
+    assert [f["name"] for f in client.get("/files", headers=h).json()] == ["report.md"]
+    assert [c["id"] for c in client.get("/chats", headers=h).json()] == ["c1"]
+
+
+def test_solo_data_readable_in_place_no_migration(tmp_path):
+    """Solo personal workspace IS the account root: legacy data is readable
+    immediately, nothing moves, no marker or General is provisioned."""
+    _seed_legacy(tmp_path, org="solo", user="solo")
+    client = _client(tmp_path)
+    h = {"X-Test-User": "solo"}
+    assert [f["name"] for f in client.get("/files", headers=h).json()] == ["report.md"]
+    assert [c["id"] for c in client.get("/chats", headers=h).json()] == ["c1"]
+    assert (tmp_path / "solo" / "report.md").exists()          # untouched
+    assert not (tmp_path / "solo" / "ws").exists()             # no move
+    orgdb = state.org_db("solo", tmp_path, f"file://{tmp_path}")
+    assert _run(orgdb.get("workspaces/t-shared")) is None
+    assert _run(orgdb.get("migrated")) is None                 # no marker either
+
+
+def test_t_shared_is_per_org(tmp_path):
+    """Every org's General shares the `t-shared` id, but the root derives from
+    the requester's org — an outsider sees their own empty General, never
+    another org's files."""
+    _seed_legacy(tmp_path)
+    client = _client(tmp_path)
+    client.get("/workspaces")   # provision org_1's General
+    h = {"X-Workspace": "t-shared", "X-Test-User": "outsider"}
+    r = client.get("/files", headers=h)
+    assert r.status_code == 200 and r.json() == []
+    assert client.get("/files/report.md", headers=h).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Shares carry the minting workspace
+# ---------------------------------------------------------------------------
+
+def test_share_url_carries_ws_and_resolves(tmp_path):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    h = {"X-Workspace": ws_id}
+    client.put("/chats/c1", json={"title": "Team chat"}, headers=h)
+    body = client.post("/share", json={"path": "chat/c1"}, headers=h).json()
+    assert body["url"].endswith(f"?ws={ws_id}")
+
+    r = client.get(f"/share/org_1:user_1/{body['token']}/data?ws={ws_id}")
+    assert r.status_code == 200 and r.json()["title"] == "Team chat"
+    # without the ws hint the fallbacks (personal, t-shared) don't have the row
+    assert client.get(f"/share/org_1:user_1/{body['token']}/data").status_code == 404
+
+
+def test_share_bare_link_falls_back_to_personal(tmp_path):
+    client = _client(tmp_path)
+    client.put("/chats/c1", json={"title": "Mine"})          # personal workspace
+    body = client.post("/share", json={"path": "chat/c1"}).json()
+    r = client.get(f"/share/org_1:user_1/{body['token']}/data")   # no ?ws=
+    assert r.status_code == 200 and r.json()["title"] == "Mine"
+
+
+def test_fork_team_share_lands_in_forker_personal(tmp_path):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    h = {"X-Workspace": ws_id}
+    client.put("/chats/c1", json={"title": "Team chat"}, headers=h)
+    from cycls._app.db import workspace as _workspace
+    team_ws = _workspace("org_1:user_1", tmp_path, base=f"file://{tmp_path}", ws=ws_id)
+    _run(state.append_messages(team_ws, "c1", [{"role": "user", "content": "hi"}], 0))
+    token = client.post("/share", json={"path": "chat/c1"}, headers=h).json()["token"]
+
+    r = client.post(f"/share/org_1:user_1/{token}/fork?ws={ws_id}",
+                    headers={"X-Test-User": "user_2"})
+    assert r.status_code == 200
+    forked = client.get("/chats", headers={"X-Test-User": "user_2"}).json()
+    assert [c["title"] for c in forked] == ["Team chat"]
+
+
+def test_fork_copies_canvas_outputs(tmp_path):
+    """Continue-this-conversation lands with the chat's canvas artifact in the
+    forker's workspace — the fork copies the conversation's whole surface,
+    not just attachments."""
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    h = {"X-Workspace": ws_id}
+    client.put("/chats/c1", json={"title": "Team chat"}, headers=h)
+    from cycls._app.db import workspace as _workspace
+    team_ws = _workspace("org_1:user_1", tmp_path, base=f"file://{tmp_path}", ws=ws_id)
+    _run(state.append_messages(team_ws, "c1", [
+        {"role": "user", "content": "make a site"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "canvas", "input": {"path": "site.html"}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "opened"}]},
+    ], 0))
+    team_ws.root.mkdir(parents=True, exist_ok=True)
+    (team_ws.root / "site.html").write_text("<h1>site</h1>")
+    token = client.post("/share", json={"path": "chat/c1"}, headers=h).json()["token"]
+
+    r = client.post(f"/share/org_1:user_1/{token}/fork?ws={ws_id}",
+                    headers={"X-Test-User": "user_2"})
+    assert r.status_code == 200
+    forker_ws = _workspace("org_1:user_2", tmp_path, base=f"file://{tmp_path}", ws="u-user_2")
+    assert (forker_ws.root / "site.html").read_text() == "<h1>site</h1>"
+
+
+def test_list_chats_heals_wiped_meta(tmp_path, monkeypatch):
+    """gcsfuse moves drop GCS custom metadata; the sidebar listing must fall
+    back to the canonical body and rewrite the meta channel."""
+    from cycls._app import db as db_mod
+    from cycls._app.db import workspace
+
+    ws = workspace("u1", tmp_path, base=f"file://{tmp_path}")
+    _run(state.put_meta(ws, "c1", {"id": "c1", "title": "هلا", "updatedAt": "2026-07-06"}))
+
+    async def wiped_scan(self, *, prefix=None, glob=None):
+        yield "chat/c1/index", {}
+    monkeypatch.setattr(db_mod.DB, "scan", wiped_scan)
+
+    async def collect():
+        return [(cid, meta) async for cid, meta in state.list_chats(ws)]
+    rows = _run(collect())
+    assert rows == [("c1", {"id": "c1", "title": "هلا", "updatedAt": "2026-07-06"})]
+
+
+def test_org_with_stale_migration_marker_still_gets_general(tmp_path):
+    """Marker rows from the retired in-SDK migration are inert — provisioning
+    keys off the registry row alone."""
+    _run(_orgdb(tmp_path).put("migrated", {"at": "2026-07-06", "moved": "False"}))
+    client = _client(tmp_path)
+    rows = client.get("/workspaces").json()
+    assert any(w["id"] == "t-shared" and w["name"] == "General" for w in rows)
+
+
+# ---------------------------------------------------------------------------
+# Trash — deletes are moves; admins delete forever
+# ---------------------------------------------------------------------------
+
+def test_file_delete_goes_to_trash_and_restores(tmp_path):
+    client = _client(tmp_path)
+    from cycls._app.db import workspace as _workspace
+    root = _workspace("org_1:user_1", tmp_path, base=f"file://{tmp_path}", ws="u-user_1").root
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "report.md").write_text("hello")
+
+    r = client.delete("/files/report.md")
+    assert r.status_code == 200 and r.json()["kind"] == "file"
+    tid = r.json()["trash_id"]
+    assert not (root / "report.md").exists()
+    rows = client.get("/trash").json()
+    assert [(x["path"], x["by"], x["kind"]) for x in rows] == [("report.md", "user", "file")]
+
+    assert client.post(f"/trash/{tid}/restore").json()["path"] == "report.md"
+    assert (root / "report.md").read_text() == "hello"
+    assert client.get("/trash").json() == []
+
+
+def test_app_delete_and_purge_are_admin_only(tmp_path):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    _run(_orgdb(tmp_path).put(f"members/{ws_id}/user_2", {"role": "editor"}))
+    from cycls._app.db import workspace as _workspace
+    root = _workspace("org_1:user_1", tmp_path, base=f"file://{tmp_path}", ws=ws_id).root
+    (root / "apps" / "demo").mkdir(parents=True)
+    (root / "apps" / "demo" / "index.html").write_text("<h1>")
+    (root / "notes.md").write_text("n")
+    h = {"X-Workspace": ws_id}
+
+    # editor: ordinary files yes, apps no
+    assert client.delete("/files/notes.md", headers={**h, "X-Test-User": "user_2"}).status_code == 200
+    assert client.delete("/files/apps/demo", headers={**h, "X-Test-User": "user_2"}).status_code == 403
+    # owner: yes, and it lands as an app
+    r = client.delete("/files/apps/demo", headers=h)
+    assert r.status_code == 200 and r.json()["kind"] == "app"
+    tid = r.json()["trash_id"]
+    # delete-forever is admin-only too; restore is for anyone who can edit
+    assert client.delete(f"/trash/{tid}", headers={**h, "X-Test-User": "user_2"}).status_code == 403
+    assert client.delete("/trash", headers={**h, "X-Test-User": "user_2"}).status_code == 403
+    assert client.delete(f"/trash/{tid}", headers=h).status_code == 200
+    assert [x["path"] for x in client.get("/trash", headers=h).json()] == ["notes.md"]
+    assert client.delete("/trash", headers=h).status_code == 200
+    assert client.get("/trash", headers=h).json() == []
+
+
+def test_chat_delete_is_a_tombstone(tmp_path):
+    client = _client(tmp_path)
+    client.put("/chats/c1", json={"title": "Keep me"})
+    r = client.delete("/chats/c1")
+    assert r.status_code == 200 and r.json()["trash_id"] == "chat:c1"
+    assert client.get("/chats").json() == []
+    rows = client.get("/trash").json()
+    assert [(x["id"], x["kind"], x["path"]) for x in rows] == [("chat:c1", "chat", "Keep me")]
+    assert client.post("/trash/chat:c1/restore").status_code == 200
+    assert [c["id"] for c in client.get("/chats").json()] == ["c1"]
+    # purge for good
+    client.delete("/chats/c1")
+    assert client.delete("/trash/chat:c1").status_code == 200
+    assert client.get("/trash").json() == [] and client.get("/chats").json() == []

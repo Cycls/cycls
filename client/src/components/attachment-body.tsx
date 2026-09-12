@@ -1,14 +1,16 @@
 import type { Attachment } from "../hooks/use-chat";
+import { tintTile, tintLabel } from "./canvas-utils";
 
 export function AttachmentBody({ attachment }: { attachment: Attachment }) {
   const { name, type, url, size, status } = attachment;
+  const isImg = type.startsWith("image/");
   return (
     <>
-      <div className="bg-secondary flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg relative">
-        {type.startsWith("image/") ? (
+      <div className="bg-secondary flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg relative" style={isImg ? undefined : tintTile(name)}>
+        {isImg ? (
           <img src={url} alt={name} className={`size-full object-cover ${status === "uploading" ? "opacity-40" : ""}`} />
         ) : (
-          <span className={`text-[10px] font-medium uppercase ${status === "error" ? "text-red-500" : "text-muted-foreground"}`}>
+          <span className={`text-[10px] font-medium uppercase ${status === "error" ? "text-red-500" : "text-muted-foreground"}`} style={status === "error" ? undefined : tintLabel(name)}>
             {name.split(".").pop()}
           </span>
         )}

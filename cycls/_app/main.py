@@ -14,10 +14,18 @@ from cycls._app.db import workspace
 CYCLS_PATH = importlib.resources.files("cycls")
 
 
+def _behind_proxy(app):
+    """Cloud Run terminates TLS and forwards plain HTTP; without this every
+    request.url is http:// and an OAuth redirect_uri never matches."""
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+    return ProxyHeadersMiddleware(app, trusted_hosts="*")
+
+
 def _serve(app, port):
     from hypercorn.asyncio import serve
     from hypercorn.config import Config
     from cycls._function.remote import BARE_LOGS
+    app = _behind_proxy(app)
     config = Config()
     config.bind = [f"0.0.0.0:{port}"]
     config.alpn_protocols = ["h2", "http/1.1"]

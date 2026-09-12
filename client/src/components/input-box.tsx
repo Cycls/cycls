@@ -1,10 +1,48 @@
-import { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { t, getLang, setLang } from "../lib/i18n";
-import { track } from "../lib/posthog";
+import { track } from "../lib/analytics";
 import { Icon } from "./icon";
+import { autoApprove, setAutoApprove } from "../lib/utils";
+import { ConnectorIcon, connectorLabel, type Connector } from "./connectors-dialog";
+
+export type MentionHit = { name: string; path: string; connector?: Connector };
 import { AttachmentBody } from "./attachment-body";
+import { extTint } from "./canvas-utils";
 import type { Attachment } from "../hooks/use-chat";
+
+const MENTION_DEBOUNCE_MS = 150;
+
+// `(?:^|\s)` not `\b`: \b matches between the "f" and "@" of "mf@cycls.com" and
+// would open the picker on every email address. Spaces are allowed in the query
+// so multi-word filenames are searchable; a double space ends the session.
+export function mentionAt(value: string, caret: number) {
+  const m = value.slice(0, caret).match(/(?:^|\s)@([^\n@]{0,64})$/);
+  if (!m || m[1].includes("  ")) return null;
+  return { query: m[1], start: caret - m[1].length - 1 };
+}
+
+// A dead session swallows anything that extends the query it died on. A blank
+// dead query therefore shuts the session outright — correct for Esc, fatal if
+// reached by searching "".
+export const mentionSuppressed = (
+  mention: { start: number; query: string } | null,
+  dead: { start: number; query: string } | null,
+) => !!(mention && dead && mention.start === dead.start && mention.query.startsWith(dead.query));
+
+// Render composer text with inserted file mentions and connector pills painted in place. Lives behind a
+// transparent textarea as an aligned backdrop — a <textarea> can't style substrings itself — so only
+// colour may change here: padding or weight would shift the text off the real caret.
+function highlightMentions(text: string, mentions: string[], pills: string[]) {
+  const all = [...new Set([...pills, ...mentions])].sort((a, b) => b.length - a.length);  // longest first
+  if (!all.length) return text;
+  const re = new RegExp(`(${all.map((m) => m.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "g");
+  return text.split(re).map((p, i) =>
+    pills.includes(p) ? <span key={i} className="rounded-full bg-foreground/10 text-foreground">{p}</span>
+      : mentions.includes(p) ? <span key={i} className="rounded bg-muted">{p}</span>
+      : <span key={i}>{p}</span>,
+  );
+}
 
 export function InputBox({
   textareaRef,
@@ -25,6 +63,11 @@ export function InputBox({
   cancelMic,
   voice,
   onFilesAdded,
+  onMentionSearch,
+  connectors,
+  onOpenConnectors,
+  approveSwitch,
+  onAddConnector,
   placeholder,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -45,9 +88,125 @@ export function InputBox({
   cancelMic: () => void;
   voice?: boolean;
   onFilesAdded?: (files: File[]) => void;
+  onMentionSearch?: (query: string) => Promise<MentionHit[]>;
+  connectors?: Connector[];
+  onOpenConnectors?: () => void;
+  approveSwitch?: boolean;   // the deployment has connectors: show Auto / Manual
+  onAddConnector?: (c: Connector) => void;
   placeholder?: string;
 }) {
   const [dragOver, setDragOver] = useState(false);
+
+  // ---- @-mention file picker ----
+  const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
+  // The query that came back with nothing, and the "@" it belonged to. Anything
+  // extending it is dead too, so typing a sentence containing "@" costs one
+  // request rather than one per character — but backspacing to a shorter query
+  // that did have hits revives the picker. An empty query means the whole
+  // session is shut (Esc).
+  const [dead, setDead] = useState<{ start: number; query: string } | null>(null);
+  const [results, setResults] = useState<MentionHit[]>([]);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [mentions, setMentions] = useState<string[]>([]);   // inserted paths → highlighted
+  const [pills, setPills] = useState<string[]>([]);         // inserted @Connector tokens → painted as pills
+  const backdropRef = useRef<HTMLDivElement>(null);
+
+  // Drop highlights whose text no longer appears (edited/sent). Deleting the token is how a pill is removed.
+  useEffect(() => {
+    setMentions((ms) => ms.filter((m) => input.includes(m)));
+    setPills((ps) => ps.filter((p) => input.includes(p)));
+  }, [input]);
+
+  const detectMention = (value: string, caret: number) => {
+    const next = mentionAt(value, caret);
+    setMention((prev) =>
+      !next ? null
+        : prev && prev.start === next.start && prev.query === next.query ? prev
+        : next);
+  };
+
+  const suppressed = mentionSuppressed(mention, dead);
+
+  useEffect(() => {
+    if (!mention || suppressed) setResults([]);
+  }, [mention, suppressed]);
+
+  useEffect(() => {
+    if (!mention || suppressed || !onMentionSearch) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      onMentionSearch(mention.query).then((r) => {
+        if (cancelled) return;
+        setResults(r);
+        setActiveIdx(0);
+        // Only a query that actually searched for something may latch. Latching
+        // on "" would suppress the whole session, since every query extends it.
+        if (!r.length && mention.query.trim()) setDead({ start: mention.start, query: mention.query });
+      });
+    }, MENTION_DEBOUNCE_MS);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [mention?.query, mention?.start, suppressed, onMentionSearch]);
+
+  const selectMention = (hit: MentionHit) => {
+    if (!mention) return;
+    const caret = textareaRef.current?.selectionStart ?? input.length;
+    if (hit.connector) {   // a scope, not content: the token stays in the line, painted as a pill
+      const token = `@${hit.name}`;
+      setInput(input.slice(0, mention.start) + token + " " + input.slice(caret));
+      setPills((ps) => (ps.includes(token) ? ps : [...ps, token]));
+      onAddConnector?.(hit.connector);
+      setDead(null); setMention(null); setResults([]);
+      const at = mention.start + token.length + 1;
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(at, at);
+      });
+      return;
+    }
+    const file = hit;
+    const next = input.slice(0, mention.start) + file.path + " " + input.slice(caret);
+    setInput(next);
+    setMentions((ms) => (ms.includes(file.path) ? ms : [...ms, file.path]));
+    setDead(null);
+    setMention(null);
+    setResults([]);
+    const pos = mention.start + file.path.length + 1;
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(pos, pos);
+    });
+  };
+
+  const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value);
+    detectMention(e.target.value, e.target.selectionStart ?? e.target.value.length);
+  };
+
+  const onSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    const el = e.currentTarget;
+    detectMention(el.value, el.selectionStart ?? el.value.length);
+  };
+
+  // Intercept nav keys while the picker is open; otherwise normal handling.
+  const onKeyDownInternal = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mention && results.length) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx((i) => (i + 1) % results.length); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx((i) => (i - 1 + results.length) % results.length); return; }
+      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); selectMention(results[activeIdx]); return; }
+      if (e.key === "Escape") { e.preventDefault(); setDead({ start: mention.start, query: "" }); setMention(null); return; }
+    }
+    handleKeyDown(e);
+  };
+
+  // Paste images / files from the clipboard → attach them.
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!onFilesAdded) return;
+    const files = Array.from(e.clipboardData.items)
+      .filter((it) => it.kind === "file")
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => !!f);
+    if (files.length) { e.preventDefault(); onFilesAdded(files); }
+  };
 
   return (
     <motion.div
@@ -109,23 +268,78 @@ export function InputBox({
         )}
       </AnimatePresence>
 
-      <textarea
-        ref={textareaRef}
-        dir={input ? "auto" : getLang() === "ar" ? "rtl" : "ltr"}
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder || t("sendMessage")}
-        rows={1}
-        className="w-full min-h-[44px] max-h-[240px] resize-none bg-transparent px-3 py-2.5 text-foreground placeholder:text-muted-foreground focus:outline-none overflow-y-auto"
-      />
+      <div className="relative">
+        {/* @-mention file picker — floats above the textarea */}
+        <AnimatePresence>
+          {mention && results.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={{ duration: 0.12 }}
+              dir="ltr"
+              onClick={(e) => e.stopPropagation()}
+              className="absolute bottom-full left-2 right-2 mb-2 z-50 max-h-56 overflow-y-auto rounded-xl border border-border bg-background shadow-lg py-1"
+            >
+              {results.map((f, i) => (
+                <React.Fragment key={f.connector ? `c:${f.connector.name}` : f.path}>
+                  {(i === 0 || !!results[i - 1].connector !== !!f.connector) && (
+                    <div className="px-3 pb-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">{f.connector ? t("connectors") : t("files")}</div>
+                  )}
+                  <button
+                    type="button"
+                    onMouseEnter={() => setActiveIdx(i)}
+                    onMouseDown={(e) => { e.preventDefault(); selectMention(f); }}
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer ${i === activeIdx ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary/60"}`}
+                  >
+                    {f.connector
+                      ? <ConnectorIcon c={f.connector} className="size-4" />
+                      : <span className="size-1.5 shrink-0 rounded-full" style={{ backgroundColor: extTint(f.name) || "var(--color-muted-foreground)" }} />}
+                    <span className="truncate">
+                      {!f.connector && f.path.lastIndexOf("/") >= 0 && (
+                        <span className="text-muted-foreground/60">{f.path.slice(0, f.path.lastIndexOf("/") + 1)}</span>
+                      )}
+                      {f.name}
+                    </span>
+                  </button>
+                </React.Fragment>
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Backdrop that paints the mention highlights, aligned behind the
+            transparent-background textarea. Same box metrics so text lines up. */}
+        <div
+          ref={backdropRef}
+          aria-hidden
+          dir={input ? "auto" : getLang() === "ar" ? "rtl" : "ltr"}
+          className="pointer-events-none absolute inset-0 z-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2.5 leading-6 text-transparent"
+        >
+          {highlightMentions(input, mentions, pills)}
+        </div>
+        <textarea
+          ref={textareaRef}
+          dir={input ? "auto" : getLang() === "ar" ? "rtl" : "ltr"}
+          value={input}
+          onChange={onChange}
+          onSelect={onSelect}
+          onKeyDown={onKeyDownInternal}
+          onPaste={onPaste}
+          onScroll={(e) => { if (backdropRef.current) backdropRef.current.scrollTop = e.currentTarget.scrollTop; }}
+          placeholder={placeholder || t("sendMessage")}
+          rows={1}
+          className="relative z-10 w-full min-h-[44px] max-h-[240px] resize-none bg-transparent px-3 py-2.5 leading-6 text-foreground placeholder:text-muted-foreground focus:outline-none overflow-y-auto"
+        />
+      </div>
 
       {/* Actions row: paperclip left, send right */}
       <div className="flex items-center justify-between px-1 pt-1" dir="ltr">
         <div className="relative flex items-center gap-0.5">
           {(onOpenFilePicker || onOpenFiles) && (
-            <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} disabled={isStreaming} />
+            <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} connectors={connectors} onOpenConnectors={onOpenConnectors} disabled={isStreaming} />
           )}
+          {approveSwitch && <ApproveMode disabled={isStreaming} />}
           <button
             type="button"
             onClick={(e) => {
@@ -143,7 +357,24 @@ export function InputBox({
         </div>
         <div className="flex items-center gap-1">
           {voice && <MicButton listening={listening} transcribing={transcribing} disabled={isStreaming} onStart={startMic} onStop={stopMic} onCancel={cancelMic} />}
-          {isStreaming ? (
+          {/* A filled composer stays sendable mid-run — the message queues and
+              fires when the reply finishes — so send and stop sit side by
+              side while streaming. Empty composer, streaming: stop only. */}
+          {(!isStreaming || input.trim()) && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); handleSubmit(); }}
+              disabled={!input.trim() || attachments?.some((a) => a.status === "uploading")}
+              className={`flex size-8 items-center justify-center rounded-full transition cursor-pointer disabled:opacity-30 ${isStreaming ? "border border-border text-foreground hover:bg-secondary" : "bg-foreground text-background hover:opacity-80"}`}
+              aria-label={isStreaming ? t("queueMessage") : "Send"}
+              title={isStreaming ? t("queueMessage") : undefined}
+            >
+              <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 12l7-7 7 7M12 5v14" />
+              </svg>
+            </button>
+          )}
+          {isStreaming && (
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); onStop(); }}
@@ -151,18 +382,6 @@ export function InputBox({
               aria-label="Stop"
             >
               <svg className="size-5" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); handleSubmit(); }}
-              disabled={!input.trim() || attachments?.some((a) => a.status === "uploading")}
-              className="flex size-8 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80 disabled:opacity-30 transition cursor-pointer"
-              aria-label="Send"
-            >
-              <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 12l7-7 7 7M12 5v14" />
-              </svg>
             </button>
           )}
         </div>
@@ -190,44 +409,78 @@ function MicButton({ listening, transcribing, disabled, onStart, onStop, onCance
   );
 }
 
-function AttachMenu({ onOpenFilePicker, onOpenFiles, disabled }: { onOpenFilePicker?: () => void; onOpenFiles?: () => void; disabled?: boolean }) {
+// Auto: a connector's writes run, the destructive still ask. Manual: every write asks. Remembered per device.
+function ApproveMode({ disabled }: { disabled?: boolean }) {
   const [open, setOpen] = useState(false);
-  const btnClass = `flex size-8 items-center justify-center rounded-2xl transition ${disabled ? "text-muted-foreground opacity-30 cursor-not-allowed" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 cursor-pointer"}`;
-
-  if (onOpenFilePicker && !onOpenFiles) {
-    return (
-      <button type="button" onClick={(e) => { e.stopPropagation(); onOpenFilePicker(); }} disabled={disabled} className={btnClass} aria-label="Attach file">
-        <Icon name="paperclip" className="size-5" />
-      </button>
-    );
-  }
-
+  const [auto, setAuto] = useState(autoApprove);
+  const choose = (on: boolean) => (e: React.MouseEvent) => { e.stopPropagation(); setAutoApprove(on, "composer"); setAuto(on); setOpen(false); };
+  const row = (on: boolean, icon: "forward" | "hand", title: string, hint: string) => (
+    <button onClick={choose(on)} className="flex w-full cursor-pointer items-start gap-2.5 px-3 py-2 text-start transition-colors hover:bg-secondary/80">
+      <Icon name={icon} className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1"><span className="block text-sm text-foreground">{title}</span><span className="block text-xs text-muted-foreground">{hint}</span></span>
+      {auto === on && <Icon name="check" className="mt-0.5 size-4 shrink-0" />}
+    </button>
+  );
   return (
-    <>
-      <button type="button" onClick={(e) => { e.stopPropagation(); if (!disabled) setOpen(!open); }} disabled={disabled} className={btnClass} aria-label="Attach">
-        <Icon name="paperclip" className="size-5" />
+    <div className="relative">
+      <button type="button" onClick={(e) => { e.stopPropagation(); if (!disabled) setOpen(!open); }} disabled={disabled} aria-label={t(auto ? "autoApprove" : "manualApprove")}
+        className={`flex h-8 items-center gap-1.5 rounded-2xl px-2.5 text-xs transition ${disabled ? "cursor-not-allowed text-muted-foreground opacity-30" : "cursor-pointer text-muted-foreground hover:bg-secondary hover:text-foreground"}`}>
+        <Icon name={auto ? "forward" : "hand"} className="size-4" />{t(auto ? "auto" : "manual")}
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 bottom-full z-50 mb-2 w-44 rounded-lg border border-border bg-background shadow-lg py-1">
-            {onOpenFilePicker && (
-              <button
-                onClick={(e) => { e.stopPropagation(); setOpen(false); onOpenFilePicker(); }}
-                className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-              >
-                <Icon name="upload" className="size-4" />
-                {t("uploadFile")}
-              </button>
-            )}
-            {onOpenFiles && (
-              <button
-                onClick={(e) => { e.stopPropagation(); setOpen(false); onOpenFiles(); }}
-                className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-              >
-                <Icon name="folder" className="size-4" />
-                {t("browseFiles")}
-              </button>
+          <div className="absolute start-0 bottom-full z-50 mb-2 w-64 rounded-lg border border-border bg-background py-1 shadow-lg">
+            {row(true, "forward", t("autoApprove"), t("autoApproveHint"))}
+            {row(false, "hand", t("manualApprove"), t("manualApproveHint"))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnectors, disabled }: {
+  onOpenFilePicker?: () => void; onOpenFiles?: () => void; connectors?: Connector[]; onOpenConnectors?: () => void; disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const btnClass = `flex size-8 items-center justify-center rounded-2xl transition ${disabled ? "text-muted-foreground opacity-30 cursor-not-allowed" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 cursor-pointer"}`;
+  const item = "flex w-full items-center gap-2.5 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer";
+  const pick = (fn?: () => void) => (e: React.MouseEvent) => { e.stopPropagation(); setOpen(false); fn?.(); };
+
+  if (!onOpenFiles && !onOpenConnectors) {
+    return onOpenFilePicker ? (
+      <button type="button" onClick={(e) => { e.stopPropagation(); onOpenFilePicker(); }} disabled={disabled} className={btnClass} aria-label="Attach file">
+        <Icon name="paperclip" className="size-5" />
+      </button>
+    ) : null;
+  }
+
+  return (
+    <>
+      <button type="button" onClick={(e) => { e.stopPropagation(); if (!disabled) setOpen(!open); }} disabled={disabled} className={btnClass} aria-label="Add">
+        <Icon name="plus" className="size-5" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute start-0 bottom-full z-50 mb-2 w-52 rounded-lg border border-border bg-background shadow-lg py-1">
+            {onOpenFilePicker && <button onClick={pick(onOpenFilePicker)} className={item}><Icon name="upload" className="size-4" />{t("uploadFile")}</button>}
+            {onOpenFiles && <button onClick={pick(onOpenFiles)} className={item}><Icon name="folder" className="size-4" />{t("browseFiles")}</button>}
+            {onOpenConnectors && (
+              <>
+                <div className="my-1 border-t border-border" />
+                {connectors?.map((c) => (
+                  <div key={c.name} className="flex items-center gap-2.5 px-3 py-2 text-sm text-foreground">
+                    <ConnectorIcon c={c} className="size-4" />
+                    <span className="min-w-0 flex-1 truncate">{connectorLabel(c)}</span>
+                    <span className="size-1.5 rounded-full bg-green-500" />
+                  </div>
+                ))}
+                <button onClick={pick(onOpenConnectors)} className={item}>
+                  <Icon name="link" className="size-4" />{t("manageConnectors")}<Icon name="chevron-right" className="ms-auto size-3.5" />
+                </button>
+              </>
             )}
           </div>
         </>

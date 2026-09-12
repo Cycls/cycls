@@ -26,6 +26,6 @@ node_modules/
 .*
 !.github
 mj/
-cycls/_agent/web/themes/
 *.tsbuildinfo
 uv.lock
+examples/agent/super_new.py

@@ -11,10 +11,10 @@ export function Popover({ open, onClose, className, dim, children }: {
   return createPortal(
     <>
       <div
-        className={`fixed inset-0 z-40 ${dim ? "bg-black/50 backdrop-blur-sm" : ""}`}
+        className={`fixed inset-0 z-[70] ${dim ? "bg-black/50 backdrop-blur-sm" : ""}`}
         onClick={onClose}
       />
-      <div className={`fixed z-50 ${className}`}>{children}</div>
+      <div className={`fixed z-[80] ${className}`}>{children}</div>
     </>,
     document.body,
   );

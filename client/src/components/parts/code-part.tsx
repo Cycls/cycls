@@ -32,7 +32,7 @@ export const CodePart = memo(function CodePart({
   );
 });
 
-function HighlightedCode({ code, language = "text" }: { code: string; language?: string }) {
+export function HighlightedCode({ code, language = "text" }: { code: string; language?: string }) {
   const isDark = useDarkMode();
   const [html, setHtml] = useState<string | null>(null);
 

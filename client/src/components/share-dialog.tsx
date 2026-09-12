@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { t } from "../lib/i18n";
 import { Popover } from "./popover";
 import { Icon, Spinner } from "./icon";
@@ -19,14 +19,23 @@ export function ShareDialog({ onClose, mode = "chat", subtitle = "", org, onShar
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
     <Popover open onClose={onClose} className="right-2 top-12 mt-2 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-background shadow-lg overflow-hidden">
       <div className="px-4 pt-4 pb-3">
         <div className="flex items-center gap-2 mb-1">
           <Icon name="link" className="w-4 h-4 text-foreground shrink-0" />
-          <h3 className="text-sm font-medium text-foreground">
+          <h3 className="flex-1 text-sm font-medium text-foreground">
             {mode === "file" ? t("shareFile") : t("shareConversation")}
           </h3>
+          <button onClick={onClose} aria-label="Close" className="shrink-0 -mr-1 -mt-1 flex size-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors cursor-pointer">
+            <Icon name="x" className="w-4 h-4" />
+          </button>
         </div>
         {mode === "file" && subtitle && (
           <p className="mb-3 truncate text-[11px] text-muted-foreground" dir="auto">{subtitle}</p>

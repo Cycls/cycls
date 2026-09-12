@@ -13,4 +13,4 @@ from .compact import compact
 from . import events
 from .events import to_ui
 from ..state import Session
-from ..tools import build_tools, dispatch
+from ..tools import build_tools, dispatch, ToolContext

@@ -50,6 +50,21 @@ def test_bash_sandbox_hides_db(tmp_path):
         f"expected --tmpfs /workspace/.db in argv, got: {argv}"
 
 
+def test_bash_sandbox_hides_credentials(tmp_path):
+    argv = _capture_bash_argv(tmp_path)
+    masked = {argv[i + 1] for i, a in enumerate(argv) if a == "--tmpfs"}
+    assert {"/workspace/.secrets", "/workspace/.connectors"} <= masked
+
+
+def test_bash_touches_nothing_on_the_workspace_for_scratch(tmp_path):
+    """The workspace is gcsfuse in production. TMPDIR stays on the sandbox
+    tmpfs so pip, tar and tempfile never write there, and a bash call creates
+    no .tmp/ of its own — spill makes the directory when it has something to put in it."""
+    argv = _capture_bash_argv(tmp_path)
+    assert "TMPDIR" not in argv
+    assert not (tmp_path / ".tmp").exists()
+
+
 def test_bash_sandbox_network_off_by_default(tmp_path):
     """Default: --unshare-user + --unshare-net → fresh userns owns the new
     netns so bwrap has NET_ADMIN to bring up lo. No host net access."""
@@ -75,11 +90,12 @@ def test_bash_sandbox_clearenv(tmp_path):
 
 
 def test_bash_sandbox_forwards_only_safe_env(tmp_path):
-    """Only PATH / HOME / TERM / LANG / LD_PRELOAD may be forwarded via --setenv.
-    LD_PRELOAD is the metadata-block shim path; everything else risks leaking
-    a secret the caller forgot to strip."""
+    """Only PATH / HOME / TERM / LANG / LD_PRELOAD and the two fixed trash
+    paths (CYCLS_WORKSPACE / CYCLS_TRASH, constants the rm shim reads) may be
+    forwarded via --setenv. LD_PRELOAD is the metadata-block shim path;
+    everything else risks leaking a secret the caller forgot to strip."""
     argv = _capture_bash_argv(tmp_path)
-    safe = {"PATH", "HOME", "TERM", "LANG", "LD_PRELOAD"}
+    safe = {"PATH", "HOME", "TERM", "LANG", "LD_PRELOAD", "CYCLS_WORKSPACE", "CYCLS_TRASH"}
     forwarded = {argv[i + 1] for i, a in enumerate(argv) if a == "--setenv"}
     assert forwarded <= safe, f"unexpected env forwarded: {forwarded - safe}"
 
@@ -171,3 +187,14 @@ def test_bash_sandbox_bwrap_pid_environ_is_clean_live(tmp_path, monkeypatch):
         "bwrap's own environ leaked parent-process secret — env= sanitization "
         "on subprocess_exec is broken"
     )
+
+
+def test_bash_sandbox_bind_targets_ship_in_the_image(tmp_path):
+    """bwrap can't mkdir inside `--ro-bind / /`: a bind target outside /workspace,
+    /tmp or /skills must be created by the image, or every bash call dies."""
+    from cycls._agent.main import Agent
+    argv = _capture_bash_argv(tmp_path)
+    targets = {dst for flag, _, dst in zip(argv, argv[1:], argv[2:]) if flag in ("--bind", "--ro-bind")}
+    baked = " ".join(Agent._base_run).split()
+    for t in targets - {"/", "/workspace"}:
+        assert t.startswith(("/workspace/", "/tmp/", "/skills/")) or t in baked, t

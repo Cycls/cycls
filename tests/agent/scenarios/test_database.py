@@ -145,3 +145,13 @@ def test_db_delete_subtree_via_trailing_slash(tmp_path):
         remaining = sorted([k async for k, _ in db.items()])
         assert remaining == ["tasks/keep"]
     _run(t())
+
+
+def test_ws_mode_kv_lands_inside_workspace(tmp_path):
+    """Multi-workspace mode: the agent KV re-derivation keeps the ws segment,
+    so the `.database` slot sits inside the workspace subtree, per-user."""
+    ws = workspace("org:u1", tmp_path, base=f"file://{tmp_path}", ws="u-u1")
+    _run(_exec_database({"command": "put", "key": "k1", "value": 1}, ws))
+    assert (tmp_path / "org" / "ws" / "u-u1" / ".database" / "u1" / "k1.json").exists()
+    out = _run(_exec_database({"command": "get", "key": "k1"}, ws))
+    assert json.loads(out) == 1
