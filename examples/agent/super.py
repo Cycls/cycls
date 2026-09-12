@@ -5,6 +5,8 @@
 
 from datetime import datetime, timezone
 
+import os
+
 import cycls
 
 FREE_MONTHLY_LIMIT = 5
@@ -22,12 +24,26 @@ image = cycls.Image().copy(".providers.env", ".env")#.rebuild()
 
 # A connector: the person connects their own Google Drive (scope="user"), and
 # every call the drive tools make carries their grant. Secrets stay in env.
-google = cycls.OAuth2("google",
+google = cycls.OAuth2("google", title="Google Drive",
     authorize="https://accounts.google.com/o/oauth2/v2/auth",
     token="https://oauth2.googleapis.com/token",
     client_id=cycls.env("GOOGLE_CLIENT_ID"), secret=cycls.env("GOOGLE_CLIENT_SECRET"),
-    scopes=["https://www.googleapis.com/auth/drive.file"],
-    extra={"access_type": "offline", "prompt": "consent"})   # Google issues a refresh token only with these
+    # Google's Drive MCP requires both — drive.file alone is refused, even for create_file.
+    # drive.readonly is a restricted scope: fine for test users, CASA to publish.
+    scopes=["https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive.readonly"],
+    extra={"access_type": "offline", "prompt": "consent"},
+    description="Search, read and create files in your Drive",
+    icon="https://ssl.gstatic.com/images/branding/product/2x/drive_2020q4_48dp.png",
+    about="Connect Google Drive to search your documents, read file contents, create new files and analyze your data. "
+          "The agent can find a document even when you don't remember its exact name, read Docs, Sheets, Slides and PDFs, "
+          "and save its work straight to your Drive.",
+    use_cases=[("Find and summarize", "Locate the right document and pull out what matters"),
+               ("Analyze data", "Read a spreadsheet and answer questions about it"),
+               ("Create documents", "Save reports, notes and drafts to your Drive")],
+    developer="Google", category="Productivity", website="https://drive.google.com",
+    privacy="https://policies.google.com/privacy", terms="https://policies.google.com/terms",
+    docs="https://developers.google.com/workspace/drive/api/guides/configure-mcp-server",
+    prompts=["ما آخر الملفات التي عدّلتها هذا الأسبوع؟", "ابحث عن آخر عرض للمبيعات ولخّصه", "Find the latest sales deck and summarize it"])   # Google issues a refresh token only with these
 
 web = (
     cycls.Web()
@@ -104,8 +120,16 @@ async def render_image(args):
 
 llm = (
     cycls.LLM()
-    .model("anthropic/claude-sonnet-4-6")
+    # .model("anthropic/claude-sonnet-4-6")
     # .model("openai/gpt-5.4")
+    .model("modal/moonshotai/Kimi-K3")   # the production path: Modal-hosted K3 through the OpenAI provider
+    .extra_body({"reasoning_effort": "high"})
+    .base_url("https://cycls--ep-kimi-k3-server.us-west.modal.direct/v1")
+    .api_key("unused")
+    .headers({"Modal-Key": os.environ["MODAL_PROXY_TOKEN_ID"],
+              "Modal-Secret": os.environ["MODAL_PROXY_TOKEN_SECRET"]})
+    .context(1_000_000)
+    .max_tokens(32_768)
     # .model("zai/glm-5.2").base_url("https://api.z.ai/api/paas/v4/")  # any OpenAI-compatible API
     # .model("google/gemini-3.1-pro-preview").base_url("https://generativelanguage.googleapis.com/v1beta/openai/")
     # .context(200_000)   # window → compaction timing (default 1M; set for smaller models)
