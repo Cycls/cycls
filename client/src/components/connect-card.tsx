@@ -15,7 +15,7 @@ export function ConnectCard({ name, onConnect, onDismiss }: { name: string; onCo
           {t("notNow")}
         </button>
         <button onClick={onConnect} className="shrink-0 rounded-full bg-foreground px-3.5 py-1.5 text-xs font-medium text-background transition hover:opacity-80 cursor-pointer">
-          {t("connect")}
+          {t("connectName").replace("{name}", label)}
         </button>
       </div>
     </motion.div>

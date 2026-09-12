@@ -56,7 +56,8 @@ const rehypePlugins = [[rehypeKatex, { strict: false }]] as const;
 export function workspacePath(href: string): string | null {
   let h = href.replace(/^(file:\/\/|sandbox:)/i, "");
   if (/^https?:\/\//i.test(h)) {
-    const u = new URL(h);
+    let u: URL;
+    try { u = new URL(h); } catch { return null; }
     if (u.origin !== location.origin || !u.pathname.startsWith("/files/")) return null;
     h = u.pathname.slice(7);
   } else if (/^([a-z][a-z0-9+.-]*:|\/\/|#)/i.test(h)) return null;

@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { t, useLang, getLang } from "../lib/i18n";
 import { LoadingBar } from "./loading-bar";
@@ -40,28 +41,55 @@ function formatDate(iso: string) {
 type MenuItem = { label: string; danger?: boolean; divider?: boolean; onClick: () => void };
 
 // Dropdown menu (anchored under a trigger).
+// Measured against its trigger and drawn in a portal: every pane it opens from clips its own overflow,
+// which used to cut the menu off at the bottom of a list and — in Arabic, where `end-0` flips — hide the
+// labels past the pane's edge. Fixed coordinates escape that, flipping above the trigger when the
+// bottom is tight and staying inside the viewport on both sides.
 export function DropdownMenu({ items, onClose }: { items: MenuItem[]; onClose: () => void }) {
+  const here = useRef<HTMLSpanElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const anchor = here.current?.previousElementSibling ?? here.current?.parentElement;
+    if (!anchor || !menu.current) return;
+    const a = anchor.getBoundingClientRect(), m = menu.current.getBoundingClientRect(), gap = 4;
+    const below = a.bottom + gap;
+    setAt({
+      top: below + m.height > window.innerHeight - 8 ? Math.max(8, a.top - m.height - gap) : below,
+      left: Math.min(Math.max(8, a.right - m.width), window.innerWidth - m.width - 8),
+    });
+  }, []);
+
   return (
     <>
-      <div className="fixed inset-0 z-40" onClick={onClose} />
-      {/* Anchored by the pane's direction (end-0), read in the UI's — the canvas
-          pane is forced LTR for layout, its menu still reads RTL in Arabic. */}
-      <div className="absolute top-full end-0 z-50 mt-1 min-w-[140px] rounded-lg border border-border bg-background shadow-lg py-1"
-           dir={getLang() === "ar" ? "rtl" : "ltr"}>
-        {items.map((item) => (
-          <button
-            key={item.label}
-            onClick={(e) => { e.stopPropagation(); item.onClick(); onClose(); }}
-            className={`flex w-full items-center px-3 py-1.5 text-sm transition-colors cursor-pointer ${
-              item.divider ? "mt-1 border-t border-border pt-2" : ""
-            } ${
-              item.danger ? "text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20" : "text-foreground hover:bg-secondary/80"
-            }`}
+      <span ref={here} className="hidden" />
+      {createPortal(
+        <>
+          <div className="fixed inset-0 z-40" onClick={onClose} />
+          <div
+            ref={menu}
+            dir={getLang() === "ar" ? "rtl" : "ltr"}
+            style={{ top: at?.top ?? 0, left: at?.left ?? 0, visibility: at ? undefined : "hidden" }}
+            className="fixed z-50 min-w-[140px] rounded-lg border border-border bg-background shadow-lg py-1"
           >
-            {item.label}
-          </button>
-        ))}
-      </div>
+            {items.map((item) => (
+              <button
+                key={item.label}
+                onClick={(e) => { e.stopPropagation(); item.onClick(); onClose(); }}
+                className={`flex w-full items-center px-3 py-1.5 text-sm transition-colors cursor-pointer ${
+                  item.divider ? "mt-1 border-t border-border pt-2" : ""
+                } ${
+                  item.danger ? "text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20" : "text-foreground hover:bg-secondary/80"
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </>,
+        document.body,
+      )}
     </>
   );
 }

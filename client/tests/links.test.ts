@@ -13,6 +13,7 @@ describe("workspace links", () => {
     expect(workspacePath("https://example.com/files/x.md")).toBeNull();
     expect(workspacePath("mailto:a@b.c")).toBeNull();
     expect(workspacePath("#top")).toBeNull();
+    expect(workspacePath("https://[not a url")).toBeNull();   // a link-shaped string must not throw in render
   });
 
   it("links bare paths in prose, not inside code or existing links", () => {

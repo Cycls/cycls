@@ -165,9 +165,14 @@ export function MessageBubble({
   // `suggest` and `ask` drive the composer, not the transcript. Their step
   // line restated a chip or a card the user is already looking at, and padded
   // the "N steps" count with work that isn't work.
-  const rendered = parts.filter((p) =>
-    p.type !== "sources"
-    && !(p.type === "step" && (p.tool_name === "Suggest" || p.tool_name === "Ask")));
+  // A search's results ride into its own step row, threaded by the id of the call that ran them, and
+  // expand under the query there. The deduped chip row at the end of the turn stays: provenance can't
+  // depend on the reader opening a step.
+  const byCall = new Map<string, Source[]>();
+  for (const p of parts) if (p.type === "sources" && p.id && p.sources?.length) byCall.set(p.id, p.sources);
+  const rendered = parts
+    .filter((p) => p.type !== "sources" && !(p.type === "step" && (p.tool_name === "Suggest" || p.tool_name === "Ask")))
+    .map((p) => (p.type === "step" && p.id && byCall.has(p.id) ? { ...p, sources: byCall.get(p.id) } : p));
   const isEmpty = rendered.length === 0;
 
   // Every result this turn's searches returned, keyed for link lookup. `parts`
