@@ -1,4 +1,4 @@
-import json, inspect, re, time, uuid, os
+import asyncio, json, inspect, re, time, uuid, os
 from pathlib import Path
 from pydantic import BaseModel, PrivateAttr
 from typing import Optional, Any
@@ -7,6 +7,8 @@ from cycls._app.db import Workspace, workspace
 from cycls._agent.logs import log
 from cycls._agent import state
 
+
+BRAND_TTL = 300   # how long a container serves the brand it last read from the CMS
 
 class PassMetadata(BaseModel):
     name: str
@@ -131,31 +133,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
 
     cms = config.cms or {}
     _cms_headers = {"Authorization": f"Bearer {cms['token']}"} if cms.get("token") else {}
-    if cms.get("brand"):
-        try:
-            resp = httpx.get(cms["brand"], headers=_cms_headers, timeout=5)
-            if resp.status_code == 200:
-                agent = resp.json()
-                cms_meta = {
-                    "en": {"name": agent.get("title") or "",
-                           "description": agent.get("description", "")},
-                    "ar": {"name": agent.get("title_ar") or agent.get("title") or "",
-                           "description": agent.get("description_ar", "")},
-                }
-                # Static .brand() wins piece by piece; CMS fills what's unset.
-                static = config.pass_metadata or {}
-                merged = {}
-                for loc, c in cms_meta.items():
-                    s = static.get(loc)
-                    merged[loc] = PassMetadata(
-                        name=(s.name if s else "") or c["name"] or config.name or "",
-                        description=(s.description if s else "") or c["description"],
-                        logo=(s.logo if s else "") or agent.get("icon_svg", ""),
-                        brand=s.brand if s else "",
-                    )
-                config.pass_metadata = {**static, **merged}
-        except Exception:
-            pass
+    _static_brand = dict(config.pass_metadata or {})   # .brand() wins piece by piece; the CMS fills what's unset
 
     volume = Path(config.volume)
 
@@ -225,6 +203,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
 
     @app.get("/config")
     async def get_config():
+        asyncio.create_task(_refresh())
         return config.public()
 
     @app.post("/transcribe")
@@ -281,33 +260,19 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
     _base_html = (Path(config.public_path) / "index.html").read_text()
 
     config.voice = bool(os.environ.get("OPENAI_API_KEY"))
-    # "</" escaped so CMS-sourced text can't close the script tag
-    _config_json = json.dumps(config.public()).replace("</", "<\\/")
-    _config_script = f'<script>window.__CONFIG__={_config_json}</script>'
 
-    brand_en = (config.pass_metadata or {}).get("en")
-    seo = config.seo or {}
-    app_title = seo.get("title") or (brand_en.name if brand_en else None) \
-        or (f"{config.name.capitalize()} | Cycls Pass" if config.name else "Cycls")
-    app_desc = seo.get("description") or (brand_en.description if brand_en else "") \
-        or config.title or "AI Agent"
-
-    _jsonld = json.dumps({"@context": "https://schema.org", "@type": "WebApplication",
-                          "name": app_title, "description": app_desc,
-                          "image": config.og or "/og.png",
-                          "inLanguage": list(config.pass_metadata or {"en": None})}).replace("</", "<\\/")
-    _extra_head = f'<script type="application/ld+json">{_jsonld}</script>'
+    _head = ""   # the <head> additions the CMS cannot change, so they are built once
     _gtm_id = next((p.get("id") for p in (config.analytics or [])
                     if isinstance(p, dict) and p.get("provider") == "gtm"), None)
     if _gtm_id and re.fullmatch(r"GTM-[A-Z0-9]{4,10}", str(_gtm_id)):   # shape re-checked: inlined into a script tag
-        _extra_head += (
+        _head += (
             "<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});"
             "var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';"
             "j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})"
             f"(window,document,'script','dataLayer','{_gtm_id}');</script>")
     if config.favicon:
         href = config.favicon if config.favicon.startswith(("http", "data:")) else "/favicon.svg"
-        _extra_head += f'<link rel="icon" href="{escape(href)}" />'
+        _head += f'<link rel="icon" href="{escape(href)}" />'
     if config.colors:
         c = config.colors
         light = "".join(f"--color-{k}:{v};" for k, v in
@@ -315,17 +280,68 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
         dark = "".join(f"--color-{k}:{v};" for k, v in
                        (("accent", c.get("primary_dark") or c.get("primary")),
                         ("secondary", c.get("secondary_dark") or c.get("secondary"))) if v)
-        _extra_head += f"<style>:root{{{light}}}.dark{{{dark}}}</style>"
+        _head += f"<style>:root{{{light}}}.dark{{{dark}}}</style>"
     if config.head:
-        _extra_head += config.head
-    def _seo_html(title: str = "Cycls", desc: str = "AI Agent"):
-        html = _base_html.replace("__TITLE__", escape(title)).replace("__DESC__", escape(desc))
+        _head += config.head
+
+    V = {}   # everything baked from the brand; _build() replaces the whole set together
+
+    def _build():
+        brand, seo = (config.pass_metadata or {}).get("en"), config.seo or {}
+        V["title"] = seo.get("title") or (brand.name if brand else None) \
+            or (f"{config.name.capitalize()} | Cycls Pass" if config.name else "Cycls")
+        V["desc"] = seo.get("description") or (brand.description if brand else "") \
+            or config.title or "AI Agent"
+        V["og_title"] = (brand.name if brand else None) or (config.name.capitalize() if config.name else "Cycls")
+        V["og_desc"] = (brand.description if brand else "") or config.title or ""
+        # "</" escaped so CMS-sourced text can't close either script tag
+        jsonld = json.dumps({"@context": "https://schema.org", "@type": "WebApplication",
+                             "name": V["title"], "description": V["desc"],
+                             "image": config.og or "/og.png",
+                             "inLanguage": list(config.pass_metadata or {"en": None})}).replace("</", "<\\/")
+        cfg = json.dumps(config.public()).replace("</", "<\\/")
+        html = _base_html.replace("__TITLE__", escape(V["title"])).replace("__DESC__", escape(V["desc"]))
         if config.og:
             html = html.replace('content="/og.png"', f'content="{escape(config.og)}"')
-        html = html.replace("</head>", f"{_extra_head}</head>")
-        return html.replace("</body>", f"{_config_script}</body>")
+        html = html.replace("</head>", f'<script type="application/ld+json">{jsonld}</script>{_head}</head>')
+        V["html"] = html.replace("</body>", f'<script>window.__CONFIG__={cfg}</script></body>')
 
-    _index_html = _seo_html(app_title, app_desc)
+    def _brand(agent):
+        merged = {}
+        for loc, name, desc in (("en", agent.get("title"), agent.get("description", "")),
+                                ("ar", agent.get("title_ar") or agent.get("title"), agent.get("description_ar", ""))):
+            s = _static_brand.get(loc)
+            merged[loc] = PassMetadata(name=(s.name if s else "") or name or config.name or "",
+                                       description=(s.description if s else "") or desc,
+                                       logo=(s.logo if s else "") or agent.get("icon_svg", ""),
+                                       brand=s.brand if s else "")
+        config.pass_metadata = {**_static_brand, **merged}
+        _build()
+
+    _brand_at = {"t": time.time()}
+    if cms.get("brand"):   # once at boot, so the very first page already carries the real name
+        try:
+            r = httpx.get(cms["brand"], headers=_cms_headers, timeout=5)
+            if r.status_code == 200:
+                _brand(r.json())
+        except Exception:
+            pass
+    if not V:              # no CMS, or the boot fetch failed
+        _build()
+
+    async def _refresh():
+        """Re-read the brand at most once per TTL, in the background: the request that finds the
+        cache stale is served from the copy in hand, so nothing ever waits on the CMS."""
+        if not cms.get("brand") or time.time() - _brand_at["t"] < BRAND_TTL:
+            return
+        _brand_at["t"] = time.time()
+        try:
+            async with httpx.AsyncClient(timeout=5) as c:
+                r = await c.get(cms["brand"], headers=_cms_headers)
+            if r.status_code == 200:
+                _brand(r.json())
+        except Exception:
+            pass
 
     @app.get("/robots.txt")
     async def robots(request: Request):
@@ -334,7 +350,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
 
     @app.get("/llms.txt")
     async def llms(request: Request):
-        return FastAPIResponse(f"# {app_title}\n\n> {app_desc}\n\n- [{app_title}]({request.base_url})\n",
+        return FastAPIResponse(f"# {V['title']}\n\n> {V['desc']}\n\n- [{V['title']}]({request.base_url})\n",
                                media_type="text/plain")
 
     @app.get("/sitemap.xml")
@@ -354,26 +370,25 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
 
     from fastapi.responses import Response
 
-    og_title = (brand_en.name if brand_en else None) or (config.name.capitalize() if config.name else "Cycls")
-    og_desc = (brand_en.description if brand_en else "") or config.title or ""
-
     @app.get("/og.png")
     async def og_image():
         if config._og_image:
             return Response(config._og_image, media_type="image/png")
         from .og import generate as og_generate
-        return Response(await og_generate(og_title, og_desc), media_type="image/png")
+        return Response(await og_generate(V["og_title"], V["og_desc"]), media_type="image/png")
 
     # ---- SPA fallback routes (before static mounts) ----
 
     @app.get("/")
     @app.get("/sso-callback")
     async def index():
-        return HTMLResponse(_index_html)
+        asyncio.create_task(_refresh())   # this page is served from what we have; the next one is fresh
+        return HTMLResponse(V["html"])
 
     @app.get("/shared/{user}/{token}")
     async def share_index(user: str, token: str):
-        return HTMLResponse(_index_html)
+        asyncio.create_task(_refresh())
+        return HTMLResponse(V["html"])
 
     if any(isinstance(p, dict) and p.get("provider") == "onesignal" for p in (config.notifications or [])):
         # A push service worker must come from the site's own origin; scoped
