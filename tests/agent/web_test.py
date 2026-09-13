@@ -1112,6 +1112,52 @@ def test_seo_derives_from_brand(tmp_path):
     assert "<h1>" not in html  # no server-rendered body — nothing to flash before React mounts
 
 
+def test_brand_refresh_reaches_every_surface(tmp_path, monkeypatch):
+    """A published CMS edit must reach the whole page, not just the chat header: the boot value is
+    served until the TTL, then a background re-read replaces the title, the meta description, the
+    JSON-LD, the OG copy and window.__CONFIG__ together. Nothing waits on the CMS."""
+    import time as _time
+    from fastapi.testclient import TestClient
+    from cycls._agent.web import server
+
+    live = {"description": "old copy"}
+
+    class _Resp:
+        status_code = 200
+        def json(self): return {"title": "Super", **live}
+
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, *a, **k): return _Resp()
+
+    monkeypatch.setattr("httpx.get", lambda *a, **k: _Resp())
+    monkeypatch.setattr("httpx.AsyncClient", lambda *a, **k: _Client())
+
+    async def dummy_agent(context):
+        yield "test"
+
+    cfg = Config(public_path=_seo_theme(tmp_path), name="super",
+                 cms={"brand": "https://cms.example/agents/super"})
+    client = TestClient(web(dummy_agent, cfg))
+    assert "old copy" in client.get("/").text
+
+    live["description"] = "new copy"
+    assert "old copy" in client.get("/").text          # inside the TTL, still the boot value
+
+    monkeypatch.setattr(server, "BRAND_TTL", 0)        # the next request finds it stale
+    for _ in range(50):                                # the re-read runs in the background, so give it a tick
+        html = client.get("/").text
+        if "new copy" in html:
+            break
+        _time.sleep(0.02)
+    assert "new copy" in html                          # meta description
+    assert '"description": "new copy"' in html         # JSON-LD
+    assert "new copy" in html.split("window.__CONFIG__")[1]
+    assert "new copy" in client.get("/llms.txt").text
+    assert "new copy" in str(client.get("/config").json())
+
+
 def test_seo_overrides_brand(tmp_path):
     from fastapi.testclient import TestClient
 
