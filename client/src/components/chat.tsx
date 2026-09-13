@@ -13,7 +13,7 @@ import { Icon, IconButton } from "./icon";
 import { ConnectCard } from "./connect-card";
 import { ConfirmCard } from "./confirm-card";
 import { ConnectorsContext } from "./parts/tool-call";
-import { ConnectorsDialog, connectorLabel, type Connector } from "./connectors-dialog";
+import { ConnectorsDialog, connectorLabel, openAuth, type Connector } from "./connectors-dialog";
 import { CyclsLogo } from "./cycls-logo";
 import { LoadingBar } from "./loading-bar";
 import { InputBox } from "./input-box";
@@ -473,7 +473,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     const needle = q.toLowerCase();
     // Hidden only while its token is still in the line — delete the token and the connector is offered again.
     const hits = (connectors ?? [])
-      .filter((c) => c.connected && c.allowed && connectorLabel(c).toLowerCase().includes(needle)
+      .filter((c) => c.connected && c.allowed && c.on && connectorLabel(c).toLowerCase().includes(needle)
         && !inputRef.current.includes(`@${connectorLabel(c)}`))
       .map((c) => ({ name: connectorLabel(c), path: "", connector: c }));
     return [...(account ? hits : []), ...(searchFiles ? await searchFiles(q) : [])];
@@ -728,6 +728,11 @@ export function Chat({ chat, onShare, files, account, config }: {
     connectors: connectors?.filter((c) => c.connected),
     approveSwitch: !!connectors?.length,
     onOpenConnectors: account ? () => openConnectors("plus") : undefined,
+    onToggleConnector: (c: Connector, on: boolean) => {
+      setConnectors((prev) => prev?.map((x) => (x.name === c.name ? { ...x, on } : x)) ?? prev);
+      track("connector_toggled", { connector: c.name, to: on ? "on" : "off", level: "user" });
+      api(`/connectors/${c.name}`, { method: "PATCH", json: { on } }).catch(loadConnectors);
+    },
     onAddConnector: (c: Connector) => addPill(c, "picker"),
     placeholder: inputPlaceholder,
   };
@@ -1015,7 +1020,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                       track("connector_connect_clicked", { connector: connect.name, source: "card", chat_id: chatId });
                       if (connectors?.find((x) => x.name === connect.name)?.kind === "key") { setConnect(null); openConnectors("card", connect.name); return; }
                       const { url } = await (await api(`/connectors/${connect.name}/authorize`, { method: "POST" })).json();
-                      window.open(url, "_blank", "noopener");
+                      openAuth(url, loadConnectors);
                     }}
                     onDismiss={() => { track("connector_dismissed", { connector: connect.name }); setConnect(null); }}
                   />

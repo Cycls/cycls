@@ -1,21 +1,24 @@
 // The connector directory and a connector's page (docs/notes/plugins-connectors.md, UI).
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./icon";
 import type { ChatApi } from "../hooks/use-chat";
-import { t, useLang } from "../lib/i18n";
+import { t, useLang, getLang } from "../lib/i18n";
 import { cn } from "../lib/utils";
 import { track } from "../lib/analytics";
 
+// A field the CMS owns is bilingual; one declared in code is the same string in both languages.
+export type L = { en: string; ar: string } | null;
 export type Connector = {
-  name: string; title: string | null; scope: "user" | "workspace" | "either"; kind: "oauth" | "key"; hint: string | null;
+  name: string; scope: "user" | "workspace" | "either"; kind: "oauth" | "key"; hint: string | null;
   connected: boolean; connected_as: "user" | "workspace" | null;
-  admin: boolean; allowed: boolean; org_admin: boolean; team: string | null;
-  description: string | null; about: string | null; icon: string | null;
-  prompts: string[]; use_cases: [string, string][]; skills: [string, string][];
-  developer: string | null; category: string | null; website: string | null; version: string | null;
-  privacy: string | null; terms: string | null; docs: string | null; support: string | null;
-  servers: { label: string; url: string }[];
+  admin: boolean; allowed: boolean; on: boolean; org_admin: boolean; team: string | null;
+  title: L; description: L; category: L; story: L; about: string | null; icon: string | null;
+  prompts: L[]; showcase: "prompts" | "gallery"; gallery: { image: string; caption?: L }[]; gradient: string[] | null;
+  links: { label: string; url: string }[];
+  use_cases: [string, string][]; skills: [string, string][];
+  developer: string | null; website: string | null;
+  privacy: string | null; terms: string | null; docs: string | null;
 };
 type Mode = "allow" | "ask" | "never";
 type ToolRow = { name: string; title: string; description: string | null; writes: boolean; mode: Mode };
@@ -23,8 +26,11 @@ type PromptRow = { name: string; title: string; description: string | null };
 const MODES: Mode[] = ["allow", "ask", "never"];
 const MODE_HINT = { allow: "hintAllow", ask: "hintAsk", never: "hintNever" } as const;
 
-export const connectorLabel = (c: { name: string; title?: string | null }) =>
-  c.title || c.name.charAt(0).toUpperCase() + c.name.slice(1);
+// Read a bilingual field in the reader's language, falling back to whatever was written.
+export const L = (v: L | undefined): string => (v ? (getLang() === "ar" ? v.ar || v.en : v.en || v.ar) : "");
+
+export const connectorLabel = (c: { name: string; title?: L }) =>
+  L(c.title) || c.name.charAt(0).toUpperCase() + c.name.slice(1);
 
 // The declared logo, else the site's favicon, else a link glyph — a connector always has a face.
 export function ConnectorIcon({ c, className = "size-9" }: { c: Connector; className?: string }) {
@@ -36,12 +42,31 @@ export function ConnectorIcon({ c, className = "size-9" }: { c: Connector; class
 }
 
 // cycls.com's ember, each stop mixed into the theme background so it reads in light and dark alike.
-const PANEL = "radial-gradient(140% 120% at 96% 100%, color-mix(in oklab, #ffbe6e 42%, var(--color-background)) 0%, color-mix(in oklab, #ff8c37 36%, var(--color-background)) 20%, color-mix(in oklab, #d6501e 28%, var(--color-background)) 42%, color-mix(in oklab, #962d14 18%, var(--color-background)) 66%, var(--color-background) 100%)";
+// Three stops from the CMS, else cycls.com's ember. Each is mixed into the theme background, so it
+// reads in light and dark alike.
+const panel = (stops: string[] | null) => {
+  const [a, b, d] = stops?.length === 3 ? stops : ["#ffbe6e", "#ff8c37", "#962d14"];
+  return `radial-gradient(140% 120% at 96% 100%, color-mix(in oklab, ${a} 42%, var(--color-background)) 0%,` +
+    ` color-mix(in oklab, ${b} 36%, var(--color-background)) 20%, color-mix(in oklab, ${d} 28%, var(--color-background)) 42%,` +
+    ` color-mix(in oklab, ${d} 18%, var(--color-background)) 66%, var(--color-background) 100%)`;
+};
+
 
 const RAIL = ["connectors", "plugins", "skills"] as const;
 const H4 = "mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground";
 const CARD = "rounded-xl border border-border bg-background/40 px-4";
 const CHIP = "rounded-full border border-border bg-secondary/50 px-2.5 py-1 text-xs text-foreground";
+
+// The OAuth window has to keep its opener: the callback posts `cycls:connected` back through it. The
+// listener checks the origin, and `closed` is the fallback for a flow finished somewhere else.
+export function openAuth(url: string, done: () => void) {
+  const win = window.open(url, "cycls:connect", "popup=yes,width=520,height=700");
+  if (!win) { window.location.href = url; return; }
+  const timer = setInterval(() => {
+    if (win.closed) { clearInterval(timer); done(); }
+  }, 800);
+  setTimeout(() => clearInterval(timer), 5 * 60 * 1000);
+}
 
 export function ConnectorsDialog({ api, items, reload, initial, onClose, onUsePrompt }: {
   api: ChatApi["api"];
@@ -52,14 +77,14 @@ export function ConnectorsDialog({ api, items, reload, initial, onClose, onUsePr
   onUsePrompt: (text: string, c: Connector) => void;
 }) {
   const isAr = useLang() === "ar";
-  const [tab, setTab] = useState<"discover" | "yours">("discover");
+  const [cat, setCat] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<string | null>(initial ?? null);
 
   const connect = async (c: Connector, scope: "user" | "workspace") => {
     track("connector_connect_clicked", { connector: c.name, source: "directory", scope });
     const { url } = await (await api(`/connectors/${c.name}/authorize?scope=${scope}`, { method: "POST" })).json();
-    window.open(url, "_blank", "noopener");
+    openAuth(url, reload);
   };
   const disconnect = async (c: Connector) => {
     await api(`/connectors/${c.name}?scope=${c.connected_as ?? "user"}`, { method: "DELETE" });
@@ -69,6 +94,11 @@ export function ConnectorsDialog({ api, items, reload, initial, onClose, onUsePr
   const allow = async (c: Connector, on: boolean) => {
     await api(`/connectors/${c.name}`, { method: "PATCH", json: { allowed: on } });
     track("connector_toggled", { connector: c.name, to: on ? "on" : "off", level: "org" });
+    reload();
+  };
+  const use = async (c: Connector, on: boolean) => {
+    await api(`/connectors/${c.name}`, { method: "PATCH", json: { on } });
+    track("connector_toggled", { connector: c.name, to: on ? "on" : "off", level: "user" });
     reload();
   };
   const saveKey = async (c: Connector, key: string, scope: "user" | "workspace") => {
@@ -82,17 +112,25 @@ export function ConnectorsDialog({ api, items, reload, initial, onClose, onUsePr
     onClose();
   };
 
+  // One list, not two tabs: what you have connected sits at the top with its state, everything else
+  // follows. Search and the category chips narrow both halves at once.
   const q = query.trim().toLowerCase();
-  const list = (items ?? [])
-    .filter((c) => c.connected === (tab === "yours"))
-    .filter((c) => !q || connectorLabel(c).toLowerCase().includes(q) || (c.description ?? "").toLowerCase().includes(q));
+  const matches = (items ?? []).filter((c) =>
+    (!q || connectorLabel(c).toLowerCase().includes(q) || L(c.description).toLowerCase().includes(q))
+    && (!cat || L(c.category) === cat));
+  const mine = matches.filter((c) => c.connected);
+  const rest = matches.filter((c) => !c.connected);
+  const list = [...mine, ...rest];
+  const cats = [...new Set((items ?? []).map((c) => L(c.category)).filter(Boolean))].sort();
   const detail = open ? items?.find((c) => c.name === open) : null;
 
-  const tabs = (
-    <div className="flex shrink-0 rounded-lg border border-border bg-secondary p-0.5">
-      {(["discover", "yours"] as const).map((k) => (
-        <button key={k} onClick={() => setTab(k)} className={cn("cursor-pointer rounded-md px-3 py-1 text-xs transition-colors", tab === k ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
-          {t(k)}
+  const filters = cats.length > 1 && (
+    <div className="-mx-1 mb-4 flex gap-1.5 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {[null, ...cats].map((k) => (
+        <button key={k ?? "all"} onClick={() => setCat(k)}
+          className={cn("shrink-0 cursor-pointer rounded-full border px-3 py-1 text-xs transition-colors",
+            cat === k ? "border-foreground bg-foreground text-background" : "border-border text-muted-foreground hover:text-foreground")}>
+          {k ?? t("allConnectors")}
         </button>
       ))}
     </div>
@@ -105,32 +143,52 @@ export function ConnectorsDialog({ api, items, reload, initial, onClose, onUsePr
     </div>
   );
 
-  const grid = items === null ? null : list.length === 0 ? (
-    <div className="flex flex-col items-center py-20 text-center text-muted-foreground">
-      <Icon name="link" className="mb-3 size-8 opacity-30" strokeWidth={1.5} />
-      <p className="text-sm">{q ? t("noConnectorsFound") : tab === "yours" ? t("nothingConnected") : t("noConnectors")}</p>
-      {!q && tab === "yours" && <p className="mt-1 text-xs">{t("nothingConnectedSub")}</p>}
-    </div>
-  ) : (
+  const cards = (rows: Connector[]) => (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-      {list.map((c) => (
+      {rows.map((c) => (
         <button key={c.name} onClick={() => setOpen(c.name)} className={cn("flex cursor-pointer flex-col gap-3 rounded-2xl border border-border bg-background/40 p-4 text-start transition hover:border-foreground/25 hover:shadow-sm", !c.allowed && "opacity-50")}>
           <div className="flex items-center gap-3">
             <ConnectorIcon c={c} className="size-10" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-foreground">{connectorLabel(c)}</p>
-              {c.category && <p className="truncate text-[11px] text-muted-foreground">{c.category}</p>}
+              {L(c.category) && <p className="truncate text-[11px] text-muted-foreground">{L(c.category)}</p>}
             </div>
+            {/* One 28px slot whatever the state, so the column lines up down the grid. */}
             {!c.allowed
-              ? <span className="rounded-full border border-border px-1.5 py-px text-[10px] text-muted-foreground">{t("off")}</span>
+              ? <span title={t("offInOrg")} className="flex size-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground"><Icon name="x" className="size-3.5" /></span>
               : c.connected
-                ? <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><span className="size-2 rounded-full bg-green-500" />{t("connectedLabel")}</span>
-                : <span className="flex size-7 items-center justify-center rounded-full border border-border text-muted-foreground"><Icon name="plus" className="size-3.5" /></span>}
+                ? <span title={c.on ? t("connectedLabel") : t("useInChatsSub")}
+                    className={cn("flex size-7 shrink-0 items-center justify-center rounded-full", c.on ? "bg-green-500/15 text-green-600" : "bg-secondary text-muted-foreground")}>
+                    {c.on ? <Icon name="check" className="size-3.5" strokeWidth={2.5} /> : <span className="size-1.5 rounded-full bg-current" />}
+                  </span>
+                : <span title={t("connect")} className="flex size-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground"><Icon name="plus" className="size-3.5" /></span>}
           </div>
-          {c.description && <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground"><bdi>{c.description}</bdi></p>}
+          {L(c.description) && <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground"><bdi>{L(c.description)}</bdi></p>}
         </button>
       ))}
     </div>
+  );
+
+  const grid = items === null ? null : list.length === 0 ? (
+    <div className="flex flex-col items-center py-20 text-center text-muted-foreground">
+      <Icon name="link" className="mb-3 size-8 opacity-30" strokeWidth={1.5} />
+      <p className="text-sm">{q || cat ? t("noConnectorsFound") : t("noConnectors")}</p>
+    </div>
+  ) : (
+    <>
+      {mine.length > 0 && (
+        <section className="mb-6">
+          <h4 className={H4}>{t("yours")}</h4>
+          {cards(mine)}
+        </section>
+      )}
+      {rest.length > 0 && (
+        <section>
+          {mine.length > 0 && <h4 className={H4}>{t("discover")}</h4>}
+          {cards(rest)}
+        </section>
+      )}
+    </>
   );
 
   return createPortal(
@@ -157,14 +215,15 @@ export function ConnectorsDialog({ api, items, reload, initial, onClose, onUsePr
 
           <div className="min-w-0 flex-1 overflow-y-auto px-5 py-5 sm:px-8 sm:py-6">
             {detail ? (
-              <Detail c={detail} api={api} onBack={() => setOpen(null)} onConnect={connect} onSaveKey={saveKey} onDisconnect={disconnect} onAllow={allow} onPrompt={usePrompt} />
+              <Detail c={detail} api={api} onBack={() => setOpen(null)} onConnect={connect} onSaveKey={saveKey} onDisconnect={disconnect} onAllow={allow} onUse={use} onPrompt={usePrompt} />
             ) : (
               <>
                 <div className="mb-5 hidden sm:block">
                   <h2 className="text-lg font-semibold text-foreground">{t("connectors")}</h2>
                   <p className="text-sm text-muted-foreground">{t("connectorsSub")}</p>
                 </div>
-                <div className="mb-5 flex items-center gap-3">{search}{tabs}</div>
+                <div className="mb-4">{search}</div>
+                {filters}
                 {grid}
               </>
             )}
@@ -194,13 +253,18 @@ function Split({ primary, secondary, onPrimary, onSecondary }: { primary: string
   );
 }
 
-function Switch({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
+// Sized to sit beside a connector's icon, and green when on — the switch is the state, so nothing
+// needs a dot next to it.
+export function Switch({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
   return (
-    <button role="switch" aria-checked={on} onClick={() => onChange(!on)} className={cn("relative h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors", on ? "bg-foreground" : "bg-muted-foreground/30")}>
-      <span className={cn("absolute top-0.5 size-4 rounded-full bg-background shadow-sm transition-all", on ? "start-4.5" : "start-0.5")} />
+    <button role="switch" aria-checked={on} onClick={() => onChange(!on)} className={cn("relative h-4 w-7 shrink-0 cursor-pointer rounded-full transition-colors", on ? "bg-green-500" : "bg-muted-foreground/30")}>
+      <span className={cn("absolute top-0.5 size-3 rounded-full bg-white shadow-sm transition-all", on ? "start-3.5" : "start-0.5")} />
     </button>
   );
 }
+
+// One shape for the key row: same height, same radius, same type size, whichever control it is.
+const FIELD = "h-9 rounded-full border border-border bg-background px-4 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-foreground/30";
 
 const Out = ({ href }: { href: string }) => (
   <a href={href} target="_blank" rel="noreferrer" className="flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground" aria-label="Open link">
@@ -213,21 +277,62 @@ function KeyForm({ c, team, onSave }: { c: Connector; team: string | null; onSav
   const [scope, setScope] = useState<"user" | "workspace">(c.scope === "workspace" ? "workspace" : "user");
   const choice = c.scope === "either" && !!team && c.admin;
   return (
-    <form onSubmit={(e) => { e.preventDefault(); if (key.trim()) onSave(key.trim(), scope); }} className="flex shrink-0 flex-wrap items-center gap-2">
+    // On a phone the three sit on their own line each, full width; from sm they share the header row.
+    // One height class on all three, so the field and the scope never disagree about their size.
+    <form onSubmit={(e) => { e.preventDefault(); if (key.trim()) onSave(key.trim(), scope); }}
+      className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
       <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={c.hint ?? t("apiKey")} autoComplete="off" dir="ltr"
-        className="w-44 rounded-full border border-border bg-background px-3.5 py-2 text-sm outline-none placeholder:text-muted-foreground focus:border-foreground/30" />
+        className={cn(FIELD, "w-full sm:w-44")} />
       {choice && (
-        <select value={scope} onChange={(e) => setScope(e.target.value as "user" | "workspace")} className="cursor-pointer rounded-full border border-border bg-background px-2.5 py-2 text-xs text-foreground">
+        <select value={scope} onChange={(e) => setScope(e.target.value as "user" | "workspace")}
+          className={cn(FIELD, "w-full cursor-pointer sm:w-auto")}>
           <option value="user">{t("forMe")}</option>
           <option value="workspace">{t("forTeam").replace("{name}", team ?? "")}</option>
         </select>
       )}
-      <button type="submit" disabled={!key.trim()} className="shrink-0 cursor-pointer rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background transition hover:opacity-80 disabled:cursor-default disabled:opacity-40">{t("save")}</button>
+      <button type="submit" disabled={!key.trim()}
+        className={cn(FIELD, "w-full shrink-0 cursor-pointer border-foreground bg-foreground text-center font-medium text-background transition hover:opacity-80 disabled:cursor-default disabled:opacity-40 sm:w-auto sm:px-5")}>{t("save")}</button>
     </form>
   );
 }
 
-function Detail({ c, api, onBack, onConnect, onSaveKey, onDisconnect, onAllow, onPrompt }: {
+// A store-style carousel: one image per page, snapped, swiped on a phone and dragged or arrowed on a
+// desktop. Dots say how many there are and which one you are on.
+function Gallery({ items, className }: { items: { image: string; caption?: L }[]; className?: string }) {
+  const strip = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState(0);
+  const go = (i: number) => {
+    const el = strip.current;
+    if (el) el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+  };
+  return (
+    <div className={className}>
+      <div
+        ref={strip}
+        dir="ltr"
+        onScroll={(e) => setAt(Math.round(e.currentTarget.scrollLeft / Math.max(1, e.currentTarget.clientWidth)))}
+        className="flex snap-x snap-mandatory overflow-x-auto rounded-2xl border border-border [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
+        {items.map((g, i) => (
+          <figure key={g.image + i} className="w-full shrink-0 snap-center">
+            <img src={g.image} alt={L(g.caption)} loading="lazy" className="aspect-[16/10] w-full bg-secondary object-cover" />
+            {L(g.caption) && <figcaption dir="auto" className="px-3 py-2 text-xs text-muted-foreground"><bdi>{L(g.caption)}</bdi></figcaption>}
+          </figure>
+        ))}
+      </div>
+      {items.length > 1 && (
+        <div className="mt-2 flex justify-center gap-1.5">
+          {items.map((g, i) => (
+            <button key={g.image + i} onClick={() => go(i)} aria-label={`${i + 1}`}
+              className={cn("h-1.5 cursor-pointer rounded-full transition-all", i === at ? "w-4 bg-foreground" : "w-1.5 bg-muted-foreground/40")} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Detail({ c, api, onBack, onConnect, onSaveKey, onDisconnect, onAllow, onUse, onPrompt }: {
   c: Connector;
   api: ChatApi["api"];
   onBack: () => void;
@@ -235,6 +340,7 @@ function Detail({ c, api, onBack, onConnect, onSaveKey, onDisconnect, onAllow, o
   onSaveKey: (c: Connector, key: string, scope: "user" | "workspace") => void;
   onDisconnect: (c: Connector) => void;
   onAllow: (c: Connector, on: boolean) => void;
+  onUse: (c: Connector, on: boolean) => void;
   onPrompt: (c: Connector, text: string) => void;
 }) {
   const label = connectorLabel(c);
@@ -267,8 +373,27 @@ function Detail({ c, api, onBack, onConnect, onSaveKey, onDisconnect, onAllow, o
     : null;
 
   const caps = rows?.length ? [rows.some((r) => !r.writes) && t("read"), rows.some((r) => r.writes) && t("write")].filter(Boolean).join(", ") : null;
-  const facts = [[t("capabilities"), caps], [t("developer"), c.developer], [t("category"), c.category]].filter(([, v]) => v) as [string, string][];
-  const links = [[t("website"), c.website], [t("privacyPolicy"), c.privacy], [t("termsLabel"), c.terms], [t("documentation"), c.docs]].filter(([, v]) => v) as [string, string][];
+  const facts = [[t("capabilities"), caps], [t("developer"), c.developer], [t("category"), L(c.category)]].filter(([, v]) => v) as [string, string][];
+  const links: [string, string][] = c.links.length
+    ? c.links.map((l) => [l.label, l.url] as [string, string])
+    : ([[t("website"), c.website], [t("privacyPolicy"), c.privacy], [t("termsLabel"), c.terms], [t("documentation"), c.docs]]
+        .filter(([, v]) => v) as [string, string][]);
+
+  // What the page opens with: the store-style carousel when the CMS says so and has images, else the
+  // prompts on their gradient. No heading over either — it is the first thing on the page.
+  const prompts = c.prompts.map(L).filter(Boolean);
+  const showcase = c.showcase === "gallery" && c.gallery.length > 0 ? (
+    <Gallery items={c.gallery} className="mt-5" />
+  ) : prompts.length > 0 ? (
+    <div className="mt-5 flex flex-col gap-2.5 rounded-3xl p-3 sm:p-4" style={{ backgroundImage: panel(c.gradient) }}>
+      {prompts.map((p) => (
+        <button key={p} onClick={() => onPrompt(c, p)} className="flex w-full cursor-pointer items-center gap-4 rounded-2xl border border-border/50 bg-background/80 px-4 py-3 text-start transition hover:bg-background">
+          <span className="min-w-0 flex-1 text-[15px] leading-snug text-foreground"><b className="font-semibold">@{label}</b> <bdi>{p}</bdi></span>
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-secondary text-foreground"><Icon name="arrow-right" className="size-4 rtl:rotate-180" /></span>
+        </button>
+      ))}
+    </div>
+  ) : null;
 
   return (
     <div>
@@ -276,16 +401,31 @@ function Detail({ c, api, onBack, onConnect, onSaveKey, onDisconnect, onAllow, o
         <Icon name="chevron-left" className="size-3.5 rtl:rotate-180" />{t("back")}
       </button>
 
-      <div className="flex flex-wrap items-start gap-4">
-        <ConnectorIcon c={c} className="size-16" />
-        <div className="min-w-0 flex-1 pt-0.5">
-          <h3 className="text-xl font-semibold leading-tight text-foreground">{label}</h3>
-          {c.category && <p className="text-xs text-muted-foreground">{c.category}</p>}
-          {c.description && <p className="mt-1.5 text-sm text-muted-foreground"><bdi>{c.description}</bdi></p>}
+      {/* Name and action share the row; the line about the connector spans the width beneath it. Kept in
+          the column it was wrapping into three words a line on a phone, beside the button. */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+        <div className="flex min-w-0 flex-1 items-center gap-4">
+          <ConnectorIcon c={c} className="size-14 sm:size-16" />
+          <div className="min-w-0 flex-1">
+            <h3 className="truncate text-xl font-semibold leading-tight text-foreground">{label}</h3>
+            {L(c.category) && <p className="truncate text-xs text-muted-foreground">{L(c.category)}</p>}
+          </div>
         </div>
         {action}
       </div>
+      {L(c.description) && <p className="mt-3 text-sm text-muted-foreground"><bdi>{L(c.description)}</bdi></p>}
       {status && <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><span className={cn("size-2 rounded-full", status[0])} />{status[1]}</p>}
+
+      {/* The person's own switch: the grant stays, the tools stop riding along. Mirrors the one in the + menu. */}
+      {c.connected && c.allowed && (
+        <div className="mt-5 flex items-center justify-between gap-4 rounded-xl border border-border bg-background/40 px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-sm text-foreground">{t("useInChats")}</p>
+            <p className="text-xs text-muted-foreground">{t("useInChatsSub")}</p>
+          </div>
+          <Switch on={c.on} onChange={(on) => onUse(c, on)} />
+        </div>
+      )}
 
       {c.org_admin && (
         <div className="mt-5 flex items-center justify-between gap-4 rounded-xl border border-border bg-background/40 px-4 py-3">
@@ -297,21 +437,11 @@ function Detail({ c, api, onBack, onConnect, onSaveKey, onDisconnect, onAllow, o
         </div>
       )}
 
-      {c.about && <p className="mt-6 text-sm leading-relaxed text-foreground/90"><bdi>{c.about}</bdi></p>}
+      {showcase}
 
-      {c.prompts.length > 0 && (
-        <section className="mt-7">
-          <h4 className={H4}>{t("tryAsking")}</h4>
-          <div className="flex flex-col gap-2.5 rounded-3xl p-3 sm:p-4" style={{ backgroundImage: PANEL }}>
-            {c.prompts.map((p) => (
-              <button key={p} onClick={() => onPrompt(c, p)} className="flex w-full cursor-pointer items-center gap-4 rounded-2xl border border-border/50 bg-background/80 px-5 py-3.5 text-start shadow-sm backdrop-blur transition hover:bg-background">
-                <span className="min-w-0 flex-1 text-[15px] leading-snug text-foreground"><b className="font-semibold">@{label}</b> <bdi>{p}</bdi></span>
-                <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-secondary text-foreground"><Icon name="arrow-right" className="size-4 rtl:rotate-180" /></span>
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
+      {L(c.story)
+        ? <div dir={getLang() === "ar" ? "rtl" : "ltr"} className="story mt-6 text-sm leading-relaxed text-foreground/90" dangerouslySetInnerHTML={{ __html: L(c.story) }} />
+        : c.about && <p className="mt-6 text-sm leading-relaxed text-foreground/90"><bdi>{c.about}</bdi></p>}
 
       {c.use_cases.length > 0 && (
         <section className="mt-7">

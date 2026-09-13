@@ -7,7 +7,7 @@ credential store's key and names the user and workspace — the callback carries
 `cycls.env("NAME")` references, resolved when used, never pickled. An org admin can switch a connector off;
 each person sets allow / ask / never per tool, and `ask` stops the model with a confirm card.
 """
-import base64, hashlib, hmac, json, os, re, time
+import asyncio, base64, hashlib, hmac, json, os, re, time
 from dataclasses import dataclass
 from urllib.parse import urlencode, urlparse
 from . import credentials, state
@@ -68,6 +68,68 @@ async def blocked(ws):
 async def set_blocked(ws, name, off):
     names = (await blocked(ws) - {name}) | ({name} if off else set())
     await _orgdb(ws).put("connectors", {"blocked": sorted(names)})
+
+
+async def off(ws):
+    """Connector names this person switched off — the grant is kept, the tools stay out of every turn.
+    Their own row, so it follows them into every workspace and every chat until they switch it back on."""
+    return set(((await credentials.get(ws, "_off")) or {}).get("connectors") or [])
+
+
+async def set_off(ws, name, value):
+    names = (await off(ws) - {name}) | ({name} if value else set())
+    await credentials.put(ws, "_off", {"connectors": sorted(names)})
+
+
+# ---- Directory copy from a CMS: bilingual, and whatever the code declares wins ----
+CMS_TTL = 300   # how long a container serves the connector copy it last read
+_copy = {"at": 0.0, "rows": {}}
+
+
+async def _cms_read(url, headers):
+    import httpx2
+    _copy["at"] = time.time()
+    try:
+        async with httpx2.AsyncClient(timeout=5) as h:
+            r = await h.get(url, headers=headers)
+        if r.status_code == 200:
+            _copy["rows"] = {c["name"]: c for c in (r.json().get("connectors") or []) if c.get("name")}
+    except Exception:
+        pass   # a CMS that is down leaves the page rendering what the code declares
+
+
+async def cms_rows(url, headers=None):
+    """The CMS's records by connector name. The first caller waits, so the first directory is already
+    right; after that a stale cache is served as it stands and re-read behind the request."""
+    if not url:
+        return {}
+    if not _copy["at"]:
+        await _cms_read(url, headers or {})
+    elif time.time() - _copy["at"] >= CMS_TTL:
+        asyncio.create_task(_cms_read(url, headers or {}))
+    return _copy["rows"]
+
+
+def bilingual(*values):
+    """The first value anyone declared, as {en, ar}. A CMS field is already a pair; a string from code is
+    the same in both languages, which is what a developer who wrote one means."""
+    for v in values:
+        if isinstance(v, dict) and (v.get("en") or v.get("ar")):
+            return {"en": v.get("en") or v.get("ar") or "", "ar": v.get("ar") or v.get("en") or ""}
+        if isinstance(v, str) and v.strip():
+            return {"en": v, "ar": v}
+    return None
+
+
+def links_of(row, o):
+    """`label: url` lines from the CMS, else the four the connector declared — those keep their own
+    translated labels on the page, so they are sent as they always were."""
+    out = []
+    for line in (row.get("links") or "").splitlines():
+        label, _, url = line.partition(":")
+        if label.strip() and url.strip():
+            out.append({"label": label.strip(), "url": url.strip()})
+    return out
 
 
 # ---- Tool permissions: allow / ask / never, per user, per connector ----
@@ -222,15 +284,18 @@ async def _auth_server(mcp_url):
     raise RuntimeError(f"{mcp_url}: no authorization server metadata")
 
 
+CLIENT_NAME = "Cycls"   # what a provider's consent screen calls us; changing it re-registers on next connect
+
+
 async def _register(meta, redirect, name):
     """Dynamic client registration (RFC 7591): a public client with PKCE and one redirect — no app to pre-register."""
     import httpx2
     async with httpx2.AsyncClient(timeout=15) as h:
         r = await h.post(meta["registration_endpoint"], json={
-            "client_name": f"Cycls · {name}", "redirect_uris": [redirect], "grant_types": ["authorization_code", "refresh_token"],
+            "client_name": CLIENT_NAME, "redirect_uris": [redirect], "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"], "token_endpoint_auth_method": "none"})
     r.raise_for_status()
-    return {"client_id": r.json()["client_id"], "redirect": redirect, "issuer": meta.get("issuer")}
+    return {"client_id": r.json()["client_id"], "redirect": redirect, "issuer": meta.get("issuer"), "name": CLIENT_NAME}
 
 
 class OAuth2(Connector):
@@ -251,7 +316,7 @@ class OAuth2(Connector):
             return {"authorize": self.authorize, "token": self.token, "client_id": _val(self.client_id), "resource": None}
         meta, db = await _auth_server(self.mcp), _orgdb(ws)
         row = await db.get(f"clients/{self.name}")
-        if not row or row.get("redirect") != redirect or row.get("issuer") != meta.get("issuer"):
+        if not row or row.get("redirect") != redirect or row.get("issuer") != meta.get("issuer") or row.get("name") != CLIENT_NAME:
             row = await _register(meta, redirect, self.name)
             await db.put(f"clients/{self.name}", row)
         return {"authorize": meta["authorization_endpoint"], "token": meta["token_endpoint"], "client_id": row["client_id"], "resource": self.mcp}

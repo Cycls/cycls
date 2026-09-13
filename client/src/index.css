@@ -134,6 +134,18 @@ body {
   animation: slide 1.4s linear infinite;
 }
 
+/* A connector's story, written in the CMS as rich text: enough rhythm for headings, lists and links
+   without letting a paragraph out of the page's own type scale. */
+.story h2, .story h3 { margin: 1.25rem 0 0.4rem; font-size: 0.9375rem; font-weight: 600; color: var(--color-foreground); }
+.story p { margin: 0.5rem 0; }
+.story ul, .story ol { margin: 0.5rem 0; padding-inline-start: 1.25rem; list-style: revert; }
+.story li > p { direction: inherit; }
+.story li { margin: 0.2rem 0; }
+.story a { color: var(--color-foreground); text-decoration: underline; text-underline-offset: 2px; }
+.story img { max-width: 100%; border-radius: 0.75rem; margin: 0.75rem 0; }
+.story :first-child { margin-top: 0; }
+.story :last-child { margin-bottom: 0; }
+
 /* Icon shimmer — a built-in step's glyph while it runs. The logo's sweep needs an image; a line
    glyph carries the same 1.4s cadence as a pulse of light instead. */
 @keyframes icon-shimmer {

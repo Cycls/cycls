@@ -598,6 +598,41 @@ it took, with the user, the chat and the connector.
 **Masking.** Keys and endpoints render masked with a reveal toggle. Presentation only —
 decision 12 owns storage.
 
+## The directory copy comes from the CMS
+
+A connector's page is copy, and copy belongs to whoever writes it, not to whoever deploys the agent.
+`Web.cms(connectors="https://cms.cycls.ai/connectors")` reads the CMS's connector records, following
+the same rule `.cms(brand=…)` already follows: **what the code declares wins, field by field**, the CMS
+fills the rest, and with no `cms=` nothing is fetched at all. The first request waits so the first
+directory is already right; after that a stale cache is served as it stands and re-read behind the
+request, on a 300s TTL. A CMS that is down leaves the page rendering what the code says.
+
+**Code owns behaviour, the CMS owns copy.** `name`, `kind`, `scope`, `hint`, the OAuth endpoints and the
+servers stay in the agent file — nothing a CMS edit can reach may change what a connector is able to do.
+The CMS owns `title`, `description`, `category`, `story`, `prompts`, `icon`, `showcase`, `gallery`,
+`gradient`, `links`, `developer`.
+
+**The showcase leads the content**, with no heading over it: prompts on their gradient, or the gallery
+when the CMS says so. The order is header, description, status, the two switches, then the showcase, then
+the story — the switches are single compact rows and belong with the state they change, and everything
+below the showcase is reading rather than doing.
+
+**Every text field is bilingual**, `{en, ar}`, and the page reads the one the reader is in, falling back
+to the other rather than showing a gap. A string declared in code is the same in both languages, which is
+what a developer who wrote one means.
+
+| CMS field | what it replaces |
+|---|---|
+| `story` (rich text, one block) | `about`, and in time `use_cases` and `skills` |
+| `links` (`label: url` per line) | the fixed `website` / `privacy` / `terms` / `docs`, which remain the fallback with their translated labels |
+| `gradient` (three stops) | the one hardcoded ember on the prompt panel |
+| `showcase` + `gallery` | opens the page with a carousel instead of prompts — snapped, swipeable, dots for position; falls back to the prompts when a gallery is empty |
+
+`story` is HTML from TipTap, so the page injects it. The source is the team's own Clerk-gated admin, and
+the record is first-party; that is the assumption the rendering rests on, and it is why `published` and
+`order` in the CMS control listing and ordering but never **availability** — a connector is switched off
+by an org admin, never by someone editing copy.
+
 ## Approvals
 
 One schema for every tool the model can call, connector or builtin. Four layers resolve in order;
@@ -606,9 +641,21 @@ the first that answers, wins.
 | # | layer | who sets it | says |
 |---|---|---|---|
 | 1 | **org policy** | org admin | a connector is switched off: its tools are not in the turn at all, for anyone in the org |
-| 2 | **per-tool choice** | the person, on the connector's page | *Never* (out of the turn), *Allow* (runs), *Ask* (card, always) |
-| 3 | **composer mode** | the person, per device | *Auto* (default): writes run, destructive still asks. *Manual*: every write asks |
-| 4 | **the call's own risk** | the tool and the server | read → runs; write → follows layer 3; destructive → asks in both modes |
+| 2 | **on / off** | the person, one toggle | off: the grant is kept, the tools stay out of every turn |
+| 3 | **per-tool choice** | the person, on the connector's page | *Never* (out of the turn), *Allow* (runs), *Ask* (card, always) |
+| 4 | **composer mode** | the person, per device | *Auto* (default): writes run, destructive still asks. *Manual*: every write asks |
+| 5 | **the call's own risk** | the tool and the server | read → runs; write → follows layer 4; destructive → asks in both modes |
+
+**Off is not disconnected, and it is not per chat.** A connected connector whose tools you do not want
+in the way gets switched off: the grant stays, the page still lists it, and its servers contribute
+nothing to any turn. It is stored on the person, in their own credential slot, so it follows them into
+every workspace and every chat and holds until they switch it back on — a per-chat version that reset
+every morning would mean switching the same thing off forever. The toggle sits on each connected row of
+the composer's `+` menu, beside a dot that is green while it is on and grey while it is off, and again
+at the top of the connector's page so both places show one state. An off connector is not offered in the
+`@` picker either: an override would mean the switch sometimes lies. Connecting turns it on, because
+connecting is already the explicit act, and switching it off takes effect from the next turn, including
+in the conversation you are in when you flip it.
 
 Only a choice that differs from the class default is stored at layer 2, so touching one tool never
 silently pins the rest — an untouched tool keeps following the composer switch.
