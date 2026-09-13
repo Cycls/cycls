@@ -202,9 +202,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     owners = {}   # tool name -> the OAuth2 it acts with, for the audit line
     mcp_names = set()   # a server's results are the model's, never the chat's
     client_side = [s for s in mcp_servers or [] if not s._server_side]
-    off = await connectors.blocked(workspace) if any(s._connector for s in client_side) else set()
+    # An org admin's switch and the person's own resolve the same way here: the tools never enter the turn.
+    hidden = (await connectors.blocked(workspace) | await connectors.off(workspace)) if any(s._connector for s in client_side) else set()
     for server in client_side:
-        if server._connector and server._connector.name in off:
+        if server._connector and server._connector.name in hidden:
             continue
         try:
             schemas, fns, names = await connectors.tools_for(server, workspace)

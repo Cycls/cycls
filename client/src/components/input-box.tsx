@@ -3,8 +3,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { t, getLang, setLang } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { Icon } from "./icon";
-import { autoApprove, setAutoApprove } from "../lib/utils";
-import { ConnectorIcon, connectorLabel, type Connector } from "./connectors-dialog";
+import { cn, autoApprove, setAutoApprove } from "../lib/utils";
+import { ConnectorIcon, Switch, connectorLabel, type Connector } from "./connectors-dialog";
 
 export type MentionHit = { name: string; path: string; connector?: Connector };
 import { AttachmentBody } from "./attachment-body";
@@ -66,6 +66,7 @@ export function InputBox({
   onMentionSearch,
   connectors,
   onOpenConnectors,
+  onToggleConnector,
   approveSwitch,
   onAddConnector,
   placeholder,
@@ -91,6 +92,7 @@ export function InputBox({
   onMentionSearch?: (query: string) => Promise<MentionHit[]>;
   connectors?: Connector[];
   onOpenConnectors?: () => void;
+  onToggleConnector?: (c: Connector, on: boolean) => void;   // the person's own on/off, kept across chats
   approveSwitch?: boolean;   // the deployment has connectors: show Auto / Manual
   onAddConnector?: (c: Connector) => void;
   placeholder?: string;
@@ -337,7 +339,7 @@ export function InputBox({
       <div className="flex items-center justify-between px-1 pt-1" dir="ltr">
         <div className="relative flex items-center gap-0.5">
           {(onOpenFilePicker || onOpenFiles) && (
-            <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} connectors={connectors} onOpenConnectors={onOpenConnectors} disabled={isStreaming} />
+            <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} connectors={connectors} onOpenConnectors={onOpenConnectors} onToggleConnector={onToggleConnector} disabled={isStreaming} />
           )}
           {approveSwitch && <ApproveMode disabled={isStreaming} />}
           <button
@@ -440,8 +442,9 @@ function ApproveMode({ disabled }: { disabled?: boolean }) {
   );
 }
 
-function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnectors, disabled }: {
-  onOpenFilePicker?: () => void; onOpenFiles?: () => void; connectors?: Connector[]; onOpenConnectors?: () => void; disabled?: boolean;
+function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnectors, onToggleConnector, disabled }: {
+  onOpenFilePicker?: () => void; onOpenFiles?: () => void; connectors?: Connector[]; onOpenConnectors?: () => void;
+  onToggleConnector?: (c: Connector, on: boolean) => void; disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const btnClass = `flex size-8 items-center justify-center rounded-2xl transition ${disabled ? "text-muted-foreground opacity-30 cursor-not-allowed" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 cursor-pointer"}`;
@@ -470,11 +473,12 @@ function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnector
             {onOpenConnectors && (
               <>
                 <div className="my-1 border-t border-border" />
+                {/* Off keeps the connection and keeps the tools out of every turn, until it is switched back on. */}
                 {connectors?.map((c) => (
                   <div key={c.name} className="flex items-center gap-2.5 px-3 py-2 text-sm text-foreground">
-                    <ConnectorIcon c={c} className="size-4" />
-                    <span className="min-w-0 flex-1 truncate">{connectorLabel(c)}</span>
-                    <span className="size-1.5 rounded-full bg-green-500" />
+                    <ConnectorIcon c={c} className={cn("size-4", !c.on && "opacity-40")} />
+                    <span className={cn("min-w-0 flex-1 truncate", !c.on && "text-muted-foreground")}>{connectorLabel(c)}</span>
+                    <Switch on={c.on} onChange={(on) => onToggleConnector?.(c, on)} />
                   </div>
                 ))}
                 <button onClick={pick(onOpenConnectors)} className={item}>

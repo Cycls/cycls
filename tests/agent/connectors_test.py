@@ -85,13 +85,15 @@ def _app(tmp_path, *oauths, user=None, ws_id=None):
 
 def test_routes_connect_list_and_disconnect(tmp_path):
     client, ws = _app(tmp_path, _google())
-    assert client.get("/connectors").json() == [{"name": "google", "title": None, "scope": "user", "description": None,
-                                                 "kind": "oauth", "hint": None,
-                                                 "about": None, "icon": None, "prompts": [], "use_cases": [], "skills": [],
-                                                 "developer": None, "category": None, "website": None,
+    assert client.get("/connectors").json() == [{"name": "google", "kind": "oauth", "hint": None, "scope": "user",
+                                                 "title": None, "description": None, "category": None,
+                                                 "about": None, "story": None, "icon": None, "prompts": [],
+                                                 "showcase": "prompts", "gallery": [], "gradient": None, "links": [],
+                                                 "use_cases": [], "skills": [],
+                                                 "developer": None, "website": None,
                                                  "privacy": None, "terms": None, "docs": None, "team": None,
                                                  "admin": False, "allowed": True, "org_admin": False, "connected": False,
-                                                 "connected_as": None}]
+                                                 "on": True, "connected_as": None}]
     url = client.post("/connectors/google/authorize").json()["url"]
     q = parse_qs(urlparse(url).query)
     assert q["redirect_uri"] == ["http://testserver/connectors/google/callback"]
@@ -311,7 +313,8 @@ def test_an_mcp_server_registers_its_own_client_once_per_org_and_refreshes_witho
     salla = c.OAuth2("salla", mcp="https://mcp.x/mcp", scopes=["offline_access"])
     meta = {"issuer": "https://mcp.x", "authorization_endpoint": "https://mcp.x/authorize",
             "token_endpoint": "https://mcp.x/token", "registration_endpoint": "https://mcp.x/register"}
-    reg = AsyncMock(return_value={"client_id": "dyn1", "redirect": "http://testserver/connectors/salla/callback", "issuer": "https://mcp.x"})
+    reg = AsyncMock(return_value={"client_id": "dyn1", "redirect": "http://testserver/connectors/salla/callback",
+                                  "issuer": "https://mcp.x", "name": c.CLIENT_NAME})
     _HTTP.calls.clear()
     with patch.object(c, "_auth_server", AsyncMock(return_value=meta)), patch.object(c, "_register", reg), patch("httpx2.AsyncClient", _HTTP):
         client, ws = _app(tmp_path, salla)
@@ -363,3 +366,51 @@ def test_a_builtin_keeps_its_own_allow_beside_the_connector_ones(tmp_path):
     assert client.get("/tools").json() == {}                                                     # and clears it to Auto
     assert _gate("bash", hard, ToolContext(None, ws, auto=False, modes={"bash": "ask"}), step) is not None   # explicit ask
 
+
+
+def test_a_person_can_switch_a_connector_off_without_losing_the_grant(tmp_path):
+    """Their own switch: the connector stays connected and listed, its tools stay out of every turn,
+    and it holds across chats because it is stored on the person, not the conversation."""
+    client, ws = _app(tmp_path, _google())
+    asyncio.run(credentials.put(ws, "google", {"access_token": "tok", "refresh_token": "r", "expires_at": time.time() + 3600}))
+    assert client.patch("/connectors/google", json={"on": False}).json() == {"on": False}
+    row = client.get("/connectors").json()[0]
+    assert (row["on"], row["connected"], row["allowed"]) == (False, True, True)   # off, but still connected and allowed
+    assert asyncio.run(c.off(ws)) == {"google"}
+    assert asyncio.run(credentials.get(ws, "google"))["access_token"] == "tok"    # the grant is untouched
+    assert client.patch("/connectors/google", json={"on": True}).json() == {"on": True}
+    assert asyncio.run(c.off(ws)) == set()
+
+
+def test_the_cms_fills_the_page_and_the_code_still_wins(tmp_path):
+    """Bilingual copy from the CMS, overridden field by field by whatever the agent declared — and a CMS
+    that is unreachable leaves the page rendering what the code says."""
+    from types import SimpleNamespace as NS
+    o = c.OAuth2("salla", mcp="https://mcp.x/mcp", title="Salla")   # title declared in code, the rest is the CMS's
+    record = {"name": "salla", "title": {"en": "Salla Store", "ar": "سلة"},
+              "description": {"en": "Orders and products", "ar": "الطلبات والمنتجات"},
+              "category": {"en": "Commerce", "ar": "تجارة"},
+              "story": {"en": "<p>What it does</p>", "ar": "<p>ما تفعله</p>"},
+              "prompts": [{"en": "Top products?", "ar": "أفضل المنتجات؟"}],
+              "icon": "https://cdn/salla.png", "showcase": "gallery",
+              "gallery": [{"image": "https://cdn/1.png"}], "gradient": ["#111", "#222", "#333"],
+              "links": "Website: https://salla.sa\nDocs: https://docs.salla.dev\nbroken line",
+              "developer": "Salla"}
+
+    async def fake(url, headers=None): return {"salla": record}
+    with patch.object(c, "cms_rows", fake):
+        client, _ = _app(tmp_path, o)
+        row = client.get("/connectors").json()[0]
+    assert row["title"] == {"en": "Salla", "ar": "Salla"}                     # code wins, both languages
+    assert row["description"]["ar"] == "الطلبات والمنتجات"                    # the CMS fills what code left out
+    assert row["story"]["en"] == "<p>What it does</p>" and row["about"] is None
+    assert row["prompts"] == [{"en": "Top products?", "ar": "أفضل المنتجات؟"}]
+    assert (row["showcase"], row["gradient"], row["icon"]) == ("gallery", ["#111", "#222", "#333"], "https://cdn/salla.png")
+    assert row["links"] == [{"label": "Website", "url": "https://salla.sa"},
+                            {"label": "Docs", "url": "https://docs.salla.dev"}]   # a line without a url is dropped
+
+
+def test_bilingual_prefers_what_came_first_and_fills_the_other_language():
+    assert c.bilingual("Drive", {"en": "x", "ar": "y"}) == {"en": "Drive", "ar": "Drive"}
+    assert c.bilingual(None, {"en": "", "ar": "سلة"}) == {"en": "سلة", "ar": "سلة"}
+    assert c.bilingual(None, None) is None

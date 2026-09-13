@@ -1252,10 +1252,15 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
     def _team(ws):
         return bool(ws.ws) and not ws.ws.startswith("u-")
 
+    cms = getattr(getattr(cycls_app, "config", None), "cms", None) or {}
+    cms_headers = {"Authorization": f"Bearer {cms['token']}"} if cms.get("token") else {}
+
     @r.get("/connectors")
     async def list_connectors(ws: Workspace = ws_dep, user: Any = user_dep):
         admin = any(o.scope != "user" for o in reg.values()) and await _admin(cycls_app, user, ws, volume, base)
         off, org_admin = await oauth.blocked(ws), _org_admin(user)   # members never see what an admin switched off
+        mine = await oauth.off(ws)   # what this person switched off: still listed, still connected, just not in a turn
+        rows = await oauth.cms_rows(cms.get("connectors"), cms_headers)   # copy the team edits, code still wins
         team = None   # the team workspace's name — the button says where a shared grant lands
         if _team(ws):
             row = await state.org_db(state.org_of(user), volume, base).get(f"workspaces/{ws.ws}")
@@ -1265,13 +1270,21 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
             if n in off and not org_admin:
                 continue
             grant, shared = await credentials.find(ws, n)
-            out.append({"name": n, "kind": o.kind, "hint": o.hint,
-                        "title": o.title, "scope": o.scope, "description": o.description, "about": o.about,
-                        "icon": o.icon, "prompts": o.prompts, "use_cases": o.use_cases, "skills": o.skills,
-                        "developer": o.developer, "category": o.category, "website": o.website,
+            row = rows.get(n, {})
+            out.append({"name": n, "kind": o.kind, "hint": o.hint, "scope": o.scope,
+                        "title": oauth.bilingual(o.title, row.get("title")),
+                        "description": oauth.bilingual(o.description, row.get("description")),
+                        "category": oauth.bilingual(o.category, row.get("category")),
+                        "about": o.about, "story": oauth.bilingual(row.get("story")),   # plain from code, html from the CMS
+                        "icon": o.icon or row.get("icon") or None,
+                        "prompts": [p for p in (oauth.bilingual(x) for x in (o.prompts or row.get("prompts") or [])) if p],
+                        "showcase": row.get("showcase") or "prompts", "gallery": row.get("gallery") or [],
+                        "gradient": row.get("gradient") or None, "links": oauth.links_of(row, o),
+                        "use_cases": o.use_cases, "skills": o.skills,
+                        "developer": o.developer or row.get("developer") or None, "website": o.website,
                         "privacy": o.privacy, "terms": o.terms, "docs": o.docs, "team": team,
                         "admin": admin, "allowed": n not in off, "org_admin": org_admin, "connected": grant is not None,
-                        "connected_as": ("workspace" if shared else "user") if grant else None})
+                        "on": n not in mine, "connected_as": ("workspace" if shared else "user") if grant else None})
         return out
 
     async def _slot_or_4xx(o, scope, user, ws):
@@ -1292,10 +1305,18 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.patch("/connectors/{name}")
     async def allow(name: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        """Two switches, one route: `allowed` is the org admin's, for everyone; `on` is the person's own,
+        which keeps the grant and only keeps the tools out of their turns."""
         _get(name)
+        data = await request.json()
+        if "on" in data:
+            on = bool(data["on"])
+            await oauth.set_off(ws, name, not on)
+            log("connector", user=user, action="on" if on else "off", connector=name)
+            return {"on": on}
         if not _org_admin(user):
             raise HTTPException(status_code=403, detail="Only org admins can switch a connector off")
-        allowed = bool((await request.json()).get("allowed"))
+        allowed = bool(data.get("allowed"))
         await oauth.set_blocked(ws, name, not allowed)
         log("connector", user=user, action="allowed" if allowed else "blocked", connector=name)
         return {"allowed": allowed}

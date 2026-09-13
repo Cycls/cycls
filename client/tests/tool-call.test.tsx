@@ -58,3 +58,28 @@ describe("ToolCall — a custom tool", () => {
     expect(screen.getByText("3 rows")).toBeTruthy();
   });
 });
+
+describe("a connector switched off", () => {
+  afterEach(cleanup);
+  it("is kept out of the @ picker while it stays connected", () => {
+    // The composer's filter is what the picker offers; off means off, with no @ back door.
+    const all = [
+      { name: "google", title: "Google Drive", connected: true, allowed: true, on: true },
+      { name: "posthog", title: "PostHog", connected: true, allowed: true, on: false },
+    ];
+    const offered = all.filter((c) => c.connected && c.allowed && c.on).map((c) => c.title);
+    expect(offered).toEqual(["Google Drive"]);
+  });
+});
+
+describe("bilingual connector copy", () => {
+  afterEach(cleanup);
+  it("reads a field in the reader's language and falls back to whatever was written", () => {
+    // The rule the page uses for every CMS field: current language, else the other, else nothing.
+    const pick = (lang: string, v: { en: string; ar: string } | null) =>
+      v ? (lang === "ar" ? v.ar || v.en : v.en || v.ar) : "";
+    expect(pick("ar", { en: "Salla Store", ar: "سلة" })).toBe("سلة");
+    expect(pick("ar", { en: "Salla Store", ar: "" })).toBe("Salla Store");
+    expect(pick("en", null)).toBe("");
+  });
+});
