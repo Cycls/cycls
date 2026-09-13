@@ -31,7 +31,7 @@ export function useFiles(baseUrl: string = "") {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [path, setPath] = useState("");
   const [loading, setLoading] = useState(false);
-  const { api, setGetToken } = useApi(baseUrl);
+  const { api, authHeaders, setGetToken } = useApi(baseUrl);
 
   // `fresh` skips the server's catalog cache. Worth it right after our own
   // write (serving is serverless, so another instance may have handled it and
@@ -135,6 +135,19 @@ export function useFiles(baseUrl: string = "") {
     return (await api(`/files/${filePath}`, { silent })).text();
   }, [api]);
 
+  // An app's live call to a connector's API. The token stays on the server: it resolves the
+  // workspace's grant per call, so a refreshed one is picked up with no change in the app.
+  const fetchConnector = useCallback(async (name: string, path: string,
+                                            init: { method: string; headers: Record<string, string>; body?: string }) => {
+    // Raw fetch, not `api`: a 4xx from the provider is an answer the app has to read,
+    // not an exception, and it must never raise a toast over someone's dashboard.
+    const res = await fetch(`${baseUrl}/connectors/${name}/fetch/${String(path).replace(/^\/+/, "")}`, {
+      method: init.method, body: init.body,
+      headers: { ...(await authHeaders()), ...init.headers },
+    });
+    return { status: res.status, body: await res.text(), contentType: res.headers.get("content-type") || "" };
+  }, [baseUrl, authHeaders]);
+
   // Overwrite a text file from the canvas editor.
   const writeFile = useCallback(async (filePath: string, text: string, silent = false) => {
     await api(`/files/${filePath}`, { method: "PUT", body: new Blob([text]), silent });
@@ -182,7 +195,7 @@ export function useFiles(baseUrl: string = "") {
     return `${window.location.origin}${url}`;
   }, [api]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, searchFiles, listFolders, shareFile, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchConnector, searchFiles, listFolders, shareFile, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

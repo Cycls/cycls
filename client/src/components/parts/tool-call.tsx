@@ -4,7 +4,7 @@ import { Icon } from "../icon";
 import { t } from "../../lib/i18n";
 import { track } from "../../lib/analytics";
 import type { Part, Source } from "../../hooks/use-chat";
-import { ConnectorIcon, type Connector } from "../connectors-dialog";
+import { ConnectorIcon, PLATE, type Connector } from "../connectors-dialog";
 import { StepDot } from "./step-part";
 import { Favicon, domainOf } from "./sources-part";
 
@@ -28,7 +28,7 @@ export const ToolCall = memo(function ToolCall({ p, live }: { p: Part; live?: bo
     <div>
       <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full cursor-pointer items-center gap-2 py-1 text-start text-sm text-muted-foreground">
         {p.icon ? (
-          <span className="relative flex size-5 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border/60 bg-white">
+          <span className={cn("relative flex size-5 shrink-0 items-center justify-center", PLATE)}>
             <img src={p.icon} alt="" className="size-[68%] object-contain" />
             {live && <span className="logo-shimmer absolute inset-y-0 -inset-x-full" />}
           </span>
