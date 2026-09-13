@@ -1158,6 +1158,46 @@ def test_brand_refresh_reaches_every_surface(tmp_path, monkeypatch):
     assert "new copy" in str(client.get("/config").json())
 
 
+def test_boot_timeout_heals_on_the_next_request(tmp_path, monkeypatch):
+    """The CMS scales to zero and the boot read is usually what wakes it, so that read routinely
+    times out and the agent has no static brand to fall back on. It must not then serve a nameless
+    page for a whole TTL: the very next request re-reads, by which point the CMS is warm."""
+    import time as _time
+    from fastapi.testclient import TestClient
+
+    class _Resp:
+        status_code = 200
+        def json(self): return {"title": "Super", "description": "Gets things done",
+                                "icon_svg": "<svg id='super'/>"}
+
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, *a, **k): return _Resp()
+
+    def cold(*a, **k): raise TimeoutError("cms cold start exceeded the 5s boot timeout")
+    monkeypatch.setattr("httpx.get", cold)              # boot loses the race
+    monkeypatch.setattr("httpx.AsyncClient", lambda *a, **k: _Client())   # by now the CMS is warm
+
+    async def dummy_agent(context):
+        yield "test"
+
+    cfg = Config(public_path=_seo_theme(tmp_path), name="super", title="fallback title",
+                 cms={"brand": "https://cms.example/agents/super"})
+    client = TestClient(web(dummy_agent, cfg))
+    assert cfg.pass_metadata is None                    # the boot read failed, as it does in prod
+    assert "<title>Super | Cycls Pass</title>" in client.get("/").text
+
+    for _ in range(50):                                 # no TTL wait: the next request re-reads
+        html = client.get("/").text
+        if "Gets things done" in html:
+            break
+        _time.sleep(0.02)
+    assert "<title>Super</title>" in html
+    assert "Gets things done" in html
+    assert "<svg id='super'/>" in cfg.pass_metadata["en"].logo   # the icon the page was missing
+
+
 def test_seo_overrides_brand(tmp_path):
     from fastapi.testclient import TestClient
 

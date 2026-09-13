@@ -318,15 +318,19 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
         config.pass_metadata = {**_static_brand, **merged}
         _build()
 
-    _brand_at = {"t": time.time()}
-    if cms.get("brand"):   # once at boot, so the very first page already carries the real name
+    _brand_at = {"t": 0.0}   # 0 means never loaded, so the first request retries instead of waiting a TTL
+    if cms.get("brand"):     # once at boot, so the very first page already carries the real name
         try:
             r = httpx.get(cms["brand"], headers=_cms_headers, timeout=5)
             if r.status_code == 200:
                 _brand(r.json())
+                _brand_at["t"] = time.time()
         except Exception:
+            # A CMS that scales to zero costs more than the timeout to wake, and this read is
+            # usually what wakes it. Leaving the clock at 0 means the next request re-reads at
+            # once, by which point the CMS is warm — rather than serving a blank brand for a TTL.
             pass
-    if not V:              # no CMS, or the boot fetch failed
+    if not V:                # no CMS, or the boot read failed
         _build()
 
     async def _refresh():
