@@ -19,7 +19,10 @@ class Env:
     name: str
 
     def get(self):
-        return os.environ[self.name]
+        try:
+            return os.environ[self.name]
+        except KeyError:
+            raise RuntimeError(f"{self.name} is not set in this deployment's environment") from None
 
 
 def env(name):
@@ -202,10 +205,11 @@ async def tools_for(server, ws):
     anonymously so the connect card can appear."""
     o = server._connector
     token = await o.bearer(ws) if o else None
-    if o and o.kind == "key" and token is None:
+    url = await o.endpoint(ws) if o and o.addressed else None
+    if o and o.kind == "key" and token is None and url is None:
         return [], {}, {}
     try:
-        schemas, fns, names = await server.discover(token=token)
+        schemas, fns, names = await server.discover(token=token, url=url)
     except Exception:
         if o and token is None:   # a server that only lists for the signed-in: nothing, until they connect
             return [], {}, {}
@@ -213,7 +217,7 @@ async def tools_for(server, ws):
     if not o or not schemas:
         return schemas, fns, names
     chosen = await permissions(ws, o.name)
-    found = {f"{server.label}_{t.name}": t for t in await server.tools(token)}
+    found = {f"{server.label}_{t.name}": t for t in await server.tools(token, url)}
     modes = {k: mode(server, t, chosen) for k, t in found.items()}
     return ([s for s in schemas if modes.get(s["name"]) != "never"],
             {k: gated(f, k, names[k], o.name, server._writes, chosen.get(k) == "ask" or destructive(found[k])) if modes.get(k) == "ask" else f
@@ -221,14 +225,81 @@ async def tools_for(server, ws):
             names)
 
 
+RELAY_HEADERS = ("content-type", "accept")   # the app sets these; Authorization is ours alone
+RELAY_MAX_BYTES = 5_000_000
+
+
+async def relay(o, ws, path, *, method="GET", headers=None, body=None, timeout=30.0):
+    """One call from an app to a connector's REST API. The grant is resolved here, per call, so a
+    refreshed token is inherited and the page never holds one; `api` bounds the host."""
+    import httpx2
+    if not o.api:
+        return 400, b'{"error":"this connector has no API base"}', "application/json"
+    if not (token := await o.bearer(ws)):
+        return 401, b'{"error":"not connected"}', "application/json"
+    path = str(path or "")
+    if ".." in path or "\\" in path or "\0" in path or "://" in path or path.startswith("//"):
+        return 400, b'{"error":"bad path"}', "application/json"
+    url = f"{o.api}/{path.lstrip('/')}"
+    if not url.startswith(o.api + "/") or urlparse(url).netloc != urlparse(o.api).netloc:
+        return 400, b'{"error":"path escapes the connector"}', "application/json"
+    if (method := str(method or "GET").upper()) not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+        return 405, b'{"error":"method not allowed"}', "application/json"
+    send = {k: v for k, v in (headers or {}).items() if str(k).lower() in RELAY_HEADERS}
+    send.update(o.api_headers)          # what the API requires of every caller
+    send["Authorization"] = f"Bearer {token}"
+    async with httpx2.AsyncClient(timeout=timeout, follow_redirects=False) as c:
+        r = await c.request(method, url, headers=send, content=body)
+    out = r.content[:RELAY_MAX_BYTES]
+    return r.status_code, out, r.headers.get("content-type", "application/octet-stream")
+
+
+FIND_TOOLS = {
+    "type": "custom", "name": "find_tools",
+    "description": "Load a connector's tools before you can call them. Search by what you want to do "
+                   "(\"list orders\", \"read a page\") or by connector name. Matching tools join the "
+                   "conversation and stay for the rest of it. The connectors you can search are listed "
+                   "in the system prompt.",
+    "input_schema": {"type": "object", "required": ["query"],
+                     "properties": {"query": {"type": "string", "description": "What you need to do, in a few words."}}},
+}
+
+
+def index_line(o, count):
+    """One line per connector — ~15 tokens against ~320 for a schema."""
+    d = re.sub(r"\s+", " ", (o.description or "").strip())[:70]
+    return f"- {o.name}: {o.title or o.name}{' — ' + d if d else ''} ({count} tools)"
+
+
+def matches(query, catalog):
+    """Connector names whose tools answer *query*, best first. `catalog` is name -> (title, description, [tool text])."""
+    q = (query or "").lower()
+    words = {w for w in re.findall(r"[a-z0-9]+", q) if len(w) > 2}
+    scored = {}
+    for name, (title, desc, tools) in catalog.items():
+        hay = " ".join([name, title or "", desc or "", *tools]).lower()
+        score = sum(1 for w in words if w in hay)
+        if name in q or (title and title.lower() in q):
+            score += 5
+        if score:
+            scored[name] = score
+    return sorted(scored, key=lambda n: -scored[n])
+
+
 class Connector:
     """What the directory shows and where a grant lands — shared by every kind of connector."""
     kind = hint = None
+    addressed = False   # True when the secret IS the server address, not a token sent to it
 
     def __init__(self, name, *, scope="user", description=None, icon=None, prompts=(), developer=None, category=None,
-                 website=None, title=None, about=None, use_cases=(), skills=(), privacy=None, terms=None, docs=None):
+                 website=None, title=None, about=None, use_cases=(), skills=(), privacy=None, terms=None, docs=None,
+                 api=None, api_headers=None):
         if scope not in ("user", "workspace", "either"):
             raise ValueError(f'scope must be "user", "workspace" or "either"; got {scope!r}')
+        if api and not str(api).startswith("https://"):
+            raise ValueError(f"api must be an https base url; got {api!r}")
+        self.api = str(api).rstrip("/") if api else None   # REST base an app may reach through the relay
+        self.api_headers = dict(api_headers or {})          # fixed headers that base requires, e.g. Notion-Version
         self.name, self.scope = name, scope
         self.description, self.icon, self.prompts = description, icon, list(prompts)   # the directory card and detail page
         self.developer, self.category, self.website = developer, category, website
@@ -255,9 +326,44 @@ class Key(Connector):
         super().__init__(name, **kw)
         self.hint = hint   # what a key looks like, e.g. "phx_…" — the field's placeholder
 
+    def validate(self, value):
+        """An error to show the person, or None. Runs before anything is stored."""
+        return None
+
     async def bearer(self, ws):
         grant = await credentials.get(ws, self.name)
         return grant["key"] if grant else None
+
+
+class Endpoint(Key):
+    """A connector whose secret IS the address. Zid hands each merchant a private MCP link from
+    their dashboard and says to treat it like a password, so there is nothing to send — the link
+    is the credential. It reuses the paste field a key already has; `prefix` bounds what counts
+    as one, so a typo or a pasted internal address is refused rather than dialled."""
+    addressed = True
+
+    def __init__(self, name, *, host, **kw):
+        super().__init__(name, **kw)
+        self.host = str(host).lower().lstrip("*")   # ".zid.sa" — any subdomain of it, and nothing else
+
+    def _ok(self, url):
+        """https, on the declared domain, with no credentials in it. Everything else is someone
+        else's server — or an address inside our own network."""
+        u = urlparse(str(url or ""))
+        h = (u.hostname or "").lower()
+        return bool(u.scheme == "https" and not u.username
+                    and (h == self.host.lstrip(".") or h.endswith(self.host if self.host.startswith(".") else "." + self.host)))
+
+    def validate(self, value):
+        return None if self._ok(value) else f"That should be an https link on {self.host.lstrip('.')}"
+
+    async def bearer(self, ws):
+        return None   # nothing to send; the address carries the authority
+
+    async def endpoint(self, ws):
+        grant = await credentials.get(ws, self.name)
+        url = (grant or {}).get("key")
+        return url if self._ok(url) else None
 
 
 _meta = {}   # mcp url -> its authorization server's metadata
@@ -332,8 +438,10 @@ class OAuth2(Connector):
         import httpx2
         secret = None if self.mcp else _val(self.secret)   # a discovered client has none
         async with httpx2.AsyncClient(timeout=30) as h:
-            r = await h.post(client["token"], data={"client_id": client["client_id"], **({"client_secret": secret} if secret else {}),
-                                                    **({"resource": client["resource"]} if client["resource"] else {}), **form})
+            # GitHub answers form-encoded unless asked otherwise, and `.json()` would throw on it.
+            r = await h.post(client["token"], headers={"Accept": "application/json"},
+                             data={"client_id": client["client_id"], **({"client_secret": secret} if secret else {}),
+                                   **({"resource": client["resource"]} if client["resource"] else {}), **form})
         r.raise_for_status()
         t = r.json()
         return {"access_token": t["access_token"], "refresh_token": t.get("refresh_token"), "expires_at": time.time() + t.get("expires_in", 3600),

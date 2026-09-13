@@ -216,6 +216,12 @@ _BUILD_APP_TOOL = {
         "Inside the app, `cycls.read`/`write` reach files in the app's own folder, "
         "`cycls.get`/`set` are a key-value store, and `cycls.save(name, content)` "
         "asks the user where to put a file anywhere in the workspace.\n\n"
+        "`await cycls.connector(name).json(path, {method, headers, body})` calls a connected "
+        "connector's own REST API live — `cycls.connector('posthog').json('/api/projects/123/query/', "
+        "{method: 'POST', body: JSON.stringify({query})})`. The workspace's credential is attached "
+        "server-side on every call, so the app holds no key, inherits a refreshed token, and keeps "
+        "working after this chat ends. Use it for a dashboard that must stay live; never paste an "
+        "API key into app source, and never ask the user for one a connector already has.\n\n"
         "On failure the build log comes back — fix the source and call again."
     ),
     "input_schema": {"type": "object", "properties": {

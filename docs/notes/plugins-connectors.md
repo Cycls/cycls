@@ -333,8 +333,10 @@ discovered tools register on the `handlers` path `dispatch` already had, named
 **Discovery is cached; connections are not pooled** — built. The tool list is cached ten
 minutes per url and token; a session is opened only when a tool is called.
 
-**Discovered tools are derived, not stored** — phase 3, with `find_tools`. Until then a
-connected server's tools are injected directly.
+**Discovered tools are derived, not stored** — built. A connected server's tools wait behind
+`find_tools`; the discovered set is read back from the transcript, either from the lookup that
+loaded them or from a call to one of their tools, so nothing is stored and a new instance
+picks up where the last left off.
 
 **`http_request` requires a connector, and the connector bounds the host** — phase 2. There
 is no unbound form; that would be the SSRF `web_fetch` already guards against.
@@ -513,8 +515,7 @@ toast. On mobile the system browser plays the new tab and the app refreshes on f
 (durable). The **`+`** menu is *active in this chat* (per chat): the `AttachMenu` paperclip
 becomes `+`, keeps Upload file and Browse files, then a divider, then one row per connected
 connector — icon, name, a green dot — and *Manage connectors →*. The per-chat toggle on each
-row lands with `find_tools` (phase 3), when a row that is off can actually keep the tools out
-of the turn.
+row can now keep the tools out of the turn, since `find_tools` decides what enters it.
 Unconnected connectors are not in the menu. And **`@`** is *invoked in this message*
 (per message), below.
 
@@ -530,8 +531,8 @@ like attachments do.
 
 On the server a mentioned connector is **user-driven discovery**: one line — `[Using: Salla]` —
 is appended to the user message so the intent is in the transcript and survives replay. Its
-tools are injected for that turn without a `find_tools` round-trip (decision 22) once
-`find_tools` exists; today every allowed connector's tools are already in the turn.
+tools are injected for that turn without a `find_tools` round-trip (decision 22) — the person
+already chose, so the lookup would be waste.
 A connector typed as `@salla` by hand, without picking, is plain text: the model sees it,
 calls the tool, and an unconnected one produces the connect card as usual.
 
@@ -772,7 +773,7 @@ project is enrolled. Three gates Microsoft has none of. Salla is next, on the sa
 The live run happened on the deployed agent: connect, grant, bearer, audit all worked; only
 Google's preview gate remains (application submitted 2026-09-06). Phase 2 is the relay, the
 plugin half (`cycls.Key`, `auth=` on `.on()`, `http_request`), single-flight refresh, and a
-second connector. Phase 3 is `find_tools`. `Plugin` is phase 4, if anyone asks for it.
+second connector. Phase 3, `find_tools`, is built. `Plugin` is phase 4, if anyone asks for it.
 
 ## Open questions
 

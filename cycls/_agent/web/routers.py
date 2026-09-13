@@ -1369,6 +1369,8 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
             raise HTTPException(status_code=400, detail="This connector signs in with OAuth")
         if not isinstance(key, str) or not key.strip():
             raise HTTPException(status_code=400, detail="A key is required")
+        if err := o.validate(key.strip()):
+            raise HTTPException(status_code=400, detail=err)
         chosen = await _connect_slot(o, data.get("scope"), user, ws)
         await credentials.put(ws, name, {"key": key.strip()}, shared=chosen == "workspace")
         log("connector", user=user, action="connected", connector=name, scope=chosen)
@@ -1378,21 +1380,35 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
     async def tools(name: str, ws: Workspace = ws_dep):
         o, chosen = _get(name), await oauth.permissions(ws, name)
         token, out = await o.bearer(ws), []
+        url = await o.endpoint(ws) if o.addressed else None
         for s in o.servers:
             try:
-                found = await s.tools(token)
+                found = await s.tools(token, url)
             except Exception:
                 continue   # a server that wants a key the caller hasn't saved yet lists nothing
             out += [{"name": f"{s.label}_{t.name}", "title": t.title or t.name.replace("_", " "), "description": t.description,
                      "writes": bool(s._writes) or oauth.writes(t), "mode": oauth.mode(s, t, chosen)} for t in found]
         return out
 
+    @r.api_route("/connectors/{name}/fetch/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    async def fetch(name: str, path: str, request: Request, ws: Workspace = ws_dep):
+        """An app's live call to a connector's API. The grant is resolved per call — a refreshed token
+        is inherited and never reaches the page — and the same switches that hide a connector's tools
+        close this too."""
+        o = _get(name)
+        if name in (await oauth.blocked(ws) | await oauth.off(ws)):
+            raise HTTPException(status_code=403, detail="Connector is switched off")
+        status, body, ctype = await oauth.relay(
+            o, ws, path, method=request.method, headers=dict(request.headers),
+            body=await request.body() if request.method != "GET" else None)
+        return Response(content=body, status_code=status, media_type=ctype)
+
     @r.get("/connectors/{name}/prompts")
     async def prompts(name: str, ws: Workspace = ws_dep):
         o = _get(name)
-        token = await o.bearer(ws)
+        token, url = await o.bearer(ws), (await o.endpoint(ws) if o.addressed else None)
         return [{"name": p.name, "title": p.title or p.name.replace("_", " "), "description": p.description}
-                for s in o.servers for p in await s.prompts(token)]
+                for s in o.servers for p in await s.prompts(token, url)]
 
     @r.put("/connectors/{name}/tools")
     async def set_tools(name: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):

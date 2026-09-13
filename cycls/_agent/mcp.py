@@ -68,8 +68,8 @@ def _shape(result):
 
 
 class MCP:
-    def __init__(self, url: str):
-        self._url = url
+    def __init__(self, url: str = None):
+        self._url = url   # None when the connector carries a per-person address (cycls.Endpoint)
         self._name: Optional[str] = None
         self._token: Optional[str] = None
         self._allow: Optional[List[str]] = None
@@ -122,13 +122,19 @@ class MCP:
         tok = token or self._token
         return {"Authorization": f"Bearer {tok}"} if tok else {}
 
-    async def prompts(self, token=None):
+    def _at(self, url=None):
+        """This server's address for this caller: their own, when the connector carries one, else the declared url."""
+        return url or self._url
+
+    async def prompts(self, token=None, url=None):
         """The server's prompt templates, if it offers any — cached like tools; a server without them reads as none."""
-        key = (self._url, token or self._token)
+        if not (at := self._at(url)):
+            return []
+        key = (at, token or self._token)
         hit = _prompts.get(key)
         if not hit or hit[0] < time.monotonic():
             try:
-                found = await _list_prompts(self._url, self._headers(token))
+                found = await _list_prompts(at, self._headers(token))
             except Exception:
                 found = []
             _prompts[key] = hit = (time.monotonic() + DISCOVERY_TTL, found)
@@ -138,18 +144,21 @@ class MCP:
     def label(self):
         return self._name or "mcp"
 
-    async def tools(self, token=None):
-        """This server's tools (the SDK objects), discovered once per token and cached; `.allow()` applied."""
-        key = (self._url, token or self._token)
+    async def tools(self, token=None, url=None):
+        """This server's tools (the SDK objects), discovered once per address and token and cached;
+        `.allow()` applied. A per-person address keys its own entry, so nobody reads another's catalog."""
+        if not (at := self._at(url)):
+            return []
+        key = (at, token or self._token)
         hit = _discovered.get(key)
         if not hit or hit[0] < time.monotonic():
-            _discovered[key] = hit = (time.monotonic() + DISCOVERY_TTL, await _list(self._url, self._headers(token)))
+            _discovered[key] = hit = (time.monotonic() + DISCOVERY_TTL, await _list(at, self._headers(token)))
         return [t for t in hit[1] if not self._allow or t.name in self._allow]
 
-    async def discover(self, token=None):
+    async def discover(self, token=None, url=None):
         """(schemas, handlers, names) for this server's tools, prefixed `{name}_`."""
         schemas, handlers, names = [], {}, {}
-        for t in await self.tools(token):
+        for t in await self.tools(token, url):
             full = f"{self.label}_{t.name}"
             schemas.append({"type": "custom", "name": full, "description": t.description or "",
                             "input_schema": t.input_schema})
@@ -159,13 +168,16 @@ class MCP:
 
     def _handler(self, raw):
         async def call(inp, ctx):
-            headers = self._headers()
-            if self._connector:
-                token = await self._connector.bearer(ctx.workspace)
-                if not token:
-                    return not_connected(self._connector.name)
-                headers = {"Authorization": f"Bearer {token}"}
-            return await _call(self._url, headers, raw, inp)
+            headers, url = self._headers(), self._url
+            if o := self._connector:
+                if o.addressed:   # the address is the credential; there is no header to add
+                    if not (url := await o.endpoint(ctx.workspace)):
+                        return not_connected(o.name)
+                elif not (token := await o.bearer(ctx.workspace)):
+                    return not_connected(o.name)
+                else:
+                    headers = {"Authorization": f"Bearer {token}"}
+            return await _call(url, headers, raw, inp)
         return call
 
     def _spec(self) -> dict:

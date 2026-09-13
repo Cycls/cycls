@@ -1512,6 +1512,115 @@ def test_unconnected_connector_yields_the_card_and_stops_the_model(agent_env):
     assert "not connected" in result["content"] and "end your turn" in result["content"]
 
 
+def _drive(name="search_files", description="search the user's files"):
+    return types.SimpleNamespace(name=name, description=description, input_schema={"type": "object"})
+
+
+def _google():
+    from cycls._agent import connectors as c
+    return c.OAuth2("google", title="Google Drive", description="Files and folders",
+                    authorize="a", token="t", client_id="i", secret="s")
+
+
+def _grant(ctx):
+    from cycls._agent import credentials
+    asyncio.run(credentials.put(ctx.workspace, "google", {"access_token": "tok", "refresh_token": "r", "expires_at": 9e12}))
+
+
+def test_connector_schemas_are_absent_until_find_tools_matches(agent_env):
+    """Decision 22: the turn opens with `find_tools` and a one-line index, not forty schemas.
+    The model asks for what it needs and only then do the schemas enter the request."""
+    from cycls._agent import mcp as m
+    ws, ctx = agent_env
+    m._discovered.clear()
+    google = _google()
+    find = _make_response([_tool_use_block("t1", name="find_tools", inp={"query": "search my files"})], stop_reason="tool_use")
+    client, calls = _capturing_client([find, _make_response([_text_block("ok")])])
+
+    with _mock_anthropic(client), patch.object(m, "_list", AsyncMock(return_value=[_drive()])), \
+         patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}):
+        _grant(ctx)
+        asyncio.run(_drain(_run(context=ctx, mcp_servers=[m.MCP("https://d/mcp").name("drive").connector(google)])))
+
+    first = [t["name"] for t in calls[0]["tools"]]
+    assert "drive_search_files" not in first and "find_tools" in first
+    assert "Google Drive" in calls[0]["system"][-1]["text"] if isinstance(calls[0]["system"], list) else True
+    assert "drive_search_files" in [t["name"] for t in calls[1]["tools"]]
+
+
+def test_an_at_mention_loads_a_connector_without_a_find_tools_call(agent_env):
+    """The person already chose, so the round-trip is waste: the tools are in the first request."""
+    from cycls._agent import mcp as m
+    ws, ctx = agent_env
+    m._discovered.clear()
+    google = _google()
+    client, calls = _capturing_client([_make_response([_text_block("ok")])])
+
+    with _mock_anthropic(client), patch.object(m, "_list", AsyncMock(return_value=[_drive()])), \
+         patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}):
+        _grant(ctx)
+        asyncio.run(_drain(_run(context=ctx, mentions=["google"],
+                                mcp_servers=[m.MCP("https://d/mcp").name("drive").connector(google)])))
+
+    names = [t["name"] for t in calls[0]["tools"]]
+    assert "drive_search_files" in names and "find_tools" not in names
+
+
+def test_discovery_sticks_for_the_rest_of_the_chat(agent_env):
+    """The cache breakpoint sits on the last tool, so a connector is paid for once per chat.
+    A transcript that already called its tools rebuilds the discovered set with no stored state."""
+    from cycls._agent import mcp as m
+    ws, ctx = agent_env
+    m._discovered.clear()
+    google = _google()
+    server = m.MCP("https://d/mcp").name("drive").connector(google)
+    looked_up = _make_response([_tool_use_block("t1", name="find_tools", inp={"query": "search my files"})], stop_reason="tool_use")
+    first, _ = _capturing_client([looked_up, _make_response([_text_block("ok")])])
+    second, later = _capturing_client([_make_response([_text_block("ok")])])
+
+    with patch.object(m, "_list", AsyncMock(return_value=[_drive()])), \
+         patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}):
+        _grant(ctx)
+        with _mock_anthropic(first):
+            asyncio.run(_drain(_run(context=ctx, mcp_servers=[server])))
+        _providers._clients.clear()
+        with _mock_anthropic(second):
+            asyncio.run(_drain(_run(context=ctx, mcp_servers=[server])))
+
+    names = [t["name"] for t in later[0]["tools"]]
+    assert "drive_search_files" in names and "find_tools" not in names
+
+
+def test_builtins_are_never_behind_discovery(agent_env):
+    """`bash` and friends are used constantly — putting them behind a lookup would cost a
+    round-trip on every turn for nothing."""
+    from cycls._agent import mcp as m
+    ws, ctx = agent_env
+    m._discovered.clear()
+    google = _google()
+    client, calls = _capturing_client([_make_response([_text_block("ok")])])
+
+    with _mock_anthropic(client), patch.object(m, "_list", AsyncMock(return_value=[_drive()])), \
+         patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}):
+        _grant(ctx)
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Bash"],
+                                mcp_servers=[m.MCP("https://d/mcp").name("drive").connector(google)])))
+
+    assert "bash" in [t["name"] for t in calls[0]["tools"]]
+
+
+def test_find_tools_matches_on_what_the_tools_do(agent_env):
+    """The index carries a connector's name and blurb; matching also reads the tool
+    descriptions behind it, so "spreadsheet" finds Drive without naming it."""
+    from cycls._agent import connectors as c
+    catalog = {"google": ("Google Drive", "Files and folders", ["drive_search_files search spreadsheets and docs"]),
+               "salla": ("Salla", "Your store", ["salla_orders_list list the store's orders"])}
+    assert c.matches("find a spreadsheet", catalog) == ["google"]
+    assert c.matches("how many orders today", catalog) == ["salla"]
+    assert c.matches("salla", catalog)[0] == "salla"
+    assert c.matches("nothing relevant here", catalog) == []
+
+
 def test_tool_guidance_rides_with_the_enabled_tool(agent_env):
     """Opting into the tool is the only switch — no operator has to remember
     matching prompt copy, and a tool that isn't enabled contributes nothing."""
