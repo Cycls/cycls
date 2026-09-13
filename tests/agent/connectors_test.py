@@ -239,7 +239,7 @@ def test_auto_still_pauses_for_a_destructive_tool(tmp_path):
 
 def test_a_key_connector_stores_the_pasted_key_and_hands_it_to_its_servers(tmp_path):
     ph = c.Key("posthog", hint="phx_…", scope="either", website="https://posthog.com")
-    async def listing(token=None):
+    async def listing(token=None, url=None):
         if not token:
             raise RuntimeError("401")
         return [SimpleNamespace(name="insight_get", title=None, description="d", annotations=None)]
@@ -255,7 +255,7 @@ def test_a_key_connector_stores_the_pasted_key_and_hands_it_to_its_servers(tmp_p
     assert client.put("/connectors/posthog/key", json={"key": "phx_abc"}).json() == {"ok": True}
     assert asyncio.run(ph.bearer(ws)) == "phx_abc"
     assert [r["name"] for r in client.get("/connectors/posthog/tools").json()] == ["posthog_insight_get"]
-    server.tools.assert_awaited_with("phx_abc")
+    server.tools.assert_awaited_with("phx_abc", None)
     assert client.get("/connectors").json()[0]["connected_as"] == "user"
     assert client.delete("/connectors/posthog").json() == {"ok": True}
     assert asyncio.run(ph.bearer(ws)) is None
@@ -271,10 +271,10 @@ def test_discovery_uses_the_callers_grant_and_skips_a_keyless_key_connector(tmp_
     server.discover.assert_not_awaited()
     asyncio.run(credentials.put(ws, "posthog", {"key": "phx_1"}))
     assert asyncio.run(c.tools_for(server, ws)) == found
-    server.discover.assert_awaited_with(token="phx_1")
+    server.discover.assert_awaited_with(token="phx_1", url=None)
     gs = SimpleNamespace(_connector=_google(), discover=AsyncMock(return_value=([], {}, {})))
     asyncio.run(c.tools_for(gs, ws))
-    gs.discover.assert_awaited_with(token=None)                                        # OAuth lists anonymously: the card can appear
+    gs.discover.assert_awaited_with(token=None, url=None)                                        # OAuth lists anonymously: the card can appear
 
 
 def test_a_one_tool_server_asks_only_for_the_calls_that_write():
@@ -304,7 +304,7 @@ class _HTTP:
     def __init__(self, **kw): pass
     async def __aenter__(self): return self
     async def __aexit__(self, *a): pass
-    async def post(self, url, data=None, json=None):
+    async def post(self, url, data=None, json=None, headers=None):
         _HTTP.calls.append((url, data or json))
         return _Resp({"access_token": f"at{len(_HTTP.calls)}", "refresh_token": "rt", "expires_in": 100})
 
@@ -414,3 +414,145 @@ def test_bilingual_prefers_what_came_first_and_fills_the_other_language():
     assert c.bilingual("Drive", {"en": "x", "ar": "y"}) == {"en": "Drive", "ar": "Drive"}
     assert c.bilingual(None, {"en": "", "ar": "سلة"}) == {"en": "سلة", "ar": "سلة"}
     assert c.bilingual(None, None) is None
+
+
+def _relay_ws(tmp_path):
+    return workspace("relay", tmp_path, base=f"file://{tmp_path}")
+
+
+def _fake_httpx(captured):
+    """Stands in for httpx.AsyncClient so the relay's request is inspectable."""
+    class R:
+        status_code, content, headers = 200, b'{"ok":true}', {"content-type": "application/json"}
+
+    class C:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def request(self, method, url, headers=None, content=None):
+            captured.update(method=method, url=url, headers=headers, content=content)
+            return R()
+    return SimpleNamespace(AsyncClient=lambda **kw: C())
+
+
+def test_an_app_reaches_a_connector_api_with_the_workspace_grant(key, tmp_path):
+    """The app names a connector and a path; the live token is attached here, so a refreshed
+    grant is inherited and the page never holds one."""
+    import sys
+    o, ws, got = c.Key("posthog", api="https://us.posthog.com"), _relay_ws(tmp_path), {}
+    asyncio.run(credentials.put(ws, "posthog", {"key": "phx_live"}))
+    with patch.dict(sys.modules, {"httpx2": _fake_httpx(got)}):
+        status, body, ctype = asyncio.run(c.relay(o, ws, "/api/projects/1/query/", method="POST",
+                                                  headers={"content-type": "application/json",
+                                                           "authorization": "Bearer attacker",
+                                                           "x-forwarded-for": "1.2.3.4"},
+                                                  body=b'{"query":"select 1"}'))
+    assert (status, body, ctype) == (200, b'{"ok":true}', "application/json")
+    assert got["url"] == "https://us.posthog.com/api/projects/1/query/"
+    assert got["headers"]["Authorization"] == "Bearer phx_live"      # ours, not the caller's
+    assert "x-forwarded-for" not in {k.lower() for k in got["headers"]}
+
+
+def test_the_relay_will_not_leave_the_connectors_host(key, tmp_path):
+    """`api` is the boundary: a path that climbs out, or an absolute url, is refused before
+    any request is made — the grant would otherwise be handed to whatever host was named."""
+    o, ws = c.Key("posthog", api="https://us.posthog.com"), _relay_ws(tmp_path)
+    asyncio.run(credentials.put(ws, "posthog", {"key": "phx_live"}))
+    import sys
+    with patch.dict(sys.modules, {"httpx2": _fake_httpx({})}):   # a leak would show as 200, never a live call
+        for path in ("../../evil", "/api/../../evil", "https://evil.example/x", "//evil.example/x"):
+            assert asyncio.run(c.relay(o, ws, path))[0] == 400, path
+
+
+def test_the_relay_says_not_connected_rather_than_calling_anonymously(key, tmp_path):
+    o, ws = c.Key("posthog", api="https://us.posthog.com"), _relay_ws(tmp_path)
+    assert asyncio.run(c.relay(o, ws, "/api/x"))[0] == 401
+    assert asyncio.run(c.relay(c.Key("nope"), ws, "/api/x"))[0] == 400   # no api base declared
+
+
+def test_an_api_base_must_be_https():
+    with pytest.raises(ValueError):
+        c.Key("posthog", api="http://us.posthog.com")
+
+
+def test_a_connector_can_require_headers_of_every_caller(key, tmp_path):
+    """Notion refuses a request without its version header, and an app cannot set one — the
+    allowlist drops it. The connector declares it once and the relay sends it every time."""
+    import sys
+    o = c.OAuth2("notion", mcp="https://mcp.notion.com/mcp", api="https://api.notion.com",
+                 api_headers={"Notion-Version": "2022-06-28"})
+    ws, got = _relay_ws(tmp_path), {}
+    asyncio.run(credentials.put(ws, "notion", {"access_token": "t", "expires_at": 9e12}))
+    with patch.dict(sys.modules, {"httpx2": _fake_httpx(got)}):
+        asyncio.run(c.relay(o, ws, "/v1/search", method="POST",
+                            headers={"notion-version": "1999-01-01"}, body=b"{}"))
+    assert got["headers"]["Notion-Version"] == "2022-06-28"   # the connector's, not the app's
+
+
+def test_a_pasted_link_can_be_the_credential(tmp_path):
+    """Zid gives each merchant a private MCP link and calls it a password. It rides the same paste
+    field a key uses, but it addresses the server instead of being sent to one."""
+    from cycls._app.auth import User
+    zid = c.Endpoint("zid", host="zid.sa", hint="https://…zid.sa/…", title="Zid")
+    ws = workspace(User(id="u1"), tmp_path, base=f"file://{tmp_path}")
+    found = ([{"name": "zid_orders"}], {"zid_orders": 1}, {"zid_orders": "n"})
+    server = SimpleNamespace(_connector=zid, label="zid", _writes=None,
+                             tools=AsyncMock(return_value=[]), discover=AsyncMock(return_value=found))
+    assert zid.kind == "key"                                   # the directory already knows how to draw this
+    assert asyncio.run(c.tools_for(server, ws)) == ([], {}, {})   # no link yet: nothing, and no error
+    server.discover.assert_not_awaited()
+
+    for bad in ("https://evil.example/mcp", "http://mcp.zid.sa/s/a", "https://evil-zid.sa/s/a",
+                "https://zid.sa.evil.com/s/a", "https://u:p@mcp.zid.sa/s/a"):
+        assert zid.validate(bad), bad                          # a link from anywhere else is refused
+    assert zid.validate("https://mcp.zid.sa/s/abc") is None    # any subdomain of theirs is fine
+    asyncio.run(credentials.put(ws, "zid", {"key": "https://mcp.zid.sa/s/abc"}))
+    assert asyncio.run(c.tools_for(server, ws)) == found
+    server.discover.assert_awaited_with(token=None, url="https://mcp.zid.sa/s/abc")   # addressed, never sent
+    assert asyncio.run(zid.bearer(ws)) is None
+
+
+def test_a_stored_link_that_no_longer_matches_the_prefix_is_ignored(tmp_path):
+    """The guard is read at use, not only at save: a prefix tightened in code retires links that
+    were stored under the looser one instead of dialling them."""
+    from cycls._app.auth import User
+    ws = workspace(User(id="u1"), tmp_path, base=f"file://{tmp_path}")
+    asyncio.run(credentials.put(ws, "zid", {"key": "https://old.example/s/abc"}))
+    assert asyncio.run(c.Endpoint("zid", host="zid.sa").endpoint(ws)) is None
+
+
+def test_a_link_on_the_right_domain_is_still_refused_over_plain_http():
+    assert c.Endpoint("zid", host="zid.sa").validate("http://mcp.zid.sa/s/a")
+
+
+def test_the_token_exchange_asks_for_json(key):
+    """GitHub's token endpoint answers form-encoded unless the request says otherwise, and the
+    grant is read with `.json()` — so the header is what makes that provider work at all."""
+    import sys
+    seen = {}
+
+    class R:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {"access_token": "a", "expires_in": 60}
+
+    class C:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, headers=None, data=None):
+            seen.update(headers=headers or {}, data=data)
+            return R()
+
+    o = c.OAuth2("github", authorize="a", token="https://github.com/login/oauth/access_token",
+                 client_id="cid", secret="shh")
+    with patch.dict(sys.modules, {"httpx2": SimpleNamespace(AsyncClient=lambda **kw: C())}):
+        grant = asyncio.run(o._token({"token": o.token, "client_id": "cid", "resource": None}, code="z"))
+    assert seen["headers"].get("Accept") == "application/json"
+    assert grant["access_token"] == "a"
+
+
+def test_a_missing_deployment_secret_says_which_one(monkeypatch):
+    """A connector declares `cycls.env("X")` and it resolves when used, so a value nobody set
+    surfaces at Connect — naming it beats a bare KeyError in the logs."""
+    monkeypatch.delenv("NOPE_CLIENT_ID", raising=False)
+    with pytest.raises(RuntimeError, match="NOPE_CLIENT_ID is not set"):
+        c.env("NOPE_CLIENT_ID").get()

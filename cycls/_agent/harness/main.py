@@ -42,6 +42,32 @@ DEFAULT_WINDOW = 1_000_000    # context window when .context() is unset — set 
 DEFAULT_MAX_TOKENS = 8_192    # output cap when .max_tokens() is unset — safe on every model
 
 
+def _cause(e):
+    """A TaskGroup/ExceptionGroup wrapper says nothing — dig out the exception that actually failed."""
+    while getattr(e, "exceptions", None): e = e.exceptions[0]
+    return f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+
+
+def _seen_connectors(messages, prefixes, catalog):
+    """Which connectors this chat already discovered — read back from the transcript, so discovery
+    survives a new instance without storing anything. Either the lookup that loaded them is in the
+    history, or a call to one of their tools is."""
+    seen = set()
+    for m in messages:
+        content = m.get("content")
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if not (isinstance(b, dict) and b.get("type") == "tool_use"):
+                continue
+            name = str(b.get("name") or "")
+            if name == "find_tools":
+                seen |= set(connectors.matches(str((b.get("input") or {}).get("query") or ""), catalog))
+            else:
+                seen |= {n for p, n in prefixes.items() if name.startswith(p)}
+    return seen
+
+
 def _user_warn(user, chat_id, public, detail):
     """Chat callout with a reference id; the detail lives only in the log."""
     ref = uuid.uuid4().hex[:8]
@@ -201,29 +227,75 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         tools_list.append(skills_mod.SKILL_TOOL)
     owners = {}   # tool name -> the OAuth2 it acts with, for the audit line
     mcp_names = set()   # a server's results are the model's, never the chat's
+    handlers = dict(handlers or {})
+
+    def _mount(server, schemas, fns, names):
+        nonlocal system_text
+        tools_list.extend(schemas)
+        handlers.update(fns)
+        mcp_names.update(fns)
+        register_labels({}, names, dict.fromkeys(fns, server._connector.name) if server._connector else None, details=fns.keys())
+        if server._connector:
+            owners.update(dict.fromkeys(fns, server._connector))
+        if server._guidance and schemas:
+            system_text += "\n\n" + server._guidance
+
     client_side = [s for s in mcp_servers or [] if not s._server_side]
     # An org admin's switch and the person's own resolve the same way here: the tools never enter the turn.
     hidden = (await connectors.blocked(workspace) | await connectors.off(workspace)) if any(s._connector for s in client_side) else set()
+    deferred, catalog, objs = {}, {}, {}   # a connector's schemas wait behind `find_tools`
     for server in client_side:
         if server._connector and server._connector.name in hidden:
             continue
         try:
             schemas, fns, names = await connectors.tools_for(server, workspace)
         except Exception as e:
-            cause = e
-            while getattr(cause, "exceptions", None): cause = cause.exceptions[0]   # the TaskGroup wrapper says nothing
             yield _user_warn(user, session.chat_id, f"Couldn't reach {server._name or server._url} — its tools are off this turn.",
-                             f"mcp discovery failed for {server._url}: {cause}")
+                             f"mcp discovery failed for {server._url}: {_cause(e)}")
             continue
-        tools_list += schemas
-        handlers = {**(handlers or {}), **fns}
-        mcp_names |= fns.keys()
-        register_labels({}, names, dict.fromkeys(fns, server._connector.name) if server._connector else None, details=fns.keys())
-        if server._connector:
-            owners.update(dict.fromkeys(fns, server._connector))
-        if server._guidance and schemas:
-            system_text += "\n\n" + server._guidance
+        if not (server._connector and schemas):
+            _mount(server, schemas, fns, names)
+            continue
+        o = server._connector
+        objs[o.name] = o
+        deferred.setdefault(o.name, []).append((server, schemas, fns, names))
+        catalog.setdefault(o.name, (o.title, o.description, []))[2].extend(
+            f'{s["name"]} {s.get("description") or ""}' for s in schemas)
     mcp_servers = [s for s in mcp_servers or [] if s._server_side] or None
+
+    def _discover(name):
+        """Its tools enter the turn and stay for the rest of the chat — the cache breakpoint sits on the
+        last tool, so this is paid once per connector per chat, never once per turn."""
+        got = []
+        for entry in deferred.pop(name, ()):
+            _mount(*entry)
+            got += list(entry[2])
+        return got
+
+    def _owner_of(tool):
+        return next((n for n, es in deferred.items() for s, *_ in es if tool.startswith(f"{s.label}_")), None)
+
+    async def _find_tools(inp, ctx):
+        hits = connectors.matches(str(inp.get("query") or ""), catalog)
+        loaded = [(n, _discover(n)) for n in hits if n in deferred]
+        if loaded:
+            return "Loaded:\n" + "\n".join(f"- {n}: {', '.join(sorted(t))}" for n, t in loaded)
+        if hits:
+            return f"Already loaded: {', '.join(hits)}. Call those tools directly."
+        return ("Nothing matched. You can load: " + ", ".join(sorted(deferred))) if deferred else "No connectors left to load."
+
+    if deferred:   # already discovered here, or just `@`-mentioned — either way, no round-trip
+        prefixes = {f"{s.label}_": n for n, es in deferred.items() for s, *_ in es}
+        for name in _seen_connectors(messages, prefixes, catalog) | set(mentions or []):
+            _discover(name)
+    if deferred:
+        tools_list.append(connectors.FIND_TOOLS)
+        handlers["find_tools"] = _find_tools
+        register_labels({"find_tools": lambda i: str(i.get("query") or "")}, {"find_tools": "Finding tools"},
+                        details=("find_tools",))   # the result is the model's; the step row carries it
+        system_text += "\n\nConnectors this person has connected. Their tools are not loaded yet — call " \
+                       "`find_tools` once with what you need, then call the tools it returns.\n" + \
+                       "\n".join(connectors.index_line(objs[n], sum(len(e[2]) for e in es)) for n, es in sorted(deferred.items()))
     for guidance in tool_prompts(tools_list):
         system_text += "\n\n" + guidance
     window = context_window or DEFAULT_WINDOW
@@ -340,6 +412,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 await session.checkpoint(); break
 
             blocks = [b for b in turn.content if isinstance(b, dict) and b.get("type") == "tool_use"]
+            for b in blocks:   # reached for a tool it never loaded — load it and let the call through
+                _discover(_owner_of(b.get("name") or ""))
             # One `seen` per batch; comprehensions run left to right, so the first call wins.
             seen = set()
             pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network, seen=seen, ctx=ctx)
@@ -362,8 +436,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 log("tool_call", user=user, chat_id=session.chat_id,
                     model=bare_model, tool=block["name"], tool_use_id=block["id"], ms=ms, ok=ok,
                     connector=o.name if o else None, credential_scope=o.scope if o else None,
-                    output_bytes=len(out) if isinstance(out, (str, bytes)) else None)
-                if not ok: out = f"Error: {out}"
+                    output_bytes=len(out) if isinstance(out, (str, bytes)) else None,
+                    error=None if ok else _cause(out))
+                if not ok: out = f"Error: {_cause(out)}"
                 # Two channels: `_model` lands in tool_result, `_ui` is forwarded
                 # to the client. `web_search` uses it to hand the FE structured
                 # sources without changing what the model reads.

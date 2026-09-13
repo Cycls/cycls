@@ -89,3 +89,16 @@ def test_workspace_round_trip(tmp_path):
         ws_a = workspace(u, tmp_path)
         ws_b = workspace(ws_a.subject, tmp_path)
         assert ws_a == ws_b
+
+
+def test_every_exported_name_actually_resolves():
+    """`_EXPORTS` is a lazy map, so a name listed here but missing from its module only fails at
+    deploy, inside someone's agent file. Touch them all once instead."""
+    import cycls
+    missing = []
+    for name in cycls.__all__:
+        try:
+            getattr(cycls, name)
+        except AttributeError as e:
+            missing.append(f"{name}: {e}")
+    assert not missing
