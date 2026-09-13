@@ -12,6 +12,9 @@
   --color-card-foreground: #0a0a0a;
   --color-secondary: #f5f5f5;
   --color-secondary-foreground: #0a0a0a;
+  /* Logo plate. Most connector marks are dark ink on transparent, so this stays light in both
+     themes — a dark tile would swallow them — just dimmed below to take the glare off. */
+  --color-plate: #ffffff;
 }
 
 .dark {
@@ -26,6 +29,7 @@
   --color-card-foreground: #fafafa;
   --color-secondary: #1c1c1c;
   --color-secondary-foreground: #fafafa;
+  --color-plate: #d8d8d8;
 }
 
 body {

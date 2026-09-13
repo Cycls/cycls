@@ -73,13 +73,14 @@ interface PendingSave {
 }
 
 // Without readFile (shared pages have no workspace) this is a plain sandboxed doc.
-function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders }: {
+function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetchConnector }: {
   file: CanvasFile;
   content: string;
   shared: boolean;
   readFile?: (path: string, silent?: boolean) => Promise<string>;
   writeFile?: (path: string, text: string, silent?: boolean) => Promise<void>;
   listFolders?: () => Promise<{ name: string; path: string }[]>;
+  fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
 }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const [pending, setPending] = useState<PendingSave | null>(null);
@@ -102,6 +103,7 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders }: {
         ? (name, body) => new Promise<string | null>((resolve) =>
             setPending({ name, content: body, resolve }))
         : undefined,
+      fetchConnector: shared ? undefined : fetchConnector,
       context: {
         theme: document.documentElement.classList.contains("dark") ? "dark" : "light",
         locale: document.documentElement.lang || "en",
@@ -146,7 +148,7 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders }: {
   );
 }
 
-export function CanvasDoc({ file, content, error, shared = false, readFile, writeFile, listFolders, onDownload, onShare }: {
+export function CanvasDoc({ file, content, error, shared = false, readFile, writeFile, listFolders, fetchConnector, onDownload, onShare }: {
   file: CanvasFile;
   content: string | null;
   error: boolean;
@@ -154,6 +156,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, writ
   readFile?: (path: string, silent?: boolean) => Promise<string>;
   writeFile?: (path: string, text: string, silent?: boolean) => Promise<void>;
   listFolders?: () => Promise<{ name: string; path: string }[]>;
+  fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   onDownload?: () => void;
   onShare?: () => void;
 }) {
@@ -163,7 +166,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, writ
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Couldn't load this file.</div>;
   }
   if (isHtml(fileKind(file))) {
-    return <HtmlDoc file={file} content={content ?? ""} shared={shared} readFile={readFile} writeFile={writeFile} listFolders={listFolders} />;
+    return <HtmlDoc file={file} content={content ?? ""} shared={shared} readFile={readFile} writeFile={writeFile} listFolders={listFolders} fetchConnector={fetchConnector} />;
   }
   if (isPdf(fileKind(file))) {
     // Desktop's native inline viewer is the best PDF UX (search, zoom, print).
@@ -264,7 +267,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, org, onShareFile, railWidth = 0, reloadKey, working }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, fetchConnector, org, onShareFile, railWidth = 0, reloadKey, working }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -285,6 +288,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   openFile: (path: string) => Promise<string>;    // authed blob URL (pdf / download)
   writeFile: (path: string, text: string) => Promise<void>;  // overwrite (editor)
   listFolders?: () => Promise<{ name: string; path: string }[]>;  // app save dialog
+  fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;   // an app's live call to a connector API
   org?: { id: string; name: string } | null;   // lets the share dialog offer the org audience
   onShareFile?: (path: string, audience: string) => Promise<string>;
   railWidth?: number;   // pane docked to our right; the drag must account for it
@@ -359,6 +363,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
           openFile={openFile}
           writeFile={writeFile}
           listFolders={listFolders}
+          fetchConnector={fetchConnector}
           org={org}
           onShareFile={onShareFile}
           reloadKey={reloadKey}
@@ -578,12 +583,13 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
 }
 
 // Keyed by path from the parent, so per-file state resets on tab switch.
-function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, org, onShareFile, reloadKey }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetchConnector, org, onShareFile, reloadKey }: {
   file: CanvasFile;
   readFile: (path: string) => Promise<string>;
   openFile: (path: string) => Promise<string>;
   writeFile: (path: string, text: string) => Promise<void>;
   listFolders?: () => Promise<{ name: string; path: string }[]>;
+  fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   org?: { id: string; name: string } | null;
   onShareFile?: (path: string, audience: string) => Promise<string>;
   reloadKey?: number;
@@ -713,6 +719,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, org,
           />
         ) : (
           <CanvasDoc file={file} content={content} error={error} readFile={readFile} writeFile={writeFile} listFolders={listFolders}
+                     fetchConnector={fetchConnector}
                      onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
         )}
       </div>

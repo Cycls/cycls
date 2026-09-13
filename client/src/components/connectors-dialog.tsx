@@ -32,12 +32,15 @@ export const L = (v: L | undefined): string => (v ? (getLang() === "ar" ? v.ar |
 export const connectorLabel = (c: { name: string; title?: L }) =>
   L(c.title) || c.name.charAt(0).toUpperCase() + c.name.slice(1);
 
+// A logo sits on its own plate, light in either theme (see --color-plate) so a dark mark still reads.
+export const PLATE = "overflow-hidden rounded-xl border border-border/60 bg-plate";
+
 // The declared logo, else the site's favicon, else a link glyph — a connector always has a face.
 export function ConnectorIcon({ c, className = "size-9" }: { c: Connector; className?: string }) {
   const host = c.website?.replace(/^https?:\/\//, "").split("/")[0];
   const src = c.icon || (host ? `https://www.google.com/s2/favicons?sz=128&domain=${host}` : null);
   return src
-    ? <span className={cn(className, "flex shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border/60 bg-white")}><img src={src} alt="" className="size-[68%] object-contain" /></span>
+    ? <span className={cn(className, "flex shrink-0 items-center justify-center", PLATE)}><img src={src} alt="" className="size-[68%] object-contain" /></span>
     : <span className={cn(className, "flex shrink-0 items-center justify-center rounded-xl bg-secondary text-muted-foreground")}><Icon name="link" className="size-1/2" /></span>;
 }
 

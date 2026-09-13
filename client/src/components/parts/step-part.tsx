@@ -14,6 +14,7 @@ const GLYPHS: Record<string, IconName> = {
   Bash: "terminal",
   Database: "database",
   Skill: "star",
+  "Finding tools": "scope",
 };
 
 const pageUrl = (s?: string) => {
