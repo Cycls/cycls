@@ -191,3 +191,9 @@ body {
     font-size: 16px !important;
   }
 }
+
+/* The app flips to dir="rtl" on <html> for Arabic (i18n.ts), and Clerk portals
+   its drawers into #clerk-components on the body — so checkout inherits RTL and
+   mirrors. Pin the portal back to LTR: the drawer keeps the English layout while
+   its copy stays Arabic. */
+#clerk-components { direction: ltr; }
