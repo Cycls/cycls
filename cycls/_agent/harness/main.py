@@ -48,6 +48,17 @@ def _cause(e):
     return f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
 
 
+def _server_said(e):
+    """An MCP server's own words, when it answered with a reason rather than failing to answer at all.
+    A server writes these for the person to act on — Slack's names the switch and links the page that
+    flips it — so they belong in the chat. A timeout or a TLS failure says nothing a user can use and
+    stays in the log."""
+    from mcp.shared.exceptions import MCPError
+    while getattr(e, "exceptions", None): e = e.exceptions[0]
+    said = str(e).strip() if isinstance(e, MCPError) else ""
+    return said[:300] or None
+
+
 def _seen_connectors(messages, prefixes, catalog):
     """Which connectors this chat already discovered — read back from the transcript, so discovery
     survives a new instance without storing anything. Either the lookup that loaded them is in the
@@ -72,7 +83,7 @@ def _user_warn(user, chat_id, public, detail):
     """Chat callout with a reference id; the detail lives only in the log."""
     ref = uuid.uuid4().hex[:8]
     log("warn", user=user, chat_id=chat_id, error_id=ref, message=detail)
-    return events.callout(f"{public} Reference: `{ref}`", "warning")
+    return events.callout(f"{public} Reference: {ref}", "warning")
 
 
 def _cost(price, inp, out, cached, cache_create):
@@ -250,7 +261,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         try:
             schemas, fns, names = await connectors.tools_for(server, workspace)
         except Exception as e:
-            yield _user_warn(user, session.chat_id, f"Couldn't reach {server._name or server._url} — its tools are off this turn.",
+            said, label = _server_said(e), server._name or server._url
+            yield _user_warn(user, session.chat_id,
+                             f"{label}'s tools are off this turn — {said}" if said
+                             else f"Couldn't reach {label} — its tools are off this turn.",
                              f"mcp discovery failed for {server._url}: {_cause(e)}")
             continue
         if not (server._connector and schemas):
