@@ -556,3 +556,70 @@ def test_a_missing_deployment_secret_says_which_one(monkeypatch):
     monkeypatch.delenv("NOPE_CLIENT_ID", raising=False)
     with pytest.raises(RuntimeError, match="NOPE_CLIENT_ID is not set"):
         c.env("NOPE_CLIENT_ID").get()
+
+
+# ---- the connect relay: one registered redirect for every agent ----
+
+def _relay_env(monkeypatch, origins="https://super.cycls.ai,https://haseef.cycls.ai"):
+    monkeypatch.setenv("CYCLS_RELAY_SECRET", "shared")
+    monkeypatch.setenv("CYCLS_RELAY_ORIGINS", origins)
+    monkeypatch.setenv("CYCLS_RELAY_URL", "https://connect.cycls.ai/callback")
+
+
+def test_the_relay_sends_the_code_back_to_the_agent_that_asked(monkeypatch):
+    """The state names the origin, the relay reads it and bounces. Both halves sign and read with
+    the same functions, so the format cannot drift into a broken login."""
+    _relay_env(monkeypatch)
+    state = c.sign({"c": "github", "o": "https://super.cycls.ai", "n": "x"}, key=c.state_key())
+    payload = c.verify(state, key=c.state_key())
+    assert c.relay_target(payload, c.relay_origins()) == "https://super.cycls.ai/connectors/github/callback"
+
+
+def test_the_relay_refuses_an_origin_that_is_not_on_the_list(monkeypatch):
+    """Anyone can deploy a *.cycls.ai subdomain, so being one of ours is not permission to use our
+    registered OAuth apps. Without this the relay is an open redirect with OAuth attached."""
+    _relay_env(monkeypatch)
+    for origin in ("https://evil.cycls.ai", "https://evil.example", "http://super.cycls.ai",
+                   "https://super.cycls.ai.evil.com", ""):
+        p = c.verify(c.sign({"c": "github", "o": origin}, key=c.state_key()), key=c.state_key())
+        with pytest.raises(ValueError):
+            c.relay_target(p, c.relay_origins())
+
+
+def test_the_relay_refuses_a_state_it_did_not_sign(monkeypatch):
+    """A code is only forwarded on our own signature — otherwise anyone could name any origin."""
+    _relay_env(monkeypatch)
+    good = c.sign({"c": "github", "o": "https://super.cycls.ai"}, key=c.state_key())
+    body, _, mac = good.rpartition(".")
+    for bad in (f"{body}.{'0' * len(mac)}", f"{body}x.{mac}", "nonsense", body):
+        with pytest.raises(ValueError):
+            c.verify(bad, key=c.state_key())
+    other = c.sign({"c": "github", "o": "https://super.cycls.ai"}, key=b"someone else's key" * 2)
+    with pytest.raises(ValueError):
+        c.verify(other, key=c.state_key())
+
+
+def test_a_relayed_state_expires(monkeypatch):
+    _relay_env(monkeypatch)
+    stale = c.sign({"c": "github", "o": "https://super.cycls.ai"}, ttl=-1, key=c.state_key())
+    with pytest.raises(ValueError, match="expired"):
+        c.verify(stale, key=c.state_key())
+
+
+def test_a_connector_name_cannot_escape_the_callback_path(monkeypatch):
+    """The name lands in a URL path, so a traversal or a scheme in it would retarget the redirect."""
+    _relay_env(monkeypatch)
+    for name in ("../../evil", "git hub", "https://evil.example", "a" * 65, ""):
+        p = {"c": name, "o": "https://super.cycls.ai"}
+        with pytest.raises(ValueError):
+            c.relay_target(p, c.relay_origins())
+
+
+def test_without_a_relay_nothing_changes(monkeypatch):
+    """No relay configured: the state never leaves the deployment and its own key signs it."""
+    monkeypatch.delenv("CYCLS_RELAY_URL", raising=False)
+    monkeypatch.delenv("CYCLS_RELAY_SECRET", raising=False)
+    monkeypatch.setenv("CYCLS_SECRET_KEY", "k1")
+    assert c.relay_url() is None
+    assert c.state_key() == credentials.key()
+    assert c.relay_origins() == set()
