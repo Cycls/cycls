@@ -1331,11 +1331,12 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
         here = f"{request.base_url}connectors/{name}/callback"
         # Through the relay the provider sends the code to one registered host, which reads the origin
         # out of the signed state and bounces it back here. The exchange must reuse whichever it was.
-        redirect = oauth.relay_url() or here
+        via = oauth.relay_url() if o.relay else None
+        redirect = via or here
         client = await o.client(ws, redirect)
         await credentials.put(ws, f"_pending/{nonce}", {"verifier": verifier, "redirect": redirect, "client": client})
         state_ = oauth.sign({"c": name, "s": ws.subject, "w": ws.ws, "n": nonce, "k": chosen,
-                             **({"o": str(request.base_url).rstrip("/")} if oauth.relay_url() else {})},
+                             **({"o": str(request.base_url).rstrip("/")} if via else {})},
                             key=oauth.state_key())
         return {"url": o.authorize_url(client, redirect, state_, verifier)}
 
