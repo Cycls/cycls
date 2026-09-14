@@ -192,8 +192,14 @@ body {
   }
 }
 
-/* The app flips to dir="rtl" on <html> for Arabic (i18n.ts), and Clerk portals
-   its drawers into #clerk-components on the body — so checkout inherits RTL and
-   mirrors. Pin the portal back to LTR: the drawer keeps the English layout while
-   its copy stays Arabic. */
-#clerk-components { direction: ltr; }
+/* Arabic flips <html> to dir="rtl" (i18n.ts), and Clerk anchors its checkout
+   drawer with inset-inline-end — which under RTL resolves to the *left* edge, so
+   the panel opened on the wrong side. Pin it to the physical right, as in
+   English; the copy inside stays RTL. Clerk's own portal root is a sibling of
+   #clerk-components on the body, so .cl-drawerContent is the handle. */
+[dir="rtl"] .cl-drawerContent {
+  inset-inline-start: auto !important;
+  inset-inline-end: auto !important;
+  left: auto !important;
+  right: 12px !important;
+}
