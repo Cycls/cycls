@@ -10,7 +10,7 @@ interface Sheet { html: string; rowsTrunc: boolean; colsTrunc: boolean }
 export function SpreadsheetView({ url, name }: { url: string; name: string }) {
   // Excel/ODS render as values only (no formatting/formulas/charts) → always a
   // preview. CSV has no formatting, so its table is complete unless truncated.
-  const excel = /\.(xlsx|xls|ods)$/i.test(name);
+  const excel = /\.(xlsx|xlsm|xls|ods)$/i.test(name);
   const [names, setNames] = useState<string[] | null>(null);
   const [rtl, setRtl] = useState(false);
   const [active, setActive] = useState(0);

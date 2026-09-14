@@ -94,11 +94,11 @@ function ChatAppKeyed({ config }: { config: AppConfig | null }) {
 
 function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: WorkspaceSelection }) {
   const chat = useChat();
+  const { user } = useUser();
   const files = useFiles();
   useRefreshOnTurnEnd(files, chat.isStreaming);
   const ws = useWorkspaces();
   const { getToken, signOut, isLoaded: authLoaded } = useAuth();
-  const { user } = useUser();
   const clerk = useClerk();
   const { organization, membership, memberships } = useOrganization(
     workspace ? { memberships: { infinite: true } } : {});

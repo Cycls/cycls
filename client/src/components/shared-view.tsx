@@ -247,7 +247,10 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
   const authedFetch = useCallback(async (p: string) => {
     const headers: Record<string, string> = {};
     if (getToken) { const tk = await getToken(); if (tk) headers.Authorization = `Bearer ${tk}`; }
-    const res = await fetch(`${shareBase}/file/${p}${shareQuery}`, { headers });
+    // p may already carry a query (Office ?as=pdf); merge shareQuery's params in
+    // with & so we don't emit a broken double-'?' URL.
+    const q = shareQuery && p.includes("?") ? shareQuery.replace(/^\?/, "&") : shareQuery;
+    const res = await fetch(`${shareBase}/file/${p}${q}`, { headers });
     if (!res.ok) throw new Error("Couldn't load this file");
     return res;
   }, [getToken, shareBase, shareQuery]);
@@ -361,7 +364,9 @@ function SharedFile({ share, getToken }: { share: FileShare; getToken?: () => Pr
   const authedFetch = useCallback(async (p: string) => {
     const headers: Record<string, string> = {};
     if (getToken) { const tk = await getToken(); if (tk) headers.Authorization = `Bearer ${tk}`; }
-    const res = await fetch(`${shareBase}/file/${p}${shareQuery}`, { headers });
+    // p may already carry a query (Office ?as=pdf); merge shareQuery in with &.
+    const q = shareQuery && p.includes("?") ? shareQuery.replace(/^\?/, "&") : shareQuery;
+    const res = await fetch(`${shareBase}/file/${p}${q}`, { headers });
     if (!res.ok) throw new Error("Couldn't load this file");
     return res;
   }, [getToken, shareBase, shareQuery]);

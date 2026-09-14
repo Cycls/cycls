@@ -122,9 +122,11 @@ export function useFiles(baseUrl: string = "") {
 
   // /files is bearer-only (JWTs in URLs leak via history/logs/Referer), so
   // <img src> / window.open can't hit it directly. Fetch with auth + return
-  // a blob URL the browser can render in any context.
-  const openFile = useCallback(async (filePath: string) => {
-    return URL.createObjectURL(await (await api(`/files/${filePath}`)).blob());
+  // a blob URL the browser can render in any context. `silent` suppresses the
+  // error toast for an expected-and-handled failure — e.g. an Office ?as=pdf
+  // conversion when the converter is down, which falls back to the download card.
+  const openFile = useCallback(async (filePath: string, silent = false) => {
+    return URL.createObjectURL(await (await api(`/files/${filePath}`, { silent })).blob());
   }, [api]);
 
   // Authed text fetch — the canvas renders md/html from source, not a blob URL.

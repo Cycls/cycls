@@ -257,7 +257,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
 
     from fastapi.responses import HTMLResponse
     from html import escape
-    _base_html = (Path(config.public_path) / "index.html").read_text()
+    _base_html = (Path(config.public_path) / "index.html").read_text(encoding="utf-8")
 
     config.voice = bool(os.environ.get("OPENAI_API_KEY"))
 
