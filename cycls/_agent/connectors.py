@@ -34,14 +34,46 @@ def _val(x):
     return x.get() if isinstance(x, Env) else x
 
 
-def sign(payload, ttl=600):
+def relay_url():
+    """Where providers send the code, when this deployment goes through the connect relay. One
+    registered redirect for every agent, so a provider allowlists one host instead of a growing list."""
+    return (os.environ.get("CYCLS_RELAY_URL") or "").rstrip("/") or None
+
+
+def state_key():
+    """The relay and the agents either side of it must read the same state, so it is signed with a
+    key they share. Without a relay the state never leaves this deployment: its own key is enough."""
+    k = os.environ.get("CYCLS_RELAY_SECRET")
+    return hashlib.sha256(k.encode()).digest() if k else credentials.key()
+
+
+def relay_origins():
+    """Agent origins this relay will hand a code to — an explicit list, from deployment config."""
+    return {o.strip().rstrip("/") for o in (os.environ.get("CYCLS_RELAY_ORIGINS") or "").split(",") if o.strip()}
+
+
+def relay_target(payload, origins):
+    """Where a relayed code goes: the origin named in the signed state, and only if it is on the list.
+    Never a wildcard — anyone can deploy a *.cycls.ai subdomain, so "one of ours" is a different
+    question from "may use our registered OAuth apps"."""
+    origin, connector = (payload.get("o") or "").rstrip("/"), payload.get("c") or ""
+    if origin not in origins:
+        raise ValueError("unknown origin")
+    if urlparse(origin).scheme != "https":
+        raise ValueError("bad origin")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", connector):
+        raise ValueError("bad connector")
+    return f"{origin}/connectors/{connector}/callback"
+
+
+def sign(payload, ttl=600, key=None):
     body = base64.urlsafe_b64encode(json.dumps({**payload, "exp": int(time.time()) + ttl}).encode()).decode().rstrip("=")
-    return f"{body}.{_mac(body)}"
+    return f"{body}.{_mac(body, key)}"
 
 
-def verify(state):
+def verify(state, key=None):
     body, _, mac = state.rpartition(".")
-    if not hmac.compare_digest(mac, _mac(body)):
+    if not hmac.compare_digest(mac, _mac(body, key)):
         raise ValueError("bad state")
     payload = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
     if payload["exp"] < time.time():
@@ -49,8 +81,8 @@ def verify(state):
     return payload
 
 
-def _mac(body):
-    return hmac.new(credentials.key(), body.encode(), hashlib.sha256).hexdigest()[:32]
+def _mac(body, key=None):
+    return hmac.new(key or credentials.key(), body.encode(), hashlib.sha256).hexdigest()[:32]
 
 
 def not_connected(name):
