@@ -3,19 +3,19 @@ import { useDarkMode } from "./hooks/use-dark-mode";
 import {
   AuthenticateWithRedirectCallback,
   ClerkProvider,
-  SignedIn,
-  SignedOut,
+  Show,
   GoogleOneTap,
   useAuth,
   useClerk,
   useOrganization,
   useOrganizationList,
-  useSignIn,
-  useSignUp,
   useUser,
-} from "@clerk/clerk-react";
-import { useSubscription } from "@clerk/clerk-react/experimental";
-import { dark } from "@clerk/themes";
+} from "@clerk/react";
+// Core 3 turned the default useSignIn/useSignUp into signals; the custom flow
+// below wants the resource-shaped hooks, which ship under /legacy.
+import { useSignIn, useSignUp } from "@clerk/react/legacy";
+import { useSubscription } from "@clerk/react/experimental";
+import { dark } from "@clerk/ui/themes";
 import { arSA } from "@clerk/localizations";
 import { useLang, setLang, t } from "./lib/i18n";
 import { toggleDark } from "./lib/utils";
@@ -655,7 +655,7 @@ export default function App() {
     // visitors still see public shares without auth.
     if (!clerkKey) return <SharedView />;
     return (
-      <ClerkProvider publishableKey={clerkKey} appearance={{ baseTheme: isDark ? dark : undefined }}>
+      <ClerkProvider publishableKey={clerkKey} appearance={{ theme: isDark ? dark : undefined }}>
         <SharedViewAuthed />
       </ClerkProvider>
     );
@@ -676,13 +676,13 @@ export default function App() {
   }
 
   return (
-    <ClerkProvider publishableKey={clerkKey} appearance={{ baseTheme: isDark ? dark : undefined }} localization={lang === "ar" ? arSA : undefined}>
-      <SignedIn>
+    <ClerkProvider publishableKey={clerkKey} appearance={{ theme: isDark ? dark : undefined }} localization={lang === "ar" ? arSA : undefined}>
+      <Show when="signed-in">
         <ChatAppKeyed config={config} />
-      </SignedIn>
-      <SignedOut>
+      </Show>
+      <Show when="signed-out">
         <PublicGate config={config} />
-      </SignedOut>
+      </Show>
     </ClerkProvider>
   );
 }

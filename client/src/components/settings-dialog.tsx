@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useClerk, useOrganization, useUser, useReverification } from "@clerk/clerk-react";
-import { PaymentElement, PaymentElementProvider, usePaymentElement, SubscriptionDetailsButton } from "@clerk/clerk-react/experimental";
+import { useClerk, useOrganization, useUser, useReverification } from "@clerk/react";
+import { PaymentElement, PaymentElementProvider, usePaymentElement, SubscriptionDetailsButton } from "@clerk/react/experimental";
 import { Icon } from "./icon";
 import { InlineInput, DropdownMenu } from "./files";
 import { LoadingBar } from "./loading-bar";
