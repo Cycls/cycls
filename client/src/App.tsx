@@ -16,7 +16,7 @@ import {
 import { useSignIn, useSignUp } from "@clerk/react/legacy";
 import { useSubscription } from "@clerk/react/experimental";
 import { dark } from "@clerk/ui/themes";
-import { arSA } from "@clerk/localizations";
+import { arCheckout } from "./lib/clerk-ar";
 import { useLang, setLang, t } from "./lib/i18n";
 import { toggleDark } from "./lib/utils";
 import { markSignup, detectSignup, startSignup } from "./lib/signup";
@@ -676,7 +676,7 @@ export default function App() {
   }
 
   return (
-    <ClerkProvider publishableKey={clerkKey} appearance={{ theme: isDark ? dark : undefined }} localization={lang === "ar" ? arSA : undefined}>
+    <ClerkProvider publishableKey={clerkKey} appearance={{ theme: isDark ? dark : undefined }} localization={lang === "ar" ? arCheckout : undefined}>
       <Show when="signed-in">
         <ChatAppKeyed config={config} />
       </Show>
