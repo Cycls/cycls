@@ -325,11 +325,12 @@ class Connector:
 
     def __init__(self, name, *, scope="user", description=None, icon=None, prompts=(), developer=None, category=None,
                  website=None, title=None, about=None, use_cases=(), skills=(), privacy=None, terms=None, docs=None,
-                 api=None, api_headers=None):
+                 api=None, api_headers=None, relay=True):
         if scope not in ("user", "workspace", "either"):
             raise ValueError(f'scope must be "user", "workspace" or "either"; got {scope!r}')
         if api and not str(api).startswith("https://"):
             raise ValueError(f"api must be an https base url; got {api!r}")
+        self.relay = relay   # False for a fixed app whose console we would rather not touch — it keeps its own callback
         self.api = str(api).rstrip("/") if api else None   # REST base an app may reach through the relay
         self.api_headers = dict(api_headers or {})          # fixed headers that base requires, e.g. Notion-Version
         self.name, self.scope = name, scope

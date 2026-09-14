@@ -623,3 +623,12 @@ def test_without_a_relay_nothing_changes(monkeypatch):
     assert c.relay_url() is None
     assert c.state_key() == credentials.key()
     assert c.relay_origins() == set()
+
+
+def test_a_connector_can_stay_off_the_relay(monkeypatch):
+    """A fixed app's redirect lives in the provider's console. Routing it through the relay without
+    updating that console is a redirect_uri_mismatch at the moment someone presses Connect."""
+    _relay_env(monkeypatch)
+    assert c.OAuth2("salla", mcp="https://mcp.x/mcp").relay is True
+    assert c.OAuth2("google", authorize="a", token="t", client_id="i", relay=False).relay is False
+    assert c.Key("posthog").relay is True
