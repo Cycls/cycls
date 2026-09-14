@@ -22,8 +22,18 @@ def catalog():
 def test_every_declaration_constructs(catalog):
     """Every connector and its servers, built. A bad scope or a non-https api base raises here."""
     assert [o.name for o in catalog.ALL] == \
-        ["google", "gmail", "gcal", "posthog", "salla", "notion", "apify", "zid", "github", "hubspot", "slack"]
+        ["posthog", "salla", "notion", "apify", "zid", "github", "hubspot", "slack"]
     assert all(isinstance(o, Connector) for o in catalog.ALL)
+
+
+def test_google_is_declared_but_not_offered(catalog):
+    """Parked, not deleted: the Workspace MCP servers are Developer Preview, and its terms bar preview
+    features from public applications until GA. The declarations still construct, so they come back by
+    editing one list — but nothing offers them, because a user could connect and then be refused."""
+    assert [o.name for o in (catalog.google, catalog.gmail_c, catalog.gcal_c)] == ["google", "gmail", "gcal"]
+    offered = {o.name for o in catalog.ALL}
+    assert offered.isdisjoint({"google", "gmail", "gcal"})
+    assert not any(s._connector.name in {"google", "gmail", "gcal"} for s in catalog.SERVERS)
 
 
 def test_every_server_belongs_to_a_listed_connector(catalog):
