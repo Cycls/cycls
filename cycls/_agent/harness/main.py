@@ -208,7 +208,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     incoming = context.messages.raw[-1]
     content = await _ingest(incoming.get("content", ""), workspace.root, vision)
     if mentions:
-        titles = {s._connector.name: s._connector.title or s._connector.name for s in mcp_servers or [] if s._connector}
+        titles = {s._connector.name: connectors.copy_of(s._connector)[0] or s._connector.name
+                  for s in mcp_servers or [] if s._connector}
         content = _with_mention(content, "[Using: " + ", ".join(titles.get(m, m) for m in mentions) + "]")
     await session.add_user(content, attachments=incoming.get("attachments"), internal=bool(approvals))
     messages = session.messages
@@ -273,7 +274,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         o = server._connector
         objs[o.name] = o
         deferred.setdefault(o.name, []).append((server, schemas, fns, names))
-        catalog.setdefault(o.name, (o.title, o.description, []))[2].extend(
+        catalog.setdefault(o.name, (*connectors.copy_of(o), []))[2].extend(
             f'{s["name"]} {s.get("description") or ""}' for s in schemas)
     mcp_servers = [s for s in mcp_servers or [] if s._server_side] or None
 

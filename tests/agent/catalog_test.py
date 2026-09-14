@@ -54,3 +54,14 @@ def test_the_catalog_holds_no_callable(catalog):
     bad = [n for n, v in vars(catalog).items()
            if not n.startswith("__") and callable(v) and getattr(v, "__module__", None) == "catalog"]
     assert bad == [], f"move these into the deploy file: {bad}"
+
+
+def test_the_catalog_declares_no_copy(catalog):
+    """Copy is the CMS's: a title or a description here would win over the row field by field, which is
+    how an English word ends up on the Arabic page. Behaviour only — scopes, endpoints, what a key
+    looks like."""
+    copy = ("title", "description", "icon", "about", "use_cases", "skills", "prompts",
+            "developer", "category", "website", "privacy", "terms", "docs")
+    for o in catalog.ALL:
+        assert not [f for f in copy if getattr(o, f, None)], \
+            f"{o.name} declares copy: {[f for f in copy if getattr(o, f, None)]} — write it in the CMS instead"

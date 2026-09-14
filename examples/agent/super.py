@@ -50,7 +50,9 @@ web = (
     #     namespace="<uuid the iOS client also uses>"))
     .cms(brand="https://cms.cycls.ai/agents/super", explore="https://cms.cycls.ai/agents",
          connectors="https://cms.cycls.ai/connectors")  # any CMS returning the contract JSON; token=... for private ones
-    # Connector copy is bilingual and comes from the CMS; what catalog.py declares still wins, field by field.
+    # Every connector's copy — title, description, icon, story, prompts, links — is the CMS's, bilingual,
+    # keyed by the name catalog.py declares. Nothing in catalog.py restates it, so the copy changes
+    # without a redeploy. A field declared there would still win over the CMS, field by field.
     # Static branding — the same knobs without a CMS (static wins, piece by piece):
     # .brand(name="Super", description="The agent for getting things done",
     #        logo="assets/icon.svg",   # agent icon, shown in the chat hero
