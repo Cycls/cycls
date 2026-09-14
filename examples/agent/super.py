@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import os
 
 import cycls
+from catalog import ALL, SERVERS, posthog_mcp
 
 FREE_MONTHLY_LIMIT = 5
 EXEMPT_USERS = {
@@ -22,39 +23,34 @@ EXEMPT_USERS = {
 # moves the workspace mount; .rebuild() forces a no-cache build.
 image = cycls.Image().copy(".providers.env", ".env")#.rebuild()
 
-# A connector: the person connects their own Google Drive (scope="user"), and
-# every call the drive tools make carries their grant. Secrets stay in env.
-google = cycls.OAuth2("google", title="Google Drive",
-    authorize="https://accounts.google.com/o/oauth2/v2/auth",
-    token="https://oauth2.googleapis.com/token",
-    client_id=cycls.env("GOOGLE_CLIENT_ID"), secret=cycls.env("GOOGLE_CLIENT_SECRET"),
-    # Google's Drive MCP requires both — drive.file alone is refused, even for create_file.
-    # drive.readonly is a restricted scope: fine for test users, CASA to publish.
-    scopes=["https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive.readonly"],
-    extra={"access_type": "offline", "prompt": "consent"},
-    description="Search, read and create files in your Drive",
-    icon="https://ssl.gstatic.com/images/branding/product/2x/drive_2020q4_48dp.png",
-    about="Connect Google Drive to search your documents, read file contents, create new files and analyze your data. "
-          "The agent can find a document even when you don't remember its exact name, read Docs, Sheets, Slides and PDFs, "
-          "and save its work straight to your Drive.",
-    use_cases=[("Find and summarize", "Locate the right document and pull out what matters"),
-               ("Analyze data", "Read a spreadsheet and answer questions about it"),
-               ("Create documents", "Save reports, notes and drafts to your Drive")],
-    developer="Google", category="Productivity", website="https://drive.google.com",
-    privacy="https://policies.google.com/privacy", terms="https://policies.google.com/terms",
-    docs="https://developers.google.com/workspace/drive/api/guides/configure-mcp-server",
-    prompts=["ما آخر الملفات التي عدّلتها هذا الأسبوع؟", "ابحث عن آخر عرض للمبيعات ولخّصه", "Find the latest sales deck and summarize it"])   # Google issues a refresh token only with these
+# The connectors. Every declaration — endpoints, scopes, what a key looks like, which grant is
+# shareable — is `catalog.py` beside this file: eleven of them, OAuth apps registered by hand,
+# servers that register themselves, a pasted key and a pasted address.
+
+# What cannot live in catalog.py is code. cloudpickle pickles a function defined in the file you deploy
+# (`__main__`) by value and one defined in an imported module by reference, so a classifier or a tool
+# handler declared there would boot the container into `import catalog` and die. Hence this one here:
+# PostHog is a single `exec` tool taking CLI-style commands, so *Ask* would stop on every question —
+# this says which command actually changes something, and reads pass straight through.
+def posthog_writes(tool, args):
+    import json, re
+    return bool(re.search(r"\b(create|update|delete|patch|archive|set)\b", json.dumps(args).lower()))
+
+
+posthog_server = posthog_mcp.writes(posthog_writes)
 
 web = (
     cycls.Web()
     .auth(cycls.Clerk())
-    .connectors(google)  # offered in the directory; served by /connectors/google/{authorize,callback}
+    .connectors(*ALL)  # the directory; each is served at /connectors/{name}/{authorize,callback}
     # .iap(cycls.AppleIAP(  # iOS subscriptions — StoreKit 2 JWS sent in the x-apple-entitlement header
     #     bundle_id="com.cycls.app",
     #     products={"com.cycls.app.pro.month": "u:ios_pro",   # each SKU grants its own plan
     #               "com.cycls.app.max.month": "u:ios_max"},  # add/rename SKUs here, no SDK change
     #     namespace="<uuid the iOS client also uses>"))
-    .cms(brand="https://cms.cycls.ai/agents/super", explore="https://cms.cycls.ai/agents")  # any CMS returning the contract JSON; token=... for private ones
+    .cms(brand="https://cms.cycls.ai/agents/super", explore="https://cms.cycls.ai/agents",
+         connectors="https://cms.cycls.ai/connectors")  # any CMS returning the contract JSON; token=... for private ones
+    # Connector copy is bilingual and comes from the CMS; what catalog.py declares still wins, field by field.
     # Static branding — the same knobs without a CMS (static wins, piece by piece):
     # .brand(name="Super", description="The agent for getting things done",
     #        logo="assets/icon.svg",   # agent icon, shown in the chat hero
@@ -129,7 +125,6 @@ llm = (
     .headers({"Modal-Key": os.environ["MODAL_PROXY_TOKEN_ID"],
               "Modal-Secret": os.environ["MODAL_PROXY_TOKEN_SECRET"]})
     .context(1_000_000)
-    .max_tokens(32_768)
     # .model("zai/glm-5.2").base_url("https://api.z.ai/api/paas/v4/")  # any OpenAI-compatible API
     # .model("google/gemini-3.1-pro-preview").base_url("https://generativelanguage.googleapis.com/v1beta/openai/")
     # .context(200_000)   # window → compaction timing (default 1M; set for smaller models)
@@ -154,7 +149,8 @@ llm = (
     # .web_search("native")  # Anthropic server-side search; default "brave" runs on any model (BRAVE_API_KEY)
     # .skills("examples/agent/skills")  # ship skill folders (<name>/SKILL.md) with the agent
     # .instructions("AGENT.md")  # workspace instructions file in the system prompt — this is the default
-    .mcp(cycls.MCP("https://drivemcp.googleapis.com/mcp/v1").name("drive").connector(google))  # remote MCP, any provider; tools are `drive_*`
+    .mcp(*SERVERS, posthog_server)  # remote MCP, any provider; tools are `{label}_*`, e.g. `drive_*`
+    # .mcp(cycls.MCP("https://x/mcp").name("x").connector(o))  # one server on its own, wired to its connector
     # .mcp(cycls.MCP("https://x/mcp").name("x").token("…").server_side())  # let the Anthropic connector run it instead (anthropic/* only)
     # .sandbox(network=False)  # opt out of network access for the LLM bash
     # .bash_timeout(600)  # bash sandbox timeout in seconds

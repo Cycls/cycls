@@ -3,7 +3,7 @@
 Chat metadata + message log and shares live in the workspace DB — see
 `cycls._agent.state`. Files stay on the workspace filesystem (POSIX-shaped).
 """
-import asyncio, json, os, secrets, shutil, tempfile, time, unicodedata, uuid, zipfile
+import asyncio, base64, hashlib, json, os, secrets, shutil, tempfile, time, unicodedata, uuid, zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse
 
 from cycls._app.db import DB, Workspace, workspace
 from cycls._agent import connectors as oauth, credentials, spill, state, trash
+from cycls._agent.web import office
 from cycls._agent.logs import log
 from cycls._agent.tools import tool_step, detailed, excerpt
 
@@ -328,7 +329,12 @@ _KINDS = (
     ("image",    {"png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "bmp", "svg", "ico", "avif"}),
     ("pdf",      {"pdf"}),
     ("csv",      {"csv", "tsv"}),          # delimited text: any client can render it
-    ("sheet",    {"xls", "xlsx", "numbers"}),   # binary: needs a parser
+    ("sheet",    {"numbers"}),             # binary spreadsheet a client parses in-browser
+    # Office documents render by converting to PDF on demand (LibreOffice, via
+    # the office-render service) and showing them in the PDF viewer. The ext
+    # set is single-sourced from the converter so labelling and conversion
+    # can't disagree. Binary spreadsheets (xls/xlsx/ods) route here too.
+    ("office",   set(office.CONVERTIBLE)),
     ("audio",    {"mp3", "wav", "ogg", "oga", "m4a", "aac", "flac", "opus", "weba"}),
     ("video",    {"mp4", "webm", "mov", "m4v", "ogv"}),
     ("model3d",  {"glb", "gltf"}),
@@ -337,7 +343,7 @@ _KINDS = (
     ("code",     {"py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "json", "sh", "bash", "zsh",
                   "rb", "go", "rs", "java", "c", "h", "cc", "cpp", "cs", "php", "swift", "kt",
                   "sql", "yaml", "yml", "toml", "css", "scss", "less", "xml", "ipynb"}),
-    ("text",     {"txt", "text", "log", "env", "conf", "cfg", "ini", "rtf"}),
+    ("text",     {"txt", "text", "log", "env", "conf", "cfg", "ini"}),
 )
 _KIND_BY_EXT = {ext: kind for kind, exts in _KINDS for ext in exts}
 _SORTS = ("name", "size", "modified", "type")
@@ -352,6 +358,84 @@ def _public(entry):
     return {k: entry[k] for k in _PUBLIC}
 
 
+# Converted-PDF cache for the Office preview. Hidden (dot-prefixed) so the
+# catalog walk skips it, keyed by source path+mtime+size so a rewritten source
+# is a fresh entry and prior renders of the same file are swept on the miss.
+_OFFICE_CACHE = ".cache/office"
+
+
+def _write_office_cache(cache_dir, stem, dst, pdf):
+    """Persist a rendered PDF into the workspace cache and return the served
+    path. On a read-only workspace (e.g. a share) fall back to a temp file so
+    the preview still works, just uncached — matching how folder zips serve."""
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        for old in cache_dir.glob(f"{stem}-*.pdf"):   # sweep prior renders of this file
+            try: old.unlink()
+            except OSError: pass
+        tmp = cache_dir / f".{stem}-{uuid.uuid4().hex}.part"
+        tmp.write_bytes(pdf)
+        tmp.replace(dst)                              # atomic swap into place
+        return dst
+    except OSError:
+        tmp = Path(tempfile.gettempdir()) / f"office-{uuid.uuid4().hex}.pdf"
+        tmp.write_bytes(pdf)
+        return tmp
+
+
+async def _office_pdf(root, src, user_id):
+    """A cached PDF render of one office file, converting on a miss via the
+    office-render service. Raises office.Unavailable so the caller can fall
+    back to the download card."""
+    root = Path(root).resolve()   # src is already resolved (resolve_path), so match it
+    st = src.stat()
+    stem = hashlib.sha1(src.relative_to(root).as_posix().encode("utf-8")).hexdigest()[:16]
+    cache_dir = root / _OFFICE_CACHE
+    dst = cache_dir / f"{stem}-{st.st_mtime_ns}-{st.st_size}.pdf"
+    if dst.exists():
+        return dst
+    data = await asyncio.to_thread(src.read_bytes)
+    pdf = await office.to_pdf(data, src.name, user_id)
+    return await asyncio.to_thread(_write_office_cache, cache_dir, stem, dst, pdf)
+
+
+def _write_office_slides(cache_dir, stem, dst, payload):
+    """Persist the rendered-slides JSON into the workspace cache; fall back to a
+    temp file on a read-only workspace (a share), same as the PDF cache."""
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        for old in cache_dir.glob(f"{stem}-*.slides.json"):
+            try: old.unlink()
+            except OSError: pass
+        tmp = cache_dir / f".{stem}-{uuid.uuid4().hex}.part"
+        tmp.write_text(payload, encoding="utf-8")
+        tmp.replace(dst)
+        return dst
+    except OSError:
+        tmp = Path(tempfile.gettempdir()) / f"office-{uuid.uuid4().hex}.slides.json"
+        tmp.write_text(payload, encoding="utf-8")
+        return tmp
+
+
+async def _office_slides(root, src, user_id):
+    """A cached slide render of one presentation — a JSON manifest of per-slide
+    PNG data-URIs the canvas shows in the slide viewer. Renders on a miss via the
+    office-render service. Raises office.Unavailable so the caller can fall back
+    to the download card."""
+    root = Path(root).resolve()
+    st = src.stat()
+    stem = hashlib.sha1(src.relative_to(root).as_posix().encode("utf-8")).hexdigest()[:16]
+    cache_dir = root / _OFFICE_CACHE
+    dst = cache_dir / f"{stem}-{st.st_mtime_ns}-{st.st_size}.slides.json"
+    if dst.exists():
+        return dst
+    data = await asyncio.to_thread(src.read_bytes)
+    pngs = await office.to_slides(data, src.name, user_id)
+    slides = ["data:image/png;base64," + base64.b64encode(p).decode("ascii") for p in pngs]
+    payload = json.dumps({"count": len(slides), "slides": slides})
+    return await asyncio.to_thread(_write_office_slides, cache_dir, stem, dst, payload)
+
+
 def _walk_catalog(root):
     """One pass over the tree, a single stat per entry. Folder times come from
     the newest child seen during the same walk — gcsfuse synthesizes directory
@@ -362,9 +446,11 @@ def _walk_catalog(root):
     for parent, subdirs, names in os.walk(root):
         subdirs[:] = sorted(d for d in subdirs if not d.startswith("."))
         p = Path(parent)
-        rel_dir = "" if p == root else str(p.relative_to(root))
+        # POSIX-shaped paths (forward slashes) so scoping/search compare equal on
+        # Windows too — str(relative_to()) would emit backslashes there.
+        rel_dir = "" if p == root else (p.relative_to(root)).as_posix()
         for d in subdirs:
-            entries.append({"name": d, "path": str((p / d).relative_to(root)),
+            entries.append({"name": d, "path": (p / d).relative_to(root).as_posix(),
                             "type": "directory", "size": 0, "modified": "",
                             "kind": "folder", "_dir": rel_dir})
         for fn in sorted(names):
@@ -374,7 +460,7 @@ def _walk_catalog(root):
                 st = (p / fn).stat()
             except OSError:      # vanished mid-walk, or unreadable
                 continue
-            entries.append({"name": fn, "path": str((p / fn).relative_to(root)),
+            entries.append({"name": fn, "path": (p / fn).relative_to(root).as_posix(),
                             "type": "file", "size": st.st_size,
                             "modified": _iso(st.st_mtime), "kind": _kind(fn),
                             "_dir": rel_dir})
@@ -512,7 +598,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             is_dir = entry.is_dir()
             out.append({
                 "name": entry.name,
-                "path": str(Path(entry.path).relative_to(root)),
+                "path": Path(entry.path).relative_to(root).as_posix(),
                 "type": "directory" if is_dir else "file",
                 "size": 0 if is_dir else st.st_size,
                 "modified": _dir_mtime(entry.path) if is_dir else _iso(st.st_mtime),
@@ -533,7 +619,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         root = Path(ws.root).resolve()
         fresh = q.get("fresh") is not None
         target = _safe_path(ws.root, q.get("path", ""))
-        rel = "" if target == root else str(target.relative_to(root))
+        rel = "" if target == root else target.relative_to(root).as_posix()
         under = lambda es: es if not rel else [e for e in es if e["path"].startswith(f"{rel}/")]
 
         if (search := q.get("search")) is not None:
@@ -563,6 +649,24 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             return _zip_dir(file_path)   # folders download as <name>.zip
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
+        # ?as=slides previews a presentation as a slide viewer — a JSON manifest
+        # of per-slide PNG data-URIs (office-render /v1/render). The canvas shows
+        # the deck slide-by-slide rather than as a flat PDF.
+        if request.query_params.get("as") == "slides" and office.presentation(file_path.name):
+            try:
+                slides = await _office_slides(ws.root, file_path, ws.subject)
+            except office.Unavailable as e:
+                raise HTTPException(status_code=415, detail=str(e))
+            return FileResponse(slides, media_type="application/json", headers=_NO_CACHE)
+        # ?as=pdf previews an Office document (docx/xlsx/…) by converting it to
+        # PDF and serving that inline, so the canvas renders it in the viewer it
+        # already has. No filename → inline, not a download.
+        if request.query_params.get("as") == "pdf" and office.convertible(file_path.name):
+            try:
+                pdf = await _office_pdf(ws.root, file_path, ws.subject)
+            except office.Unavailable as e:
+                raise HTTPException(status_code=415, detail=str(e))
+            return FileResponse(pdf, media_type="application/pdf", headers=_NO_CACHE)
         if request.query_params.get("download") is not None:
             return FileResponse(file_path, filename=file_path.name, headers=_NO_CACHE)
         return FileResponse(file_path, headers=_NO_CACHE)
@@ -621,8 +725,12 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
                     raise HTTPException(413, limit_msg)
                 tmp.write(chunk)
             tmp.flush()
+            tmp.seek(0)
             try:
-                zf = zipfile.ZipFile(tmp.name)
+                # Read from the open handle, not tmp.name — reopening a
+                # NamedTemporaryFile by name fails on Windows (the file is still
+                # locked by this handle).
+                zf = zipfile.ZipFile(tmp)
             except zipfile.BadZipFile:
                 raise HTTPException(400, "Body is not a valid zip")
             with zf:
@@ -875,7 +983,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.get("/share/{user}/{token}/file/{file_path:path}")
     async def shared_attachment(
-        user: str, token: str, file_path: str, ws: Optional[str] = None,
+        user: str, token: str, file_path: str, request: Request, ws: Optional[str] = None,
         bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     ):
         ws_owner, row = await _resolve_or_403(user, token, bearer, ws)
@@ -893,6 +1001,25 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             allowed.update(canvas_files(ui))
             if file_path not in allowed:
                 raise HTTPException(403, "Not an attachment of this share")
+        # ?as=slides / ?as=pdf preview an Office file (read-only — shares aren't
+        # editable). Same convert+cache path as get_file, over the owner's
+        # workspace. Presentations get the slide viewer; everything else, PDF.
+        as_ = request.query_params.get("as")
+        if as_ in ("slides", "pdf") and office.convertible(file_path):
+            try:
+                target = resolve_path(ws_owner.root, file_path)
+            except ValueError:
+                raise HTTPException(403, "Path traversal denied")
+            if not target.is_file():
+                raise HTTPException(404, "File not found")
+            try:
+                if as_ == "slides" and office.presentation(file_path):
+                    slides = await _office_slides(ws_owner.root, target, ws_owner.subject)
+                    return FileResponse(slides, media_type="application/json", headers=_NO_CACHE)
+                pdf = await _office_pdf(ws_owner.root, target, ws_owner.subject)
+            except office.Unavailable as e:
+                raise HTTPException(415, str(e))
+            return FileResponse(pdf, media_type="application/pdf", headers=_NO_CACHE)
         return _serve_file(ws_owner.root, file_path)
 
     # ---- Examples (curated public shares — the empty-screen gallery) ----

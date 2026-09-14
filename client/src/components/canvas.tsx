@@ -8,8 +8,10 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob } from "./canvas-utils";
+import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
+import { DocxView } from "./docx-view";
+import { SlidesView } from "./slides-view";
 import { attachBridge, appScope } from "./app-bridge";
 import { injectShim } from "./app-shim";
 import { SaveDialog } from "./save-dialog";
@@ -37,8 +39,8 @@ export interface CanvasFile {
 // file=null to fetch nothing (e.g. unrenderable file shown as a download card).
 export function useFileContent(
   file: CanvasFile | null,
-  readFile: (p: string) => Promise<string>,
-  openFile: (p: string) => Promise<string>,
+  readFile: (p: string, silent?: boolean) => Promise<string>,
+  openFile: (p: string, silent?: boolean) => Promise<string>,
   reloadKey: number = 0,   // bump to re-fetch: the agent rewrote the file
 ) {
   const [content, setContent] = useState<string | null>(null);
@@ -51,11 +53,21 @@ export function useFileContent(
     setContent(null);
     setError(false);
     // Only formats we render from source fetch as text. Everything else — pdf,
-    // media, spreadsheets, and anything unrenderable like docx — fetches bytes,
-    // so a binary is never handed to a text renderer.
-    const load = isMd(fileKind(file)) || isHtml(fileKind(file)) || codeLang(fileKind(file)) != null
+    // media, spreadsheets — fetches bytes, so a binary is never handed to a
+    // text renderer. Office docs fetch the server's on-demand PDF render of
+    // themselves (?as=pdf) and ride the PDF viewer.
+    const kind = fileKind(file);
+    // Office ?as=pdf / ?as=slides is fetched silently — if the converter is down
+    // it throws, we set error, and CanvasDoc shows the download card (no toast).
+    // Presentations fetch the slide manifest as text; .docx and spreadsheets
+    // fetch their raw bytes (a blob URL) for the native renderer; other office
+    // files fetch the server's PDF render.
+    const load = isMd(kind) || isHtml(kind) || codeLang(kind) != null
       ? readFile(file.path)
-      : openFile(file.path).then((url) => { blobUrl = url; return url; });
+      : isPresentation(kind)
+      ? readFile(`${file.path}?as=slides`, true)
+      : (isOffice(kind) ? openFile(`${file.path}?as=pdf`, true) : openFile(file.path))
+          .then((url) => { blobUrl = url; return url; });
     load.then((v) => { if (!cancelled) setContent(v); })
         .catch(() => { if (!cancelled) setError(true); });
     return () => { cancelled = true; if (blobUrl) URL.revokeObjectURL(blobUrl); };
@@ -148,6 +160,38 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
   );
 }
 
+// Extension tile + download/share — shown for a file with no in-browser
+// renderer, and when an Office file's PDF conversion is unavailable.
+function NoPreviewCard({ file, onDownload, onShare }: {
+  file: CanvasFile;
+  onDownload?: () => void;
+  onShare?: () => void;
+}) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+      <div className="flex size-16 items-center justify-center rounded-2xl bg-secondary text-xs font-bold text-muted-foreground" style={tintTile(fileKind(file))}>
+        <span style={tintLabel(fileKind(file))}>{(ext(fileKind(file)) || "file").slice(0, 4).toUpperCase()}</span>
+      </div>
+      <p className="text-sm font-medium text-foreground">{file.name}</p>
+      <p className="text-xs text-muted-foreground">{t("noPreview")}</p>
+      {(onDownload || onShare) && (
+        <div className="mt-1 flex gap-2">
+          {onDownload && (
+            <button onClick={onDownload} className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity cursor-pointer">
+              {t("download")}
+            </button>
+          )}
+          {onShare && (
+            <button onClick={onShare} className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition-colors cursor-pointer">
+              {t("share")}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function CanvasDoc({ file, content, error, shared = false, readFile, writeFile, listFolders, fetchConnector, onDownload, onShare }: {
   file: CanvasFile;
   content: string | null;
@@ -163,12 +207,29 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, writ
   const lang = codeLang(fileKind(file));
   if (content == null && !error) return <LoadingBar />;
   if (error) {
+    // A failed Office conversion / render (service down, unconvertible, parse
+    // error) degrades to the download card rather than a dead error — same as an
+    // unrenderable file.
+    if (isOffice(fileKind(file)) || isDocx(fileKind(file)) || isPresentation(fileKind(file)))
+      return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Couldn't load this file.</div>;
   }
   if (isHtml(fileKind(file))) {
     return <HtmlDoc file={file} content={content ?? ""} shared={shared} readFile={readFile} writeFile={writeFile} listFolders={listFolders} fetchConnector={fetchConnector} />;
   }
-  if (isPdf(fileKind(file))) {
+  // Word .docx renders natively as formatted HTML (docx-preview) from its raw
+  // bytes — a document view, not a flat PDF.
+  if (isDocx(fileKind(file))) {
+    return content ? <DocxView url={content} /> : null;
+  }
+  // Presentations render as a slide viewer from the ?as=slides manifest (per-
+  // slide images), not a flat PDF. `content` here is that JSON, fetched as text.
+  if (isPresentation(fileKind(file))) {
+    return content ? <SlidesView data={content} /> : null;
+  }
+  // Office docs arrive here as a converted-PDF blob URL, so they ride the same
+  // native PDF viewer (search / zoom / print, mobile open-in-tab).
+  if (isPdf(fileKind(file)) || isOffice(fileKind(file))) {
     // Desktop's native inline viewer is the best PDF UX (search, zoom, print).
     // Phones can't EMBED PDFs (iOS iframes render page 1 only) but render them
     // fine on direct navigation — so on small screens the iframe doubles as a
@@ -235,29 +296,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
     );
   }
   if (lang == null) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
-        <div className="flex size-16 items-center justify-center rounded-2xl bg-secondary text-xs font-bold text-muted-foreground" style={tintTile(fileKind(file))}>
-          <span style={tintLabel(fileKind(file))}>{(ext(fileKind(file)) || "file").slice(0, 4).toUpperCase()}</span>
-        </div>
-        <p className="text-sm font-medium text-foreground">{file.name}</p>
-        <p className="text-xs text-muted-foreground">{t("noPreview")}</p>
-        {(onDownload || onShare) && (
-          <div className="mt-1 flex gap-2">
-            {onDownload && (
-              <button onClick={onDownload} className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity cursor-pointer">
-                {t("download")}
-              </button>
-            )}
-            {onShare && (
-              <button onClick={onShare} className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition-colors cursor-pointer">
-                {t("share")}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-    );
+    return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
   }
   return (
     <div className="h-full overflow-auto">

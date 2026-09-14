@@ -16,6 +16,7 @@
     "@clerk/ui": "^1",
     "@emoji-mart/data": "^1.2.1",
     "clsx": "^2",
+    "docx-preview": "^0.4.0",
     "emoji-mart": "^5.6.0",
     "fflate": "^0.8.3",
     "framer-motion": "^12.35.0",
