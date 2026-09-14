@@ -20,7 +20,16 @@
 # is an English word the Arabic page cannot override.
 import cycls
 
-# ---- Google ----
+# ---- Google — parked, not offered ----
+# Declared and working, but out of ALL/SERVERS below. All six Workspace MCP servers are in Google's
+# Developer Preview, whose terms are explicit: "Features in Developer Preview may not be included in
+# public applications prior to the General Availability announcement", and access may not be granted
+# to end users outside your own domain or company. That is a harder gate than CASA — no fee or review
+# lifts it. Worse, the servers list their tools anonymously, so a user would connect successfully and
+# then have every call refused with "the caller does not have permission".
+#
+# Two ways back: Google announces GA, or these go over the GA REST APIs instead of the MCP servers,
+# where `drive.file` needs no review. Either way the declarations below still stand.
 
 google = cycls.OAuth2("google",
     authorize="https://accounts.google.com/o/oauth2/v2/auth",
@@ -140,5 +149,5 @@ Use `info <tool>` only for a tool not covered above, at most once per chat, and 
 
 # What a deploy file wires up. `.connectors(*ALL)` is the directory; `.mcp(*SERVERS)` is the tools.
 # `posthog_mcp` is deliberately out of SERVERS — it needs its classifier attached first.
-ALL = [google, gmail_c, gcal_c, posthog, salla, notion, apify, zid, github, hubspot, slack]
-SERVERS = [drive, gdocs, gsheet, gslide, gmail, gcal, salla_mcp, notion_mcp, apify_mcp, zid_mcp, github_mcp, hubspot_mcp, slack_mcp]
+ALL = [posthog, salla, notion, apify, zid, github, hubspot, slack]
+SERVERS = [salla_mcp, notion_mcp, apify_mcp, zid_mcp, github_mcp, hubspot_mcp, slack_mcp]
