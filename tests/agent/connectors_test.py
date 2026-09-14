@@ -410,6 +410,78 @@ def test_the_cms_fills_the_page_and_the_code_still_wins(tmp_path):
                             {"label": "Docs", "url": "https://docs.salla.dev"}]   # a line without a url is dropped
 
 
+class _Reader:
+    """Stands in for the CMS read: the calls are counted, and each one answers as told."""
+
+    def __init__(self, *answers):
+        self.answers, self.calls = list(answers), 0
+
+    async def __call__(self, url, headers=None):
+        self.calls += 1
+        ok = self.answers[min(self.calls - 1, len(self.answers) - 1)]
+        c._copy["tried"] = time.time()
+        if ok:
+            c._copy["rows"], c._copy["at"] = {"salla": {"name": "salla"}}, time.time()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_copy():
+    """The copy cache is one dict per container, so a test that fills it would leak into the next."""
+    c._copy.update({"at": 0.0, "tried": 0.0, "rows": {}, "task": None})
+    yield
+    c._copy.update({"at": 0.0, "tried": 0.0, "rows": {}, "task": None})
+
+
+def test_a_read_that_fails_is_retried_rather_than_serving_code_only_copy_for_a_ttl():
+    """The bug this guards: stamping the clock on the attempt meant one timeout — a CMS scaled to zero
+    is usually woken by this very read — left the directory with no story on it for five minutes, on
+    that container only, so the page rendered for some people and not others."""
+    read = _Reader(False, True)
+    with patch.object(c, "_cms_read", read):
+        assert asyncio.run(c.cms_rows("https://cms/connectors")) == {}   # the read did not land
+        c._copy["tried"] = 0.0                                          # the retry gate, a moment later
+        assert asyncio.run(c.cms_rows("https://cms/connectors")) == {"salla": {"name": "salla"}}
+    assert read.calls == 2
+
+
+def test_a_cms_that_is_down_is_not_read_on_every_request():
+    """The other half: retrying at once must not mean every request waits on a dead CMS."""
+    read = _Reader(False)
+    with patch.object(c, "_cms_read", read):
+        for _ in range(5):
+            assert asyncio.run(c.cms_rows("https://cms/connectors")) == {}
+    assert read.calls == 1   # one attempt, then the gate holds until CMS_RETRY
+
+
+def test_a_copy_in_hand_is_served_while_it_is_re_read_behind_the_request():
+    read = _Reader(True)
+    with patch.object(c, "_cms_read", read):
+        assert asyncio.run(c.cms_rows("https://cms/connectors")) == {"salla": {"name": "salla"}}
+
+        async def stale():
+            c._copy["at"] = c._copy["tried"] = time.time() - c.CMS_TTL - 1
+            rows = await c.cms_rows("https://cms/connectors")
+            await c._copy["task"]      # held on the dict, so it cannot be collected mid-flight
+            return rows
+
+        assert asyncio.run(stale()) == {"salla": {"name": "salla"}}   # served as it stands, never awaited
+    assert read.calls == 2
+
+
+def test_the_model_reads_the_same_copy_the_page_does():
+    """catalog.py names a connector and the CMS describes it, so the index the model routes on has to
+    come from the CMS row too — not from the code's empty title."""
+    o = c.OAuth2("salla", mcp="https://mcp.x/mcp")
+    assert c.copy_of(o) == ("", "")                                   # nothing read yet, nothing declared
+    assert c.index_line(o, 12) == "- salla: salla (12 tools)"
+    c._copy["rows"] = {"salla": {"name": "salla", "title": {"en": "Salla", "ar": "سلة"},
+                                 "description": {"en": "Orders, products and customers", "ar": "الطلبات"}}}
+    assert c.copy_of(o) == ("Salla", "Orders, products and customers")
+    assert c.index_line(o, 12) == "- salla: Salla — Orders, products and customers (12 tools)"
+    o.title, o.description = "Salla Store", "What the code says"       # code still wins where it speaks
+    assert c.copy_of(o) == ("Salla Store", "What the code says")
+
+
 def test_bilingual_prefers_what_came_first_and_fills_the_other_language():
     assert c.bilingual("Drive", {"en": "x", "ar": "y"}) == {"en": "Drive", "ar": "Drive"}
     assert c.bilingual(None, {"en": "", "ar": "سلة"}) == {"en": "سلة", "ar": "سلة"}

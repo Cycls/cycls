@@ -245,19 +245,17 @@ as shipped; the plugin half (`cycls.Key`, `auth=` and `writes=` on `.on()`) is p
 **1. Declared in code** — by the developer, pickled with the agent:
 
 ```python
-google = cycls.OAuth2("google", title="Google Drive",
+google = cycls.OAuth2("google",
     authorize="https://accounts.google.com/o/oauth2/v2/auth",
     token="https://oauth2.googleapis.com/token",
     client_id=cycls.env("GOOGLE_CLIENT_ID"), secret=cycls.env("GOOGLE_CLIENT_SECRET"),
     scopes=["https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive.readonly"],
     scope="user",                                   # or "workspace": one grant, every member
-    extra={"access_type": "offline", "prompt": "consent"},
-    description="Search, read and create files in your Drive", icon="https://…/drive_48dp.png",
-    about="Connect Google Drive to search your documents, read file contents …",
-    use_cases=[("Find and summarize", "Locate the right document and pull out what matters")],
-    developer="Google", category="Productivity", website="https://drive.google.com",
-    privacy="https://policies.google.com/privacy", terms="https://policies.google.com/terms",
-    prompts=["ما آخر الملفات التي عدّلتها هذا الأسبوع؟", "Find the latest sales deck and summarize it"])
+    extra={"access_type": "offline", "prompt": "consent"})
+# Behaviour only. The page's copy — title, description, icon, story, prompts, links — is the CMS's row
+# for "google", bilingual, changed without a redeploy. Every copy field below still exists and still
+# wins field by field, for an agent with no CMS: title=, description=, icon=, about=, use_cases=,
+# developer=, category=, website=, privacy=, terms=, docs=, prompts=.
 
 web = cycls.Web().auth(cycls.Clerk()).connectors(google)
 
@@ -278,7 +276,7 @@ lands in the same store. Its servers discover with the caller's key, so a person
 saved one sees no tools and the turn skips the server silently:
 
 ```python
-posthog = cycls.Key("posthog", title="PostHog", hint="phx_…", scope="either", ...)
+posthog = cycls.Key("posthog", hint="phx_…", scope="either", ...)
 posthog_mcp = (cycls.MCP("https://mcp.posthog.com/mcp?features=insights,dashboards,flags,sql").name("posthog")
     .connector(posthog)
     .guidance("…the argument shapes and recipes the model should not have to discover…")
@@ -604,14 +602,28 @@ decision 12 owns storage.
 A connector's page is copy, and copy belongs to whoever writes it, not to whoever deploys the agent.
 `Web.cms(connectors="https://cms.cycls.ai/connectors")` reads the CMS's connector records, following
 the same rule `.cms(brand=…)` already follows: **what the code declares wins, field by field**, the CMS
-fills the rest, and with no `cms=` nothing is fetched at all. The first request waits so the first
-directory is already right; after that a stale cache is served as it stands and re-read behind the
-request, on a 300s TTL. A CMS that is down leaves the page rendering what the code says.
+fills the rest, and with no `cms=` nothing is fetched at all. The browser never talks to the CMS: it
+asks the agent for `/connectors`, and the container holds one copy of the records for every person it
+serves. The first request waits so the first directory is already right; after that a stale copy is
+served as it stands and re-read behind the request, on a 300s TTL. A CMS that is down leaves the page
+rendering what the code says.
+
+A read that **fails** leaves the clock at zero, so the next request reads again rather than serving a
+TTL of code-only copy — a CMS that scales to zero costs more than the timeout to wake, and this read is
+usually what wakes it. `CMS_RETRY` (10s) keeps a CMS that is really down from being dialled on every
+request. This matters because each container caches on its own: one poisoned container served a page
+with no story on it while its neighbours served the full one, which reads as "the copy renders
+sometimes".
+
+The loop reads the same cache (`connectors.copy_of`), so the connector index the model routes on —
+`- gcal: Google Calendar — Your schedule … (12 tools)` — is the CMS's words too, not a name the catalog
+happened to also spell out.
 
 **Code owns behaviour, the CMS owns copy.** `name`, `kind`, `scope`, `hint`, the OAuth endpoints and the
 servers stay in the agent file — nothing a CMS edit can reach may change what a connector is able to do.
 The CMS owns `title`, `description`, `category`, `story`, `prompts`, `icon`, `showcase`, `gallery`,
-`gradient`, `links`, `developer`.
+`gradient`, `links`, `developer`. `examples/agent/catalog.py` is the worked example: eleven connectors,
+not one line of copy among them, and a test that keeps it that way.
 
 **The showcase leads the content**, with no heading over it: prompts on their gradient, or the gallery
 when the CMS says so. The order is header, description, status, the two switches, then the showcase, then

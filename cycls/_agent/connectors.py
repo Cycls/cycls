@@ -118,31 +118,53 @@ async def set_off(ws, name, value):
 
 # ---- Directory copy from a CMS: bilingual, and whatever the code declares wins ----
 CMS_TTL = 300   # how long a container serves the connector copy it last read
-_copy = {"at": 0.0, "rows": {}}
+CMS_RETRY = 10  # how soon it tries again after a read that did not land
+_copy = {"at": 0.0, "tried": 0.0, "rows": {}, "task": None}
 
 
 async def _cms_read(url, headers):
     import httpx2
-    _copy["at"] = time.time()
+    _copy["tried"] = time.time()
     try:
-        async with httpx2.AsyncClient(timeout=5) as h:
+        async with httpx2.AsyncClient(timeout=10) as h:
             r = await h.get(url, headers=headers)
         if r.status_code == 200:
             _copy["rows"] = {c["name"]: c for c in (r.json().get("connectors") or []) if c.get("name")}
+            _copy["at"] = time.time()   # only a read that landed starts the clock
     except Exception:
         pass   # a CMS that is down leaves the page rendering what the code declares
 
 
 async def cms_rows(url, headers=None):
     """The CMS's records by connector name. The first caller waits, so the first directory is already
-    right; after that a stale cache is served as it stands and re-read behind the request."""
+    right; after that a stale copy is served as it stands and re-read behind the request.
+
+    A read that fails leaves the clock at zero. A CMS that scales to zero costs more than the timeout
+    to wake and this read is usually what wakes it, so stamping the clock on the attempt would serve
+    code-only copy for a whole TTL — the page half the team sees with no story on it. `tried` is the
+    other half: a CMS that is really down is retried every CMS_RETRY, not on every request."""
     if not url:
         return {}
-    if not _copy["at"]:
+    now = time.time()
+    if now - _copy["at"] < CMS_TTL or now - _copy["tried"] < CMS_RETRY:
+        return _copy["rows"]
+    if _copy["at"]:
+        _copy["task"] = asyncio.create_task(_cms_read(url, headers or {}))   # held: a task nobody keeps can be collected mid-flight
+    else:
         await _cms_read(url, headers or {})
-    elif time.time() - _copy["at"] >= CMS_TTL:
-        asyncio.create_task(_cms_read(url, headers or {}))
     return _copy["rows"]
+
+
+def copy_of(o):
+    """A connector's name and blurb for the loop — what the code declared, else the copy this container
+    last read from the CMS. The directory renders those rows; the model's connector index is built from
+    the same cache, so a connector the catalog only names still reaches the model described."""
+    row = _copy["rows"].get(o.name) or {}
+
+    def one(v):
+        return v if isinstance(v, str) else ((v or {}).get("en") or (v or {}).get("ar") or "")
+
+    return o.title or one(row.get("title")), o.description or one(row.get("description"))
 
 
 def bilingual(*values):
@@ -299,8 +321,9 @@ FIND_TOOLS = {
 
 def index_line(o, count):
     """One line per connector — ~15 tokens against ~320 for a schema."""
-    d = re.sub(r"\s+", " ", (o.description or "").strip())[:70]
-    return f"- {o.name}: {o.title or o.name}{' — ' + d if d else ''} ({count} tools)"
+    title, desc = copy_of(o)
+    d = re.sub(r"\s+", " ", (desc or "").strip())[:70]
+    return f"- {o.name}: {title or o.name}{' — ' + d if d else ''} ({count} tools)"
 
 
 def matches(query, catalog):
