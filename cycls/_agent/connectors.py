@@ -477,6 +477,8 @@ class OAuth2(Connector):
                                    **({"resource": client["resource"]} if client["resource"] else {}), **form})
         r.raise_for_status()
         t = r.json()
+        if "access_token" not in t:   # Slack answers 200 with {"ok": false, "error": …} — a KeyError would hide why
+            raise RuntimeError(f"{self.name}: {t.get('error') or t.get('error_description') or t}")
         return {"access_token": t["access_token"], "refresh_token": t.get("refresh_token"), "expires_at": time.time() + t.get("expires_in", 3600),
                 "token_endpoint": client["token"], "client_id": client["client_id"], "resource": client["resource"]}
 
