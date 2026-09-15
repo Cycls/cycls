@@ -432,3 +432,50 @@ def test_replace_messages_still_rewrites_in_place(tmp_path):
     _run(chat.replace_messages(ws, cid, [{"role": "user", "content": "only"}]))
     assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == ["000000"]
     assert _run(chat.load_messages(ws, cid)) == [{"role": "user", "content": "only"}]
+
+
+# ---- the user's turn is durable immediately (docs/notes/runs.md) ----
+
+def test_the_user_turn_is_on_disk_before_the_model_answers(tmp_path):
+    """The 42 titled-but-empty chats: the index was written at add_user and the
+    turn only at the first checkpoint, so a run that died between them lost what
+    the person typed."""
+    ws, cid = _ws(tmp_path), "test"
+    s = chat.Session(ws, cid, [])
+    _run(s.add_user("remember this"))
+
+    assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == ["000000"]
+    assert _run(chat.load_messages(ws, cid))[0]["content"] == "remember this"
+    assert _run(chat.get_meta(ws, cid))["title"] == "remember this"
+
+
+def test_an_internal_turn_is_durable_but_does_not_title_the_chat(tmp_path):
+    """An approval carried back from a confirm card is a turn the model must
+    keep and the chat must not show."""
+    ws, cid = _ws(tmp_path), "test"
+    s = chat.Session(ws, cid, [])
+    _run(s.add_user("real question"))
+    _run(s.add_user("Approved: bash", internal=True))
+
+    assert len(_turn_keys(ws, cid)) == 2
+    assert _run(chat.get_meta(ws, cid))["title"] == "real question"
+
+
+def test_rollback_cannot_drop_the_flushed_user_turn(tmp_path):
+    ws, cid = _ws(tmp_path), "test"
+    s = chat.Session(ws, cid, [])
+    _run(s.add_user("keep me"))
+    s.messages.append({"role": "assistant", "content": [
+        {"type": "tool_use", "id": "A", "name": "bash", "input": {}}]})
+
+    s.rollback()
+    assert [m["content"] for m in s.messages] == ["keep me"]
+    assert len(_turn_keys(ws, cid)) == 1
+
+
+def test_an_anonymous_session_still_writes_nothing(tmp_path):
+    ws = _ws(tmp_path)
+    s = chat.Session(ws, None, [])
+    _run(s.add_user("no chat id, no disk"))
+    assert s.messages[0]["content"] == "no chat id, no disk"
+    assert not list(Path(tmp_path).glob("**/*.json"))
