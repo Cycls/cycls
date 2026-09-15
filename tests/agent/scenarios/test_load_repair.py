@@ -8,6 +8,7 @@ the "Readers do not repair" section of docs/notes/runs.md.
 The conftest.py at tests/ resets the engine pool between tests so each
 scenario starts fresh."""
 import asyncio
+import types
 from pathlib import Path
 
 import pytest
@@ -24,10 +25,10 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def test_orphan_assistant_tool_use_trimmed_and_persisted(tmp_path):
-    """The headline reliability win: a chat with a dangling assistant
-    tool_use (the typical mid-turn-crash corruption) loads as the clean
-    prefix. With `persist`, disk catches up too."""
+def test_orphan_assistant_tool_use_trimmed_in_memory_only(tmp_path):
+    """The headline reliability win: a chat with a dangling assistant tool_use
+    (what a run killed mid-tool-batch leaves) loads as the clean prefix — and
+    disk keeps both turns. Nobody renumbers to make the view true."""
     ws = _ws(tmp_path)
     cid = "test"
     _run(chat.append_messages(ws, cid, [
@@ -37,13 +38,14 @@ def test_orphan_assistant_tool_use_trimmed_and_persisted(tmp_path):
         ]},
     ], 0))
 
-    first = _run(chat.load_messages(ws, cid, persist=True))
+    first = _run(chat.load_messages(ws, cid))
     assert len(first) == 1, f"orphan not trimmed: {first}"
     assert first[0]["content"] == "do X"
+    assert len(_turn_keys(ws, cid)) == 2, "the reader rewrote disk"
 
-    # Second load: disk now matches; repair is a no-op.
-    second = _run(chat.load_messages(ws, cid))
-    assert second == first, "disk wasn't persisted clean"
+    # Stable: loading again gives the same view, still without touching disk.
+    assert _run(chat.load_messages(ws, cid)) == first
+    assert len(_turn_keys(ws, cid)) == 2
 
 
 def test_clean_history_passes_through_unchanged(tmp_path):
@@ -206,16 +208,23 @@ def test_a_reader_normalizes_in_memory_and_leaves_disk_alone(tmp_path):
     assert _turn_keys(ws, cid) == before, "a reader rewrote the turn files"
 
 
-def test_the_writer_repairs_so_its_index_matches_disk(tmp_path):
-    """`Session.__init__` sets `_saved = len(messages)` and appends at it, so the
-    one caller that repairs must be the one whose indices have to agree."""
+def test_the_writer_appends_past_disk_instead_of_repairing_it(tmp_path):
+    """The writer does not repair either. Its two counters diverge: `_saved`
+    indexes the normalized list, `_next_idx` the real end of the turn files, so
+    the next append lands after the dangling turn rather than over it."""
     ws, cid = _ws(tmp_path), "test"
     _dangling(ws, cid)
 
-    messages = _run(chat.load_messages(ws, cid, persist=True))
-    keys = _turn_keys(ws, cid)
-    assert [k.split("/")[-1] for k in keys] == ["000000"], keys
-    assert chat.Session(ws, cid, messages)._saved == len(keys)
+    ctx = types.SimpleNamespace(workspace=ws, chat_id=cid, user=object())
+    session = _run(chat.Session.open(ctx))
+
+    assert len(_turn_keys(ws, cid)) == 2, "opening a chat rewrote disk"
+    assert session._saved == 1, "the dangling turn should be out of the list"
+    assert session._next_idx == 2, "writes must land past every slot on disk"
+
+    session.messages.append({"role": "user", "content": "next"})
+    _run(session.checkpoint())
+    assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == ["000000", "000001", "000002"]
 
 
 def test_a_reader_cannot_move_a_live_sessions_slots(tmp_path):
