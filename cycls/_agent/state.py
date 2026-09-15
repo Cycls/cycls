@@ -267,6 +267,31 @@ async def load_messages(workspace, chat_id, *, persist=False):
     return normalized
 
 
+async def turn_end(workspace, chat_id):
+    """The next free turn index. Not `len()`: a chat can have holes, and two in
+    production did."""
+    _validate(chat_id)
+    keys = await DB(workspace).keys(glob=f"chat/{chat_id}/[0-9]*")
+    return max((int(k.rsplit("/", 1)[1]) for k in keys), default=-1) + 1
+
+
+async def load_tail(workspace, chat_id, since):
+    """Turns from index *since* on, raw. Returns (turns, end), or (None, end) if
+    the caller is ahead of us and should reload from scratch.
+
+    No normalization: a window is a view, not a provider payload. Normalizing one
+    would strip a `tool_result` whose `tool_use` sits before it, or an assistant
+    turn whose result lands after it, and silently blank the poll."""
+    _validate(chat_id)
+    db = DB(workspace)
+    idx = sorted(int(k.rsplit("/", 1)[1]) for k in await db.keys(glob=f"chat/{chat_id}/[0-9]*"))
+    end = idx[-1] + 1 if idx else 0
+    if since > end:
+        return None, end
+    want = [f"chat/{chat_id}/{i:06d}" for i in idx if i >= since]
+    return [m for m in await asyncio.gather(*[db.get(k) for k in want]) if m is not None], end
+
+
 async def append_messages(workspace, chat_id, messages, start_idx, *, create=True):
     """Append *messages* starting at turn index *start_idx*; returns how many
     landed.

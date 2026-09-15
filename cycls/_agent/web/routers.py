@@ -245,17 +245,29 @@ def chats_router(ws_dep):
         return items
 
     @r.get("/chats/{chat_id}")
-    async def get_chat(chat_id: str, ws: Workspace = ws_dep):
+    async def get_chat(chat_id: str, since: Optional[int] = None, ws: Workspace = ws_dep):
+        """`since` returns only the turns after that index — the poll runs every
+        2s and a whole chat is one object read per turn. `next` is the cursor to
+        come back with; `open` is the role of the last projected message, which is
+        how a client knows whether to fold the window into its trailing bubble
+        (consecutive assistant turns collapse into one)."""
         meta = await state.get_meta(ws, chat_id)
         # 204 (not 404) for a missing chat: the FE auto-restores `?id=` on
         # cold load, and a stale id is normal — 404s clutter the dev console.
         if meta is None:
             return Response(status_code=204)
-        raw = await state.load_messages(ws, chat_id)
         # `run` tells the client whether to keep polling: a run outlives the
         # request that started it, so a finished stream is not a finished run.
-        return {**meta, "messages": to_ui_messages(raw),
-                "run": state.run_status(await state.get_run(ws, chat_id))}
+        run = state.run_status(await state.get_run(ws, chat_id))
+        turns, end = (None, None) if since is None else await state.load_tail(ws, chat_id, max(since, 0))
+        reset = since is not None and turns is None
+        if turns is None:   # full load, or the client is ahead of us
+            turns = await state.load_messages(ws, chat_id)
+            end = end if end is not None else await state.turn_end(ws, chat_id)
+        ui = to_ui_messages(turns)
+        return {**meta, "messages": ui, "run": run, "next": end,
+                "open": ui[-1]["role"] if ui else None,
+                **({"reset": True} if reset else {})}
 
     @r.put("/chats/{chat_id}")
     async def put_chat(chat_id: str, request: Request, ws: Workspace = ws_dep):
@@ -284,6 +296,11 @@ def chats_router(ws_dep):
         run that follows is an ordinary send."""
         if (await state.get_meta(ws, chat_id)) is None:
             raise HTTPException(status_code=404, detail="Chat not found")
+        # This is the one route that still deletes and renumbers every turn file.
+        # Under a live run that moves the slots it is appending to — the exact way
+        # two production chats lost turns (docs/notes/runs.md).
+        if state.run_status(await state.get_run(ws, chat_id)) == "running":
+            raise HTTPException(status_code=409, detail="This chat is still working on your last message.")
         removed = await state.truncate_last_exchange(ws, chat_id)
         return {"ok": removed is not None}
 

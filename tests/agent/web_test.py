@@ -2015,3 +2015,27 @@ def test_a_hook_that_raises_never_reaches_the_run(tmp_path):
     exc, runs = asyncio.run(go())
     assert exc is None, "a deployment's hook failed the run"
     assert runs == {}, "the slot was not released"
+
+
+def test_regenerate_is_refused_while_a_run_is_live(tmp_path):
+    """DELETE last-exchange deletes and renumbers every turn file. Under a live
+    run that moves the slots it is appending to."""
+    from cycls._agent import state
+    from cycls._app.db import workspace as mkws
+    from datetime import datetime, timezone
+
+    ws = mkws("tenant", tmp_path, base=f"file://{tmp_path}")
+
+    async def go():
+        await state.put_meta(ws, "c1", {"id": "c1", "title": "t"})
+        await state.append_messages(ws, "c1", [
+            {"role": "user", "content": "a"},
+            {"role": "assistant", "content": [{"type": "text", "text": "1"}]}], 0)
+        await state.put_run(ws, "c1", {"run": "r", "status": "running",
+                                       "heartbeat": datetime.now(timezone.utc).isoformat()})
+        live = state.run_status(await state.get_run(ws, "c1"))
+        await state.put_run(ws, "c1", {"run": "r", "status": "done"})
+        return live, state.run_status(await state.get_run(ws, "c1"))
+
+    live, after = asyncio.run(go())
+    assert live == "running" and after == "done"

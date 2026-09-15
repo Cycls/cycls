@@ -584,3 +584,47 @@ def test_the_record_is_all_strings_and_rides_the_meta_channel(tmp_path):
     row = _run(chat.get_run(ws, cid))
     assert row == {"run": "r1", "status": "running", "ms": "1234", "heartbeat": "now"}, row
     assert _run(chat.list_runs(ws)) == {cid: row}
+
+
+# ---- the poll's window (docs/notes/runs.md §4) ----
+
+def test_load_tail_returns_only_new_turns_and_the_next_cursor(tmp_path):
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": [{"type": "text", "text": "1"}]},
+        {"role": "user", "content": "b"},
+    ], 0))
+
+    turns, end = _run(chat.load_tail(ws, cid, 0))
+    assert len(turns) == 3 and end == 3
+    turns, end = _run(chat.load_tail(ws, cid, 2))
+    assert [m["content"] for m in turns] == ["b"] and end == 3
+    assert _run(chat.load_tail(ws, cid, 3)) == ([], 3)
+
+
+def test_load_tail_tells_a_client_that_is_ahead_to_reload(tmp_path):
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [{"role": "user", "content": "a"}], 0))
+    assert _run(chat.load_tail(ws, cid, 9)) == (None, 1)
+
+
+def test_load_tail_does_not_normalize_its_window(tmp_path):
+    """A window is a view, not a provider payload: normalizing one would strip a
+    tool_result whose tool_use sits before it and blank the poll."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "A", "name": "bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "A", "content": "ok"}]},
+    ], 0))
+    turns, _ = _run(chat.load_tail(ws, cid, 2))
+    assert len(turns) == 1 and turns[0]["content"][0]["type"] == "tool_result"
+
+
+def test_turn_end_counts_past_a_hole(tmp_path):
+    """`len()` is not the next index — two production chats had holes."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [{"role": "user", "content": "a"}], 0))
+    _run(chat.append_messages(ws, cid, [{"role": "user", "content": "b"}], 5))
+    assert _run(chat.turn_end(ws, cid)) == 6
