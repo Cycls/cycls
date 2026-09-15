@@ -853,12 +853,14 @@ def _exec_edit(inp, workspace):
 
 class Tool(NamedTuple):
     """`once`: one call per batch. `terminal`: a successful call ends the turn.
-    `prompt`: guidance appended while the tool is enabled."""
+    `prompt`: guidance appended while the tool is enabled. `interrupted`: what the
+    model is told when the call is cancelled mid-flight."""
     run: object
     step: object
     once: bool = False
     terminal: bool = False
     prompt: str = ""
+    interrupted: str = ""
 
 
 def _run_bash(inp, workspace, *, timeout, network, **_):
@@ -990,7 +992,9 @@ def _browser_step(inp):
 
 
 _TOOLS = {
-    "browser":    Tool(lambda inp, ws, **_: _exec_browser(inp, ws), _browser_step),
+    "browser":    Tool(lambda inp, ws, **_: _exec_browser(inp, ws), _browser_step,
+                       interrupted="The page is still open but may have moved; re-read it "
+                                   "before acting on any element ref."),
     "bash":       Tool(_run_bash,
                        lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
     "read":       Tool(lambda inp, ws, **_: _exec_read(inp, ws.root),
@@ -1029,6 +1033,16 @@ def is_terminal(name):
     """Whether a successful call to *name* should end the turn."""
     row = _TOOLS.get(name)
     return bool(row and row.terminal)
+
+
+def interrupted_note(name, reason):
+    """What the model reads for a call cancelled mid-flight. It cannot be told the
+    call did not happen: a thread-dispatched tool finishes regardless, and side
+    effects outside the sandbox are already out there."""
+    row = _TOOLS.get(name)
+    return (f"Interrupted: the run was {reason}. This call may or may not have "
+            f"completed — check before repeating it."
+            + (f" {row.interrupted}" if row and row.interrupted else ""))
 
 
 _custom_labels, _custom_names, _custom_owners, _custom_icons = {}, {}, {}, {}

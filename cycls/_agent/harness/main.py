@@ -18,7 +18,7 @@ from .compact import COMPACT_BUFFER
 from ..logs import log
 from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
-from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, register_labels, detailed, excerpt, ToolContext
+from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, interrupted_note, register_labels, detailed, excerpt, ToolContext
 from ..tools import skills as skills_mod
 
 
@@ -32,6 +32,7 @@ MAX_DELAY_MS = 32_000
 _RETRYABLE_STATUSES = {429, 500, 502, 503, 504, 529}
 MAX_CONTINUATIONS = 4         # auto-continue rounds after a max_tokens cut
 MAX_PAUSES = 8                # pause_turn resends before giving up
+CANCEL_DRAIN = 2              # seconds a cancelled tool batch gets to unwind
 _CONTINUE = ("Your previous message was cut off at the output-token limit. "
              "Continue exactly from where you stopped. Do not repeat anything.")
 # Providers report context overflow as an error, each with its own wording.
@@ -99,6 +100,8 @@ async def _timed(coro):
     t0 = time.monotonic()
     try:
         return await coro, int((time.monotonic() - t0) * 1000)
+    except asyncio.CancelledError:
+        raise   # a cancelled tool is cancelled, not a tool that returned an error
     except BaseException as e:
         return e, int((time.monotonic() - t0) * 1000)
 
@@ -114,6 +117,55 @@ def _with_mention(content, line):
     if isinstance(content, list):
         return [*content, {"type": "text", "text": line}]
     return f"{content}\n\n{line}" if content else line
+
+
+def _shape(block, out, ok, handlers, mcp_names):
+    """A tool's output as (what the model reads, what the chat is shown, whether
+    the turn now waits on the person). Split out so the cancel path can derive
+    the same content without yielding — you cannot yield while unwinding."""
+    name = block["name"]
+    if ok and isinstance(out, dict) and "_model" in out:
+        # Two channels: `_model` lands in tool_result, `_ui` goes to the client.
+        return out["_model"], ([{**out["_ui"], "id": block["id"]}] if out.get("_ui") else []), False
+    if ok and isinstance(out, dict) and out.get("type") == "ui":
+        # A UI tool drives the client; the model gets a short ack so tool_result
+        # stays a valid string. `ack` overrides the wording and never ships.
+        ack = out.pop("ack", None)
+        waiting = out.get("action") in ("confirm", "connect")
+        return (ack or f"Opened {out.get('name') or out.get('path') or 'the file'} for the user.",
+                [out], waiting)
+    if ok and handlers and name in handlers and name not in mcp_names and not detailed(name):
+        # A custom handler's result is both the chat's and the model's; a
+        # connector's is the model's alone — the chat sees the step.
+        return (out if isinstance(out, str) else json.dumps(out, default=str)), [out], False
+    return out, [], False
+
+
+async def _unwind(session, blocks, tasks, reason, handlers, mcp_names, workspace):
+    """Take the batch back. `asyncio.wait` does not cancel what it waits on, so a
+    bare cancel leaves tools running and their effects unrecorded. Cancel, give
+    them a moment, then write a result for every call — the real one where it
+    finished, `Interrupted:` only where it did not — because a `tool_use` with no
+    result is stripped on the next read, taking the assistant turn with it."""
+    for t in tasks:
+        if not t.done(): t.cancel()
+    await asyncio.wait(tasks, timeout=CANCEL_DRAIN)
+    results = []
+    for block, t in zip(blocks, tasks):
+        if t.cancelled() or not t.done():
+            content, failed = interrupted_note(block["name"], reason), True
+        else:
+            out, _ = t.result()
+            failed = isinstance(out, BaseException)
+            if failed: out = f"Error: {_cause(out)}"
+            content, _, _ = _shape(block, out, not failed, handlers, mcp_names)
+        if isinstance(content, str) and block["name"] not in ("read", "skill"):
+            content = spill.spill(content, workspace.root, session.chat_id,
+                                  f"{block['name']}-{block['id'][-6:]}")
+        results.append({"type": "tool_result", "tool_use_id": block["id"],
+                        "content": content, "is_error": failed})
+    session.messages.append({"role": "user", "content": results})
+    await asyncio.shield(session.checkpoint())
 
 
 async def _ingest(content, workspace, vision=True):
@@ -439,11 +491,18 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             # proxies from severing the SSE stream during long silent tool
             # executions.
             tasks = [asyncio.create_task(_timed(c)) for _, c in pairs]
-            while True:
-                _, pending = await asyncio.wait(tasks, timeout=15.0, return_when=asyncio.ALL_COMPLETED)
-                if not pending: break
-                yield {"type": "ping"}
-            timed = [t.result() for t in tasks]
+            try:
+                while True:
+                    _, pending = await asyncio.wait(tasks, timeout=15.0, return_when=asyncio.ALL_COMPLETED)
+                    if not pending: break
+                    yield {"type": "ping"}
+                timed = [t.result() for t in tasks]
+            except (GeneratorExit, asyncio.CancelledError):
+                # Why it stopped is the run record's job (§3); the model only
+                # needs to know this call did not run to completion.
+                await _unwind(session, blocks, tasks, "interrupted",
+                              handlers, mcp_names, workspace)
+                raise
 
             results, terminal, waiting = [], False, False
             for block, (out, ms) in zip(blocks, timed):
@@ -455,30 +514,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     output_bytes=len(out) if isinstance(out, (str, bytes)) else None,
                     error=None if ok else _cause(out))
                 if not ok: out = f"Error: {_cause(out)}"
-                # Two channels: `_model` lands in tool_result, `_ui` is forwarded
-                # to the client. `web_search` uses it to hand the FE structured
-                # sources without changing what the model reads.
-                if ok and isinstance(out, dict) and "_model" in out:
-                    if ev := out.get("_ui"): yield {**ev, "id": block["id"]}   # threads onto its step row
-                    content = out["_model"]
-                # A tool that returns a UI event (e.g. `canvas`, `suggest`) drives
-                # the client and the model gets a short ack — keeps tool_result a
-                # valid string. An `ack` key overrides the default wording and is
-                # stripped before the event reaches the client.
-                elif ok and isinstance(out, dict) and out.get("type") == "ui":
-                    ack = out.pop("ack", None)
-                    yield out
-                    content = ack or f"Opened {out.get('name') or out.get('path') or 'the file'} for the user."
-                    if out.get("action") in ("confirm", "connect"):
-                        waiting = True   # the person has to answer before anything else can happen
-                # Custom-handler results flow through the stream for the body to see
-                # (UI rendering) AND serialize into tool_result for the model (data).
-                # A connector's result is data for the model only — the chat sees the step.
-                elif handlers and block["name"] in handlers and block["name"] not in mcp_names and not detailed(block["name"]) and ok:
-                    yield out
-                    content = out if isinstance(out, str) else json.dumps(out, default=str)
-                else:
-                    content = out
+                content, evs, waits = _shape(block, out, ok, handlers, mcp_names)
+                for ev in evs: yield ev
+                if waits:
+                    waiting = True   # the person has to answer before anything else can happen
                 if isinstance(content, str) and block["name"] not in ("read", "skill"):
                     content = spill.spill(content, workspace.root, session.chat_id, f"{block['name']}-{block['id'][-6:]}")
                 results.append({"type": "tool_result", "tool_use_id": block["id"], "content": content})
