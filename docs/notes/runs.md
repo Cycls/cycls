@@ -65,6 +65,29 @@ be read back as valid:
   is derived from the user's first message, so the message reached the server and
   never reached disk. They sit in the user's chat list, named, empty.
 
+## What the OOM kills say
+
+Measured 2026-09-15, 30 days, all services: 139 OOM log rows, 26 container kills.
+Four chats account for 24 of them, and they are two distinct causes.
+
+- **Three super chats, one user, 19 kills — the agent installs Chrome into RAM.**
+  super's `allowed_tools` has no `Browser`, so asked for screenshots the model
+  builds its own Playwright over Bash: `unshare -rm`, `mount -t tmpfs tmpfs /tmp/x`
+  with no `size=`, then unpacks `chrome.zip` (193MB) and `shell.zip` (120MB) into
+  it. A tmpfs is RAM charged to the container's cgroup, so that is ~500MB resident
+  before Chrome starts, inside 1Gi. It killed 10 consecutive *fresh* containers in
+  18 minutes, each dying 23–51s in, because every retry re-ran the same unpack.
+  Transcript size is irrelevant: one of these chats is 38KB, below median.
+- **One haseef chat, 6 kills — a 3MB, 413-turn, image-bearing chat submitted five
+  times within 12ms.** Its first turn is `اكمل`. This is the cut-stream bug feeding
+  the OOM: cut, resubmit, five concurrent runs each expanding the same images.
+  `_claim` (§1) fixes this one by construction.
+
+Two conclusions the design depends on. **Concurrency is not the cause** — 84% of
+kills had 0 or 1 run in flight, and kill-time concurrency is indistinguishable
+from ambient. **The sandbox can allocate the container's whole memory budget as a
+filesystem**, which no run-level accounting can see.
+
 The mechanism behind the holes is that our read path writes. It takes three facts
 to see it.
 
@@ -184,10 +207,12 @@ its own schedule and nothing breaks in between.
 navigates the other's out from under it. One run per chat bounds the loop, not the
 browser; key the cache by subject and chat id.
 
-Per-instance cap on active runs (tied to memory). Beyond it, `503` with
-`Retry-After`; the client retries on the next poll tick. The cap and the memory
-figure in §5 decide whether this makes the OOM class better or worse, so measure
-them on super-dev rather than picking them.
+**A per-instance run cap was proposed here and dropped.** Measured instead: 84%
+of container kills happened with 0 or 1 run in flight, p95 concurrency is 2, and
+offered load is 0.1 concurrent runs — a cap of 8 would not have fired once in 14
+days. The kills are a per-run payload problem, not a concurrency one (see
+"What the OOM kills say"). Do not re-propose it without data that says
+concurrency is the cause.
 
 ### 2. Writing: one writer, append-only
 
@@ -345,7 +370,7 @@ a live run record along with the rest of the meta.
 - Analytics move with the run. `turn_completed` fires in the stream reader's
   `finally`, so once the stream ending stops meaning the turn ending it silently
   becomes "how long the browser stayed attached" — emit it when the poll sees
-  status leave `running`, or tag it attached/detached. And `409`/`503` are not
+  status leave `running`, or tag it attached/detached. And `409` is not
   `message_failed`, whose alert fires above 2%: left alone, the rollout trips its
   own alarm. One new event, `stream_broken`, carries the error name,
   `visibilityState`, `navigator.onLine`, seconds since the last byte and run
@@ -362,8 +387,7 @@ is unchanged since this note was written, so all of this still applies as stated
   cost view before flipping: agents already run mostly one request per instance.
 - Default memory `2Gi` and concurrency `10` for agents (today 1Gi and 80). 73 OOM
   kills in 14 days at 1Gi, before detached runs, MCP schemas and browser sessions
-  start sharing an instance. Measure the real per-run footprint on super-dev and
-  set the per-instance cap from it.
+  start sharing an instance.
 
 Exposed as deploy fields; `@cycls.agent` sends them.
 
@@ -407,7 +431,7 @@ mostly unnecessary.
    afterwards as the regression check.
 2. **The run becomes a task**: registry plus lease, `chat/{id}/run` with
    heartbeat, `stop` endpoint, the cancel path that takes the tool batch back,
-   the shutdown hook, run budget, instance cap, `/chat/completions` excluded,
+   the shutdown hook, run budget, `/chat/completions` excluded,
    opt-in flag, and the run-finished event.
 3. **The client**: `since=`, polling fallback, visibility and page-load checks,
    `isStreaming` from `run.status`, the background-run indicator in the chat and
