@@ -719,6 +719,7 @@ export function Chat({ chat, onShare, files, account, config }: {
 
   const inputProps = {
     textareaRef, input, setInput, handleKeyDown, handleSubmit, isStreaming, onStop: handleStop,
+    working: (isStreaming && !chat.attached ? "background" : undefined) as "background" | undefined,
     onOpenFilePicker: openFilePicker,
     onOpenFiles: files ? () => openPanel("files") : undefined,
     attachments,
@@ -1401,7 +1402,7 @@ function formatShortDate(iso: string) {
 }
 
 function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onToggleFavorite }: {
-  chats: { id: string; title: string; updatedAt: string; favoritedAt?: string }[];
+  chats: { id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null }[];
   loading: boolean;
   activeId?: string | null;
   onLoad: (id: string) => void;
@@ -1468,7 +1469,15 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
                     onCancel={() => setRenaming(null)}
                   />
                 ) : (
-                  <span className="text-sm text-foreground truncate block">{s.title || t("untitled")}</span>
+                  <span className="text-sm text-foreground truncate block">
+                    {/* a run outlives the tab that started it — say so, or leaving
+                        the chat looks the same as the agent stopping */}
+                    {s.run === "running" && (
+                      <span className="mr-1.5 inline-block size-1.5 rounded-full bg-accent animate-pulse align-middle"
+                            aria-label={t("working")} />
+                    )}
+                    {s.title || t("untitled")}
+                  </span>
                 )}
               </div>
               <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">

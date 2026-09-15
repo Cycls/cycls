@@ -195,7 +195,11 @@ export function useChat(baseUrl: string = "") {
         if (viewRef.current !== view) return;
         applyTail(data);
         setRunStatus(data.run ?? null);
-        if (data.run !== "running") return;
+        if (data.run !== "running") {
+          // The run's real ending, for a turn this tab was not attached to.
+          if (data.run) track("turn_completed", { chat_id: id, status: data.run, detached: true });
+          return;
+        }
         await new Promise((r) => setTimeout(r, 2000));
       }
     } catch {
@@ -204,6 +208,26 @@ export function useChat(baseUrl: string = "") {
       pollingRef.current = false;
     }
   }, [api, applyTail]);
+
+  // Edge does not sleep a tab holding a Web Lock and Chrome does not freeze one,
+  // and a locked screen is where most mobile-web drops come from. This is the only
+  // part of the design that reduces how often a connection drops at all.
+  useEffect(() => {
+    if (!isStreaming) return;
+    let done = false;
+    const release: (() => void)[] = [];
+    const locks = navigator as Navigator & {
+      locks?: { request: (n: string, f: () => Promise<void>) => Promise<void> };
+      wakeLock?: { request: (t: "screen") => Promise<{ release: () => Promise<void> }> };
+    };
+    locks.locks?.request("cycls-run", () => new Promise<void>((r) => {
+      if (done) r(); else release.push(r);
+    })).catch(() => {});
+    locks.wakeLock?.request("screen")
+      .then((w) => { if (done) void w.release(); else release.push(() => void w.release()); })
+      .catch(() => {});
+    return () => { done = true; release.forEach((f) => f()); };
+  }, [isStreaming]);
 
   // Coming back is the common case the whole design exists for: the tab was
   // parked or the phone was locked, and the run kept going without us.
@@ -254,6 +278,7 @@ export function useChat(baseUrl: string = "") {
 
       let receivedData = false;
       let sawDone = false;   // the server's end marker; its absence means the run may live on
+      let lastByteAt = Date.now();
 
       const doFetch = async () => {
         const controller = new AbortController();
@@ -294,6 +319,7 @@ export function useChat(baseUrl: string = "") {
           headers,
           body: JSON.stringify({ messages: [requestMessage],
                                  ...(webSearchEnabled() ? {} : { disabled_tools: ["WebSearch"] }),
+                                 detach: true,   // we poll, and we stop through the endpoint
                                  ...(autoApprove() ? {} : { auto: false }),
                                  ...(extra?.approvals?.length ? { approvals: extra.approvals } : {}),
                                  ...(extra?.connectors?.length ? { connectors: extra.connectors } : {}) }),
@@ -318,6 +344,7 @@ export function useChat(baseUrl: string = "") {
           const { done, value } = await reader.read();
           if (done) break;
           receivedData = true;
+          lastByteAt = Date.now();
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
@@ -516,9 +543,11 @@ export function useChat(baseUrl: string = "") {
         // updatedAt + first-turn title during the stream — no FE save needed.
 
         // One event per turn carrying the shape of the work — capability
-        // usage without per-tool-call volume (the server logs those).
+        // usage without per-tool-call volume (the server logs those). Only when
+        // the stream carried the turn to its end: otherwise it would measure how
+        // long this tab stayed attached, and the poll reports the real ending.
         const last = messagesRef.current[messagesRef.current.length - 1];
-        if (last?.role === "assistant") {
+        if (sawDone && last?.role === "assistant") {
           const tools: Record<string, number> = {};
           let calls = 0;
           for (const p of last.parts || []) {
@@ -533,6 +562,17 @@ export function useChat(baseUrl: string = "") {
             errored: (last.parts || []).some((p) => p.type === "callout" && p.style === "error"),
             stopped,
             origin,
+            detached: false,
+          });
+        }
+        if (!sawDone) {
+          track("stream_broken", {
+            chat_id: chatIdRef.current,
+            reason: stopped ? "stopped" : "ended_without_done",
+            visibility: document.visibilityState,
+            online: navigator.onLine,
+            seconds_since_byte: Math.round((Date.now() - lastByteAt) / 1000),
+            run_seconds: Math.round((Date.now() - sentAt) / 1000),
           });
         }
       }
@@ -582,17 +622,23 @@ export function useChat(baseUrl: string = "") {
     setTimeout(() => send(content, attachments, "regenerate"), 0);
   }, [isStreaming, send, api, setMessages]);
 
-  const stop = useCallback(() => {
-    if (abortRef.current) {
-      track("generation_stopped", { chat_id: chatIdRef.current });
+  const stop = useCallback(async () => {
+    const id = chatIdRef.current;
+    track("generation_stopped", { chat_id: id });
+    // Dropping the connection is no longer a stop — the run would keep going.
+    // The endpoint is the only thing that cancels; it reaches a run on another
+    // container too, through the record.
+    if (id) {
+      try { await api(`/chats/${encodeURIComponent(id)}/stop`, { method: "POST" }); }
+      catch { /* it may already have finished; the poll below settles it */ }
     }
-    abortRef.current?.abort();
-  }, []);
+    abortRef.current?.abort();   // let go of the reader, for immediate feedback
+    if (id) void pollRun(id);    // and watch it wind down
+  }, [api, pollRun]);
 
   const clear = useCallback(() => {
     track("chat_cleared", { chat_id: chatIdRef.current });
     viewRef.current += 1;
-    abortRef.current?.abort();
     cursorRef.current = openRef.current = null;
     setRunStatus(null);
     setMessages([]);
@@ -658,7 +704,6 @@ export function useChat(baseUrl: string = "") {
 
   const loadChat = useCallback(async (id: string) => {
     viewRef.current += 1;   // whatever is streaming stops writing here
-    abortRef.current?.abort();
     setChatLoading(true);
     try {
       const chat = await (await api(`/chats/${id}`)).json();
@@ -698,11 +743,16 @@ export function useChat(baseUrl: string = "") {
   }, [api, pollRun, setMessages]);
 
   const deleteChat = useCallback(async (id: string) => {
+    // Stop first: a detached run would otherwise keep working, and keep
+    // heartbeating, into a chat the person just deleted.
+    try { await api(`/chats/${encodeURIComponent(id)}/stop`, { method: "POST" }); } catch { /* none running */ }
     await api(`/chats/${id}`, { method: "DELETE" });
     track("chat_deleted", { chat_id: id });
     if (chatIdRef.current === id) {
       viewRef.current += 1;
       abortRef.current?.abort();
+      cursorRef.current = openRef.current = null;
+      setRunStatus(null);
       setMessages([]);
       setChatId(null);
       chatIdRef.current = null;
@@ -726,6 +776,7 @@ export function useChat(baseUrl: string = "") {
   return {
     messages,
     isStreaming,
+    attached,    // a stream is feeding this tab right now
     runStatus,   // "running" while the server still has work, even with no stream
     chatLoading,
     chatId,
