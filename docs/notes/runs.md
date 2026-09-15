@@ -248,13 +248,13 @@ Then the cancel path:
   older than 30s as `interrupted` whatever the stored status says, so a container
   that died mid-run never leaves a chat "running" forever.
 - `owner`: for logs only. Nothing routes on it.
-- `finished`, `turns`, `title`: stamped when the status leaves `running`. This is
-  the completion event — a run that ends while nobody is attached has to be
-  announceable, and the transition is the only place that knows it happened. The
-  loop emits `log("run", status=…, ms=…, turns=…)` for the fleet view and calls
-  one hook so a deployment can push (`cycls.Web().notifications(…)` already ships
-  OneSignal). Fire it on every terminal status, not just `done`: "your document
-  is ready" and "the agent stopped early" are both worth a notification.
+- `finished`, `turns`: stamped when the status leaves `running`. That transition
+  is the only place that knows a run ended, so it is where the **run-finished
+  event** fires — `on_run(chat_id, user, status, turns, ms)`, a plain hook on the
+  agent with no opinion about what happens next. Push, email, a webhook, a row in
+  a table, nothing: the deployment decides. The loop also logs it for the fleet
+  view. Fires on every terminal status, not just `done` — "it finished" and "it
+  stopped early" are both things a deployment may want to act on.
 
 Its own object because `index.json` is the wrong home three times over:
 `put_meta` hands the whole meta dict to the object store's custom-metadata
@@ -367,7 +367,8 @@ a completed turn.
 
 They close the laptop, come back, open the chat, and see the run still working
 (per-turn updates, marked as running in the background) or the finished document.
-If they left the tab entirely, the notification tells them it finished.
+If they left the tab entirely, whatever the deployment hung off the run-finished
+event reaches them.
 Token-level streaming returns on their next message. "كمل" becomes a button, and
 mostly unnecessary.
 
@@ -381,12 +382,11 @@ mostly unnecessary.
 2. **The run becomes a task**: registry plus lease, `chat/{id}/run` with
    heartbeat, `stop` endpoint, the cancel path that takes the tool batch back,
    the shutdown hook, run budget, instance cap, `/chat/completions` excluded,
-   opt-in flag, and the completion hook that a deployment can push from.
+   opt-in flag, and the run-finished event.
 3. **The client**: `since=`, polling fallback, visibility and page-load checks,
    `isStreaming` from `run.status`, the background-run indicator in the chat and
    the chat list, card rebuilt from the transcript, stop endpoint, no aborts on
-   navigation, Web Lock, the analytics moves, and push on completion through the
-   OneSignal plugin already wired in.
+   navigation, Web Lock, and the analytics moves.
 4. **Cloud**: `cpu_idle`, memory, concurrency as deploy fields. Enable on
    super-dev, watch `stream_broken`, the cut count and memory for a few days, then
    super and haseef.
