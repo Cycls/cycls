@@ -397,3 +397,48 @@ describe("tool switches", () => {
   });
 });
 
+
+describe("watching a run the stream no longer carries (docs/notes/runs.md)", () => {
+  test("a stream that ends without [DONE] polls until the run stops running", async () => {
+    const polls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes("/chats/")) {
+        polls.push(u);
+        return polls.length === 1
+          ? { ok: true, status: 200, json: async () => ({
+              messages: [{ role: "assistant", content: " and the rest", parts: [] }],
+              next: 4, open: "assistant", run: "running" }) } as any
+          : { ok: true, status: 200, json: async () => ({ messages: [], next: 4, run: "done" }) } as any;
+      }
+      // a stream that stops mid-answer: no [DONE]
+      return {
+        ok: true,
+        body: { getReader: () => {
+          const chunks = ['data: {"type":"chat_id","chat_id":"c1"}\n\n',
+                          'data: {"type":"text","text":"half an answer"}\n\n'];
+          let i = 0;
+          return { read: async () => i < chunks.length
+            ? { done: false, value: new TextEncoder().encode(chunks[i++]) }
+            : { done: true, value: undefined } };
+        } },
+      } as any;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useChat(""));
+    await act(async () => { await result.current.send("hi"); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 2600)); });
+
+    expect(polls.length).toBeGreaterThanOrEqual(2);
+    // the first poll has nothing to resume from and seeds the cursor; every one
+    // after that asks only for what is new
+    expect(polls[0]).not.toContain("since=");
+    expect(polls[1]).toContain("since=4");
+    expect(result.current.runStatus).toBe("done");
+    // the window was folded onto the open bubble, not appended as a new one
+    const last = result.current.messages[result.current.messages.length - 1];
+    expect(last.role).toBe("assistant");
+    expect(last.content).toBe("half an answer and the rest");
+  });
+});

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useApi, reasonOf } from "./use-api";
 import { track } from "../lib/analytics";
 import { webSearchEnabled, autoApprove } from "../lib/utils";
@@ -98,7 +98,12 @@ export function useChat(baseUrl: string = "") {
       return next;
     });
   }, []);
-  const [isStreaming, setIsStreaming] = useState(false);
+  // Two facts, not one. `attached` is "a stream is feeding this tab"; `runStatus`
+  // is "the server says the run is alive". They diverge the moment a run outlives
+  // its connection, which is the whole point of the design.
+  const [attached, setAttached] = useState(false);
+  const [runStatus, setRunStatus] = useState<string | null>(null);
+  const isStreaming = attached || runStatus === "running";
   const [chatId, setChatId] = useState<string | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
   const chatIdRef = useRef<string | null>(null);
@@ -109,6 +114,9 @@ export function useChat(baseUrl: string = "") {
   // writes nothing once it no longer matches — the chat id is not enough, since a
   // run can learn its id after the user has already moved on.
   const viewRef = useRef(0);
+  const cursorRef = useRef<number | null>(null);   // server-reported turn index, never messages.length
+  const openRef = useRef<string | null>(null);     // role of the last rendered message
+  const pollingRef = useRef(false);
   const uiHandlerRef = useRef<UIHandler | null>(null);
   const setUIHandler = useCallback((h: UIHandler | null) => {
     uiHandlerRef.current = h;
@@ -148,6 +156,70 @@ export function useChat(baseUrl: string = "") {
     [baseUrl, authHeaders, toastError],
   );
 
+  // Fold a window of new turns onto what is on screen. The server merges
+  // consecutive assistant turns into one bubble, so the first message of a window
+  // may be a continuation of the last one rendered — `open` is how we know.
+  const applyTail = useCallback((data: {
+    messages?: Message[]; next?: number; open?: string | null; reset?: boolean;
+  }) => {
+    const tail = data.messages || [];
+    if (data.reset) setMessages(tail);
+    else if (tail.length) setMessages((prev) => {
+      const out = [...prev];
+      const last = out[out.length - 1];
+      let i = 0;
+      if (openRef.current === "assistant" && tail[0].role === "assistant" && last?.role === "assistant") {
+        out[out.length - 1] = { ...last, content: last.content + tail[0].content,
+                                parts: [...(last.parts || []), ...(tail[0].parts || [])] };
+        i = 1;
+      }
+      return [...out, ...tail.slice(i)];
+    });
+    if (typeof data.next === "number") cursorRef.current = data.next;
+    if (tail.length && data.open !== undefined) openRef.current = data.open;
+  }, [setMessages]);
+
+  // Watch a run we are not streaming. The run outlives its request, so a stream
+  // that ended is not a turn that ended — only the record says that.
+  const pollRun = useCallback(async (id: string) => {
+    if (pollingRef.current) return;
+    pollingRef.current = true;
+    const view = viewRef.current;
+    try {
+      for (;;) {
+        if (viewRef.current !== view) return;
+        const q = cursorRef.current == null ? "" : `?since=${cursorRef.current}`;
+        const res = await api(`/chats/${encodeURIComponent(id)}${q}`);
+        if (res.status === 204) return;
+        const data = await res.json();
+        if (viewRef.current !== view) return;
+        applyTail(data);
+        setRunStatus(data.run ?? null);
+        if (data.run !== "running") return;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    } catch {
+      // Leave it: the next trigger (visibility, online, a send) retries.
+    } finally {
+      pollingRef.current = false;
+    }
+  }, [api, applyTail]);
+
+  // Coming back is the common case the whole design exists for: the tab was
+  // parked or the phone was locked, and the run kept going without us.
+  useEffect(() => {
+    const check = () => {
+      if (document.visibilityState !== "visible") return;
+      if (chatIdRef.current && !attached) void pollRun(chatIdRef.current);
+    };
+    document.addEventListener("visibilitychange", check);
+    window.addEventListener("online", check);
+    return () => {
+      document.removeEventListener("visibilitychange", check);
+      window.removeEventListener("online", check);
+    };
+  }, [attached, pollRun]);
+
   const send = useCallback(
     async (text: string, attachments?: Attachment[], origin: string = "keyboard", extra?: SendExtra) => {
       if (isStreaming) return;
@@ -165,7 +237,7 @@ export function useChat(baseUrl: string = "") {
       const view = viewRef.current;
       const mine = () => viewRef.current === view;
       setMessages((prev) => [...prev, ...(silent ? [] : [userMessage]), assistantMessage]);
-      setIsStreaming(true);
+      setAttached(true);
       const sentAt = Date.now();
 
       track("message_sent", {
@@ -181,6 +253,7 @@ export function useChat(baseUrl: string = "") {
       lastRequestRef.current = { text, attachments, origin };
 
       let receivedData = false;
+      let sawDone = false;   // the server's end marker; its absence means the run may live on
 
       const doFetch = async () => {
         const controller = new AbortController();
@@ -253,7 +326,7 @@ export function useChat(baseUrl: string = "") {
           for (const line of lines) {
             if (!line.startsWith("data: ")) continue;
             const data = line.slice(6);
-            if (data === "[DONE]") continue;
+            if (data === "[DONE]") { sawDone = true; continue; }
 
             try {
               const item: Part = JSON.parse(data);
@@ -381,6 +454,7 @@ export function useChat(baseUrl: string = "") {
         // meantime the retry succeeds and sends the message twice.
         if ((err as Error & { status?: number }).status === 409) {
           track("run_busy", { chat_id: chatIdRef.current });
+          if (chatIdRef.current) void pollRun(chatIdRef.current);
           if (mine()) setMessages((prev) => {
             const updated = [...prev];
             const last = updated[updated.length - 1];
@@ -431,8 +505,12 @@ export function useChat(baseUrl: string = "") {
           }
         }
       } finally {
+        // No end marker means the stream stopped before the run did — the record
+        // is the only thing that knows which. Also covers a clean-looking read
+        // that simply ran out, which is what a parked tab produces.
+        if (!sawDone && chatIdRef.current && mine()) void pollRun(chatIdRef.current);
         const stopped = !!abortRef.current?.signal.aborted;
-        setIsStreaming(false);
+        setAttached(false);
         abortRef.current = null;
         // Server is the sole writer of chat metadata. The harness stamps
         // updatedAt + first-turn title during the stream — no FE save needed.
@@ -515,6 +593,8 @@ export function useChat(baseUrl: string = "") {
     track("chat_cleared", { chat_id: chatIdRef.current });
     viewRef.current += 1;
     abortRef.current?.abort();
+    cursorRef.current = openRef.current = null;
+    setRunStatus(null);
     setMessages([]);
     setChatId(null);
     chatIdRef.current = null;
@@ -587,6 +667,12 @@ export function useChat(baseUrl: string = "") {
       setMessages(loaded);
       setChatId(id);
       chatIdRef.current = id;
+      // Seed the poll's cursor from the server, never from the array length:
+      // the projection merges assistant turns and hides tool batches.
+      cursorRef.current = typeof chat.next === "number" ? chat.next : null;
+      openRef.current = chat.open ?? (loaded.length ? loaded[loaded.length - 1].role : null);
+      setRunStatus(chat.run ?? null);
+      if (chat.run === "running") void pollRun(id);   // opened a chat that is still working
       const u = new URL(window.location.href);
       u.searchParams.set("id", id);
       window.history.replaceState({}, "", u.toString());
@@ -609,7 +695,7 @@ export function useChat(baseUrl: string = "") {
     } finally {
       setChatLoading(false);
     }
-  }, [api]);
+  }, [api, pollRun, setMessages]);
 
   const deleteChat = useCallback(async (id: string) => {
     await api(`/chats/${id}`, { method: "DELETE" });
@@ -640,6 +726,7 @@ export function useChat(baseUrl: string = "") {
   return {
     messages,
     isStreaming,
+    runStatus,   // "running" while the server still has work, even with no stream
     chatLoading,
     chatId,
     send,
