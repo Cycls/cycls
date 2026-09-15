@@ -441,7 +441,7 @@ async for ev in llm.run(context=context):
     yield cycls.to_ui(ev)
 ```
 
-Need more than a hook? `.loop(fn)` swaps the loop entirely — `fn` is an async generator with the default loop's signature that yields events. The building blocks live in `cycls._agent.harness`: `default_loop`, `make_provider`, `Session` (the message log + persistence), `build_tools`, `dispatch`, `compact`, `events`.
+Need more than a hook? `.loop(fn)` swaps the loop entirely — `fn` is an async generator with the default loop's signature that yields events. The building blocks live in `cycls._agent.harness`: `default_loop`, `make_provider`, `Session` (the message log + persistence — `add_user` checkpoints, so the person's turn is durable before the model is called, and `rollback()` drops only the assistant tail), `build_tools`, `dispatch`, `compact`, `events`.
 
 ### Multi-provider
 

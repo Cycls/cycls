@@ -348,7 +348,11 @@ class Session:
     complete turn or tool-result batch) and `.rollback()` after an error that
     may have left a half-written turn. An anonymous request — no chat_id or no
     signed-in user — gets a pure in-memory session: checkpoint/rollback are
-    no-ops and nothing touches disk."""
+    no-ops and nothing touches disk.
+
+    `add_user` is itself a checkpoint: the person's turn is on disk when it
+    returns, so `rollback()` can only drop the assistant tail. Custom loops
+    (`.loop(fn)`) get this for free, and inherit the same contract."""
 
     @classmethod
     async def open(cls, context):
@@ -394,13 +398,23 @@ class Session:
 
     async def add_user(self, content, *, attachments=None, internal=False):
         """`internal` marks a turn the person did not type — an approval carried back from a confirm
-        card. The model reads it, the chat never shows it, and it never becomes the chat's title."""
+        card. The model reads it, the chat never shows it, and it never becomes the chat's title.
+
+        The turn is durable when this returns. It used to reach disk only at the
+        first checkpoint, after the first tool batch, so a run that died before
+        then lost what the person typed — 42 chats on super and haseef hold a
+        title and no turns at all. Shielded because this runs outside the loop's
+        try, where a disconnect cancels at the nearest await."""
         msg = {"role": "user", "content": content}
         if internal:
             msg["internal"] = True
         if attachments:
             msg["attachments"] = attachments
         self.messages.append(msg)
+        # Before the meta touch: a turn with no index is recoverable (the next
+        # touch_meta fills the title, add_cost and the chat-list self-heal both
+        # write one), an index with no turn is the loss we are closing.
+        await asyncio.shield(self.checkpoint())
         if self.chat_id and not internal:
             try: await touch_meta(self.workspace, self.chat_id, content)
             except Exception as e: print(f"[WARN] meta touch failed: {e}")

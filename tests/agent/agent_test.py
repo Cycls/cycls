@@ -248,7 +248,10 @@ def test_no_history_without_session(tmp_path):
     with _mock_anthropic(mock_client):
         asyncio.run(_drain(_run(context=ctx)))
 
-    assert not list(tmp_path.glob("**/*.jsonl"))
+    # `.json`, not `.jsonl` — the store writes the former, so the old glob
+    # matched nothing and passed regardless. `add_user` now checkpoints on every
+    # session, so this is the only guard that the anonymous one stays in memory.
+    assert not list(tmp_path.glob("**/*.json"))
 
 
 # ---------------------------------------------------------------------------
