@@ -248,6 +248,13 @@ Then the cancel path:
   older than 30s as `interrupted` whatever the stored status says, so a container
   that died mid-run never leaves a chat "running" forever.
 - `owner`: for logs only. Nothing routes on it.
+- `finished`, `turns`, `title`: stamped when the status leaves `running`. This is
+  the completion event — a run that ends while nobody is attached has to be
+  announceable, and the transition is the only place that knows it happened. The
+  loop emits `log("run", status=…, ms=…, turns=…)` for the fleet view and calls
+  one hook so a deployment can push (`cycls.Web().notifications(…)` already ships
+  OneSignal). Fire it on every terminal status, not just `done`: "your document
+  is ready" and "the agent stopped early" are both worth a notification.
 
 Its own object because `index.json` is the wrong home three times over:
 `put_meta` hands the whole meta dict to the object store's custom-metadata
@@ -274,6 +281,14 @@ a live run record along with the rest of the meta.
   connection dropped while the agent was working" with a Continue button.
 - Do the same on page load with `?id=`, on `visibilitychange` back to visible, and
   on `online`.
+- **A detached run is visible as itself.** Once a run outlives its stream the UI
+  has to say so, or a returning person cannot tell "still working" from "stopped
+  and said nothing" — the complaint this note exists to fix. In the open chat, the
+  composer's working state comes from `run.status`, not from a live stream, and
+  reads "working in the background" when nothing is attached. In the chat list, a
+  chat whose run record is `running` carries the same mark, so a person who
+  switches away can see it finish. `GET /chats` already enumerates the chats;
+  it returns each one's run status with them.
 - **`since=<turn index>` is required, not an optimization.** `load_messages` reads
   one object per turn file, so refetching a 600-turn chat is ~600 reads every 2s
   per attached client, on instances §5 caps at concurrency 10. Payload size was
@@ -351,8 +366,10 @@ a completed turn.
 ## What the user sees
 
 They close the laptop, come back, open the chat, and see the run still working
-(per-turn updates) or the finished document. Token-level streaming returns on
-their next message. "كمل" becomes a button, and mostly unnecessary.
+(per-turn updates, marked as running in the background) or the finished document.
+If they left the tab entirely, the notification tells them it finished.
+Token-level streaming returns on their next message. "كمل" becomes a button, and
+mostly unnecessary.
 
 ## Order of work
 
@@ -364,10 +381,12 @@ their next message. "كمل" becomes a button, and mostly unnecessary.
 2. **The run becomes a task**: registry plus lease, `chat/{id}/run` with
    heartbeat, `stop` endpoint, the cancel path that takes the tool batch back,
    the shutdown hook, run budget, instance cap, `/chat/completions` excluded,
-   opt-in flag.
+   opt-in flag, and the completion hook that a deployment can push from.
 3. **The client**: `since=`, polling fallback, visibility and page-load checks,
-   `isStreaming` from `run.status`, card rebuilt from the transcript, stop
-   endpoint, no aborts on navigation, Web Lock, the analytics moves.
+   `isStreaming` from `run.status`, the background-run indicator in the chat and
+   the chat list, card rebuilt from the transcript, stop endpoint, no aborts on
+   navigation, Web Lock, the analytics moves, and push on completion through the
+   OneSignal plugin already wired in.
 4. **Cloud**: `cpu_idle`, memory, concurrency as deploy fields. Enable on
    super-dev, watch `stream_broken`, the cut count and memory for a few days, then
    super and haseef.
@@ -385,8 +404,6 @@ precise state. Step 4 makes it complete.
 - Token-level re-attach: a hot `GET /chats/{id}/stream?since=N` served from the
   owner's memory, with an owner check and `409` fallback to polling. Only worth it
   if users notice per-turn granularity after a drop.
-- Push on completion via the existing OneSignal plugin, for runs that finish while
-  nobody is attached.
 - The mobile client adopting the opt-in flag, the stop endpoint and the poll, with
   AppState in place of `visibilitychange`. Half of it is already built: on a
   mid-stream failure it foregrounds and refetches the chat.
