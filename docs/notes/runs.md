@@ -207,9 +207,24 @@ everything else, not consequences of it.
   parameter on the turn write path, not the compare-and-swap a shared object would
   need.
 - **`add_user` checkpoints immediately.** Closes the 42 lost messages.
+- **The repair on the open path stops renumbering too.** `Session.open` is the one
+  caller still allowed to write a repair, and it does it with `replace_messages` —
+  delete every turn file, rewrite from zero. That is fine while the only thing
+  opening a chat is its sole live run, and it becomes the design's own corruption
+  the moment §3's lease lets a second run take a chat over: the taking-over run
+  repairs on open, deleting committed turns belonging to a run that is still
+  alive, and the old run then appends past the end where create-only finds free
+  slots and raises nothing. Silent loss, the exact shape of the two healed chats.
+  So the repair becomes append-only before the lease exists — write the corrected
+  turns at the end and leave the originals, or skip the repair when the record
+  says another run holds the chat. **The lease in §3 must not ship until this
+  lands.**
 - **The assistant turn is checkpointed before its tools run** — safe only once the
   first rule is in, because until then it is precisely the state that makes every
-  reader destructive.
+  reader destructive. It also makes `Session`'s two counters genuinely diverge for
+  the first time: `_saved` walks back when a turn leaves the list, `_next_idx`
+  never does. Until this rule lands they are always equal, so that code has never
+  actually run — do not assume it works because it is written.
 
 Then the cancel path:
 
@@ -243,11 +258,22 @@ Then the cancel path:
 {"status": "running", "started": "…", "heartbeat": "…", "owner": "<instance id>"}
 ```
 
-- `status`: `running` | `done` | `interrupted` | `stopped`.
+- `status`: `running` | `done` | `interrupted` | `stopped` | `failed`. `failed` is
+  its own value because the finished-run event fires on the transition, and a
+  deployment that pushes "your document is ready" must not send it for a run that
+  raised.
 - `heartbeat`: refreshed every 10s by the owning task. Readers treat a heartbeat
   older than 30s as `interrupted` whatever the stored status says, so a container
   that died mid-run never leaves a chat "running" forever.
 - `owner`: for logs only. Nothing routes on it.
+
+The record is also the cross-container half of "one run per chat": the in-process
+registry from step 1 only sees its own instance. A run that finds a fresh
+heartbeat refuses; one that finds a stale record takes the chat. **That takeover
+is only safe once the repair on the open path is append-only** (§2) — otherwise
+the taking-over run's `Session.open` deletes and renumbers turns the previous run
+may still be writing. Ship the record and the heartbeat first, the refusal next,
+and the takeover only after that rule lands.
 - `finished`, `turns`: stamped when the status leaves `running`. That transition
   is the only place that knows a run ended, so it is where the **run-finished
   event** fires — `on_run(chat_id, user, status, turns, ms)`, a plain hook on the
@@ -393,7 +419,9 @@ mostly unnecessary.
 5. **Lease takeover**: a stale heartbeat lets the next container resume the run
    from its checkpoint instead of waiting for the user to press Continue. Sized as
    optional when OOM looked rare; at 73 in 14 days it is the difference between
-   the common failure being automatic and being a manual click.
+   the common failure being automatic and being a manual click. Blocked on the
+   append-only repair in §2 — a takeover that repairs on open deletes the turns of
+   a run that may still be alive.
 
 Steps 1 to 3 without 4 already help: a detached run keeps CPU for as long as any
 other request is active on the instance, and otherwise ends as `interrupted` with
