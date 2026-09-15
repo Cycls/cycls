@@ -504,7 +504,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                               handlers, mcp_names, workspace)
                 raise
 
-            results, terminal, waiting = [], False, False
+            results, terminal, waiting, cards = [], False, False, []
             for block, (out, ms) in zip(blocks, timed):
                 ok = not isinstance(out, BaseException)
                 o = owners.get(block["name"])
@@ -518,6 +518,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 for ev in evs: yield ev
                 if waits:
                     waiting = True   # the person has to answer before anything else can happen
+                    cards += [e for e in evs if isinstance(e, dict) and e.get("type") == "ui"]
                 if isinstance(content, str) and block["name"] not in ("read", "skill"):
                     content = spill.spill(content, workspace.root, session.chat_id, f"{block['name']}-{block['id'][-6:]}")
                 results.append({"type": "tool_result", "tool_use_id": block["id"], "content": content})
@@ -528,7 +529,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 # `ask` gets another turn to fix itself.
                 if ok and is_terminal(block["name"]) and not str(content).startswith("Error"):
                     terminal = True
-            messages.append({"role": "user", "content": results})
+            # A card is a `ui` event, which the transcript does not keep — so a
+            # run that ends waiting looks finished after a reload, with nothing to
+            # approve. Ride it on the message the batch already writes.
+            messages.append({"role": "user", "content": results, **({"cards": cards} if cards else {})})
             await session.checkpoint()
             if waiting:
                 terminal = True

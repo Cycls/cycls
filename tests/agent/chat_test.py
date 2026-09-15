@@ -531,3 +531,32 @@ def test_a_search_result_carries_the_id_of_the_call_that_ran_it():
     parts = to_ui_messages(raw)[0]["parts"]
     assert parts[0]["id"] == "s1"                                    # the step
     assert (parts[1]["type"], parts[1]["id"]) == ("sources", "s1")   # its results
+
+
+def test_a_waiting_card_survives_a_reload():
+    """`ui` events never reach the transcript, so a run that ended on a confirm
+    card looked finished after a reload, with nothing to approve."""
+    from cycls._agent.web.routers import to_ui_messages
+    card = {"type": "ui", "action": "confirm", "tool": "bash", "key": "k1",
+            "label": "Bash · rm -rf", "args": {"command": "rm -rf /tmp/x"}}
+    ui = to_ui_messages([
+        {"role": "user", "content": "clean up"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "A", "name": "bash", "input": {"command": "rm -rf /tmp/x"}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "A", "content": "needs approval"}],
+         "cards": [card]},
+    ])
+    parts = ui[-1]["parts"]
+    assert ui[-1]["role"] == "assistant"
+    assert [p for p in parts if p["type"] == "card"] == [{"type": "card", "card": card}]
+
+
+def test_a_batch_with_no_card_projects_unchanged():
+    from cycls._agent.web.routers import to_ui_messages
+    ui = to_ui_messages([
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "A", "name": "bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "A", "content": "ok"}]},
+    ])
+    assert not [p for p in ui[-1]["parts"] if p["type"] == "card"]
