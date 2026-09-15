@@ -22,7 +22,8 @@ import asyncio, json, os, re, secrets, shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from cycls._app.db import DB, workspace, _store
+from cycls._app.db import DB, Conflict, workspace, _store
+from .logs import log
 
 
 # ---- Chat metadata ----
@@ -224,16 +225,31 @@ async def load_messages(workspace, chat_id, *, persist=False):
     return normalized
 
 
-async def append_messages(workspace, chat_id, messages, start_idx):
-    """Append *messages* starting at turn index *start_idx*."""
+async def append_messages(workspace, chat_id, messages, start_idx, *, create=True):
+    """Append *messages* starting at turn index *start_idx*; returns how many
+    landed.
+
+    `create=True` refuses to overwrite an existing turn. A slot that is already
+    taken means this caller's idea of the next index is stale — someone else
+    wrote the chat — and overwriting is how turns were lost before; failing is
+    how the caller finds out in time to re-read.
+
+    Sequential rather than gathered: `asyncio.gather` propagates the first
+    failure while its siblings keep writing, so the count would be a guess. The
+    `Conflict` carries how many landed before it."""
     _validate(chat_id)
     if not messages:
-        return
+        return 0
     db = DB(workspace)
-    await asyncio.gather(*[
-        db.put(f"chat/{chat_id}/{(start_idx + i):06d}", msg)
-        for i, msg in enumerate(messages)
-    ])
+    written = 0
+    for i, msg in enumerate(messages):
+        try:
+            await db.put(f"chat/{chat_id}/{(start_idx + i):06d}", msg, create=create)
+        except Conflict as e:
+            e.written = written
+            raise
+        written += 1
+    return written
 
 
 async def replace_messages(workspace, chat_id, messages):
@@ -243,12 +259,12 @@ async def replace_messages(workspace, chat_id, messages):
     (the person asked) and `load_messages(persist=True)` (the writer itself)."""
     _validate(chat_id)
     db = DB(workspace)
-    turn_keys = [k async for k, _ in db.scan(glob=f"chat/{chat_id}/[0-9]*")]
+    # keys(), not scan(): scan reads bodies and drops what it cannot decode, so a
+    # torn turn file would survive the wipe and sit above the rewritten prefix.
+    turn_keys = await db.keys(glob=f"chat/{chat_id}/[0-9]*")
     await asyncio.gather(*(db.delete(k) for k in turn_keys))
-    await asyncio.gather(*[
-        db.put(f"chat/{chat_id}/{i:06d}", msg)
-        for i, msg in enumerate(messages)
-    ])
+    # create=False: rewriting these slots is the point.
+    await append_messages(workspace, chat_id, messages, 0, create=False)
 
 
 async def get_compaction(workspace, chat_id):
@@ -349,7 +365,13 @@ class Session:
     def __init__(self, workspace, chat_id, messages, summary=None, first_kept=0):
         self.workspace, self.chat_id, self.messages = workspace, chat_id, messages
         self.summary, self.first_kept = summary, min(first_kept, len(messages))
+        # Two counters, deliberately: `_saved` indexes `.messages`, `_next_idx`
+        # names the next turn file. They start equal because `load_messages`
+        # persisted its repair for us, and they must be advanced together and
+        # never re-derived from `len(.messages)` — a turn dropped from the list
+        # does not free the slot it already occupies on disk.
         self._saved = len(messages)
+        self._next_idx = len(messages)
 
     def context(self):
         """The model's view: raw turns whole, or (once compacted) the summary
@@ -385,9 +407,25 @@ class Session:
 
     async def checkpoint(self):
         """Flush the unsaved tail of `.messages` to disk."""
-        if self.chat_id and len(self.messages) > self._saved:
-            await append_messages(self.workspace, self.chat_id, self.messages[self._saved:], self._saved)
-        self._saved = len(self.messages)
+        if not self.chat_id:
+            self._saved = len(self.messages)
+            return
+        pending = self.messages[self._saved:]
+        if not pending:
+            return
+        try:
+            n = await append_messages(self.workspace, self.chat_id, pending, self._next_idx)
+        except Conflict as e:
+            # Someone else wrote this chat's turns; our next index is stale. Bank
+            # what landed so a retry does not rewrite it, and let the run fail —
+            # silent overwriting is the bug this replaces.
+            self._saved += e.written
+            self._next_idx += e.written
+            log("error", chat_id=self.chat_id, kind="turn_conflict",
+                key=e.key, written=e.written, next_idx=self._next_idx)
+            raise
+        self._saved += n
+        self._next_idx += n
 
     def rollback(self):
         """Drop any tail not yet flushed by `checkpoint()`."""

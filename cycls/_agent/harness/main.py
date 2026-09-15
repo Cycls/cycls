@@ -9,6 +9,7 @@ import asyncio, json, random, re, time, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from cycls._app.db import Conflict
 from .. import connectors, spill, state
 from ..state import Session
 from . import events
@@ -495,6 +496,13 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             if terminal:
                 break
 
+        except Conflict:
+            # A turn slot was taken: this run's index is stale because something
+            # else wrote the chat. Never replay — a replay writes more turns at
+            # the same stale index. `checkpoint` has already logged and banked
+            # what landed; fail the run and let the next load re-read the truth.
+            session.rollback()
+            raise
         except Exception as e:
             # Most providers report context overflow as an error, not a
             # stop_reason — compact and replay the turn, once per run.
