@@ -84,6 +84,12 @@ def to_ui_messages(raw):
                                 continue
                             if rows := _search_rows(b.get("content")):
                                 out[-1]["parts"].append({"type": "sources", "sources": rows, "id": b.get("tool_use_id")})
+                    # A run that ended waiting on the person: the card is stored
+                    # on the batch, because `ui` events never reach the
+                    # transcript. Without this a reload shows a finished-looking
+                    # chat with nothing to approve.
+                    if msg.get("cards") and out and out[-1]["role"] == "assistant":
+                        out[-1]["parts"] += [{"type": "card", "card": card} for card in msg["cards"]]
                     continue
                 text = "".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
             elif isinstance(c, str):

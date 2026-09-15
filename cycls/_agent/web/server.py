@@ -152,10 +152,11 @@ async def _supervise(run, stream, runs, key, on_run):
                 break
             if time.monotonic() - run.started > RUN_BUDGET:
                 run.reason = run.reason or "budget"
-                run.inner.cancel()
-                await asyncio.wait({run.inner}, timeout=RUN_DRAIN)
-                break
-            await _record(run, "running")
+            elif not await _beat(run):
+                continue
+            run.inner.cancel()
+            await asyncio.wait({run.inner}, timeout=RUN_DRAIN)
+            break
     finally:
         try: await asyncio.wait_for(stream.aclose(), RUN_DRAIN)
         except BaseException: pass
@@ -165,6 +166,22 @@ async def _supervise(run, stream, runs, key, on_run):
         await asyncio.shield(asyncio.ensure_future(_finish(run, status, on_run)))
         run.push(_DONE)
         if runs.get(key) is run: runs.pop(key, None)
+
+
+async def _beat(run):
+    """Heartbeat, and read the stop flag back first — a stop can land on another
+    container, which has nowhere to put it but the record. Returns True to stop."""
+    if run.workspace is None:
+        return False
+    try:
+        row = await state.get_run(run.workspace, run.chat_id)
+    except Exception:
+        row = None
+    if row and row.get("stop"):
+        run.reason = "stopped"
+        return True
+    await _record(run, "running")
+    return False
 
 
 async def _record(run, status):
@@ -385,12 +402,19 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         """The only thing that cancels a run. A dropped connection is not a stop."""
         ws_id = await resolve_ws_id(user, request.headers.get("x-workspace"), config.workspaces,
                                     volume, config.storage)
-        run = runs.get((workspace(user, volume, base=config.storage, ws=ws_id).path, chat_id))
-        if run is None or run.inner is None or run.inner.done():
+        ws = workspace(user, volume, base=config.storage, ws=ws_id)
+        run = runs.get((ws.path, chat_id))
+        if run is not None and run.inner is not None and not run.inner.done():
+            run.reason = "stopped"
+            run.inner.cancel()
+            return JSONResponse(status_code=202, content={"stopping": True})
+        # Not ours: the run is on another container, which can only be reached
+        # through the record. Its supervisor reads this on its next beat.
+        row = await state.get_run(ws, chat_id) if user is not None else None
+        if state.run_status(row) != "running":
             return JSONResponse(status_code=404, content={"error": "no_run"})
-        run.reason = "stopped"
-        run.inner.cancel()
-        return {"stopped": True}
+        await state.put_run(ws, chat_id, {**row, "stop": "1"})
+        return JSONResponse(status_code=202, content={"stopping": True})
 
     @app.get("/config")
     async def get_config():
