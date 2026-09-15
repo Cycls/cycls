@@ -505,3 +505,51 @@ def test_a_cancelled_checkpoint_banks_the_turns_that_landed(tmp_path):
     assert (s._saved, s._next_idx) == (1, 1), "the landed turn was not banked"
     _run(s.checkpoint())
     assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == ["000000", "000001"]
+
+
+# ---- a cancelled batch is taken back, not abandoned (docs/notes/runs.md) ----
+
+def test_unwind_keeps_what_finished_and_marks_only_what_was_cancelled(tmp_path):
+    from cycls._agent.harness.main import _unwind, _timed
+
+    ws, cid = _ws(tmp_path), "test"
+    s = chat.Session(ws, cid, [])
+    _run(s.add_user("do two things"))
+    blocks = [{"type": "tool_use", "id": "A", "name": "bash", "input": {}},
+              {"type": "tool_use", "id": "B", "name": "bash", "input": {}}]
+    s.messages.append({"role": "assistant", "content": blocks})
+
+    async def go():
+        async def quick(): return "finished output"
+        async def slow(): await asyncio.Event().wait()
+        tasks = [asyncio.create_task(_timed(quick())), asyncio.create_task(_timed(slow()))]
+        await asyncio.sleep(0)                      # let the quick one land
+        await _unwind(s, blocks, tasks, "interrupted", None, set(), ws)
+        # inside the loop: asyncio.run() cancels stragglers on the way out, so
+        # asserting after it would pass whether or not _unwind cancelled anything
+        return tasks[1].cancelled(), list(s.messages[-1]["content"])
+
+    cancelled, results = _run(go())
+
+    assert cancelled, "the running tool was left alive"
+    assert [r["tool_use_id"] for r in results] == ["A", "B"], "every call needs a result"
+    assert results[0]["content"] == "finished output" and results[0]["is_error"] is False
+    assert results[1]["content"].startswith("Interrupted:") and results[1]["is_error"] is True
+    assert len(_run(chat.load_messages(ws, cid))) == 3, "the pair must survive the next read"
+
+
+def test_a_cancelled_tool_is_not_recorded_as_an_error_value(tmp_path):
+    """_timed used to swallow CancelledError and hand back the exception, which
+    the loop then wrote as `Error: CancelledError`."""
+    from cycls._agent.harness.main import _timed
+
+    async def go():
+        async def slow(): await asyncio.Event().wait()
+        t = asyncio.create_task(_timed(slow()))
+        await asyncio.sleep(0)
+        t.cancel()
+        try: await t
+        except asyncio.CancelledError: pass
+        return t
+
+    assert _run(go()).cancelled()
