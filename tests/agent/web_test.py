@@ -1880,3 +1880,90 @@ def test_a_failing_run_still_releases_its_slot():
     client = TestClient(app)
     client.post("/chat?id=c1", json={"messages": [{"role": "user", "content": "hi"}]})
     assert app.state.runs == {}
+
+
+# =============================================================================
+# Detachment (docs/notes/runs.md §2c)
+# =============================================================================
+
+def _drive_run(detach):
+    """Start a run, read one chunk, then drop the reader. Returns
+    (reached_the_end, slot_released)."""
+    from cycls._agent.web.server import Run, _supervise, _forward
+
+    async def go():
+        started, release, end = asyncio.Event(), asyncio.Event(), []
+
+        async def stream():
+            yield "a"
+            started.set()
+            await release.wait()
+            end.append(True)
+            yield "b"
+
+        runs, key = {}, ("ws", "c1")
+        run = Run(detach=detach)
+        runs[key] = run
+        run.task = asyncio.create_task(_supervise(run, stream(), runs, key))
+
+        fwd = _forward(run)
+        assert await fwd.__anext__() == "a"
+        await started.wait()
+        await fwd.aclose()                       # the connection drops
+        await asyncio.sleep(0)                   # let a cancel land
+        release.set()
+        await asyncio.wait({run.task}, timeout=2)
+        return bool(end), runs == {}
+
+    return asyncio.run(go())
+
+
+def test_a_dropped_connection_ends_a_run_that_did_not_opt_in():
+    """Today's behaviour, kept for clients that will not poll."""
+    reached_end, released = _drive_run(detach=False)
+    assert not reached_end, "the run kept going for a client that cannot come back"
+    assert released
+
+
+def test_a_dropped_connection_leaves_a_detached_run_working():
+    """The whole point: the loop outlives the request."""
+    reached_end, released = _drive_run(detach=True)
+    assert reached_end, "the run died with its reader"
+    assert released, "the supervisor did not release the slot"
+
+
+def test_the_supervisor_releases_the_slot_not_the_reader():
+    """The reader ending must not free the chat — the run still owns it."""
+    from cycls._agent.web.server import Run, _supervise, _forward
+
+    async def go():
+        release = asyncio.Event()
+        async def stream():
+            yield "a"
+            await release.wait()
+
+        runs, key = {}, ("ws", "c1")
+        run = Run(detach=True)
+        runs[key] = run
+        run.task = asyncio.create_task(_supervise(run, stream(), runs, key))
+        fwd = _forward(run)
+        await fwd.__anext__()
+        await fwd.aclose()
+        await asyncio.sleep(0)
+        held = key in runs                       # still running, still held
+        release.set()
+        await asyncio.wait({run.task}, timeout=2)
+        return held, runs == {}
+
+    held, released = asyncio.run(go())
+    assert held, "the reader released a slot it does not own"
+    assert released
+
+
+def test_a_slow_reader_is_dropped_rather_than_stalling_the_run():
+    """emit never awaits: a queue nobody drains must not hang the loop."""
+    from cycls._agent.web.server import Run, QUEUE_MAX
+    run = Run(detach=True)
+    for i in range(QUEUE_MAX + 50):
+        run.emit(i)
+    assert not run.attached, "the run would have blocked on a full queue"

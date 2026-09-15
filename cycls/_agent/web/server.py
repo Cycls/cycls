@@ -1,4 +1,5 @@
 import asyncio, json, inspect, re, time, uuid, os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from pydantic import BaseModel, PrivateAttr
 from typing import Optional, Any
@@ -86,6 +87,84 @@ def sse(item):
     if not isinstance(item, dict): item = {"type": "text", "text": item}
     return f"data: {json.dumps(item)}\n\n"
 
+RUN_BUDGET = 45 * 60   # a run cannot outlive this
+RUN_DRAIN = 5          # how long a cancelled run gets to unwind
+QUEUE_MAX = 512        # events buffered for a reader; a view, not a log
+_DONE, _LAGGED = object(), object()
+
+
+class Run:
+    """One agent run. Two tasks on purpose: `task` supervises and is never
+    cancelled by us, so it always lives to release the slot; `inner` drives the
+    loop and is the only thing stop, budget, disconnect and shutdown cancel."""
+
+    def __init__(self, *, detach):
+        self.queue = asyncio.Queue(QUEUE_MAX)
+        self.detach, self.attached, self.reason = detach, True, None
+        self.task = self.inner = None
+
+    def done(self):
+        return self.task is not None and self.task.done()
+
+    def emit(self, chunk):
+        """Never awaits: a producer that blocks on a queue nobody drains would
+        hang the run. A reader that falls behind is dropped instead."""
+        if not self.attached: return
+        try:
+            self.queue.put_nowait(chunk)
+        except asyncio.QueueFull:
+            self.attached = False
+            self.push(_LAGGED)
+
+    def push(self, item):
+        """Force an item in, evicting if need be — the end marker must land or
+        the reader waits forever."""
+        while True:
+            try: return self.queue.put_nowait(item)
+            except asyncio.QueueFull:
+                try: self.queue.get_nowait()
+                except asyncio.QueueEmpty: return
+
+
+async def _supervise(run, stream, runs, key):
+    run.inner = asyncio.create_task(_drive(run, stream))
+    try:
+        _, pending = await asyncio.wait({run.inner}, timeout=RUN_BUDGET)
+        if pending:
+            run.reason = run.reason or "budget"
+            run.inner.cancel()
+            await asyncio.wait({run.inner}, timeout=RUN_DRAIN)
+    finally:
+        try: await asyncio.wait_for(stream.aclose(), RUN_DRAIN)
+        except BaseException: pass
+        run.push(_DONE)
+        if runs.get(key) is run: runs.pop(key, None)
+
+
+async def _drive(run, stream):
+    async for chunk in stream:
+        run.emit(chunk)
+
+
+async def _forward(run):
+    """The response: drains the run's queue. Ending this does not end the run —
+    unless the client never opted into detachment, which is today's behaviour."""
+    try:
+        while True:
+            try:
+                item = await asyncio.wait_for(run.queue.get(), 1.0)
+            except asyncio.TimeoutError:
+                if run.inner is not None and run.inner.done() and run.queue.empty(): return
+                continue
+            if item is _DONE or item is _LAGGED: return
+            yield item
+    finally:
+        run.attached = False
+        if not run.detach and run.inner is not None and not run.inner.done():
+            run.reason = run.reason or "disconnected"
+            run.inner.cancel()
+
+
 def _claim(runs, key, task):
     """Take the chat's run slot, or report it busy. Check and insert stay
     adjacent — an await between them reopens the race. A done task is stale, so
@@ -96,15 +175,6 @@ def _claim(runs, key, task):
     if owner is not None and not owner.done(): return False
     runs[key] = task
     return True
-
-
-async def _release(stream, runs, key, task):
-    """Forward the stream, then hand the slot back — only if still ours, and
-    without awaiting: this also runs during finalization after a disconnect."""
-    try:
-        async for chunk in stream: yield chunk
-    finally:
-        if runs.get(key) is task: runs.pop(key, None)
 
 
 async def encoder(stream, *, chat_id=None, user=None, first=False):
@@ -184,7 +254,18 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
         def workspace(self) -> Workspace:
             return workspace(self.user, volume, base=config.storage, ws=self.workspace_id)
 
-    app = FastAPI()
+    @asynccontextmanager
+    async def _lifespan(app):
+        yield
+        # SIGTERM: hypercorn drives this, and Cloud Run allows 10s. Cancel the
+        # loops, then let the supervisors finish their unwind and checkpoints.
+        for run in list(runs.values()):
+            run.reason = run.reason or "shutdown"
+            if run.inner is not None and not run.inner.done(): run.inner.cancel()
+        if tasks := [r.task for r in runs.values() if r.task and not r.task.done()]:
+            await asyncio.wait(tasks, timeout=8)
+
+    app = FastAPI(lifespan=_lifespan)
     app.state.runs = runs   # routers read it off the request
 
     validate = validator(auth, config.prod, iap)
@@ -201,6 +282,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
         messages = data.get("messages")
         given = request.query_params.get("id")
         chat_id = given or str(uuid.uuid4())
+        api = request.url.path == "/chat/completions"   # read off the request while it exists
         ws_id = await resolve_ws_id(user, request.headers.get("x-workspace"), config.workspaces,
                                     volume, config.storage)
 
@@ -220,24 +302,38 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
                           approvals=[t for t in (data.get("approvals") or []) if isinstance(t, str)][:20], auto=data.get("auto") is not False,
                           connectors=[t for t in (data.get("connectors") or []) if isinstance(t, str)][:10])
 
-        # A fresh id can't collide, so only a supplied one is guarded.
-        key = (context.workspace.path, chat_id) if given else None
-        task = asyncio.current_task()
-        if key and not _claim(runs, key, task):
+        # Every run gets an entry, fresh id or not: `stop` finds it there, the cap
+        # counts it, and shutdown drains it. A fresh id simply never collides.
+        key = (context.workspace.path, chat_id)
+        # Detachment is the client's call — one that won't poll keeps today's
+        # behaviour, where its disconnect ends the run. Never on the API route,
+        # whose caller is given no chat id to come back to.
+        run = Run(detach=data.get("detach") is True and not api)
+        if not _claim(runs, key, run):
             return JSONResponse(status_code=409, headers={"Retry-After": "2"},
                                 content={"error": "run_in_progress", "chat_id": chat_id,
                                          "detail": "This chat is still working on your last message."})
         try:
             stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
-            if request.url.path == "/chat/completions":
-                stream = openai_encoder(stream)
-            else:
-                stream = encoder(stream, chat_id=chat_id, user=user, first=first)
+            stream = (openai_encoder(stream) if api
+                      else encoder(stream, chat_id=chat_id, user=user, first=first))
         except BaseException:
-            if key and runs.get(key) is task: runs.pop(key, None)
+            if runs.get(key) is run: runs.pop(key, None)   # no supervisor yet to do it
             raise
-        if key: stream = _release(stream, runs, key, task)
-        return StreamingResponse(stream, media_type="text/event-stream")
+        run.task = asyncio.create_task(_supervise(run, stream, runs, key))
+        return StreamingResponse(_forward(run), media_type="text/event-stream")
+
+    @app.post("/chats/{chat_id}/stop")
+    async def stop_run(chat_id: str, request: Request, user: Optional[User] = auth):
+        """The only thing that cancels a run. A dropped connection is not a stop."""
+        ws_id = await resolve_ws_id(user, request.headers.get("x-workspace"), config.workspaces,
+                                    volume, config.storage)
+        run = runs.get((workspace(user, volume, base=config.storage, ws=ws_id).path, chat_id))
+        if run is None or run.inner is None or run.inner.done():
+            return JSONResponse(status_code=404, content={"error": "no_run"})
+        run.reason = "stopped"
+        run.inner.cancel()
+        return {"stopped": True}
 
     @app.get("/config")
     async def get_config():
