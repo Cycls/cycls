@@ -86,6 +86,27 @@ def sse(item):
     if not isinstance(item, dict): item = {"type": "text", "text": item}
     return f"data: {json.dumps(item)}\n\n"
 
+def _claim(runs, key, task):
+    """Take the chat's run slot, or report it busy. Check and insert stay
+    adjacent — an await between them reopens the race. A done task is stale, so
+    a missed release can't lock a chat forever."""
+    for k, t in list(runs.items()):
+        if t.done(): runs.pop(k, None)
+    owner = runs.get(key)
+    if owner is not None and not owner.done(): return False
+    runs[key] = task
+    return True
+
+
+async def _release(stream, runs, key, task):
+    """Forward the stream, then hand the slot back — only if still ours, and
+    without awaiting: this also runs during finalization after a disconnect."""
+    try:
+        async for chunk in stream: yield chunk
+    finally:
+        if runs.get(key) is task: runs.pop(key, None)
+
+
 async def encoder(stream, *, chat_id=None, user=None, first=False):
     if chat_id: yield sse({"type": "chat_id", "chat_id": chat_id, **({"first": True} if first else {})})
     try:
@@ -123,7 +144,7 @@ class Messages(list):
 def web(func, config, extra_routers=None, auth=None, iap=None):
     from fastapi import FastAPI, Request, HTTPException, Depends
     from fastapi import Response as FastAPIResponse
-    from fastapi.responses import StreamingResponse
+    from fastapi.responses import JSONResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
 
     import httpx
@@ -136,6 +157,9 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
     _static_brand = dict(config.pass_metadata or {})   # .brand() wins piece by piece; the CMS fills what's unset
 
     volume = Path(config.volume)
+    # (workspace path, chat id) -> endpoint task. One run per chat per container;
+    # create-only turn writes catch the cross-container pair (docs/notes/runs.md).
+    runs = {}
 
     class Context(BaseModel):
         messages: Any
@@ -161,6 +185,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
             return workspace(self.user, volume, base=config.storage, ws=self.workspace_id)
 
     app = FastAPI()
+    app.state.runs = runs   # routers read it off the request
 
     validate = validator(auth, config.prod, iap)
     auth = Depends(validate) if config.auth else Depends(lambda: None)
@@ -174,7 +199,8 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
     async def back(request: Request, user: Optional[User] = auth):
         data = await request.json()
         messages = data.get("messages")
-        chat_id = request.query_params.get("id") or str(uuid.uuid4())
+        given = request.query_params.get("id")
+        chat_id = given or str(uuid.uuid4())
         ws_id = await resolve_ws_id(user, request.headers.get("x-workspace"), config.workspaces,
                                     volume, config.storage)
 
@@ -182,7 +208,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
         # activation tick fires once per user (a browser flag re-fires on
         # every new device; a per-workspace check re-fires per workspace).
         first = False
-        if user is not None and not request.query_params.get("id"):
+        if user is not None and not given:
             try:
                 first = await state.mark_first_use(user, volume, config.storage, config.workspaces)
             except Exception:
@@ -193,12 +219,24 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
                           disabled_tools=[t for t in (data.get("disabled_tools") or []) if isinstance(t, str)][:20],
                           approvals=[t for t in (data.get("approvals") or []) if isinstance(t, str)][:20], auto=data.get("auto") is not False,
                           connectors=[t for t in (data.get("connectors") or []) if isinstance(t, str)][:10])
-        stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
 
-        if request.url.path == "/chat/completions":
-            stream = openai_encoder(stream)
-        else:
-            stream = encoder(stream, chat_id=chat_id, user=user, first=first)
+        # A fresh id can't collide, so only a supplied one is guarded.
+        key = (context.workspace.path, chat_id) if given else None
+        task = asyncio.current_task()
+        if key and not _claim(runs, key, task):
+            return JSONResponse(status_code=409, headers={"Retry-After": "2"},
+                                content={"error": "run_in_progress", "chat_id": chat_id,
+                                         "detail": "This chat is still working on your last message."})
+        try:
+            stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
+            if request.url.path == "/chat/completions":
+                stream = openai_encoder(stream)
+            else:
+                stream = encoder(stream, chat_id=chat_id, user=user, first=first)
+        except BaseException:
+            if key and runs.get(key) is task: runs.pop(key, None)
+            raise
+        if key: stream = _release(stream, runs, key, task)
         return StreamingResponse(stream, media_type="text/event-stream")
 
     @app.get("/config")

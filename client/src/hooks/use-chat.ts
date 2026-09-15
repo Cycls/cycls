@@ -222,7 +222,11 @@ export function useChat(baseUrl: string = "") {
         });
 
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
+          const err = new Error(
+            response.status === 409 ? await reasonOf(response) : `HTTP ${response.status}`,
+          ) as Error & { status?: number };
+          err.status = response.status;
+          throw err;
         }
 
         const reader = response.body!.getReader();
@@ -363,9 +367,22 @@ export function useChat(baseUrl: string = "") {
       try {
         await doFetch();
       } catch (err) {
+        // 409: the chat already has a run. Never retry — if it finishes in the
+        // meantime the retry succeeds and sends the message twice.
+        if ((err as Error & { status?: number }).status === 409) {
+          track("run_busy", { chat_id: chatIdRef.current });
+          setMessages((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last?.role === "assistant") {
+              updated[updated.length - 1] = { ...last, parts: [
+                { type: "callout", callout: (err as Error).message, style: "warning" }] };
+            }
+            return updated;
+          });
         // Only retry a pre-stream failure; once bytes flowed the server has
         // the turn and resubmitting would double-run it.
-        if ((err as Error).name !== "AbortError" && !receivedData) {
+        } else if ((err as Error).name !== "AbortError" && !receivedData) {
           try {
             setMessages((prev) => {
               const updated = [...prev];
