@@ -182,6 +182,40 @@ def test_cycls_provider_dispatches_to_rest_session(monkeypatch):
     assert s._sid == "sess-1" and s._user_id == "org_1:user_1"
 
 
+def test_rest_session_cache_is_per_chat(monkeypatch):
+    """One person's two chats each drive their own page — a shared page means
+    one run's `open` navigates the other's away. Same chat still reuses, or
+    multi-step flows lose their page between calls."""
+    monkeypatch.setenv("BROWSER_PROVIDER", "cycls")
+    monkeypatch.setenv("BROWSER_URL", "https://browser.cycls.ai")
+    monkeypatch.setenv("BROWSER_SECRET", "s")
+
+    minted = []
+
+    class _Resp:
+        status_code = 200
+        def __init__(self, sid): self._sid = sid
+        def json(self): return {"id": self._sid}
+
+    class _HTTP:
+        async def post(self, url, **kw):
+            minted.append(f"sess-{len(minted) + 1}")
+            return _Resp(minted[-1])
+
+    async def _connect(self):
+        self._http = _HTTP()
+        await self._ensure_session()
+
+    monkeypatch.setattr(client.RestSession, "_connect", _connect)
+    a1 = asyncio.run(browser.session("u1", chat_id="chat-a"))
+    b1 = asyncio.run(browser.session("u1", chat_id="chat-b"))
+    a2 = asyncio.run(browser.session("u1", chat_id="chat-a"))
+
+    assert a1._sid != b1._sid          # two chats, two pages
+    assert a2._sid == a1._sid          # same chat keeps its page
+    assert len(minted) == 2
+
+
 def test_session_helper_raises_when_unconfigured():
     with pytest.raises(browser.Unavailable):
         asyncio.run(browser.session())
@@ -236,9 +270,10 @@ class _FakeSession:
 
 def _use_fake(monkeypatch):
     fake = _FakeSession()
-    async def _session(user_id=None, nav_url=None):
+    async def _session(user_id=None, nav_url=None, chat_id=None):
         _session.subject = user_id
         _session.nav_url = nav_url
+        _session.chat_id = chat_id
         return fake
     monkeypatch.setattr("cycls._agent.browser.session", _session)
     return fake, _session
@@ -294,8 +329,20 @@ def test_action_arg_validation(tmp_path, monkeypatch):
     assert asyncio.run(_exec_browser({"action": "nope"}, ws)).startswith("Error")        # unknown
 
 
+def test_browser_tool_passes_chat_id_from_ctx(tmp_path, monkeypatch):
+    """The key is only per-chat if the chat id reaches it — the Tool lambda
+    must bind ctx rather than swallow it in **_."""
+    from cycls._agent.tools import dispatch, ToolContext
+    fake, spy = _use_fake(monkeypatch)
+    ws = _ws(tmp_path)
+    block = {"type": "tool_use", "id": "b1", "name": "browser", "input": {"action": "read"}}
+    _step, aw = dispatch(block, ws, 30, ctx=ToolContext(user=None, workspace=ws, chat_id="chat-42"))
+    asyncio.run(aw)
+    assert spy.chat_id == "chat-42"
+
+
 def test_executor_reports_unavailable(tmp_path, monkeypatch):
-    async def _boom(user_id=None, nav_url=None):
+    async def _boom(user_id=None, nav_url=None, chat_id=None):
         raise browser.Unavailable("service down")
     monkeypatch.setattr("cycls._agent.browser.session", _boom)
     out = asyncio.run(_exec_browser({"action": "read"}, _ws(tmp_path)))

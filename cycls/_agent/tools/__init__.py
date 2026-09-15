@@ -908,7 +908,7 @@ def _safe_filename(name, default="download"):
     return base or default
 
 
-async def _exec_browser(inp, workspace):
+async def _exec_browser(inp, workspace, chat_id=None):
     """Drive the shared browser service one action at a time. State lives in the
     remote page (which persists between calls), so every navigational action
     returns a fresh read — the numbered elements the model acts on next."""
@@ -919,7 +919,7 @@ async def _exec_browser(inp, workspace):
     # the proxy by domain (per-site routing). Only `open` carries a target URL.
     nav_url = inp.get("url") if action == "open" else None
     try:
-        async with await browser.session(subject, nav_url=nav_url) as s:
+        async with await browser.session(subject, nav_url=nav_url, chat_id=chat_id) as s:
             if action == "open":
                 if not inp.get("url"):
                     return "Error: `open` needs a `url`."
@@ -992,7 +992,7 @@ def _browser_step(inp):
 
 
 _TOOLS = {
-    "browser":    Tool(lambda inp, ws, **_: _exec_browser(inp, ws), _browser_step,
+    "browser":    Tool(lambda inp, ws, ctx=None, **_: _exec_browser(inp, ws, getattr(ctx, "chat_id", None)), _browser_step,
                        interrupted="The page is still open but may have moved; re-read it "
                                    "before acting on any element ref."),
     "bash":       Tool(_run_bash,
