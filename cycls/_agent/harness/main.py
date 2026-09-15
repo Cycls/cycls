@@ -479,6 +479,11 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             if turn.stop_reason != "tool_use":
                 await session.checkpoint(); break
 
+            # On disk before the tools run: a kill mid-batch otherwise loses the
+            # turn that asked for them and the next run redoes the whole step.
+            # After the pop/retry paths above — checkpointing a turn that is then
+            # popped strands `_saved` past the list and silently drops the rest.
+            await session.checkpoint()
             blocks = [b for b in turn.content if isinstance(b, dict) and b.get("type") == "tool_use"]
             for b in blocks:   # reached for a tool it never loaded — load it and let the call through
                 _discover(_owner_of(b.get("name") or ""))
