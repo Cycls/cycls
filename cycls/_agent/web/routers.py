@@ -229,6 +229,7 @@ def chats_router(ws_dep):
     @r.get("/chats")
     async def list_chats(ws: Workspace = ws_dep):
         items = []
+        runs = await state.list_runs(ws)   # one listing for the whole workspace
         async for cid, data in state.list_chats(ws):
             if data.get("deletedAt"):   # in the trash
                 continue
@@ -238,6 +239,7 @@ def chats_router(ws_dep):
                 "updatedAt": data.get("updatedAt", ""),
                 "favoritedAt": data.get("favoritedAt", ""),
                 "cost": data.get("cost", "0"),
+                "run": state.run_status(runs.get(cid)),
             })
         items.sort(key=lambda s: s.get("updatedAt", ""), reverse=True)
         return items
@@ -250,7 +252,10 @@ def chats_router(ws_dep):
         if meta is None:
             return Response(status_code=204)
         raw = await state.load_messages(ws, chat_id)
-        return {**meta, "messages": to_ui_messages(raw)}
+        # `run` tells the client whether to keep polling: a run outlives the
+        # request that started it, so a finished stream is not a finished run.
+        return {**meta, "messages": to_ui_messages(raw),
+                "run": state.run_status(await state.get_run(ws, chat_id))}
 
     @r.put("/chats/{chat_id}")
     async def put_chat(chat_id: str, request: Request, ws: Workspace = ws_dep):
@@ -259,6 +264,7 @@ def chats_router(ws_dep):
         message activity only, owned by `touch_meta` on new messages."""
         patch = await request.json()
         patch.pop("messages", None)
+        patch.pop("run", None)   # the run record is its own object, not chat meta
         existing = (await state.get_meta(ws, chat_id)) or {}
         merged = {**existing}
         for k, v in patch.items():

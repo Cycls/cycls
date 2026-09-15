@@ -48,6 +48,48 @@ async def put_meta(workspace, chat_id, data):
     await DB(workspace).put(f"chat/{chat_id}/index", data, meta=data)
 
 
+# ---- Run record: `chat/{id}/run`, one object beside the turns ----
+#
+# Its own object, not a key on the index: the index has six writers, `put_meta`
+# hands the whole dict to the object store's metadata channel (which takes only
+# strings), and a heartbeat racing `add_cost` there would lose billing.
+
+RUN_STALE = 30   # a heartbeat older than this means the container is gone
+
+
+async def get_run(workspace, chat_id):
+    _validate(chat_id)
+    return await DB(workspace).get(f"chat/{chat_id}/run")
+
+
+async def put_run(workspace, chat_id, row):
+    """Flat strings only — the row rides the metadata channel so `list_runs`
+    reads a whole workspace in one listing."""
+    _validate(chat_id)
+    row = {k: str(v) for k, v in row.items() if v is not None}
+    await DB(workspace).put(f"chat/{chat_id}/run", row, meta=row)
+
+
+async def list_runs(workspace):
+    """chat_id -> row, in one listing. Locally the body stands in for metadata."""
+    return {k.split("/")[1]: row async for k, row in DB(workspace).scan(glob="chat/*/run")}
+
+
+def run_status(row):
+    """What a reader sees. A heartbeat that stopped means the container died
+    mid-run, whatever the stored status still says — so no chat is left reading
+    `running` forever."""
+    if not row:
+        return None
+    if row.get("status") != "running":
+        return row.get("status")
+    try:
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(row["heartbeat"])).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        return "interrupted"
+    return "running" if age < RUN_STALE else "interrupted"
+
+
 async def mark_first_use(user, volume, base, mode):
     """The account's first agent use, as a durable marker in the user's
     personal workspace — the one workspace every user always has, whichever

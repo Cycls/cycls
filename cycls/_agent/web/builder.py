@@ -74,6 +74,7 @@ class Web:
         self._cms: Optional[dict] = None
         self._analytics: Optional[list] = None
         self._notifications: Optional[list] = None
+        self._on_run = None
         self._suggestions: bool = False
         self._affiliate: Optional[str] = None
         self._max_upload: int = 512
@@ -245,6 +246,13 @@ class Web:
             return self._copy(_analytics=None)
         specs = [p.spec if hasattr(p, "spec") else dict(p) for p in providers]
         return self._copy(_analytics=specs or None)
+
+    def on_run(self, fn):
+        """Called once when a run ends, with the run record plus `chat_id`. Fires
+        on every terminal status — a run that finished, was stopped, was
+        interrupted or failed. What happens next is yours: push, email, a webhook,
+        a row in a table. Exceptions are logged and never reach the run."""
+        return self._copy(_on_run=fn)
 
     def notifications(self, *providers):
         """Push notifications as plugins (cycls.OneSignal). The SDK owns the
