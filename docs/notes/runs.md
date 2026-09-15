@@ -252,10 +252,15 @@ everything else, not consequences of it.
   repairs on open, deleting committed turns belonging to a run that is still
   alive, and the old run then appends past the end where create-only finds free
   slots and raises nothing. Silent loss, the exact shape of the two healed chats.
-  So the repair becomes append-only before the lease exists — write the corrected
-  turns at the end and leave the originals, or skip the repair when the record
-  says another run holds the chat. **The lease in §3 must not ship until this
-  lands.**
+  So the repair becomes append-only before the lease exists. **Landed
+  2026-09-16**, as the stronger of the two options: nothing writes a repair at
+  all. `load_messages` lost its `persist` flag, and `Session.open` takes
+  `next_idx` from `turn_end()` — the true end of the turn files — so the list can
+  be shorter than disk and appends still land past every existing slot. This is
+  where the two counters first diverge for real. It also stopped being optional
+  the moment the rule below landed: a run killed mid-batch now leaves an unpaired
+  turn routinely, so the delete-and-renumber would have fired constantly rather
+  than never. **§3's lease is unblocked.**
 - **The assistant turn is checkpointed before its tools run** — safe only once the
   first rule is in, because until then it is precisely the state that makes every
   reader destructive. It also makes `Session`'s two counters genuinely diverge for
@@ -306,11 +311,11 @@ Then the cancel path:
 
 The record is also the cross-container half of "one run per chat": the in-process
 registry from step 1 only sees its own instance. A run that finds a fresh
-heartbeat refuses; one that finds a stale record takes the chat. **That takeover
-is only safe once the repair on the open path is append-only** (§2) — otherwise
-the taking-over run's `Session.open` deletes and renumbers turns the previous run
-may still be writing. Ship the record and the heartbeat first, the refusal next,
-and the takeover only after that rule lands.
+heartbeat refuses; one that finds a stale record takes the chat. That takeover
+was blocked on the repair being append-only (§2), which landed 2026-09-16 — a
+taking-over `Session.open` no longer deletes or renumbers anything, so it cannot
+move slots a previous run may still be writing. The record, the heartbeat and the
+refusal all shipped; the takeover is the remaining piece.
 - `finished`, `turns`: stamped when the status leaves `running`. That transition
   is the only place that knows a run ended, so it is where the **run-finished
   event** fires — `on_run(chat_id, user, status, turns, ms)`, a plain hook on the

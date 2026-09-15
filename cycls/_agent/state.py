@@ -246,25 +246,21 @@ def _normalize_user_blocks(blocks, prior):
     return [b for b in blocks if keep(b)]
 
 
-async def load_messages(workspace, chat_id, *, persist=False):
+async def load_messages(workspace, chat_id):
     """All messages for *chat_id* in turn order, normalized to satisfy provider
     pairing invariants.
 
-    Normalization is in memory. `persist=True` also writes the repair back, which
-    renumbers every turn file — only `Session.open` may ask for that, because the
-    session it returns is the chat's one writer and holds the resulting indices.
-    A reader that renumbers turn files under a live run moves the slots that run
-    is still appending to; that is how two production chats lost turns (see
-    docs/notes/runs.md). Hence the default: a caller that has not thought about
-    it gets the safe half."""
+    Normalization is in memory and stays there. Nothing writes a repair back:
+    renumbering turn files moves slots a live run is still appending to, which is
+    how two production chats lost turns (docs/notes/runs.md), and a run killed
+    mid-tool-batch now leaves an unpaired turn routinely, so that path would fire
+    constantly instead of never. The writer appends past the end of disk instead
+    — see `Session.open`."""
     _validate(chat_id)
     db = DB(workspace)
     # Glob `[0-9]*` selects turn files (000000, 000001, ...) — index excluded.
     messages = [msg async for _, msg in db.items(glob=f"chat/{chat_id}/[0-9]*")]
-    normalized = normalize(messages)
-    if persist and normalized != messages:
-        await replace_messages(workspace, chat_id, normalized)
-    return normalized
+    return normalize(messages)
 
 
 async def turn_end(workspace, chat_id):
@@ -323,8 +319,8 @@ async def append_messages(workspace, chat_id, messages, start_idx, *, create=Tru
 async def replace_messages(workspace, chat_id, messages):
     """Wipe and rewrite all messages for *chat_id*. Preserves the index file —
     only turns are rewritten. Renumbers from 0, so it invalidates any index a
-    live `Session` is holding: the only callers are `truncate_last_exchange`
-    (the person asked) and `load_messages(persist=True)` (the writer itself)."""
+    live `Session` is holding: the only caller is `truncate_last_exchange`, where
+    the person asked for it and the route refuses while a run is going."""
     _validate(chat_id)
     db = DB(workspace)
     # keys(), not scan(): scan reads bodies and drops what it cannot decode, so a
@@ -427,23 +423,24 @@ class Session:
         persist = bool(context.chat_id and context.user)
         if not persist:
             return cls(context.workspace, None, [])
-        # The one caller that repairs on disk: this session owns the chat's
-        # writes, so `_saved` below and the turn-file indices must agree.
-        messages = _ephemeralize(await load_messages(context.workspace, context.chat_id, persist=True))
+        # Append-only: normalization is in memory, so the list can be shorter
+        # than what is on disk. `next_idx` is the real end of the turn files, so
+        # this run writes past every existing slot instead of over one.
+        messages = _ephemeralize(await load_messages(context.workspace, context.chat_id))
         marker = await get_compaction(context.workspace, context.chat_id) or {}
         return cls(context.workspace, context.chat_id, messages,
-                   summary=marker.get("summary"), first_kept=int(marker.get("first_kept", 0)))
+                   summary=marker.get("summary"), first_kept=int(marker.get("first_kept", 0)),
+                   next_idx=await turn_end(context.workspace, context.chat_id))
 
-    def __init__(self, workspace, chat_id, messages, summary=None, first_kept=0):
+    def __init__(self, workspace, chat_id, messages, summary=None, first_kept=0, next_idx=None):
         self.workspace, self.chat_id, self.messages = workspace, chat_id, messages
         self.summary, self.first_kept = summary, min(first_kept, len(messages))
         # Two counters, deliberately: `_saved` indexes `.messages`, `_next_idx`
-        # names the next turn file. They start equal because `load_messages`
-        # persisted its repair for us, and they must be advanced together and
-        # never re-derived from `len(.messages)` — a turn dropped from the list
-        # does not free the slot it already occupies on disk.
+        # names the next turn file. They diverge whenever normalization dropped a
+        # turn the files still hold, so never re-derive either from the other —
+        # a turn missing from the list does not free the slot it owns on disk.
         self._saved = len(messages)
-        self._next_idx = len(messages)
+        self._next_idx = len(messages) if next_idx is None else next_idx
 
     def context(self):
         """The model's view: raw turns whole, or (once compacted) the summary
