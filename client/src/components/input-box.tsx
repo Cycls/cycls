@@ -51,6 +51,7 @@ export function InputBox({
   handleKeyDown,
   handleSubmit,
   isStreaming,
+  working,
   onStop,
   onOpenFilePicker,
   onOpenFiles,
@@ -77,6 +78,7 @@ export function InputBox({
   handleKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   handleSubmit: (overrideText?: string) => void;
   isStreaming: boolean;
+  working?: "background";   // running with no stream attached
   onStop: () => void;
   onOpenFilePicker?: () => void;
   onOpenFiles?: () => void;
@@ -329,7 +331,7 @@ export function InputBox({
           onKeyDown={onKeyDownInternal}
           onPaste={onPaste}
           onScroll={(e) => { if (backdropRef.current) backdropRef.current.scrollTop = e.currentTarget.scrollTop; }}
-          placeholder={placeholder || t("sendMessage")}
+          placeholder={working === "background" ? t("workingInBackground") : (placeholder || t("sendMessage"))}
           rows={1}
           className="relative z-10 w-full min-h-[44px] max-h-[240px] resize-none bg-transparent px-3 py-2.5 leading-6 text-foreground placeholder:text-muted-foreground focus:outline-none overflow-y-auto"
         />

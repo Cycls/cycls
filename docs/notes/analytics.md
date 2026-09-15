@@ -131,9 +131,10 @@ Identified users also carry **person properties** (via identify): `email`,
 
 | event | fires when | key props / question |
 |---|---|---|
-| `turn_completed` | stream ends (also when stopped) | `tools` {name: count}, `tool_calls`, `duration_s`, `produced_artifact`, `errored`, `stopped`, `origin` — the shape of the work, without per-tool-call volume |
+| `turn_completed` | the run ends — from the stream when it carried the turn to the end, otherwise from the poll (`detached: true`, `status`) | `tools` {name: count}, `tool_calls`, `duration_s`, `produced_artifact`, `errored`, `stopped`, `origin` — the shape of the work, without per-tool-call volume |
 | `generation_stopped` | user hits stop mid-stream | impatience / runaway signal |
 | `message_retried` / `message_regenerated` / `message_failed` | recovery paths | friction |
+| `stream_broken` | the stream ended without the server's end marker | `reason`, `visibility`, `online`, `seconds_since_byte`, `run_seconds` — why connections drop, per user. The run itself is unaffected; the client polls |
 | `run_busy` | send refused with 409 — the chat already has a run | a second tab, or a run whose disconnect the server hasn't noticed. Not `message_failed`: it would trip that event's alert |
 | `message_queued` / `queued_message_sent` / `queued_message_edited` / `queued_message_dropped` | composing while the agent works | does queueing get used? |
 | `chat_loaded` / `chat_cleared` / `chat_renamed` / `chat_favorited` / `chat_deleted` | sidebar chat ops | retention behavior |

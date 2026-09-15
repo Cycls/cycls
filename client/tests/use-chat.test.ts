@@ -442,3 +442,43 @@ describe("watching a run the stream no longer carries (docs/notes/runs.md)", () 
     expect(last.content).toBe("half an answer and the rest");
   });
 });
+
+describe("a run writes only to the view it started in (docs/notes/runs.md)", () => {
+  test("a stream still arriving after a chat switch does not touch the new chat", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => { open = r; });
+    const fetchMock = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes("/chats/other")) {
+        // non-empty: an unguarded write lands on THIS bubble
+        return { ok: true, status: 200, json: async () => ({
+          id: "other", run: null, next: 2,
+          messages: [{ role: "user", content: "old question" },
+                     { role: "assistant", content: "old answer", parts: [] }],
+        }) } as any;
+      }
+      const chunks = ['data: {"type":"text","text":"from A"}\n\n'];
+      let i = 0, parked = false;
+      return { ok: true, body: { getReader: () => ({ read: async () => {
+        if (i < chunks.length) return { done: false, value: new TextEncoder().encode(chunks[i++]) };
+        if (!parked) {
+          parked = true;
+          await gate;                       // resumes after the user has moved on
+          return { done: false, value: new TextEncoder().encode('data: {"type":"text","text":" ...more A"}\n\n') };
+        }
+        return { done: true, value: undefined };
+      } }) } } as any;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useChat(""));
+    let sending!: Promise<void>;
+    await act(async () => { sending = result.current.send("hello"); await Promise.resolve(); });
+    await act(async () => { await result.current.loadChat("other"); });
+    await act(async () => { open(); await sending; });
+
+    const last = result.current.messages[result.current.messages.length - 1];
+    expect(last.content).toBe("old answer");   // the final write stayed in chat A
+    expect(last.parts).toEqual([]);            // and so did every streamed part
+  });
+});
