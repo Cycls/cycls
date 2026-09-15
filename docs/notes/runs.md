@@ -68,16 +68,24 @@ be read back as valid:
 ## What the OOM kills say
 
 Measured 2026-09-15, 30 days, all services: 139 OOM log rows, 26 container kills.
-Four chats account for 24 of them, and they are two distinct causes.
+Four chats account for 24 of them, across at least two distinct causes.
 
-- **Three super chats, one user, 19 kills — the agent installs Chrome into RAM.**
-  super's `allowed_tools` has no `Browser`, so asked for screenshots the model
-  builds its own Playwright over Bash: `unshare -rm`, `mount -t tmpfs tmpfs /tmp/x`
-  with no `size=`, then unpacks `chrome.zip` (193MB) and `shell.zip` (120MB) into
-  it. A tmpfs is RAM charged to the container's cgroup, so that is ~500MB resident
-  before Chrome starts, inside 1Gi. It killed 10 consecutive *fresh* containers in
-  18 minutes, each dying 23–51s in, because every retry re-ran the same unpack.
-  Transcript size is irrelevant: one of these chats is 38KB, below median.
+- **One super chat, 10 kills — the agent installs Chrome into RAM.** super's
+  `allowed_tools` has no `Browser`, so asked for screenshots the model builds its
+  own Playwright over Bash: 17 issued commands wrap `mount -t tmpfs tmpfs /tmp/x`
+  (no `size=`) in `unshare -rm`, after `mount -o remount,exec /tmp` failed. It
+  then unpacks `chrome.zip` (193MB) and `shell.zip` (120MB) into it. A tmpfs is
+  RAM charged to the container's cgroup, so that is ~500MB resident before Chrome
+  starts, inside 1Gi. It killed 10 consecutive *fresh* containers in 18 minutes,
+  each dying 23–51s in, because every retry re-ran the same unpack.
+- **Two more super chats by the same user, 9 kills — cause not established.**
+  They only `cat` the script the first chat left on the volume; neither ever ran
+  `unshare`. A first grep counted them as the same pattern — it was matching file
+  contents echoed into the transcript, not commands. The likely candidate is our
+  own `/tmp`, an unbounded tmpfs where `pip install` and `playwright install`
+  stage hundreds of MB by default, but nothing measured confirms it.
+  Transcript size is irrelevant either way: one of these chats is 38KB, below
+  median. The behaviour is also rare — 0 of 25 sampled chats used `unshare`.
 - **One haseef chat, 6 kills — a 3MB, 413-turn, image-bearing chat submitted five
   times within 12ms.** Its first turn is `اكمل`. This is the cut-stream bug feeding
   the OOM: cut, resubmit, five concurrent runs each expanding the same images.
@@ -86,7 +94,11 @@ Four chats account for 24 of them, and they are two distinct causes.
 Two conclusions the design depends on. **Concurrency is not the cause** — 84% of
 kills had 0 or 1 run in flight, and kill-time concurrency is indistinguishable
 from ambient. **The sandbox can allocate the container's whole memory budget as a
-filesystem**, which no run-level accounting can see.
+filesystem**, which no run-level accounting can see — both through our own
+unbounded `/tmp` and, for a model that routes around a limit there, through one
+it mounts itself in a nested user namespace. Fix parked 2026-09-16: `--size` on
+every `--tmpfs` is the broad half, `--disable-userns` the narrow half that stops
+the bypass. Neither is measured against real RSS yet.
 
 The mechanism behind the holes is that our read path writes. It takes three facts
 to see it.
