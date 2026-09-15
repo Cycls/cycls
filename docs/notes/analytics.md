@@ -134,6 +134,7 @@ Identified users also carry **person properties** (via identify): `email`,
 | `turn_completed` | stream ends (also when stopped) | `tools` {name: count}, `tool_calls`, `duration_s`, `produced_artifact`, `errored`, `stopped`, `origin` — the shape of the work, without per-tool-call volume |
 | `generation_stopped` | user hits stop mid-stream | impatience / runaway signal |
 | `message_retried` / `message_regenerated` / `message_failed` | recovery paths | friction |
+| `run_busy` | send refused with 409 — the chat already has a run | a second tab, or a run whose disconnect the server hasn't noticed. Not `message_failed`: it would trip that event's alert |
 | `message_queued` / `queued_message_sent` / `queued_message_edited` / `queued_message_dropped` | composing while the agent works | does queueing get used? |
 | `chat_loaded` / `chat_cleared` / `chat_renamed` / `chat_favorited` / `chat_deleted` | sidebar chat ops | retention behavior |
 

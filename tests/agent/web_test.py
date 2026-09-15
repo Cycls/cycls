@@ -1806,3 +1806,77 @@ def test_last_exchange_route_does_not_shadow_chat_delete(tmp_path):
     client.put("/chats/c1", json={"title": "hello"})
     assert client.delete("/chats/c1").status_code == 200
     assert client.get("/chats").json() == []
+
+
+# =============================================================================
+# One run per chat (docs/notes/runs.md)
+# =============================================================================
+
+class _FakeTask:
+    """`_claim` only ever asks a task whether it is done."""
+    def __init__(self, done=False): self._done = done
+    def done(self): return self._done
+
+
+def test_claim_scopes_the_slot_to_a_workspace():
+    """`?id=` is client-supplied text. A flat key would let one tenant lock
+    another's chat by guessing an id."""
+    from cycls._agent.web.server import _claim
+    runs = {}
+    assert _claim(runs, ("orgA/.db/u1", "c1"), _FakeTask())
+    assert _claim(runs, ("orgB/.db/u2", "c1"), _FakeTask())
+
+
+def test_claim_refuses_a_live_run_and_keeps_the_holder():
+    from cycls._agent.web.server import _claim
+    runs, holder, key = {}, _FakeTask(), ("ws", "c1")
+    assert _claim(runs, key, holder)
+    assert not _claim(runs, key, _FakeTask())
+    assert runs[key] is holder, "the loser overwrote the winner"
+
+
+def test_claim_treats_a_finished_run_as_stale():
+    """A release that never ran must not lock the chat forever."""
+    from cycls._agent.web.server import _claim
+    runs, key = {}, ("ws", "c1")
+    runs[key] = _FakeTask(done=True)
+    assert _claim(runs, key, _FakeTask())
+
+
+def test_a_send_to_a_busy_chat_is_refused_and_a_new_chat_is_not():
+    """The duplicate-POST case that interleaved writes in production."""
+    from fastapi.testclient import TestClient
+
+    keys = []
+    async def handler(context):
+        keys.extend(app.state.runs)
+        yield "ok"
+
+    app = web(handler, Config(public_path=THEME_PATH, auth=False))
+    client = TestClient(app)
+    body = {"messages": [{"role": "user", "content": "hi"}]}
+
+    assert client.post("/chat?id=c1", json=body).status_code == 200
+    assert len(keys) == 1, "the run never claimed a slot"
+    assert app.state.runs == {}, "the slot was not released"
+
+    app.state.runs[keys[0]] = _FakeTask()          # a run still in flight
+    busy = client.post("/chat?id=c1", json=body)
+    assert busy.status_code == 409
+    assert busy.json()["error"] == "run_in_progress"
+    assert busy.headers["retry-after"] == "2"
+    assert isinstance(busy.json()["detail"], str)  # reasonOf() only reads a string
+    assert client.post("/chat", json=body).status_code == 200, "a new chat is never refused"
+
+
+def test_a_failing_run_still_releases_its_slot():
+    from fastapi.testclient import TestClient
+
+    async def handler(context):
+        raise RuntimeError("boom")
+        yield "unreachable"
+
+    app = web(handler, Config(public_path=THEME_PATH, auth=False))
+    client = TestClient(app)
+    client.post("/chat?id=c1", json={"messages": [{"role": "user", "content": "hi"}]})
+    assert app.state.runs == {}
