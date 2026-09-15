@@ -10,8 +10,10 @@ scenario starts fresh."""
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from cycls._agent import state as chat
-from cycls._app.db import workspace
+from cycls._app.db import Conflict, workspace
 
 
 def _ws(tmp_path):
@@ -370,3 +372,63 @@ def test_truncate_ignores_internal_scaffolding_turns(tmp_path):
     ], 0))
     assert _run(chat.truncate_last_exchange(ws, cid)) == "write it"
     assert _run(chat.load_messages(ws, cid)) == []
+
+
+# ---- create-only turn writes (docs/notes/runs.md) ----
+
+def test_append_returns_how_many_landed(tmp_path):
+    ws, cid = _ws(tmp_path), "test"
+    n = _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": [{"type": "text", "text": "1"}]},
+    ], 0))
+    assert n == 2
+
+
+def test_a_stale_index_conflicts_instead_of_overwriting(tmp_path):
+    """Two sessions, one chat — the shape behind both production holes. The
+    loser must not silently replace the winner's turn."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [{"role": "user", "content": "shared"}], 0))
+
+    a = chat.Session(ws, cid, [{"role": "user", "content": "shared"}])
+    b = chat.Session(ws, cid, [{"role": "user", "content": "shared"}])
+    for s, text in ((a, "from A"), (b, "from B")):
+        s.messages.append({"role": "assistant", "content": [{"type": "text", "text": text}]})
+
+    _run(a.checkpoint())
+    with pytest.raises(Conflict):
+        _run(b.checkpoint())
+
+    kept = _run(chat.load_messages(ws, cid))
+    assert kept[1]["content"] == [{"type": "text", "text": "from A"}], "B clobbered A"
+    assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == ["000000", "000001"]
+
+
+def test_a_conflict_banks_what_landed_so_a_retry_does_not_duplicate(tmp_path):
+    """The batch is sequential precisely so the session knows where it got to."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [{"role": "user", "content": "u"}], 0))
+    _run(chat.append_messages(ws, cid, [{"role": "assistant", "content": "squatter"}], 2))
+
+    s = chat.Session(ws, cid, [{"role": "user", "content": "u"}])
+    s.messages += [
+        {"role": "assistant", "content": [{"type": "text", "text": "mine"}]},   # -> 1, free
+        {"role": "user", "content": "next"},                                    # -> 2, taken
+    ]
+    with pytest.raises(Conflict):
+        _run(s.checkpoint())
+    assert (s._saved, s._next_idx) == (2, 2), "the landed turn was not banked"
+    assert _run(chat.load_messages(ws, cid))[1]["content"] == [{"type": "text", "text": "mine"}]
+
+
+def test_replace_messages_still_rewrites_in_place(tmp_path):
+    """create-only must not leak into the one caller whose job is to overwrite."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": [{"type": "text", "text": "1"}]},
+    ], 0))
+    _run(chat.replace_messages(ws, cid, [{"role": "user", "content": "only"}]))
+    assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == ["000000"]
+    assert _run(chat.load_messages(ws, cid)) == [{"role": "user", "content": "only"}]
