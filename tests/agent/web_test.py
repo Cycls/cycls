@@ -1904,7 +1904,7 @@ def _drive_run(detach):
         runs, key = {}, ("ws", "c1")
         run = Run(detach=detach)
         runs[key] = run
-        run.task = asyncio.create_task(_supervise(run, stream(), runs, key))
+        run.task = asyncio.create_task(_supervise(run, stream(), runs, key, None))
 
         fwd = _forward(run)
         assert await fwd.__anext__() == "a"
@@ -1945,7 +1945,7 @@ def test_the_supervisor_releases_the_slot_not_the_reader():
         runs, key = {}, ("ws", "c1")
         run = Run(detach=True)
         runs[key] = run
-        run.task = asyncio.create_task(_supervise(run, stream(), runs, key))
+        run.task = asyncio.create_task(_supervise(run, stream(), runs, key, None))
         fwd = _forward(run)
         await fwd.__anext__()
         await fwd.aclose()
@@ -1967,3 +1967,51 @@ def test_a_slow_reader_is_dropped_rather_than_stalling_the_run():
     for i in range(QUEUE_MAX + 50):
         run.emit(i)
     assert not run.attached, "the run would have blocked on a full queue"
+
+
+def test_a_finished_run_stamps_its_record_and_fires_the_hook(tmp_path):
+    from cycls._agent.web.server import Run, _supervise
+    from cycls._app.db import workspace as mkws
+    from cycls._agent import state
+
+    fired = []
+    ws = mkws("tenant", tmp_path, base=f"file://{tmp_path}")
+
+    async def go(boom):
+        async def stream():
+            yield "a"
+            if boom: raise RuntimeError("boom")
+
+        runs, key = {}, ("ws", "c1")
+        run = Run(detach=True, workspace=ws, chat_id="c1", user=None)
+        runs[key] = run
+        run.task = asyncio.create_task(_supervise(run, stream(), runs, key, fired.append))
+        await asyncio.wait({run.task}, timeout=2)
+        return state.run_status(await state.get_run(ws, "c1"))
+
+    assert asyncio.run(go(boom=False)) == "done"
+    assert asyncio.run(go(boom=True)) == "failed"
+    assert [f["status"] for f in fired] == ["done", "failed"]
+    assert fired[0]["chat_id"] == "c1" and "ms" in fired[0]
+
+
+def test_a_hook_that_raises_never_reaches_the_run(tmp_path):
+    from cycls._agent.web.server import Run, _supervise
+    from cycls._app.db import workspace as mkws
+
+    async def go():
+        async def stream():
+            yield "a"
+        def bad(row): raise RuntimeError("the deployment's webhook is down")
+
+        runs, key = {}, ("ws", "c1")
+        run = Run(detach=True, workspace=mkws("t", tmp_path, base=f"file://{tmp_path}"),
+                  chat_id="c1", user=None)
+        runs[key] = run
+        run.task = asyncio.create_task(_supervise(run, stream(), runs, key, bad))
+        await asyncio.wait({run.task}, timeout=2)
+        return run.task.exception(), runs
+
+    exc, runs = asyncio.run(go())
+    assert exc is None, "a deployment's hook failed the run"
+    assert runs == {}, "the slot was not released"

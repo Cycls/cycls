@@ -1,5 +1,6 @@
 import asyncio, json, inspect, re, time, uuid, os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from pydantic import BaseModel, PrivateAttr
 from typing import Optional, Any
@@ -89,19 +90,35 @@ def sse(item):
 
 RUN_BUDGET = 45 * 60   # a run cannot outlive this
 RUN_DRAIN = 5          # how long a cancelled run gets to unwind
+RUN_BEAT = 10          # heartbeat interval; state.RUN_STALE is the reader's patience
 QUEUE_MAX = 512        # events buffered for a reader; a view, not a log
 _DONE, _LAGGED = object(), object()
+_OWNER = f"{os.environ.get('K_REVISION', 'local')}/{uuid.uuid4().hex[:8]}"
 
 
 class Run:
     """One agent run. Two tasks on purpose: `task` supervises and is never
-    cancelled by us, so it always lives to release the slot; `inner` drives the
-    loop and is the only thing stop, budget, disconnect and shutdown cancel."""
+    cancelled by us, so it always lives to stamp the record and release the slot;
+    `inner` drives the loop and is the only thing stop, budget, disconnect and
+    shutdown cancel."""
 
-    def __init__(self, *, detach):
+    def __init__(self, *, detach, workspace=None, chat_id=None, user=None):
         self.queue = asyncio.Queue(QUEUE_MAX)
         self.detach, self.attached, self.reason = detach, True, None
         self.task = self.inner = None
+        self.workspace, self.chat_id, self.user = workspace, chat_id, user
+        self.id, self.started = uuid.uuid4().hex, time.monotonic()
+
+    def row(self, status):
+        return {"run": self.id, "status": status, "owner": _OWNER,
+                "heartbeat": datetime.now(timezone.utc).isoformat(),
+                "user": getattr(self.user, "id", None), "reason": self.reason,
+                "ms": int((time.monotonic() - self.started) * 1000)}
+
+    def outcome(self):
+        if self.inner.cancelled():
+            return "stopped" if self.reason == "stopped" else "interrupted"
+        return "failed" if self.inner.exception() else "done"
 
     def done(self):
         return self.task is not None and self.task.done()
@@ -126,19 +143,49 @@ class Run:
                 except asyncio.QueueEmpty: return
 
 
-async def _supervise(run, stream, runs, key):
+async def _supervise(run, stream, runs, key, on_run):
     run.inner = asyncio.create_task(_drive(run, stream))
     try:
-        _, pending = await asyncio.wait({run.inner}, timeout=RUN_BUDGET)
-        if pending:
-            run.reason = run.reason or "budget"
-            run.inner.cancel()
-            await asyncio.wait({run.inner}, timeout=RUN_DRAIN)
+        while True:
+            _, pending = await asyncio.wait({run.inner}, timeout=RUN_BEAT)
+            if not pending:
+                break
+            if time.monotonic() - run.started > RUN_BUDGET:
+                run.reason = run.reason or "budget"
+                run.inner.cancel()
+                await asyncio.wait({run.inner}, timeout=RUN_DRAIN)
+                break
+            await _record(run, "running")
     finally:
         try: await asyncio.wait_for(stream.aclose(), RUN_DRAIN)
         except BaseException: pass
+        status = run.outcome() if run.inner.done() else "interrupted"
+        # Shielded: this is the only place that knows the run ended, and it runs
+        # while the process may already be shutting down.
+        await asyncio.shield(asyncio.ensure_future(_finish(run, status, on_run)))
         run.push(_DONE)
         if runs.get(key) is run: runs.pop(key, None)
+
+
+async def _record(run, status):
+    if run.workspace is None: return
+    try: await state.put_run(run.workspace, run.chat_id, run.row(status))
+    except Exception as e: log("warn", chat_id=run.chat_id, message=f"run record failed: {e}")
+
+
+async def _finish(run, status, on_run):
+    """The status transition, and the only moment that knows a run ended. The
+    hook is the deployment's — push, email, a webhook, nothing."""
+    await _record(run, status)
+    log("run", user=run.user, chat_id=run.chat_id, status=status,
+        reason=run.reason, ms=int((time.monotonic() - run.started) * 1000))
+    if on_run is None: return
+    try:
+        row = {**run.row(status), "chat_id": run.chat_id}
+        result = on_run(row)
+        if inspect.isawaitable(result): await result
+    except Exception as e:   # a deployment's webhook must never fail the run
+        log("warn", chat_id=run.chat_id, message=f"on_run failed: {e}")
 
 
 async def _drive(run, stream):
@@ -211,7 +258,7 @@ class Messages(list):
     def raw(self):
         return self._raw
 
-def web(func, config, extra_routers=None, auth=None, iap=None):
+def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
     from fastapi import FastAPI, Request, HTTPException, Depends
     from fastapi import Response as FastAPIResponse
     from fastapi.responses import JSONResponse, StreamingResponse
@@ -308,19 +355,29 @@ def web(func, config, extra_routers=None, auth=None, iap=None):
         # Detachment is the client's call — one that won't poll keeps today's
         # behaviour, where its disconnect ends the run. Never on the API route,
         # whose caller is given no chat id to come back to.
-        run = Run(detach=data.get("detach") is True and not api)
+        run = Run(detach=data.get("detach") is True and not api,
+                  workspace=context.workspace if user is not None else None,
+                  chat_id=chat_id, user=user)
+        busy = JSONResponse(status_code=409, headers={"Retry-After": "2"},
+                            content={"error": "run_in_progress", "chat_id": chat_id,
+                                     "detail": "This chat is still working on your last message."})
         if not _claim(runs, key, run):
-            return JSONResponse(status_code=409, headers={"Retry-After": "2"},
-                                content={"error": "run_in_progress", "chat_id": chat_id,
-                                         "detail": "This chat is still working on your last message."})
+            return busy
         try:
+            # The registry only sees this container; the record is the other half,
+            # and a heartbeat that stopped reads as gone rather than running.
+            if run.workspace is not None:
+                if state.run_status(await state.get_run(run.workspace, chat_id)) == "running":
+                    runs.pop(key, None)
+                    return busy
+                await _record(run, "running")   # visible before the first heartbeat
             stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
             stream = (openai_encoder(stream) if api
                       else encoder(stream, chat_id=chat_id, user=user, first=first))
         except BaseException:
             if runs.get(key) is run: runs.pop(key, None)   # no supervisor yet to do it
             raise
-        run.task = asyncio.create_task(_supervise(run, stream, runs, key))
+        run.task = asyncio.create_task(_supervise(run, stream, runs, key, on_run))
         return StreamingResponse(_forward(run), media_type="text/event-stream")
 
     @app.post("/chats/{chat_id}/stop")

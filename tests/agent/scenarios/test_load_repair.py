@@ -553,3 +553,34 @@ def test_a_cancelled_tool_is_not_recorded_as_an_error_value(tmp_path):
         return t
 
     assert _run(go()).cancelled()
+
+
+# ---- the run record (docs/notes/runs.md §3) ----
+
+def test_a_stopped_heartbeat_reads_as_interrupted_not_running(tmp_path):
+    """No chat may sit at `running` forever because its container died."""
+    from datetime import datetime, timedelta, timezone
+    ws, cid = _ws(tmp_path), "test"
+    fresh = datetime.now(timezone.utc)
+    _run(chat.put_run(ws, cid, {"run": "r1", "status": "running",
+                                "heartbeat": fresh.isoformat()}))
+    assert chat.run_status(_run(chat.get_run(ws, cid))) == "running"
+
+    stale = fresh - timedelta(seconds=chat.RUN_STALE + 5)
+    _run(chat.put_run(ws, cid, {"run": "r1", "status": "running",
+                                "heartbeat": stale.isoformat()}))
+    assert chat.run_status(_run(chat.get_run(ws, cid))) == "interrupted"
+    assert chat.run_status(None) is None
+    assert chat.run_status({"status": "done"}) == "done"
+
+
+def test_the_record_is_all_strings_and_rides_the_meta_channel(tmp_path):
+    """It is read back through a listing, which carries object metadata — and the
+    store rejects a non-string there, from inside a terminal write."""
+    from cycls._app.db import DB
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.put_run(ws, cid, {"run": "r1", "status": "running", "ms": 1234,
+                                "reason": None, "heartbeat": "now"}))
+    row = _run(chat.get_run(ws, cid))
+    assert row == {"run": "r1", "status": "running", "ms": "1234", "heartbeat": "now"}, row
+    assert _run(chat.list_runs(ws)) == {cid: row}
