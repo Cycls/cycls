@@ -235,8 +235,9 @@ async def append_messages(workspace, chat_id, messages, start_idx, *, create=Tru
     how the caller finds out in time to re-read.
 
     Sequential rather than gathered: `asyncio.gather` propagates the first
-    failure while its siblings keep writing, so the count would be a guess. The
-    `Conflict` carries how many landed before it."""
+    failure while its siblings keep writing, so the count would be a guess. Any
+    exception carries `written` — cancellation included, since the caller still
+    has to know which slots are spent."""
     _validate(chat_id)
     if not messages:
         return 0
@@ -245,7 +246,7 @@ async def append_messages(workspace, chat_id, messages, start_idx, *, create=Tru
     for i, msg in enumerate(messages):
         try:
             await db.put(f"chat/{chat_id}/{(start_idx + i):06d}", msg, create=create)
-        except Conflict as e:
+        except BaseException as e:
             e.written = written
             raise
         written += 1
@@ -429,14 +430,17 @@ class Session:
             return
         try:
             n = await append_messages(self.workspace, self.chat_id, pending, self._next_idx)
-        except Conflict as e:
-            # Someone else wrote this chat's turns; our next index is stale. Bank
-            # what landed so a retry does not rewrite it, and let the run fail —
-            # silent overwriting is the bug this replaces.
-            self._saved += e.written
-            self._next_idx += e.written
-            log("error", chat_id=self.chat_id, kind="turn_conflict",
-                key=e.key, written=e.written, next_idx=self._next_idx)
+        except BaseException as e:
+            # Bank whatever landed, on any failure including cancellation, so a
+            # later write does not re-use a spent slot. A Conflict means another
+            # writer owns the chat — loud, because silent overwriting is the bug
+            # this replaces.
+            n = getattr(e, "written", 0)
+            self._saved += n
+            self._next_idx += n
+            if isinstance(e, Conflict):
+                log("error", chat_id=self.chat_id, kind="turn_conflict",
+                    key=e.key, written=n, next_idx=self._next_idx)
             raise
         self._saved += n
         self._next_idx += n

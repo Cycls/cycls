@@ -86,5 +86,8 @@ class Sandbox:
             timed_out = True; proc.kill()
             try: stdout, stderr = await proc.communicate()
             except Exception: stdout, stderr = b"", b""
+        except asyncio.CancelledError:
+            proc.kill()   # a stopped run must not leave its command running
+            raise
         code = proc.returncode if proc.returncode is not None else -1
         return SandboxResult(stdout, stderr, code, timed_out)

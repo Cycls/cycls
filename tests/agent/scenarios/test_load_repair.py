@@ -479,3 +479,29 @@ def test_an_anonymous_session_still_writes_nothing(tmp_path):
     _run(s.add_user("no chat id, no disk"))
     assert s.messages[0]["content"] == "no chat id, no disk"
     assert not list(Path(tmp_path).glob("**/*.json"))
+
+
+def test_a_cancelled_checkpoint_banks_the_turns_that_landed(tmp_path):
+    """Writes go through a thread, so a turn in flight can land even as the await
+    is cancelled. Unless the counters move, the next write re-uses a spent slot."""
+    from cycls._app import db as dbmod
+    ws, cid = _ws(tmp_path), "test"
+    s = chat.Session(ws, cid, [])
+    s.messages += [{"role": "user", "content": "a"}, {"role": "user", "content": "b"}]
+
+    real, calls = dbmod.DB.put, []
+    async def flaky(self, key, value, **kw):
+        calls.append(key)
+        if len(calls) == 2: raise asyncio.CancelledError()
+        return await real(self, key, value, **kw)
+
+    dbmod.DB.put = flaky
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            _run(s.checkpoint())
+    finally:
+        dbmod.DB.put = real
+
+    assert (s._saved, s._next_idx) == (1, 1), "the landed turn was not banked"
+    _run(s.checkpoint())
+    assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == ["000000", "000001"]

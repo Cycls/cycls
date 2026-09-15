@@ -8,6 +8,7 @@ Anthropic connector instead: fewer hops, one deploy-time bearer, anthropic/*
 only. Immutable fluent, like cycls.LLM / cycls.Web / cycls.Image.
 """
 import time
+from contextlib import asynccontextmanager
 from typing import List, Optional
 from .connectors import not_connected
 
@@ -16,11 +17,17 @@ _discovered = {}   # (url, token) -> (deadline, [Tool])
 _prompts = {}      # (url, token) -> (deadline, [Prompt])
 
 
-def _session(url, headers):
+@asynccontextmanager
+async def _session(url, headers):
+    """Owns the http client: `streamable_http_client` closes one it made itself,
+    never one handed to it, so a call that returned — or was cancelled — would
+    leave its pool open."""
     import httpx2
     from mcp.client.streamable_http import streamable_http_client
-    return streamable_http_client(url, http_client=httpx2.AsyncClient(
-        headers=headers, timeout=httpx2.Timeout(30.0, read=300.0)))
+    async with httpx2.AsyncClient(headers=headers,
+                                  timeout=httpx2.Timeout(30.0, read=300.0)) as http:
+        async with streamable_http_client(url, http_client=http) as streams:
+            yield streams
 
 
 async def _list(url, headers):
