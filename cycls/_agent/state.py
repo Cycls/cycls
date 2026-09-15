@@ -203,16 +203,23 @@ def _normalize_user_blocks(blocks, prior):
     return [b for b in blocks if keep(b)]
 
 
-async def load_messages(workspace, chat_id):
+async def load_messages(workspace, chat_id, *, persist=False):
     """All messages for *chat_id* in turn order, normalized to satisfy provider
-    pairing invariants. Persists the repair via full rewrite so disk catches
-    up with whatever `normalize` produced."""
+    pairing invariants.
+
+    Normalization is in memory. `persist=True` also writes the repair back, which
+    renumbers every turn file — only `Session.open` may ask for that, because the
+    session it returns is the chat's one writer and holds the resulting indices.
+    A reader that renumbers turn files under a live run moves the slots that run
+    is still appending to; that is how two production chats lost turns (see
+    docs/notes/runs.md). Hence the default: a caller that has not thought about
+    it gets the safe half."""
     _validate(chat_id)
     db = DB(workspace)
     # Glob `[0-9]*` selects turn files (000000, 000001, ...) — index excluded.
     messages = [msg async for _, msg in db.items(glob=f"chat/{chat_id}/[0-9]*")]
     normalized = normalize(messages)
-    if normalized != messages:
+    if persist and normalized != messages:
         await replace_messages(workspace, chat_id, normalized)
     return normalized
 
@@ -230,8 +237,10 @@ async def append_messages(workspace, chat_id, messages, start_idx):
 
 
 async def replace_messages(workspace, chat_id, messages):
-    """Wipe and rewrite all messages for *chat_id* (used by compaction).
-    Preserves the index file — only turns are rewritten."""
+    """Wipe and rewrite all messages for *chat_id*. Preserves the index file —
+    only turns are rewritten. Renumbers from 0, so it invalidates any index a
+    live `Session` is holding: the only callers are `truncate_last_exchange`
+    (the person asked) and `load_messages(persist=True)` (the writer itself)."""
     _validate(chat_id)
     db = DB(workspace)
     turn_keys = [k async for k, _ in db.scan(glob=f"chat/{chat_id}/[0-9]*")]
@@ -330,7 +339,9 @@ class Session:
         persist = bool(context.chat_id and context.user)
         if not persist:
             return cls(context.workspace, None, [])
-        messages = _ephemeralize(await load_messages(context.workspace, context.chat_id))
+        # The one caller that repairs on disk: this session owns the chat's
+        # writes, so `_saved` below and the turn-file indices must agree.
+        messages = _ephemeralize(await load_messages(context.workspace, context.chat_id, persist=True))
         marker = await get_compaction(context.workspace, context.chat_id) or {}
         return cls(context.workspace, context.chat_id, messages,
                    summary=marker.get("summary"), first_kept=int(marker.get("first_kept", 0)))

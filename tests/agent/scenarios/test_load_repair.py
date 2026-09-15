@@ -1,7 +1,10 @@
 """End-to-end scenarios for load-time repair (rfc-004 b44248c).
 
 These plant state directly via chat.append_messages, then verify that
-chat.load_messages trims trailing corruption AND persists the cleanup.
+chat.load_messages trims trailing corruption. The repair is in memory for
+readers and persisted only for `persist=True`, the session's own load — see
+the "Readers do not repair" section of docs/notes/runs.md.
+
 The conftest.py at tests/ resets the engine pool between tests so each
 scenario starts fresh."""
 import asyncio
@@ -22,7 +25,7 @@ def _run(coro):
 def test_orphan_assistant_tool_use_trimmed_and_persisted(tmp_path):
     """The headline reliability win: a chat with a dangling assistant
     tool_use (the typical mid-turn-crash corruption) loads as the clean
-    prefix. Second load sees disk-clean state — repair was persisted."""
+    prefix. With `persist`, disk catches up too."""
     ws = _ws(tmp_path)
     cid = "test"
     _run(chat.append_messages(ws, cid, [
@@ -32,7 +35,7 @@ def test_orphan_assistant_tool_use_trimmed_and_persisted(tmp_path):
         ]},
     ], 0))
 
-    first = _run(chat.load_messages(ws, cid))
+    first = _run(chat.load_messages(ws, cid, persist=True))
     assert len(first) == 1, f"orphan not trimmed: {first}"
     assert first[0]["content"] == "do X"
 
@@ -176,6 +179,67 @@ def test_attachment_sidecar_survives_repair(tmp_path):
         {"name": "pic.jpg", "path": "attachments/pic.jpg",
          "type": "image/jpeg", "size": 1234}
     ]
+
+
+# ---- readers do not repair (docs/notes/runs.md) ----
+
+def _dangling(ws, cid):
+    """A chat whose last turn is an assistant tool_use with no result yet —
+    what disk looks like while a run is mid-tool-batch."""
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "do X"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "A", "name": "bash", "input": {"command": "ls"}}
+        ]},
+    ], 0))
+
+
+def test_a_reader_normalizes_in_memory_and_leaves_disk_alone(tmp_path):
+    ws, cid = _ws(tmp_path), "test"
+    _dangling(ws, cid)
+    before = _turn_keys(ws, cid)
+
+    loaded = _run(chat.load_messages(ws, cid))
+    assert len(loaded) == 1, "the caller still gets a provider-valid view"
+    assert _turn_keys(ws, cid) == before, "a reader rewrote the turn files"
+
+
+def test_the_writer_repairs_so_its_index_matches_disk(tmp_path):
+    """`Session.__init__` sets `_saved = len(messages)` and appends at it, so the
+    one caller that repairs must be the one whose indices have to agree."""
+    ws, cid = _ws(tmp_path), "test"
+    _dangling(ws, cid)
+
+    messages = _run(chat.load_messages(ws, cid, persist=True))
+    keys = _turn_keys(ws, cid)
+    assert [k.split("/")[-1] for k in keys] == ["000000"], keys
+    assert chat.Session(ws, cid, messages)._saved == len(keys)
+
+
+def test_a_reader_cannot_move_a_live_sessions_slots(tmp_path):
+    """The production failure, in miniature (super a95500f1, haseef 48b79700):
+    a run holds turn 2 as its next index while its tool_use is unpaired on disk;
+    a reader normalizes that turn away and renumbers; the run's next append then
+    lands in a slot that means something else, leaving a hole."""
+    ws, cid = _ws(tmp_path), "test"
+    _dangling(ws, cid)
+    # The run as it stands mid-batch: both turns written, so its next index is 2.
+    live = chat.Session(ws, cid, [
+        {"role": "user", "content": "do X"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "A", "name": "bash", "input": {"command": "ls"}}]},
+    ])
+    assert live._saved == 2 == len(_turn_keys(ws, cid))
+
+    _run(chat.load_messages(ws, cid))          # a poll lands mid-batch
+
+    live.messages.append({"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "A", "content": "ok"}]})
+    _run(live.checkpoint())
+
+    assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == \
+        ["000000", "000001", "000002"], "the reader moved the run's slots"
+    assert len(_run(chat.load_messages(ws, cid))) == 3
 
 
 # ---- truncate_last_exchange (backs `regenerate`) ----
