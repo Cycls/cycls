@@ -1,14 +1,20 @@
 """Workspace + DB — per-tenant JSON KV over object storage.
 
 `file://` (dev) and `gs://` (prod). `db.scan(...)` is the 1-round-trip
-listing path: GCS uses LIST + custom-meta; FS uses `pathlib.glob` + body
-reads (no metadata channel locally). `meta=` on `db.put` is a GCS-only
-perf hint — body is canonical on FS.
+listing path: object storage uses LIST + custom-meta; FS uses `pathlib.glob`
++ body reads (no metadata channel locally). `meta=` on `db.put` is an
+object-storage-only perf hint — body is canonical on FS.
 """
-import asyncio, json, os
+import asyncio, json, os, re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
+from uuid import uuid4
+
+# Workspace ids are namespaced: `u-{user_id}` personal, `t-{id}` team (see
+# docs/workspaces.md). The prefix split means a team workspace can never
+# be named to collide with someone's personal one.
+_WS_ID = re.compile(r"^[ut]-[A-Za-z0-9_-]+$")
 
 
 @dataclass(frozen=True)
@@ -17,17 +23,37 @@ class Workspace:
     path: str
     subject: str
     base: str | None = None
+    ws: str | None = None
+
+    @property
+    def volume(self) -> Path:
+        """The deployment volume this workspace lives under."""
+        root = Path(self.root)
+        return root.parents[2] if self.ws else root.parent
 
 
-def workspace(target, volume, base=None, slot=".db"):
-    """Derive a Workspace from a User, a subject string, or None (anonymous)."""
+def workspace(target, volume, base=None, slot=".db", ws=None):
+    """Derive a Workspace from a User, a subject string, or None (anonymous).
+
+    `ws` (multi-workspace mode) adds a folder dimension below the org:
+    root `{volume}/{org}/ws/{ws}`, DB path `{org}/ws/{ws}/{slot}/{user}`.
+    Without it, legacy layout: root `{volume}/{org}`, path `{org}/{slot}/{user}`.
+    """
     sub = ("local" if target is None
            else target if isinstance(target, str)
            else f"{target.org_id}:{target.id}" if getattr(target, "org_id", None)
            else target.id)
     org, _, user = sub.partition(":")
-    path = f"{org}/{slot}/{user}" if user else f"{org}/{slot}"
-    return Workspace(Path(volume) / org, path, sub, base)
+    for seg in (org, user):
+        if seg and (seg in (".", "..") or "/" in seg or "\\" in seg):
+            raise ValueError(f"invalid workspace subject: {sub!r}")
+    if ws is not None and not _WS_ID.match(ws):
+        raise ValueError(f"invalid workspace id: {ws!r}")
+    if ws is not None and not user and ws == f"u-{org}":
+        ws = None   # a solo account's personal workspace IS the account root
+    parts = [org, "ws", ws] if ws else [org]
+    path = "/".join([*parts, slot, user] if user else [*parts, slot])
+    return Workspace(Path(volume).joinpath(*parts), path, sub, base, ws)
 
 
 _METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
@@ -56,6 +82,14 @@ async def _gcs_auth():
     return {"Authorization": f"Bearer {_gcs_token}"}
 
 
+class Conflict(Exception):
+    """A `create=True` write found the key already there. Carries `written` so a
+    caller that was part-way through a batch knows how far it got."""
+    def __init__(self, key, written=0):
+        super().__init__(f"{key} already exists")
+        self.key, self.written = key, written
+
+
 class _FileStore:
     def __init__(self, url):
         self.root = Path(url[7:])
@@ -68,11 +102,37 @@ class _FileStore:
             except FileNotFoundError: return None
         return await asyncio.to_thread(_do)
 
-    async def write(self, key, data, meta=None):
+    async def write(self, key, data, meta=None, create=False):
         def _do():
             p = self._path(key)
             p.parent.mkdir(parents=True, exist_ok=True)
-            tmp = p.with_suffix(".json.tmp"); tmp.write_bytes(data); tmp.replace(p)
+            # Unique tmp name: a shared one lets two concurrent writers interleave
+            # their bytes and leave a torn file that every later read raises on.
+            tmp = p.with_suffix(f".json.{uuid4().hex}.tmp")
+            tmp.write_bytes(data)
+            try:
+                if not create:
+                    tmp.replace(p)
+                    return
+                # link() is the POSIX create-if-absent: it fails rather than
+                # clobber, where replace() would overwrite silently.
+                try:
+                    os.link(tmp, p)
+                except FileExistsError:
+                    raise Conflict(key)
+                except OSError:
+                    # gcsfuse has no hard links (ENOSYS), and `--remote` dev
+                    # services run this store over one. O_EXCL reserves the name
+                    # just as atomically; the write that follows is not atomic,
+                    # but gcsfuse only publishes the object on close.
+                    try:
+                        fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                    except FileExistsError:
+                        raise Conflict(key)
+                    with os.fdopen(fd, "wb") as f:
+                        f.write(data)
+            finally:
+                tmp.unlink(missing_ok=True)
         await asyncio.to_thread(_do)
 
     async def remove(self, key):
@@ -134,7 +194,7 @@ class _GCSStore:
         r.raise_for_status()
         return r.content
 
-    async def write(self, key, data, meta=None):
+    async def write(self, key, data, meta=None, create=False):
         info = {"name": self._name(key)}
         if meta: info["metadata"] = meta
         body = b"\r\n".join([
@@ -144,9 +204,13 @@ class _GCSStore:
             data,
             b"--cycls--", b"",
         ])
-        r = await self._req("POST",
-            f"{self._STORAGE}/upload/storage/v1/b/{self.bucket}/o?uploadType=multipart",
+        # ifGenerationMatch=0 is "only if absent" — appended to the URL, not
+        # passed as params=, which httpx would use to replace uploadType.
+        url = f"{self._STORAGE}/upload/storage/v1/b/{self.bucket}/o?uploadType=multipart"
+        if create: url += "&ifGenerationMatch=0"
+        r = await self._req("POST", url,
             headers={"Content-Type": "multipart/related; boundary=cycls"}, content=body)
+        if create and r.status_code == 412: raise Conflict(key)
         r.raise_for_status()
 
     async def remove(self, key):
@@ -199,11 +263,13 @@ class DB:
         data = await self._store.read(key)
         return json.loads(data) if data is not None else default
 
-    async def put(self, key, value, *, meta=None):
+    async def put(self, key, value, *, meta=None, create=False):
+        """`create=True` refuses to overwrite: raises `Conflict` if the key is
+        taken. Default off so every existing caller keeps its semantics."""
         if meta:
             bad = [(k, type(v).__name__) for k, v in meta.items() if not isinstance(v, str)]
             if bad: raise TypeError(f"meta values must be str; got non-string: {bad}")
-        await self._store.write(key, json.dumps(value).encode(), meta=meta)
+        await self._store.write(key, json.dumps(value).encode(), meta=meta, create=create)
 
     async def delete(self, target):
         if not target or target.startswith("/") or ".." in target.split("/"):
@@ -223,7 +289,12 @@ class DB:
             if r is not None: yield r
 
     async def scan(self, *, prefix=None, glob=None):
-        """Yield (key, meta) — `meta` is GCS custom-meta or, on FS, the body.
-        `glob` uses `*` to match non-`/`."""
+        """Yield (key, meta) — `meta` is object-storage custom-meta or, on local
+        FS, the body. `glob` uses `*` to match non-`/`."""
         for k, m in sorted(await self._store.list_metas(prefix=prefix, glob=glob)):
             yield k, m
+
+    async def keys(self, *, prefix=None, glob=None):
+        """Key names only. Unlike `scan`, reads no bodies — so a file this
+        process cannot decode is still listed, and still deletable."""
+        return sorted(await self._store.list_keys(prefix=prefix, glob=glob))

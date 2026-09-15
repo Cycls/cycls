@@ -14,10 +14,18 @@ from cycls._app.db import workspace
 CYCLS_PATH = importlib.resources.files("cycls")
 
 
+def _behind_proxy(app):
+    """Cloud Run terminates TLS and forwards plain HTTP; without this every
+    request.url is http:// and an OAuth redirect_uri never matches."""
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+    return ProxyHeadersMiddleware(app, trusted_hosts="*")
+
+
 def _serve(app, port):
     from hypercorn.asyncio import serve
     from hypercorn.config import Config
     from cycls._function.remote import BARE_LOGS
+    app = _behind_proxy(app)
     config = Config()
     config.bind = [f"0.0.0.0:{port}"]
     config.alpn_protocols = ["h2", "http/1.1"]
@@ -88,8 +96,11 @@ if __name__ == "__main__":
 
 
 class App(Function):
+    # playwright is the LIBRARY only (a few MB) — the agent connects to the
+    # shared browser service over CDP and never downloads a browser. See
+    # cycls/_agent/browser and docs/notes/browser.md.
     _base_pip = ["hypercorn==0.18.0", "fastapi[standard]==0.139.2",
-                 "pyjwt==2.13.0", "cryptography==49.0.0"]
+                 "pyjwt==2.13.0", "cryptography==49.0.0", "playwright==1.62.0"]
     _base_apt = ["bubblewrap"]
     _serves = True
 

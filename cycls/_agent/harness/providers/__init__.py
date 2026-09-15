@@ -50,8 +50,6 @@ class Message(TypedDict):
 
 class Provider(Protocol):
     model: str
-    context_window: int    # model's input token budget
-    max_output: int        # model's output token cap
 
     def stream(self, *, messages: list[Message], system: str, tools: list[dict],
                max_tokens: int, mcp_servers=None, thinking=None) -> AsyncIterator:
@@ -65,37 +63,46 @@ class Provider(Protocol):
 
 # ---- Client routing ----
 
-_clients: dict = {}  # vendor → reused SDK client. Construction is ~1s (httpx + TLS).
+_clients: dict = {}  # config key → reused SDK client. Construction is ~1s (httpx + TLS).
 
 
-def _client_for(vendor: str, *, base_url, api_key):
-    if vendor in _clients: return _clients[vendor]
+def _client_for(vendor: str, *, base_url, api_key, headers=None):
+    key = (vendor, base_url, api_key, tuple(sorted(headers.items())) if headers else None)
+    if key in _clients: return _clients[key]
     if vendor == "anthropic":
         import anthropic
-        c = anthropic.AsyncAnthropic(**({"api_key": api_key} if api_key else {}))
+        kw = {"api_key": api_key} if api_key else {}
+        if headers: kw["default_headers"] = headers
+        c = anthropic.AsyncAnthropic(**kw)
     else:
         import openai
-        c = openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
-    _clients[vendor] = c
+        c = openai.AsyncOpenAI(base_url=base_url, api_key=api_key,
+                               **({"default_headers": headers} if headers else {}))
+    _clients[key] = c
     return c
 
 
-def make_provider(model: str, *, client=None, base_url=None, api_key=None) -> Provider:
+def make_provider(model: str, *, client=None, base_url=None, api_key=None,
+                  headers=None, vision=True) -> Provider:
     """Build the provider for a `vendor/model` string. `anthropic/*` goes native;
     everything else (openai, groq, vllm, local) goes through Chat Completions.
-    Pass `client` to inject a pre-built SDK client (test seam)."""
+    Pass `client` to inject a pre-built SDK client — for tests, or deployments
+    needing configuration the builder doesn't cover (custom transports, proxies,
+    instrumented clients). `vision=False`
+    marks a text-only model: image blocks degrade to text stubs instead of
+    being sent (and rejected) on the wire — no-op on the native Anthropic path."""
     if "/" not in model:
         raise ValueError(
             f"model must be `vendor/model` (e.g. `anthropic/claude-sonnet-4-6`, "
             f"`openai/gpt-5.4`); got {model!r}"
         )
     vendor, name = model.split("/", 1)
-    sdk = client or _client_for(vendor, base_url=base_url, api_key=api_key)
+    sdk = client or _client_for(vendor, base_url=base_url, api_key=api_key, headers=headers)
     if vendor == "anthropic":
         from .anthropic import AnthropicProvider
         return AnthropicProvider(sdk, name)
     from .openai import OpenAIProvider
-    return OpenAIProvider(sdk, name)
+    return OpenAIProvider(sdk, name, vendor, vision=vision)
 
 
 # Re-export concrete providers for type-checking / direct construction by callers

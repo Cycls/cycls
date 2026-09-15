@@ -7,7 +7,7 @@ from typing import NamedTuple, Optional
 
 
 # --unshare-user is required for --unshare-net to work in containers that
-# lack CAP_NET_ADMIN (Docker default, Cloud Run): the new netns is owned
+# lack CAP_NET_ADMIN (e.g. the Docker default): the new netns is owned
 # by the new userns where bwrap has all caps, so RTM_NEWADDR for lo works.
 _DEFAULT_ARGS = [
     "--ro-bind", "/", "/",
@@ -86,5 +86,8 @@ class Sandbox:
             timed_out = True; proc.kill()
             try: stdout, stderr = await proc.communicate()
             except Exception: stdout, stderr = b"", b""
+        except asyncio.CancelledError:
+            proc.kill()   # a stopped run must not leave its command running
+            raise
         code = proc.returncode if proc.returncode is not None else -1
         return SandboxResult(stdout, stderr, code, timed_out)

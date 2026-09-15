@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mini app</title>
+<style>
+  :root{color-scheme:light dark}
+  *{box-sizing:border-box;margin:0}
+  body{font:13px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:20px}
+  h1{font-size:15px;font-weight:650}
+  .sub{opacity:.6;font-size:11.5px;margin-top:2px}
+  .grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));margin:16px 0}
+  .kpi{border:1px solid color-mix(in oklab,currentColor 15%,transparent);border-radius:10px;padding:12px}
+  .kpi b{display:block;font-size:22px;font-weight:650;font-variant-numeric:tabular-nums}
+  .kpi span{opacity:.6;font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+  section{border:1px solid color-mix(in oklab,currentColor 15%,transparent);border-radius:10px;padding:12px;margin-top:14px}
+  h2{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;opacity:.6}
+  ul{list-style:none;padding:0;margin:8px 0 0;font:11.5px ui-monospace,monospace}
+  li{display:flex;gap:8px;padding:3px 0}
+  .ok{color:#0ca30c;font-weight:700}.bad{color:#d03b3b;font-weight:700}
+  .row{display:flex;gap:6px;align-items:center;margin-top:8px}
+  button{font:inherit;padding:3px 9px;border-radius:7px;cursor:pointer;
+    border:1px solid color-mix(in oklab,currentColor 20%,transparent);background:none;color:inherit}
+  button[aria-pressed=true]{background:color-mix(in oklab,currentColor 12%,transparent)}
+</style>
+</head>
+<body>
+<h1 id="title">Mini app</h1>
+<div class="sub" id="sub">waiting for host…</div>
+<div class="grid" id="kpis"></div>
+
+<section>
+  <h2>Persisted state</h2>
+  <div class="row" id="filters"></div>
+  <div class="sub" id="saved"></div>
+</section>
+
+<section>
+  <h2>Scoped read</h2>
+  <ul id="reads"></ul>
+</section>
+
+<section>
+  <h2>Containment self-test</h2>
+  <ul id="probe"></ul>
+</section>
+
+<script>
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const line = (label, value, good) =>
+  `<li><span class="${good ? 'ok' : 'bad'}">${good ? 'PASS' : 'FAIL'}</span>
+   <span style="opacity:.65">${esc(label)}</span><span>${esc(value)}</span></li>`;
+
+const tryRead = p => cycls.read(p).then(c => ({ ok: true, content: c }), e => ({ ok: false, error: e.message }));
+
+(async function main() {
+  const ctx = await cycls.ready;
+  document.getElementById('sub').textContent =
+    `scope ${ctx.scope} · theme ${ctx.theme} · ${ctx.canWrite ? 'writable' : 'read-only'} · no credential held`;
+
+  const mine = await tryRead('data.json');
+  const above = await tryRead('projects/PRJ-001/.state/commercial.json');
+  const walk = await tryRead(ctx.scope + '/../../.state/store.json');
+
+  document.getElementById('reads').innerHTML = [
+    line('own folder', mine.ok ? 'read ' + mine.content.length + ' bytes' : mine.error, mine.ok),
+    line('sibling project cost', above.ok ? 'LEAKED' : above.error, !above.ok),
+    line('traversal', walk.ok ? 'LEAKED' : walk.error, !walk.ok),
+  ].join('');
+
+  if (mine.ok) {
+    try {
+      const d = JSON.parse(mine.content);
+      document.getElementById('title').textContent = d.title || 'Mini app';
+      document.getElementById('kpis').innerHTML = (d.kpis || [])
+        .map(k => `<div class="kpi"><span>${esc(k.label)}</span><b>${esc(k.value)}</b></div>`).join('');
+    } catch {}
+  }
+
+  // Survives a reload, and every teammate opening the app sees the same choice.
+  const modes = ['all', 'mine', 'blocked'];
+  let mode = await cycls.get('filter', 'all');
+  const filters = document.getElementById('filters');
+  const paint = () => {
+    filters.innerHTML = modes
+      .map(m => `<button data-m="${m}" aria-pressed="${m === mode}">${m}</button>`).join('');
+  };
+  filters.onclick = async e => {
+    const m = e.target.dataset?.m;
+    if (!m) return;
+    mode = m;
+    paint();
+    document.getElementById('saved').textContent = 'saving…';
+    try {
+      await cycls.set('filter', m);
+      document.getElementById('saved').textContent = 'saved to state.json';
+    } catch (err) {
+      document.getElementById('saved').textContent = 'not saved: ' + err.message;
+    }
+  };
+  paint();
+
+  cycls.resize(document.body.scrollHeight + 40);
+})();
+
+(async function probe() {
+  const rows = [];
+  rows.push(['location.origin', location.origin, location.origin === 'null']);
+  try { rows.push(['document.cookie', document.cookie || 'empty', !document.cookie]); }
+  catch (e) { rows.push(['document.cookie', e.name, true]); }
+  try { const r = await fetch('/files?path=projects', { credentials: 'include' });
+        rows.push(['fetch /files', 'HTTP ' + r.status, r.status === 401 || r.status === 403]); }
+  catch (e) { rows.push(['fetch /files', 'blocked (' + e.name + ')', true]); }
+  try { rows.push(['parent.document', parent.document.title, false]); }
+  catch (e) { rows.push(['parent.document', 'blocked (' + e.name + ')', true]); }
+  try { localStorage.setItem('x', '1'); rows.push(['localStorage', 'writable', false]); }
+  catch (e) { rows.push(['localStorage', 'blocked (' + e.name + ')', true]); }
+  await cycls.write('index.html', '<h1>pwned</h1>')
+    .then(() => rows.push(['write own source', 'LEAKED', false]),
+          e => rows.push(['write own source', e.message, true]));
+  await cycls.write('../escape.json', '{}')
+    .then(() => rows.push(['write outside scope', 'LEAKED', false]),
+          e => rows.push(['write outside scope', e.message, true]));
+  document.getElementById('probe').innerHTML = rows.map(r => line(...r)).join('');
+})();
+</script>
+</body>
+</html>

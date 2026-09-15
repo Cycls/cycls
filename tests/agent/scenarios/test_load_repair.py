@@ -1,14 +1,19 @@
 """End-to-end scenarios for load-time repair (rfc-004 b44248c).
 
 These plant state directly via chat.append_messages, then verify that
-chat.load_messages trims trailing corruption AND persists the cleanup.
+chat.load_messages trims trailing corruption. The repair is in memory for
+readers and persisted only for `persist=True`, the session's own load — see
+the "Readers do not repair" section of docs/notes/runs.md.
+
 The conftest.py at tests/ resets the engine pool between tests so each
 scenario starts fresh."""
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from cycls._agent import state as chat
-from cycls._app.db import workspace
+from cycls._app.db import Conflict, workspace
 
 
 def _ws(tmp_path):
@@ -22,7 +27,7 @@ def _run(coro):
 def test_orphan_assistant_tool_use_trimmed_and_persisted(tmp_path):
     """The headline reliability win: a chat with a dangling assistant
     tool_use (the typical mid-turn-crash corruption) loads as the clean
-    prefix. Second load sees disk-clean state — repair was persisted."""
+    prefix. With `persist`, disk catches up too."""
     ws = _ws(tmp_path)
     cid = "test"
     _run(chat.append_messages(ws, cid, [
@@ -32,7 +37,7 @@ def test_orphan_assistant_tool_use_trimmed_and_persisted(tmp_path):
         ]},
     ], 0))
 
-    first = _run(chat.load_messages(ws, cid))
+    first = _run(chat.load_messages(ws, cid, persist=True))
     assert len(first) == 1, f"orphan not trimmed: {first}"
     assert first[0]["content"] == "do X"
 
@@ -176,3 +181,450 @@ def test_attachment_sidecar_survives_repair(tmp_path):
         {"name": "pic.jpg", "path": "attachments/pic.jpg",
          "type": "image/jpeg", "size": 1234}
     ]
+
+
+# ---- readers do not repair (docs/notes/runs.md) ----
+
+def _dangling(ws, cid):
+    """A chat whose last turn is an assistant tool_use with no result yet —
+    what disk looks like while a run is mid-tool-batch."""
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "do X"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "A", "name": "bash", "input": {"command": "ls"}}
+        ]},
+    ], 0))
+
+
+def test_a_reader_normalizes_in_memory_and_leaves_disk_alone(tmp_path):
+    ws, cid = _ws(tmp_path), "test"
+    _dangling(ws, cid)
+    before = _turn_keys(ws, cid)
+
+    loaded = _run(chat.load_messages(ws, cid))
+    assert len(loaded) == 1, "the caller still gets a provider-valid view"
+    assert _turn_keys(ws, cid) == before, "a reader rewrote the turn files"
+
+
+def test_the_writer_repairs_so_its_index_matches_disk(tmp_path):
+    """`Session.__init__` sets `_saved = len(messages)` and appends at it, so the
+    one caller that repairs must be the one whose indices have to agree."""
+    ws, cid = _ws(tmp_path), "test"
+    _dangling(ws, cid)
+
+    messages = _run(chat.load_messages(ws, cid, persist=True))
+    keys = _turn_keys(ws, cid)
+    assert [k.split("/")[-1] for k in keys] == ["000000"], keys
+    assert chat.Session(ws, cid, messages)._saved == len(keys)
+
+
+def test_a_reader_cannot_move_a_live_sessions_slots(tmp_path):
+    """The production failure, in miniature (super a95500f1, haseef 48b79700):
+    a run holds turn 2 as its next index while its tool_use is unpaired on disk;
+    a reader normalizes that turn away and renumbers; the run's next append then
+    lands in a slot that means something else, leaving a hole."""
+    ws, cid = _ws(tmp_path), "test"
+    _dangling(ws, cid)
+    # The run as it stands mid-batch: both turns written, so its next index is 2.
+    live = chat.Session(ws, cid, [
+        {"role": "user", "content": "do X"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "A", "name": "bash", "input": {"command": "ls"}}]},
+    ])
+    assert live._saved == 2 == len(_turn_keys(ws, cid))
+
+    _run(chat.load_messages(ws, cid))          # a poll lands mid-batch
+
+    live.messages.append({"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "A", "content": "ok"}]})
+    _run(live.checkpoint())
+
+    assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == \
+        ["000000", "000001", "000002"], "the reader moved the run's slots"
+    assert len(_run(chat.load_messages(ws, cid))) == 3
+
+
+# ---- truncate_last_exchange (backs `regenerate`) ----
+
+def _turn_keys(ws, cid):
+    from cycls._app.db import DB
+    async def go():
+        return sorted([k async for k, _ in DB(ws).scan(glob=f"chat/{cid}/[0-9]*")])
+    return _run(go())
+
+
+def test_truncate_drops_last_user_turn_and_everything_after(tmp_path):
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": [{"type": "text", "text": "one"}]},
+        {"role": "user", "content": "second"},
+        {"role": "assistant", "content": [{"type": "text", "text": "two"}]},
+    ], 0))
+    removed = _run(chat.truncate_last_exchange(ws, cid))
+    assert removed == "second"
+    left = _run(chat.load_messages(ws, cid))
+    assert [m["content"] for m in left] == ["first", [{"type": "text", "text": "one"}]]
+
+
+def test_truncate_renumbers_so_the_next_append_cannot_collide(tmp_path):
+    """The corruption this guards: turn files are `{turn:06d}` and the session
+    appends at `len(messages)`. A delete that left a numbering gap would make
+    the next append overwrite a live turn — so the rewrite must be contiguous."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": [{"type": "text", "text": "1"}]},
+        {"role": "user", "content": "b"},
+        {"role": "assistant", "content": [{"type": "text", "text": "2"}]},
+    ], 0))
+    _run(chat.truncate_last_exchange(ws, cid))
+
+    keys = _turn_keys(ws, cid)
+    assert [k.split("/")[-1] for k in keys] == ["000000", "000001"], keys
+
+    # Replay what the session does next: append at len(messages).
+    left = _run(chat.load_messages(ws, cid))
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "b again"},
+        {"role": "assistant", "content": [{"type": "text", "text": "3"}]},
+    ], len(left)))
+    final = _run(chat.load_messages(ws, cid))
+    assert [m["content"] for m in final] == [
+        "a", [{"type": "text", "text": "1"}],
+        "b again", [{"type": "text", "text": "3"}],
+    ], "a stale turn survived the truncate"
+
+
+def test_truncate_shrinks_a_stale_compaction_marker(tmp_path):
+    """`first_kept` is an index. Session clamps on load, but the marker on disk
+    has to shrink too — a value left past the new length would re-clamp beyond
+    the turns appended afterwards and hide them from the model's context."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": [{"type": "text", "text": "1"}]},
+        {"role": "user", "content": "b"},
+        {"role": "assistant", "content": [{"type": "text", "text": "2"}]},
+    ], 0))
+    _run(chat.put_compaction(ws, cid, {"summary": "earlier work", "first_kept": 3}))
+    _run(chat.truncate_last_exchange(ws, cid))
+    marker = _run(chat.get_compaction(ws, cid))
+    assert marker["first_kept"] == 2, marker
+    assert marker["summary"] == "earlier work"
+
+    # And the model's view still contains the turn sent after the truncate.
+    left = _run(chat.load_messages(ws, cid))
+    _run(chat.append_messages(ws, cid, [{"role": "user", "content": "b again"}], len(left)))
+    reloaded = _run(chat.load_messages(ws, cid))
+    session = chat.Session(ws, cid, reloaded, summary=marker["summary"],
+                           first_kept=int(marker["first_kept"]))
+    assert {"role": "user", "content": "b again"} in session.context()
+
+
+def test_truncate_keeps_a_marker_that_still_fits(tmp_path):
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": [{"type": "text", "text": "1"}]},
+        {"role": "user", "content": "b"},
+    ], 0))
+    _run(chat.put_compaction(ws, cid, {"summary": "s", "first_kept": 1}))
+    _run(chat.truncate_last_exchange(ws, cid))
+    assert _run(chat.get_compaction(ws, cid))["first_kept"] == 1
+
+
+def test_truncate_cuts_at_a_plain_user_turn_not_a_tool_result(tmp_path):
+    """A tool-result batch is a user-role message. Cutting there would strand
+    the assistant `tool_use` it answers; the cut has to land on a real turn."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "run it"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "A", "name": "bash", "input": {"command": "ls"}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "A", "content": "out"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "done"}]},
+    ], 0))
+    removed = _run(chat.truncate_last_exchange(ws, cid))
+    assert removed == "run it"
+    assert _run(chat.load_messages(ws, cid)) == []
+
+
+def test_truncate_on_a_chat_with_no_user_turn_is_a_noop(tmp_path):
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+    ], 0))
+    assert _run(chat.truncate_last_exchange(ws, cid)) is None
+    assert len(_run(chat.load_messages(ws, cid))) == 1
+
+
+def test_truncate_ignores_internal_scaffolding_turns(tmp_path):
+    """The output-limit resume prompt is a user-role message the harness wrote.
+    Regenerate must rewind to the user's own last turn, not to that."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "write it"},
+        {"role": "assistant", "content": [{"type": "text", "text": "part one"}]},
+        {"role": "user", "internal": True, "content": "Continue."},
+        {"role": "assistant", "content": [{"type": "text", "text": "part two"}]},
+    ], 0))
+    assert _run(chat.truncate_last_exchange(ws, cid)) == "write it"
+    assert _run(chat.load_messages(ws, cid)) == []
+
+
+# ---- create-only turn writes (docs/notes/runs.md) ----
+
+def test_append_returns_how_many_landed(tmp_path):
+    ws, cid = _ws(tmp_path), "test"
+    n = _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": [{"type": "text", "text": "1"}]},
+    ], 0))
+    assert n == 2
+
+
+def test_a_stale_index_conflicts_instead_of_overwriting(tmp_path):
+    """Two sessions, one chat — the shape behind both production holes. The
+    loser must not silently replace the winner's turn."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [{"role": "user", "content": "shared"}], 0))
+
+    a = chat.Session(ws, cid, [{"role": "user", "content": "shared"}])
+    b = chat.Session(ws, cid, [{"role": "user", "content": "shared"}])
+    for s, text in ((a, "from A"), (b, "from B")):
+        s.messages.append({"role": "assistant", "content": [{"type": "text", "text": text}]})
+
+    _run(a.checkpoint())
+    with pytest.raises(Conflict):
+        _run(b.checkpoint())
+
+    kept = _run(chat.load_messages(ws, cid))
+    assert kept[1]["content"] == [{"type": "text", "text": "from A"}], "B clobbered A"
+    assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == ["000000", "000001"]
+
+
+def test_a_conflict_banks_what_landed_so_a_retry_does_not_duplicate(tmp_path):
+    """The batch is sequential precisely so the session knows where it got to."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [{"role": "user", "content": "u"}], 0))
+    _run(chat.append_messages(ws, cid, [{"role": "assistant", "content": "squatter"}], 2))
+
+    s = chat.Session(ws, cid, [{"role": "user", "content": "u"}])
+    s.messages += [
+        {"role": "assistant", "content": [{"type": "text", "text": "mine"}]},   # -> 1, free
+        {"role": "user", "content": "next"},                                    # -> 2, taken
+    ]
+    with pytest.raises(Conflict):
+        _run(s.checkpoint())
+    assert (s._saved, s._next_idx) == (2, 2), "the landed turn was not banked"
+    assert _run(chat.load_messages(ws, cid))[1]["content"] == [{"type": "text", "text": "mine"}]
+
+
+def test_replace_messages_still_rewrites_in_place(tmp_path):
+    """create-only must not leak into the one caller whose job is to overwrite."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": [{"type": "text", "text": "1"}]},
+    ], 0))
+    _run(chat.replace_messages(ws, cid, [{"role": "user", "content": "only"}]))
+    assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == ["000000"]
+    assert _run(chat.load_messages(ws, cid)) == [{"role": "user", "content": "only"}]
+
+
+# ---- the user's turn is durable immediately (docs/notes/runs.md) ----
+
+def test_the_user_turn_is_on_disk_before_the_model_answers(tmp_path):
+    """The 42 titled-but-empty chats: the index was written at add_user and the
+    turn only at the first checkpoint, so a run that died between them lost what
+    the person typed."""
+    ws, cid = _ws(tmp_path), "test"
+    s = chat.Session(ws, cid, [])
+    _run(s.add_user("remember this"))
+
+    assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == ["000000"]
+    assert _run(chat.load_messages(ws, cid))[0]["content"] == "remember this"
+    assert _run(chat.get_meta(ws, cid))["title"] == "remember this"
+
+
+def test_an_internal_turn_is_durable_but_does_not_title_the_chat(tmp_path):
+    """An approval carried back from a confirm card is a turn the model must
+    keep and the chat must not show."""
+    ws, cid = _ws(tmp_path), "test"
+    s = chat.Session(ws, cid, [])
+    _run(s.add_user("real question"))
+    _run(s.add_user("Approved: bash", internal=True))
+
+    assert len(_turn_keys(ws, cid)) == 2
+    assert _run(chat.get_meta(ws, cid))["title"] == "real question"
+
+
+def test_rollback_cannot_drop_the_flushed_user_turn(tmp_path):
+    ws, cid = _ws(tmp_path), "test"
+    s = chat.Session(ws, cid, [])
+    _run(s.add_user("keep me"))
+    s.messages.append({"role": "assistant", "content": [
+        {"type": "tool_use", "id": "A", "name": "bash", "input": {}}]})
+
+    s.rollback()
+    assert [m["content"] for m in s.messages] == ["keep me"]
+    assert len(_turn_keys(ws, cid)) == 1
+
+
+def test_an_anonymous_session_still_writes_nothing(tmp_path):
+    ws = _ws(tmp_path)
+    s = chat.Session(ws, None, [])
+    _run(s.add_user("no chat id, no disk"))
+    assert s.messages[0]["content"] == "no chat id, no disk"
+    assert not list(Path(tmp_path).glob("**/*.json"))
+
+
+def test_a_cancelled_checkpoint_banks_the_turns_that_landed(tmp_path):
+    """Writes go through a thread, so a turn in flight can land even as the await
+    is cancelled. Unless the counters move, the next write re-uses a spent slot."""
+    from cycls._app import db as dbmod
+    ws, cid = _ws(tmp_path), "test"
+    s = chat.Session(ws, cid, [])
+    s.messages += [{"role": "user", "content": "a"}, {"role": "user", "content": "b"}]
+
+    real, calls = dbmod.DB.put, []
+    async def flaky(self, key, value, **kw):
+        calls.append(key)
+        if len(calls) == 2: raise asyncio.CancelledError()
+        return await real(self, key, value, **kw)
+
+    dbmod.DB.put = flaky
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            _run(s.checkpoint())
+    finally:
+        dbmod.DB.put = real
+
+    assert (s._saved, s._next_idx) == (1, 1), "the landed turn was not banked"
+    _run(s.checkpoint())
+    assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == ["000000", "000001"]
+
+
+# ---- a cancelled batch is taken back, not abandoned (docs/notes/runs.md) ----
+
+def test_unwind_keeps_what_finished_and_marks_only_what_was_cancelled(tmp_path):
+    from cycls._agent.harness.main import _unwind, _timed
+
+    ws, cid = _ws(tmp_path), "test"
+    s = chat.Session(ws, cid, [])
+    _run(s.add_user("do two things"))
+    blocks = [{"type": "tool_use", "id": "A", "name": "bash", "input": {}},
+              {"type": "tool_use", "id": "B", "name": "bash", "input": {}}]
+    s.messages.append({"role": "assistant", "content": blocks})
+
+    async def go():
+        async def quick(): return "finished output"
+        async def slow(): await asyncio.Event().wait()
+        tasks = [asyncio.create_task(_timed(quick())), asyncio.create_task(_timed(slow()))]
+        await asyncio.sleep(0)                      # let the quick one land
+        await _unwind(s, blocks, tasks, "interrupted", None, set(), ws)
+        # inside the loop: asyncio.run() cancels stragglers on the way out, so
+        # asserting after it would pass whether or not _unwind cancelled anything
+        return tasks[1].cancelled(), list(s.messages[-1]["content"])
+
+    cancelled, results = _run(go())
+
+    assert cancelled, "the running tool was left alive"
+    assert [r["tool_use_id"] for r in results] == ["A", "B"], "every call needs a result"
+    assert results[0]["content"] == "finished output" and results[0]["is_error"] is False
+    assert results[1]["content"].startswith("Interrupted:") and results[1]["is_error"] is True
+    assert len(_run(chat.load_messages(ws, cid))) == 3, "the pair must survive the next read"
+
+
+def test_a_cancelled_tool_is_not_recorded_as_an_error_value(tmp_path):
+    """_timed used to swallow CancelledError and hand back the exception, which
+    the loop then wrote as `Error: CancelledError`."""
+    from cycls._agent.harness.main import _timed
+
+    async def go():
+        async def slow(): await asyncio.Event().wait()
+        t = asyncio.create_task(_timed(slow()))
+        await asyncio.sleep(0)
+        t.cancel()
+        try: await t
+        except asyncio.CancelledError: pass
+        return t
+
+    assert _run(go()).cancelled()
+
+
+# ---- the run record (docs/notes/runs.md §3) ----
+
+def test_a_stopped_heartbeat_reads_as_interrupted_not_running(tmp_path):
+    """No chat may sit at `running` forever because its container died."""
+    from datetime import datetime, timedelta, timezone
+    ws, cid = _ws(tmp_path), "test"
+    fresh = datetime.now(timezone.utc)
+    _run(chat.put_run(ws, cid, {"run": "r1", "status": "running",
+                                "heartbeat": fresh.isoformat()}))
+    assert chat.run_status(_run(chat.get_run(ws, cid))) == "running"
+
+    stale = fresh - timedelta(seconds=chat.RUN_STALE + 5)
+    _run(chat.put_run(ws, cid, {"run": "r1", "status": "running",
+                                "heartbeat": stale.isoformat()}))
+    assert chat.run_status(_run(chat.get_run(ws, cid))) == "interrupted"
+    assert chat.run_status(None) is None
+    assert chat.run_status({"status": "done"}) == "done"
+
+
+def test_the_record_is_all_strings_and_rides_the_meta_channel(tmp_path):
+    """It is read back through a listing, which carries object metadata — and the
+    store rejects a non-string there, from inside a terminal write."""
+    from cycls._app.db import DB
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.put_run(ws, cid, {"run": "r1", "status": "running", "ms": 1234,
+                                "reason": None, "heartbeat": "now"}))
+    row = _run(chat.get_run(ws, cid))
+    assert row == {"run": "r1", "status": "running", "ms": "1234", "heartbeat": "now"}, row
+    assert _run(chat.list_runs(ws)) == {cid: row}
+
+
+# ---- the poll's window (docs/notes/runs.md §4) ----
+
+def test_load_tail_returns_only_new_turns_and_the_next_cursor(tmp_path):
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": [{"type": "text", "text": "1"}]},
+        {"role": "user", "content": "b"},
+    ], 0))
+
+    turns, end = _run(chat.load_tail(ws, cid, 0))
+    assert len(turns) == 3 and end == 3
+    turns, end = _run(chat.load_tail(ws, cid, 2))
+    assert [m["content"] for m in turns] == ["b"] and end == 3
+    assert _run(chat.load_tail(ws, cid, 3)) == ([], 3)
+
+
+def test_load_tail_tells_a_client_that_is_ahead_to_reload(tmp_path):
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [{"role": "user", "content": "a"}], 0))
+    assert _run(chat.load_tail(ws, cid, 9)) == (None, 1)
+
+
+def test_load_tail_does_not_normalize_its_window(tmp_path):
+    """A window is a view, not a provider payload: normalizing one would strip a
+    tool_result whose tool_use sits before it and blank the poll."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "A", "name": "bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "A", "content": "ok"}]},
+    ], 0))
+    turns, _ = _run(chat.load_tail(ws, cid, 2))
+    assert len(turns) == 1 and turns[0]["content"][0]["type"] == "tool_result"
+
+
+def test_turn_end_counts_past_a_hole(tmp_path):
+    """`len()` is not the next index — two production chats had holes."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [{"role": "user", "content": "a"}], 0))
+    _run(chat.append_messages(ws, cid, [{"role": "user", "content": "b"}], 5))
+    assert _run(chat.turn_end(ws, cid)) == 6
