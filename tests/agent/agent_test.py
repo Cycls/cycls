@@ -26,7 +26,7 @@ def _clear_client_cache():
 from cycls._agent.harness.compact import COMPACT_BUFFER, microcompact, compact
 from cycls._agent.harness.events import to_ui
 from cycls._agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path
-from cycls._agent.state import load_messages
+from cycls._agent.state import load_messages, load_tail
 from cycls._app.db import workspace
 
 
@@ -199,6 +199,31 @@ def test_history_survives_crash_after_first_tool_round(agent_env):
     assert history[0]["role"] == "user"
     assert history[1]["role"] == "assistant"
     assert history[2]["role"] == "user"
+
+
+def test_assistant_turn_is_on_disk_before_its_tools_run(agent_env):
+    """A kill mid-batch must not lose the turn that asked for the tools — the
+    next run would re-decide and redo every tool it already ran. The spy reads
+    the transcript at the moment the tool executes."""
+    ws, ctx = agent_env
+    seen = {}
+
+    responses = iter([_make_response([_tool_use_block("t1")], stop_reason="tool_use"),
+                      _make_response([_text_block("done")])])
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+
+    async def _spy(*a, **kw):
+        # Raw turn files, not load_messages: normalization drops a trailing
+        # unpaired tool_use, which is exactly the turn under test.
+        turns, _end = await load_tail(ctx.workspace, ctx.chat_id, 0)
+        seen["roles"] = [m["role"] for m in turns]
+        return "ok"
+
+    with _mock_anthropic(mock_client), patch("cycls._agent.tools._exec_bash", new=_spy):
+        asyncio.run(_drain(_run(context=ctx)))
+
+    assert seen["roles"] == ["user", "assistant"]   # the turn asking for t1 is durable
 
 
 def test_error_recovery_saves_incrementally(agent_env):
