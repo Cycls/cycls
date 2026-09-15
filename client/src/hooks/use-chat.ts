@@ -105,6 +105,10 @@ export function useChat(baseUrl: string = "") {
   const messagesRef = useRef<Message[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const lastRequestRef = useRef<{ text: string; attachments?: Attachment[]; origin?: string } | null>(null);
+  // Which conversation the view is showing. A run captures it when it starts and
+  // writes nothing once it no longer matches — the chat id is not enough, since a
+  // run can learn its id after the user has already moved on.
+  const viewRef = useRef(0);
   const uiHandlerRef = useRef<UIHandler | null>(null);
   const setUIHandler = useCallback((h: UIHandler | null) => {
     uiHandlerRef.current = h;
@@ -158,6 +162,8 @@ export function useChat(baseUrl: string = "") {
       // An approval carried back from a confirm card is machinery, not something the person typed —
       // it goes to the model and the server stores it `internal`, so the chat shows no bubble for it.
       const silent = origin === "confirm";
+      const view = viewRef.current;
+      const mine = () => viewRef.current === view;
       setMessages((prev) => [...prev, ...(silent ? [] : [userMessage]), assistantMessage]);
       setIsStreaming(true);
       const sentAt = Date.now();
@@ -258,6 +264,7 @@ export function useChat(baseUrl: string = "") {
                 // The server knows whether this account had any chat before —
                 // a browser flag can't (existing users on a new device).
                 if (item.first) track("first_agent_use", {});
+                if (!mine()) continue;   // the view moved on before the id arrived
                 chatIdRef.current = item.chat_id;
                 setChatId(item.chat_id);
                 // Reflect in browser URL so the chat is bookmarkable/shareable
@@ -321,6 +328,7 @@ export function useChat(baseUrl: string = "") {
               }
 
               // Update state
+              if (!mine()) continue;
               setMessages((prev) => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];
@@ -347,18 +355,20 @@ export function useChat(baseUrl: string = "") {
           .map((p) => p.text)
           .join("");
 
-        setMessages((prev) => {
-          const updated = [...prev];
-          const last = updated[updated.length - 1];
-          if (last?.role === "assistant") {
-            updated[updated.length - 1] = {
-              ...last,
-              content: contentText,
-              parts: finalParts,
-            };
-          }
-          return updated;
-        });
+        if (mine()) {
+          setMessages((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last?.role === "assistant") {
+              updated[updated.length - 1] = {
+                ...last,
+                content: contentText,
+                parts: finalParts,
+              };
+            }
+            return updated;
+          });
+        }
 
         // Success — clear retry ref
         lastRequestRef.current = null;
@@ -371,7 +381,7 @@ export function useChat(baseUrl: string = "") {
         // meantime the retry succeeds and sends the message twice.
         if ((err as Error & { status?: number }).status === 409) {
           track("run_busy", { chat_id: chatIdRef.current });
-          setMessages((prev) => {
+          if (mine()) setMessages((prev) => {
             const updated = [...prev];
             const last = updated[updated.length - 1];
             if (last?.role === "assistant") {
@@ -382,7 +392,7 @@ export function useChat(baseUrl: string = "") {
           });
         // Only retry a pre-stream failure; once bytes flowed the server has
         // the turn and resubmitting would double-run it.
-        } else if ((err as Error).name !== "AbortError" && !receivedData) {
+        } else if ((err as Error).name !== "AbortError" && !receivedData && mine()) {
           try {
             setMessages((prev) => {
               const updated = [...prev];
@@ -400,7 +410,7 @@ export function useChat(baseUrl: string = "") {
                 error_message: (retryErr as Error).message,
                 chat_id: chatIdRef.current,
               });
-              setMessages((prev) => {
+              if (mine()) setMessages((prev) => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];
                 if (last?.role === "assistant") {
@@ -503,6 +513,7 @@ export function useChat(baseUrl: string = "") {
 
   const clear = useCallback(() => {
     track("chat_cleared", { chat_id: chatIdRef.current });
+    viewRef.current += 1;
     abortRef.current?.abort();
     setMessages([]);
     setChatId(null);
@@ -566,6 +577,7 @@ export function useChat(baseUrl: string = "") {
   }, [api]);
 
   const loadChat = useCallback(async (id: string) => {
+    viewRef.current += 1;   // whatever is streaming stops writing here
     abortRef.current?.abort();
     setChatLoading(true);
     try {
@@ -603,6 +615,7 @@ export function useChat(baseUrl: string = "") {
     await api(`/chats/${id}`, { method: "DELETE" });
     track("chat_deleted", { chat_id: id });
     if (chatIdRef.current === id) {
+      viewRef.current += 1;
       abortRef.current?.abort();
       setMessages([]);
       setChatId(null);

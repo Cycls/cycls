@@ -396,3 +396,4 @@ describe("tool switches", () => {
     expect(bodies[1]).not.toHaveProperty("disabled_tools");
   });
 });
+
