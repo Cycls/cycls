@@ -423,9 +423,8 @@ class Session:
         persist = bool(context.chat_id and context.user)
         if not persist:
             return cls(context.workspace, None, [])
-        # Append-only: normalization is in memory, so the list can be shorter
-        # than what is on disk. `next_idx` is the real end of the turn files, so
-        # this run writes past every existing slot instead of over one.
+        # Append-only: the normalized list can be shorter than disk, so writes
+        # go past every existing slot rather than over one.
         messages = _ephemeralize(await load_messages(context.workspace, context.chat_id))
         marker = await get_compaction(context.workspace, context.chat_id) or {}
         return cls(context.workspace, context.chat_id, messages,

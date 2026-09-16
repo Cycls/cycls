@@ -103,8 +103,6 @@ export function useChat(baseUrl: string = "") {
   // its connection, which is the whole point of the design.
   const [attached, setAttached] = useState(false);
   const [runStatus, setRunStatus] = useState<string | null>(null);
-  // Wall-clock start of the run the server is working on, so the indicator can
-  // tick elapsed for a run this tab never started.
   const [runStartedAt, setRunStartedAt] = useState<string | null>(null);
   const isStreaming = attached || runStatus === "running";
   const [chatId, setChatId] = useState<string | null>(null);
@@ -184,14 +182,9 @@ export function useChat(baseUrl: string = "") {
 
   // Watch a run we are not streaming. The run outlives its request, so a stream
   // that ended is not a turn that ended — only the record says that.
-  // `reload`: the stream ended abnormally, so this tab rendered a turn the
-  // server also has. Nothing advances the cursor during a stream, so a tail
-  // from the pre-turn index would append what is already on screen — the
-  // exchange twice. Drop the cursor and take the server's copy whole.
-  const pollRun = useCallback(async (id: string, reload = false) => {
+  const pollRun = useCallback(async (id: string) => {
     if (pollingRef.current) return;
     pollingRef.current = true;
-    if (reload) cursorRef.current = null;
     const view = viewRef.current;
     try {
       for (;;) {
@@ -546,7 +539,8 @@ export function useChat(baseUrl: string = "") {
         // No end marker means the stream stopped before the run did — the record
         // is the only thing that knows which. Also covers a clean-looking read
         // that simply ran out, which is what a parked tab produces.
-        if (!sawDone && chatIdRef.current && mine()) void pollRun(chatIdRef.current, true);
+        cursorRef.current = null;   // nothing advanced it while streaming
+        if (!sawDone && chatIdRef.current && mine()) void pollRun(chatIdRef.current);
         const stopped = !!abortRef.current?.signal.aborted;
         setAttached(false);
         abortRef.current = null;
@@ -643,8 +637,9 @@ export function useChat(baseUrl: string = "") {
       try { await api(`/chats/${encodeURIComponent(id)}/stop`, { method: "POST" }); }
       catch { /* it may already have finished; the poll below settles it */ }
     }
+    const streaming = !!abortRef.current;
     abortRef.current?.abort();   // let go of the reader, for immediate feedback
-    if (id) void pollRun(id, true);    // and watch it wind down
+    if (id && !streaming) void pollRun(id);   // a stream settles itself above
   }, [api, pollRun]);
 
   const clear = useCallback(() => {

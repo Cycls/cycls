@@ -273,7 +273,6 @@ def chats_router(ws_dep):
             end = end if end is not None else await state.turn_end(ws, chat_id)
         ui = to_ui_messages(turns)
         return {**meta, "messages": ui, "run": run, "next": end,
-                # Only while running: the client ticks elapsed from it.
                 **({"run_started": row.get("started")} if run == "running" and row else {}),
                 "open": ui[-1]["role"] if ui else None,
                 **({"reset": True} if reset else {})}

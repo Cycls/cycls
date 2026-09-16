@@ -105,11 +105,10 @@ class Run:
     def __init__(self, *, detach, workspace=None, chat_id=None, user=None):
         self.queue = asyncio.Queue(QUEUE_MAX)
         self.detach, self.attached, self.reason = detach, True, None
-        self.failed = False   # set by the encoder, which handles the error itself
+        self.failed = False   # the encoder handles the error itself
         self.task = self.inner = None
         self.workspace, self.chat_id, self.user = workspace, chat_id, user
         self.id, self.started = uuid.uuid4().hex, time.monotonic()
-        # Wall clock too: `started` is monotonic, which no reader can interpret.
         self.started_at = datetime.now(timezone.utc).isoformat()
 
     def row(self, status):
@@ -255,10 +254,7 @@ async def encoder(stream, *, chat_id=None, user=None, first=False, run=None):
         error_id = uuid.uuid4().hex[:8]
         log("error", user=user, chat_id=chat_id,
             error_id=error_id, message=str(e), stack=traceback.format_exc())
-        # The callout below keeps the stream well-formed, so the task ends clean
-        # and `outcome()` would call this run `done` — and a deployment hooked on
-        # the finished-run event would announce a turn that actually raised.
-        if run is not None: run.failed = True
+        if run is not None: run.failed = True   # the callout would read as `done`
         yield sse({"type": "callout",
                    "callout": f"Something went wrong. Reference: `{error_id}`",
                    "style": "error"})
@@ -420,10 +416,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         # through the record. Its supervisor reads this on its next beat.
         row = await state.get_run(ws, chat_id) if user is not None else None
         status = state.run_status(row)
-        if row is not None and status != "running":
-            # Already finished. The client polls every couple of seconds, so a
-            # person can easily press Stop in the window after a run ends —
-            # stopping what already stopped is a no-op, not an error to show.
+        if row is not None and status != "running":   # finished: a no-op, not an error
             return JSONResponse(status_code=202, content={"stopping": False, "status": status})
         if status != "running":
             return JSONResponse(status_code=404, content={"error": "no_run"})

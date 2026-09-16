@@ -71,10 +71,8 @@ def _provider():
 # markers), so the SAME session is REUSED across the stateless connect/act/
 # disconnect cycles a turn makes — else every call would mint a fresh blank page
 # and multi-step flows (open → read → click → screenshot) would fall apart. Keyed
-# by caller AND chat: one person's two chats each drive their own page, or one
-# run's `open` navigates the other's out from under it. A stale entry is evicted
-# and re-minted on the next connect failure. The `cdp` provider is one browser by
-# design and needs no cache.
+# by caller AND chat: two chats of one person must not share a page. A stale entry
+# is evicted on the next connect failure; `cdp` is one browser and needs no cache.
 _STEEL_SESSIONS = {}
 # Same idea for the `cycls` REST provider — cache the server-side session id.
 _REST_SESSIONS = {}
