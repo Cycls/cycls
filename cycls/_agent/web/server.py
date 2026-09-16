@@ -105,6 +105,7 @@ class Run:
     def __init__(self, *, detach, workspace=None, chat_id=None, user=None):
         self.queue = asyncio.Queue(QUEUE_MAX)
         self.detach, self.attached, self.reason = detach, True, None
+        self.failed = False   # set by the encoder, which handles the error itself
         self.task = self.inner = None
         self.workspace, self.chat_id, self.user = workspace, chat_id, user
         self.id, self.started = uuid.uuid4().hex, time.monotonic()
@@ -118,7 +119,7 @@ class Run:
     def outcome(self):
         if self.inner.cancelled():
             return "stopped" if self.reason == "stopped" else "interrupted"
-        return "failed" if self.inner.exception() else "done"
+        return "failed" if (self.inner.exception() or self.failed) else "done"
 
     def done(self):
         return self.task is not None and self.task.done()
@@ -241,7 +242,7 @@ def _claim(runs, key, task):
     return True
 
 
-async def encoder(stream, *, chat_id=None, user=None, first=False):
+async def encoder(stream, *, chat_id=None, user=None, first=False, run=None):
     if chat_id: yield sse({"type": "chat_id", "chat_id": chat_id, **({"first": True} if first else {})})
     try:
         async for item in _aiter(stream):
@@ -251,6 +252,10 @@ async def encoder(stream, *, chat_id=None, user=None, first=False):
         error_id = uuid.uuid4().hex[:8]
         log("error", user=user, chat_id=chat_id,
             error_id=error_id, message=str(e), stack=traceback.format_exc())
+        # The callout below keeps the stream well-formed, so the task ends clean
+        # and `outcome()` would call this run `done` — and a deployment hooked on
+        # the finished-run event would announce a turn that actually raised.
+        if run is not None: run.failed = True
         yield sse({"type": "callout",
                    "callout": f"Something went wrong. Reference: `{error_id}`",
                    "style": "error"})
@@ -390,7 +395,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                 await _record(run, "running")   # visible before the first heartbeat
             stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
             stream = (openai_encoder(stream) if api
-                      else encoder(stream, chat_id=chat_id, user=user, first=first))
+                      else encoder(stream, chat_id=chat_id, user=user, first=first, run=run))
         except BaseException:
             if runs.get(key) is run: runs.pop(key, None)   # no supervisor yet to do it
             raise
