@@ -110,7 +110,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   account?: AccountInfo | null;
   config?: AppConfig | null;
 }) {
-  const { messages, isStreaming, runStatus, runStartedAt, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler } = chat;
+  const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler } = chat;
   const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
@@ -739,7 +739,7 @@ export function Chat({ chat, onShare, files, account, config }: {
 
   const inputProps = {
     textareaRef, input, setInput, handleKeyDown, handleSubmit, isStreaming, onStop: handleStop,
-    working: (isStreaming && !chat.attached ? "background" : undefined) as "background" | undefined,
+    working: (runStatus === "running" && !attached ? "background" : undefined) as "background" | undefined,
     onOpenFilePicker: openFilePicker,
     onOpenFiles: files ? () => openPanel("files") : undefined,
     attachments,
@@ -1084,7 +1084,9 @@ export function Chat({ chat, onShare, files, account, config }: {
                   ))}
                 </AnimatePresence>
                 <AnimatePresence initial={false}>
-                  {isStreaming && (
+                  {/* Only when the work is happening WITHOUT this tab attached.
+                      While the stream is feeding us the output says it already. */}
+                  {runStatus === "running" && !attached && (
                     <RunIndicator step={currentStep} startedAt={runStartedAt} onStop={handleStop} />
                   )}
                 </AnimatePresence>
