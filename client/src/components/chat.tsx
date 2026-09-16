@@ -520,8 +520,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     setTimeout(() => scrollToBottom(), 0);
   }, [isStreaming, onSend, scrollToBottom, chatId]);
 
-  // The newest step the agent reported — what the indicator says it is doing.
-  // Read off the transcript, so a run this tab never streamed still shows one.
+  // Newest step on the transcript — a run this tab never streamed still has one.
   const currentStep = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const parts = (messages[i] as { parts?: { type: string; step?: string }[] }).parts;
@@ -533,8 +532,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     return null;
   }, [messages]);
 
-  // The list's `run` comes from one GET /chats and never changes, so a finished
-  // chat would pulse forever. Mirror the active chat's live status into it.
+  // The list's `run` is fetched once; without this a finished chat pulses on.
   useEffect(() => {
     if (!chatId) return;
     setChats((prev) => prev.map((x) => (x.id === chatId ? { ...x, run: runStatus } : x)));
@@ -1084,8 +1082,6 @@ export function Chat({ chat, onShare, files, account, config }: {
                   ))}
                 </AnimatePresence>
                 <AnimatePresence initial={false}>
-                  {/* Only when the work is happening WITHOUT this tab attached.
-                      While the stream is feeding us the output says it already. */}
                   {runStatus === "running" && !attached && (
                     <RunIndicator step={currentStep} startedAt={runStartedAt} onStop={handleStop} />
                   )}
@@ -1557,8 +1553,6 @@ function RunIndicator({ step, startedAt, onStop }: {
   startedAt: string | null;
   onStop: () => void;
 }) {
-  // Ticks locally; `startedAt` is the server's wall clock, so a run this tab
-  // never started still shows a true elapsed.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const h = setInterval(() => setNow(Date.now()), 1000);
