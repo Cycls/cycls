@@ -164,9 +164,9 @@ export function useChat(baseUrl: string = "") {
   // may be a continuation of the last one rendered — `open` is how we know.
   const applyTail = useCallback((data: {
     messages?: Message[]; next?: number; open?: string | null; reset?: boolean;
-  }) => {
+  }, replace = false) => {
     const tail = data.messages || [];
-    if (data.reset) setMessages(tail);
+    if (data.reset || (replace && tail.length)) setMessages(tail);
     else if (tail.length) setMessages((prev) => {
       const out = [...prev];
       const last = out[out.length - 1];
@@ -184,19 +184,25 @@ export function useChat(baseUrl: string = "") {
 
   // Watch a run we are not streaming. The run outlives its request, so a stream
   // that ended is not a turn that ended — only the record says that.
-  const pollRun = useCallback(async (id: string) => {
+  // `reload`: the stream ended abnormally, so this tab rendered a turn the
+  // server also has. Nothing advances the cursor during a stream, so a tail
+  // from the pre-turn index would append what is already on screen — the
+  // exchange twice. Drop the cursor and take the server's copy whole.
+  const pollRun = useCallback(async (id: string, reload = false) => {
     if (pollingRef.current) return;
     pollingRef.current = true;
+    if (reload) cursorRef.current = null;
     const view = viewRef.current;
     try {
       for (;;) {
         if (viewRef.current !== view) return;
-        const q = cursorRef.current == null ? "" : `?since=${cursorRef.current}`;
+        const full = cursorRef.current == null;
+        const q = full ? "" : `?since=${cursorRef.current}`;
         const res = await api(`/chats/${encodeURIComponent(id)}${q}`);
         if (res.status === 204) return;
         const data = await res.json();
         if (viewRef.current !== view) return;
-        applyTail(data);
+        applyTail(data, full);
         setRunStatus(data.run ?? null);
         setRunStartedAt(data.run_started ?? null);
         if (data.run !== "running") {
@@ -540,7 +546,7 @@ export function useChat(baseUrl: string = "") {
         // No end marker means the stream stopped before the run did — the record
         // is the only thing that knows which. Also covers a clean-looking read
         // that simply ran out, which is what a parked tab produces.
-        if (!sawDone && chatIdRef.current && mine()) void pollRun(chatIdRef.current);
+        if (!sawDone && chatIdRef.current && mine()) void pollRun(chatIdRef.current, true);
         const stopped = !!abortRef.current?.signal.aborted;
         setAttached(false);
         abortRef.current = null;
@@ -638,7 +644,7 @@ export function useChat(baseUrl: string = "") {
       catch { /* it may already have finished; the poll below settles it */ }
     }
     abortRef.current?.abort();   // let go of the reader, for immediate feedback
-    if (id) void pollRun(id);    // and watch it wind down
+    if (id) void pollRun(id, true);    // and watch it wind down
   }, [api, pollRun]);
 
   const clear = useCallback(() => {
