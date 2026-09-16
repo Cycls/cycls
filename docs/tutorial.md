@@ -360,6 +360,37 @@ python browser_service.py        # → https://cycls-browser.cycls.ai
 (Self-hosted **Steel Browser** over CDP is an alternative backing — set
 `BROWSER_PROVIDER=steel`.) Details: [docs/notes/browser.md](notes/browser.md).
 
+### Design (posts & slides)
+
+Let an agent **create graphics** — social-media posts and slide decks — and show
+them on the canvas, with no design engine in the image. The agent describes a
+design as a small JSON spec; a shared service (OpenPencil, headless) renders it to
+an image (and a real `.pptx` for decks) plus an editable `.fig` source. Same split
+as browser/office: the SDK ships only the client and the built-in `Design` tool.
+
+Enable it by adding `"Design"` to `allowed_tools` and pointing env at the service:
+
+```python
+llm = cycls.LLM().model(...).allowed_tools(["Bash", "Editor", "Design"])
+```
+```
+DESIGN_URL=https://cycls-design.cycls.ai    # your deployed design service
+DESIGN_SECRET=<the shared service secret>   # optional; a local dev instance runs open
+```
+
+The model calls one `design` tool. `render {spec}` where `spec` is
+`{size:[w,h], fill, nodes:[…]}` — `text` and `rect` nodes with explicit geometry,
+hex colors, and Inter/Arial fonts — or a **deck** `{frames:[…]}` (one frame per
+slide) exported as `pptx`. Formats: png (default), jpg, webp, svg, pptx. The render
+opens on the canvas; the editable `.fig` is saved beside it for later tweaks. A raw
+`script` escape hatch runs an OpenPencil / Figma plugin-API script for anything the
+spec can't express. Unset the env and the tool simply isn't offered — no crash,
+like the office fallback.
+
+The service is a small Bun + OpenPencil app in its own repo (`cycls-design`);
+generation uses the Figma plugin API (high fidelity), not HTML import. Details:
+[docs/notes/design.md](notes/design.md).
+
 ### Apple IAP entitlements
 
 For agents that sell subscriptions through Apple In-App Purchase, `.iap(...)`
@@ -408,7 +439,7 @@ async for ev in llm.run(context=context):
 | `.system(str)` | System prompt |
 | `.tools(list)` | Custom tool JSON schemas |
 | `.on(name, fn, label=)` | Register async handler for a custom tool; `label` (input → str) renders the step line in the UI, like `Bash(command)` — default is the input's first string value |
-| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `Browser`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user. `Browser` is offered only when a browser service is configured (see below) |
+| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `Browser`, `Design`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user. `Browser` and `Design` are offered only when their service is configured (see below) |
 | `.instructions(path)` | Workspace instructions file auto-loaded into the system prompt (default `AGENT.md`; `None` disables) |
 | `.skills(*dirs)` | Ship skills with the agent (dirs of `<name>/SKILL.md` folders; `None` disables skills) |
 | `.context(n)` | Model context window in tokens — sets when compaction kicks in (default 1M; set it for smaller models) |
