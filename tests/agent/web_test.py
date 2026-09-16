@@ -17,6 +17,29 @@ THEME_PATH = str(importlib.resources.files('cycls').joinpath('_agent/web/themes/
 # Messages Class Tests
 # =============================================================================
 
+def test_a_handled_stream_error_is_a_failed_run():
+    """The encoder turns an exception into a callout so the stream stays
+    well-formed. Without a flag the task then ends clean and the run records
+    `done` — and a finished-run hook announces a turn that actually raised."""
+    import asyncio
+    from cycls._agent.web.server import Run, encoder
+
+    async def boom():
+        yield {"type": "text", "text": "partial"}
+        raise RuntimeError("provider went away")
+
+    run = Run(detach=False, chat_id="c1")
+
+    async def go():
+        out = [chunk async for chunk in encoder(boom(), chat_id="c1", run=run)]
+        return out
+
+    out = asyncio.run(go())
+    assert any("[DONE]" in c for c in out), "stream must still terminate cleanly"
+    assert any("callout" in c for c in out), "the person must still see the error"
+    assert run.failed is True, "a handled error must still mark the run failed"
+
+
 def test_messages_extracts_text_content():
     """Tests that Messages extracts text-only content from raw messages."""
     print("\n--- Running test: test_messages_extracts_text_content ---")
