@@ -405,9 +405,13 @@ describe("watching a run the stream no longer carries (docs/notes/runs.md)", () 
       const u = String(url);
       if (u.includes("/chats/")) {
         polls.push(u);
+        // No `since` means a FULL load — the server returns the whole chat,
+        // never a fragment. The client takes it whole, because its own copy of
+        // the cut turn overlaps it.
         return polls.length === 1
           ? { ok: true, status: 200, json: async () => ({
-              messages: [{ role: "assistant", content: " and the rest", parts: [] }],
+              messages: [{ role: "user", content: "hi" },
+                         { role: "assistant", content: "half an answer and the rest", parts: [] }],
               next: 4, open: "assistant", run: "running" }) } as any
           : { ok: true, status: 200, json: async () => ({ messages: [], next: 4, run: "done" }) } as any;
       }
@@ -436,10 +440,55 @@ describe("watching a run the stream no longer carries (docs/notes/runs.md)", () 
     expect(polls[0]).not.toContain("since=");
     expect(polls[1]).toContain("since=4");
     expect(result.current.runStatus).toBe("done");
-    // the window was folded onto the open bubble, not appended as a new one
+    // the server's copy replaced the cut one rather than stacking on it
+    expect(result.current.messages).toHaveLength(2);
     const last = result.current.messages[result.current.messages.length - 1];
     expect(last.role).toBe("assistant");
     expect(last.content).toBe("half an answer and the rest");
+  });
+
+  test("stopping a run does not render the exchange twice", async () => {
+    // Nothing advances the cursor during a stream, so a tail poll from the
+    // pre-turn index returns the very turn this tab just rendered itself.
+    const urls: string[] = [];
+    const full = [{ role: "user", content: "first" },
+                  { role: "assistant", content: "reply", parts: [] }];
+    const after = [...full, { role: "user", content: "ok thanks" },
+                   { role: "assistant", content: "you are welcome", parts: [] }];
+    const fetchMock = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes("/chats/")) {
+        urls.push(u);
+        if (u.includes("since=")) // the stale-cursor tail that used to duplicate
+          return { ok: true, status: 200, json: async () => ({
+            messages: after.slice(2), next: 4, open: "assistant", run: "done" }) } as any;
+        const first = urls.filter((x) => !x.includes("since=")).length === 1;
+        return { ok: true, status: 200, json: async () => ({
+          messages: first ? full : after, next: first ? 2 : 4,
+          open: "assistant", run: first ? null : "done" }) } as any;
+      }
+      return { ok: true, body: { getReader: () => {
+        const chunks = ['data: {"type":"chat_id","chat_id":"c1"}\n\n',
+                        'data: {"type":"text","text":"you are welcome"}\n\n'];
+        let i = 0;
+        return { read: async () => i < chunks.length
+          ? { done: false, value: new TextEncoder().encode(chunks[i++]) }
+          : { done: true, value: undefined } };
+      } } } as any;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useChat(""));
+    await act(async () => { await result.current.loadChat("c1"); });
+    expect(result.current.messages).toHaveLength(2);
+
+    await act(async () => { await result.current.send("ok thanks"); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
+
+    // four turns, not six: the server's copy replaced this tab's, and the
+    // exchange is not on screen twice.
+    expect(result.current.messages).toHaveLength(4);
+    expect(result.current.messages.filter((m) => m.content === "ok thanks")).toHaveLength(1);
   });
 });
 
