@@ -247,6 +247,56 @@ _BROWSER_TOOL = {
     }, "required": ["action"]}
 }
 
+# Visual design (social posts + slides), backed by the shared cycls-design
+# service (see cycls/_agent/design). Enabled by "Design" in allowed_tools, but
+# only offered when the service is configured — else silently absent, like an
+# unconfigured office-render. The model describes a design as a spec; the service
+# renders it to an image (shown on the canvas) plus an editable .fig source.
+_DESIGN_TOOL = {
+    "type": "custom",
+    "name": "design",
+    "description": (
+        "Create a visual design — a social-media post or a slide — and show it to "
+        "the user on the canvas. You describe the design; the service renders it to "
+        "an image and to an editable design file saved in the workspace.\n\n"
+        "Two ways to call:\n"
+        "- render {spec, name, format?} — the normal way. `spec` is a JSON design:\n"
+        "    {\"size\": [W, H], \"fill\": \"#0f172a\", \"nodes\": [ ... ]}\n"
+        "  Coordinates are pixels from the top-left. Node types:\n"
+        "    {\"type\":\"text\", \"text\":\"…\", \"x\":, \"y\":, \"w\"?:, \"size\":, "
+        "\"font\":\"Inter Bold\"|\"Inter Regular\"|\"Arial\", \"color\":\"#fff\", "
+        "\"align\"?:\"left|center|right\", \"lineHeight\"?:px}\n"
+        "    {\"type\":\"rect\", \"x\":, \"y\":, \"w\":, \"h\":, \"radius\"?:, \"fill\":\"#3b82f6\"}\n"
+        "  Give any multi-word text a `w` (wrap width). Common sizes: 1080×1080 "
+        "(square post), 1080×1920 (story), 1920×1080 (slide).\n"
+        "  LAYOUT: leave vertical room for text that WRAPS — a headline with a wrap "
+        "width `w` can run 2–3 lines (budget ~1.2×`size` per line, or set "
+        "`lineHeight`), and put the NEXT node below the whole wrapped block so "
+        "nothing overlaps. Sketch the y positions top-to-bottom before you emit them.\n"
+        "- For a multi-slide DECK, pass frames instead of a single design:\n"
+        "    {\"frames\": [ {\"size\":[1920,1080], \"fill\":…, \"nodes\":[…]}, … ]}\n"
+        "  one object per slide, and set format \"pptx\" — each frame becomes a slide "
+        "in one PowerPoint file.\n"
+        "- script {script, name, format?} — escape hatch: a raw OpenPencil / Figma "
+        "plugin-API script for what the spec can't express. It MUST end with "
+        "`console.log('__FRAME__'+frame.id)` naming the frame to export.\n\n"
+        "`format` is png (default), jpg, webp, svg, or pptx (PowerPoint; use it for "
+        "decks). `name` is the file base name, e.g. `launch`. The render opens on the "
+        "canvas; the editable `.fig` is saved beside it for later edits."
+    ),
+    "input_schema": {"type": "object", "properties": {
+        "action": {"type": "string", "enum": ["render", "script"],
+                   "description": "`render` a JSON spec (normal), or run a raw `script` (escape hatch)."},
+        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}, or a deck {frames: [{size, fill, nodes}, ...]} (one per slide, export as pptx)."},
+        "script": {"type": "string",
+                   "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id)."},
+        "name": {"type": "string", "description": "Output file base name, e.g. `launch` (lowercase, no extension)."},
+        "format": {"type": "string", "enum": ["png", "jpg", "webp", "svg", "pptx"],
+                   "description": "Output format (default png). Use pptx for a PowerPoint slide."},
+        "scale": {"type": "integer", "description": "Raster scale for png/jpg/webp (default 2 = @2x)."},
+    }, "required": ["action"]}
+}
+
 _BUILD_APP_TOOL = {
     "type": "custom",
     "name": "build_app",
@@ -376,6 +426,12 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
             from cycls._agent import browser as _browser
             if _browser.configured():
                 tools.append(_BROWSER_TOOL)
+        elif name == "Design":
+            # Same gate as Browser: only offered when the cycls-design service is
+            # configured (DESIGN_URL), else silently absent.
+            from cycls._agent import design as _design
+            if _design.configured():
+                tools.append(_DESIGN_TOOL)
         else:
             tools += _BUILTINS.get(name, [])
     tools += [_normalize_tool(t) for t in (custom or [])]
@@ -1011,10 +1067,61 @@ def _browser_step(inp):
     return {"tool_name": "Browser", "step": f"{a} {detail}".strip()}
 
 
+_DESIGN_EXTS = {"png", "jpg", "webp", "svg", "pptx"}
+
+
+async def _exec_design(inp, workspace):
+    """Render a design via the shared cycls-design service, save the image + the
+    editable `.fig` into the workspace, and open the image on the canvas. Two
+    channels: the model reads a short ack; the client opens the render (same
+    open_canvas event the Canvas tool and browser screenshots use)."""
+    from cycls._agent import design
+    action = (inp.get("action") or "render").lower()
+    fmt = (inp.get("format") or "png").lower()
+    if fmt not in _DESIGN_EXTS:
+        return f"Error: unknown format {fmt!r} (png, jpg, webp, svg, pptx)."
+    scale = inp.get("scale") or 2
+    # Base name only, no extension the model may have tacked on.
+    name = _safe_filename(inp.get("name") or "design", "design").rsplit(".", 1)[0] or "design"
+    subject = getattr(workspace, "subject", None)
+    try:
+        if action == "render":
+            if not isinstance(inp.get("spec"), dict):
+                return "Error: `render` needs a `spec` object, e.g. {size:[1080,1080], fill:'#0f172a', nodes:[...]}."
+            image, fig, _fid, _fmt = await design.render(inp["spec"], fmt=fmt, scale=scale, user_id=subject)
+        elif action == "script":
+            if not inp.get("script"):
+                return "Error: `script` needs a `script` string ending in console.log('__FRAME__'+id)."
+            image, fig, _fid, _fmt = await design.evaluate(inp["script"], fmt=fmt, scale=scale, user_id=subject)
+        else:
+            return f"Error: unknown design action {action!r} (render or script)."
+    except design.Unavailable as e:
+        return f"Error: design unavailable — {e}"
+    except Exception as e:
+        return f"Error: design {action} failed — {type(e).__name__}: {e}"
+
+    rel = f"designs/{name}.{fmt}"
+    dst = pathlib.Path(workspace.root) / rel
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(dst.write_bytes, image)
+    # The .fig is the durable, editable source of truth (opened by a drag-editor
+    # later); saved beside the render but not itself shown on the canvas.
+    fig_rel = f"designs/{name}.fig"
+    await asyncio.to_thread((pathlib.Path(workspace.root) / fig_rel).write_bytes, fig)
+    return {"_model": f"Design saved to {rel} ({len(image) // 1024} KB) and opened on the "
+                      f"canvas. Editable source: {fig_rel}.",
+            "_ui": {"type": "ui", "action": "open_canvas", "path": rel, "name": f"{name}.{fmt}"}}
+
+
+def _design_step(inp):
+    return {"tool_name": "Design", "step": f"{inp.get('action', 'render')} {inp.get('name', '')}".strip()}
+
+
 _TOOLS = {
     "browser":    Tool(lambda inp, ws, ctx=None, **_: _exec_browser(inp, ws, getattr(ctx, "chat_id", None)), _browser_step,
                        interrupted="The page is still open but may have moved; re-read it "
                                    "before acting on any element ref."),
+    "design":     Tool(lambda inp, ws, **_: _exec_design(inp, ws), _design_step),
     "bash":       Tool(_run_bash,
                        lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
     "read":       Tool(lambda inp, ws, **_: _exec_read(inp, ws.root),
