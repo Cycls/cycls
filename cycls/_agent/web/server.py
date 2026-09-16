@@ -416,7 +416,13 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         # Not ours: the run is on another container, which can only be reached
         # through the record. Its supervisor reads this on its next beat.
         row = await state.get_run(ws, chat_id) if user is not None else None
-        if state.run_status(row) != "running":
+        status = state.run_status(row)
+        if row is not None and status != "running":
+            # Already finished. The client polls every couple of seconds, so a
+            # person can easily press Stop in the window after a run ends —
+            # stopping what already stopped is a no-op, not an error to show.
+            return JSONResponse(status_code=202, content={"stopping": False, "status": status})
+        if status != "running":
             return JSONResponse(status_code=404, content={"error": "no_run"})
         await state.put_run(ws, chat_id, {**row, "stop": "1"})
         return JSONResponse(status_code=202, content={"stopping": True})
