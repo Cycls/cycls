@@ -264,7 +264,8 @@ def chats_router(ws_dep):
             return Response(status_code=204)
         # `run` tells the client whether to keep polling: a run outlives the
         # request that started it, so a finished stream is not a finished run.
-        run = state.run_status(await state.get_run(ws, chat_id))
+        row = await state.get_run(ws, chat_id)
+        run = state.run_status(row)
         turns, end = (None, None) if since is None else await state.load_tail(ws, chat_id, max(since, 0))
         reset = since is not None and turns is None
         if turns is None:   # full load, or the client is ahead of us
@@ -272,6 +273,8 @@ def chats_router(ws_dep):
             end = end if end is not None else await state.turn_end(ws, chat_id)
         ui = to_ui_messages(turns)
         return {**meta, "messages": ui, "run": run, "next": end,
+                # Only while running: the client ticks elapsed from it.
+                **({"run_started": row.get("started")} if run == "running" and row else {}),
                 "open": ui[-1]["role"] if ui else None,
                 **({"reset": True} if reset else {})}
 

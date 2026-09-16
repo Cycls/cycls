@@ -103,6 +103,9 @@ export function useChat(baseUrl: string = "") {
   // its connection, which is the whole point of the design.
   const [attached, setAttached] = useState(false);
   const [runStatus, setRunStatus] = useState<string | null>(null);
+  // Wall-clock start of the run the server is working on, so the indicator can
+  // tick elapsed for a run this tab never started.
+  const [runStartedAt, setRunStartedAt] = useState<string | null>(null);
   const isStreaming = attached || runStatus === "running";
   const [chatId, setChatId] = useState<string | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
@@ -195,6 +198,7 @@ export function useChat(baseUrl: string = "") {
         if (viewRef.current !== view) return;
         applyTail(data);
         setRunStatus(data.run ?? null);
+        setRunStartedAt(data.run_started ?? null);
         if (data.run !== "running") {
           // The run's real ending, for a turn this tab was not attached to.
           if (data.run) track("turn_completed", { chat_id: id, status: data.run, detached: true });
@@ -262,6 +266,7 @@ export function useChat(baseUrl: string = "") {
       const mine = () => viewRef.current === view;
       setMessages((prev) => [...prev, ...(silent ? [] : [userMessage]), assistantMessage]);
       setAttached(true);
+      setRunStartedAt((prev) => prev ?? new Date().toISOString());
       const sentAt = Date.now();
 
       track("message_sent", {
@@ -641,6 +646,7 @@ export function useChat(baseUrl: string = "") {
     viewRef.current += 1;
     cursorRef.current = openRef.current = null;
     setRunStatus(null);
+    setRunStartedAt(null);
     setMessages([]);
     setChatId(null);
     chatIdRef.current = null;
@@ -717,6 +723,7 @@ export function useChat(baseUrl: string = "") {
       cursorRef.current = typeof chat.next === "number" ? chat.next : null;
       openRef.current = chat.open ?? (loaded.length ? loaded[loaded.length - 1].role : null);
       setRunStatus(chat.run ?? null);
+      setRunStartedAt(chat.run_started ?? null);
       if (chat.run === "running") void pollRun(id);   // opened a chat that is still working
       const u = new URL(window.location.href);
       u.searchParams.set("id", id);
@@ -753,6 +760,7 @@ export function useChat(baseUrl: string = "") {
       abortRef.current?.abort();
       cursorRef.current = openRef.current = null;
       setRunStatus(null);
+      setRunStartedAt(null);
       setMessages([]);
       setChatId(null);
       chatIdRef.current = null;
@@ -778,6 +786,7 @@ export function useChat(baseUrl: string = "") {
     isStreaming,
     attached,    // a stream is feeding this tab right now
     runStatus,   // "running" while the server still has work, even with no stream
+    runStartedAt,
     chatLoading,
     chatId,
     send,

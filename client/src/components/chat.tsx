@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
@@ -110,7 +110,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   account?: AccountInfo | null;
   config?: AppConfig | null;
 }) {
-  const { messages, isStreaming, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler } = chat;
+  const { messages, isStreaming, runStatus, runStartedAt, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler } = chat;
   const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
@@ -312,7 +312,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   }, []);
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
-  const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string; favoritedAt?: string }[]>([]);
+  const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null }[]>([]);
   const [chatsLoading, setChatsLoading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -519,6 +519,26 @@ export function Chat({ chat, onShare, files, account, config }: {
     onSend(next.text, next.attachments, "queued", next.extra);
     setTimeout(() => scrollToBottom(), 0);
   }, [isStreaming, onSend, scrollToBottom, chatId]);
+
+  // The newest step the agent reported — what the indicator says it is doing.
+  // Read off the transcript, so a run this tab never streamed still shows one.
+  const currentStep = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const parts = (messages[i] as { parts?: { type: string; step?: string }[] }).parts;
+      if (!parts) continue;
+      for (let j = parts.length - 1; j >= 0; j--) {
+        if (parts[j].type === "step" && parts[j].step) return parts[j].step as string;
+      }
+    }
+    return null;
+  }, [messages]);
+
+  // The list's `run` comes from one GET /chats and never changes, so a finished
+  // chat would pulse forever. Mirror the active chat's live status into it.
+  useEffect(() => {
+    if (!chatId) return;
+    setChats((prev) => prev.map((x) => (x.id === chatId ? { ...x, run: runStatus } : x)));
+  }, [chatId, runStatus]);
 
   // Stop holds the queue rather than draining into a run the user just killed.
   const handleStop = useCallback(() => {
@@ -1063,6 +1083,11 @@ export function Chat({ chat, onShare, files, account, config }: {
                     />
                   ))}
                 </AnimatePresence>
+                <AnimatePresence initial={false}>
+                  {isStreaming && (
+                    <RunIndicator step={currentStep} startedAt={runStartedAt} onStop={handleStop} />
+                  )}
+                </AnimatePresence>
                 {followUpsOn && followUp && !isStreaming && !ask && (
                   <FollowUpChip
                     text={followUp}
@@ -1473,7 +1498,7 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
                     {/* a run outlives the tab that started it — say so, or leaving
                         the chat looks the same as the agent stopping */}
                     {s.run === "running" && (
-                      <span className="mr-1.5 inline-block size-1.5 rounded-full bg-accent animate-pulse align-middle"
+                      <span className="mr-1.5 inline-block size-1.5 rounded-full bg-emerald-500 animate-pulse align-middle"
                             aria-label={t("working")} />
                     )}
                     {s.title || t("untitled")}
@@ -1525,6 +1550,46 @@ function Star({ filled, className }: { filled: boolean; className?: string }) {
 // sent; clicking pulls it back into the composer (the same gesture that
 // accepts a follow-up), which is also the only way to send one while an
 // explicit Stop is holding the queue.
+function RunIndicator({ step, startedAt, onStop }: {
+  step: string | null;
+  startedAt: string | null;
+  onStop: () => void;
+}) {
+  // Ticks locally; `startedAt` is the server's wall clock, so a run this tab
+  // never started still shows a true elapsed.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const h = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(h);
+  }, []);
+  const secs = startedAt ? Math.max(0, Math.floor((now - Date.parse(startedAt)) / 1000)) : null;
+  const elapsed = secs == null ? null
+    : secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${String(secs % 60).padStart(2, "0")}s`;
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 4 }}
+      transition={{ duration: 0.15 }}
+      className="mb-2 px-1"
+    >
+      <div className="flex items-center gap-2 rounded-2xl border border-border bg-secondary/40 py-1.5 ps-3 pe-1.5">
+        <span className="inline-block size-1.5 shrink-0 rounded-full bg-emerald-500 animate-pulse" />
+        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground" dir="auto">
+          {step || t("working")}
+          {elapsed && <span className="ms-2 tabular-nums text-muted-foreground/60">{elapsed}</span>}
+        </span>
+        <button
+          onClick={onStop}
+          className="shrink-0 rounded-full px-2.5 py-1 text-xs text-muted-foreground/80 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+        >
+          {t("stopRun")}
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
 function QueuedChip({ text, held, onEdit, onDismiss }: {
   text: string;
   held: boolean;

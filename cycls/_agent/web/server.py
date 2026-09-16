@@ -109,9 +109,12 @@ class Run:
         self.task = self.inner = None
         self.workspace, self.chat_id, self.user = workspace, chat_id, user
         self.id, self.started = uuid.uuid4().hex, time.monotonic()
+        # Wall clock too: `started` is monotonic, which no reader can interpret.
+        self.started_at = datetime.now(timezone.utc).isoformat()
 
     def row(self, status):
         return {"run": self.id, "status": status, "owner": _OWNER,
+                "started": self.started_at,
                 "heartbeat": datetime.now(timezone.utc).isoformat(),
                 "user": getattr(self.user, "id", None), "reason": self.reason,
                 "ms": int((time.monotonic() - self.started) * 1000)}
