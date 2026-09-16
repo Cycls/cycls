@@ -17,6 +17,39 @@ THEME_PATH = str(importlib.resources.files('cycls').joinpath('_agent/web/themes/
 # Messages Class Tests
 # =============================================================================
 
+def test_stopping_a_finished_run_answers_202_not_404(tmp_path, monkeypatch):
+    """A person can press Stop in the ~2s poll window after a run ends — seen in
+    production, 466ms after the record said done, surfacing as an HTTP error.
+    A terminal record means there is nothing to do, not that something broke.
+    A chat with no record at all is still a real 404."""
+    import asyncio
+    from fastapi.testclient import TestClient
+    from cycls._app.auth import User
+    from cycls._app.db import workspace
+    from cycls._agent import state
+    import cycls._agent.web.server as server
+
+    user = User(id="user_test")
+    monkeypatch.setattr(server, "validator", lambda *a, **k: (lambda: user))
+
+    async def dummy_agent(context):
+        yield "hi"
+
+    # storage is derived: file://{volume} when not prod
+    config = Config(public_path=THEME_PATH, auth=True, plan="free", volume=str(tmp_path))
+    client = TestClient(server.web(dummy_agent, config))
+
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    asyncio.run(state.put_run(ws, "finished", {"status": "done", "run": "r1",
+                                               "heartbeat": "2026-01-01T00:00:00+00:00"}))
+
+    r = client.post("/chats/finished/stop")
+    assert r.status_code == 202, r.text
+    assert r.json()["stopping"] is False and r.json()["status"] == "done"
+
+    assert client.post("/chats/never-ran/stop").status_code == 404
+
+
 def test_a_handled_stream_error_is_a_failed_run():
     """The encoder turns an exception into a callout so the stream stays
     well-formed. Without a flag the task then ends clean and the run records
