@@ -167,7 +167,7 @@ Identified users also carry **person properties** (via identify): `email`,
 
 | event | fires when | key props / question |
 |---|---|---|
-| `ui_action` | every minor agent `ui` event: `action` = `suggest`, `ask` (+ `questions`), `connect` (+ `connector`), `confirm` (+ `tool`), or anything unhandled (`handled: false`) | the denominator for the chips: `followup_accepted` ÷ `ui_action{suggest}`, `ask_answered` ÷ `ui_action{ask}`. Milestone actions fire their named event instead (`open_canvas` → `artifact_completed`, `open_plan_modal` → `paywall_shown`) |
+| `ui_action` | every minor agent `ui` event: `action` = `suggest`, `ask` (+ `questions`), `connect` (+ `connector`), `confirm` (+ `tool`), `design_command` (live design edit relayed to the open editor), or anything unhandled (`handled: false`) | the denominator for the chips: `followup_accepted` ÷ `ui_action{suggest}`, `ask_answered` ÷ `ui_action{ask}`. Milestone actions fire their named event instead (`open_canvas` → `artifact_completed`, `open_plan_modal` → `paywall_shown`) |
 | `ask_answered` / `ask_dismissed` | clarifying-question card resolved | answered ÷ shown decides the feature's fate |
 | `confirm_approved` / `confirm_dismissed` / `connector_permissions_changed` | the confirm card was approved or waved off (+ `tool`); a tool's mode changed on a connector's page or from the card's Always allow (`scope` = `tool`, `group` or `card`, `to`) | approved ÷ `ui_action{confirm}` says whether *ask* is a safety net or a nag |
 | `client_crashed` | a render error was caught by the boundary (`message`) | should be zero; each one is a bug with its message attached |

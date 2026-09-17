@@ -375,8 +375,9 @@ Enable it by adding `"Design"` to `allowed_tools` and pointing env at the servic
 llm = cycls.LLM().model(...).allowed_tools(["Bash", "Editor", "Design"])
 ```
 ```
-DESIGN_URL=https://cycls-design.cycls.ai    # your deployed design service
-DESIGN_SECRET=<the shared service secret>   # optional; a local dev instance runs open
+DESIGN_URL=https://cycls-design.cycls.ai        # your deployed render service
+DESIGN_SECRET=<the shared service secret>       # optional; a local dev instance runs open
+DESIGN_EDITOR_URL=https://design-editor.cycls.ai # optional; the in-canvas editor
 ```
 
 The model calls one `design` tool. `render {spec}` where `spec` is
@@ -388,7 +389,14 @@ opens on the canvas; the editable `.fig` is saved beside it for later tweaks. A 
 spec can't express. Unset the env and the tool simply isn't offered — no crash,
 like the office fallback.
 
-The service is a small Bun + OpenPencil app in its own repo (`cycls-design`);
+**Editing.** Set `DESIGN_EDITOR_URL` and a `.fig` opens on the canvas as a full
+OpenPencil editor (embedded from its own origin), so the human hand-edits the same
+design the agent rendered — saved straight back to the workspace file. The agent
+can also edit an open design live: the `edit {script}` action pushes a Figma
+plugin-API snippet into that editor ("make the button green"), which the human
+watches apply on the canvas and which auto-saves.
+
+The render service is a small Bun + OpenPencil app in its own repo (`cycls-design`);
 generation uses the Figma plugin API (high fidelity), not HTML import. Details:
 [docs/notes/design.md](notes/design.md).
 

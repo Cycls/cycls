@@ -8,10 +8,11 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob } from "./canvas-utils";
+import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
+import { DesignEditorView } from "./design-editor-view";
 import { attachBridge, appScope } from "./app-bridge";
 import { injectShim } from "./app-shim";
 import { SaveDialog } from "./save-dialog";
@@ -214,16 +215,17 @@ function NoPreviewCard({ file, onDownload, onShare }: {
   );
 }
 
-export function CanvasDoc({ file, content, error, shared = false, readFile, writeFile, listFolders, fetchConnector, appData, onDownload, onShare }: {
+export function CanvasDoc({ file, content, error, shared = false, readFile, writeFile, listFolders, fetchConnector, appData, designEditorUrl, onDownload, onShare }: {
   file: CanvasFile;
   content: string | null;
   error: boolean;
   shared?: boolean;
   readFile?: (path: string, silent?: boolean) => Promise<string>;
-  writeFile?: (path: string, text: string, silent?: boolean) => Promise<void>;
+  writeFile?: (path: string, data: BlobPart, silent?: boolean) => Promise<void>;
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
+  designEditorUrl?: string;   // when set, .fig opens the embedded editor
   onDownload?: () => void;
   onShare?: () => void;
 }) {
@@ -249,6 +251,17 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, writ
   // slide images), not a flat PDF. `content` here is that JSON, fetched as text.
   if (isPresentation(fileKind(file))) {
     return content ? <SlidesView data={content} /> : null;
+  }
+  // OpenPencil .fig → the embedded editor on its own origin, so the human edits
+  // the same design the agent renders headlessly. Needs a configured editor URL
+  // (config.design_editor_url) + the fetched bytes; otherwise the download card.
+  if (isDesignEditor(fileKind(file))) {
+    return content && designEditorUrl ? (
+      <DesignEditorView url={content} path={file.path} name={file.name}
+                        editorUrl={designEditorUrl} writeFile={writeFile ?? (async () => {})} />
+    ) : (
+      <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />
+    );
   }
   // Office docs arrive here as a converted-PDF blob URL, so they ride the same
   // native PDF viewer (search / zoom / print, mobile open-in-tab).
@@ -329,7 +342,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, fetchConnector, appData, org, onShareFile, railWidth = 0, reloadKey, working }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, fetchConnector, appData, org, onShareFile, railWidth = 0, reloadKey, working, designEditorUrl }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -348,7 +361,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   searchFiles?: (q: string) => Promise<{ name: string; path: string }[]>;
   readFile: (path: string) => Promise<string>;   // authed text fetch (md/html/code source)
   openFile: (path: string) => Promise<string>;    // authed blob URL (pdf / download)
-  writeFile: (path: string, text: string) => Promise<void>;  // overwrite (editor)
+  writeFile: (path: string, data: BlobPart) => Promise<void>;  // overwrite (editor); binary for the .fig editor
   listFolders?: () => Promise<{ name: string; path: string }[]>;  // app save dialog
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;   // an app's live call to a connector API
@@ -356,6 +369,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   onShareFile?: (path: string, audience: string) => Promise<string>;
   railWidth?: number;   // pane docked to our right; the drag must account for it
   reloadKey?: number;  // bump to re-fetch the open document
+  designEditorUrl?: string;   // embedded .fig editor base URL (config.design_editor_url)
 }) {
   const file = hidden ? null : tabs.find((f) => f.path === active) ?? tabs[tabs.length - 1] ?? null;
   const { width, startResize, resizing } = usePaneWidth("cycls_canvas_width", 560, 380, 420, railWidth, undefined, 1, 0.25);
@@ -431,6 +445,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
           org={org}
           onShareFile={onShareFile}
           reloadKey={reloadKey}
+          designEditorUrl={designEditorUrl}
         />
       )}
     </>
@@ -647,17 +662,18 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
 }
 
 // Keyed by path from the parent, so per-file state resets on tab switch.
-function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetchConnector, appData, org, onShareFile, reloadKey }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetchConnector, appData, org, onShareFile, reloadKey, designEditorUrl }: {
   file: CanvasFile;
   readFile: (path: string) => Promise<string>;
   openFile: (path: string) => Promise<string>;
-  writeFile: (path: string, text: string) => Promise<void>;
+  writeFile: (path: string, data: BlobPart) => Promise<void>;
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   org?: { id: string; name: string } | null;
   onShareFile?: (path: string, audience: string) => Promise<string>;
   reloadKey?: number;
+  designEditorUrl?: string;
 }) {
   const { content, setContent, error } = useFileContent(file, readFile, openFile, reloadKey);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -786,6 +802,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetc
           <CanvasDoc file={file} content={content} error={error} readFile={readFile} writeFile={writeFile} listFolders={listFolders}
                      fetchConnector={fetchConnector}
                      appData={appData}
+                     designEditorUrl={designEditorUrl}
                      onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
         )}
       </div>
