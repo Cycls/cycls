@@ -280,24 +280,32 @@ _DESIGN_TOOL = {
         "- script {script, name, format?} — escape hatch: a raw OpenPencil / Figma "
         "plugin-API script for what the spec can't express. It MUST end with "
         "`console.log('__FRAME__'+frame.id)` naming the frame to export.\n"
-        "- edit {script, name} — modify the design ALREADY OPEN in the editor (the "
-        "user is looking at it). The script is a Figma plugin-API snippet that "
-        "mutates the live document — e.g. `figma.currentPage.children[0].fills=[{type:"
-        "'SOLID',color:{r:0,g:0,b:0}}]` — and the user WATCHES your change appear on "
-        "the canvas; it auto-saves. Use `edit` to tweak an open design ('bigger "
-        "headline', 'move the button down'); use `render`/`script` to CREATE one. "
-        "`name` is the open design's base name (e.g. `launch`). No `console.log` "
-        "needed — nothing is exported, the live canvas just updates.\n\n"
+        "- edit {script, name, intent?} — modify the design ALREADY OPEN in the editor "
+        "(the user is looking at it). The script is a Figma plugin-API snippet that "
+        "mutates the live document — e.g. `const t=figma.currentPage.children[0]; "
+        "t.fills=[{type:'SOLID',color:{r:0,g:0,b:0}}]; figma.currentPage.selection=[t]` "
+        "— and the user WATCHES a labeled 'Super' cursor glide in and your change "
+        "appear on the canvas; it auto-saves. ALWAYS set `figma.currentPage.selection` "
+        "to the node(s) you change so it highlights under the cursor, and pass a short "
+        "`intent` (e.g. 'making the headline gold') shown on that cursor. Use `edit` to "
+        "tweak an open design ('bigger headline', 'move the button down'); use "
+        "`render`/`script` to CREATE one. `name` is the open design's base name (e.g. "
+        "`launch`). No `console.log` needed — nothing is exported, the live canvas "
+        "just updates.\n\n"
         "`format` is png (default), jpg, webp, svg, or pptx (PowerPoint; use it for "
         "decks). `name` is the file base name, e.g. `launch`. The render opens on the "
-        "canvas; the editable `.fig` is saved beside it for later edits."
+        "canvas; the editable `.fig` is saved beside it for later edits. A fresh "
+        "`render`/`script` NEVER overwrites an earlier design — if the name is taken "
+        "it gets a numeric suffix (`launch-2`); to CHANGE an existing design use `edit`."
     ),
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["render", "script", "edit"],
                    "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), or `edit` the design open in the editor (live)."},
         "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}, or a deck {frames: [{size, fill, nodes}, ...]} (one per slide, export as pptx)."},
         "script": {"type": "string",
-                   "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id)."},
+                   "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s)."},
+        "intent": {"type": "string",
+                   "description": "For `edit`: a short label of the change (e.g. 'making the headline gold') shown on the live 'Super' cursor."},
         "name": {"type": "string", "description": "Output file base name, e.g. `launch` (lowercase, no extension)."},
         "format": {"type": "string", "enum": ["png", "jpg", "webp", "svg", "pptx"],
                    "description": "Output format (default png). Use pptx for a PowerPoint slide."},
@@ -1078,6 +1086,23 @@ def _browser_step(inp):
 _DESIGN_EXTS = {"png", "jpg", "webp", "svg", "pptx"}
 
 
+def _dedupe_design_name(designs_dir, name, fmt):
+    """A base name whose `<name>.<fmt>` and `<name>.fig` are both free under
+    `designs_dir`, so a fresh render never overwrites an existing design:
+    `launch`, else `launch-2`, `launch-3`, … The render output and its `.fig`
+    stay paired under one base. (`edit` targets an existing design — it does not
+    dedupe.)"""
+    def taken(base):
+        return ((designs_dir / f"{base}.{fmt}").exists()
+                or (designs_dir / f"{base}.fig").exists())
+    if not taken(name):
+        return name
+    n = 2
+    while taken(f"{name}-{n}"):
+        n += 1
+    return f"{name}-{n}"
+
+
 async def _exec_design(inp, workspace):
     """Render a design via the shared cycls-design service, save the image + the
     editable `.fig` into the workspace, and open the image on the canvas. Two
@@ -1100,8 +1125,12 @@ async def _exec_design(inp, workspace):
         if not script:
             return "Error: `edit` needs a `script` (a Figma plugin-API snippet mutating the OPEN design)."
         rel = f"designs/{name}.fig"
-        return {"_model": f"Sent the edit to the open editor for {rel} — it appears live on the canvas and auto-saves.",
-                "_ui": {"type": "ui", "action": "design_command", "path": rel, "script": script}}
+        ui = {"type": "ui", "action": "design_command", "path": rel, "script": script}
+        if intent := inp.get("intent"):
+            ui["intent"] = str(intent)[:80]   # shown on the live "Super" cursor
+        return {"_model": f"Sent the edit to the open editor for {rel} — the Super cursor applies it "
+                          f"live on the canvas and it auto-saves.",
+                "_ui": ui}
     try:
         if action == "render":
             if not isinstance(inp.get("spec"), dict):
@@ -1118,6 +1147,10 @@ async def _exec_design(inp, workspace):
     except Exception as e:
         return f"Error: design {action} failed — {type(e).__name__}: {e}"
 
+    # Never clobber an earlier design: if this base name is taken, bump it
+    # (launch → launch-2 → …). To CHANGE an existing design, the model uses `edit`.
+    requested = name
+    name = _dedupe_design_name(pathlib.Path(workspace.root) / "designs", name, fmt)
     rel = f"designs/{name}.{fmt}"
     dst = pathlib.Path(workspace.root) / rel
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -1126,7 +1159,9 @@ async def _exec_design(inp, workspace):
     # later); saved beside the render but not itself shown on the canvas.
     fig_rel = f"designs/{name}.fig"
     await asyncio.to_thread((pathlib.Path(workspace.root) / fig_rel).write_bytes, fig)
-    return {"_model": f"Design saved to {rel} ({len(image) // 1024} KB) and opened on the "
+    note = (f" (named '{name}' so it doesn't overwrite the existing '{requested}')"
+            if name != requested else "")
+    return {"_model": f"Design saved to {rel} ({len(image) // 1024} KB){note} and opened on the "
                       f"canvas. Editable source: {fig_rel}.",
             "_ui": {"type": "ui", "action": "open_canvas", "path": rel, "name": f"{name}.{fmt}"}}
 
