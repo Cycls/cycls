@@ -280,6 +280,7 @@ web = (
 | Method | Purpose |
 |---|---|
 | `.auth(provider)` | Set auth provider (`cycls.Clerk()` or `cycls.JWT(...)`) |
+| `.auth(cycls.Clerk(one_tap=True))` | Google One Tap on the signed-out page — the "Continue as …" card. Needs Google enabled in Clerk with **custom credentials**, and each agent origin in that OAuth client's authorized JavaScript origins |
 | `.title(str)` | Browser tab + app title |
 | `.brand(locale=, name=, description=, logo=, brand=, og=, favicon=)` | Static branding per locale. `logo` is the agent icon (chat hero); `brand` is the wordmark shown in the nav bar (falls back to the Cycls logo when unset); `og`/`favicon` are global |
 | `.theme(name)` | `"default"` or `"dev"` |
@@ -479,7 +480,7 @@ async for ev in llm.run(context=context):
     yield cycls.to_ui(ev)
 ```
 
-Need more than a hook? `.loop(fn)` swaps the loop entirely — `fn` is an async generator with the default loop's signature that yields events. The building blocks live in `cycls._agent.harness`: `default_loop`, `make_provider`, `Session` (the message log + persistence), `build_tools`, `dispatch`, `compact`, `events`.
+Need more than a hook? `.loop(fn)` swaps the loop entirely — `fn` is an async generator with the default loop's signature that yields events. The building blocks live in `cycls._agent.harness`: `default_loop`, `make_provider`, `Session` (the message log + persistence — `add_user` checkpoints, so the person's turn is durable before the model is called, and `rollback()` drops only the assistant tail), `build_tools`, `dispatch`, `compact`, `events`.
 
 ### Multi-provider
 

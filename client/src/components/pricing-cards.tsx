@@ -1,13 +1,14 @@
 import { useState } from "react";
-import { SignedIn, useUser } from "@clerk/clerk-react";
-import { usePlans, useSubscription, CheckoutButton, SubscriptionDetailsButton } from "@clerk/clerk-react/experimental";
+import { Show, useUser } from "@clerk/react";
+import { usePlans, useSubscription, CheckoutButton, SubscriptionDetailsButton } from "@clerk/react/experimental";
 import { t, getLang } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { convertReferral } from "../lib/affiliate";
 import { commerceProps } from "../lib/commerce";
 import { Icon } from "./icon";
 
-function formatPrice(money: { amount: number; currencySymbol: string; currency: string }) {
+function formatPrice(money: { amount: number; currencySymbol: string; currency: string } | null) {
+  if (!money) return "";
   const value = money.amount / 100;
   return new Intl.NumberFormat(getLang() === "ar" ? "ar" : "en-US", {
     style: "currency",
@@ -107,7 +108,7 @@ export function PricingCards({ payerType = "user", onSelect }: { payerType?: "us
               )}
               <div className="mt-auto">
                 {isActive ? (
-                  <SignedIn>
+                  <Show when="signed-in">
                     <SubscriptionDetailsButton for={payerType}>
                       <button
                         onClick={() => {
@@ -123,9 +124,9 @@ export function PricingCards({ payerType = "user", onSelect }: { payerType?: "us
                         {t("managePlan")}
                       </button>
                     </SubscriptionDetailsButton>
-                  </SignedIn>
+                  </Show>
                 ) : (
-                  <SignedIn>
+                  <Show when="signed-in">
                     <CheckoutButton
                       planId={plan.id}
                       planPeriod={period}
@@ -155,7 +156,7 @@ export function PricingCards({ payerType = "user", onSelect }: { payerType?: "us
                         {isFreePlan ? t("getStarted") : t("subscribe")}
                       </button>
                     </CheckoutButton>
-                  </SignedIn>
+                  </Show>
                 )}
               </div>
             </div>

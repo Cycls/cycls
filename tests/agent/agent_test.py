@@ -3,7 +3,7 @@
 Mocks the Anthropic streaming API to test incremental history saving
 and crash recovery without hitting a real LLM.
 """
-import asyncio
+import asyncio, os
 import sys
 import types
 from pathlib import Path
@@ -26,7 +26,7 @@ def _clear_client_cache():
 from cycls._agent.harness.compact import COMPACT_BUFFER, microcompact, compact
 from cycls._agent.harness.events import to_ui
 from cycls._agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path
-from cycls._agent.state import load_messages
+from cycls._agent.state import load_messages, load_tail
 from cycls._app.db import workspace
 
 
@@ -201,6 +201,31 @@ def test_history_survives_crash_after_first_tool_round(agent_env):
     assert history[2]["role"] == "user"
 
 
+def test_assistant_turn_is_on_disk_before_its_tools_run(agent_env):
+    """A kill mid-batch must not lose the turn that asked for the tools — the
+    next run would re-decide and redo every tool it already ran. The spy reads
+    the transcript at the moment the tool executes."""
+    ws, ctx = agent_env
+    seen = {}
+
+    responses = iter([_make_response([_tool_use_block("t1")], stop_reason="tool_use"),
+                      _make_response([_text_block("done")])])
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+
+    async def _spy(*a, **kw):
+        # Raw turn files, not load_messages: normalization drops a trailing
+        # unpaired tool_use, which is exactly the turn under test.
+        turns, _end = await load_tail(ctx.workspace, ctx.chat_id, 0)
+        seen["roles"] = [m["role"] for m in turns]
+        return "ok"
+
+    with _mock_anthropic(mock_client), patch("cycls._agent.tools._exec_bash", new=_spy):
+        asyncio.run(_drain(_run(context=ctx)))
+
+    assert seen["roles"] == ["user", "assistant"]   # the turn asking for t1 is durable
+
+
 def test_error_recovery_saves_incrementally(agent_env):
     """When tool execution raises during dispatch, the except handler patches
     error tool_results. Those should be saved incrementally."""
@@ -248,7 +273,10 @@ def test_no_history_without_session(tmp_path):
     with _mock_anthropic(mock_client):
         asyncio.run(_drain(_run(context=ctx)))
 
-    assert not list(tmp_path.glob("**/*.jsonl"))
+    # `.json`, not `.jsonl` — the store writes the former, so the old glob
+    # matched nothing and passed regardless. `add_user` now checkpoints on every
+    # session, so this is the only guard that the anonymous one stays in memory.
+    assert not list(tmp_path.glob("**/*.json"))
 
 
 # ---------------------------------------------------------------------------
@@ -1313,7 +1341,7 @@ def test_web_search_yields_sources_and_stores_json(agent_env):
          patch("cycls._agent.tools._exec_web_search", new=search):
         items = asyncio.run(_drain(_run(context=ctx, allowed_tools=["WebSearch"])))
 
-    assert {"type": "sources", "sources": rows} in items
+    assert {"type": "sources", "sources": rows, "id": "s1"} in items   # the id threads them onto the search's own step
 
     history = _read_history(ctx)
     result = next(b for m in history if m["role"] == "user" and isinstance(m["content"], list)
@@ -1446,6 +1474,181 @@ def test_second_ask_in_one_batch_is_refused_by_the_loop(agent_env):
     assert results[1]["content"].startswith("Error")
 
 
+def test_mcp_tools_reach_the_model_and_dispatch(agent_env):
+    """Client-side MCP: the discovered schema is in the request's tools and a
+    call to it runs through the handler path — on whatever provider, with
+    nothing handed to the Anthropic connector."""
+    from cycls._agent import mcp as m
+    ws, ctx = agent_env
+    m._discovered.clear()
+    tool = types.SimpleNamespace(name="orders", description="d", input_schema={"type": "object"})
+    call = _make_response([_tool_use_block("t1", name="salla_orders", inp={"since": "2026-08"})],
+                          stop_reason="tool_use")
+    client, calls = _capturing_client([call, _make_response([_text_block("done")])])
+
+    with _mock_anthropic(client), \
+         patch.object(m, "_list", AsyncMock(return_value=[tool])), \
+         patch.object(m, "_call", AsyncMock(return_value="3 orders")):
+        asyncio.run(_drain(_run(context=ctx, mcp_servers=[m.MCP("https://x/mcp").name("salla")])))
+
+    assert "salla_orders" in [t["name"] for t in calls[0]["tools"]]
+    assert "mcp_servers" not in calls[0].get("extra_body", {})
+    result = next(b for msg in _read_history(ctx) if msg["role"] == "user" and isinstance(msg["content"], list)
+                  for b in msg["content"] if b.get("type") == "tool_result")
+    assert result["content"] == "3 orders"
+
+
+def test_connector_calls_are_attributable_in_the_log(agent_env):
+    """A call through a connector logs which grant it acted with, its scope, and
+    the tool_use id that joins the line to the transcript."""
+    from cycls._agent import mcp as m, connectors as c, credentials
+    ws, ctx = agent_env
+    m._discovered.clear()
+    google = c.OAuth2("google", authorize="a", token="t", client_id="i", secret="s")
+    tool = types.SimpleNamespace(name="search_files", description="d", input_schema={"type": "object"})
+    call = _make_response([_tool_use_block("t1", name="drive_search_files", inp={"q": "x"})], stop_reason="tool_use")
+    client, _ = _capturing_client([call, _make_response([_text_block("ok")])])
+    lines = []
+    with _mock_anthropic(client), patch.object(m, "_list", AsyncMock(return_value=[tool])), \
+         patch.object(m, "_call", AsyncMock(return_value="found")), patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}), \
+         patch("cycls._agent.harness.main.log", lambda level, **f: lines.append((level, f))):
+        asyncio.run(credentials.put(ctx.workspace, "google", {"access_token": "tok", "refresh_token": "r", "expires_at": 9e12}))
+        asyncio.run(_drain(_run(context=ctx, mcp_servers=[m.MCP("https://d/mcp").name("drive").connector(google)])))
+    f = next(f for level, f in lines if level == "tool_call")
+    assert (f["tool_use_id"], f["connector"], f["credential_scope"]) == ("t1", "google", "user")
+
+
+def test_unconnected_connector_yields_the_card_and_stops_the_model(agent_env):
+    """No grant → the loop forwards the connect event to the client and the
+    model reads an ack telling it to end the turn, in the transcript."""
+    from cycls._agent import mcp as m, connectors as c
+    ws, ctx = agent_env
+    m._discovered.clear()
+    google = c.OAuth2("google", authorize="a", token="t", client_id="i", secret="s")
+    tool = types.SimpleNamespace(name="search_files", description="d", input_schema={"type": "object"})
+    call = _make_response([_tool_use_block("t1", name="drive_search_files", inp={"q": "x"})], stop_reason="tool_use")
+    client, calls = _capturing_client([call, _make_response([_text_block("ok")])])
+
+    with _mock_anthropic(client), patch.object(m, "_list", AsyncMock(return_value=[tool])), \
+         patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}):
+        events = asyncio.run(_drain(_run(context=ctx, mcp_servers=[m.MCP("https://d/mcp").name("drive").connector(google)])))
+
+    cards = [e for e in events if isinstance(e, dict) and e.get("action") == "connect"]
+    assert cards == [{"type": "ui", "action": "connect", "connector": "google"}]
+    result = next(b for msg in _read_history(ctx) if msg["role"] == "user" and isinstance(msg["content"], list)
+                  for b in msg["content"] if b.get("type") == "tool_result")
+    assert "not connected" in result["content"] and "end your turn" in result["content"]
+
+
+def _drive(name="search_files", description="search the user's files"):
+    return types.SimpleNamespace(name=name, description=description, input_schema={"type": "object"})
+
+
+def _google():
+    from cycls._agent import connectors as c
+    return c.OAuth2("google", title="Google Drive", description="Files and folders",
+                    authorize="a", token="t", client_id="i", secret="s")
+
+
+def _grant(ctx):
+    from cycls._agent import credentials
+    asyncio.run(credentials.put(ctx.workspace, "google", {"access_token": "tok", "refresh_token": "r", "expires_at": 9e12}))
+
+
+def test_connector_schemas_are_absent_until_find_tools_matches(agent_env):
+    """Decision 22: the turn opens with `find_tools` and a one-line index, not forty schemas.
+    The model asks for what it needs and only then do the schemas enter the request."""
+    from cycls._agent import mcp as m
+    ws, ctx = agent_env
+    m._discovered.clear()
+    google = _google()
+    find = _make_response([_tool_use_block("t1", name="find_tools", inp={"query": "search my files"})], stop_reason="tool_use")
+    client, calls = _capturing_client([find, _make_response([_text_block("ok")])])
+
+    with _mock_anthropic(client), patch.object(m, "_list", AsyncMock(return_value=[_drive()])), \
+         patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}):
+        _grant(ctx)
+        asyncio.run(_drain(_run(context=ctx, mcp_servers=[m.MCP("https://d/mcp").name("drive").connector(google)])))
+
+    first = [t["name"] for t in calls[0]["tools"]]
+    assert "drive_search_files" not in first and "find_tools" in first
+    assert "Google Drive" in calls[0]["system"][-1]["text"] if isinstance(calls[0]["system"], list) else True
+    assert "drive_search_files" in [t["name"] for t in calls[1]["tools"]]
+
+
+def test_an_at_mention_loads_a_connector_without_a_find_tools_call(agent_env):
+    """The person already chose, so the round-trip is waste: the tools are in the first request."""
+    from cycls._agent import mcp as m
+    ws, ctx = agent_env
+    m._discovered.clear()
+    google = _google()
+    client, calls = _capturing_client([_make_response([_text_block("ok")])])
+
+    with _mock_anthropic(client), patch.object(m, "_list", AsyncMock(return_value=[_drive()])), \
+         patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}):
+        _grant(ctx)
+        asyncio.run(_drain(_run(context=ctx, mentions=["google"],
+                                mcp_servers=[m.MCP("https://d/mcp").name("drive").connector(google)])))
+
+    names = [t["name"] for t in calls[0]["tools"]]
+    assert "drive_search_files" in names and "find_tools" not in names
+
+
+def test_discovery_sticks_for_the_rest_of_the_chat(agent_env):
+    """The cache breakpoint sits on the last tool, so a connector is paid for once per chat.
+    A transcript that already called its tools rebuilds the discovered set with no stored state."""
+    from cycls._agent import mcp as m
+    ws, ctx = agent_env
+    m._discovered.clear()
+    google = _google()
+    server = m.MCP("https://d/mcp").name("drive").connector(google)
+    looked_up = _make_response([_tool_use_block("t1", name="find_tools", inp={"query": "search my files"})], stop_reason="tool_use")
+    first, _ = _capturing_client([looked_up, _make_response([_text_block("ok")])])
+    second, later = _capturing_client([_make_response([_text_block("ok")])])
+
+    with patch.object(m, "_list", AsyncMock(return_value=[_drive()])), \
+         patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}):
+        _grant(ctx)
+        with _mock_anthropic(first):
+            asyncio.run(_drain(_run(context=ctx, mcp_servers=[server])))
+        _providers._clients.clear()
+        with _mock_anthropic(second):
+            asyncio.run(_drain(_run(context=ctx, mcp_servers=[server])))
+
+    names = [t["name"] for t in later[0]["tools"]]
+    assert "drive_search_files" in names and "find_tools" not in names
+
+
+def test_builtins_are_never_behind_discovery(agent_env):
+    """`bash` and friends are used constantly — putting them behind a lookup would cost a
+    round-trip on every turn for nothing."""
+    from cycls._agent import mcp as m
+    ws, ctx = agent_env
+    m._discovered.clear()
+    google = _google()
+    client, calls = _capturing_client([_make_response([_text_block("ok")])])
+
+    with _mock_anthropic(client), patch.object(m, "_list", AsyncMock(return_value=[_drive()])), \
+         patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}):
+        _grant(ctx)
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Bash"],
+                                mcp_servers=[m.MCP("https://d/mcp").name("drive").connector(google)])))
+
+    assert "bash" in [t["name"] for t in calls[0]["tools"]]
+
+
+def test_find_tools_matches_on_what_the_tools_do(agent_env):
+    """The index carries a connector's name and blurb; matching also reads the tool
+    descriptions behind it, so "spreadsheet" finds Drive without naming it."""
+    from cycls._agent import connectors as c
+    catalog = {"google": ("Google Drive", "Files and folders", ["drive_search_files search spreadsheets and docs"]),
+               "salla": ("Salla", "Your store", ["salla_orders_list list the store's orders"])}
+    assert c.matches("find a spreadsheet", catalog) == ["google"]
+    assert c.matches("how many orders today", catalog) == ["salla"]
+    assert c.matches("salla", catalog)[0] == "salla"
+    assert c.matches("nothing relevant here", catalog) == []
+
+
 def test_tool_guidance_rides_with_the_enabled_tool(agent_env):
     """Opting into the tool is the only switch — no operator has to remember
     matching prompt copy, and a tool that isn't enabled contributes nothing."""
@@ -1465,3 +1668,74 @@ def test_tool_guidance_rides_with_the_enabled_tool(agent_env):
     with _mock_anthropic(client):
         asyncio.run(_drain(_run(context=ctx2, allowed_tools=["Bash"])))
     assert "## Asking the user" not in calls[0]["system"][0]["text"]
+
+
+def test_a_connector_result_reaches_the_model_but_never_the_chat(agent_env):
+    """A custom `.on()` result streams to the chat (it may be a table); a connector's result is data for the model only."""
+    ws, ctx = agent_env
+    server = types.SimpleNamespace(_server_side=False, _connector=None, _guidance=None, label="x",
+                             discover=AsyncMock(return_value=([{"type": "custom", "name": "x_t", "description": "", "input_schema": {"type": "object"}}],
+                                                              {"x_t": AsyncMock(return_value="RAW CONNECTOR RESULT")}, {"x_t": "x · t"})))
+    round1 = _make_response([_tool_use_block("t1", name="x_t", inp={}), _tool_use_block("t2", name="custom", inp={})], stop_reason="tool_use")
+    final = _make_response([_text_block("done")])
+    responses = iter([round1, final])
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+    with _mock_anthropic(mock_client):
+        events = asyncio.run(_drain(_run(context=ctx, mcp_servers=[server], handlers={"custom": AsyncMock(return_value="CUSTOM RESULT")})))
+    texts = [e.get("text", "") if isinstance(e, dict) else str(e) for e in events]
+    assert not any("RAW CONNECTOR RESULT" in t for t in texts)
+    assert any("CUSTOM RESULT" in t for t in texts)
+    assert {"type": "step", "id": "t1", "ok": True, "result": "RAW CONNECTOR RESULT"} in events   # the step's Response, not a bubble
+    history = _read_history(ctx)
+    results = [b["content"] for m in history if m["role"] == "user" for b in (m["content"] if isinstance(m["content"], list) else []) if b.get("type") == "tool_result"]
+    assert "RAW CONNECTOR RESULT" in results                               # the model still gets it
+
+
+def test_a_custom_tool_can_carry_an_icon_and_its_own_request_and_response(agent_env):
+    """`.on(icon=…, details=True)` gives a custom tool the connector treatment: an image on the step,
+    the result in the block instead of the chat, and the whole thing still reaching the model."""
+    from cycls._agent.tools import register_labels, tool_step, detailed
+    register_labels({}, icons={"moj_lookup": "https://moj.gov.sa/icon.svg"}, details={"moj_lookup"})
+    assert tool_step("moj_lookup", {"query": "zakat"})["icon"] == "https://moj.gov.sa/icon.svg"
+    assert detailed("moj_lookup") and not detailed("some_other_tool")
+
+    ws, ctx = agent_env
+    round1 = _make_response([_tool_use_block("t1", name="moj_lookup", inp={"query": "zakat"})], stop_reason="tool_use")
+    responses = iter([round1, _make_response([_text_block("done")])])
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+    with _mock_anthropic(mock_client):
+        events = asyncio.run(_drain(_run(context=ctx, handlers={"moj_lookup": AsyncMock(return_value="RAW ROWS")})))
+    texts = [e.get("text", "") if isinstance(e, dict) else str(e) for e in events]
+    assert not any("RAW ROWS" in t for t in texts)                                   # not in the chat
+    assert {"type": "step", "id": "t1", "ok": True, "result": "RAW ROWS"} in events   # in the block
+    results = [b["content"] for m in _read_history(ctx) if m["role"] == "user"
+               for b in (m["content"] if isinstance(m["content"], list) else []) if b.get("type") == "tool_result"]
+    assert "RAW ROWS" in results                                                     # and whole, for the model
+
+
+def test_a_confirm_card_ends_the_turn_instead_of_inviting_a_retry(agent_env):
+    """The ack asked the model to stop and Kimi K3 called straight through it, card after card. The card
+    is a question put to the person, so the loop ends the turn the way `ask` does."""
+    ws, ctx = agent_env
+    calls = [_make_response([_tool_use_block(f"b{i}", name="bash",
+                                             inp={"command": "git clean -fdx", "description": f"try {i}"})],
+                            stop_reason="tool_use") for i in range(3)]
+    responses = iter(calls + [_make_response([_text_block("done")])])
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+    with _mock_anthropic(mock_client):
+        events = asyncio.run(_drain(_run(context=ctx)))
+    cards = [e for e in events if isinstance(e, dict) and e.get("action") == "confirm"]
+    assert len(cards) == 1                      # one question, not a queue of them
+    assert cards[0]["tool"] == "bash"
+
+
+def test_one_approval_survives_the_model_rewording_its_own_description():
+    """The key covers the command, not the sentence the model wrote about it."""
+    from cycls._agent.connectors import approval_key
+    a = approval_key("bash", {"command": "git clean -fdx", "description": "Check installed PDF tools"})
+    b = approval_key("bash", {"command": "git clean -fdx", "description": "Check available PDF conversion tools"})
+    c = approval_key("bash", {"command": "git clean -fdxn", "description": "Check installed PDF tools"})
+    assert a == b and a != c

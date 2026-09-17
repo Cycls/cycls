@@ -2,14 +2,19 @@
 API shape (`type` / `name` / `description` / `input_schema`) and registered in
 `_BUILTINS`; `build_tools` emits them as-is. User-supplied custom tools come
 through `_normalize_tool` (accepts the camelCase `inputSchema` form too)."""
-import asyncio, base64, ipaddress, json, os, pathlib, socket, uuid
+import asyncio, base64, inspect, ipaddress, json, os, pathlib, re, socket, uuid
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import NamedTuple
 from . import pdf, skills
+from ..connectors import approval_key
+from ..logs import log
 from ..state import _exec_database
-from .. import trash
+from .. import credentials, spill, trash
 
-MAX_OUTPUT = 30_000
+TRASH_MOUNT, SHIMS_MOUNT = "/workspace-trash", "/opt/cycls-bin"   # created by the image (Agent._base_run)
+
+MAX_OUTPUT = 2_000_000   # memory ceiling; the loop spills anything large to .tmp/
 
 _IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
 _DOC_EXTS = {"pdf"}
@@ -21,15 +26,15 @@ _BASH_TOOL = {
         "Execute a shell command in the workspace sandbox.\n\n"
         "Usage:\n"
         "- Working directory is /workspace. Never prefix commands with `cd /workspace`.\n"
-        "- Save files in the workspace, never /tmp — every command gets its own /tmp, "
-        "discarded the moment it exits, and the read/edit/canvas tools cannot see it. "
-        "Download with `curl -o report.pdf <url>`, not `curl -o /tmp/report.pdf <url>`.\n"
+        "- Scratch goes in `.tmp/`: downloads, intermediate data, anything "
+        "the user should not see in their files — it is hidden and cleaned up. Files the user "
+        "keeps go in the workspace root. Never /tmp: every command gets its own, gone when it exits.\n"
         "- Use `rg` or `rg --files` for searching — it's faster than grep.\n"
         "- Use `jq` to extract fields from JSON.\n"
         "- Use the `read` tool (not cat/head/tail) for viewing files.\n"
         "- Use the `edit` tool to create OR modify files — never `cat >`, `echo >`, heredocs, or `sed`/`awk`. Bash for files bypasses safety checks and blows the output-token budget on long content.\n"
         "- Always quote paths containing spaces with double quotes.\n"
-        "- Output over 30K chars is truncated in the middle — use head/grep/tail in the command to keep results focused.\n"
+        "- Large output is saved to `.tmp/` with a preview — analyse it with jq, rg or python.\n"
         "- Default timeout is 600s; adjust via `timeout` parameter (milliseconds).\n"
         "- Avoid destructive commands (`rm -rf`) unless the user explicitly asks.\n"
         "- When issuing multiple independent commands, send multiple bash tool calls in parallel rather than chaining with &&."
@@ -316,6 +321,12 @@ _BUILD_APP_TOOL = {
         "Inside the app, `cycls.read`/`write` reach files in the app's own folder, "
         "`cycls.get`/`set` are a key-value store, and `cycls.save(name, content)` "
         "asks the user where to put a file anywhere in the workspace.\n\n"
+        "`await cycls.connector(name).json(path, {method, headers, body})` calls a connected "
+        "connector's own REST API live — `cycls.connector('posthog').json('/api/projects/123/query/', "
+        "{method: 'POST', body: JSON.stringify({query})})`. The workspace's credential is attached "
+        "server-side on every call, so the app holds no key, inherits a refreshed token, and keeps "
+        "working after this chat ends. Use it for a dashboard that must stay live; never paste an "
+        "API key into app source, and never ask the user for one a connector already has.\n\n"
         "On failure the build log comes back — fix the source and call again."
     ),
     "input_schema": {"type": "object", "properties": {
@@ -472,8 +483,8 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
     return tools
 
 _TMP_ERROR = ("/tmp is not shared — every bash command gets its own, discarded when it "
-              "exits, and the file tools cannot see it. Save into the workspace instead "
-              "(relative paths, e.g. report.pdf)")
+              "exits, and the file tools cannot see it. Use .tmp/ for scratch and the workspace "
+              "root for files the user keeps")
 
 
 def _resolve_path(raw_path, workspace):
@@ -486,7 +497,7 @@ def _resolve_path(raw_path, workspace):
     rel = raw_path.removeprefix("~/").removeprefix("/workspace/").lstrip("/")
     path = (ws / rel).resolve()
     if not path.is_relative_to(ws): raise ValueError("path escapes workspace")
-    for name in (".db", ".database", ".trash"):
+    for name in (".db", ".database", ".trash", credentials.USER, credentials.SHARED):
         reserved = ws / name
         if path == reserved or path.is_relative_to(reserved):
             raise ValueError(f"{name}/ is managed by cycls")
@@ -504,22 +515,17 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
     trash_dir = os.path.join(cwd, trash.DIR)
     os.makedirs(trash_dir, exist_ok=True)
     shims = str(pathlib.Path(__file__).parent / "shims")
-    # Mount points must live under a writable parent. bwrap ro-binds `/`, so a
-    # mount point that doesn't already exist on the host root can't be created
-    # (on a read-only root like Cloud Run, EVERY command then fails at setup with
-    # `bwrap: Can't create file …: Read-only file system`). `/tmp` is a tmpfs here
-    # (writable on any host), so the trash + shims mount cleanly. They stay outside
-    # /workspace, so the model never sees them; the underlying trash is still the
-    # persistent `trash_dir` bound in.
-    env = {"PATH": f"/tmp/.cycls-bin:{path}", "LANG": lang,
-           "CYCLS_WORKSPACE": "/workspace", "CYCLS_TRASH": "/tmp/.cycls-trash"}
+    env = {"PATH": f"{SHIMS_MOUNT}:{path}", "LANG": lang,
+           "CYCLS_WORKSPACE": "/workspace", "CYCLS_TRASH": TRASH_MOUNT}
     sb = (Sandbox()
           .bind(cwd, "/workspace")
           .tmpfs("/workspace/.db")        # cycls state (chat, shares); editor blocks via _resolve_path
           .tmpfs("/workspace/.database")  # agent KV store; same blocking
           .tmpfs("/workspace/.trash")
-          .bind(trash_dir, "/tmp/.cycls-trash")
-          .ro_bind(shims, "/tmp/.cycls-bin")
+          .tmpfs(f"/workspace/{credentials.USER}")
+          .tmpfs(f"/workspace/{credentials.SHARED}")
+          .bind(trash_dir, TRASH_MOUNT)
+          .ro_bind(shims, SHIMS_MOUNT)
           .tmpfs("/app")
           .chdir("/workspace")
           .setenv(**env)
@@ -693,6 +699,8 @@ async def _exec_canvas(inp, workspace):
     if not path.exists(): return f"Error: {raw} does not exist"
     if path.is_dir(): return f"Error: {raw} is a directory"
     rel = raw.removeprefix("/workspace/").lstrip("/")
+    if path.relative_to(pathlib.Path(workspace).resolve()).parts[:1] == (spill.DIR,):
+        return f"Error: {spill.DIR}/ is scratch that may be deleted — write the deliverable elsewhere and open that"
     return {"type": "ui", "action": "open_canvas", "path": rel,
             **_app_identity(path, path.name)}
 
@@ -909,15 +917,17 @@ def _exec_edit(inp, workspace):
 
 class Tool(NamedTuple):
     """`once`: one call per batch. `terminal`: a successful call ends the turn.
-    `prompt`: guidance appended while the tool is enabled."""
+    `prompt`: guidance appended while the tool is enabled. `interrupted`: what the
+    model is told when the call is cancelled mid-flight."""
     run: object
     step: object
     once: bool = False
     terminal: bool = False
     prompt: str = ""
+    interrupted: str = ""
 
 
-def _run_bash(inp, workspace, *, timeout, network):
+def _run_bash(inp, workspace, *, timeout, network, **_):
     t = inp.get("timeout")
     return _exec_bash(inp.get("command", ""), workspace.root, timeout=t / 1000 if t else timeout, network=network)
 
@@ -962,7 +972,7 @@ def _safe_filename(name, default="download"):
     return base or default
 
 
-async def _exec_browser(inp, workspace):
+async def _exec_browser(inp, workspace, chat_id=None):
     """Drive the shared browser service one action at a time. State lives in the
     remote page (which persists between calls), so every navigational action
     returns a fresh read — the numbered elements the model acts on next."""
@@ -973,7 +983,7 @@ async def _exec_browser(inp, workspace):
     # the proxy by domain (per-site routing). Only `open` carries a target URL.
     nav_url = inp.get("url") if action == "open" else None
     try:
-        async with await browser.session(subject, nav_url=nav_url) as s:
+        async with await browser.session(subject, nav_url=nav_url, chat_id=chat_id) as s:
             if action == "open":
                 if not inp.get("url"):
                     return "Error: `open` needs a `url`."
@@ -1106,7 +1116,9 @@ def _design_step(inp):
 
 
 _TOOLS = {
-    "browser":    Tool(lambda inp, ws, **_: _exec_browser(inp, ws), _browser_step),
+    "browser":    Tool(lambda inp, ws, ctx=None, **_: _exec_browser(inp, ws, getattr(ctx, "chat_id", None)), _browser_step,
+                       interrupted="The page is still open but may have moved; re-read it "
+                                   "before acting on any element ref."),
     "design":     Tool(lambda inp, ws, **_: _exec_design(inp, ws), _design_step),
     "bash":       Tool(_run_bash,
                        lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
@@ -1148,13 +1160,40 @@ def is_terminal(name):
     return bool(row and row.terminal)
 
 
-_custom_labels = {}
+def interrupted_note(name, reason):
+    """What the model reads for a call cancelled mid-flight. It cannot be told the
+    call did not happen: a thread-dispatched tool finishes regardless, and side
+    effects outside the sandbox are already out there."""
+    row = _TOOLS.get(name)
+    return (f"Interrupted: the run was {reason}. This call may or may not have "
+            f"completed — check before repeating it."
+            + (f" {row.interrupted}" if row and row.interrupted else ""))
 
 
-def register_labels(labels):
-    """UI step labels for custom tools: name → (input dict → str). Registered
-    by LLM.run() so both live steps and the refetch projection render them."""
+_custom_labels, _custom_names, _custom_owners, _custom_icons = {}, {}, {}, {}
+_detailed = set()   # tools whose step row carries Request and Response — every MCP tool, and `.on(details=True)`
+
+
+def register_labels(labels, names=None, owners=None, icons=None, details=()):
+    """UI step labels for custom tools: name → (input dict → str), an optional display name, the connector a tool
+    acts with, an icon url, and whether the row opens into request and response. Registered by LLM.run() and by
+    MCP discovery so both live steps and the refetch projection render them."""
     _custom_labels.update(labels or {})
+    _custom_names.update(names or {})
+    _custom_owners.update(owners or {})
+    _custom_icons.update(icons or {})
+    _detailed.update(details)
+
+
+def detailed(name):
+    """Does this tool's row open into its request and response? Its result is then the model's, not the chat's."""
+    return name in _detailed
+
+
+def excerpt(content, limit=3000):
+    """What the chat shows of a tool's result: its text, cut to `limit`."""
+    s = content if isinstance(content, str) else json.dumps(content, default=str, ensure_ascii=False)
+    return s if len(s) <= limit else s[:limit] + "\n…"
 
 
 def tool_step(name, input):
@@ -1162,23 +1201,90 @@ def tool_step(name, input):
     entry = _TOOLS.get(name)
     if entry:
         return entry.step(inp)
+    shown = _custom_names.get(name, name)
     if fn := _custom_labels.get(name):
         try:
-            return {"tool_name": name, "step": str(fn(inp))}
+            return {"tool_name": shown, "step": str(fn(inp))}
         except Exception:
             pass
-    # No label — show the first string value, like Bash(command).
-    step = next((v for v in inp.values() if isinstance(v, str) and v.strip()), "")
-    return {"tool_name": name, "step": step if len(step) <= 120 else step[:117] + "..."}
+    # No label. A connector's tool (it registered a display name) shows the `context` line its server asks the model
+    # for, never the raw arguments; a custom tool shows the first string, like Bash(command).
+    if name in _custom_names:
+        step = inp.get("context") if isinstance(inp.get("context"), str) else ""
+    else:
+        step = next((v for v in inp.values() if isinstance(v, str) and v.strip()), "")
+    out = {"tool_name": shown, "step": step if len(step) <= 120 else step[:117] + "..."}
+    if name in _custom_owners:
+        out["connector"] = _custom_owners[name]
+    if name in _custom_icons:
+        out["icon"] = _custom_icons[name]
+    return out
 
 
-def dispatch(block, workspace, timeout, handlers=None, network=False, seen=None):
+# ---- What a builtin risks (docs/notes/plugins-connectors.md, Approvals) ----
+# `rm` and `rmdir` are not here: the sandbox shims them into the trash (30 days, restorable), so a
+# delete is a move and Auto lets it run. These have no trash behind them.
+_DESTRUCTIVE_CMD = re.compile(r"\b(shred|mkfs|dd\s+if=|truncate\s|drop\s+(table|database)|"
+                              r"git\s+(push\s+(-f|--force)|reset\s+--hard|clean\s+-\w*[fdx])|killall\s|>\s*/dev/)", re.I)
+_READ_CMD = re.compile(r"^\s*(ls|cat|head|tail|wc|grep|rg|find|stat|file|du|df|pwd|echo|which|type|tree|sort|uniq|diff|awk|sed\s+-n)\b", re.I)
+
+
+def risk(name, inp):
+    """None (a read — always runs), "write" (follows the composer switch) or "destructive" (asks in both modes)."""
+    if name == "bash":
+        cmd = str(inp.get("command") or "")
+        return "destructive" if _DESTRUCTIVE_CMD.search(cmd) else None if _READ_CMD.match(cmd) else "write"
+    if name == "database":
+        return {"delete": "destructive", "put": "write"}.get(inp.get("command"))
+    return "write" if name in ("edit", "build_app") else None
+
+
+def _gate(name, inp, ctx, step):
+    """The card a builtin returns instead of running, or None to run — the builtin half of `connectors.gated`."""
+    r = risk(name, inp)
+    if r is None or ctx is None:
+        return None
+    key, chosen = approval_key(name, inp), (getattr(ctx, "modes", None) or {}).get(name)
+    how = ("approved" if key in ctx.approvals else "allow" if chosen == "allow"
+           else "asked" if chosen == "ask" else "auto" if getattr(ctx, "auto", True) and r != "destructive" else "asked")
+    log("approval", user=ctx.user, chat_id=ctx.chat_id, tool=name, risk=r, how=how)
+    if how != "asked":
+        return None
+    label = f"{step['tool_name']} · {step['step']}".strip(" ·")[:80]
+    return {"type": "ui", "action": "confirm", "tool": name, "key": key, "label": label, "args": inp,
+            "ack": f"{label} needs the user's approval — a card is asking them. End your turn now. "
+                       "If they approve, make this call again with exactly the same arguments: the approval covers "
+                       "this call, so any change to the arguments asks them a second time."}
+
+
+@dataclass(frozen=True)
+class ToolContext:
+    """Who a custom tool acts for. Handlers that declare a second parameter
+    receive it; one-argument handlers are called as before."""
+    user: object
+    workspace: object
+    chat_id: str | None = None
+    approvals: frozenset = frozenset()   # approval keys from the confirm card, this turn only
+    auto: bool = True                    # the composer's switch: writes run on their own, destructive ones still ask
+    modes: dict = None                   # the person's own allow/ask per builtin, read once a turn
+
+    async def secret(self, name):
+        return await credentials.get(self.workspace, name)
+
+
+def _takes_ctx(fn):
+    kinds = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    return sum(p.kind in kinds for p in inspect.signature(fn).parameters.values()) > 1
+
+
+def dispatch(block, workspace, timeout, handlers=None, network=False, seen=None, ctx=None):
     """*block* is a tool_use content block (dict): {type, id, name, input}.
     Returns (step_event_dict, awaitable_result). The step carries the block's
     `id` so the FE can fold it into the `ToolStart`/`ToolArgs` it already showed.
 
     *seen* is the caller's per-batch set of dispatched `once` tools; omitting
-    it (the default) dispatches every block."""
+    it (the default) dispatches every block. *ctx* is the `ToolContext` handed
+    to handlers that take one."""
     bid, name, inp = block["id"], block["name"], block.get("input") or {}
     entry = _TOOLS.get(name)
     if entry and entry.once and seen is not None:
@@ -1190,7 +1296,11 @@ def dispatch(block, workspace, timeout, handlers=None, network=False, seen=None)
                         "call ran. Send everything in a single call.")))
         seen.add(name)
     if entry and entry.run:
-        return {"type": "step", "id": bid, **entry.step(inp)}, entry.run(inp, workspace, timeout=timeout, network=network)
+        step = {"type": "step", "id": bid, **entry.step(inp)}
+        if card := _gate(name, inp, ctx, step):
+            return step, asyncio.sleep(0, result=card)
+        return step, entry.run(inp, workspace, timeout=timeout, network=network, ctx=ctx)
     if handlers and name in handlers:
-        return {"type": "step", "id": bid, **tool_step(name, inp)}, handlers[name](inp)
+        fn = handlers[name]
+        return {"type": "step", "id": bid, **tool_step(name, inp)}, fn(inp, ctx) if _takes_ctx(fn) else fn(inp)
     return {"type": "tool_call", "id": bid, "tool": name, "args": inp}, asyncio.sleep(0, result=f"{name} executed")

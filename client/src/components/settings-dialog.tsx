@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useClerk, useOrganization, useUser, useReverification } from "@clerk/clerk-react";
-import { PaymentElement, PaymentElementProvider, usePaymentElement, SubscriptionDetailsButton } from "@clerk/clerk-react/experimental";
+import { useClerk, useOrganization, useUser, useReverification } from "@clerk/react";
+import { PaymentElement, PaymentElementProvider, usePaymentElement, SubscriptionDetailsButton } from "@clerk/react/experimental";
 import { Icon } from "./icon";
 import { InlineInput, DropdownMenu } from "./files";
 import { LoadingBar } from "./loading-bar";
@@ -15,6 +15,7 @@ import { cn, getThemeMode, setThemeMode, followUpsEnabled, setFollowUpsEnabled, 
 import { pushProvider, pushStatus, requestPush, answerResult } from "../lib/notifications";
 import { useDarkMode } from "../hooks/use-dark-mode";
 import { useToast } from "../lib/toast";
+import { useApi } from "../hooks/use-api";
 import { track } from "../lib/analytics";
 
 type Tab = "general" | "account" | "organization" | "members" | "workspaces" | "billing" | "security" | "help";
@@ -40,9 +41,10 @@ const dateLocale = () => (getLang() === "ar" ? "ar" : "en");
 const fmtDate = (d: string | Date) => new Date(d).toLocaleDateString(dateLocale(), { month: "short", day: "numeric", year: "numeric" });
 const fmtDateTime = (d: string | Date) => new Date(d).toLocaleString(dateLocale(), { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
-export function SettingsDialog({ account, onClose }: {
+export function SettingsDialog({ account, onClose, onOpenConnectors }: {
   account: AccountInfo;
   onClose: () => void;
+  onOpenConnectors?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("account");
   const lang = useLang();
@@ -114,7 +116,7 @@ export function SettingsDialog({ account, onClose }: {
 
           <div className="min-w-0 flex-1 overflow-y-auto px-5 py-5 sm:px-8">
             <h2 className="mb-4 hidden text-lg font-semibold text-foreground sm:block">{t(tab)}</h2>
-            {tab === "general" && <GeneralTab />}
+            {tab === "general" && <GeneralTab onOpenConnectors={onOpenConnectors} />}
             {tab === "account" && <AccountTab account={account} />}
             {tab === "organization" && <OrganizationTab account={account} isAdmin={isAdmin} />}
             {tab === "members" && <MembersTab isAdmin={isAdmin} />}
@@ -270,7 +272,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 function Segmented<T extends string>({ value, options, onChange }: {
   value: T;
-  options: { value: T; label: string }[];
+  options: { value: T; label: string; hint?: string }[];
   onChange: (v: T) => void;
 }) {
   return (
@@ -278,6 +280,7 @@ function Segmented<T extends string>({ value, options, onChange }: {
       {options.map((o) => (
         <button
           key={o.value}
+          title={o.hint}
           onClick={() => onChange(o.value)}
           className={cn(
             "cursor-pointer rounded-md px-3 py-1 text-xs transition-colors",
@@ -453,14 +456,75 @@ function Challenge({ prompt, expected, onConfirm, onCancel }: {
   );
 }
 
-function GeneralTab() {
+type ToolMode = "auto" | "allow" | "ask" | "never";
+
+// The builtins that can ever stop and ask. `auto` is the absence of a choice: the composer's switch
+// decides. Anything else is the person's own, stored server-side and true in every chat.
+const GATED = [
+  { name: "bash", label: "toolBash", sub: "toolBashSub" },
+  { name: "edit", label: "toolEditor", sub: "toolEditorSub" },
+  { name: "database", label: "toolDatabase", sub: "toolDatabaseSub" },
+  { name: "build_app", label: "toolApps", sub: "toolAppsSub" },
+] as const;
+
+function ToolsSection() {
+  const { api } = useApi();
+  const [modes, setModes] = useState<Record<string, ToolMode>>({});
+  useEffect(() => {
+    api("/tools", { silent: true }).then((r) => r.json()).then(setModes).catch(() => {});
+  }, [api]);
+  const set = (name: string, mode: ToolMode) => {
+    setModes((prev) => {
+      const next = { ...prev };
+      if (mode === "auto") delete next[name]; else next[name] = mode;
+      return next;
+    });
+    const call = mode === "auto"
+      ? api(`/tools/${name}`, { method: "DELETE" })
+      : api(`/tools/${name}`, { method: "PUT", json: { mode } });
+    call.catch(() => {});
+    track("connector_permissions_changed", { connector: "_builtin", scope: "tool", to: mode });
+  };
+  return (
+    <>
+      <SectionLabel>{t("toolPermissions")}</SectionLabel>
+      <ListCard>
+        {GATED.map((g) => (
+          <Row
+            key={g.name}
+            label={t(g.label)}
+            sub={t(g.sub)}
+            control={
+              <Segmented
+                value={modes[g.name] ?? "auto"}
+                options={[
+                  { value: "auto" as ToolMode, label: t("auto"), hint: t("hintAuto") },
+                  { value: "allow" as ToolMode, label: t("allow"), hint: t("hintAllow") },
+                  { value: "ask" as ToolMode, label: t("ask"), hint: t("hintAsk") },
+                  { value: "never" as ToolMode, label: t("never"), hint: t("hintNever") },
+                ]}
+                onChange={(m) => set(g.name, m)}
+              />
+            }
+          />
+        ))}
+      </ListCard>
+    </>
+  );
+}
+
+function GeneralTab({ onOpenConnectors }: { onOpenConnectors?: () => void }) {
   const [mode, setMode] = useState<ThemeMode>(getThemeMode());
   const [followUps, setFollowUps] = useState(followUpsEnabled);
   const [askOn, setAskOn] = useState(askEnabled);
   const [webOn, setWebOn] = useState(webSearchEnabled);
   const [push, setPush] = useState(pushStatus);
   return (
+    <>
     <ListCard>
+      {onOpenConnectors && (
+        <Row label={t("connectors")} sub={t("connectorsSub")} control={<Icon name="chevron-right" className="size-4 rtl:rotate-180" />} onClick={onOpenConnectors} />
+      )}
       <Row
         label={t("appearance")}
         control={
@@ -538,6 +602,8 @@ function GeneralTab() {
         />
       )}
     </ListCard>
+    <ToolsSection />
+    </>
   );
 }
 

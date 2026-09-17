@@ -5,7 +5,10 @@
 
 from datetime import datetime, timezone
 
+import os
+
 import cycls
+from catalog import ALL, SERVERS, posthog_mcp
 
 FREE_MONTHLY_LIMIT = 5
 EXEMPT_USERS = {
@@ -20,15 +23,36 @@ EXEMPT_USERS = {
 # moves the workspace mount; .rebuild() forces a no-cache build.
 image = cycls.Image().copy(".providers.env", ".env")#.rebuild()
 
+# The connectors. Every declaration — endpoints, scopes, what a key looks like, which grant is
+# shareable — is `catalog.py` beside this file: eleven of them, OAuth apps registered by hand,
+# servers that register themselves, a pasted key and a pasted address.
+
+# What cannot live in catalog.py is code. cloudpickle pickles a function defined in the file you deploy
+# (`__main__`) by value and one defined in an imported module by reference, so a classifier or a tool
+# handler declared there would boot the container into `import catalog` and die. Hence this one here:
+# PostHog is a single `exec` tool taking CLI-style commands, so *Ask* would stop on every question —
+# this says which command actually changes something, and reads pass straight through.
+def posthog_writes(tool, args):
+    import json, re
+    return bool(re.search(r"\b(create|update|delete|patch|archive|set)\b", json.dumps(args).lower()))
+
+
+posthog_server = posthog_mcp.writes(posthog_writes)
+
 web = (
     cycls.Web()
     .auth(cycls.Clerk())
+    .connectors(*ALL)  # the directory; each is served at /connectors/{name}/{authorize,callback}
     # .iap(cycls.AppleIAP(  # iOS subscriptions — StoreKit 2 JWS sent in the x-apple-entitlement header
     #     bundle_id="com.cycls.app",
     #     products={"com.cycls.app.pro.month": "u:ios_pro",   # each SKU grants its own plan
     #               "com.cycls.app.max.month": "u:ios_max"},  # add/rename SKUs here, no SDK change
     #     namespace="<uuid the iOS client also uses>"))
-    .cms(brand="https://cms.cycls.ai/agents/super", explore="https://cms.cycls.ai/agents")  # any CMS returning the contract JSON; token=... for private ones
+    .cms(brand="https://cms.cycls.ai/agents/super", explore="https://cms.cycls.ai/agents",
+         connectors="https://cms.cycls.ai/connectors")  # any CMS returning the contract JSON; token=... for private ones
+    # Every connector's copy — title, description, icon, story, prompts, links — is the CMS's, bilingual,
+    # keyed by the name catalog.py declares. Nothing in catalog.py restates it, so the copy changes
+    # without a redeploy. A field declared there would still win over the CMS, field by field.
     # Static branding — the same knobs without a CMS (static wins, piece by piece):
     # .brand(name="Super", description="The agent for getting things done",
     #        logo="assets/icon.svg",   # agent icon, shown in the chat hero
@@ -94,8 +118,15 @@ async def render_image(args):
 
 llm = (
     cycls.LLM()
-    .model("anthropic/claude-sonnet-4-6")
+    # .model("anthropic/claude-sonnet-4-6")
     # .model("openai/gpt-5.4")
+    .model("modal/moonshotai/Kimi-K3")   # the production path: Modal-hosted K3 through the OpenAI provider
+    .extra_body({"reasoning_effort": "high"})
+    .base_url("https://cycls--ep-kimi-k3-server.us-west.modal.direct/v1")
+    .api_key("unused")
+    .headers({"Modal-Key": os.environ["MODAL_PROXY_TOKEN_ID"],
+              "Modal-Secret": os.environ["MODAL_PROXY_TOKEN_SECRET"]})
+    .context(1_000_000)
     # .model("zai/glm-5.2").base_url("https://api.z.ai/api/paas/v4/")  # any OpenAI-compatible API
     # .model("google/gemini-3.1-pro-preview").base_url("https://generativelanguage.googleapis.com/v1beta/openai/")
     # .context(200_000)   # window → compaction timing (default 1M; set for smaller models)
@@ -120,7 +151,9 @@ llm = (
     # .web_search("native")  # Anthropic server-side search; default "brave" runs on any model (BRAVE_API_KEY)
     # .skills("examples/agent/skills")  # ship skill folders (<name>/SKILL.md) with the agent
     # .instructions("AGENT.md")  # workspace instructions file in the system prompt — this is the default
-    # .mcp(cycls.MCP("https://figma-mcp.example/mcp").name("figma").token(os.environ["FIGMA_TOKEN"]))  # remote MCP, anthropic/* only (needs `import os`)
+    .mcp(*SERVERS, posthog_server)  # remote MCP, any provider; tools are `{label}_*`, e.g. `drive_*`
+    # .mcp(cycls.MCP("https://x/mcp").name("x").connector(o))  # one server on its own, wired to its connector
+    # .mcp(cycls.MCP("https://x/mcp").name("x").token("…").server_side())  # let the Anthropic connector run it instead (anthropic/* only)
     # .sandbox(network=False)  # opt out of network access for the LLM bash
     # .bash_timeout(600)  # bash sandbox timeout in seconds
     # .api_key(os.environ["ANTHROPIC_API_KEY"])  # override the provider key (default: from env)

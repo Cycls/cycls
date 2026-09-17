@@ -71,19 +71,19 @@ def _provider():
 # markers), so the SAME session is REUSED across the stateless connect/act/
 # disconnect cycles a turn makes — else every call would mint a fresh blank page
 # and multi-step flows (open → read → click → screenshot) would fall apart. Keyed
-# by the caller's user_id; a stale entry is evicted and re-minted on the next
-# connect failure. The `cdp` provider is one browser by design and needs no cache.
+# by caller AND chat: two chats of one person must not share a page. A stale entry
+# is evicted on the next connect failure; `cdp` is one browser and needs no cache.
 _STEEL_SESSIONS = {}
 # Same idea for the `cycls` REST provider — cache the server-side session id.
 _REST_SESSIONS = {}
 
 
-def _skey(user_id):
-    return str(user_id or "default")
+def _skey(user_id, chat_id=None):
+    return f"{user_id or 'default'}/{chat_id or '-'}"
 
 
-def _evict_steel(user_id):
-    _STEEL_SESSIONS.pop(_skey(user_id), None)
+def _evict_steel(user_id, chat_id=None):
+    _STEEL_SESSIONS.pop(_skey(user_id, chat_id), None)
 
 
 def _dlname(url, cdisp):
@@ -143,7 +143,7 @@ def configured():
     return bool(os.environ.get("BROWSER_SECRET"))
 
 
-async def _cdp_endpoint(user_id=None):
+async def _cdp_endpoint(user_id=None, chat_id=None):
     """Resolve the CDP endpoint to connect to, creating a service-side session
     first when the provider needs it. `user_id` rides along as X-User-Id for
     attribution (not auth). Raises `Unavailable` on any miss."""
@@ -162,7 +162,7 @@ async def _cdp_endpoint(user_id=None):
         # calls); mint one on a miss and cache its CDP websocket.
         if not secret:
             raise Unavailable("browser not configured (BROWSER_SECRET)")
-        if cached := _STEEL_SESSIONS.get(_skey(user_id)):
+        if cached := _STEEL_SESSIONS.get(_skey(user_id, chat_id)):
             return cached
         headers = {"Authorization": f"Bearer {secret}"}
         if user_id:
@@ -178,7 +178,7 @@ async def _cdp_endpoint(user_id=None):
         ws = data.get("websocketUrl") or data.get("connectUrl") or data.get("wsEndpoint")
         if not ws:
             raise Unavailable(f"browser service returned no CDP url: {str(data)[:200]}")
-        _STEEL_SESSIONS[_skey(user_id)] = ws
+        _STEEL_SESSIONS[_skey(user_id, chat_id)] = ws
         return ws
 
     raise Unavailable(f"unknown BROWSER_PROVIDER: {provider!r}")
@@ -359,10 +359,11 @@ class RestSession:
     The service-side session id is cached per caller so page state persists across
     the stateless per-call cycles; a stale (404) session is re-minted once."""
 
-    def __init__(self, base, secret, user_id=None, nav_url=None):
+    def __init__(self, base, secret, user_id=None, nav_url=None, chat_id=None):
         self._base = base.rstrip("/")
         self._secret = secret
         self._user_id = user_id
+        self._chat_id = chat_id
         self._nav_url = nav_url   # first goto URL — forwarded so the service can
         self._sid = None          # route this session to the proxy by domain
         self._http = None
@@ -376,7 +377,7 @@ class RestSession:
         return h
 
     async def _ensure_session(self):
-        if sid := _REST_SESSIONS.get(_skey(self._user_id)):
+        if sid := _REST_SESSIONS.get(_skey(self._user_id, self._chat_id)):
             self._sid = sid
             return
         body = _session_body()
@@ -388,7 +389,7 @@ class RestSession:
         self._sid = r.json().get("id")
         if not self._sid:
             raise Unavailable("browser service returned no session id")
-        _REST_SESSIONS[_skey(self._user_id)] = self._sid
+        _REST_SESSIONS[_skey(self._user_id, self._chat_id)] = self._sid
 
     async def _connect(self):
         self._http = httpx.AsyncClient(timeout=_NAV_TIMEOUT / 1000 + 15)
@@ -420,7 +421,7 @@ class RestSession:
             except httpx.HTTPError as e:
                 raise Unavailable(f"browser service unreachable: {e}") from e
             if r.status_code == 404 and attempt == 1:
-                _REST_SESSIONS.pop(_skey(self._user_id), None)
+                _REST_SESSIONS.pop(_skey(self._user_id, self._chat_id), None)
                 await self._ensure_session()
                 continue
             if r.status_code == 200:
@@ -470,7 +471,7 @@ class RestSession:
         return (await self._act("/evaluate", json={"script": script})).json()
 
 
-async def session(user_id=None, nav_url=None):
+async def session(user_id=None, nav_url=None, chat_id=None):
     """Open a connected browser session against the configured service. Raises
     `Unavailable` when unconfigured/unreachable. Use as an async context manager:
     `async with await browser.session(uid) as s: await s.goto(...)`.
@@ -484,12 +485,13 @@ async def session(user_id=None, nav_url=None):
         url = os.environ.get("BROWSER_URL")
         if not url:
             raise Unavailable("browser not configured (BROWSER_URL)")
-        s = RestSession(url, os.environ.get("BROWSER_SECRET"), user_id, nav_url=nav_url)
+        s = RestSession(url, os.environ.get("BROWSER_SECRET"), user_id, nav_url=nav_url,
+                        chat_id=chat_id)
         await s._connect()
         return s
 
     for attempt in (1, 2):
-        endpoint = await _cdp_endpoint(user_id)
+        endpoint = await _cdp_endpoint(user_id, chat_id)
         s = Session(endpoint, user_id)
         try:
             await s._connect()
@@ -497,8 +499,8 @@ async def session(user_id=None, nav_url=None):
         except Exception as e:
             await s._safe_teardown()
             # A dead cached Steel session: drop it and retry with a fresh one.
-            if _provider() == "steel" and _STEEL_SESSIONS.get(_skey(user_id)) == endpoint and attempt == 1:
-                _evict_steel(user_id)
+            if _provider() == "steel" and _STEEL_SESSIONS.get(_skey(user_id, chat_id)) == endpoint and attempt == 1:
+                _evict_steel(user_id, chat_id)
                 continue
             if isinstance(e, Unavailable):
                 raise

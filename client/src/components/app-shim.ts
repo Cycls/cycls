@@ -47,13 +47,15 @@ const SHIM = `<script>(function(){
       return;
     }
     if (m.type !== 'cycls:read:result' && m.type !== 'cycls:write:result'
-        && m.type !== 'cycls:save:result') return;
+        && m.type !== 'cycls:save:result' && m.type !== 'cycls:fetch:result') return;
     var p = waiting.get(m.id);
     if (!p) return;
     waiting.delete(m.id);
     if (!m.ok) return p.rej(new Error(m.error || 'failed'));
     p.res(m.type === 'cycls:read:result' ? m.content
-        : m.type === 'cycls:save:result' ? m.path : undefined);
+        : m.type === 'cycls:save:result' ? m.path
+        : m.type === 'cycls:fetch:result' ? { status: m.status, body: m.body, contentType: m.contentType }
+        : undefined);
   });
 
   // Retry the handshake: the host's listener usually mounts first, but nothing
@@ -133,6 +135,24 @@ const SHIM = `<script>(function(){
       var s = await load();
       if (value === undefined) delete s[key]; else s[key] = value;
       return schedule();
+    },
+    // A connector's own API, live. The app never holds a token: the host resolves the
+    // workspace's grant per call, so a refreshed one is inherited with no change here.
+    connector: function(name){
+      return {
+        fetch: async function(path, init){
+          await ready;
+          init = init || {};
+          return call('cycls:fetch', { name: String(name), path: String(path),
+                                       method: init.method || 'GET', headers: init.headers || {},
+                                       body: init.body === undefined ? undefined : String(init.body) });
+        },
+        json: async function(path, init){
+          var r = await api.connector(name).fetch(path, init);
+          if (r.status >= 400) throw new Error(name + ' ' + r.status + ': ' + String(r.body).slice(0, 200));
+          return JSON.parse(r.body || 'null');
+        }
+      };
     },
     all: async function(){ return Object.assign({}, await load()); },
     keys: async function(){ return Object.keys(await load()); },

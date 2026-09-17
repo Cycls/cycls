@@ -19,7 +19,7 @@ export function domainOf(url: string): string {
 
 const VISIBLE = 4;   // chips shown before the "+n" overflow
 
-function Favicon({ url, className }: { url: string; className: string }) {
+export function Favicon({ url, className }: { url: string; className: string }) {
   const [failed, setFailed] = useState(false);
   if (failed) return <span className={`${className} rounded-full bg-muted-foreground/30`} />;
   return (

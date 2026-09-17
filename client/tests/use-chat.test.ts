@@ -396,3 +396,185 @@ describe("tool switches", () => {
     expect(bodies[1]).not.toHaveProperty("disabled_tools");
   });
 });
+
+
+describe("watching a run the stream no longer carries (docs/notes/runs.md)", () => {
+  test("a stream that ends without [DONE] polls until the run stops running", async () => {
+    const polls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes("/chats/")) {
+        polls.push(u);
+        // No `since` means a FULL load — the server returns the whole chat,
+        // never a fragment. The client takes it whole, because its own copy of
+        // the cut turn overlaps it.
+        return polls.length === 1
+          ? { ok: true, status: 200, json: async () => ({
+              messages: [{ role: "user", content: "hi" },
+                         { role: "assistant", content: "half an answer and the rest", parts: [] }],
+              next: 4, open: "assistant", run: "running" }) } as any
+          : { ok: true, status: 200, json: async () => ({ messages: [], next: 4, run: "done" }) } as any;
+      }
+      // a stream that stops mid-answer: no [DONE]
+      return {
+        ok: true,
+        body: { getReader: () => {
+          const chunks = ['data: {"type":"chat_id","chat_id":"c1"}\n\n',
+                          'data: {"type":"text","text":"half an answer"}\n\n'];
+          let i = 0;
+          return { read: async () => i < chunks.length
+            ? { done: false, value: new TextEncoder().encode(chunks[i++]) }
+            : { done: true, value: undefined } };
+        } },
+      } as any;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useChat(""));
+    await act(async () => { await result.current.send("hi"); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 2600)); });
+
+    expect(polls.length).toBeGreaterThanOrEqual(2);
+    // the first poll has nothing to resume from and seeds the cursor; every one
+    // after that asks only for what is new
+    expect(polls[0]).not.toContain("since=");
+    expect(polls[1]).toContain("since=4");
+    expect(result.current.runStatus).toBe("done");
+    // the server's copy replaced the cut one rather than stacking on it
+    expect(result.current.messages).toHaveLength(2);
+    const last = result.current.messages[result.current.messages.length - 1];
+    expect(last.role).toBe("assistant");
+    expect(last.content).toBe("half an answer and the rest");
+  });
+
+  test("coming back to a tab after a clean turn does not duplicate it", async () => {
+    // The path the first fix missed: a clean turn never polls, so nothing
+    // reseeds the cursor, and the visibility handler then polls from the
+    // pre-turn index. Same duplication, no Stop involved.
+    const urls: string[] = [];
+    const full = [{ role: "user", content: "first" },
+                  { role: "assistant", content: "reply", parts: [] }];
+    const after = [...full, { role: "user", content: "ok thanks" },
+                   { role: "assistant", content: "you are welcome", parts: [] }];
+    const fetchMock = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes("/chats/")) {
+        urls.push(u);
+        if (u.includes("since="))
+          return { ok: true, status: 200, json: async () => ({
+            messages: after.slice(2), next: 4, open: "assistant", run: "done" }) } as any;
+        const first = urls.filter((x) => !x.includes("since=")).length === 1;
+        return { ok: true, status: 200, json: async () => ({
+          messages: first ? full : after, next: first ? 2 : 4,
+          open: "assistant", run: first ? null : "done" }) } as any;
+      }
+      return { ok: true, body: { getReader: () => {
+        const chunks = ['data: {"type":"chat_id","chat_id":"c1"}\n\n',
+                        'data: {"type":"text","text":"you are welcome"}\n\n',
+                        'data: [DONE]\n\n'];   // a CLEAN turn
+        let i = 0;
+        return { read: async () => i < chunks.length
+          ? { done: false, value: new TextEncoder().encode(chunks[i++]) }
+          : { done: true, value: undefined } };
+      } } } as any;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useChat(""));
+    await act(async () => { await result.current.loadChat("c1"); });
+    await act(async () => { await result.current.send("ok thanks"); });
+    expect(result.current.messages).toHaveLength(4);
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await new Promise((r) => setTimeout(r, 300));
+    });
+
+    expect(result.current.messages).toHaveLength(4);
+    expect(result.current.messages.filter((m) => m.content === "ok thanks")).toHaveLength(1);
+  });
+
+  test("stopping a run does not render the exchange twice", async () => {
+    // Nothing advances the cursor during a stream, so a tail poll from the
+    // pre-turn index returns the very turn this tab just rendered itself.
+    const urls: string[] = [];
+    const full = [{ role: "user", content: "first" },
+                  { role: "assistant", content: "reply", parts: [] }];
+    const after = [...full, { role: "user", content: "ok thanks" },
+                   { role: "assistant", content: "you are welcome", parts: [] }];
+    const fetchMock = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes("/chats/")) {
+        urls.push(u);
+        if (u.includes("since=")) // the stale-cursor tail that used to duplicate
+          return { ok: true, status: 200, json: async () => ({
+            messages: after.slice(2), next: 4, open: "assistant", run: "done" }) } as any;
+        const first = urls.filter((x) => !x.includes("since=")).length === 1;
+        return { ok: true, status: 200, json: async () => ({
+          messages: first ? full : after, next: first ? 2 : 4,
+          open: "assistant", run: first ? null : "done" }) } as any;
+      }
+      return { ok: true, body: { getReader: () => {
+        const chunks = ['data: {"type":"chat_id","chat_id":"c1"}\n\n',
+                        'data: {"type":"text","text":"you are welcome"}\n\n'];
+        let i = 0;
+        return { read: async () => i < chunks.length
+          ? { done: false, value: new TextEncoder().encode(chunks[i++]) }
+          : { done: true, value: undefined } };
+      } } } as any;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useChat(""));
+    await act(async () => { await result.current.loadChat("c1"); });
+    expect(result.current.messages).toHaveLength(2);
+
+    await act(async () => { await result.current.send("ok thanks"); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
+
+    // four turns, not six: the server's copy replaced this tab's, and the
+    // exchange is not on screen twice.
+    expect(result.current.messages).toHaveLength(4);
+    expect(result.current.messages.filter((m) => m.content === "ok thanks")).toHaveLength(1);
+  });
+});
+
+describe("a run writes only to the view it started in (docs/notes/runs.md)", () => {
+  test("a stream still arriving after a chat switch does not touch the new chat", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => { open = r; });
+    const fetchMock = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes("/chats/other")) {
+        // non-empty: an unguarded write lands on THIS bubble
+        return { ok: true, status: 200, json: async () => ({
+          id: "other", run: null, next: 2,
+          messages: [{ role: "user", content: "old question" },
+                     { role: "assistant", content: "old answer", parts: [] }],
+        }) } as any;
+      }
+      const chunks = ['data: {"type":"text","text":"from A"}\n\n'];
+      let i = 0, parked = false;
+      return { ok: true, body: { getReader: () => ({ read: async () => {
+        if (i < chunks.length) return { done: false, value: new TextEncoder().encode(chunks[i++]) };
+        if (!parked) {
+          parked = true;
+          await gate;                       // resumes after the user has moved on
+          return { done: false, value: new TextEncoder().encode('data: {"type":"text","text":" ...more A"}\n\n') };
+        }
+        return { done: true, value: undefined };
+      } }) } } as any;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useChat(""));
+    let sending!: Promise<void>;
+    await act(async () => { sending = result.current.send("hello"); await Promise.resolve(); });
+    await act(async () => { await result.current.loadChat("other"); });
+    await act(async () => { open(); await sending; });
+
+    const last = result.current.messages[result.current.messages.length - 1];
+    expect(last.content).toBe("old answer");   // the final write stayed in chat A
+    expect(last.parts).toEqual([]);            // and so did every streamed part
+  });
+});

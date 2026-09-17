@@ -125,37 +125,41 @@ export function SurveyStrip({ survey, onDone }: { survey: Survey; onDone: () => 
   return (
     <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.15 }} className="mb-2 px-1">
       <div dir={lang === "ar" ? "rtl" : "ltr"}
-           className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-2xl border border-border bg-background px-3 py-2">
-        <span dir="auto" className="text-xs text-muted-foreground">{q.question}</span>
-        {q.open ? (
-          <input
-            autoFocus value={text} dir="auto"
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && text.trim()) { e.preventDefault(); commit(text.trim()); } }}
-            placeholder={tIn(lang, "typeAnswer")}
-            className="h-7 min-w-40 flex-1 rounded-full border border-border bg-background px-3 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground/30"
-          />
-        ) : q.options.map((o) => {
-          const on = picked.includes(o.label);
-          return (
-            <button key={o.label} title={o.hint} dir="auto"
-                    onClick={() => (q.multi ? toggle(o.label) : commit([o.label]))}
-                    className={cn(pill, on ? "border-foreground bg-foreground text-background"
-                                            : "border-border text-foreground hover:border-foreground/30 hover:bg-secondary/60")}>
-              {o.label}
-            </button>
-          );
-        })}
-        {q.multi && (
-          <button onClick={() => commit(picked)} disabled={!picked.length}
-                  className={cn(pill, "border-foreground bg-foreground text-background disabled:opacity-40")}>
-            {t("send")}
+           className="flex flex-col gap-1.5 rounded-2xl border border-border bg-background px-3 py-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-2">
+        <div className="flex items-center gap-2 sm:contents">
+          <span dir="auto" className="min-w-0 flex-1 text-xs text-muted-foreground sm:flex-none">{q.question}</span>
+          <button onClick={dismiss} aria-label={tIn(lang, "dismiss")}
+                  className="shrink-0 rounded-full p-1 text-muted-foreground/60 transition-colors hover:bg-secondary hover:text-foreground cursor-pointer sm:order-last sm:ms-auto">
+            <Icon name="x" className="size-3" />
           </button>
-        )}
-        <button onClick={dismiss} aria-label={tIn(lang, "dismiss")}
-                className="ms-auto rounded-full p-1 text-muted-foreground/60 transition-colors hover:bg-secondary hover:text-foreground cursor-pointer">
-          <Icon name="x" className="size-3" />
-        </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {q.open ? (
+            <input
+              autoFocus value={text} dir="auto"
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && text.trim()) { e.preventDefault(); commit(text.trim()); } }}
+              placeholder={tIn(lang, "typeAnswer")}
+              className="h-7 min-w-40 flex-1 rounded-full border border-border bg-background px-3 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground/30"
+            />
+          ) : q.options.map((o) => {
+            const on = picked.includes(o.label);
+            return (
+              <button key={o.label} title={o.hint} dir="auto"
+                      onClick={() => (q.multi ? toggle(o.label) : commit([o.label]))}
+                      className={cn(pill, on ? "border-foreground bg-foreground text-background"
+                                              : "border-border text-foreground hover:border-foreground/30 hover:bg-secondary/60")}>
+                {o.label}
+              </button>
+            );
+          })}
+          {q.multi && (
+            <button onClick={() => commit(picked)} disabled={!picked.length}
+                    className={cn(pill, "border-foreground bg-foreground text-background disabled:opacity-40")}>
+              {t("send")}
+            </button>
+          )}
+        </div>
       </div>
     </motion.div>
   );

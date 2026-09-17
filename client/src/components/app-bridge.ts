@@ -11,7 +11,23 @@ export const MSG = {
   save: "cycls:save",
   saveResult: "cycls:save:result",
   resize: "cycls:resize",
+  fetch: "cycls:fetch",
+  fetchResult: "cycls:fetch:result",
 } as const;
+
+export const RELAY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+// The app may set these; Authorization is the server's alone.
+const RELAY_HEADERS = ["content-type", "accept"];
+
+export function relayHeaders(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (raw && typeof raw === "object") {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (RELAY_HEADERS.includes(k.toLowerCase()) && typeof v === "string") out[k] = v;
+    }
+  }
+  return out;
+}
 
 // An app may not rewrite its own source or manifest. Its OWN pair only, so a
 // nested reports/index.html is fine.
@@ -62,10 +78,14 @@ export interface BridgeOptions {
   requestSave?: (name: string, content: string) => Promise<string | null>;
   context?: Record<string, unknown>;
   onResize?: (height: number) => void;
+  // Calls the connector relay as the signed-in user; the app never sees a token.
+  fetchConnector?: (name: string, path: string,
+                    init: { method: string; headers: Record<string, string>; body?: string })
+                   => Promise<{ status: number; body: string; contentType: string }>;
 }
 
 export function attachBridge({
-  frame, appPath, readFile, writeFile, requestSave, context, onResize,
+  frame, appPath, readFile, writeFile, requestSave, context, onResize, fetchConnector,
 }: BridgeOptions) {
   const folder = appScope(appPath);
   if (folder === null) return () => {};
@@ -121,6 +141,26 @@ export function attachBridge({
         const path = await requestSave(name, msg.content);
         if (!path) return fail("cancelled");
         post({ type: MSG.saveResult, id: msg.id, ok: true, path });
+      } catch (err) {
+        fail((err as Error).message);
+      }
+      return;
+    }
+
+    if (msg.type === MSG.fetch) {
+      const fail = (error: string) => post({ type: MSG.fetchResult, id: msg.id, ok: false, error });
+      if (!fetchConnector) return fail("connectors are not available here");
+      const m = msg as { name?: unknown; path?: unknown; method?: unknown; headers?: unknown; body?: unknown };
+      if (typeof m.name !== "string" || !/^[a-z0-9_-]{1,64}$/i.test(m.name)) return fail("a connector name is required");
+      if (typeof m.path !== "string" || m.path.includes("..")) return fail("a valid path is required");
+      const method = typeof m.method === "string" ? m.method.toUpperCase() : "GET";
+      if (!RELAY_METHODS.includes(method)) return fail("method not allowed");
+      if (m.body !== undefined && typeof m.body !== "string") return fail("body must be a string");
+      try {
+        const res = await fetchConnector(m.name, m.path, {
+          method, headers: relayHeaders(m.headers), body: m.body as string | undefined,
+        });
+        post({ type: MSG.fetchResult, id: msg.id, ok: true, ...res });
       } catch (err) {
         fail((err as Error).message);
       }

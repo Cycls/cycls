@@ -9,7 +9,8 @@ import asyncio, json, random, re, time, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import state
+from cycls._app.db import Conflict
+from .. import connectors, spill, state
 from ..state import Session
 from . import events
 from .events import Turn
@@ -17,7 +18,7 @@ from .compact import COMPACT_BUFFER
 from ..logs import log
 from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
-from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal
+from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, interrupted_note, register_labels, detailed, excerpt, ToolContext
 from ..tools import skills as skills_mod
 
 
@@ -31,6 +32,7 @@ MAX_DELAY_MS = 32_000
 _RETRYABLE_STATUSES = {429, 500, 502, 503, 504, 529}
 MAX_CONTINUATIONS = 4         # auto-continue rounds after a max_tokens cut
 MAX_PAUSES = 8                # pause_turn resends before giving up
+CANCEL_DRAIN = 2              # seconds a cancelled tool batch gets to unwind
 _CONTINUE = ("Your previous message was cut off at the output-token limit. "
              "Continue exactly from where you stopped. Do not repeat anything.")
 # Providers report context overflow as an error, each with its own wording.
@@ -42,11 +44,48 @@ DEFAULT_WINDOW = 1_000_000    # context window when .context() is unset — set 
 DEFAULT_MAX_TOKENS = 8_192    # output cap when .max_tokens() is unset — safe on every model
 
 
+def _cause(e):
+    """A TaskGroup/ExceptionGroup wrapper says nothing — dig out the exception that actually failed."""
+    while getattr(e, "exceptions", None): e = e.exceptions[0]
+    return f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+
+
+def _server_said(e):
+    """An MCP server's own words, when it answered with a reason rather than failing to answer at all.
+    A server writes these for the person to act on — Slack's names the switch and links the page that
+    flips it — so they belong in the chat. A timeout or a TLS failure says nothing a user can use and
+    stays in the log."""
+    from mcp.shared.exceptions import MCPError
+    while getattr(e, "exceptions", None): e = e.exceptions[0]
+    said = str(e).strip() if isinstance(e, MCPError) else ""
+    return said[:300] or None
+
+
+def _seen_connectors(messages, prefixes, catalog):
+    """Which connectors this chat already discovered — read back from the transcript, so discovery
+    survives a new instance without storing anything. Either the lookup that loaded them is in the
+    history, or a call to one of their tools is."""
+    seen = set()
+    for m in messages:
+        content = m.get("content")
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if not (isinstance(b, dict) and b.get("type") == "tool_use"):
+                continue
+            name = str(b.get("name") or "")
+            if name == "find_tools":
+                seen |= set(connectors.matches(str((b.get("input") or {}).get("query") or ""), catalog))
+            else:
+                seen |= {n for p, n in prefixes.items() if name.startswith(p)}
+    return seen
+
+
 def _user_warn(user, chat_id, public, detail):
     """Chat callout with a reference id; the detail lives only in the log."""
     ref = uuid.uuid4().hex[:8]
     log("warn", user=user, chat_id=chat_id, error_id=ref, message=detail)
-    return events.callout(f"{public} Reference: `{ref}`", "warning")
+    return events.callout(f"{public} Reference: {ref}", "warning")
 
 
 def _cost(price, inp, out, cached, cache_create):
@@ -61,11 +100,73 @@ async def _timed(coro):
     t0 = time.monotonic()
     try:
         return await coro, int((time.monotonic() - t0) * 1000)
+    except asyncio.CancelledError:
+        raise   # a cancelled tool is cancelled, not a tool that returned an error
     except BaseException as e:
         return e, int((time.monotonic() - t0) * 1000)
 
 
 # ---- Ingest ----
+
+# A gated builtin's name, as the tool list knows it — `never` drops the whole row, read included.
+_SETTINGS_NAME = {"bash": "Bash", "edit": "Editor", "database": "DataBase", "build_app": "Apps"}
+
+
+def _with_mention(content, line):
+    """The @-pill in the transcript: one line the model reads and a replay keeps."""
+    if isinstance(content, list):
+        return [*content, {"type": "text", "text": line}]
+    return f"{content}\n\n{line}" if content else line
+
+
+def _shape(block, out, ok, handlers, mcp_names):
+    """A tool's output as (what the model reads, what the chat is shown, whether
+    the turn now waits on the person). Split out so the cancel path can derive
+    the same content without yielding — you cannot yield while unwinding."""
+    name = block["name"]
+    if ok and isinstance(out, dict) and "_model" in out:
+        # Two channels: `_model` lands in tool_result, `_ui` goes to the client.
+        return out["_model"], ([{**out["_ui"], "id": block["id"]}] if out.get("_ui") else []), False
+    if ok and isinstance(out, dict) and out.get("type") == "ui":
+        # A UI tool drives the client; the model gets a short ack so tool_result
+        # stays a valid string. `ack` overrides the wording and never ships.
+        ack = out.pop("ack", None)
+        waiting = out.get("action") in ("confirm", "connect")
+        return (ack or f"Opened {out.get('name') or out.get('path') or 'the file'} for the user.",
+                [out], waiting)
+    if ok and handlers and name in handlers and name not in mcp_names and not detailed(name):
+        # A custom handler's result is both the chat's and the model's; a
+        # connector's is the model's alone — the chat sees the step.
+        return (out if isinstance(out, str) else json.dumps(out, default=str)), [out], False
+    return out, [], False
+
+
+async def _unwind(session, blocks, tasks, reason, handlers, mcp_names, workspace):
+    """Take the batch back. `asyncio.wait` does not cancel what it waits on, so a
+    bare cancel leaves tools running and their effects unrecorded. Cancel, give
+    them a moment, then write a result for every call — the real one where it
+    finished, `Interrupted:` only where it did not — because a `tool_use` with no
+    result is stripped on the next read, taking the assistant turn with it."""
+    for t in tasks:
+        if not t.done(): t.cancel()
+    await asyncio.wait(tasks, timeout=CANCEL_DRAIN)
+    results = []
+    for block, t in zip(blocks, tasks):
+        if t.cancelled() or not t.done():
+            content, failed = interrupted_note(block["name"], reason), True
+        else:
+            out, _ = t.result()
+            failed = isinstance(out, BaseException)
+            if failed: out = f"Error: {_cause(out)}"
+            content, _, _ = _shape(block, out, not failed, handlers, mcp_names)
+        if isinstance(content, str) and block["name"] not in ("read", "skill"):
+            content = spill.spill(content, workspace.root, session.chat_id,
+                                  f"{block['name']}-{block['id'][-6:]}")
+        results.append({"type": "tool_result", "tool_use_id": block["id"],
+                        "content": content, "is_error": failed})
+    session.messages.append({"role": "user", "content": results})
+    await asyncio.shield(session.checkpoint())
+
 
 async def _ingest(content, workspace, vision=True):
     """Resolve attachment refs in an incoming user message to inline blocks,
@@ -142,7 +243,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                base_url=None, api_key=None, headers=None, handlers=None, mcp_servers=None,
                thinking="adaptive", vision=True, web_search="brave",
                instructions="AGENT.md", skills=[], price=None, context_window=None,
-               extra_body=None):
+               extra_body=None, approvals=(), mentions=(), auto=True):
     vendor, bare_model = model.split("/", 1)
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key,
                              headers=headers, vision=vision)
@@ -152,9 +253,18 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     Path(workspace.root).mkdir(parents=True, exist_ok=True)
 
     session = await Session.open(context)
+    # the person's own allow / ask / never for the builtins, read once — no subject means no per-user store
+    modes = await connectors.permissions(workspace, "_builtin") if getattr(workspace, "subject", None) else {}
+    if off := {_SETTINGS_NAME[k] for k, v in modes.items() if v == "never" and k in _SETTINGS_NAME}:
+        allowed_tools = [t for t in allowed_tools if t not in off]
+    ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes)
     incoming = context.messages.raw[-1]
-    await session.add_user(await _ingest(incoming.get("content", ""), workspace.root, vision),
-                           attachments=incoming.get("attachments"))
+    content = await _ingest(incoming.get("content", ""), workspace.root, vision)
+    if mentions:
+        titles = {s._connector.name: connectors.copy_of(s._connector)[0] or s._connector.name
+                  for s in mcp_servers or [] if s._connector}
+        content = _with_mention(content, "[Using: " + ", ".join(titles.get(m, m) for m in mentions) + "]")
+    await session.add_user(content, attachments=incoming.get("attachments"), internal=bool(approvals))
     messages = session.messages
 
     system_text = DEFAULT_SYSTEM + ("\n\n" + system if system else "")
@@ -180,6 +290,80 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     tools_list = build_tools(allowed_tools, tools or [], vendor=vendor, web_search=web_search)
     if skill_catalog and not any(t.get("name") == "skill" for t in tools_list):
         tools_list.append(skills_mod.SKILL_TOOL)
+    owners = {}   # tool name -> the OAuth2 it acts with, for the audit line
+    mcp_names = set()   # a server's results are the model's, never the chat's
+    handlers = dict(handlers or {})
+
+    def _mount(server, schemas, fns, names):
+        nonlocal system_text
+        tools_list.extend(schemas)
+        handlers.update(fns)
+        mcp_names.update(fns)
+        register_labels({}, names, dict.fromkeys(fns, server._connector.name) if server._connector else None, details=fns.keys())
+        if server._connector:
+            owners.update(dict.fromkeys(fns, server._connector))
+        if server._guidance and schemas:
+            system_text += "\n\n" + server._guidance
+
+    client_side = [s for s in mcp_servers or [] if not s._server_side]
+    # An org admin's switch and the person's own resolve the same way here: the tools never enter the turn.
+    hidden = (await connectors.blocked(workspace) | await connectors.off(workspace)) if any(s._connector for s in client_side) else set()
+    deferred, catalog, objs = {}, {}, {}   # a connector's schemas wait behind `find_tools`
+    for server in client_side:
+        if server._connector and server._connector.name in hidden:
+            continue
+        try:
+            schemas, fns, names = await connectors.tools_for(server, workspace)
+        except Exception as e:
+            said, label = _server_said(e), server._name or server._url
+            yield _user_warn(user, session.chat_id,
+                             f"{label}'s tools are off this turn — {said}" if said
+                             else f"Couldn't reach {label} — its tools are off this turn.",
+                             f"mcp discovery failed for {server._url}: {_cause(e)}")
+            continue
+        if not (server._connector and schemas):
+            _mount(server, schemas, fns, names)
+            continue
+        o = server._connector
+        objs[o.name] = o
+        deferred.setdefault(o.name, []).append((server, schemas, fns, names))
+        catalog.setdefault(o.name, (*connectors.copy_of(o), []))[2].extend(
+            f'{s["name"]} {s.get("description") or ""}' for s in schemas)
+    mcp_servers = [s for s in mcp_servers or [] if s._server_side] or None
+
+    def _discover(name):
+        """Its tools enter the turn and stay for the rest of the chat — the cache breakpoint sits on the
+        last tool, so this is paid once per connector per chat, never once per turn."""
+        got = []
+        for entry in deferred.pop(name, ()):
+            _mount(*entry)
+            got += list(entry[2])
+        return got
+
+    def _owner_of(tool):
+        return next((n for n, es in deferred.items() for s, *_ in es if tool.startswith(f"{s.label}_")), None)
+
+    async def _find_tools(inp, ctx):
+        hits = connectors.matches(str(inp.get("query") or ""), catalog)
+        loaded = [(n, _discover(n)) for n in hits if n in deferred]
+        if loaded:
+            return "Loaded:\n" + "\n".join(f"- {n}: {', '.join(sorted(t))}" for n, t in loaded)
+        if hits:
+            return f"Already loaded: {', '.join(hits)}. Call those tools directly."
+        return ("Nothing matched. You can load: " + ", ".join(sorted(deferred))) if deferred else "No connectors left to load."
+
+    if deferred:   # already discovered here, or just `@`-mentioned — either way, no round-trip
+        prefixes = {f"{s.label}_": n for n, es in deferred.items() for s, *_ in es}
+        for name in _seen_connectors(messages, prefixes, catalog) | set(mentions or []):
+            _discover(name)
+    if deferred:
+        tools_list.append(connectors.FIND_TOOLS)
+        handlers["find_tools"] = _find_tools
+        register_labels({"find_tools": lambda i: str(i.get("query") or "")}, {"find_tools": "Finding tools"},
+                        details=("find_tools",))   # the result is the model's; the step row carries it
+        system_text += "\n\nConnectors this person has connected. Their tools are not loaded yet — call " \
+                       "`find_tools` once with what you need, then call the tools it returns.\n" + \
+                       "\n".join(connectors.index_line(objs[n], sum(len(e[2]) for e in es)) for n, es in sorted(deferred.items()))
     for guidance in tool_prompts(tools_list):
         system_text += "\n\n" + guidance
     window = context_window or DEFAULT_WINDOW
@@ -295,60 +479,76 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             if turn.stop_reason != "tool_use":
                 await session.checkpoint(); break
 
+            # On disk before the tools run — and after the pops above, which
+            # would strand `_saved` past the list.
+            await session.checkpoint()
             blocks = [b for b in turn.content if isinstance(b, dict) and b.get("type") == "tool_use"]
+            for b in blocks:   # reached for a tool it never loaded — load it and let the call through
+                _discover(_owner_of(b.get("name") or ""))
             # One `seen` per batch; comprehensions run left to right, so the first call wins.
             seen = set()
-            pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network, seen=seen)
+            pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network, seen=seen, ctx=ctx)
                      for b in blocks]
             for step, _ in pairs: yield step
             # Heartbeat every 15s while tools run — keeps intermediate
             # proxies from severing the SSE stream during long silent tool
             # executions.
             tasks = [asyncio.create_task(_timed(c)) for _, c in pairs]
-            while True:
-                _, pending = await asyncio.wait(tasks, timeout=15.0, return_when=asyncio.ALL_COMPLETED)
-                if not pending: break
-                yield {"type": "ping"}
-            timed = [t.result() for t in tasks]
+            try:
+                while True:
+                    _, pending = await asyncio.wait(tasks, timeout=15.0, return_when=asyncio.ALL_COMPLETED)
+                    if not pending: break
+                    yield {"type": "ping"}
+                timed = [t.result() for t in tasks]
+            except (GeneratorExit, asyncio.CancelledError):
+                # Why it stopped is the run record's job (§3); the model only
+                # needs to know this call did not run to completion.
+                await _unwind(session, blocks, tasks, "interrupted",
+                              handlers, mcp_names, workspace)
+                raise
 
-            results, terminal = [], False
+            results, terminal, waiting, cards = [], False, False, []
             for block, (out, ms) in zip(blocks, timed):
                 ok = not isinstance(out, BaseException)
+                o = owners.get(block["name"])
                 log("tool_call", user=user, chat_id=session.chat_id,
-                    model=bare_model, tool=block["name"], ms=ms, ok=ok,
-                    output_bytes=len(out) if isinstance(out, (str, bytes)) else None)
-                if not ok: out = f"Error: {out}"
-                # Two channels: `_model` lands in tool_result, `_ui` is forwarded
-                # to the client. `web_search` uses it to hand the FE structured
-                # sources without changing what the model reads.
-                if ok and isinstance(out, dict) and "_model" in out:
-                    if ev := out.get("_ui"): yield ev
-                    content = out["_model"]
-                # A tool that returns a UI event (e.g. `canvas`, `suggest`) drives
-                # the client and the model gets a short ack — keeps tool_result a
-                # valid string. An `ack` key overrides the default wording and is
-                # stripped before the event reaches the client.
-                elif ok and isinstance(out, dict) and out.get("type") == "ui":
-                    ack = out.pop("ack", None)
-                    yield out
-                    content = ack or f"Opened {out.get('name') or out.get('path') or 'the file'} for the user."
-                # Custom-handler results flow through the stream for the body to see
-                # (UI rendering) AND serialize into tool_result for the model (data).
-                elif handlers and block["name"] in handlers and ok:
-                    yield out
-                    content = out if isinstance(out, str) else json.dumps(out, default=str)
-                else:
-                    content = out
+                    model=bare_model, tool=block["name"], tool_use_id=block["id"], ms=ms, ok=ok,
+                    connector=o.name if o else None, credential_scope=o.scope if o else None,
+                    output_bytes=len(out) if isinstance(out, (str, bytes)) else None,
+                    error=None if ok else _cause(out))
+                if not ok: out = f"Error: {_cause(out)}"
+                content, evs, waits = _shape(block, out, ok, handlers, mcp_names)
+                for ev in evs: yield ev
+                if waits:
+                    waiting = True   # the person has to answer before anything else can happen
+                    cards += [e for e in evs if isinstance(e, dict) and e.get("type") == "ui"]
+                if isinstance(content, str) and block["name"] not in ("read", "skill"):
+                    content = spill.spill(content, workspace.root, session.chat_id, f"{block['name']}-{block['id'][-6:]}")
                 results.append({"type": "tool_result", "tool_use_id": block["id"], "content": content})
+                if block["name"] in mcp_names or detailed(block["name"]):   # the step shows the outcome, bounded; a card (a ui dict) is its own outcome
+                    yield {"type": "step", "id": block["id"], "ok": ok,
+                           **({} if isinstance(out, dict) and out.get("type") == "ui" else {"result": excerpt(content)})}
                 # Only a call that reached the user ends the turn — a malformed
                 # `ask` gets another turn to fix itself.
                 if ok and is_terminal(block["name"]) and not str(content).startswith("Error"):
                     terminal = True
-            messages.append({"role": "user", "content": results})
+            # A card is a `ui` event, which the transcript does not keep — so a
+            # run that ends waiting looks finished after a reload, with nothing to
+            # approve. Ride it on the message the batch already writes.
+            messages.append({"role": "user", "content": results, **({"cards": cards} if cards else {})})
             await session.checkpoint()
+            if waiting:
+                terminal = True
             if terminal:
                 break
 
+        except Conflict:
+            # A turn slot was taken: this run's index is stale because something
+            # else wrote the chat. Never replay — a replay writes more turns at
+            # the same stale index. `checkpoint` has already logged and banked
+            # what landed; fail the run and let the next load re-read the truth.
+            session.rollback()
+            raise
         except Exception as e:
             # Most providers report context overflow as an error, not a
             # stop_reason — compact and replay the turn, once per run.

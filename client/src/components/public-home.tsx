@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { InputBox } from "./input-box";
 import { ExamplesGallery } from "./examples";
 import { EmptyHero, Suggestions } from "./chat";
@@ -27,6 +27,8 @@ export function PublicHome({ config, onSignIn }: {
     ? { ..._active, logo: _active.logo || _en?.logo || "", brand: _active.brand || _en?.brand || "" }
     : _en;
   const [input, setInput] = useState("");
+  // One Tap signs in without passing the gate — keep the draft either way.
+  useEffect(() => { if (input.trim()) sessionStorage.setItem("cycls_draft", input.trim()); }, [input]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const noop = () => {};
 

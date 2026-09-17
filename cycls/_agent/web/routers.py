@@ -13,10 +13,10 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 
 from cycls._app.db import DB, Workspace, workspace
-from cycls._agent import state, trash
+from cycls._agent import connectors as oauth, credentials, spill, state, trash
 from cycls._agent.web import office
 from cycls._agent.logs import log
-from cycls._agent.tools import tool_step
+from cycls._agent.tools import tool_step, detailed, excerpt
 
 DEFAULT_MAX_UPLOAD_MB = 512   # per-file upload cap when not configured
 
@@ -51,7 +51,7 @@ def to_ui_messages(raw):
     shape the live stream produces."""
     # tool_use id → its result errored. Lets the FE downgrade failed canvas
     # calls from a file card back to a plain step.
-    errored = set()
+    errored, results = set(), {}   # tool_use id → its stored result, for a connector step's Response
     search_ids = set()   # client-side `web_search` calls, by tool_use id
     for msg in raw:
         c = msg.get("content")
@@ -62,7 +62,7 @@ def to_ui_messages(raw):
         if msg.get("role") == "user" and isinstance(c, list):
             for b in c:
                 if isinstance(b, dict) and b.get("type") == "tool_result":
-                    body = b.get("content")
+                    body = results[b.get("tool_use_id")] = b.get("content")
                     if b.get("is_error") or (isinstance(body, str) and body.startswith("Error")):
                         errored.add(b.get("tool_use_id"))
 
@@ -83,7 +83,13 @@ def to_ui_messages(raw):
                             if b.get("tool_use_id") not in search_ids or b.get("is_error"):
                                 continue
                             if rows := _search_rows(b.get("content")):
-                                out[-1]["parts"].append({"type": "sources", "sources": rows})
+                                out[-1]["parts"].append({"type": "sources", "sources": rows, "id": b.get("tool_use_id")})
+                    # A run that ended waiting on the person: the card is stored
+                    # on the batch, because `ui` events never reach the
+                    # transcript. Without this a reload shows a finished-looking
+                    # chat with nothing to approve.
+                    if msg.get("cards") and out and out[-1]["role"] == "assistant":
+                        out[-1]["parts"] += [{"type": "card", "card": card} for card in msg["cards"]]
                     continue
                 text = "".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
             elif isinstance(c, str):
@@ -109,6 +115,10 @@ def to_ui_messages(raw):
                     part = {"type": "step", "id": b.get("id"), **tool_step(b.get("name", ""), b.get("input"))}
                     if b.get("id") in errored:
                         part["ok"] = False
+                    if detailed(b.get("name", "")):
+                        part["args"] = json.dumps(b.get("input") or {}, ensure_ascii=False)
+                        if b.get("id") in results:
+                            part["result"] = excerpt(results[b["id"]])
                     parts.append(part)
                 elif t == "web_search_tool_result":
                     # Anthropic's server-side search stores its rows right here,
@@ -120,12 +130,12 @@ def to_ui_messages(raw):
                             for r in (body if isinstance(body, list) else [])
                             if isinstance(r, dict) and r.get("type") == "web_search_result" and r.get("url")]
                     if rows:
-                        parts.append({"type": "sources", "sources": rows})
+                        parts.append({"type": "sources", "sources": rows, "id": b.get("tool_use_id")})
                 elif t == "server_tool_use":
                     # Server-side tools (web_search etc.) run Anthropic-side. The live
                     # provider stream yields a Step for these at content_block_stop;
                     # mirror it on refetch so search history doesn't vanish on reload.
-                    parts.append({"type": "step", **tool_step(b.get("name", ""), b.get("input"))})
+                    parts.append({"type": "step", "id": b.get("id"), **tool_step(b.get("name", ""), b.get("input"))})
             if out and out[-1]["role"] == "assistant":
                 out[-1]["content"] += "".join(texts); out[-1]["parts"] += parts
             else:
@@ -210,7 +220,7 @@ def resolve_path(workspace, rel):
     ws = workspace.resolve()
     if not resolved.is_relative_to(ws):
         raise ValueError("Path traversal denied")
-    for name in (".db", ".database", ".trash"):
+    for name in (".db", ".database", ".trash", ".secrets", ".connectors"):
         reserved = ws / name
         if resolved == reserved or resolved.is_relative_to(reserved):
             raise ValueError(f"Reserved path: {name}/ is managed by cycls")
@@ -225,6 +235,7 @@ def chats_router(ws_dep):
     @r.get("/chats")
     async def list_chats(ws: Workspace = ws_dep):
         items = []
+        runs = await state.list_runs(ws)   # one listing for the whole workspace
         async for cid, data in state.list_chats(ws):
             if data.get("deletedAt"):   # in the trash
                 continue
@@ -234,19 +245,37 @@ def chats_router(ws_dep):
                 "updatedAt": data.get("updatedAt", ""),
                 "favoritedAt": data.get("favoritedAt", ""),
                 "cost": data.get("cost", "0"),
+                "run": state.run_status(runs.get(cid)),
             })
         items.sort(key=lambda s: s.get("updatedAt", ""), reverse=True)
         return items
 
     @r.get("/chats/{chat_id}")
-    async def get_chat(chat_id: str, ws: Workspace = ws_dep):
+    async def get_chat(chat_id: str, since: Optional[int] = None, ws: Workspace = ws_dep):
+        """`since` returns only the turns after that index — the poll runs every
+        2s and a whole chat is one object read per turn. `next` is the cursor to
+        come back with; `open` is the role of the last projected message, which is
+        how a client knows whether to fold the window into its trailing bubble
+        (consecutive assistant turns collapse into one)."""
         meta = await state.get_meta(ws, chat_id)
         # 204 (not 404) for a missing chat: the FE auto-restores `?id=` on
         # cold load, and a stale id is normal — 404s clutter the dev console.
         if meta is None:
             return Response(status_code=204)
-        raw = await state.load_messages(ws, chat_id)
-        return {**meta, "messages": to_ui_messages(raw)}
+        # `run` tells the client whether to keep polling: a run outlives the
+        # request that started it, so a finished stream is not a finished run.
+        row = await state.get_run(ws, chat_id)
+        run = state.run_status(row)
+        turns, end = (None, None) if since is None else await state.load_tail(ws, chat_id, max(since, 0))
+        reset = since is not None and turns is None
+        if turns is None:   # full load, or the client is ahead of us
+            turns = await state.load_messages(ws, chat_id)
+            end = end if end is not None else await state.turn_end(ws, chat_id)
+        ui = to_ui_messages(turns)
+        return {**meta, "messages": ui, "run": run, "next": end,
+                **({"run_started": row.get("started")} if run == "running" and row else {}),
+                "open": ui[-1]["role"] if ui else None,
+                **({"reset": True} if reset else {})}
 
     @r.put("/chats/{chat_id}")
     async def put_chat(chat_id: str, request: Request, ws: Workspace = ws_dep):
@@ -255,6 +284,7 @@ def chats_router(ws_dep):
         message activity only, owned by `touch_meta` on new messages."""
         patch = await request.json()
         patch.pop("messages", None)
+        patch.pop("run", None)   # the run record is its own object, not chat meta
         existing = (await state.get_meta(ws, chat_id)) or {}
         merged = {**existing}
         for k, v in patch.items():
@@ -274,6 +304,11 @@ def chats_router(ws_dep):
         run that follows is an ordinary send."""
         if (await state.get_meta(ws, chat_id)) is None:
             raise HTTPException(status_code=404, detail="Chat not found")
+        # This is the one route that still deletes and renumbers every turn file.
+        # Under a live run that moves the slots it is appending to — the exact way
+        # two production chats lost turns (docs/notes/runs.md).
+        if state.run_status(await state.get_run(ws, chat_id)) == "running":
+            raise HTTPException(status_code=409, detail="This chat is still working on your last message.")
         removed = await state.truncate_last_exchange(ws, chat_id)
         return {"ok": removed is not None}
 
@@ -549,6 +584,19 @@ def _sorted(entries, key, desc):
     return [e for g in groups for e in sorted(g, key=sort_key, reverse=desc)]
 
 
+def _is_org_admin(user):
+    return getattr(user, "org_role", None) == "admin"
+
+
+async def _admin(cycls_app, user, ws, volume, base):
+    """Owner/admin on a team workspace; everyone on their own personal one."""
+    mode = getattr(getattr(cycls_app, "config", None), "workspaces", None)
+    if not mode or not ws.ws or ws.ws.startswith("u-"):
+        return True
+    orgdb = state.org_db(state.org_of(user), volume, base)
+    return (await state.resolve_role(user, ws.ws, orgdb)) in ("owner", "admin")
+
+
 def files_router(cycls_app, ws_dep, user_dep, volume, base):
     r = APIRouter()
     max_bytes = (getattr(getattr(cycls_app, "config", None), "max_upload", None) or DEFAULT_MAX_UPLOAD_MB) * 1024 * 1024
@@ -763,15 +811,6 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
 
     # ---- Trash: a delete is a move (docs/notes/trash.md) ----
 
-    mode = getattr(getattr(cycls_app, "config", None), "workspaces", None)
-
-    async def _admin(user, ws):
-        """Owner/admin on a team workspace; everyone on their own personal one."""
-        if not mode or not ws.ws or ws.ws.startswith("u-"):
-            return True
-        orgdb = state.org_db(state.org_of(user), volume, base)
-        return (await state.resolve_role(user, ws.ws, orgdb)) in ("owner", "admin")
-
     @r.delete("/files/{path:path}")
     async def delete_path(path: str, ws: Workspace = ws_dep, user: Any = user_dep):
         target = _safe_path(ws.root, path)
@@ -779,7 +818,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             raise HTTPException(status_code=404, detail="Not found")
         rel = str(target.relative_to(Path(ws.root).resolve()))
         # Apps are shared team assets — only admins remove them.
-        if trash.kind_of(rel, target.is_dir()) == "app" and not await _admin(user, ws):
+        if trash.kind_of(rel, target.is_dir()) == "app" and not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can delete apps")
         meta = await asyncio.to_thread(trash.trash_path, ws.root, rel, "user")
         _catalog_drop(ws.root)
@@ -830,10 +869,11 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.delete("/trash/{tid}")
     async def purge_trash(tid: str, ws: Workspace = ws_dep, user: Any = user_dep):
-        if not await _admin(user, ws):
+        if not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can delete forever")
         if tid.startswith("chat:"):
             await state.delete_chat(ws, tid[5:])
+            spill.purge(ws.root, tid[5:])
             return {"ok": True}
         try:
             await asyncio.to_thread(trash.purge, ws.root, tid)
@@ -843,7 +883,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.delete("/trash")
     async def empty_trash(ws: Workspace = ws_dep, user: Any = user_dep):
-        if not await _admin(user, ws):
+        if not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can delete forever")
         await asyncio.to_thread(trash.empty, ws.root)
         for c in await _trashed_chats(ws):
@@ -1079,7 +1119,8 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         return _examples_cache["data"]
 
     @r.post("/share/{user}/{token}/fork")
-    async def fork_share(user: str, token: str, ws: Optional[str] = None, forker: Any = user_dep):
+    async def fork_share(user: str, token: str, ws: Optional[str] = None,
+                         forker: Any = user_dep, ws_fork: Workspace = ws_dep):
         # `forker` is already authenticated (user_dep), so it IS the requester.
         found = await _locate(user, token, ws)
         if found is None:
@@ -1094,7 +1135,6 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         if meta is None:
             raise HTTPException(404, "Chat not found")
         raw = await state.load_messages(ws_source, source_id)
-        ws_fork = workspace(forker, volume, base=base, ws=f"u-{forker.id}" if mode else None)
         new_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
         await state.put_meta(ws_fork, new_id, {
@@ -1164,9 +1204,6 @@ def workspaces_router(cycls_app, user_dep, volume, base):
 
     def _orgdb(user):
         return state.org_db(state.org_of(user), volume, base)
-
-    def _is_org_admin(user):
-        return getattr(user, "org_role", None) == "admin"
 
     def _name_or_400(data):
         name = (data.get("name") or "").strip()
@@ -1352,6 +1389,242 @@ def workspaces_router(cycls_app, user_dep, volume, base):
     return r
 
 
+# ---- Connectors ----
+
+def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
+    """Connect, list and disconnect grants. The callback is reached by the
+    provider's redirect — no JWT — so it trusts the signed state, which names
+    the user and workspace; the PKCE verifier waits in the user's own slot."""
+    from fastapi.responses import HTMLResponse
+    r = APIRouter()
+    reg = {o.name: o for o in cycls_app.connectors}
+
+    def _get(name):
+        if name not in reg:
+            raise HTTPException(status_code=404, detail="Unknown connector")
+        return reg[name]
+
+    def _org_admin(user):
+        return bool(getattr(user, "org_id", None)) and _is_org_admin(user)
+
+    def _team(ws):
+        return bool(ws.ws) and not ws.ws.startswith("u-")
+
+    cms = getattr(getattr(cycls_app, "config", None), "cms", None) or {}
+    cms_headers = {"Authorization": f"Bearer {cms['token']}"} if cms.get("token") else {}
+
+    @r.get("/connectors")
+    async def list_connectors(ws: Workspace = ws_dep, user: Any = user_dep):
+        admin = any(o.scope != "user" for o in reg.values()) and await _admin(cycls_app, user, ws, volume, base)
+        off, org_admin = await oauth.blocked(ws), _org_admin(user)   # members never see what an admin switched off
+        mine = await oauth.off(ws)   # what this person switched off: still listed, still connected, just not in a turn
+        rows = await oauth.cms_rows(cms.get("connectors"), cms_headers)   # copy the team edits, code still wins
+        team = None   # the team workspace's name — the button says where a shared grant lands
+        if _team(ws):
+            row = await state.org_db(state.org_of(user), volume, base).get(f"workspaces/{ws.ws}")
+            team = (row or {}).get("name") or ws.ws
+        out = []
+        for n, o in reg.items():
+            if n in off and not org_admin:
+                continue
+            grant, shared = await credentials.find(ws, n)
+            row = rows.get(n, {})
+            out.append({"name": n, "kind": o.kind, "hint": o.hint, "scope": o.scope,
+                        "title": oauth.bilingual(o.title, row.get("title")),
+                        "description": oauth.bilingual(o.description, row.get("description")),
+                        "category": oauth.bilingual(o.category, row.get("category")),
+                        "about": o.about, "story": oauth.bilingual(row.get("story")),   # plain from code, html from the CMS
+                        "icon": o.icon or row.get("icon") or None,
+                        "prompts": [p for p in (oauth.bilingual(x) for x in (o.prompts or row.get("prompts") or [])) if p],
+                        "showcase": row.get("showcase") or "prompts", "gallery": row.get("gallery") or [],
+                        "gradient": row.get("gradient") or None, "links": oauth.links_of(row, o),
+                        "use_cases": o.use_cases, "skills": o.skills,
+                        "developer": o.developer or row.get("developer") or None, "website": o.website,
+                        "privacy": o.privacy, "terms": o.terms, "docs": o.docs, "team": team,
+                        "admin": admin, "allowed": n not in off, "org_admin": org_admin, "connected": grant is not None,
+                        "on": n not in mine, "connected_as": ("workspace" if shared else "user") if grant else None})
+        return out
+
+    async def _slot_or_4xx(o, scope, user, ws):
+        try:
+            chosen = o.slot(scope)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if chosen == "workspace" and not _team(ws):
+            raise HTTPException(status_code=400, detail="No workspace to share with here")
+        if chosen == "workspace" and not await _admin(cycls_app, user, ws, volume, base):
+            raise HTTPException(status_code=403, detail="Only workspace admins can manage a team connection")
+        return chosen
+
+    async def _connect_slot(o, scope, user, ws):
+        if o.name in await oauth.blocked(ws):
+            raise HTTPException(status_code=403, detail="Switched off by an org admin")
+        return await _slot_or_4xx(o, scope, user, ws)
+
+    @r.patch("/connectors/{name}")
+    async def allow(name: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        """Two switches, one route: `allowed` is the org admin's, for everyone; `on` is the person's own,
+        which keeps the grant and only keeps the tools out of their turns."""
+        _get(name)
+        data = await request.json()
+        if "on" in data:
+            on = bool(data["on"])
+            await oauth.set_off(ws, name, not on)
+            log("connector", user=user, action="on" if on else "off", connector=name)
+            return {"on": on}
+        if not _org_admin(user):
+            raise HTTPException(status_code=403, detail="Only org admins can switch a connector off")
+        allowed = bool(data.get("allowed"))
+        await oauth.set_blocked(ws, name, not allowed)
+        log("connector", user=user, action="allowed" if allowed else "blocked", connector=name)
+        return {"allowed": allowed}
+
+    @r.post("/connectors/{name}/authorize")
+    async def authorize(name: str, request: Request, scope: str | None = None, ws: Workspace = ws_dep, user: Any = user_dep):
+        o = _get(name)
+        if o.kind == "key":
+            raise HTTPException(status_code=400, detail="This connector takes a key")
+        chosen = await _connect_slot(o, scope, user, ws)
+        nonce, verifier = secrets.token_urlsafe(16), secrets.token_urlsafe(48)
+        here = f"{request.base_url}connectors/{name}/callback"
+        # Through the relay the provider sends the code to one registered host, which reads the origin
+        # out of the signed state and bounces it back here. The exchange must reuse whichever it was.
+        via = oauth.relay_url() if o.relay else None
+        redirect = via or here
+        client = await o.client(ws, redirect)
+        await credentials.put(ws, f"_pending/{nonce}", {"verifier": verifier, "redirect": redirect, "client": client})
+        state_ = oauth.sign({"c": name, "s": ws.subject, "w": ws.ws, "n": nonce, "k": chosen,
+                             **({"o": str(request.base_url).rstrip("/")} if via else {})},
+                            key=oauth.state_key())
+        return {"url": o.authorize_url(client, redirect, state_, verifier)}
+
+    @r.get("/connectors/{name}/callback")
+    async def callback(name: str, code: str, state: str):
+        try:
+            p = oauth.verify(state, key=oauth.state_key())
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if p["c"] != name:
+            raise HTTPException(status_code=400, detail="bad state")
+        o, ws = _get(name), workspace(p["s"], volume, base=base, ws=p["w"])
+        pending = await credentials.get(ws, f"_pending/{p['n']}")
+        if not pending:
+            raise HTTPException(status_code=400, detail="unknown or used state")
+        await credentials.delete(ws, f"_pending/{p['n']}")
+        grant = await o.exchange(pending["client"], code, pending["redirect"], pending["verifier"])
+        await credentials.put(ws, name, grant, shared=p["k"] == "workspace")
+        log("connector", action="connected", connector=name, scope=p["k"], subject=p["s"], ws=p["w"])
+        return HTMLResponse("<p>Connected — you can close this tab.</p><script>"
+                            f"window.opener&&window.opener.postMessage({{type:'cycls:connected',connector:{json.dumps(name)}}},location.origin);"
+                            "window.close()</script>")
+
+    @r.delete("/connectors/{name}")
+    async def disconnect(name: str, scope: str | None = None, ws: Workspace = ws_dep, user: Any = user_dep):
+        chosen = await _slot_or_4xx(_get(name), scope, user, ws)
+        await credentials.delete(ws, name, shared=chosen == "workspace")
+        log("connector", user=user, action="disconnected", connector=name, scope=chosen)
+        return {"ok": True}
+
+    @r.put("/connectors/{name}/key")
+    async def set_key(name: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        o, data = _get(name), await request.json()
+        key = data.get("key")
+        if o.kind != "key":
+            raise HTTPException(status_code=400, detail="This connector signs in with OAuth")
+        if not isinstance(key, str) or not key.strip():
+            raise HTTPException(status_code=400, detail="A key is required")
+        if err := o.validate(key.strip()):
+            raise HTTPException(status_code=400, detail=err)
+        chosen = await _connect_slot(o, data.get("scope"), user, ws)
+        await credentials.put(ws, name, {"key": key.strip()}, shared=chosen == "workspace")
+        log("connector", user=user, action="connected", connector=name, scope=chosen)
+        return {"ok": True}
+
+    @r.get("/connectors/{name}/tools")
+    async def tools(name: str, ws: Workspace = ws_dep):
+        o, chosen = _get(name), await oauth.permissions(ws, name)
+        token, out = await o.bearer(ws), []
+        url = await o.endpoint(ws) if o.addressed else None
+        for s in o.servers:
+            try:
+                found = await s.tools(token, url)
+            except Exception:
+                continue   # a server that wants a key the caller hasn't saved yet lists nothing
+            out += [{"name": f"{s.label}_{t.name}", "title": t.title or t.name.replace("_", " "), "description": t.description,
+                     "writes": bool(s._writes) or oauth.writes(t), "mode": oauth.mode(s, t, chosen)} for t in found]
+        return out
+
+    @r.api_route("/connectors/{name}/fetch/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    async def fetch(name: str, path: str, request: Request, ws: Workspace = ws_dep):
+        """An app's live call to a connector's API. The grant is resolved per call — a refreshed token
+        is inherited and never reaches the page — and the same switches that hide a connector's tools
+        close this too."""
+        o = _get(name)
+        if name in (await oauth.blocked(ws) | await oauth.off(ws)):
+            raise HTTPException(status_code=403, detail="Connector is switched off")
+        status, body, ctype = await oauth.relay(
+            o, ws, path, method=request.method, headers=dict(request.headers),
+            body=await request.body() if request.method != "GET" else None)
+        return Response(content=body, status_code=status, media_type=ctype)
+
+    @r.get("/connectors/{name}/prompts")
+    async def prompts(name: str, ws: Workspace = ws_dep):
+        o = _get(name)
+        token, url = await o.bearer(ws), (await o.endpoint(ws) if o.addressed else None)
+        return [{"name": p.name, "title": p.title or p.name.replace("_", " "), "description": p.description}
+                for s in o.servers for p in await s.prompts(token, url)]
+
+    @r.put("/connectors/{name}/tools")
+    async def set_tools(name: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        _get(name)
+        tools = (await request.json()).get("tools") or {}
+        if not all(isinstance(k, str) and m in oauth.MODES for k, m in tools.items()):
+            raise HTTPException(status_code=400, detail="each tool maps to allow, ask or never")
+        await oauth.set_permissions(ws, name, tools)
+        log("connector", user=user, action="permissions", connector=name, tools=tools)
+        return {"ok": True}
+
+    @r.put("/connectors/{name}/tools/{tool}")
+    async def set_tool(name: str, tool: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        _get(name)
+        m = (await request.json()).get("mode")
+        if m not in oauth.MODES:
+            raise HTTPException(status_code=400, detail="mode is allow, ask or never")
+        await oauth.set_permissions(ws, name, {**await oauth.permissions(ws, name), tool: m})
+        log("connector", user=user, action="permissions", connector=name, tools={tool: m})
+        return {"ok": True}
+
+    return r
+
+
+def tools_router(ws_dep, user_dep):
+    """The builtins' own allow / ask, per person — what the card's *Always allow* writes. Stored beside
+    the connector choices, under a name no connector can take."""
+    r = APIRouter()
+
+    @r.get("/tools")
+    async def builtin_modes(ws: Workspace = ws_dep):
+        """Only what the person chose — a tool they never touched follows the composer switch."""
+        return await oauth.permissions(ws, "_builtin")
+
+    @r.delete("/tools/{tool}")
+    async def clear_builtin(tool: str, ws: Workspace = ws_dep, user: Any = user_dep):
+        await oauth.set_permissions(ws, "_builtin", {k: v for k, v in (await oauth.permissions(ws, "_builtin")).items() if k != tool})
+        log("connector", user=user, action="permissions", connector="_builtin", tools={tool: None})
+        return {"ok": True}
+
+    @r.put("/tools/{tool}")
+    async def set_builtin(tool: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        mode = (await request.json()).get("mode")
+        if mode not in oauth.MODES:
+            raise HTTPException(status_code=400, detail="mode is allow, ask or never")
+        await oauth.set_permissions(ws, "_builtin", {**await oauth.permissions(ws, "_builtin"), tool: mode})
+        log("connector", user=user, action="permissions", connector="_builtin", tools={tool: mode})
+        return {"ok": True}
+
+    return r
+
+
 # ---- Mount ----
 
 def install_routers(cycls_app, app, required_auth, volume, base):
@@ -1362,7 +1635,10 @@ def install_routers(cycls_app, app, required_auth, volume, base):
         return workspace(user, volume, base=base, ws=ws_id)
     ws_dep = Depends(_build_ws)
     app.include_router(chats_router(ws_dep))
+    app.include_router(tools_router(ws_dep, required_auth))
     app.include_router(files_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))
     if mode:
         app.include_router(workspaces_router(cycls_app, required_auth, volume, base))
+    if getattr(cycls_app, "connectors", None):
+        app.include_router(connectors_router(cycls_app, ws_dep, required_auth, volume, base))

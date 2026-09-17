@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
@@ -10,6 +10,10 @@ import { TrashView, type TrashRow } from "./trash-view";
 import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
 import { Icon, IconButton } from "./icon";
+import { ConnectCard } from "./connect-card";
+import { ConfirmCard } from "./confirm-card";
+import { ConnectorsContext } from "./parts/tool-call";
+import { ConnectorsDialog, connectorLabel, openAuth, type Connector } from "./connectors-dialog";
 import { CyclsLogo } from "./cycls-logo";
 import { LoadingBar } from "./loading-bar";
 import { InputBox } from "./input-box";
@@ -18,11 +22,11 @@ import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
-import type { Attachment, ChatApi, AppConfig } from "../hooks/use-chat";
+import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang } from "../lib/i18n";
 import { track } from "../lib/analytics";
-import { toggleDark, cn, followUpsEnabled, askEnabled } from "../lib/utils";
+import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
 import { useToast } from "../lib/toast";
 import { useSpeechRecognition } from "../hooks/use-speech";
 import { useUrlParam } from "../hooks/use-url-param";
@@ -79,6 +83,7 @@ export interface FilesPanelProps {
   onOpenFile: (path: string) => Promise<string>;
   readFile: (path: string) => Promise<string>;
   writeFile: (path: string, data: BlobPart) => Promise<void>;   // binary too — the .fig editor writes raw bytes
+  fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
   listFolders: () => Promise<{ name: string; path: string }[]>;
   onShareFile?: (path: string, audience: string) => Promise<string>;
@@ -89,6 +94,7 @@ export interface FilesPanelProps {
 
 // A message composed while the agent was still working, waiting its turn.
 interface Queued {
+  extra?: SendExtra;
   id: string;
   text: string;
   attachments?: Attachment[];
@@ -104,7 +110,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   account?: AccountInfo | null;
   config?: AppConfig | null;
 }) {
-  const { messages, isStreaming, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, setUIHandler } = chat;
+  const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler } = chat;
   const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
@@ -118,7 +124,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     ? { ..._active, logo: _active.logo || _en?.logo || "", brand: _active.brand || _en?.brand || "" }
     : _en;
   const inputPlaceholder = meta
-    ? (isAr ? `اسأل ${meta.name} - اكتب @ لذكر ملف` : `Ask ${meta.name} - @ to mention a file`)
+    ? (isAr ? `اسأل ${meta.name}` : `Ask ${meta.name}`)
     : undefined;
   // A prompt drafted before sign-in (public shell, example card) survives the
   // auth round-trip here — consumed once, so later remounts start clean.
@@ -163,6 +169,41 @@ export function Chat({ chat, onShare, files, account, config }: {
   // composer. The options are shortcuts, not a constraint: typing any reply
   // answers it too.
   const [ask, setAsk] = useState<{ questions: AskQuestion[] } | null>(null);
+  // The agent's connect card: a tool needed an account the user hasn't linked.
+  const [connect, setConnect] = useState<{ name: string } | null>(null);
+  // A tool the user set to "ask": approve sends the next turn with the approval attached.
+  const [confirm, setConfirm] = useState<{ tool: string; key: string; connector?: string; label: string; args: unknown } | null>(null);
+  // The directory: what the deployment offers, refreshed whenever a grant changes.
+  const [connectors, setConnectors] = useState<Connector[] | null>(null);
+  const [connectorsOpen, setConnectorsOpen] = useState<{ name?: string } | null>(null);
+  // @-pills: connectors this message is about. They ride the request and clear on send.
+  const [pills, setPills] = useState<Connector[]>([]);
+  const pillsRef = useRef<Connector[]>([]);
+  useEffect(() => { pillsRef.current = pills; }, [pills]);
+  // The composer's text, read by the mention search without making it a dependency — a callback that
+  // changed per keystroke would restart the picker's debounce.
+  const inputRef = useRef(input);
+  useEffect(() => { inputRef.current = input; }, [input]);
+  const addPill = (c: Connector, source: string) => {
+    setPills((ps) => (ps.some((p) => p.name === c.name) ? ps : [...ps, c]));
+    track("connector_mentioned", { connector: c.name, source });
+  };
+  const loadConnectors = useCallback(() => {
+    if (account) api("/connectors", { silent: true }).then((r) => r.json()).then(setConnectors).catch(() => setConnectors([]));
+  }, [account?.activeOrg?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadConnectors(); }, [loadConnectors]);
+  const openConnectors = (source: string, name?: string) => {
+    track("connector_directory_opened", { source });
+    loadConnectors();
+    setConnectorsOpen({ name });
+  };
+  useEffect(() => {   // the callback tab reports success: the card goes away, the directory refreshes
+    const done = (e: MessageEvent) => {
+      if (e.origin === window.location.origin && e.data?.type === "cycls:connected") { setConnect(null); loadConnectors(); }
+    };
+    window.addEventListener("message", done);
+    return () => window.removeEventListener("message", done);
+  }, [loadConnectors]);
   // Typing takes over: the moment the user starts composing, the agent's
   // chip and card yield — their own words beat our prompts.
   const prevInputRef = useRef(input);
@@ -194,6 +235,9 @@ export function Chat({ chat, onShare, files, account, config }: {
   useEffect(() => {
     setFollowUp(null);
     setAsk(null);
+    setConnect(null);
+    setConfirm(null);
+    setPills([]);
     queuedRef.current = [];
     setQueued([]);
     heldRef.current = false;
@@ -268,7 +312,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   }, []);
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
-  const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string; favoritedAt?: string }[]>([]);
+  const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null }[]>([]);
   const [chatsLoading, setChatsLoading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -338,6 +382,13 @@ export function Chat({ chat, onShare, files, account, config }: {
           setAsk({ questions });
           track("ui_action", { action: "ask", questions: questions.length });
         }
+      } else if (ev.action === "connect" && typeof ev.connector === "string") {
+        setConnect({ name: ev.connector });
+        track("ui_action", { action: "connect", connector: ev.connector });
+      } else if (ev.action === "confirm" && typeof ev.tool === "string" && typeof ev.key === "string") {
+        setConfirm({ tool: ev.tool, key: ev.key, connector: typeof ev.connector === "string" ? ev.connector : undefined,
+                     label: typeof ev.label === "string" ? ev.label : ev.tool, args: ev.args });
+        track("ui_action", { action: "confirm", tool: ev.tool });
       } else {
         track("ui_action", { action: ev.action, handled: false });
       }
@@ -421,10 +472,25 @@ export function Chat({ chat, onShare, files, account, config }: {
     textareaRef.current?.focus();
   }, []);
 
-  const handleSubmit = useCallback((overrideText?: string, origin: string = "keyboard") => {
+  const searchFiles = files?.searchFiles;
+  // Connected connectors rank above files when the query matches a name. Memoised: the picker's debounce
+  // depends on this callback, and a new closure per streamed token would restart it.
+  const searchMentions = useCallback(async (q: string) => {
+    const needle = q.toLowerCase();
+    // Hidden only while its token is still in the line — delete the token and the connector is offered again.
+    const hits = (connectors ?? [])
+      .filter((c) => c.connected && c.allowed && c.on && connectorLabel(c).toLowerCase().includes(needle)
+        && !inputRef.current.includes(`@${connectorLabel(c)}`))
+      .map((c) => ({ name: connectorLabel(c), path: "", connector: c }));
+    return [...(account ? hits : []), ...(searchFiles ? await searchFiles(q) : [])];
+  }, [account, connectors, searchFiles]);
+
+  const handleSubmit = useCallback((overrideText?: string, origin: string = "keyboard", extra?: SendExtra) => {
     const text = (overrideText ?? input).trim();
     if (!text || attachments.some((a) => a.status === "uploading")) return;
     const sendAttachments = attachments.length > 0 ? [...attachments] : undefined;
+    const mentioned = pillsRef.current.filter((p) => text.includes(`@${connectorLabel(p)}`)).map((p) => p.name);
+    if (mentioned.length) { extra = { ...extra, connectors: mentioned }; setPills([]); }
     setInput("");
     setAttachments([]);
     setFollowUp(null);
@@ -433,14 +499,14 @@ export function Chat({ chat, onShare, files, account, config }: {
     // thought the user has now shouldn't wait on them.
     if (isStreaming) {
       const next = [...queuedRef.current,
-                    { id: crypto.randomUUID(), text, attachments: sendAttachments, origin }];
+                    { id: crypto.randomUUID(), text, attachments: sendAttachments, origin, extra }];
       queuedRef.current = next;
       setQueued(next);
       track("message_queued", { chat_id: chatId, origin, queue_depth: next.length });
       return;
     }
     heldRef.current = false;
-    onSend(text, sendAttachments, origin);
+    onSend(text, sendAttachments, origin, extra);
     setTimeout(() => scrollToBottom(), 0);
   }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId]);
 
@@ -455,9 +521,27 @@ export function Chat({ chat, onShare, files, account, config }: {
     queuedRef.current = rest;
     setQueued(rest);
     track("queued_message_sent", { chat_id: chatId, remaining: rest.length });
-    onSend(next.text, next.attachments, "queued");
+    onSend(next.text, next.attachments, "queued", next.extra);
     setTimeout(() => scrollToBottom(), 0);
   }, [isStreaming, onSend, scrollToBottom, chatId]);
+
+  // Newest step on the transcript — a run this tab never streamed still has one.
+  const currentStep = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const parts = (messages[i] as { parts?: { type: string; step?: string }[] }).parts;
+      if (!parts) continue;
+      for (let j = parts.length - 1; j >= 0; j--) {
+        if (parts[j].type === "step" && parts[j].step) return parts[j].step as string;
+      }
+    }
+    return null;
+  }, [messages]);
+
+  // The list's `run` is fetched once; without this a finished chat pulses on.
+  useEffect(() => {
+    if (!chatId) return;
+    setChats((prev) => prev.map((x) => (x.id === chatId ? { ...x, run: runStatus } : x)));
+  }, [chatId, runStatus]);
 
   // Stop holds the queue rather than draining into a run the user just killed.
   const handleStop = useCallback(() => {
@@ -658,18 +742,38 @@ export function Chat({ chat, onShare, files, account, config }: {
 
   const inputProps = {
     textareaRef, input, setInput, handleKeyDown, handleSubmit, isStreaming, onStop: handleStop,
+    working: (runStatus === "running" && !attached ? "background" : undefined) as "background" | undefined,
     onOpenFilePicker: openFilePicker,
     onOpenFiles: files ? () => openPanel("files") : undefined,
     attachments,
     onRemoveFile: removeFile,
     listening, transcribing, startMic, stopMic, cancelMic, voice,
     onFilesAdded: handleFilesAdded,
-    onMentionSearch: files?.searchFiles,
+    onMentionSearch: account || searchFiles ? searchMentions : undefined,
+    connectors: connectors?.filter((c) => c.connected),
+    approveSwitch: !!connectors?.length,
+    onOpenConnectors: account ? () => openConnectors("plus") : undefined,
+    onToggleConnector: (c: Connector, on: boolean) => {
+      setConnectors((prev) => prev?.map((x) => (x.name === c.name ? { ...x, on } : x)) ?? prev);
+      track("connector_toggled", { connector: c.name, to: on ? "on" : "off", level: "user" });
+      api(`/connectors/${c.name}`, { method: "PATCH", json: { on } }).catch(loadConnectors);
+    },
+    onAddConnector: (c: Connector) => addPill(c, "picker"),
     placeholder: inputPlaceholder,
   };
 
   return (
     <div className="h-dvh flex">
+      {connectorsOpen && (
+        <ConnectorsDialog
+          api={api}
+          items={connectors}
+          reload={loadConnectors}
+          initial={connectorsOpen.name}
+          onClose={() => setConnectorsOpen(null)}
+          onUsePrompt={(text, c) => { setInput(text); addPill(c, "prompt"); textareaRef.current?.focus(); }}
+        />
+      )}
       <div className="flex h-full min-w-0 flex-1 flex-col">
       <header className="relative z-30 h-12 shrink-0" dir="ltr">
         <div className="mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
@@ -890,7 +994,7 @@ export function Chat({ chat, onShare, files, account, config }: {
             <div ref={scrollRef} className="isolate relative flex-1 overflow-y-auto" dir="ltr">
               <div className="pointer-events-none sticky top-0 z-10 h-6 -mb-6 bg-[linear-gradient(to_bottom,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
               <div ref={contentRef} className="flex w-full flex-col items-center py-4">
-                {messages.map((msg, i) => {
+                <ConnectorsContext.Provider value={connectors ?? []}>{messages.map((msg, i) => {
                   const isLast = i === messages.length - 1;
                   const hasError = msg.role === "assistant" && msg.parts?.some((p) => p.type === "callout" && p.style === "error");
                   return (
@@ -910,7 +1014,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                       onOpenFile={openFileInCanvas}
                     />
                   );
-                })}
+                })}</ConnectorsContext.Provider>
               </div>
               <div className="pointer-events-none sticky bottom-0 z-10 h-6 -mt-6 bg-[linear-gradient(to_top,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
             </div>
@@ -933,7 +1037,42 @@ export function Chat({ chat, onShare, files, account, config }: {
                     }}
                   />
                 )}
-                {!ask && survey && !hushed && !isStreaming && (
+                {connect && !ask && (
+                  <ConnectCard
+                    key={connect.name}
+                    name={connect.name}
+                    onConnect={async () => {
+                      track("connector_connect_clicked", { connector: connect.name, source: "card", chat_id: chatId });
+                      if (connectors?.find((x) => x.name === connect.name)?.kind === "key") { setConnect(null); openConnectors("card", connect.name); return; }
+                      const { url } = await (await api(`/connectors/${connect.name}/authorize`, { method: "POST" })).json();
+                      openAuth(url, loadConnectors);
+                    }}
+                    onDismiss={() => { track("connector_dismissed", { connector: connect.name }); setConnect(null); }}
+                  />
+                )}
+                {confirm && !ask && !connect && (
+                  <ConfirmCard
+                    key={confirm.tool}
+                    label={confirm.label}
+                    args={confirm.args}
+                    onApprove={() => {
+                      track("confirm_approved", { tool: confirm.tool, chat_id: chatId });
+                      const c = confirm;
+                      setConfirm(null);
+                      handleSubmit(`${t("approved")}: ${c.label}`, "confirm", { approvals: [c.key] });
+                    }}
+                    onAlways={() => {
+                      track("connector_permissions_changed", { connector: confirm.connector ?? "_builtin", scope: "card", to: "allow" });
+                      const c = confirm;
+                      setConfirm(null);
+                      const path = c.connector ? `/connectors/${c.connector}/tools/${c.tool}` : `/tools/${c.tool}`;
+                      api(path, { method: "PUT", json: { mode: "allow" } }).catch(() => {});
+                      handleSubmit(`${t("approved")}: ${c.label}`, "confirm", { approvals: [c.key] });
+                    }}
+                    onDismiss={() => { track("confirm_dismissed", { tool: confirm.tool }); setConfirm(null); }}
+                  />
+                )}
+                {!ask && !connect && survey && !hushed && !isStreaming && (
                   <SurveyStrip survey={survey} onDone={() => setSurvey(null)} />
                 )}
                 <AnimatePresence initial={false}>
@@ -946,6 +1085,11 @@ export function Chat({ chat, onShare, files, account, config }: {
                       onDismiss={() => dropQueued(m.id)}
                     />
                   ))}
+                </AnimatePresence>
+                <AnimatePresence initial={false}>
+                  {runStatus === "running" && !attached && (
+                    <RunIndicator step={currentStep} startedAt={runStartedAt} onStop={handleStop} />
+                  )}
                 </AnimatePresence>
                 {followUpsOn && followUp && !isStreaming && !ask && (
                   <FollowUpChip
@@ -1000,7 +1144,7 @@ export function Chat({ chat, onShare, files, account, config }: {
         </Popover>
       )}
       {settingsOpen && account && (
-        <SettingsDialog account={account} onClose={() => setSettingsOpen(false)} />
+        <SettingsDialog account={account} onClose={() => setSettingsOpen(false)} onOpenConnectors={() => { setSettingsOpen(false); openConnectors("settings"); }} />
       )}
       </div>
       <div className={cn(
@@ -1020,6 +1164,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           onCloseAll={() => { setCanvasTabs([]); setCanvasActive(null); setRightExpanded(false); }}
           onSelectTab={setCanvasActive}
           onCloseTab={closeCanvasTab}
+          onReorder={setCanvasTabs}
           onHide={() => setCanvasHidden(true)}
           onAddFile={openFileInCanvas}
           apps={apps}
@@ -1028,6 +1173,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           readFile={files.readFile}
           openFile={files.onOpenFile}
           writeFile={files.writeFile}
+          fetchConnector={files.fetchConnector}
           listFolders={files.listFolders}
           org={files.org}
           onShareFile={files.onShareFile}
@@ -1037,7 +1183,7 @@ export function Chat({ chat, onShare, files, account, config }: {
         />
       )}
       {/* Chats / Files / Apps / Shares — docked on desktop, overlay on a phone */}
-      <AnimatePresence>
+      <AnimatePresence initial={false}>
         {filesOpen && (
           <>
             {!isDesktop && (
@@ -1051,12 +1197,12 @@ export function Chat({ chat, onShare, files, account, config }: {
             />
             )}
             <motion.div
-              initial={isDesktop ? false : { x: "100%" }}
+              initial={isDesktop ? { width: 0 } : { x: "100%" }}
               animate={!isDesktop ? { x: 0 }
                 : rightExpanded && !canvasShowing ? {}
                 : { width: railIconsOnly ? RAIL_ICON_W : panelWidth }}
               exit={!isDesktop ? { x: "100%" } : { width: 0 }}
-              transition={railResizing ? { duration: 0 } : { type: "spring", damping: 30, stiffness: 300 }}
+              transition={railResizing ? { duration: 0 } : slide}
               className={cn(
                 "flex flex-col overflow-hidden",
                 isDesktop
@@ -1285,7 +1431,7 @@ function formatShortDate(iso: string) {
 }
 
 function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onToggleFavorite }: {
-  chats: { id: string; title: string; updatedAt: string; favoritedAt?: string }[];
+  chats: { id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null }[];
   loading: boolean;
   activeId?: string | null;
   onLoad: (id: string) => void;
@@ -1297,15 +1443,17 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
 
-  if (loading) return <LoadingBar />;
+  if (loading) return <div className="flex-1"><LoadingBar /></div>;
 
   if (chats.length === 0) {
     return (
-      <EmptyState
-        icon={<Icon name="list" className="size-full" strokeWidth={1.5} />}
-        title={t("noChats")}
-        subtitle={t("noChatsSub")}
-      />
+      <div className="flex-1">
+        <EmptyState
+          icon={<Icon name="list" className="size-full" strokeWidth={1.5} />}
+          title={t("noChats")}
+          subtitle={t("noChatsSub")}
+        />
+      </div>
     );
   }
 
@@ -1350,7 +1498,15 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
                     onCancel={() => setRenaming(null)}
                   />
                 ) : (
-                  <span className="text-sm text-foreground truncate block">{s.title || t("untitled")}</span>
+                  <span className="text-sm text-foreground truncate block">
+                    {/* a run outlives the tab that started it — say so, or leaving
+                        the chat looks the same as the agent stopping */}
+                    {s.run === "running" && (
+                      <span className="mr-1.5 inline-block size-1.5 rounded-full bg-emerald-500 animate-pulse align-middle"
+                            aria-label={t("working")} />
+                    )}
+                    {s.title || t("untitled")}
+                  </span>
                 )}
               </div>
               <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
@@ -1398,6 +1554,44 @@ function Star({ filled, className }: { filled: boolean; className?: string }) {
 // sent; clicking pulls it back into the composer (the same gesture that
 // accepts a follow-up), which is also the only way to send one while an
 // explicit Stop is holding the queue.
+function RunIndicator({ step, startedAt, onStop }: {
+  step: string | null;
+  startedAt: string | null;
+  onStop: () => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const h = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(h);
+  }, []);
+  const secs = startedAt ? Math.max(0, Math.floor((now - Date.parse(startedAt)) / 1000)) : null;
+  const elapsed = secs == null ? null
+    : secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${String(secs % 60).padStart(2, "0")}s`;
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 4 }}
+      transition={{ duration: 0.15 }}
+      className="mb-2 px-1"
+    >
+      <div className="flex items-center gap-2 rounded-2xl border border-border bg-secondary/40 py-1.5 ps-3 pe-1.5">
+        <span className="inline-block size-1.5 shrink-0 rounded-full bg-emerald-500 animate-pulse" />
+        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground" dir="auto">
+          {step || t("working")}
+          {elapsed && <span className="ms-2 tabular-nums text-muted-foreground/60">{elapsed}</span>}
+        </span>
+        <button
+          onClick={onStop}
+          className="shrink-0 rounded-full px-2.5 py-1 text-xs text-muted-foreground/80 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+        >
+          {t("stopRun")}
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
 function QueuedChip({ text, held, onEdit, onDismiss }: {
   text: string;
   held: boolean;

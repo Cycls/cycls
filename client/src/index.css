@@ -12,6 +12,9 @@
   --color-card-foreground: #0a0a0a;
   --color-secondary: #f5f5f5;
   --color-secondary-foreground: #0a0a0a;
+  /* Logo plate. Most connector marks are dark ink on transparent, so this stays light in both
+     themes — a dark tile would swallow them — just dimmed below to take the glare off. */
+  --color-plate: #ffffff;
 }
 
 .dark {
@@ -26,6 +29,7 @@
   --color-card-foreground: #fafafa;
   --color-secondary: #1c1c1c;
   --color-secondary-foreground: #fafafa;
+  --color-plate: #d8d8d8;
 }
 
 body {
@@ -128,6 +132,32 @@ body {
   .print-root { display: block !important; }
 }
 
+/* Logo shimmer — a connector's logo while its call runs; rides the loading bar's keyframes */
+.logo-shimmer {
+  background: linear-gradient(100deg, transparent 30%, rgb(255 255 255 / 0.75) 50%, transparent 70%);
+  animation: slide 1.4s linear infinite;
+}
+
+/* A connector's story, written in the CMS as rich text: enough rhythm for headings, lists and links
+   without letting a paragraph out of the page's own type scale. */
+.story h2, .story h3 { margin: 1.25rem 0 0.4rem; font-size: 0.9375rem; font-weight: 600; color: var(--color-foreground); }
+.story p { margin: 0.5rem 0; }
+.story ul, .story ol { margin: 0.5rem 0; padding-inline-start: 1.25rem; list-style: revert; }
+.story li > p { direction: inherit; }
+.story li { margin: 0.2rem 0; }
+.story a { color: var(--color-foreground); text-decoration: underline; text-underline-offset: 2px; }
+.story img { max-width: 100%; border-radius: 0.75rem; margin: 0.75rem 0; }
+.story :first-child { margin-top: 0; }
+.story :last-child { margin-bottom: 0; }
+
+/* Icon shimmer — a built-in step's glyph while it runs. The logo's sweep needs an image; a line
+   glyph carries the same 1.4s cadence as a pulse of light instead. */
+@keyframes icon-shimmer {
+  0%, 100% { color: var(--color-muted-foreground); }
+  50% { color: var(--color-foreground); }
+}
+.icon-shimmer { animation: icon-shimmer 1.4s ease-in-out infinite; }
+
 /* Text shimmer — the streaming "Thinking" label */
 @keyframes text-shimmer {
   0% { background-position: 150% center; }
@@ -160,4 +190,16 @@ body {
   input, select, textarea {
     font-size: 16px !important;
   }
+}
+
+/* Arabic flips <html> to dir="rtl" (i18n.ts), and Clerk anchors its checkout
+   drawer with inset-inline-end — which under RTL resolves to the *left* edge, so
+   the panel opened on the wrong side. Pin it to the physical right, as in
+   English; the copy inside stays RTL. Clerk's own portal root is a sibling of
+   #clerk-components on the body, so .cl-drawerContent is the handle. */
+[dir="rtl"] .cl-drawerContent {
+  inset-inline-start: auto !important;
+  inset-inline-end: auto !important;
+  left: auto !important;
+  right: 12px !important;
 }

@@ -3,19 +3,20 @@ import { useDarkMode } from "./hooks/use-dark-mode";
 import {
   AuthenticateWithRedirectCallback,
   ClerkProvider,
-  SignedIn,
-  SignedOut,
+  Show,
+  GoogleOneTap,
   useAuth,
   useClerk,
   useOrganization,
   useOrganizationList,
-  useSignIn,
-  useSignUp,
   useUser,
-} from "@clerk/clerk-react";
-import { useSubscription } from "@clerk/clerk-react/experimental";
-import { dark } from "@clerk/themes";
-import { arSA } from "@clerk/localizations";
+} from "@clerk/react";
+// Core 3 turned the default useSignIn/useSignUp into signals; the custom flow
+// below wants the resource-shaped hooks, which ship under /legacy.
+import { useSignIn, useSignUp } from "@clerk/react/legacy";
+import { useSubscription } from "@clerk/react/experimental";
+import { dark } from "@clerk/ui/themes";
+import { arCheckout } from "./lib/clerk-ar";
 import { useLang, setLang, t } from "./lib/i18n";
 import { toggleDark } from "./lib/utils";
 import { markSignup, detectSignup, startSignup } from "./lib/signup";
@@ -45,6 +46,7 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
     onOpenFile: f.openFile,
     readFile: f.readFile,
     writeFile: f.writeFile,
+    fetchConnector: f.fetchConnector,
     searchFiles: f.searchFiles,
     listFolders: f.listFolders,
     onShareFile: withShare ? f.shareFile : undefined,
@@ -653,7 +655,7 @@ export default function App() {
     // visitors still see public shares without auth.
     if (!clerkKey) return <SharedView />;
     return (
-      <ClerkProvider publishableKey={clerkKey} appearance={{ baseTheme: isDark ? dark : undefined }}>
+      <ClerkProvider publishableKey={clerkKey} appearance={{ theme: isDark ? dark : undefined }}>
         <SharedViewAuthed />
       </ClerkProvider>
     );
@@ -674,13 +676,13 @@ export default function App() {
   }
 
   return (
-    <ClerkProvider publishableKey={clerkKey} appearance={{ baseTheme: isDark ? dark : undefined }} localization={lang === "ar" ? arSA : undefined}>
-      <SignedIn>
+    <ClerkProvider publishableKey={clerkKey} appearance={{ theme: isDark ? dark : undefined }} localization={lang === "ar" ? arCheckout : undefined}>
+      <Show when="signed-in">
         <ChatAppKeyed config={config} />
-      </SignedIn>
-      <SignedOut>
+      </Show>
+      <Show when="signed-out">
         <PublicGate config={config} />
-      </SignedOut>
+      </Show>
     </ClerkProvider>
   );
 }
@@ -696,5 +698,10 @@ function PublicGate({ config }: { config: AppConfig | null }) {
     return params.has("fork") || params.has("q") || params.has("plans");
   });
   if (signingIn) return <CustomSignIn />;
-  return <PublicHome config={config} onSignIn={() => setSigningIn(true)} />;
+  return (
+    <>
+      {config?.one_tap && <GoogleOneTap />}
+      <PublicHome config={config} onSignIn={() => setSigningIn(true)} />
+    </>
+  );
 }

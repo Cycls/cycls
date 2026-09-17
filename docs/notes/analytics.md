@@ -131,9 +131,11 @@ Identified users also carry **person properties** (via identify): `email`,
 
 | event | fires when | key props / question |
 |---|---|---|
-| `turn_completed` | stream ends (also when stopped) | `tools` {name: count}, `tool_calls`, `duration_s`, `produced_artifact`, `errored`, `stopped`, `origin` — the shape of the work, without per-tool-call volume |
+| `turn_completed` | the run ends — from the stream when it carried the turn to the end, otherwise from the poll (`detached: true`, `status`) | `tools` {name: count}, `tool_calls`, `duration_s`, `produced_artifact`, `errored`, `stopped`, `origin` — the shape of the work, without per-tool-call volume |
 | `generation_stopped` | user hits stop mid-stream | impatience / runaway signal |
 | `message_retried` / `message_regenerated` / `message_failed` | recovery paths | friction |
+| `stream_broken` | the stream ended without the server's end marker | `reason`, `visibility`, `online`, `seconds_since_byte`, `run_seconds` — why connections drop, per user. The run itself is unaffected; the client polls |
+| `run_busy` | send refused with 409 — the chat already has a run | a second tab, or a run whose disconnect the server hasn't noticed. Not `message_failed`: it would trip that event's alert |
 | `message_queued` / `queued_message_sent` / `queued_message_edited` / `queued_message_dropped` | composing while the agent works | does queueing get used? |
 | `chat_loaded` / `chat_cleared` / `chat_renamed` / `chat_favorited` / `chat_deleted` | sidebar chat ops | retention behavior |
 
@@ -165,10 +167,13 @@ Identified users also carry **person properties** (via identify): `email`,
 
 | event | fires when | key props / question |
 |---|---|---|
-| `ui_action` | every minor agent `ui` event: `action` = `suggest`, `ask` (+ `questions`), `design_command` (live design edit relayed to the open editor), or anything unhandled (`handled: false`) | the denominator for the chips: `followup_accepted` ÷ `ui_action{suggest}`, `ask_answered` ÷ `ui_action{ask}`. Milestone actions fire their named event instead (`open_canvas` → `artifact_completed`, `open_plan_modal` → `paywall_shown`) |
+| `ui_action` | every minor agent `ui` event: `action` = `suggest`, `ask` (+ `questions`), `connect` (+ `connector`), `confirm` (+ `tool`), `design_command` (live design edit relayed to the open editor), or anything unhandled (`handled: false`) | the denominator for the chips: `followup_accepted` ÷ `ui_action{suggest}`, `ask_answered` ÷ `ui_action{ask}`. Milestone actions fire their named event instead (`open_canvas` → `artifact_completed`, `open_plan_modal` → `paywall_shown`) |
 | `ask_answered` / `ask_dismissed` | clarifying-question card resolved | answered ÷ shown decides the feature's fate |
+| `confirm_approved` / `confirm_dismissed` / `connector_permissions_changed` | the confirm card was approved or waved off (+ `tool`); a tool's mode changed on a connector's page or from the card's Always allow (`scope` = `tool`, `group` or `card`, `to`) | approved ÷ `ui_action{confirm}` says whether *ask* is a safety net or a nag |
+| `client_crashed` | a render error was caught by the boundary (`message`) | should be zero; each one is a bug with its message attached |
+| `connector_connect_clicked` / `connector_dismissed` / `connector_disconnected` / `connector_directory_opened` / `connector_prompt_used` / `connector_toggled` / `connector_mentioned` | a connector was opened for connecting (`source` = `card` or `directory`; `kind` = `key` when a key was saved), declined from the card, or disconnected (+ `connector`); a connector was switched on or off (`level` = `org` for the admin's switch or `user` for the person's own, `to` = `on` or `off`); the directory was opened (`source` = `plus` or `settings`) or one of a connector's example prompts taken; an org admin switched one on or off (`to`, `level` = `org`); an @-pill was added (`source` = `picker` or `prompt`) | clicked ÷ `ui_action{connect}` is the connect rate; a high dismiss rate on one connector says its card isn't earning trust |
 | `followup_accepted` | follow-up chip taken | `method` (click/arrow) |
-| `ask_toggled` / `followups_toggled` / `web_search_toggled` | settings switches (`to`, `source`) | opt-out rate = annoyance meter; web search off rides the request as `disabled_tools` |
+| `ask_toggled` / `followups_toggled` / `web_search_toggled` / `approve_mode_changed` | settings switches and the composer's Auto / Manual pill (`to`, `source`) | opt-out rate = annoyance meter; web search off rides the request as `disabled_tools` |
 | `notification_prompt_shown` / `notification_prompt_answered` | our push-permission card (docs/notes/engagement.md) | `placement` (`corner`, or `settings` from the Turn on row), `result` (`allowed` / `denied` / `dismissed`). When it shows is the `notification_prompt` flag's call |
 | `announcement_shown` / `announcement_clicked` / `announcement_dismissed` | a What's new modal or a corner tip from the `announcements` flag payload | `id`, `type` (`modal` / `corner`). Seen ids also land on the person as `announcement_seen/<id>` so a flag condition can exclude them |
 | *(PostHog-native)* `survey shown` / `survey sent` / `survey dismissed` | a PostHog survey answered in our strip above the composer | PostHog's own names and `$survey_*` props, sent to the PostHog plugin only — not on the pipe |

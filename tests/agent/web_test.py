@@ -17,6 +17,62 @@ THEME_PATH = str(importlib.resources.files('cycls').joinpath('_agent/web/themes/
 # Messages Class Tests
 # =============================================================================
 
+def test_stopping_a_finished_run_answers_202_not_404(tmp_path, monkeypatch):
+    """A person can press Stop in the ~2s poll window after a run ends — seen in
+    production, 466ms after the record said done, surfacing as an HTTP error.
+    A terminal record means there is nothing to do, not that something broke.
+    A chat with no record at all is still a real 404."""
+    import asyncio
+    from fastapi.testclient import TestClient
+    from cycls._app.auth import User
+    from cycls._app.db import workspace
+    from cycls._agent import state
+    import cycls._agent.web.server as server
+
+    user = User(id="user_test")
+    monkeypatch.setattr(server, "validator", lambda *a, **k: (lambda: user))
+
+    async def dummy_agent(context):
+        yield "hi"
+
+    # storage is derived: file://{volume} when not prod
+    config = Config(public_path=THEME_PATH, auth=True, plan="free", volume=str(tmp_path))
+    client = TestClient(server.web(dummy_agent, config))
+
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    asyncio.run(state.put_run(ws, "finished", {"status": "done", "run": "r1",
+                                               "heartbeat": "2026-01-01T00:00:00+00:00"}))
+
+    r = client.post("/chats/finished/stop")
+    assert r.status_code == 202, r.text
+    assert r.json()["stopping"] is False and r.json()["status"] == "done"
+
+    assert client.post("/chats/never-ran/stop").status_code == 404
+
+
+def test_a_handled_stream_error_is_a_failed_run():
+    """The encoder turns an exception into a callout so the stream stays
+    well-formed. Without a flag the task then ends clean and the run records
+    `done` — and a finished-run hook announces a turn that actually raised."""
+    import asyncio
+    from cycls._agent.web.server import Run, encoder
+
+    async def boom():
+        yield {"type": "text", "text": "partial"}
+        raise RuntimeError("provider went away")
+
+    run = Run(detach=False, chat_id="c1")
+
+    async def go():
+        out = [chunk async for chunk in encoder(boom(), chat_id="c1", run=run)]
+        return out
+
+    out = asyncio.run(go())
+    assert any("[DONE]" in c for c in out), "stream must still terminate cleanly"
+    assert any("callout" in c for c in out), "the person must still see the error"
+    assert run.failed is True, "a handled error must still mark the run failed"
+
+
 def test_messages_extracts_text_content():
     """Tests that Messages extracts text-only content from raw messages."""
     print("\n--- Running test: test_messages_extracts_text_content ---")
@@ -1046,6 +1102,20 @@ def test_ws_mode_foreign_workspace_is_404(tmp_path):
         assert client.get("/chats", headers={"X-Workspace": header}).status_code == 404
 
 
+def test_ws_mode_fork_lands_in_the_active_workspace(tmp_path):
+    """The client opens the fork with the header it sent. A fork that always
+    went to personal 204'd from a team workspace and read as a dead share link."""
+    client = _ws_routers_client(tmp_path)
+    assert client.put("/chats/c1", json={"title": "t"}).status_code == 200
+    share = client.post("/share", json={"path": "chat/c1"}).json()
+    team = client.post("/workspaces", json={"name": "Team"}).json()["id"]
+    h = {"X-Workspace": team}
+    path = share["url"].replace("/shared/", "/share/").split("?")[0]
+    r = client.post(f"{path}/fork?ws=u-user_1", headers=h)
+    assert r.status_code == 200, r.text
+    assert client.get(f"/chats/{r.json()['id']}", headers=h).status_code == 200
+
+
 def test_ws_mode_files_land_in_personal_workspace(tmp_path):
     client = _ws_routers_client(tmp_path)
     r = client.put("/files/notes.txt", files={"file": ("notes.txt", b"hi")})
@@ -1126,6 +1196,92 @@ def test_seo_derives_from_brand(tmp_path):
     assert "<h1>" not in html  # no server-rendered body — nothing to flash before React mounts
 
 
+def test_brand_refresh_reaches_every_surface(tmp_path, monkeypatch):
+    """A published CMS edit must reach the whole page, not just the chat header: the boot value is
+    served until the TTL, then a background re-read replaces the title, the meta description, the
+    JSON-LD, the OG copy and window.__CONFIG__ together. Nothing waits on the CMS."""
+    import time as _time
+    from fastapi.testclient import TestClient
+    from cycls._agent.web import server
+
+    live = {"description": "old copy"}
+
+    class _Resp:
+        status_code = 200
+        def json(self): return {"title": "Super", **live}
+
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, *a, **k): return _Resp()
+
+    monkeypatch.setattr("httpx.get", lambda *a, **k: _Resp())
+    monkeypatch.setattr("httpx.AsyncClient", lambda *a, **k: _Client())
+
+    async def dummy_agent(context):
+        yield "test"
+
+    cfg = Config(public_path=_seo_theme(tmp_path), name="super",
+                 cms={"brand": "https://cms.example/agents/super"})
+    client = TestClient(web(dummy_agent, cfg))
+    assert "old copy" in client.get("/").text
+
+    live["description"] = "new copy"
+    assert "old copy" in client.get("/").text          # inside the TTL, still the boot value
+
+    monkeypatch.setattr(server, "BRAND_TTL", 0)        # the next request finds it stale
+    for _ in range(50):                                # the re-read runs in the background, so give it a tick
+        html = client.get("/").text
+        if "new copy" in html:
+            break
+        _time.sleep(0.02)
+    assert "new copy" in html                          # meta description
+    assert '"description": "new copy"' in html         # JSON-LD
+    assert "new copy" in html.split("window.__CONFIG__")[1]
+    assert "new copy" in client.get("/llms.txt").text
+    assert "new copy" in str(client.get("/config").json())
+
+
+def test_boot_timeout_heals_on_the_next_request(tmp_path, monkeypatch):
+    """The CMS scales to zero and the boot read is usually what wakes it, so that read routinely
+    times out and the agent has no static brand to fall back on. It must not then serve a nameless
+    page for a whole TTL: the very next request re-reads, by which point the CMS is warm."""
+    import time as _time
+    from fastapi.testclient import TestClient
+
+    class _Resp:
+        status_code = 200
+        def json(self): return {"title": "Super", "description": "Gets things done",
+                                "icon_svg": "<svg id='super'/>"}
+
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, *a, **k): return _Resp()
+
+    def cold(*a, **k): raise TimeoutError("cms cold start exceeded the 5s boot timeout")
+    monkeypatch.setattr("httpx.get", cold)              # boot loses the race
+    monkeypatch.setattr("httpx.AsyncClient", lambda *a, **k: _Client())   # by now the CMS is warm
+
+    async def dummy_agent(context):
+        yield "test"
+
+    cfg = Config(public_path=_seo_theme(tmp_path), name="super", title="fallback title",
+                 cms={"brand": "https://cms.example/agents/super"})
+    client = TestClient(web(dummy_agent, cfg))
+    assert cfg.pass_metadata is None                    # the boot read failed, as it does in prod
+    assert "<title>Super | Cycls Pass</title>" in client.get("/").text
+
+    for _ in range(50):                                 # no TTL wait: the next request re-reads
+        html = client.get("/").text
+        if "Gets things done" in html:
+            break
+        _time.sleep(0.02)
+    assert "<title>Super</title>" in html
+    assert "Gets things done" in html
+    assert "<svg id='super'/>" in cfg.pass_metadata["en"].logo   # the icon the page was missing
+
+
 def test_seo_overrides_brand(tmp_path):
     from fastapi.testclient import TestClient
 
@@ -1174,6 +1330,15 @@ def test_analytics_providers_are_plugins():
     for bad in ("javascript:alert(1)", "gtm-abc123", "GTM-", "GTM-abc123'"):
         with pytest.raises(ValueError):
             cycls.GTM(bad)
+
+
+def test_clerk_one_tap_reaches_the_page_config():
+    """One Tap is opt-in on the provider (it needs the operator's own Google
+    credentials in Clerk) and rides the public config as a plain flag."""
+    import cycls
+    assert cycls.Clerk().resolve(True)["one_tap"] is False
+    assert cycls.Clerk(one_tap=True).resolve(False)["one_tap"] is True
+    assert Config(public_path=THEME_PATH).public()["one_tap"] is False
 
 
 def test_notifications_providers_are_plugins():
@@ -1697,3 +1862,236 @@ def test_last_exchange_route_does_not_shadow_chat_delete(tmp_path):
     client.put("/chats/c1", json={"title": "hello"})
     assert client.delete("/chats/c1").status_code == 200
     assert client.get("/chats").json() == []
+
+
+# =============================================================================
+# One run per chat (docs/notes/runs.md)
+# =============================================================================
+
+class _FakeTask:
+    """`_claim` only ever asks a task whether it is done."""
+    def __init__(self, done=False): self._done = done
+    def done(self): return self._done
+
+
+def test_claim_scopes_the_slot_to_a_workspace():
+    """`?id=` is client-supplied text. A flat key would let one tenant lock
+    another's chat by guessing an id."""
+    from cycls._agent.web.server import _claim
+    runs = {}
+    assert _claim(runs, ("orgA/.db/u1", "c1"), _FakeTask())
+    assert _claim(runs, ("orgB/.db/u2", "c1"), _FakeTask())
+
+
+def test_claim_refuses_a_live_run_and_keeps_the_holder():
+    from cycls._agent.web.server import _claim
+    runs, holder, key = {}, _FakeTask(), ("ws", "c1")
+    assert _claim(runs, key, holder)
+    assert not _claim(runs, key, _FakeTask())
+    assert runs[key] is holder, "the loser overwrote the winner"
+
+
+def test_claim_treats_a_finished_run_as_stale():
+    """A release that never ran must not lock the chat forever."""
+    from cycls._agent.web.server import _claim
+    runs, key = {}, ("ws", "c1")
+    runs[key] = _FakeTask(done=True)
+    assert _claim(runs, key, _FakeTask())
+
+
+def test_a_send_to_a_busy_chat_is_refused_and_a_new_chat_is_not():
+    """The duplicate-POST case that interleaved writes in production."""
+    from fastapi.testclient import TestClient
+
+    keys = []
+    async def handler(context):
+        keys.extend(app.state.runs)
+        yield "ok"
+
+    app = web(handler, Config(public_path=THEME_PATH, auth=False))
+    client = TestClient(app)
+    body = {"messages": [{"role": "user", "content": "hi"}]}
+
+    assert client.post("/chat?id=c1", json=body).status_code == 200
+    assert len(keys) == 1, "the run never claimed a slot"
+    assert app.state.runs == {}, "the slot was not released"
+
+    app.state.runs[keys[0]] = _FakeTask()          # a run still in flight
+    busy = client.post("/chat?id=c1", json=body)
+    assert busy.status_code == 409
+    assert busy.json()["error"] == "run_in_progress"
+    assert busy.headers["retry-after"] == "2"
+    assert isinstance(busy.json()["detail"], str)  # reasonOf() only reads a string
+    assert client.post("/chat", json=body).status_code == 200, "a new chat is never refused"
+
+
+def test_a_failing_run_still_releases_its_slot():
+    from fastapi.testclient import TestClient
+
+    async def handler(context):
+        raise RuntimeError("boom")
+        yield "unreachable"
+
+    app = web(handler, Config(public_path=THEME_PATH, auth=False))
+    client = TestClient(app)
+    client.post("/chat?id=c1", json={"messages": [{"role": "user", "content": "hi"}]})
+    assert app.state.runs == {}
+
+
+# =============================================================================
+# Detachment (docs/notes/runs.md §2c)
+# =============================================================================
+
+def _drive_run(detach):
+    """Start a run, read one chunk, then drop the reader. Returns
+    (reached_the_end, slot_released)."""
+    from cycls._agent.web.server import Run, _supervise, _forward
+
+    async def go():
+        started, release, end = asyncio.Event(), asyncio.Event(), []
+
+        async def stream():
+            yield "a"
+            started.set()
+            await release.wait()
+            end.append(True)
+            yield "b"
+
+        runs, key = {}, ("ws", "c1")
+        run = Run(detach=detach)
+        runs[key] = run
+        run.task = asyncio.create_task(_supervise(run, stream(), runs, key, None))
+
+        fwd = _forward(run)
+        assert await fwd.__anext__() == "a"
+        await started.wait()
+        await fwd.aclose()                       # the connection drops
+        await asyncio.sleep(0)                   # let a cancel land
+        release.set()
+        await asyncio.wait({run.task}, timeout=2)
+        return bool(end), runs == {}
+
+    return asyncio.run(go())
+
+
+def test_a_dropped_connection_ends_a_run_that_did_not_opt_in():
+    """Today's behaviour, kept for clients that will not poll."""
+    reached_end, released = _drive_run(detach=False)
+    assert not reached_end, "the run kept going for a client that cannot come back"
+    assert released
+
+
+def test_a_dropped_connection_leaves_a_detached_run_working():
+    """The whole point: the loop outlives the request."""
+    reached_end, released = _drive_run(detach=True)
+    assert reached_end, "the run died with its reader"
+    assert released, "the supervisor did not release the slot"
+
+
+def test_the_supervisor_releases_the_slot_not_the_reader():
+    """The reader ending must not free the chat — the run still owns it."""
+    from cycls._agent.web.server import Run, _supervise, _forward
+
+    async def go():
+        release = asyncio.Event()
+        async def stream():
+            yield "a"
+            await release.wait()
+
+        runs, key = {}, ("ws", "c1")
+        run = Run(detach=True)
+        runs[key] = run
+        run.task = asyncio.create_task(_supervise(run, stream(), runs, key, None))
+        fwd = _forward(run)
+        await fwd.__anext__()
+        await fwd.aclose()
+        await asyncio.sleep(0)
+        held = key in runs                       # still running, still held
+        release.set()
+        await asyncio.wait({run.task}, timeout=2)
+        return held, runs == {}
+
+    held, released = asyncio.run(go())
+    assert held, "the reader released a slot it does not own"
+    assert released
+
+
+def test_a_slow_reader_is_dropped_rather_than_stalling_the_run():
+    """emit never awaits: a queue nobody drains must not hang the loop."""
+    from cycls._agent.web.server import Run, QUEUE_MAX
+    run = Run(detach=True)
+    for i in range(QUEUE_MAX + 50):
+        run.emit(i)
+    assert not run.attached, "the run would have blocked on a full queue"
+
+
+def test_a_finished_run_stamps_its_record_and_fires_the_hook(tmp_path):
+    from cycls._agent.web.server import Run, _supervise
+    from cycls._app.db import workspace as mkws
+    from cycls._agent import state
+
+    fired = []
+    ws = mkws("tenant", tmp_path, base=f"file://{tmp_path}")
+
+    async def go(boom):
+        async def stream():
+            yield "a"
+            if boom: raise RuntimeError("boom")
+
+        runs, key = {}, ("ws", "c1")
+        run = Run(detach=True, workspace=ws, chat_id="c1", user=None)
+        runs[key] = run
+        run.task = asyncio.create_task(_supervise(run, stream(), runs, key, fired.append))
+        await asyncio.wait({run.task}, timeout=2)
+        return state.run_status(await state.get_run(ws, "c1"))
+
+    assert asyncio.run(go(boom=False)) == "done"
+    assert asyncio.run(go(boom=True)) == "failed"
+    assert [f["status"] for f in fired] == ["done", "failed"]
+    assert fired[0]["chat_id"] == "c1" and "ms" in fired[0]
+
+
+def test_a_hook_that_raises_never_reaches_the_run(tmp_path):
+    from cycls._agent.web.server import Run, _supervise
+    from cycls._app.db import workspace as mkws
+
+    async def go():
+        async def stream():
+            yield "a"
+        def bad(row): raise RuntimeError("the deployment's webhook is down")
+
+        runs, key = {}, ("ws", "c1")
+        run = Run(detach=True, workspace=mkws("t", tmp_path, base=f"file://{tmp_path}"),
+                  chat_id="c1", user=None)
+        runs[key] = run
+        run.task = asyncio.create_task(_supervise(run, stream(), runs, key, bad))
+        await asyncio.wait({run.task}, timeout=2)
+        return run.task.exception(), runs
+
+    exc, runs = asyncio.run(go())
+    assert exc is None, "a deployment's hook failed the run"
+    assert runs == {}, "the slot was not released"
+
+
+def test_regenerate_is_refused_while_a_run_is_live(tmp_path):
+    """DELETE last-exchange deletes and renumbers every turn file. Under a live
+    run that moves the slots it is appending to."""
+    from cycls._agent import state
+    from cycls._app.db import workspace as mkws
+    from datetime import datetime, timezone
+
+    ws = mkws("tenant", tmp_path, base=f"file://{tmp_path}")
+
+    async def go():
+        await state.put_meta(ws, "c1", {"id": "c1", "title": "t"})
+        await state.append_messages(ws, "c1", [
+            {"role": "user", "content": "a"},
+            {"role": "assistant", "content": [{"type": "text", "text": "1"}]}], 0)
+        await state.put_run(ws, "c1", {"run": "r", "status": "running",
+                                       "heartbeat": datetime.now(timezone.utc).isoformat()})
+        live = state.run_status(await state.get_run(ws, "c1"))
+        await state.put_run(ws, "c1", {"run": "r", "status": "done"})
+        return live, state.run_status(await state.get_run(ws, "c1"))
+
+    live, after = asyncio.run(go())
+    assert live == "running" and after == "done"
