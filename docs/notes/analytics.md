@@ -199,6 +199,44 @@ Identified users also carry **person properties** (via identify): `email`,
 
 ---
 
+## The mobile client
+
+The Expo app (`~/Desktop/code/mobile-app`) posts to the same PostHog project
+with the same event names, so one event answers for both surfaces. It emits 42
+of these today against the web's ~88 — the gap is surfaces it does not have
+yet (shares, trash, examples, surveys, announcements), not a second vocabulary.
+
+**Same name, same fact.** `message_sent` (with `origin` and `is_new_chat`),
+`turn_completed`, `stream_broken`, `run_busy`, `generation_stopped`,
+`ui_action`, `ask_answered` / `ask_dismissed`, `confirm_approved` /
+`confirm_dismissed`, `connector_*`, `artifact_completed`, `paywall_shown`,
+`purchase`, `client_crashed`, `notification_prompt_shown` / `_answered`,
+`file_uploaded` / `file_upload_failed`, `chat_deleted` / `chat_renamed` /
+`chat_favorited`, `theme_changed`, `language_changed`, `approve_mode_changed`,
+`mic_started` / `mic_permission_denied` / `mic_transcription_failed`,
+`user_signed_out`.
+
+**Deviations, and why.**
+
+| event | why it differs |
+|---|---|
+| `app_opened` | mobile-only. The web gets `$pageview` from PostHog's SDK; an app has no page to view, and `session_start` is on the denylist for the same reason |
+| `client_error` | mobile-only. The web toasts a server's own message; the app shows an eight-hex reference and this is the only record of what it stood for (`src/net/errors.ts`) |
+| `session_lost` | mobile-only. A session that ended without the person asking. The web has no equivalent because a browser tab losing auth is not the same complaint |
+| `token_cache_error` | mobile-only. The keychain read behind the session; `src/auth/tokenCache.ts` retries rather than deleting, and records when it still fails |
+| `push_marketing_opt_in` / `_opt_out` | mobile-only. The Settings switch, distinct from `notification_prompt_answered`, which is the OS prompt |
+| `analytics_opt_in` / `_opt_out` | mobile-only. The app ships an explicit consent switch; the web does not |
+| `purchase` | same name, different payload. StoreKit, not Clerk — so `sku`, `tier` and the store's `displayPrice`, and no `transaction_id` in Clerk's sense |
+| `sign_up` | routed to the Firebase destination only, never through `track()`. PostHog observes the fact through `$identify`, and `user_signed_up` is on the denylist; Google Ads needs GA4's reserved name to import it as a conversion (`conversion()` in `src/net/analytics.ts`) |
+
+**Not emitted yet**, because the surface does not exist on mobile: the sharing
+loop, trash, examples and suggestions, surveys, announcements, `first_agent_use`,
+`sign_up_start`, the queueing events, and the Clerk-side subscription events.
+
+**Examples are a deliberate product difference**, not a gap: the app shows the
+example gallery on the signed-out shell only, where the web shows the same empty
+screen to everyone.
+
 ## Query cookbook (PostHog / HogQL)
 
 Every query below can be scoped to one agent by adding
