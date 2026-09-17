@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { fileKind } from "../src/components/canvas";
-import { isHtml, isMd, isPdf, codeLang, ext, editWorkingPath } from "../src/components/canvas-utils";
+import { isHtml, isMd, isPdf, isDesignEditor, isRenderable, extTint, codeLang, ext, editWorkingPath } from "../src/components/canvas-utils";
 
 // An app's canvas tab is titled by its manifest, so the display name has no
 // extension. Every renderer check must therefore key off the path — keyed off
@@ -32,6 +32,24 @@ describe("fileKind", () => {
 
   it("falls back to the name when there is no path", () => {
     expect(fileKind({ path: "", name: "loose.md" })).toBe("loose.md");
+  });
+});
+
+// A `.fig` opens the embedded OpenPencil editor (keyed off the path, like every
+// other renderer). CanvasDoc only mounts it when a design-editor URL is
+// configured; either way the file must count as renderable so the pane opens.
+describe("isDesignEditor", () => {
+  it("recognises .fig by its path", () => {
+    expect(isDesignEditor(fileKind({ path: "designs/launch.fig", name: "launch.fig" }))).toBe(true);
+    expect(isDesignEditor(fileKind({ path: "designs/launch.png", name: "launch.png" }))).toBe(false);
+  });
+
+  it("makes .fig renderable so the canvas opens it (not the no-preview card)", () => {
+    expect(isRenderable("launch.fig")).toBe(true);
+  });
+
+  it("tints the .fig tile like the other vector/3d files", () => {
+    expect(extTint("launch.fig")).toBe("#af52de");
   });
 });
 

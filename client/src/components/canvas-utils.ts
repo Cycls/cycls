@@ -44,6 +44,12 @@ const OFFICE_EXTS = new Set([
 ]);
 export const isOffice = (name: string) => OFFICE_EXTS.has(ext(name));
 
+// OpenPencil design files (.fig) open in an embedded editor iframe on its own
+// origin (the human edits the same design the agent renders). Only when a
+// design-editor URL is configured — otherwise CanvasDoc shows the download card.
+const DESIGN_EXTS = new Set(["fig"]);
+export const isDesignEditor = (name: string) => DESIGN_EXTS.has(ext(name));
+
 export const is3d = (name: string) => ["glb", "gltf"].includes(ext(name));
 
 // Per-filetype accent — faint tile wash + label color for extension tiles.
@@ -55,6 +61,7 @@ const TINTS: Record<string, string> = {
   zip: "#8e8e93", tar: "#8e8e93", gz: "#8e8e93",
   json: "#ff9500", js: "#ff9500", ts: "#2b7fff", tsx: "#2b7fff", py: "#34c759", html: "#ff9500", css: "#2b7fff", sh: "#34c759",
   glb: "#af52de", gltf: "#af52de",
+  fig: "#af52de",
 };
 export const extTint = (name: string): string | undefined => TINTS[ext(name)];
 // Wash + label styles for an extension tile; undefined → neutral (bg-secondary).
@@ -91,7 +98,7 @@ export const codeLang = (name: string): string | null => {
 // for servers predating it and for files not yet listed (mid-upload rows).
 export const isRenderable = (name: string, kind?: string) =>
   kind ? kind !== "opaque"
-       : isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || isDocx(name) || isPresentation(name) || isOffice(name) || is3d(name) || codeLang(name) != null;
+       : isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || isDocx(name) || isPresentation(name) || isOffice(name) || isDesignEditor(name) || is3d(name) || codeLang(name) != null;
 
 // Deliverable target of a live edit step — from the finished label or the
 // streamed partial-JSON args. Helper scripts never open the canvas.

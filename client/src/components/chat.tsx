@@ -78,7 +78,7 @@ export interface FilesPanelProps {
   onEmptyTrash?: () => Promise<void>;
   onOpenFile: (path: string) => Promise<string>;
   readFile: (path: string) => Promise<string>;
-  writeFile: (path: string, text: string) => Promise<void>;
+  writeFile: (path: string, data: BlobPart) => Promise<void>;   // binary too — the .fig editor writes raw bytes
   searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
   listFolders: () => Promise<{ name: string; path: string }[]>;
   onShareFile?: (path: string, audience: string) => Promise<string>;
@@ -307,6 +307,11 @@ export function Chat({ chat, onShare, files, account, config }: {
         const app = appsRef.current.find((a) => a.entry === ev.path);
         if (app) openApp(app);
         else openFileInCanvas(ev.path, typeof ev.name === "string" ? ev.name : undefined);
+      } else if (ev.action === "design_command" && typeof ev.path === "string" && typeof ev.script === "string") {
+        // The agent is editing an OPEN design live — forward the script to that
+        // .fig's embedded editor (DesignEditorView listens for this and relays it).
+        window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: { path: ev.path, script: ev.script } }));
+        track("ui_action", { action: "design_command" });
       } else if (ev.action === "suggest" && typeof ev.text === "string") {
         if (followUpsEnabled()) {
           setFollowUp(ev.text);
@@ -1028,6 +1033,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           onShareFile={files.onShareFile}
           railWidth={railPx}
           reloadKey={reloadKey}
+          designEditorUrl={config?.design_editor_url}
         />
       )}
       {/* Chats / Files / Apps / Shares — docked on desktop, overlay on a phone */}

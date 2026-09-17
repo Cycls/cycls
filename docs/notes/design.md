@@ -8,12 +8,19 @@ SDK ships only a thin client (`cycls/_agent/design`) and the built-in `Design`
 tool. Same split as office-render and the browser tool: the heavy dependency lives
 in one service, not in every image.
 
+The agent and the human meet at one shared file — `designs/<name>.fig`. The agent
+**generates** it (and can **edit** it live), and the human **hand-edits** the same
+file in an OpenPencil editor embedded in the canvas — see
+[Editing](#editing--the-in-canvas-editor) below.
+
 Enable it by putting `"Design"` in an agent's `allowed_tools` and pointing
-`DESIGN_URL` (+ optional `DESIGN_SECRET`) at a deployed `cycls-design` service.
-Validated end-to-end: the client renders a spec through the service to a 2160²
-PNG + editable `.fig`; a real Kimi-K3 agent turn chose the tool, wrote a spec, and
-the post opened on the canvas; and a model-authored 3-slide deck exported to a real
-`.pptx`.
+`DESIGN_URL` (+ optional `DESIGN_SECRET`) at a deployed `cycls-design` service; set
+`DESIGN_EDITOR_URL` too for the in-canvas editor. Validated end-to-end: the client
+renders a spec through the service to a 2160² PNG + editable `.fig`; a real Kimi-K3
+agent turn chose the tool, wrote a spec, and the post opened on the canvas; a
+model-authored 3-slide deck exported to a real `.pptx`; and — with the editor
+configured — the human edited that same design in the embedded editor while the
+agent's live `edit` changed it under their cursor.
 
 ## Why this shape
 
@@ -31,9 +38,10 @@ the post opened on the canvas; and a model-authored 3-slide deck exported to a r
 ## Non-goals
 
 - Not bundling a design engine into agent images.
-- Not a human drag-and-drop editor (Path A: the agent designs, the human
-  art-directs in chat). A canvas mini-app editor over the same `.fig` is a possible
-  later addition (Path B).
+- Not multiplayer co-editing. The agent and human share the `.fig` *file*, not a
+  live session: the agent renders/edits it headlessly and over the live `edit`
+  bridge, the human hand-edits it in the embedded editor, and both persist to the
+  same workspace file. True co-editing (OpenPencil's Yjs CRDT) is a later option.
 
 ## Architecture
 
@@ -87,6 +95,45 @@ the loop already understands: the model reads a short ack, and the client gets a
 screenshots use). PNGs render inline; a `.pptx` deck shows in the slide viewer when
 office-render is configured, else a download card.
 
+## Editing — the in-canvas editor
+
+Generation is half of it. When `DESIGN_EDITOR_URL` is set, a `.fig` on the canvas
+opens the **OpenPencil editor embedded in an iframe** (`DesignEditorView`), so the
+human edits the exact design the agent rendered. The editor is a static app on its
+**own origin** (a patched OpenPencil build, loaded with `?embed=cycls`); the SDK
+ships only the small React embed component and threads the `design_editor_url`
+config value to it. Two directions meet at the shared `designs/<name>.fig`:
+
+- **Human edits** — the canvas fetches the `.fig` bytes, posts them into the editor
+  (`load`), and writes the editor's saved bytes back to the workspace
+  (`PUT /files`) after each change. Runs entirely in the browser (CanvasKit/WASM) —
+  no service call. The agent picks up the human's edits on its next turn.
+- **Agent edits live** — the `edit` action returns *instantly* (no render-service
+  call) with a `design_command` UI event. The FE relays the Figma-plugin-API
+  `script` over `postMessage` to the open editor, which applies it to the live
+  canvas the human is watching; the same auto-save persists it. Use `edit` to tweak
+  an open design ("bigger headline", "make the button green"); use `render` /
+  `script` to *create* one.
+
+```
+Tool `edit` ──▶ {_ui:{action:"design_command", path, script}}
+   │             (two-channel; no render-service call)
+   ▼
+chat.tsx ──▶ CustomEvent("cycls:design-command") ──▶ DesignEditorView
+                                                        │  postMessage
+                                                        ▼  (target/source:"cycls-editor")
+                              editor iframe (own origin, ?embed=cycls)
+                                 load .fig in  ·  apply script live  ·  save .fig back
+                                                        │  PUT /files
+                                                        ▼
+                                         designs/<name>.fig (workspace)
+```
+
+The embedded editor is a **patched** OpenPencil fork (three source patches +
+forcing synchronous `.fig` compression so the in-page save doesn't hang on the
+export web-worker). The patches and build recipe live in
+[`design-editor-patch/`](design-editor-patch/) and the handoff note beside it.
+
 ## Implementation notes
 
 - **The `.fig` codec renumbers node ids on save.** The builder logs an in-memory
@@ -103,14 +150,17 @@ office-render is configured, else a download card.
 
 ## Configuration
 
-| Env            | Meaning                                                          |
-|----------------|------------------------------------------------------------------|
-| `DESIGN_URL`   | service base URL, e.g. `https://cycls-design.cycls.ai`           |
-| `DESIGN_SECRET`| shared service secret (Bearer). Optional — a local dev instance may run open; a deployed service sets one and rejects calls without it. |
+| Env                 | Meaning                                                     |
+|---------------------|-------------------------------------------------------------|
+| `DESIGN_URL`        | render-service base URL, e.g. `https://cycls-design.cycls.ai`. Gates the whole `Design` tool. |
+| `DESIGN_SECRET`     | shared render-service secret (Bearer). Optional — a local dev instance may run open; a deployed service sets one and rejects calls without it. |
+| `DESIGN_EDITOR_URL` | the embedded editor's own origin (a static OpenPencil build). Injected into `/config` as `design_editor_url`. Unset → `.fig` files show the download card and there is no open editor for `edit` to drive; generation (`render` / `script`) is unaffected. |
 
 Unset `DESIGN_URL` and `design.configured()` is false: the `Design` tool is never
 offered and the feature is simply absent — **no regression**, exactly the
-office-render / browser behaviour.
+office-render / browser behaviour. (The tool is gated on the render service, so an
+agent can call `edit` whenever `DESIGN_URL` is set; without `DESIGN_EDITOR_URL`
+there is simply no open editor for the command to reach.)
 
 ## The service
 

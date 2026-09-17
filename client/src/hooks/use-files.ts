@@ -137,9 +137,10 @@ export function useFiles(baseUrl: string = "") {
     return (await api(`/files/${filePath}`, { silent })).text();
   }, [api]);
 
-  // Overwrite a text file from the canvas editor.
-  const writeFile = useCallback(async (filePath: string, text: string, silent = false) => {
-    await api(`/files/${filePath}`, { method: "PUT", body: new Blob([text]), silent });
+  // Overwrite a workspace file from the canvas. Accepts text OR binary (a
+  // Uint8Array / ArrayBuffer / Blob) — the design editor writes raw .fig bytes.
+  const writeFile = useCallback(async (filePath: string, data: BlobPart, silent = false) => {
+    await api(`/files/${filePath}`, { method: "PUT", body: new Blob([data]), silent });
     track("file_saved", { path: filePath });
   }, [api]);
 

@@ -272,14 +272,22 @@ _DESIGN_TOOL = {
         "in one PowerPoint file.\n"
         "- script {script, name, format?} — escape hatch: a raw OpenPencil / Figma "
         "plugin-API script for what the spec can't express. It MUST end with "
-        "`console.log('__FRAME__'+frame.id)` naming the frame to export.\n\n"
+        "`console.log('__FRAME__'+frame.id)` naming the frame to export.\n"
+        "- edit {script, name} — modify the design ALREADY OPEN in the editor (the "
+        "user is looking at it). The script is a Figma plugin-API snippet that "
+        "mutates the live document — e.g. `figma.currentPage.children[0].fills=[{type:"
+        "'SOLID',color:{r:0,g:0,b:0}}]` — and the user WATCHES your change appear on "
+        "the canvas; it auto-saves. Use `edit` to tweak an open design ('bigger "
+        "headline', 'move the button down'); use `render`/`script` to CREATE one. "
+        "`name` is the open design's base name (e.g. `launch`). No `console.log` "
+        "needed — nothing is exported, the live canvas just updates.\n\n"
         "`format` is png (default), jpg, webp, svg, or pptx (PowerPoint; use it for "
         "decks). `name` is the file base name, e.g. `launch`. The render opens on the "
         "canvas; the editable `.fig` is saved beside it for later edits."
     ),
     "input_schema": {"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["render", "script"],
-                   "description": "`render` a JSON spec (normal), or run a raw `script` (escape hatch)."},
+        "action": {"type": "string", "enum": ["render", "script", "edit"],
+                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), or `edit` the design open in the editor (live)."},
         "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}, or a deck {frames: [{size, fill, nodes}, ...]} (one per slide, export as pptx)."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id)."},
@@ -1054,6 +1062,16 @@ async def _exec_design(inp, workspace):
     # Base name only, no extension the model may have tacked on.
     name = _safe_filename(inp.get("name") or "design", "design").rsplit(".", 1)[0] or "design"
     subject = getattr(workspace, "subject", None)
+    # `edit` drives the LIVE editor the user has open — it doesn't touch the render
+    # service. Fire a UI event the FE forwards to that editor, which applies the
+    # script to the live canvas (the user watches) and auto-saves the .fig.
+    if action == "edit":
+        script = inp.get("script")
+        if not script:
+            return "Error: `edit` needs a `script` (a Figma plugin-API snippet mutating the OPEN design)."
+        rel = f"designs/{name}.fig"
+        return {"_model": f"Sent the edit to the open editor for {rel} — it appears live on the canvas and auto-saves.",
+                "_ui": {"type": "ui", "action": "design_command", "path": rel, "script": script}}
     try:
         if action == "render":
             if not isinstance(inp.get("spec"), dict):

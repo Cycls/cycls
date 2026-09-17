@@ -159,11 +159,41 @@ def test_script_escape_hatch(tmp_path, monkeypatch):
     assert got["script"].startswith("console.log") and out["_ui"]["path"] == "designs/deck.pptx"
 
 
+def test_edit_sends_design_command(tmp_path, monkeypatch):
+    # `edit` drives the LIVE editor — no service is contacted; it emits a
+    # `design_command` UI event the FE forwards to the open .fig's editor.
+    called = {"n": 0}
+
+    async def _r(*a, **k):
+        called["n"] += 1
+    monkeypatch.setattr("cycls._agent.design.render", _r)
+    monkeypatch.setattr("cycls._agent.design.evaluate", _r)
+
+    script = "figma.currentPage.children[0].fills=[{type:'SOLID',color:{r:0,g:0,b:0}}]"
+    out = asyncio.run(_exec_design({"action": "edit", "name": "launch", "script": script}, _ws(tmp_path)))
+    assert called["n"] == 0                                     # never hits the render service
+    ui = out["_ui"]
+    assert ui["action"] == "design_command" and ui["path"] == "designs/launch.fig" and ui["script"] == script
+    assert "designs/launch.fig" in out["_model"]               # ack names the open design
+
+
+def test_edit_needs_script(tmp_path):
+    out = asyncio.run(_exec_design({"action": "edit", "name": "launch"}, _ws(tmp_path)))
+    assert out.startswith("Error")                             # no script → nothing to apply
+
+
+def test_edit_name_is_sanitized(tmp_path):
+    out = asyncio.run(_exec_design(
+        {"action": "edit", "name": "../../evil", "script": "figma.root"}, _ws(tmp_path)))
+    assert out["_ui"]["path"] == "designs/evil.fig"            # basename only, no traversal
+
+
 def test_arg_validation(tmp_path, monkeypatch):
     _fake_render(monkeypatch)
     ws = _ws(tmp_path)
     assert asyncio.run(_exec_design({"action": "render"}, ws)).startswith("Error")                       # no spec
     assert asyncio.run(_exec_design({"action": "script"}, ws)).startswith("Error")                       # no script
+    assert asyncio.run(_exec_design({"action": "edit"}, ws)).startswith("Error")                         # no edit script
     assert asyncio.run(_exec_design({"action": "render", "spec": {}, "format": "gif"}, ws)).startswith("Error")  # bad fmt
     assert asyncio.run(_exec_design({"action": "nope"}, ws)).startswith("Error")                         # unknown
 

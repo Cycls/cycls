@@ -49,7 +49,13 @@ class Config(BaseModel):
         """Config as sent to the browser — cms (bearer token), volume
         (internal mount path) and the raw examples mapping (the FE reads the
         resolved cards from /examples) stay server-side."""
-        return self.model_dump(exclude={"cms", "volume", "examples"})
+        data = self.model_dump(exclude={"cms", "volume", "examples"})
+        # The .fig design editor is a deployment concern (a static app on its own
+        # origin), wired by env like OFFICE_RENDER_URL / BROWSER_URL. Unset → the
+        # FE never renders the editor and .fig shows the download card.
+        if url := os.environ.get("DESIGN_EDITOR_URL"):
+            data["design_editor_url"] = url
+        return data
 
     @property
     def storage(self) -> str:
