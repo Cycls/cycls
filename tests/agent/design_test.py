@@ -144,6 +144,29 @@ def test_render_saves_and_opens_canvas(tmp_path, monkeypatch):
     assert ui["action"] == "open_canvas" and ui["path"] == "designs/launch.png" and ui["name"] == "launch.png"
 
 
+def test_render_dedupes_name_so_nothing_overwrites(tmp_path, monkeypatch):
+    ws = _ws(tmp_path)
+    _fake_render(monkeypatch, image=b"FIRST", fig=b"FIRSTFIG")
+    out1 = asyncio.run(_exec_design({"action": "render", "name": "launch", "spec": {}}, ws))
+    assert out1["_ui"]["path"] == "designs/launch.png"
+
+    # Same name again → bumped to launch-2; the first pair is left untouched.
+    _fake_render(monkeypatch, image=b"SECOND", fig=b"SECONDFIG")
+    out2 = asyncio.run(_exec_design({"action": "render", "name": "launch", "spec": {}}, ws))
+    assert out2["_ui"]["path"] == "designs/launch-2.png"
+    assert out2["_ui"]["name"] == "launch-2.png"
+    assert "launch-2" in out2["_model"] and "launch" in out2["_model"]   # ack explains the rename
+    assert (tmp_path / "designs" / "launch.png").read_bytes() == b"FIRST"        # untouched
+    assert (tmp_path / "designs" / "launch.fig").read_bytes() == b"FIRSTFIG"     # untouched
+    assert (tmp_path / "designs" / "launch-2.png").read_bytes() == b"SECOND"
+    assert (tmp_path / "designs" / "launch-2.fig").read_bytes() == b"SECONDFIG"
+
+    # A third, even in a different format, still dedupes off the shared .fig base.
+    _fake_render(monkeypatch, image=b"THIRD", fig=b"THIRDFIG")
+    out3 = asyncio.run(_exec_design({"action": "render", "name": "launch", "spec": {}, "format": "webp"}, ws))
+    assert out3["_ui"]["path"] == "designs/launch-3.webp"
+
+
 def test_script_escape_hatch(tmp_path, monkeypatch):
     got = {}
 
@@ -169,12 +192,19 @@ def test_edit_sends_design_command(tmp_path, monkeypatch):
     monkeypatch.setattr("cycls._agent.design.render", _r)
     monkeypatch.setattr("cycls._agent.design.evaluate", _r)
 
-    script = "figma.currentPage.children[0].fills=[{type:'SOLID',color:{r:0,g:0,b:0}}]"
-    out = asyncio.run(_exec_design({"action": "edit", "name": "launch", "script": script}, _ws(tmp_path)))
+    script = "const t=figma.currentPage.children[0]; t.fills=[{type:'SOLID',color:{r:0,g:0,b:0}}]; figma.currentPage.selection=[t]"
+    out = asyncio.run(_exec_design(
+        {"action": "edit", "name": "launch", "script": script, "intent": "darken the background"},
+        _ws(tmp_path)))
     assert called["n"] == 0                                     # never hits the render service
     ui = out["_ui"]
     assert ui["action"] == "design_command" and ui["path"] == "designs/launch.fig" and ui["script"] == script
+    assert ui["intent"] == "darken the background"             # narrated on the live cursor
     assert "designs/launch.fig" in out["_model"]               # ack names the open design
+
+    # intent is optional — omit it and the key simply isn't sent.
+    out2 = asyncio.run(_exec_design({"action": "edit", "name": "launch", "script": script}, _ws(tmp_path)))
+    assert "intent" not in out2["_ui"]
 
 
 def test_edit_needs_script(tmp_path):

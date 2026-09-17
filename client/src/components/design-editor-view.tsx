@@ -73,9 +73,9 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile }: {
     // The agent edits an open design live: chat.tsx dispatches this when its
     // Design tool fires a `design_command`; we relay the script to our editor.
     const onCommand = (e: Event) => {
-      const d = (e as CustomEvent).detail as { path?: string; script?: string };
+      const d = (e as CustomEvent).detail as { path?: string; script?: string; intent?: string };
       if (!d || d.path !== path || typeof d.script !== "string") return;
-      post({ type: "command", script: d.script });
+      post({ type: "command", script: d.script, intent: d.intent });
     };
 
     window.addEventListener("message", onMessage);

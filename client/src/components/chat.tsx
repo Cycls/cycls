@@ -354,7 +354,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       } else if (ev.action === "design_command" && typeof ev.path === "string" && typeof ev.script === "string") {
         // The agent is editing an OPEN design live — forward the script to that
         // .fig's embedded editor (DesignEditorView listens for this and relays it).
-        window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: { path: ev.path, script: ev.script } }));
+        window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: { path: ev.path, script: ev.script, intent: typeof ev.intent === "string" ? ev.intent : undefined } }));
         track("ui_action", { action: "design_command" });
       } else if (ev.action === "suggest" && typeof ev.text === "string") {
         if (followUpsEnabled()) {
