@@ -281,6 +281,9 @@ _BUILD_APP_TOOL = {
         "source": {"type": "string",
                    "description": "Folder holding the source, e.g. `apps/burnup/src`. Must contain index.html."},
         "name": {"type": "string", "description": "Display name shown in the Apps tab."},
+        "description": {"type": "string", "description": (
+            "One line on what the app is for. Shown in the Apps tab and to a later session, "
+            "which otherwise has to open the app to find out.")},
         "icon": {"type": "string", "description": (
             "An emoji, or an image file in the app's folder (e.g. `logo.png`). "
             "Defaults to the first letter of the name.")},
@@ -844,6 +847,8 @@ async def _exec_build_app(inp, workspace):
         manifest["name"] = str(inp["name"])[:60]
     if inp.get("icon"):
         manifest["icon"] = str(inp["icon"])[:512]
+    if inp.get("description"):
+        manifest["description"] = str(inp["description"])[:200]
     manifest.setdefault("name", slug.replace("-", " ").replace("_", " ").title())
     manifest["built"] = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                          "source": str(inp.get("source") or ""),

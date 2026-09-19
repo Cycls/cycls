@@ -244,3 +244,18 @@ class TestAppCatalog:
         assert tools.app_catalog(str(tmp_path)) == ""
         (tmp_path / "apps" / "late").mkdir()
         assert tools.app_catalog(str(tmp_path)) == "", "a second scan inside the TTL"
+
+
+def test_the_manifest_carries_the_description_the_catalog_reads(tmp_path, monkeypatch):
+    """Two readers wanted it and nothing wrote it, so every catalog line was bare."""
+    (tmp_path / "apps" / "burnup" / "src").mkdir(parents=True)
+    (tmp_path / "apps" / "burnup" / "src" / "index.html").write_text("<html>")
+    monkeypatch.setattr(cycls, "remote",
+                        lambda name, **_: (lambda **kw: {"ok": True, "html": "x", "bytes": 1, "stray": []}))
+    asyncio.run(tools._exec_build_app(
+        {"slug": "burnup", "source": "apps/burnup/src", "name": "Burn-up",
+         "description": "Sprint burn-up over projects/*.json"}, tmp_path))
+    assert json.loads((tmp_path / "apps" / "burnup" / "app.json").read_text())[
+        "description"] == "Sprint burn-up over projects/*.json"
+    tools._apps_cache.clear()
+    assert "Sprint burn-up over projects" in tools.app_catalog(str(tmp_path))

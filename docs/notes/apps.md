@@ -30,7 +30,7 @@ one. Every other HTML file in the workspace opens in the canvas as an inert docu
 at all, because opening a document must never hand that document your workspace.
 
 **An app is shared by the whole workspace.** `workspace()` returns
-`root = {volume}/{org}/ws/{ws}` with **no user segment** (`cycls/_app/db.py:54-56`), and every
+`root = {volume}/{org}/ws/{ws}` with **no user segment** (`workspace()` in `cycls/_app/db.py`), and every
 `/files` route resolves against `ws.root`. So the bundle, the source and the data are one copy that
 every member reads and writes. This is the settled requirement, and it is the reason app data lives
 in the folder rather than in the agent KV — the KV path is `{slot}/{user}`, which is per person.
@@ -39,7 +39,8 @@ in the folder rather than in the agent KV — the KV path is `{slot}/{user}`, wh
 
 Two things, and both are cheap because neither is stored in the prompt by default.
 
-**A catalog, on a 30 s TTL.** `app_catalog()` reads each `app.json` and emits one line per app —
+**A catalog, on a 30 s TTL.** `app_catalog()` emits one line per app from the `name` and
+`description` in its `app.json`, both set by `build_app` —
 nothing at all in a workspace with no apps. The TTL is not optional: the volume is gcsfuse, and
 a scan per turn is the pattern `plugins-connectors.md` warns about.
 
@@ -51,7 +52,7 @@ where a duplicate-ID corruption came from.
 
 ## The build
 
-`build_app` (`cycls/_agent/tools/__init__.py:754`) collects the text files under the source folder
+`build_app` (`_exec_build_app` in `cycls/_agent/tools/__init__.py`) collects the text files under it
 and hands them to a deployed Cycls function, `miniapp-build`. The service is **not in this repo** —
 it lives at `~/Desktop/code/remote_build_function` and has its own git history.
 
@@ -99,7 +100,7 @@ CSP so "fetch works" would be removing the only thing that bounds a generated pa
 
  3  the user opens the app           Apps tab → canvas
  4  GET /files/apps/<slug>/index.html                         Authorization: Bearer <JWT>
- 5  injectShim(html)                 prepend window.cycls      canvas.tsx:126
+ 5  injectShim(html)                 prepend window.cycls      canvas.tsx, HtmlDoc
  6  <iframe sandbox="allow-scripts allow-popups" srcDoc={html}>
 
  7  frame → host    cycls:ready                               on the window, once
@@ -151,7 +152,7 @@ time. An app never holds standing permission to write elsewhere.
 
 `cycls.connector("salla").json(path, init)` → `cycls:fetch` → the host calls
 `/connectors/{name}/fetch/{path}` with the signed-in user's JWT → `connectors.relay()` resolves that
-user's grant, bounds the host to the connector's declared `api` base, and attaches the bearer
+user's grant, bounds the host to the connector's declared `api` base, and attaches the credential
 server-side.
 
 The page never holds a token, inherits a refreshed one for free, and keeps working after the chat
@@ -167,6 +168,8 @@ their apps reaching a connector at all. `ask` is not offered — an HTTP route h
 by the same `relay`. Without it a pasted key could be stored, encrypted, scoped and listed in the
 directory while the agent never learned it existed, because the loop only ever walks servers.
 `auth=` picks how the credential is presented: `bearer` (default), `basic`, `header`, `query`.
+Declare it on `cycls.Web().connectors(...)` as usual **and** on `cycls.LLM().connectors(...)`, which
+is how the loop sees a connector that has no server to walk.
 
 ## Known limitations
 
