@@ -3,7 +3,7 @@
 // the app's folder; `set` mutates memory and coalesces writes, so a burst of
 // updates costs one PUT rather than one each.
 
-export const STATE_FILE = "state.json";
+export const STATE_FILE = "data/state.json";   // data/ is the one place an app may write
 
 const SHIM = `<script>(function(){
   // A sandboxed frame has an opaque origin, so even READING window.localStorage
@@ -27,19 +27,21 @@ const SHIM = `<script>(function(){
     } catch (e2) {}
   }
 
-  var seq = 0, waiting = new Map(), ctx = null, resolveReady, tries = 0;
+  var seq = 0, waiting = new Map(), ctx = null, resolveReady, tries = 0, link = null;
   var ready = new Promise(function(r){ resolveReady = r; });
+
+  function send(msg){ if (link) link.postMessage(msg); else parent.postMessage(msg, '*'); }
 
   function call(type, payload){
     return new Promise(function(res, rej){
       var id = ++seq;
       waiting.set(id, { res: res, rej: rej });
-      parent.postMessage(Object.assign({ type: type, id: id }, payload), '*');
+      send(Object.assign({ type: type, id: id }, payload));
     });
   }
 
-  addEventListener('message', function(e){
-    var m = e.data || {};
+  function receive(m){
+    m = m || {};
     if (m.type === 'cycls:init' && !ctx) {
       ctx = { path: m.path, scope: m.scope, theme: m.theme, locale: m.locale, canWrite: !!m.canWrite };
       api.ctx = ctx;
@@ -56,6 +58,24 @@ const SHIM = `<script>(function(){
         : m.type === 'cycls:save:result' ? m.path
         : m.type === 'cycls:fetch:result' ? { status: m.status, body: m.body, contentType: m.contentType }
         : undefined);
+  }
+
+  addEventListener('message', function(e){
+    // The host hands over a private port with init; after that nothing rides the window,
+    // so a document that replaces this one inherits no channel. A host that sends no port
+    // keeps working on the window alone.
+    if (!link && e.ports && e.ports[0]) {
+      link = e.ports[0];
+      link.onmessage = function(ev){ receive(ev.data); };
+    }
+    receive(e.data);
+  });
+
+  // A throwing app used to be a blank frame with nothing anywhere.
+  function report(m){ try { send({ type: 'cycls:loaderror', message: String(m).slice(0, 500) }); } catch (e) {} }
+  addEventListener('error', function(e){ report(e.message || 'script error'); });
+  addEventListener('unhandledrejection', function(e){
+    report((e.reason && e.reason.message) || e.reason || 'unhandled rejection');
   });
 
   // Retry the handshake: the host's listener usually mounts first, but nothing
@@ -77,7 +97,7 @@ const SHIM = `<script>(function(){
     return call('cycls:write', { path: resolve(p), content: String(content) });
   }
 
-  var kv = null, loading = null, timer = null, pending = null, settle = null;
+  var kv = null, loading = null, timer = null, pending = null, settle = null, dirty = new Set();
 
   // Concurrent callers share one fetch, or a later parse would clobber the
   // mutations an earlier set() already made.
@@ -104,13 +124,24 @@ const SHIM = `<script>(function(){
     return pending;
   }
 
+  // Re-read and apply only the keys this frame touched. Writing the whole cached object
+  // meant a second tab, another device or the agent lost everything it had changed.
   async function flush(){
     clearTimeout(timer);
     if (!pending) return;
-    var s = settle;
-    pending = null; settle = null;
-    try { await write(${JSON.stringify(STATE_FILE)}, JSON.stringify(kv)); s.res(); }
-    catch (e) { s.rej(e); }
+    var s = settle, mine = dirty;
+    pending = null; settle = null; dirty = new Set();
+    try {
+      var remote = {};
+      try { remote = JSON.parse(await read(${JSON.stringify(STATE_FILE)})); } catch (e) {}
+      if (!remote || typeof remote !== 'object' || Array.isArray(remote)) remote = {};
+      mine.forEach(function(k){
+        if (Object.prototype.hasOwnProperty.call(kv, k)) remote[k] = kv[k]; else delete remote[k];
+      });
+      kv = remote;
+      await write(${JSON.stringify(STATE_FILE)}, JSON.stringify(kv));
+      s.res();
+    } catch (e) { s.rej(e); }
   }
 
   addEventListener('pagehide', function(){ flush(); });
@@ -134,6 +165,7 @@ const SHIM = `<script>(function(){
     set: async function(key, value){
       var s = await load();
       if (value === undefined) delete s[key]; else s[key] = value;
+      dirty.add(key);
       return schedule();
     },
     // A connector's own API, live. The app never holds a token: the host resolves the

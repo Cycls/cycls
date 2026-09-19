@@ -58,17 +58,16 @@ describe("inScope", () => {
 });
 
 describe("canWrite", () => {
-  it("allows any file inside the app's folder", () => {
+  it("allows data files, and nothing else in the app's folder", () => {
     for (const p of [
-      "apps/burnup/state.json", "apps/burnup/notes.md", "apps/burnup/out/rows.csv",
-      "apps/burnup/log.txt", "apps/burnup/report.html", "apps/burnup/chart.svg",
-      "apps/burnup/noext", "apps/burnup/reports/index.html",
+      "apps/burnup/data/state.json", "apps/burnup/data/rows.csv", "apps/burnup/data/a/b.json",
+      "apps/burnup/data/noext",
     ]) {
       expect(canWrite(scope, p), p).toBe(true);
     }
   });
 
-  it("refuses the app's own entry and manifest, whatever the casing", () => {
+  it("refuses everything outside data/, so the browser cannot write code", () => {
     for (const p of [
       "apps/burnup/index.html", "apps/burnup/app.json",
       "apps/burnup/APP.JSON", "apps/burnup/Index.HTML",
@@ -78,7 +77,9 @@ describe("canWrite", () => {
   });
 
   it("inherits every scope rule", () => {
-    for (const p of ["apps/other/state.json", "../escape.json", "/abs.json", scope, 42]) {
+    for (const p of ["apps/burnup/index.html", "apps/burnup/app.json", "apps/burnup/scripts/x.py",
+                     "apps/burnup/notes.md", "apps/other/data/s.json", "../escape.json",
+                     "/abs.json", scope, 42]) {
       expect(canWrite(scope, p as unknown), String(p)).toBe(false);
     }
   });
@@ -162,9 +163,9 @@ describe("attachBridge", () => {
     const { frame, sent, contentWindow } = fakeFrame();
     const writeFile = vi.fn(async () => {});
     detach = attachBridge({ frame, appPath: APP, readFile: async () => "", writeFile });
-    send(contentWindow, { type: MSG.write, id: 5, path: "apps/burnup/state.json", content: '{"a":1}' });
+    send(contentWindow, { type: MSG.write, id: 5, path: "apps/burnup/data/state.json", content: '{"a":1}' });
     await settle();
-    expect(writeFile).toHaveBeenCalledWith("apps/burnup/state.json", '{"a":1}');
+    expect(writeFile).toHaveBeenCalledWith("apps/burnup/data/state.json", '{"a":1}');
     expect(sent).toEqual([{ type: MSG.writeResult, id: 5, ok: true }]);
   });
 
@@ -183,7 +184,7 @@ describe("attachBridge", () => {
   it("refuses every write when the host passes no writeFile", async () => {
     const { frame, sent, contentWindow } = fakeFrame();
     detach = attachBridge({ frame, appPath: APP, readFile: async () => "" });
-    send(contentWindow, { type: MSG.write, id: 7, path: "apps/burnup/state.json", content: "{}" });
+    send(contentWindow, { type: MSG.write, id: 7, path: "apps/burnup/data/state.json", content: "{}" });
     await settle();
     expect(sent).toEqual([
       { type: MSG.writeResult, id: 7, ok: false, error: "writes are not enabled here" },
@@ -194,9 +195,9 @@ describe("attachBridge", () => {
     const { frame, sent, contentWindow } = fakeFrame();
     const writeFile = vi.fn(async () => {});
     detach = attachBridge({ frame, appPath: APP, readFile: async () => "", writeFile });
-    send(contentWindow, { type: MSG.write, id: 8, path: "apps/burnup/state.json", content: { a: 1 } });
+    send(contentWindow, { type: MSG.write, id: 8, path: "apps/burnup/data/state.json", content: { a: 1 } });
     send(contentWindow, {
-      type: MSG.write, id: 9, path: "apps/burnup/state.json", content: "x".repeat(MAX_WRITE_BYTES + 1),
+      type: MSG.write, id: 9, path: "apps/burnup/data/state.json", content: "x".repeat(MAX_WRITE_BYTES + 1),
     });
     await settle();
     expect(writeFile).not.toHaveBeenCalled();
@@ -212,7 +213,7 @@ describe("attachBridge", () => {
       frame, appPath: APP, readFile: async () => "",
       writeFile: async () => { throw new Error("disk full"); },
     });
-    send(contentWindow, { type: MSG.write, id: 10, path: "apps/burnup/state.json", content: "{}" });
+    send(contentWindow, { type: MSG.write, id: 10, path: "apps/burnup/data/state.json", content: "{}" });
     await settle();
     expect(sent).toEqual([{ type: MSG.writeResult, id: 10, ok: false, error: "disk full" }]);
   });
