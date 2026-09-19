@@ -38,8 +38,8 @@ describe("injectShim", () => {
   });
 
   it("persists through one JSON file in the app's folder", () => {
-    expect(STATE_FILE).toBe("state.json");
-    expect(shimOf("<html><head></head></html>")).toContain('"state.json"');
+    expect(STATE_FILE).toBe("data/state.json");
+    expect(shimOf("<html><head></head></html>")).toContain('"data/state.json"');
   });
 });
 
@@ -154,14 +154,34 @@ describe("the injected cycls api", () => {
     const { api, posted, deliver } = load("apps/burnup");
     const done = Promise.all([api.set("a", 1), api.set("b", 2), api.set("a", 3)]);
     await new Promise((r) => setTimeout(r, 0));
-    const read = posted.find((m) => m.type === "cycls:read")!;
-    deliver({ type: "cycls:read:result", id: read.id, ok: true, content: "{}" });
+    const reads = () => posted.filter((m) => m.type === "cycls:read");
+    deliver({ type: "cycls:read:result", id: reads()[0].id, ok: true, content: "{}" });
     await new Promise((r) => setTimeout(r, 20));
+    // the flush re-reads before writing, so the second read is the merge
+    deliver({ type: "cycls:read:result", id: reads()[1].id, ok: true, content: "{}" });
+    await new Promise((r) => setTimeout(r, 0));
     const writes = posted.filter((m) => m.type === "cycls:write");
     expect(writes).toHaveLength(1);
     expect(JSON.parse(writes[0].content as string)).toEqual({ a: 3, b: 2 });
     deliver({ type: "cycls:write:result", id: writes[0].id, ok: true });
     await expect(done).resolves.toBeDefined();
+  });
+
+  it("keeps a key another writer added, and carries a delete through", async () => {
+    const { api, posted, deliver } = load("apps/burnup");
+    const done = api.set("mine", 1);
+    await new Promise((r) => setTimeout(r, 0));
+    const reads = () => posted.filter((m) => m.type === "cycls:read");
+    deliver({ type: "cycls:read:result", id: reads()[0].id, ok: true, content: '{"gone":1}' });
+    await new Promise((r) => setTimeout(r, 20));
+    // another tab wrote `theirs` and removed nothing; only `mine` is ours to apply
+    deliver({ type: "cycls:read:result", id: reads()[1].id, ok: true,
+              content: '{"theirs":2,"gone":1}' });
+    await new Promise((r) => setTimeout(r, 0));
+    const writes = posted.filter((m) => m.type === "cycls:write");
+    expect(JSON.parse(writes[0].content as string)).toEqual({ mine: 1, theirs: 2, gone: 1 });
+    deliver({ type: "cycls:write:result", id: writes[0].id, ok: true });
+    await expect(done).resolves.toBeUndefined();
   });
 
   it("reads back what it set, and falls back for a missing key", async () => {

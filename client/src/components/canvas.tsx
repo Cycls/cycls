@@ -45,13 +45,19 @@ export function useFileContent(
 ) {
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState(false);
+  const shown = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!file) { setContent(null); setError(false); return; }
+    if (!file) { setContent(null); setError(false); shown.current = null; return; }
+    const fresh = shown.current !== file.path;
+    shown.current = file.path;
     let cancelled = false;
     let blobUrl: string | null = null;
-    setContent(null);
-    setError(false);
+    // Only blank for a DIFFERENT file. A refetch used to unmount the document — so every
+    // agent turn destroyed an open app, taking its scroll, its form state and any write
+    // still inside the shim's debounce. Unchanged content now re-renders to the same
+    // srcDoc and the frame is never touched.
+    if (fresh) { setContent(null); setError(false); }
     // Only formats we render from source fetch as text. Everything else — pdf,
     // media, spreadsheets — fetches bytes, so a binary is never handed to a
     // text renderer. Office docs fetch the server's on-demand PDF render of
@@ -96,18 +102,27 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
 }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const [pending, setPending] = useState<PendingSave | null>(null);
+  const [crash, setCrash] = useState<string | null>(null);
   // Only an app gets workspace access; every other html is just a document.
   const isApp = appScope(file.path) !== null;
   const canSave = isApp && !shared && !!writeFile && !!listFolders;
+  // A shared view has no workspace, but it still needs the shim: without it the app has no
+  // localStorage polyfill and white-screens on the first library that touches storage. So it
+  // gets a bridge that answers, and refuses.
+  const readForApp = readFile ?? (shared
+    ? () => Promise.reject(new Error("not available in a shared view"))
+    : undefined);
 
   useEffect(() => {
-    if (!ref.current || !readFile || !isApp) return;
+    if (!ref.current || !readForApp || !isApp) return;
+    setCrash(null);
     return attachBridge({
       frame: ref.current,
       appPath: file.path,
+      onError: setCrash,
       // Silent: the app is told what failed over the bridge and decides what it
       // means. A missing key-value file on first open is not a host-level error.
-      readFile: (p) => readFile(p, true),
+      readFile: (p) => readForApp(p, true),
       writeFile: shared || !writeFile ? undefined : (p, text) => writeFile(p, text, true),
       // One dialog per save: the app never holds standing permission to write
       // outside its own folder.
@@ -121,9 +136,9 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
         locale: document.documentElement.lang || "en",
       },
     });
-  }, [file.path, readFile, writeFile, shared, canSave, isApp]);
+  }, [file.path, readForApp, writeFile, shared, canSave, isApp]);
 
-  const doc = useMemo(() => (readFile && isApp ? injectShim(content) : content), [content, readFile, isApp]);
+  const doc = useMemo(() => (readForApp && isApp ? injectShim(content) : content), [content, readForApp, isApp]);
 
   const settle = async (path: string | null) => {
     if (!pending) return;
@@ -139,7 +154,7 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
   };
 
   return (
-    <>
+    <div className="relative h-full w-full">
       <iframe
         ref={ref}
         sandbox={shared ? "allow-scripts" : "allow-scripts allow-popups"}
@@ -147,6 +162,11 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
         title={file.name}
         className="h-full w-full border-0 bg-white"
       />
+      {crash && (
+        <div className="absolute inset-x-0 bottom-0 border-t border-border bg-card px-4 py-2 text-xs text-destructive">
+          {t("appCrashed")}: {crash}
+        </div>
+      )}
       {pending && listFolders && (
         <SaveDialog
           name={pending.name}
@@ -156,7 +176,7 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
           onCancel={() => void settle(null)}
         />
       )}
-    </>
+    </div>
   );
 }
 

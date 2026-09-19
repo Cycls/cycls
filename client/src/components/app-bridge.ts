@@ -13,6 +13,7 @@ export const MSG = {
   resize: "cycls:resize",
   fetch: "cycls:fetch",
   fetchResult: "cycls:fetch:result",
+  loadError: "cycls:loaderror",
 } as const;
 
 export const RELAY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
@@ -29,9 +30,9 @@ export function relayHeaders(raw: unknown): Record<string, string> {
   return out;
 }
 
-// An app may not rewrite its own source or manifest. Its OWN pair only, so a
-// nested reports/index.html is fine.
-const RESERVED = ["index.html", "app.json"];
+// An app writes its data and nothing else. As a denylist this allowed scripts/ and
+// components/ — code the browser writes and the agent later runs.
+export const DATA_DIR = "data";
 
 export const MAX_WRITE_BYTES = 1_000_000;
 
@@ -64,9 +65,7 @@ export function inScope(scope: string, target: unknown): target is string {
 }
 
 export function canWrite(scope: string, target: unknown): target is string {
-  if (!inScope(scope, target)) return false;
-  const lower = target.toLowerCase();
-  return !RESERVED.some((f) => lower === `${scope.toLowerCase()}/${f}`);
+  return inScope(scope, target) && target.startsWith(`${scope}/${DATA_DIR}/`);
 }
 
 export interface BridgeOptions {
@@ -78,6 +77,7 @@ export interface BridgeOptions {
   requestSave?: (name: string, content: string) => Promise<string | null>;
   context?: Record<string, unknown>;
   onResize?: (height: number) => void;
+  onError?: (message: string) => void;
   // Calls the connector relay as the signed-in user; the app never sees a token.
   fetchConnector?: (name: string, path: string,
                     init: { method: string; headers: Record<string, string>; body?: string })
@@ -85,23 +85,26 @@ export interface BridgeOptions {
 }
 
 export function attachBridge({
-  frame, appPath, readFile, writeFile, requestSave, context, onResize, fetchConnector,
+  frame, appPath, readFile, writeFile, requestSave, context, onResize, onError, fetchConnector,
 }: BridgeOptions) {
   const folder = appScope(appPath);
   if (folder === null) return () => {};
   const scope: string = folder;
+  let port: MessagePort | null = null;
 
-  async function onMessage(e: MessageEvent) {
-    // Sandboxed frames report origin "null", so identity is the window handle.
-    if (!frame.contentWindow || e.source !== frame.contentWindow) return;
-    const msg = e.data as {
+  async function handle(raw: unknown) {
+    const msg = raw as {
       type?: string; id?: unknown; path?: unknown; content?: unknown; height?: unknown;
     };
     if (typeof msg?.type !== "string") return;
-    const post = (p: unknown) => frame.contentWindow?.postMessage(p, "*");
+    // Once the channel is up everything goes down it. A window post needs targetOrigin
+    // "*" — an opaque origin has none to name — and a frame that navigated itself away
+    // would still receive it.
+    const post = (p: unknown) => (port ? port.postMessage(p) : frame.contentWindow?.postMessage(p, "*"));
 
-    if (msg.type === MSG.ready) {
-      return post({ type: MSG.init, path: appPath, scope, canWrite: !!writeFile, ...context });
+    if (msg.type === MSG.loadError) {
+      onError?.(String((msg as { message?: unknown }).message ?? "").slice(0, 500));
+      return;
     }
 
     if (msg.type === MSG.read) {
@@ -172,6 +175,24 @@ export function attachBridge({
     }
   }
 
-  window.addEventListener("message", onMessage);
-  return () => window.removeEventListener("message", onMessage);
+  function onWindow(e: MessageEvent) {
+    // Sandboxed frames report origin "null", so identity is the window handle.
+    if (!frame.contentWindow || e.source !== frame.contentWindow) return;
+    if ((e.data as { type?: string })?.type === MSG.ready) {
+      const ch = new MessageChannel();
+      port = ch.port1;
+      port.onmessage = (ev) => void handle(ev.data);
+      frame.contentWindow.postMessage(
+        { type: MSG.init, path: appPath, scope, canWrite: !!writeFile, ...context }, "*", [ch.port2]);
+      return;
+    }
+    void handle(e.data);   // a shim that ignored the port still works
+  }
+
+  window.addEventListener("message", onWindow);
+  return () => {
+    window.removeEventListener("message", onWindow);
+    port?.close();
+    port = null;
+  };
 }
