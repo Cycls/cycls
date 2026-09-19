@@ -24,21 +24,12 @@ _BASH_TOOL = {
     "type": "custom",
     "name": "bash",
     "description": (
-        "Execute a shell command in the workspace sandbox.\n\n"
-        "Usage:\n"
-        "- Working directory is /workspace. Never prefix commands with `cd /workspace`.\n"
-        "- Scratch goes in `.tmp/`: downloads, intermediate data, anything "
-        "the user should not see in their files — it is hidden and cleaned up. Files the user "
-        "keeps go in the workspace root. Never /tmp: every command gets its own, gone when it exits.\n"
-        "- Use `rg` or `rg --files` for searching — it's faster than grep.\n"
-        "- Use `jq` to extract fields from JSON.\n"
-        "- Use the `read` tool (not cat/head/tail) for viewing files.\n"
-        "- Use the `edit` tool to create OR modify files — never `cat >`, `echo >`, heredocs, or `sed`/`awk`. Bash for files bypasses safety checks and blows the output-token budget on long content.\n"
-        "- Always quote paths containing spaces with double quotes.\n"
+        "Execute a shell command in the workspace sandbox.\n"
+        "- Scratch goes in `.tmp/` — hidden from the user and swept. Files they keep go in the "
+        "workspace root. Never /tmp: every command gets its own, gone when it exits.\n"
+        "- `jq` for JSON, `rg` for search. Quote paths containing spaces.\n"
         "- Large output is saved to `.tmp/` with a preview — analyse it with jq, rg or python.\n"
-        "- Default timeout is 600s; adjust via `timeout` parameter (milliseconds).\n"
-        "- Avoid destructive commands (`rm -rf`) unless the user explicitly asks.\n"
-        "- When issuing multiple independent commands, send multiple bash tool calls in parallel rather than chaining with &&."
+        "- Independent commands go in parallel tool calls, not chained with &&."
     ),
     "input_schema": {"type": "object", "properties": {
         "command": {"type": "string", "description": "The shell command to execute."},
@@ -75,12 +66,11 @@ _DATABASE_TOOL = {
     "type": "custom",
     "name": "database",
     "description": (
-        "Persistent key-value store scoped to this workspace. Use for state that must "
-        "survive across turns or chat sessions: notes, user preferences, task progress. "
-        "Atomic per-key writes, prefix scans.\n\n"
-        "This store is PER USER, so other members of the workspace cannot see it and "
-        "neither can an app. Data an app reads belongs in `apps/<slug>/data/`, written "
-        "with the editor.\n\n"
+        "Persistent key-value store, PER USER — no other member of the workspace can see it, "
+        "and neither can an app. Your own memory across turns and chats: notes, preferences, "
+        "task progress. Atomic per-key writes, prefix scans.\n"
+        "Anything a teammate or an app must read goes in `apps/<slug>/data/` or a workspace "
+        "file instead.\n\n"
         "Commands:\n"
         "- get:    read a value at `key`. Returns the stored JSON or 'not found'.\n"
         "- put:    write `value` (any JSON-serializable type) at `key`.\n"
@@ -252,61 +242,39 @@ _BUILD_APP_TOOL = {
     "type": "custom",
     "name": "build_app",
     "description": (
-        "Bundle app source into a single self-contained HTML file and install "
-        "it as an app, which the user opens from the Apps tab.\n\n"
-        "Write the source into the workspace first with the editor — one file per "
-        "component, `index.html` as the entry — then call this with that folder. "
-        "The source stays in the workspace so you can edit and rebuild it later; "
-        "do NOT paste source into this call.\n\n"
-        "The bundler inlines everything into one file and stamps a Content-Security-Policy\n"
-        "on it, so an external script, stylesheet or font is blocked at load and the app\n"
-        "cannot make network requests of its own. React is 19.2.8, so use `createRoot`,\n"
-        "not `ReactDOM.render`. Tailwind v4 via `@import \"tailwindcss\"`. Also available\n"
-        "to import: @base-ui/react, @dnd-kit/core, @dnd-kit/modifiers, @dnd-kit/sortable, @dnd-kit/utilities, @hookform/resolvers, @radix-ui/react-slot, @tanstack/react-table, @tanstack/react-virtual, class-variance-authority, clsx, cmdk, date-fns, embla-carousel-react, input-otp, lucide-react, motion, radix-ui, react-day-picker, react-dom, react-hook-form, recharts, sonner, tailwind-merge, tailwind-variants, tw-animate-css, vaul, zod.\n"
-        "Nothing else — you cannot add a dependency.\n\n"
-        "Inside the app, `cycls.read`/`write` reach files in the app's own folder, "
-        "`cycls.get`/`set` are a key-value store, and `cycls.save(name, content)` "
-        "asks the user where to put a file anywhere in the workspace.\n\n"
-        "`await cycls.connector(name).json(path, {method, headers, body})` calls a connected "
-        "connector's own REST API live — `cycls.connector('posthog').json('/api/projects/123/query/', "
-        "{method: 'POST', body: JSON.stringify({query})})`. The workspace's credential is attached "
-        "server-side on every call, so the app holds no key, inherits a refreshed token, and keeps "
-        "working after this chat ends. Use it for a dashboard that must stay live; never paste an "
-        "API key into app source, and never ask the user for one a connector already has.\n\n"
-        "On failure the build log comes back — fix the source and call again."
+        "Bundle a source folder into one self-contained HTML file and install it as an app the "
+        "user opens from the Apps tab. Write the source with the editor first — `index.html` is the "
+        "entry — and pass the folder; never paste source here. It stays, so you can rebuild.\n"
+        "Everything is inlined under a CSP: no external script or font, and the app cannot fetch. "
+        "React 19.2.8 (`createRoot`), Tailwind v4 via `@import \"tailwindcss\"`, and: "
+        "@base-ui/react, @dnd-kit/core, @dnd-kit/modifiers, @dnd-kit/sortable, @dnd-kit/utilities, @hookform/resolvers, @radix-ui/react-slot, @tanstack/react-table, @tanstack/react-virtual, class-variance-authority, clsx, cmdk, date-fns, embla-carousel-react, input-otp, lucide-react, motion, radix-ui, react-day-picker, react-dom, react-hook-form, recharts, sonner, tailwind-merge, tailwind-variants, tw-animate-css, vaul, zod. "
+        "Nothing else — you cannot add a dependency.\n"
+        "In the app: `cycls.read`/`write` reach `data/` in its own folder, `cycls.get`/`set` are a "
+        "key-value store there, `cycls.save(name, content)` asks where to put a file anywhere, and "
+        "`await cycls.connector(name).json(path, init)` calls a connected connector's REST API with "
+        "the credential attached server-side — so a dashboard stays live and holds no key. Never put "
+        "an API key in app source.\n"
+        "On failure the build log comes back."
     ),
     "input_schema": {"type": "object", "properties": {
-        "slug": {"type": "string",
-                 "description": "App folder name under apps/, e.g. `burnup` (lowercase, no spaces)."},
-        "source": {"type": "string",
-                   "description": "Folder holding the source, e.g. `apps/burnup/src`. Must contain index.html."},
-        "name": {"type": "string", "description": "Display name shown in the Apps tab."},
-        "description": {"type": "string", "description": (
-            "One line on what the app is for. Shown in the Apps tab and to a later session, "
-            "which otherwise has to open the app to find out.")},
-        "icon": {"type": "string", "description": (
-            "An emoji, or an image file in the app's folder (e.g. `logo.png`). "
-            "Defaults to the first letter of the name.")},
+        "slug": {"type": "string", "description": "Folder under apps/, lowercase, e.g. `burnup`."},
+        "source": {"type": "string", "description": "Folder holding the source, e.g. `apps/burnup/src`."},
+        "name": {"type": "string", "description": "Display name in the Apps tab."},
+        "description": {"type": "string", "description": "One line on what it is for; a later session reads this."},
+        "icon": {"type": "string", "description": "An emoji, or an image file in the app's folder."},
     }, "required": ["slug", "source"]}
 }
+
 
 _SUGGEST_TOOL = {
     "type": "custom",
     "name": "suggest",
     "description": (
-        "Offer the user ONE suggested follow-up message — the single most "
-        "useful next step, shown as a one-tap chip above the composer. Write "
-        "it as a message the user would send (their voice, their language), "
-        "short enough to read at a glance.\n"
-        "Prefer steps that move the session toward a FINISHED deliverable — "
-        "'Turn this into a document', 'Make this a web page' — over "
-        "open-ended exploration.\n"
-        "Call at most once per turn, as your LAST action, after the answer "
-        "is complete. Skip it when you asked the user a question or the turn "
-        "already ended in the final artifact."
+        "Offer ONE follow-up message as a one-tap chip above the composer, written as the "
+        "user would send it."
     ),
     "input_schema": {"type": "object", "properties": {
-        "text": {"type": "string", "description": "The follow-up message, in the user's voice and language (aim for under 80 characters)."},
+        "text": {"type": "string", "description": "The follow-up, in the user's voice and language. Under 80 characters."},
     }, "required": ["text"]}
 }
 
@@ -316,45 +284,25 @@ _ASK_TOOL = {
     "type": "custom",
     "name": "ask",
     "description": (
-        "Ask the user up to 3 questions in ONE call and stop, when you genuinely "
-        "cannot pick a sensible default and different answers lead to materially "
-        "different work. They appear as a card above the composer where the user "
-        "answers and submits; they may also ignore the options and type any reply, "
-        "so never say 'choose one of the following'.\n"
-        "Batch every question you need into a single call — each call ends your "
-        "turn, so asking one at a time costs the user a full round-trip each time.\n"
-        "Per question: give 2-4 `options` when the answers are known, each a short "
-        "noun phrase with a one-line description of what it means or what happens "
-        "if chosen; omit `options` for an open question. Set `multi_select` when "
-        "several of that question's answers can hold at once (which formats to "
-        "export, which sections to include). Give each question a short `header` "
-        "(1-2 words) — it labels the answer when several come back together. "
-        "Write everything in the user's language.\n"
-        "Call at most once per turn, as your LAST action — the turn ends there and "
-        "the user's next message carries the answers. Do NOT call it to confirm "
-        "something obvious, to ask permission for work already requested, or when "
-        "a careful colleague would just make the call and say so."
+        "Ask the user up to 3 questions on one card above the composer, and stop. "
+        "They can ignore the options and type anything, so never write 'choose one "
+        "of the following'. Everything in the user's language."
     ),
     "input_schema": {"type": "object", "properties": {
         "questions": {"type": "array", "minItems": 1, "maxItems": _ASK_MAX_QUESTIONS,
                       "description": "1-3 questions, asked together on one card.",
                       "items": {
             "type": "object", "properties": {
-                "question": {"type": "string",
-                             "description": "The question, in the user's language. One sentence."},
-                "header": {"type": "string", "description": (
-                    "1-2 word label for this answer, in the user's language (e.g. "
-                    "'Format', 'Sections'). It is sent verbatim beside the answer "
-                    "when several come back together.")},
-                "options": {"type": "array", "maxItems": 4, "description": (
-                    "2-4 suggested answers. Omit for an open question."), "items": {
+                "question": {"type": "string", "description": "One sentence."},
+                "header": {"type": "string", "description": "1-2 words labelling the answer, e.g. 'Format'."},
+                "options": {"type": "array", "maxItems": 4,
+                            "description": "2-4 answers. Omit for an open question.", "items": {
                     "type": "object", "properties": {
-                        "label": {"type": "string", "description": "The answer, as the user would say it (under 80 chars)."},
-                        "description": {"type": "string", "description": "One line on what it means or implies."},
+                        "label": {"type": "string", "description": "The answer, as the user would say it."},
+                        "description": {"type": "string", "description": "One line on what it implies."},
                     }, "required": ["label"]}},
-                "multi_select": {"type": "boolean", "description": (
-                    "True when the user may pick several of THIS question's options "
-                    "at once. Default false (exactly one answer).")},
+                "multi_select": {"type": "boolean",
+                                 "description": "Several of THIS question's options can hold at once."},
             }, "required": ["question"]}},
     }, "required": ["questions"]}
 }
@@ -362,11 +310,11 @@ _ASK_TOOL = {
 # Attached to the `Tool` rows below, so enabling a tool is the only switch.
 
 SUGGEST_GUIDANCE = """## Suggested follow-up
-After a substantive answer, when there is an obvious next step, call `suggest` with ONE follow-up message. Steer the session toward a completed artifact: prefer the step that turns work-in-progress into a finished document, page, sheet, or app the user keeps — "Turn this into a document", "Make this a web page" — over open-ended exploration. Write it as a message the user would send, in the user's language. Call it at most once, as the last action of your turn — the turn ends there, so say everything you have to say before calling it. Skip it when you asked the user a question, or when the turn already delivered the final artifact and nothing obvious remains."""
+After a substantive answer with an obvious next step, call `suggest` once, as the last action of the turn — it ends there, so say everything first. Steer toward a finished artifact the user keeps ("Turn this into a document", "Make this a web page") over open-ended exploration. Skip it when you asked a question, or when the turn already delivered the artifact."""
 
 ASK_GUIDANCE = """## Asking the user
-Call `ask` only when you genuinely cannot resolve a choice from the request, the workspace, or a sensible default, AND the readings lead to materially different work. Make routine judgment calls yourself and say which you made. Do everything that does not depend on the answers first.
-Ask once per turn, as the last action of the turn — the turn ends there and the user's next message carries their answers, so never guess and carry on. Put every question you need into that single call (up to 3): each call costs the user a full round-trip, so asking one at a time is worse than asking together. Give each question a short `header` so the answers come back labelled, and set `multi_select` only when several of that question's own answers can genuinely hold at once. The user can ignore your options and type anything, so read their reply as an answer to what you asked, not as a fresh request."""
+Call `ask` only when you cannot resolve a choice from the request, the workspace or a sensible default, AND the readings lead to materially different work — not to confirm the obvious or to ask permission for work already requested. Make routine calls yourself and say which you made; do everything that does not depend on the answers first.
+Ask once per turn, as the last action: the turn ends there and the user's next message carries the answers. Put every question into that one call — each costs a full round-trip. Read their reply as an answer to what you asked, not as a fresh request."""
 
 
 _BUILTINS = {
