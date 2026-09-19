@@ -24,12 +24,21 @@ _BASH_TOOL = {
     "type": "custom",
     "name": "bash",
     "description": (
-        "Execute a shell command in the workspace sandbox.\n"
-        "- Scratch goes in `.tmp/` — hidden from the user and swept. Files they keep go in the "
-        "workspace root. Never /tmp: every command gets its own, gone when it exits.\n"
-        "- `jq` for JSON, `rg` for search. Quote paths containing spaces.\n"
+        "Execute a shell command in the workspace sandbox.\n\n"
+        "Usage:\n"
+        "- Working directory is /workspace. Never prefix commands with `cd /workspace`.\n"
+        "- Scratch goes in `.tmp/`: downloads, intermediate data, anything "
+        "the user should not see in their files — it is hidden and cleaned up. Files the user "
+        "keeps go in the workspace root. Never /tmp: every command gets its own, gone when it exits.\n"
+        "- Use `rg` or `rg --files` for searching — it's faster than grep.\n"
+        "- Use `jq` to extract fields from JSON.\n"
+        "- Use the `read` tool (not cat/head/tail) for viewing files.\n"
+        "- Use the `edit` tool to create OR modify files — never `cat >`, `echo >`, heredocs, or `sed`/`awk`. Bash for files bypasses safety checks and blows the output-token budget on long content.\n"
+        "- Always quote paths containing spaces with double quotes.\n"
         "- Large output is saved to `.tmp/` with a preview — analyse it with jq, rg or python.\n"
-        "- Independent commands go in parallel tool calls, not chained with &&."
+        "- Default timeout is 600s; adjust via `timeout` parameter (milliseconds).\n"
+        "- Avoid destructive commands (`rm -rf`) unless the user explicitly asks.\n"
+        "- When issuing multiple independent commands, send multiple bash tool calls in parallel rather than chaining with &&."
     ),
     "input_schema": {"type": "object", "properties": {
         "command": {"type": "string", "description": "The shell command to execute."},
