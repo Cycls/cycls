@@ -105,6 +105,7 @@ async def my_agent(context):
     context.chat_id       # current chat session id
     context.prod          # True when running via .deploy(), False on .local() — gate billing/analytics
     context.workspace     # per-user file scope on the /workspace volume
+    context.disabled_tools  # tools the person switched off in Settings, e.g. ["WebSearch"] — LLM.run() drops them for the turn
 ```
 
 ---
@@ -173,6 +174,13 @@ Supported actions:
 | Action | Fields | Behavior |
 |--------|--------|----------|
 | `open_plan_modal` | — | Opens the pricing modal. FE auto-picks `user` vs `organization` based on the active Clerk org. |
+| `open_canvas` | `path`, `name?` | Opens a workspace file in the canvas viewer. An `apps/<slug>/index.html` path opens under its manifest name and icon. |
+| `suggest` | `text` | One follow-up chip above the composer; click sends it, `↑` in an empty composer edits it. Users switch the chips off in Settings. |
+| `ask` | `questions` | A question card above the composer (up to 3 questions, each with `options` and optional `header`/`multi_select`). Answers arrive as the next user message — the options are shortcuts, not a gate, and typing any reply answers too. Users switch the card off in Settings. |
+
+The `Canvas`, `Suggest` and `Ask` builtins fire these for you; yield them
+directly only from a custom loop. Unlike the rest, `ask` also **ends the turn**
+when the builtin fires it — see [notes/tool-rows.md](notes/tool-rows.md).
 
 ### Component reference
 
@@ -185,6 +193,7 @@ Supported actions:
 | `callout` | `callout`, `style` | Single |
 | `status` | `status` | Replaces previous |
 | `image` | `src` | Single |
+| `sources` | `sources` | Citation chips — `[{title, url, snippet}]`. Emitted by `WebSearch`; a link in the answer matching one of these URLs becomes a chip too |
 | `ui` | `action` | Fire-and-forget client action |
 
 HTML strings pass through for custom styling.
@@ -262,7 +271,7 @@ web = (
     .auth(cycls.Clerk())
     .title("My Agent")
     .theme("default")
-    .cms("cycls.ai")
+    .cms(brand="https://cms.cycls.ai/agents/my-agent")
     .analytics(True)
     .copy_public("./assets/logo.png", "./downloads/")
 )
@@ -271,14 +280,107 @@ web = (
 | Method | Purpose |
 |---|---|
 | `.auth(provider)` | Set auth provider (`cycls.Clerk()` or `cycls.JWT(...)`) |
+| `.auth(cycls.Clerk(one_tap=True))` | Google One Tap on the signed-out page — the "Continue as …" card. Needs Google enabled in Clerk with **custom credentials**, and each agent origin in that OAuth client's authorized JavaScript origins |
 | `.title(str)` | Browser tab + app title |
+| `.brand(locale=, name=, description=, logo=, brand=, og=, favicon=)` | Static branding per locale. `logo` is the agent icon (chat hero); `brand` is the wordmark shown in the nav bar (falls back to the Cycls logo when unset); `og`/`favicon` are global |
 | `.theme(name)` | `"default"` or `"dev"` |
-| `.cms(host)` | Register this agent with a CMS (default `"cycls.ai"` fetches from `cms.cycls.ai/agents/{name}`) |
+| `.colors(primary=, secondary=, primary_dark=, secondary_dark=)` | Theme accent colors (any CSS color). `primary` drives highlights and active states, `secondary` chips and bubbles; the `_dark` variants override dark mode |
+| `.cms(brand=, explore=, token=)` | Pull branding and/or the explore menu from any CMS: plain GET URLs returning the contract JSON, optional bearer `token`. Static `.brand()`/`.explore()` win, piece by piece |
+| `.explore(*agents)` | Static explore menu (the agents dropdown): `{"name", "url", "logo"?, ...}` entries. Overrides the CMS list; with neither, the menu is hidden |
+| `.seo(title=, description=)` | Page/SEO copy when it should differ from the brand — the `<title>` tag, meta + og description |
+| `.head(html)` | Append raw HTML to `<head>` — site verification, custom meta. Repeatable |
+| `.suggestions(on=True)` | Show prompt-starter suggestions on the empty-chat screen. Off by default |
+| `.affiliate(api_key)` | Affiliate/referral tracking (e.g. a Rewardful key); the FE loads the tracker and reports conversions on checkout |
+| `.max_upload(mb)` | Per-file upload cap in MB (default 512). Enforced server-side, pre-checked client-side |
 | `.analytics(bool)` | Enable usage metrics |
+| `.notifications(cycls.OneSignal(app_id))` | Web push as a plugin; the permission card is ours, the trigger is a PostHog flag (docs/notes/engagement.md) |
 | `.suggestions(bool)` | Prompt-starter suggestions on the empty-chat screen (default off) |
 | `.copy_public(*files)` | Static files served at `/public` |
+| `.workspaces(create="member")` | Multi-workspace mode: every user gets a personal workspace, teams are shared with role-based access, selected per request via the `X-Workspace` header. Requires `.auth(...)`. `create` sets who may create team workspaces (`"member"` or `"admin"`) — see [docs/workspaces.md](workspaces.md) |
+| `.iap(cycls.AppleIAP(...))` | Apple In-App Purchase entitlements: a StoreKit 2 signed transaction (JWS) in a header is verified offline against the bundled Apple root cert and, when valid, upgrades the request's `user.plan`. See below |
 
 Static files land at `https://your-app.cycls.ai/public/logo.png`.
+
+### Office files on the canvas
+
+Office files can't render in a browser directly, so the canvas renders each in
+the form that fits it (read-only):
+
+- **Spreadsheets** (`csv/xls/xlsx/ods`) → an interactive grid with sheet tabs.
+- **Word** (`.docx`) → a formatted document (pages, fonts, tables, images).
+- **Presentations** (`.pptx/.odp`) → a slide viewer (big slide + thumbnail rail).
+- Everything else (`doc/rtf/odt/epub`) → a read-only PDF.
+
+Spreadsheets and `.docx` render in the browser from the raw bytes; presentations
+and the PDF fallback go through the shared `office-render` service, wired by env
+(unset → those two fall back to the download card, grid/docx still work):
+
+```
+OFFICE_RENDER_URL=https://office-render.cycls.ai
+OFFICE_RENDER_SECRET=<the shared service secret>
+```
+
+A failed render always falls back to the download card, never a broken page.
+Details: [docs/notes/office-preview.md](notes/office-preview.md).
+
+### Browser automation
+
+Give an agent a **real browser** — open pages behind JavaScript, read them, click,
+fill forms, log in, run multi-step flows, screenshot — without shipping Chromium
+in the image. The heavy part (real Chrome) runs in a shared service the agent
+calls over HTTP; the SDK ships only the client and the built-in `Browser` tool.
+
+Enable it by adding `"Browser"` to `allowed_tools` and pointing two env vars at a
+browser service:
+
+```python
+llm = cycls.LLM().model(...).allowed_tools(["Bash", "Editor", "Browser"])
+```
+```
+BROWSER_PROVIDER=cycls
+BROWSER_URL=https://cycls-browser.cycls.ai   # your deployed browser service
+BROWSER_SECRET=<the shared service secret>
+```
+
+The model drives one stateful `browser` tool step by step — `open` a url, `read`
+it (returns the page text + a numbered list of clickable/typable elements), then
+`click`/`type` by number, `press`, `back`, or `screenshot` (which renders on the
+canvas). The page persists between calls in the turn, so logins and forms work.
+Unset the env and the tool simply isn't offered — no crash, exactly like the
+office fallback.
+
+The service is a small FastAPI + Playwright app deployed **as a cycls function**
+(the office-render sibling), so it ships with your `CYCLS_API_KEY` and no separate
+cloud creds — real Chromium lives in it, not in any agent image. Deploy it once,
+pinned to a single instance (sessions are in-memory):
+
+```bash
+python browser_service.py        # → https://cycls-browser.cycls.ai
+```
+
+(Self-hosted **Steel Browser** over CDP is an alternative backing — set
+`BROWSER_PROVIDER=steel`.) Details: [docs/notes/browser.md](notes/browser.md).
+
+### Apple IAP entitlements
+
+For agents that sell subscriptions through Apple In-App Purchase, `.iap(...)`
+verifies the buyer on every request without a round-trip to Apple. The iOS
+client sends its current StoreKit 2 transaction (a JWS Apple signed) in a
+header; `cycls.AppleIAP` validates the certificate chain against the bundled
+Apple Root CA G3, checks the product and expiry, and confirms the purchase's
+`appAccountToken` binds to the authenticated user (so it can't be replayed by
+another account). A valid entitlement upgrades that request's `user.plan`.
+
+```python
+iap = cycls.AppleIAP(
+    bundle_id="com.example.app",
+    products={"com.example.app.pro.monthly"},
+    namespace="<uuid the client also uses>",   # UUIDv5 namespace for appAccountToken
+)
+web = cycls.Web().auth(cycls.Clerk()).iap(iap)
+```
+
+Gate features on the upgraded plan inside the agent via `context.user.plan`.
 
 ---
 
@@ -292,8 +394,9 @@ llm = (
     .tools(TOOLS)                              # custom tool schemas
     .on("render_image", render_image)          # handler for a custom tool
     .allowed_tools(["Bash", "Editor", "WebSearch"])
+    .context(200_000)                          # model context window (default 1M)
     .max_tokens(16384)
-    .show_usage(True)
+    .price(input=3, output=15, cache_read=0.30, cache_write=6)  # USD/1M, cost tracking
 )
 
 async for ev in llm.run(context=context):
@@ -305,17 +408,25 @@ async for ev in llm.run(context=context):
 | `.model(str)` | `provider/model` string — `anthropic/...`, `openai/...`, `groq/...`, etc. |
 | `.system(str)` | System prompt |
 | `.tools(list)` | Custom tool JSON schemas |
-| `.on(name, fn)` | Register async handler for a custom tool |
-| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`) |
-| `.max_tokens(n)` | Max output tokens |
+| `.on(name, fn, label=)` | Register async handler for a custom tool; `label` (input → str) renders the step line in the UI, like `Bash(command)` — default is the input's first string value |
+| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `Browser`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user. `Browser` is offered only when a browser service is configured (see below) |
+| `.instructions(path)` | Workspace instructions file auto-loaded into the system prompt (default `AGENT.md`; `None` disables) |
+| `.skills(*dirs)` | Ship skills with the agent (dirs of `<name>/SKILL.md` folders; `None` disables skills) |
+| `.context(n)` | Model context window in tokens — sets when compaction kicks in (default 1M; set it for smaller models) |
+| `.max_tokens(n)` | Max output tokens per request (default 8k) |
+| `.price(input=, output=, cache_read=, cache_write=)` | Token prices in USD per 1M for cost tracking; unset → costs report as $0 |
+| `.thinking(spec)` | Unified reasoning level: `"low"`/`"medium"`/`"high"`, `"adaptive"` (default), or `None` — translated to each vendor's dialect (OpenAI/Gemini/Grok/Mistral `reasoning_effort`, GLM/DeepSeek toggles, Qwen budgets, Kimi tiers, OpenRouter `reasoning`) |
+| `.extra_body(params)` | Vendor-specific request extras sent with every model call, merged after the built-in thinking mapping — your keys win. The escape hatch for unmapped vendors/params; `None` clears |
+| `.vision(bool)` | Whether the model accepts base64 media (images, PDFs). Default on; pass `False` for text-only models (GLM, most local) — attachments then stay in the workspace and the model gets a note naming the file, instead of the provider rejecting the request |
+| `.web_search(mode)` | `"brave"` (default, any model, needs `BRAVE_API_KEY`) or `"native"` (Anthropic server-side) |
+| `.mcp(*servers)` | Remote MCP servers via `cycls.MCP` (Anthropic models only) |
 | `.bash_timeout(secs)` | Bash sandbox timeout |
-| `.sandbox(network=True)` | Allow bash to make network calls (`curl`, `pip`, `git`). Default off |
-| `.show_usage(bool)` | Print cost + token usage at end of run |
+| `.sandbox(network=False)` | Cut bash off from the network (`curl`, `pip`, `git`). Default on |
 | `.base_url(url)` | Custom endpoint (Groq, vLLM, HUMAIN, self-hosted) |
 | `.api_key(key)` | Override API key |
 | `.loop(fn)` | Replace the built-in loop (see *Hooking the loop* below) |
 
-The Bash tool runs inside a `bubblewrap` sandbox with the workspace bound at `/workspace` and a sanitized environ. Network is off by default — enabling it allows outbound calls but means a prompt-injected bash could exfiltrate anything it can read. See [sandbox-security.md](notes/sandbox-security.md) for the full threat model.
+The Bash tool runs inside a `bubblewrap` sandbox with the workspace bound at `/workspace` and a sanitized environ. Network is on by default so `curl`/`pip`/`git` just work — but a prompt-injected bash could exfiltrate anything it can read, so pass `.sandbox(network=False)` when the agent doesn't need it. See [sandbox-security.md](notes/sandbox-security.md) for the full threat model.
 
 ### Hooking the loop
 
@@ -330,7 +441,7 @@ async for ev in llm.run(context=context):
     yield cycls.to_ui(ev)
 ```
 
-Need more than a hook? `.loop(fn)` swaps the loop entirely — `fn` is an async generator with the default loop's signature that yields events. The building blocks live in `cycls._agent.harness`: `default_loop`, `make_provider`, `Session` (the message log + persistence), `build_tools`, `dispatch`, `compact`, `events`.
+Need more than a hook? `.loop(fn)` swaps the loop entirely — `fn` is an async generator with the default loop's signature that yields events. The building blocks live in `cycls._agent.harness`: `default_loop`, `make_provider`, `Session` (the message log + persistence — `add_user` checkpoints, so the person's turn is durable before the model is called, and `rollback()` drops only the assistant tail), `build_tools`, `dispatch`, `compact`, `events`.
 
 ### Multi-provider
 
@@ -370,6 +481,35 @@ async def render_image(args):
 
 llm = cycls.LLM().tools(TOOLS).on("render_image", render_image)
 ```
+
+### Workspace instructions and skills
+
+**AGENT.md** — every turn, the harness reads `AGENT.md` from the user's workspace root (if present) and appends it to the system prompt, fenced as user preferences subordinate to your `.system()` prompt. Users edit it via the files panel or by asking the agent. Capped at 24KB (truncated beyond that); binary or unreadable files are ignored. Rename via `.instructions("NOTES.md")` or disable with `.instructions(None)`.
+
+**Skills** are packs of task-specific instructions the model loads on demand: only each skill's name + description sit in the system prompt; the full body enters context when the model calls the `skill` tool (a reserved tool name). A skill is a folder with a `SKILL.md`:
+
+```markdown
+---
+name: pdf-reports
+description: Generate branded PDF reports from CSV data. Use when the user asks for a PDF report, invoice, or printable summary.
+---
+# Full instructions... (up to 48KB loaded on demand)
+```
+
+`name` is lowercase-hyphen (falls back to the folder name); `description` decides when the model reaches for it, so say *when to use* (max 1KB). Support files (scripts, templates, reference docs) live beside `SKILL.md`.
+
+Skills come from two places:
+
+- **Shipped with the agent** — put a `skills/` dir in your project, include it in the image, and register it:
+
+  ```python
+  image = cycls.Image().copy("skills/")
+  llm = cycls.LLM().skills("skills")
+  ```
+
+  Shipped skills are read-only; each mounts at `/skills/<name>/` inside the bash sandbox, so the model runs `python /skills/pdf-reports/scripts/render.py` and scripts read their own templates from there. They version with your deploys.
+
+- **User-created** — any `skills/<name>/SKILL.md` in a user's workspace joins the catalog automatically (rescanned every ~30s) and wins name collisions with shipped skills.
 
 ---
 
@@ -418,11 +558,11 @@ web = (
     cycls.Web()
     .auth(cycls.Clerk())
     .analytics(True)
-    .cms("cycls.ai")
+    .cms(brand="https://cms.cycls.ai/agents/my-agent")
 )
 ```
 
-`.cms("cycls.ai")` registers this agent with the Cycls CMS, which drives wallet-pass UI and [Cycls Pass](https://cycls.com) monetization.
+`.cms(...)` pulls branding from the Cycls CMS, which drives wallet-pass UI and [Cycls Pass](https://cycls.com) monetization.
 
 `context.user.plan` exposes the authenticated user's subscription tier, set by your auth provider's JWT claim. The Cycls-hosted Clerk app emits values like `"u:free_user"` / `"o:free_org"` (user-plan / org-plan prefixes) and `"cycls_pass"` for paid subscribers. Gate features by inspecting the value:
 
@@ -697,4 +837,5 @@ image = cycls.Image().pip("numpy").rebuild()
 - [cron.md](cron.md) — scheduled functions
 - [cli.md](cli.md) — every CLI verb
 - Explore the [examples](../examples/) directory for working code
+- Read the [README](../README.md) for the architectural overview
 - Visit [cycls.com](https://cycls.com) for deploy + billing

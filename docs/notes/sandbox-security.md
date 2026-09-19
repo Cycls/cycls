@@ -2,6 +2,9 @@
 
 How the bash tool is isolated from the host agent process, what's currently covered, what's known to leak, and the fix plan.
 
+> The chat store is one JSON object per key over the GCS JSON API (`cycls/_app/db.py`).
+> Earlier revisions of this note called it SlateDB; there is no such dependency.
+
 ## Threat model
 
 - **Agent developer** (`@cycls.agent` author, deploys via `cycls deploy`) — **trusted**. They configured the image, they wrote the handler, they own the workspace.
@@ -31,7 +34,7 @@ bwrap --ro-bind / /
       --ro-bind <pkg>/_blockmeta.so /tmp/.blockmeta.so   # LD_PRELOAD shim
       --setenv LD_PRELOAD /tmp/.blockmeta.so
       --bind <cwd> /workspace
-      --tmpfs /workspace/.db                              # hide SlateDB internals
+      --tmpfs /workspace/.db                              # hide the chat store
       --tmpfs /app                                        # mask provider .env file
       --chdir /workspace
       [--unshare-net]                                     # only when network=False
@@ -44,7 +47,7 @@ Key properties:
 
 - **Network**: the LLM bash tool defaults to `network=True` (curl/pip/git for the model). When `network=False`, `--unshare-net` + `--unshare-user` gives a fresh netns owned by a fresh userns, so bwrap has caps to bring up `lo` even though Docker drops `CAP_NET_ADMIN` on the outer container. Without `--unshare-user`, loopback setup fails with `RTM_NEWADDR: No child processes`.
 - **Workspace is the only writable path** (`<cwd>` bound at `/workspace`). Root is read-only; `/app` and `/tmp` are ephemeral tmpfs.
-- **`.db/` is hidden** (`--tmpfs /workspace/.db`) so the sandboxed shell can't read SlateDB internals from the workspace volume. Editor tools (`read`, `edit`) also reject `.db/` paths via `_resolve_path`; tmpfs is defense in depth.
+- **`.db/` is hidden** (`--tmpfs /workspace/.db`) so the sandboxed shell can't read the chat store from the workspace volume. Editor tools (`read`, `edit`) also reject `.db/` paths via `_resolve_path`; tmpfs is defense in depth.
 - **Metadata server is blocked** via the LD_PRELOAD shim (`_blockmeta.so`), which intercepts libc `connect()` and rejects `169.254.0.0/16` + IPv6 link-local. See "Cloud credential exposure" below for the threat boundary.
 
 ### Why not `--unshare-all`?
@@ -130,14 +133,14 @@ For the realistic cycls product shape (developer ships an agent for their custom
 
 ### What this does NOT change
 
-- The developer's Python handler runs outside bwrap and keeps full ADC by design — they need it for `slatedb`/GCS calls, future `ws.object()` primitive, etc. Developer trust boundary is unchanged.
+- The developer's Python handler runs outside bwrap and keeps full ADC by design — they need it for the GCS JSON API calls `cycls._app.db` makes, the future `ws.object()` primitive, etc. Developer trust boundary is unchanged.
 - Framework state writes (share tokens, chat metadata, usage counters) happen via trusted Python code with the full-scope token. Scoping is only applied at the bash-tool boundary where untrusted input reaches.
 
 ## What's provably safe in prod
 
 - **Process env / provider keys** (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) — live in Python's env, unreadable via `/proc/<python_pid>/environ` due to user-NS boundary. `/app/.env` is masked by tmpfs. ✅
 - **CLI/publish secrets** (`CYCLS_API_KEY`, `UV_PUBLISH_TOKEN`) — not shipped into the runtime container at all, thanks to the `.providers.env` split (`Image.copy(".providers.env", ".env")`). Can't leak from a place they never existed. ✅
-- **SlateDB internals** — `--tmpfs /workspace/.db` masks the workspace's `.db/` so the sandboxed shell can't read the LSM/WAL files. Editor tools also reject `.db/` paths. ✅
+- **The chat store** — `--tmpfs /workspace/.db` masks the workspace's `.db/` so the sandboxed shell can't read it. Editor tools also reject `.db/` paths. ✅
 - **Cross-tenant filesystem access via `/proc` or mount tricks** — blocked at both layers (user-NS + bind mount). ✅
 - **Cross-tenant GCS access via metadata-minted tokens** — mitigated for libc-using code via the LD_PRELOAD shim. ⚠️ Bypassable by static binaries / direct syscall / `unset LD_PRELOAD`; see threat boundary above. Fully closing requires per-tenant deploys.
 

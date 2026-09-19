@@ -280,8 +280,9 @@ def _consume(name, r):
     return result
 
 
-def remote(name, *, url=None, api_key=None):
-    """Call a deployment by name: `cycls.remote("simulate")(n)`."""
+def remote(name, *, url=None, api_key=None, timeout=3600):
+    """Call a deployment by name: `cycls.remote("simulate")(n)`. Set `timeout` to the
+    callee's own limit so a hung service does not hold the caller long past it."""
     name = name.replace('_', '-')
 
     def call(*args, **kwargs):
@@ -292,7 +293,7 @@ def remote(name, *, url=None, api_key=None):
             raise RemoteError("No API key. Set CYCLS_API_KEY or cycls.api_key.")
         with httpx.stream("POST", url or f"https://{name}.cycls.ai",
                           content=cloudpickle.dumps((args, kwargs)),
-                          timeout=3600, headers=_stamp(key, name)) as r:
+                          timeout=timeout, headers=_stamp(key, name)) as r:
             if r.status_code == 404:
                 raise RemoteError(f"{name}: 404 — no such deployment. Run `cycls deploy <file>` first.",
                                   status=404)

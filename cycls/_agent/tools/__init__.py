@@ -2,11 +2,20 @@
 API shape (`type` / `name` / `description` / `input_schema`) and registered in
 `_BUILTINS`; `build_tools` emits them as-is. User-supplied custom tools come
 through `_normalize_tool` (accepts the camelCase `inputSchema` form too)."""
-import asyncio, base64, json, os, pathlib
-from . import pdf
+import asyncio, base64, inspect, ipaddress, json, os, pathlib, re, socket, time, uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from html.parser import HTMLParser
+from typing import NamedTuple
+from . import pdf, skills
+from ..connectors import approval_key
+from ..logs import log
 from ..state import _exec_database
+from .. import credentials, spill, trash
 
-MAX_OUTPUT = 30_000
+TRASH_MOUNT, SHIMS_MOUNT = "/workspace-trash", "/opt/cycls-bin"   # created by the image (Agent._base_run)
+
+MAX_OUTPUT = 2_000_000   # memory ceiling; the loop spills anything large to .tmp/
 
 _IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
 _DOC_EXTS = {"pdf"}
@@ -18,12 +27,15 @@ _BASH_TOOL = {
         "Execute a shell command in the workspace sandbox.\n\n"
         "Usage:\n"
         "- Working directory is /workspace. Never prefix commands with `cd /workspace`.\n"
+        "- Scratch goes in `.tmp/`: downloads, intermediate data, anything "
+        "the user should not see in their files — it is hidden and cleaned up. Files the user "
+        "keeps go in the workspace root. Never /tmp: every command gets its own, gone when it exits.\n"
         "- Use `rg` or `rg --files` for searching — it's faster than grep.\n"
         "- Use `jq` to extract fields from JSON.\n"
         "- Use the `read` tool (not cat/head/tail) for viewing files.\n"
         "- Use the `edit` tool to create OR modify files — never `cat >`, `echo >`, heredocs, or `sed`/`awk`. Bash for files bypasses safety checks and blows the output-token budget on long content.\n"
         "- Always quote paths containing spaces with double quotes.\n"
-        "- Output over 30K chars is truncated in the middle — use head/grep/tail in the command to keep results focused.\n"
+        "- Large output is saved to `.tmp/` with a preview — analyse it with jq, rg or python.\n"
         "- Default timeout is 600s; adjust via `timeout` parameter (milliseconds).\n"
         "- Avoid destructive commands (`rm -rf`) unless the user explicitly asks.\n"
         "- When issuing multiple independent commands, send multiple bash tool calls in parallel rather than chaining with &&."
@@ -63,10 +75,11 @@ _DATABASE_TOOL = {
     "type": "custom",
     "name": "database",
     "description": (
-        "Persistent key-value store scoped to this workspace. Use for state that must "
-        "survive across turns or chat sessions: notes, user preferences, task progress, "
-        "anything you'd otherwise jam into a JSON file. Atomic per-key writes, prefix "
-        "scans. Prefer this over writing JSON files via bash.\n\n"
+        "Persistent key-value store, PER USER — no other member of the workspace can see it, "
+        "and neither can an app. Your own memory across turns and chats: notes, preferences, "
+        "task progress. Atomic per-key writes, prefix scans.\n"
+        "Anything a teammate or an app must read goes in `apps/<slug>/data/` or a workspace "
+        "file instead.\n\n"
         "Commands:\n"
         "- get:    read a value at `key`. Returns the stored JSON or 'not found'.\n"
         "- put:    write `value` (any JSON-serializable type) at `key`.\n"
@@ -110,23 +123,235 @@ _EDIT_TOOL = {
     }, "required": ["path", "command"]}
 }
 
+_CANVAS_TOOL = {
+    "type": "custom",
+    "name": "canvas",
+    "description": (
+        "Show a FINISHED deliverable to the user in the canvas viewer (a side "
+        "panel). Renders markdown, HTML, PDF, images, audio/video, code/text, CSV, "
+        "Excel (xlsx/xls/ods), and 3D models (glb/gltf); other types offer a download.\n\n"
+        "Use ONLY for a final artifact the user is actually expecting to view — the "
+        "report, document, dashboard, sheet, or chart they asked you to produce, "
+        "and only once it is complete.\n"
+        "Do NOT open transient or intermediate files: scripts you run, scratch or "
+        "work-in-progress notes, intermediate/partial markdown, helper or config "
+        "files, or anything you are still editing. When unsure, don't open it.\n"
+        "Call this at most once, after the deliverable is ready. Give the "
+        "workspace-relative path."
+    ),
+    "input_schema": {"type": "object", "properties": {
+        "path": {"type": "string", "description": "Relative path of the file to display (e.g. report.xlsx)."},
+    }, "required": ["path"]}
+}
+
+# Portable web tools (Brave search + a generic fetch), client-side so they run
+# on any provider. `WebSearch` enables the pair; `web_search="native"` swaps in
+# the provider's own server-side search instead (Anthropic only, for now).
+_WEB_SEARCH_TOOL = {
+    "type": "custom",
+    "name": "web_search",
+    "description": (
+        "Search the web with Brave. Returns JSON — `{query, results: [{title, "
+        "url, snippet}]}` — ranked, each snippet holding the most relevant "
+        "passages from the page. One call is usually enough; when a result's "
+        "snippet isn't sufficient, follow up with `web_fetch` on its URL.\n"
+        "Search BEFORE answering — never from memory — whenever:\n"
+        "- the answer could have changed since training: news, prices, versions, "
+        "people's roles, laws, schedules\n"
+        "- the question involves niche or specialized detail — small entities, "
+        "local info, fan wikis, fiction/lore, regulations. Your memory of "
+        "specifics is unreliable even when the topic feels familiar.\n"
+        "- the user names a source (a wiki, site, or publication) — consulting it "
+        "is mandatory, never answer on its behalf\n"
+        "- the user disputes something you said — verify before re-answering; "
+        "confidence is not a reason to skip\n"
+        "- getting a small detail wrong is costly\n"
+        "Keep queries short and specific (1-6 words), in the language of the "
+        "likely best sources; if results miss, reformulate with different terms "
+        "rather than repeating.\n"
+        "Cite only URLs this tool or `web_fetch` returned — the user sees them "
+        "as source chips, so a URL you invented is visibly unbacked. Never "
+        "attribute a claim to a source you did not retrieve; if results don't "
+        "contain the answer, say so — don't fill the gap.\n"
+        "Do NOT end your answer with a 'Sources:' list — the client already "
+        "shows every result the search returned, as chips under your answer. "
+        "Link inline only where a specific claim needs its source named."
+    ),
+    "input_schema": {"type": "object", "properties": {
+        "query": {"type": "string", "description": "The search query."},
+        "count": {"type": "integer", "description": "Number of results (default 5, max 20)."},
+        "country": {"type": "string", "description": "2-letter country code (e.g. 'sa', 'us') — biases ranking toward that region. Set it when regional or local results matter; omit for global topics."},
+        "search_lang": {"type": "string", "description": "2-letter language code (e.g. 'ar', 'en') — restricts result language. Set it only when sources must be in that language; omit to let the query language decide."},
+    }, "required": ["query"]}
+}
+_WEB_FETCH_TOOL = {
+    "type": "custom",
+    "name": "web_fetch",
+    "description": (
+        "Fetch a web page by URL and return its readable text. Use after "
+        "`web_search` when you need the full page, not just the passages — and "
+        "ALWAYS when the user gives a URL or points at a specific page. "
+        "Give the exact http(s) URL."
+    ),
+    "input_schema": {"type": "object", "properties": {
+        "url": {"type": "string", "description": "The full http(s) URL to fetch."},
+        "max_chars": {"type": "integer", "description": "Max characters to return (default 20000)."},
+    }, "required": ["url"]}
+}
+_NATIVE_WEB_SEARCH = {"type": "web_search_20250305", "name": "web_search"}
+
+# Full browser automation, backed by the shared real-Chrome service (see
+# cycls/_agent/browser). Enabled by "Browser" in allowed_tools, but only offered
+# to the model when the service is configured — else it's silently absent, like
+# an unconfigured office-render. The page persists BETWEEN calls in a turn, so
+# the model works step by step; it acts on elements by the number `read` prints.
+_BROWSER_TOOL = {
+    "type": "custom",
+    "name": "browser",
+    "description": (
+        "Drive a REAL web browser for things a plain fetch can't do: pages "
+        "behind JavaScript, logins, search boxes, forms, multi-step flows. The "
+        "page stays OPEN between calls this turn — work step by step:\n"
+        "- open {url}        go to a page\n"
+        "- read              get the page text + a NUMBERED list of the "
+        "clickable/typable elements\n"
+        "- click {ref}       click element number `ref` from the last read\n"
+        "- type {ref,text}   type text into element `ref`\n"
+        "- press {key}       press a key, e.g. 'Enter'\n"
+        "- back              go back\n"
+        "- screenshot        save a PNG of the page into the workspace\n"
+        "- download {ref|url} save a file the page offers into the workspace — "
+        "a download button/link `ref` (from the last read), or a direct file "
+        "`url` (uses the page's session, so files behind a login work); then "
+        "open it with bash/python (e.g. pandas for .xlsx)\n"
+        "- evaluate {script} run JavaScript in the page and get its return value "
+        "— for SCRAPING structured data the `read` text truncates (e.g. every row "
+        "of a table). `script` is a JS expression or arrow function returning "
+        "JSON-serializable data, e.g. "
+        "\"[...document.querySelectorAll('table tr')].map(r=>[...r.cells].map(c=>c.innerText))\"\n"
+        "Always `read` first to learn the element numbers, then act by number. "
+        "After each click/type the page is re-read for you — use the fresh "
+        "numbers. Prefer this over web_fetch whenever a site needs interaction "
+        "or renders its content with JavaScript."
+    ),
+    "input_schema": {"type": "object", "properties": {
+        "action": {"type": "string",
+                   "enum": ["open", "read", "click", "type", "press", "back",
+                            "screenshot", "download", "evaluate"],
+                   "description": "What to do."},
+        "url": {"type": "string", "description": "For `open`/`download`: the full http(s) URL."},
+        "ref": {"type": "integer", "description": "For `click`/`type`/`download`: the element number from the last `read`."},
+        "text": {"type": "string", "description": "For `type`: the text to enter."},
+        "key": {"type": "string", "description": "For `press`: the key, e.g. 'Enter'."},
+        "script": {"type": "string", "description": "For `evaluate`: JavaScript returning JSON-serializable data."},
+    }, "required": ["action"]}
+}
+
+_BUILD_APP_TOOL = {
+    "type": "custom",
+    "name": "build_app",
+    "description": (
+        "Bundle a source folder into one self-contained HTML file and install it as an app the "
+        "user opens from the Apps tab. Write the source with the editor first — `index.html` is the "
+        "entry — and pass the folder; never paste source here. It stays, so you can rebuild.\n"
+        "Everything is inlined under a CSP: no external script or font, and the app cannot fetch. "
+        "React 19.2.8 (`createRoot`), Tailwind v4 via `@import \"tailwindcss\"`, and: "
+        "@base-ui/react, @dnd-kit/core, @dnd-kit/modifiers, @dnd-kit/sortable, @dnd-kit/utilities, @hookform/resolvers, @radix-ui/react-slot, @tanstack/react-table, @tanstack/react-virtual, class-variance-authority, clsx, cmdk, date-fns, embla-carousel-react, input-otp, lucide-react, motion, radix-ui, react-day-picker, react-dom, react-hook-form, recharts, sonner, tailwind-merge, tailwind-variants, tw-animate-css, vaul, zod. "
+        "Nothing else — you cannot add a dependency.\n"
+        "In the app: `cycls.read`/`write` reach `data/` in its own folder, `cycls.get`/`set` are a "
+        "key-value store there, `cycls.save(name, content)` asks where to put a file anywhere, and "
+        "`await cycls.connector(name).json(path, init)` calls a connected connector's REST API with "
+        "the credential attached server-side — so a dashboard stays live and holds no key. Never put "
+        "an API key in app source.\n"
+        "On failure the build log comes back."
+    ),
+    "input_schema": {"type": "object", "properties": {
+        "slug": {"type": "string", "description": "Folder under apps/, lowercase, e.g. `burnup`."},
+        "source": {"type": "string", "description": "Folder holding the source, e.g. `apps/burnup/src`."},
+        "name": {"type": "string", "description": "Display name in the Apps tab."},
+        "description": {"type": "string", "description": "One line on what it is for; a later session reads this."},
+        "icon": {"type": "string", "description": "An emoji, or an image file in the app's folder."},
+    }, "required": ["slug", "source"]}
+}
+
+
+_SUGGEST_TOOL = {
+    "type": "custom",
+    "name": "suggest",
+    "description": (
+        "Offer ONE follow-up message as a one-tap chip above the composer, written as the "
+        "user would send it."
+    ),
+    "input_schema": {"type": "object", "properties": {
+        "text": {"type": "string", "description": "The follow-up, in the user's voice and language. Under 80 characters."},
+    }, "required": ["text"]}
+}
+
+_ASK_MAX_QUESTIONS = 3
+
+_ASK_TOOL = {
+    "type": "custom",
+    "name": "ask",
+    "description": (
+        "Ask the user up to 3 questions on one card above the composer, and stop. "
+        "They can ignore the options and type anything, so never write 'choose one "
+        "of the following'. Everything in the user's language."
+    ),
+    "input_schema": {"type": "object", "properties": {
+        "questions": {"type": "array", "minItems": 1, "maxItems": _ASK_MAX_QUESTIONS,
+                      "description": "1-3 questions, asked together on one card.",
+                      "items": {
+            "type": "object", "properties": {
+                "question": {"type": "string", "description": "One sentence."},
+                "header": {"type": "string", "description": "1-2 words labelling the answer, e.g. 'Format'."},
+                "options": {"type": "array", "maxItems": 4,
+                            "description": "2-4 answers. Omit for an open question.", "items": {
+                    "type": "object", "properties": {
+                        "label": {"type": "string", "description": "The answer, as the user would say it."},
+                        "description": {"type": "string", "description": "One line on what it implies."},
+                    }, "required": ["label"]}},
+                "multi_select": {"type": "boolean",
+                                 "description": "Several of THIS question's options can hold at once."},
+            }, "required": ["question"]}},
+    }, "required": ["questions"]}
+}
+
+# Attached to the `Tool` rows below, so enabling a tool is the only switch.
+
+SUGGEST_GUIDANCE = """## Suggested follow-up
+After a substantive answer with an obvious next step, call `suggest` once, as the last action of the turn — it ends there, so say everything first. Steer toward a finished artifact the user keeps ("Turn this into a document", "Make this a web page") over open-ended exploration. Skip it when you asked a question, or when the turn already delivered the artifact."""
+
+ASK_GUIDANCE = """## Asking the user
+Call `ask` only when you cannot resolve a choice from the request, the workspace or a sensible default, AND the readings lead to materially different work — not to confirm the obvious or to ask permission for work already requested. Make routine calls yourself and say which you made; do everything that does not depend on the answers first.
+Ask once per turn, as the last action: the turn ends there and the user's next message carries the answers. Put every question into that one call — each costs a full round-trip. Read their reply as an answer to what you asked, not as a fresh request."""
+
+
 _BUILTINS = {
-    "WebSearch": [{"type": "web_search_20250305", "name": "web_search"}],
     "Bash":     [_BASH_TOOL],
     "Editor":   [_READ_TOOL, _EDIT_TOOL],
     "DataBase": [_DATABASE_TOOL],
+    "Canvas":   [_CANVAS_TOOL],
+    "Apps":     [_BUILD_APP_TOOL],
+    "Suggest":  [_SUGGEST_TOOL],
+    "Ask":      [_ASK_TOOL],
 }
 
-# Built-ins that only work on certain vendors. The loop warns + `build_tools`
-# skips when the active vendor doesn't match.
-_ANTHROPIC_ONLY = frozenset({"WebSearch"})
+
+def _web_search_tools(vendor, mode):
+    """`native` → the provider's server-side search (Anthropic only, for now);
+    otherwise our portable Brave search + fetch. `brave` without a
+    BRAVE_API_KEY falls back to native where the provider has one."""
+    native_ok = vendor in (None, "anthropic")
+    if mode == "native" or (native_ok and not os.environ.get("BRAVE_API_KEY")):
+        return [_NATIVE_WEB_SEARCH] if native_ok else []
+    return [_WEB_SEARCH_TOOL, _WEB_FETCH_TOOL]
 
 
-def vendor_skips(allowed_tools, vendor):
-    """Names from `allowed_tools` that the active `vendor` can't run."""
-    if vendor in (None, "anthropic"):
-        return []
-    return [n for n in allowed_tools if n in _ANTHROPIC_ONLY]
+def vendor_skips(allowed_tools, vendor, web_search="brave"):
+    """Requested tools the active vendor can't run — native search off Anthropic."""
+    if "WebSearch" in allowed_tools and web_search == "native" and vendor not in (None, "anthropic"):
+        return ["WebSearch"]
+    return []
 
 
 def _normalize_tool(spec):
@@ -138,21 +363,40 @@ def _normalize_tool(spec):
             "input_schema": spec.get("inputSchema", spec.get("input_schema", {}))}
 
 
-def build_tools(allowed_tools, custom, vendor=None):
+def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
     """Provider-neutral list. The Anthropic provider attaches a `cache_control`
     breakpoint to the last tool at request time."""
-    skipped = set(vendor_skips(allowed_tools, vendor))
-    tools = [t for name in allowed_tools if name not in skipped
-             for t in _BUILTINS.get(name, [])]
+    tools = []
+    for name in allowed_tools:
+        if name == "WebSearch":
+            tools += _web_search_tools(vendor, web_search)
+        elif name == "Browser":
+            # Only offered when the shared browser service is wired — else the
+            # tool is silently absent, exactly like an unconfigured office-render.
+            from cycls._agent import browser as _browser
+            if _browser.configured():
+                tools.append(_BROWSER_TOOL)
+        else:
+            tools += _BUILTINS.get(name, [])
     tools += [_normalize_tool(t) for t in (custom or [])]
     return tools
 
+_TMP_ERROR = ("/tmp is not shared — every bash command gets its own, discarded when it "
+              "exits, and the file tools cannot see it. Use .tmp/ for scratch and the workspace "
+              "root for files the user keeps")
+
+
 def _resolve_path(raw_path, workspace):
     ws = pathlib.Path(workspace).resolve()
-    rel = raw_path.removeprefix("/workspace/").lstrip("/")
+    # Every other absolute path is silently read as workspace-relative, which
+    # turns a /tmp write into a confusing "does not exist" one step later.
+    if raw_path == "/tmp" or raw_path.startswith("/tmp/"):
+        raise ValueError(_TMP_ERROR)
+    # HOME is /workspace in the sandbox, so `~/x` names a workspace file.
+    rel = raw_path.removeprefix("~/").removeprefix("/workspace/").lstrip("/")
     path = (ws / rel).resolve()
     if not path.is_relative_to(ws): raise ValueError("path escapes workspace")
-    for name in (".db", ".database"):
+    for name in (".db", ".database", ".trash", credentials.USER, credentials.SHARED):
         reserved = ws / name
         if path == reserved or path.is_relative_to(reserved):
             raise ValueError(f"{name}/ is managed by cycls")
@@ -164,15 +408,33 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
     from cycls._app.sandbox import Sandbox
     path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     lang = os.environ.get("LANG", "C.UTF-8")
+    # The trash is masked inside /workspace (the model never sees it) and bound
+    # beside it, where the rm shim writes; the shims dir goes first on PATH so
+    # `rm`/`rmdir` move to the trash instead of unlinking.
+    trash_dir = os.path.join(cwd, trash.DIR)
+    os.makedirs(trash_dir, exist_ok=True)
+    shims = str(pathlib.Path(__file__).parent / "shims")
+    env = {"PATH": f"{SHIMS_MOUNT}:{path}", "LANG": lang,
+           "CYCLS_WORKSPACE": "/workspace", "CYCLS_TRASH": TRASH_MOUNT}
     sb = (Sandbox()
           .bind(cwd, "/workspace")
           .tmpfs("/workspace/.db")        # cycls state (chat, shares); editor blocks via _resolve_path
           .tmpfs("/workspace/.database")  # agent KV store; same blocking
+          .tmpfs("/workspace/.trash")
+          .tmpfs(f"/workspace/{credentials.USER}")
+          .tmpfs(f"/workspace/{credentials.SHARED}")
+          .bind(trash_dir, TRASH_MOUNT)
+          .ro_bind(shims, SHIMS_MOUNT)
           .tmpfs("/app")
           .chdir("/workspace")
-          .setenv(PATH=path, LANG=lang)
+          .setenv(**env)
           .network(network).timeout(timeout))
-    result = await sb.run(["bash", "-c", command], env={"PATH": path, "LANG": lang})
+    for src, dst in skills.dev_mounts():   # dev skill scripts/templates, read-only
+        # a missing mount point would fail every bash command — skip it instead
+        if os.path.isdir(dst):
+            sb = sb.ro_bind(src, dst)
+    # bwrap's own environ stays PATH/LANG; the trash vars reach only the inner shell (--setenv).
+    result = await sb.run(["bash", "-c", command], env={"PATH": env["PATH"], "LANG": lang})
     if result.timed_out:
         return f"Error: Command timed out after {timeout}s"
     out = result.output
@@ -181,11 +443,125 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
         out = out[:h] + "\n... (truncated) ...\n" + out[-h:]
     return out.strip() or "(no output)"
 
+async def _exec_web_search(inp):
+    """Brave web search — one call, native-parity. Each result carries its
+    clean passages (description + extra_snippets), so no second fetch is needed
+    for most queries. Key from `BRAVE_API_KEY`; `BRAVE_COUNTRY` and
+    `BRAVE_SEARCH_LANG` set deployment-wide defaults the model can override
+    per query."""
+    key = os.environ.get("BRAVE_API_KEY")
+    if not key: return "Error: web search is unavailable (BRAVE_API_KEY not set)."
+    query = (inp.get("query") or "").strip()
+    if not query: return "Error: query is required."
+    count = min(max(int(inp.get("count") or 5), 1), 20)
+    params = {"q": query, "count": count}
+    for k in ("country", "search_lang"):
+        if v := str(inp.get(k) or os.environ.get(f"BRAVE_{k.upper()}") or "").strip().lower():
+            params[k] = v
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get("https://api.search.brave.com/res/v1/web/search",
+                                  params=params,
+                                  headers={"X-Subscription-Token": key, "Accept": "application/json"})
+        r.raise_for_status()
+        results = ((r.json().get("web") or {}).get("results") or [])[:count]
+    except Exception as e:
+        return f"Error: web search failed ({e})."
+    if not results: return f"No results for {query!r}."
+    rows = []
+    for x in results:
+        url = (x.get("url") or "").strip()
+        if not url: continue
+        rows.append({
+            "title": (x.get("title") or "").strip()[:200],
+            "url": url,
+            "snippet": " ".join([x.get("description", ""), *x.get("extra_snippets", [])]).strip()[:400],
+        })
+    if not rows: return f"No results for {query!r}."
+    # Two channels: the model reads JSON, the client gets the same rows as a
+    # `sources` part. The tool_result IS the JSON, so `to_ui_messages` can
+    # rebuild the citations on refetch from the same source of truth the live
+    # stream used — one format, both paths, no prose to re-parse.
+    return {
+        "_model": json.dumps({"query": query, "results": rows}, ensure_ascii=False),
+        "_ui": {"type": "sources", "sources": rows},
+    }
+
+
+class _TextExtractor(HTMLParser):
+    """Minimal HTML → text: drop scripts/styles/nav, keep visible text. Zero deps."""
+    _SKIP = {"script", "style", "noscript", "template", "svg", "head"}
+    def __init__(self):
+        super().__init__()
+        self.parts, self._skip = [], 0
+    def handle_starttag(self, tag, attrs):
+        if tag in self._SKIP: self._skip += 1
+    def handle_endtag(self, tag):
+        if tag in self._SKIP and self._skip: self._skip -= 1
+    def handle_data(self, data):
+        if not self._skip and (t := data.strip()): self.parts.append(t)
+
+
+def _html_to_text(html):
+    p = _TextExtractor()
+    try: p.feed(html)
+    except Exception: pass
+    return "\n".join(p.parts)
+
+
+_FETCH_MAX_BYTES = 2_000_000
+_FETCH_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; CyclsAgent/1.0)"}
+
+
+def _is_public_host(host):
+    """web_fetch runs in the server process, not the bash sandbox — refuse
+    hosts that resolve to loopback/private/link-local addresses (SSRF)."""
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        return all(ipaddress.ip_address(i[4][0].split("%")[0]).is_global for i in infos)
+    except (OSError, ValueError):
+        return False
+
+
+async def _exec_web_fetch(inp):
+    """Fetch a URL and return readable text — the model's on-demand 'read the
+    full page' step after web_search."""
+    url = (inp.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")): return "Error: a full http(s) URL is required."
+    limit = min(max(int(inp.get("max_chars") or 20_000), 500), 100_000)
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            for _ in range(5):  # redirect hops, each host re-checked
+                if not await asyncio.to_thread(_is_public_host, httpx.URL(url).host):
+                    return "Error: URL resolves to a private or unreachable address."
+                async with client.stream("GET", url, headers=_FETCH_HEADERS) as r:
+                    if r.is_redirect:
+                        url = str(httpx.URL(url).join(r.headers.get("location", "")))
+                        continue
+                    r.raise_for_status()
+                    total, chunks = 0, []
+                    async for chunk in r.aiter_bytes():
+                        chunks.append(chunk)
+                        total += len(chunk)
+                        if total >= _FETCH_MAX_BYTES: break
+                    body = b"".join(chunks).decode(r.encoding or "utf-8", "replace")
+                    ctype = r.headers.get("content-type", "")
+                    break
+            else:
+                return "Error: too many redirects."
+    except Exception as e:
+        return f"Error: fetch failed ({e})."
+    text = (_html_to_text(body) if "html" in ctype else body).strip()
+    return (text[:limit] + "\n... (truncated)") if len(text) > limit else (text or "(no readable text)")
+
+
 async def _exec_read(inp, workspace):
-    try: path = _resolve_path(inp["path"], workspace)
+    try: path = skills.resolve_dev_path(inp["path"]) or _resolve_path(inp["path"], workspace)
     except ValueError as e: return f"Error: {e}"
-    if not path.exists(): return f"Error: {path} does not exist"
-    if path.is_dir(): return f"Error: {path} is a directory"
+    if not path.exists(): return f"Error: {inp['path']} does not exist"
+    if path.is_dir(): return f"Error: {inp['path']} is a directory"
     ext, size = path.suffix.lower().lstrip("."), path.stat().st_size
 
     if ext == "pdf" and size > pdf.EXTRACT_SIZE_THRESHOLD:
@@ -208,78 +584,613 @@ async def _exec_read(inp, workspace):
                                           "data": base64.b64encode(path.read_bytes()).decode()}}]
 
     try: lines = path.read_text().splitlines()
-    except UnicodeDecodeError: return f"Error: {path} is a binary file"
+    except UnicodeDecodeError: return f"Error: {inp['path']} is a binary file"
     start = max(1, inp.get("offset", 1))
     sliced = lines[start-1 : start-1 + inp["limit"]] if inp.get("limit") else lines[start-1:]
     return "\n".join(f"{i+start:6}\t{l}" for i, l in enumerate(sliced))
 
+async def _exec_canvas(inp, workspace):
+    """Resolve + validate the path, then return a UI event the loop forwards to
+    the client to open the canvas. The model gets a short ack (see the loop)."""
+    raw = inp.get("path", "")
+    try: path = _resolve_path(raw, workspace)
+    except ValueError as e: return f"Error: {e}"
+    if not path.exists(): return f"Error: {raw} does not exist"
+    if path.is_dir(): return f"Error: {raw} is a directory"
+    rel = raw.removeprefix("/workspace/").lstrip("/")
+    if path.relative_to(pathlib.Path(workspace).resolve()).parts[:1] == (spill.DIR,):
+        return f"Error: {spill.DIR}/ is scratch that may be deleted — write the deliverable elsewhere and open that"
+    return {"type": "ui", "action": "open_canvas", "path": rel,
+            **_app_identity(path, path.name)}
+
+
+async def _exec_suggest(inp):
+    """No workspace effect — the suggestion drives the client (a one-tap chip
+    above the composer). `ack` is what the model reads back (the loop strips
+    it before forwarding the event)."""
+    text = str(inp.get("text", "")).strip()
+    if not text:
+        return "Error: suggestion text is empty"
+    return {"type": "ui", "action": "suggest", "text": text[:200],
+            "ack": "Suggestion offered to the user."}
+
+
+def _ask_options(raw):
+    """Bare strings, blank labels and non-dicts all land on [{label, description?}]."""
+    options = []
+    for o in (raw or [])[:4]:
+        if isinstance(o, str): o = {"label": o}
+        if not isinstance(o, dict): continue
+        label = str(o.get("label", "")).strip()
+        if not label: continue
+        opt = {"label": label[:80]}
+        if desc := str(o.get("description", "")).strip():
+            opt["description"] = desc[:160]
+        options.append(opt)
+    return options
+
+
+async def _exec_ask(inp):
+    """No workspace effect — the questions drive the client (one card above the
+    composer). The turn ends here and the user's next message carries every
+    answer. The singular `{question, options, ...}` shape is accepted too:
+    models improvise, and pre-plural history still has to replay."""
+    raw = inp.get("questions")
+    if not isinstance(raw, list):
+        raw = [inp] if str(inp.get("question", "")).strip() else []
+    questions = []
+    for q in raw[:_ASK_MAX_QUESTIONS]:
+        if isinstance(q, str): q = {"question": q}
+        if not isinstance(q, dict): continue
+        text = str(q.get("question", "")).strip()
+        if not text: continue
+        options = _ask_options(q.get("options"))
+        entry = {"question": text[:400], "options": options,
+                 "multi_select": bool(q.get("multi_select")) and len(options) > 1}
+        if header := str(q.get("header", "")).strip():
+            entry["header"] = header[:24]
+        questions.append(entry)
+    if not questions:
+        return "Error: no question given"
+    n, dropped = len(questions), max(0, len(raw) - _ASK_MAX_QUESTIONS)
+    ack = (f"Asked the user {n} question{'s' if n > 1 else ''}. "
+           "End your turn now — their next message is the answer.")
+    if dropped:
+        ack = (f"Only the first {_ASK_MAX_QUESTIONS} questions were asked ({dropped} "
+               f"dropped — the card takes at most {_ASK_MAX_QUESTIONS}). ") + ack
+    return {"type": "ui", "action": "ask", "questions": questions,
+            # The first question flattened onto the old singular keys: the mobile
+            # client ships on its own cadence and reads that shape.
+            "question": questions[0]["question"],
+            "options": questions[0]["options"],
+            "multi_select": questions[0]["multi_select"],
+            "ack": ack}
+
+
+def _app_identity(path, fallback):
+    """An app opens under its manifest name and icon, not `index.html`."""
+    if path.name != "index.html" or path.parent.parent.name != "apps":
+        return {"name": fallback}
+    try:
+        manifest = json.loads((path.parent / "app.json").read_text(encoding="utf-8"))
+    except Exception:
+        manifest = {}
+    if not isinstance(manifest, dict):
+        manifest = {}
+    name = manifest.get("name")
+    icon = manifest.get("icon")
+    out = {"name": (name if isinstance(name, str) and name.strip() else
+                    path.parent.name.replace("-", " ").replace("_", " ").title())[:60]}
+    if isinstance(icon, str) and icon.strip():
+        out["icon"] = icon.strip()[:8]
+    return out
+
+
+# The build runs as a deployed Cycls function; override to point at your own.
+APP_BUILDER = os.environ.get("CYCLS_APP_BUILDER", "miniapp-build")
+_APP_SRC_MAX_FILES = 400
+_APP_SRC_MAX_BYTES = 12_000_000
+_APP_SRC_MAX_FILE = 2_000_000    # the builder's cap, mirrored so it fails here naming the file
+_APP_BUILD_TIMEOUT = 420         # the build function is killed at this
+_APP_SLUG_OK = set("abcdefghijklmnopqrstuvwxyz0123456789-_")
+
+
+def _collect_source(src_dir):
+    """Text files under `src_dir`, keyed by relative path. Binaries and dot/
+    node_modules folders are skipped — the bundler takes source, not assets."""
+    files, total = {}, 0
+    for p in sorted(src_dir.rglob("*")):
+        if not p.is_file():
+            continue
+        parts = p.relative_to(src_dir).parts
+        if any(part.startswith(".") or part == "node_modules" for part in parts):
+            continue
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        size = len(text.encode())
+        if size > _APP_SRC_MAX_FILE:
+            raise ValueError(f"{'/'.join(parts)} is {size // 1000} KB; the limit is "
+                             f"{_APP_SRC_MAX_FILE // 1_000_000} MB per file — split it")
+        total += size
+        if len(files) >= _APP_SRC_MAX_FILES or total > _APP_SRC_MAX_BYTES:
+            raise ValueError("source folder is too large to build")
+        files["/".join(parts)] = text
+    return files
+
+
+_APPS_TTL = 30.0
+_apps_cache = {}   # root -> (deadline, text)
+
+
+def app_catalog(root):
+    """One line per app, so the model knows they exist without a scan per turn."""
+    hit = _apps_cache.get(root)
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    lines = []
+    try:
+        for d in sorted((pathlib.Path(root) / "apps").iterdir()):
+            if not d.is_dir() or d.name.startswith("."):
+                continue
+            try: m = json.loads((d / "app.json").read_text(encoding="utf-8"))
+            except Exception: m = {}
+            m = m if isinstance(m, dict) else {}
+            desc = str(m.get("description") or "").strip()[:100]
+            lines.append(f"- {d.name}: {m.get('name') or d.name}" + (f" — {desc}" if desc else ""))
+    except OSError:
+        pass
+    text = ("## Apps in this workspace\n"
+            "Their data is in apps/<slug>/data/. Read apps/<slug>/README.md before changing it.\n"
+            + "\n".join(lines)) if lines else ""
+    _apps_cache[root] = (time.monotonic() + _APPS_TTL, text)
+    return text
+
+
+async def _exec_build_app(inp, workspace):
+    import cycls
+
+    slug = str(inp.get("slug", "")).strip().lower()
+    if not slug or set(slug) - _APP_SLUG_OK:
+        return "Error: slug must be lowercase letters, digits, - or _"
+
+    try:
+        src_dir = _resolve_path(inp.get("source", ""), workspace)
+    except ValueError as e:
+        return f"Error: {e}"
+    if not src_dir.is_dir():
+        return f"Error: {inp.get('source')} is not a folder"
+
+    try:
+        files = _collect_source(src_dir)
+    except ValueError as e:
+        return f"Error: {e}"
+    if "index.html" not in files:
+        return f"Error: {inp.get('source')} has no index.html"
+
+    try:
+        build = cycls.remote(APP_BUILDER, timeout=_APP_BUILD_TIMEOUT)
+        result = await asyncio.to_thread(build, files=files)
+    except Exception as e:
+        return f"Error: the build service is unavailable ({type(e).__name__}: {e})"
+
+    if not isinstance(result, dict):
+        return f"Build failed: the build service returned {type(result).__name__}, not a result."
+    if not result.get("ok"):
+        have = result.get("packages") or []
+        return (f"Build failed: {result.get('error')}\n\n{result.get('log', '')}"[:MAX_OUTPUT]
+                + (f"\n\nAvailable packages: {', '.join(have)}." if have else "")
+                + "\n\nFix the source and call build_app again.")
+    if not isinstance(result.get("html"), str):
+        return "Build failed: the build service reported success but returned no html."
+
+    app_dir = pathlib.Path(workspace) / "apps" / slug
+    app_dir.mkdir(parents=True, exist_ok=True)
+    entry = app_dir / "index.html"
+    if entry.exists():   # a bad rebuild stays recoverable, as `edit` keeps an overwrite
+        trash.trash_path(workspace, f"apps/{slug}/index.html", by="agent", reason="rebuild")
+    entry.write_text(result["html"], encoding="utf-8")
+
+    manifest_path = app_dir / "app.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            manifest = {}
+    except Exception:
+        manifest = {}
+    if inp.get("name"):
+        manifest["name"] = str(inp["name"])[:60]
+    if inp.get("icon"):
+        manifest["icon"] = str(inp["icon"])[:512]
+    if inp.get("description"):
+        manifest["description"] = str(inp["description"])[:200]
+    manifest.setdefault("name", slug.replace("-", " ").replace("_", " ").title())
+    manifest["built"] = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                         "source": str(inp.get("source") or ""),
+                         "builder": str(result.get("version") or "unknown")}
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    kb = (result.get("bytes") or len(result["html"].encode())) / 1024
+    out = (f"Installed apps/{slug}/index.html ({kb:.0f} KB). It is in the Apps tab.\n"
+           f"Now write apps/{slug}/README.md describing each file the app reads under "
+           f"apps/{slug}/data/ and its shape. A later session updates that data without "
+           f"you — and without it, the only way to learn the schema is to read the bundle.")
+    if result.get("stray"):
+        out += ("\nWARNING: these assets could not be inlined and will be blocked "
+                f"when the app runs: {', '.join(result['stray'])}")
+    return out
+
+
 def _exec_edit(inp, workspace):
+    # Echo the model's own relative path back — resolved paths leak the
+    # tenant dir and the model reuses them verbatim (e.g. in canvas calls).
+    rel = inp.get("path", "")
     try: path = _resolve_path(inp["path"], workspace)
     except ValueError as e: return f"Error: {e}"
     cmd = inp["command"]
-    if cmd != "create" and not path.exists(): return f"Error: {path} does not exist"
-    if path.exists() and path.is_dir(): return f"Error: {path} is a directory"
+    if cmd != "create" and not path.exists(): return f"Error: {rel} does not exist"
+    if path.exists() and path.is_dir(): return f"Error: {rel} is a directory"
     if cmd == "str_replace":
         text, old = path.read_text(), inp["old_str"]
         n = text.count(old)
-        if n == 0: return f"Error: old_str not found in {path}"
+        if n == 0: return f"Error: old_str not found in {rel}"
         if n > 1: return f"Error: old_str found {n} times, must be unique"
         path.write_text(text.replace(old, inp.get("new_str", ""), 1))
-        return f"Replaced in {path}"
+        return f"Replaced in {rel}"
     if cmd == "create":
+        if path.exists():   # an overwrite deletes the old content — keep it recoverable
+            trash.trash_path(workspace, str(path.relative_to(pathlib.Path(workspace).resolve())),
+                             by="agent", reason="overwrite")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(inp["file_text"])
-        return f"Created {path}"
+        return f"Created {rel}"
     if cmd == "insert":
         lines = path.read_text().splitlines(keepends=True)
         new = inp["new_str"].splitlines(keepends=True)
         if not new[-1:] or not new[-1].endswith("\n"): new.append("\n")
         pos = inp["insert_line"]; lines[pos:pos] = new
         path.write_text("".join(lines))
-        return f"Inserted at line {pos} in {path}"
+        return f"Inserted at line {pos} in {rel}"
     return f"Error: unknown command {cmd}"
 
 # ---- Registry & dispatch ----
 #
-# One entry per harness tool: (run, step). `run(inp, workspace, *, timeout,
-# network)` returns the awaitable result, or is None for tools that execute
-# elsewhere (web_search runs server-side; it's here only for the UI label).
-# `step(inp)` renders the {tool_name, step} line, shared by the live dispatch
-# path and the refetch path (to_ui_messages) so they agree.
+# One `Tool` per harness tool. `run(inp, workspace, *, timeout, network)`
+# returns the awaitable result, or is None for tools that execute elsewhere
+# (web_search runs server-side; it's here only for the UI label). `step(inp)`
+# renders the {tool_name, step} line, shared by the live dispatch path and the
+# refetch path (to_ui_messages) so they agree.
+#
+# The flags are facts the loop acts on, so a tool's contract stops being a
+# sentence the model is asked to honor. NamedTuple keeps `entry[0]` working.
 
-def _run_bash(inp, workspace, *, timeout, network):
+
+class Tool(NamedTuple):
+    """`once`: one call per batch. `terminal`: a successful call ends the turn.
+    `prompt`: guidance appended while the tool is enabled. `interrupted`: what the
+    model is told when the call is cancelled mid-flight."""
+    run: object
+    step: object
+    once: bool = False
+    terminal: bool = False
+    prompt: str = ""
+    interrupted: str = ""
+
+
+def _run_bash(inp, workspace, *, timeout, network, **_):
     t = inp.get("timeout")
     return _exec_bash(inp.get("command", ""), workspace.root, timeout=t / 1000 if t else timeout, network=network)
 
+
+def _ask_step(inp):
+    """First question plus a count of the rest; the singular branch is replayed history."""
+    qs = inp.get("questions")
+    if isinstance(qs, list) and qs:
+        first = qs[0]
+        text = first.get("question", "") if isinstance(first, dict) else str(first)
+        extra = len(qs) - 1
+        return {"tool_name": "Ask", "step": f"{text} (+{extra})" if extra > 0 else text}
+    return {"tool_name": "Ask", "step": inp.get("question", "")}
+
+
+def _browser_snapshot_text(snap):
+    """A page snapshot → the compact text the model reads: title/url, the
+    visible text, then the numbered interactive elements it acts on by ref."""
+    lines = [f"{snap['title']} — {snap['url']}"]
+    if snap.get("text"):
+        lines += ["", snap["text"] + (" …(truncated)" if snap.get("text_truncated") else "")]
+    lines += ["", "Interactive elements (act by ref):"]
+    for e in snap.get("refs", []):
+        typ = f"({e['type']})" if e.get("type") else ""
+        label = f' "{e["label"]}"' if e.get("label") else ""
+        lines.append(f"[{e['ref']}] {e['tag']}{typ}{label}")
+    if not snap.get("refs"):
+        lines.append("(none)")
+    elif snap.get("refs_truncated"):
+        lines.append("… (more elements not shown — narrow the page or scroll)")
+    return "\n".join(lines)
+
+
+async def _browser_read(s):
+    return _browser_snapshot_text(await s.snapshot())
+
+
+def _safe_filename(name, default="download"):
+    """A filename safe to write under the workspace: basename only (no path
+    traversal via `/`, `\\`, or `..`), trimmed, with a fallback."""
+    base = os.path.basename((name or "").replace("\\", "/")).strip().strip(".")
+    return base or default
+
+
+async def _exec_browser(inp, workspace, chat_id=None):
+    """Drive the shared browser service one action at a time. State lives in the
+    remote page (which persists between calls), so every navigational action
+    returns a fresh read — the numbered elements the model acts on next."""
+    from cycls._agent import browser
+    action = (inp.get("action") or "").lower()
+    subject = getattr(workspace, "subject", None)
+    # Forward the first navigation's URL so the service can route this session to
+    # the proxy by domain (per-site routing). Only `open` carries a target URL.
+    nav_url = inp.get("url") if action == "open" else None
+    try:
+        async with await browser.session(subject, nav_url=nav_url, chat_id=chat_id) as s:
+            if action == "open":
+                if not inp.get("url"):
+                    return "Error: `open` needs a `url`."
+                await s.goto(inp["url"])
+                return await _browser_read(s)
+            if action == "read":
+                return await _browser_read(s)
+            if action == "click":
+                if inp.get("ref") is None:
+                    return "Error: `click` needs a `ref` (an element number from `read`)."
+                await s.click_ref(inp["ref"])
+                return await _browser_read(s)
+            if action == "type":
+                if inp.get("ref") is None or inp.get("text") is None:
+                    return "Error: `type` needs a `ref` and `text`."
+                await s.type_ref(inp["ref"], inp["text"])
+                return await _browser_read(s)
+            if action == "press":
+                await s.press(inp.get("key") or "Enter")
+                return await _browser_read(s)
+            if action == "back":
+                await s.back()
+                return await _browser_read(s)
+            if action == "screenshot":
+                png = await s.screenshot(full_page=bool(inp.get("full_page")))
+                info = await s.info()
+                rel = f"screenshots/{uuid.uuid4().hex[:12]}.png"
+                dst = pathlib.Path(workspace.root) / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                await asyncio.to_thread(dst.write_bytes, png)
+                name = rel.rsplit("/", 1)[-1]
+                # Two channels: the model reads the ack; the client opens the PNG
+                # on the canvas (same open_canvas event the Canvas tool uses).
+                return {"_model": f"Screenshot of {info['url']} saved to {rel} "
+                                  f"({len(png) // 1024} KB) and opened on the canvas.",
+                        "_ui": {"type": "ui", "action": "open_canvas", "path": rel, "name": name}}
+            if action == "download":
+                ref, url = inp.get("ref"), inp.get("url")
+                if ref is None and not url:
+                    return ("Error: `download` needs a `ref` (a download button/link "
+                            "from the last `read`) or a `url`.")
+                fname, data = await s.download(ref=ref, url=url)
+                rel = f"downloads/{_safe_filename(fname)}"
+                dst = pathlib.Path(workspace.root) / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                await asyncio.to_thread(dst.write_bytes, data)
+                return (f"Downloaded {rel} ({len(data) // 1024} KB) — open it from the "
+                        f"workspace (e.g. read it in bash/python; .xlsx via pandas).")
+            if action == "evaluate":
+                if not inp.get("script"):
+                    return ("Error: `evaluate` needs a `script` (JS expression/function "
+                            "returning JSON-serializable data).")
+                out = await s.evaluate(inp["script"])
+                text = out.get("result") or "(no result)"
+                if out.get("truncated"):
+                    text += "\n… (result truncated — narrow the script, e.g. slice/filter)"
+                return text
+            return f"Error: unknown browser action {action!r}."
+    except browser.Unavailable as e:
+        return f"Error: browser unavailable — {e}"
+    except Exception as e:
+        return f"Error: browser {action or '?'} failed — {type(e).__name__}: {e}"
+
+
+def _browser_step(inp):
+    a = inp.get("action", "")
+    detail = (inp.get("url") or (f"[{inp['ref']}]" if inp.get("ref") is not None else "")
+              or inp.get("key") or "")
+    return {"tool_name": "Browser", "step": f"{a} {detail}".strip()}
+
+
 _TOOLS = {
-    "bash":       (_run_bash,
-                   lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
-    "read":       (lambda inp, ws, **_: _exec_read(inp, ws.root),
-                   lambda inp: {"tool_name": "Reading", "step": inp.get("path", "")}),
-    "edit":       (lambda inp, ws, **_: asyncio.to_thread(_exec_edit, inp, ws.root),
-                   lambda inp: {"tool_name": "Editing", "step": inp.get("path", "")}),
-    "database":   (lambda inp, ws, **_: _exec_database(inp, ws),
-                   lambda inp: {"tool_name": "Database",
-                                "step": f"{inp.get('command', '')} {inp.get('key') or inp.get('prefix', '')}".strip()}),
-    "web_search": (None,
-                   lambda inp: {"tool_name": "Web Search", "step": inp.get("query", "")}),
+    "browser":    Tool(lambda inp, ws, ctx=None, **_: _exec_browser(inp, ws, getattr(ctx, "chat_id", None)), _browser_step,
+                       interrupted="The page is still open but may have moved; re-read it "
+                                   "before acting on any element ref."),
+    "bash":       Tool(_run_bash,
+                       lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
+    "read":       Tool(lambda inp, ws, **_: _exec_read(inp, ws.root),
+                       lambda inp: {"tool_name": "Reading", "step": inp.get("path", "")}),
+    "edit":       Tool(lambda inp, ws, **_: asyncio.to_thread(_exec_edit, inp, ws.root),
+                       lambda inp: {"tool_name": "Editing", "step": inp.get("path", "")}),
+    "database":   Tool(lambda inp, ws, **_: _exec_database(inp, ws),
+                       lambda inp: {"tool_name": "Database",
+                                    "step": f"{inp.get('command', '')} {inp.get('key') or inp.get('prefix', '')}".strip()}),
+    "canvas":     Tool(lambda inp, ws, **_: _exec_canvas(inp, ws.root),
+                       lambda inp: {"tool_name": "Canvas", "step": inp.get("path", "")}),
+    "suggest":    Tool(lambda inp, ws, **_: _exec_suggest(inp),
+                       lambda inp: {"tool_name": "Suggest", "step": inp.get("text", "")},
+                       once=True, terminal=True, prompt=SUGGEST_GUIDANCE),
+    "ask":        Tool(lambda inp, ws, **_: _exec_ask(inp), _ask_step,
+                       once=True, terminal=True, prompt=ASK_GUIDANCE),
+    "build_app":  Tool(lambda inp, ws, **_: _exec_build_app(inp, ws.root),
+                       lambda inp: {"tool_name": "Building app", "step": inp.get("slug", "")}),
+    "skill":      Tool(lambda inp, ws, **_: skills._exec_skill(inp, ws.root),
+                       lambda inp: {"tool_name": "Skill", "step": inp.get("name", "")}),
+    "web_search": Tool(lambda inp, ws, **_: _exec_web_search(inp),
+                       lambda inp: {"tool_name": "Web Search", "step": inp.get("query", "")}),
+    "web_fetch":  Tool(lambda inp, ws, **_: _exec_web_fetch(inp),
+                       lambda inp: {"tool_name": "Fetching", "step": inp.get("url", "")}),
 }
+
+
+def tool_prompts(tools_list):
+    """Guidance for every enabled tool that ships some, in `tools_list` order —
+    so a new tool with guidance never means editing the loop."""
+    return [row.prompt for t in (tools_list or [])
+            if (row := _TOOLS.get(t.get("name"))) and row.prompt]
+
+
+def is_terminal(name):
+    """Whether a successful call to *name* should end the turn."""
+    row = _TOOLS.get(name)
+    return bool(row and row.terminal)
+
+
+def interrupted_note(name, reason):
+    """What the model reads for a call cancelled mid-flight. It cannot be told the
+    call did not happen: a thread-dispatched tool finishes regardless, and side
+    effects outside the sandbox are already out there."""
+    row = _TOOLS.get(name)
+    return (f"Interrupted: the run was {reason}. This call may or may not have "
+            f"completed — check before repeating it."
+            + (f" {row.interrupted}" if row and row.interrupted else ""))
+
+
+_custom_labels, _custom_names, _custom_owners, _custom_icons = {}, {}, {}, {}
+_detailed = {"build_app"}   # step row carries Request/Response, and can show a failure; MCP tools join at runtime
+
+
+def register_labels(labels, names=None, owners=None, icons=None, details=()):
+    """UI step labels for custom tools: name → (input dict → str), an optional display name, the connector a tool
+    acts with, an icon url, and whether the row opens into request and response. Registered by LLM.run() and by
+    MCP discovery so both live steps and the refetch projection render them."""
+    _custom_labels.update(labels or {})
+    _custom_names.update(names or {})
+    _custom_owners.update(owners or {})
+    _custom_icons.update(icons or {})
+    _detailed.update(details)
+
+
+def detailed(name):
+    """Does this tool's row open into its request and response? Its result is then the model's, not the chat's."""
+    return name in _detailed
+
+
+def excerpt(content, limit=3000):
+    """What the chat shows of a tool's result: its text, cut to `limit`."""
+    s = content if isinstance(content, str) else json.dumps(content, default=str, ensure_ascii=False)
+    return s if len(s) <= limit else s[:limit] + "\n…"
 
 
 def tool_step(name, input):
     inp = input or {}
     entry = _TOOLS.get(name)
-    return entry[1](inp) if entry else {"tool_name": name, "step": ""}
+    if entry:
+        return entry.step(inp)
+    shown = _custom_names.get(name, name)
+    if fn := _custom_labels.get(name):
+        try:
+            return {"tool_name": shown, "step": str(fn(inp))}
+        except Exception:
+            pass
+    # No label. A connector's tool (it registered a display name) shows the `context` line its server asks the model
+    # for, never the raw arguments; a custom tool shows the first string, like Bash(command).
+    if name in _custom_names:
+        step = inp.get("context") if isinstance(inp.get("context"), str) else ""
+    else:
+        step = next((v for v in inp.values() if isinstance(v, str) and v.strip()), "")
+    out = {"tool_name": shown, "step": step if len(step) <= 120 else step[:117] + "..."}
+    if name in _custom_owners:
+        out["connector"] = _custom_owners[name]
+    if name in _custom_icons:
+        out["icon"] = _custom_icons[name]
+    return out
 
 
-def dispatch(block, workspace, timeout, handlers=None, network=False):
+# ---- What a builtin risks (docs/notes/plugins-connectors.md, Approvals) ----
+# `rm` and `rmdir` are not here: the sandbox shims them into the trash (30 days, restorable), so a
+# delete is a move and Auto lets it run. These have no trash behind them.
+_DESTRUCTIVE_CMD = re.compile(r"\b(shred|mkfs|dd\s+if=|truncate\s|drop\s+(table|database)|"
+                              r"git\s+(push\s+(-f|--force)|reset\s+--hard|clean\s+-\w*[fdx])|killall\s|>\s*/dev/)", re.I)
+_READ_CMD = re.compile(r"^\s*(ls|cat|head|tail|wc|grep|rg|find|stat|file|du|df|pwd|echo|which|type|tree|sort|uniq|diff|awk|sed\s+-n)\b", re.I)
+
+
+def risk(name, inp):
+    """None (a read — always runs), "write" (follows the composer switch) or "destructive" (asks in both modes)."""
+    if name == "bash":
+        cmd = str(inp.get("command") or "")
+        return "destructive" if _DESTRUCTIVE_CMD.search(cmd) else None if _READ_CMD.match(cmd) else "write"
+    if name == "database":
+        return {"delete": "destructive", "put": "write"}.get(inp.get("command"))
+    return "write" if name in ("edit", "build_app") else None
+
+
+def _gate(name, inp, ctx, step):
+    """The card a builtin returns instead of running, or None to run — the builtin half of `connectors.gated`."""
+    r = risk(name, inp)
+    if r is None or ctx is None:
+        return None
+    key, chosen = approval_key(name, inp), (getattr(ctx, "modes", None) or {}).get(name)
+    how = ("approved" if key in ctx.approvals else "allow" if chosen == "allow"
+           else "asked" if chosen == "ask" else "auto" if getattr(ctx, "auto", True) and r != "destructive" else "asked")
+    log("approval", user=ctx.user, chat_id=ctx.chat_id, tool=name, risk=r, how=how)
+    if how != "asked":
+        return None
+    label = f"{step['tool_name']} · {step['step']}".strip(" ·")[:80]
+    return {"type": "ui", "action": "confirm", "tool": name, "key": key, "label": label, "args": inp,
+            "ack": f"{label} needs the user's approval — a card is asking them. End your turn now. "
+                       "If they approve, make this call again with exactly the same arguments: the approval covers "
+                       "this call, so any change to the arguments asks them a second time."}
+
+
+@dataclass(frozen=True)
+class ToolContext:
+    """Who a custom tool acts for. Handlers that declare a second parameter
+    receive it; one-argument handlers are called as before."""
+    user: object
+    workspace: object
+    chat_id: str | None = None
+    approvals: frozenset = frozenset()   # approval keys from the confirm card, this turn only
+    auto: bool = True                    # the composer's switch: writes run on their own, destructive ones still ask
+    modes: dict = None                   # the person's own allow/ask per builtin, read once a turn
+
+    async def secret(self, name):
+        return await credentials.get(self.workspace, name)
+
+
+def _takes_ctx(fn):
+    kinds = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    return sum(p.kind in kinds for p in inspect.signature(fn).parameters.values()) > 1
+
+
+def dispatch(block, workspace, timeout, handlers=None, network=False, seen=None, ctx=None):
     """*block* is a tool_use content block (dict): {type, id, name, input}.
     Returns (step_event_dict, awaitable_result). The step carries the block's
-    `id` so the FE can fold it into the `ToolStart`/`ToolArgs` it already showed."""
+    `id` so the FE can fold it into the `ToolStart`/`ToolArgs` it already showed.
+
+    *seen* is the caller's per-batch set of dispatched `once` tools; omitting
+    it (the default) dispatches every block. *ctx* is the `ToolContext` handed
+    to handlers that take one."""
     bid, name, inp = block["id"], block["name"], block.get("input") or {}
     entry = _TOOLS.get(name)
-    if entry and entry[0]:
-        return {"type": "step", "id": bid, **entry[1](inp)}, entry[0](inp, workspace, timeout=timeout, network=network)
+    if entry and entry.once and seen is not None:
+        if name in seen:
+            # Refused, but still a step and a tool_result — every tool_use keeps its pair.
+            return ({"type": "step", "id": bid, **entry.step(inp), "ok": False},
+                    asyncio.sleep(0, result=(
+                        f"Error: `{name}` was already called this turn and only the first "
+                        "call ran. Send everything in a single call.")))
+        seen.add(name)
+    if entry and entry.run:
+        step = {"type": "step", "id": bid, **entry.step(inp)}
+        if card := _gate(name, inp, ctx, step):
+            return step, asyncio.sleep(0, result=card)
+        return step, entry.run(inp, workspace, timeout=timeout, network=network, ctx=ctx)
     if handlers and name in handlers:
-        return {"type": "step", "id": bid, **tool_step(name, inp)}, handlers[name](inp)
+        fn = handlers[name]
+        return {"type": "step", "id": bid, **tool_step(name, inp)}, fn(inp, ctx) if _takes_ctx(fn) else fn(inp)
     return {"type": "tool_call", "id": bid, "tool": name, "args": inp}, asyncio.sleep(0, result=f"{name} executed")
