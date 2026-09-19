@@ -91,7 +91,7 @@ class TestBuildApp:
         return d
 
     def _stub(self, monkeypatch, result):
-        monkeypatch.setattr(cycls, "remote", lambda name: (lambda **kw: result))
+        monkeypatch.setattr(cycls, "remote", lambda name, **_: (lambda **kw: result))
 
     def _build(self, inp, ws):
         return asyncio.run(tools._exec_build_app(inp, ws))
@@ -116,8 +116,8 @@ class TestBuildApp:
              "name": "Vendor burn-up", "icon": "📈"}, tmp_path)
         app = tmp_path / "apps" / "burnup"
         assert (app / "index.html").read_text() == "<html>built</html>"
-        assert json.loads((app / "app.json").read_text()) == {
-            "name": "Vendor burn-up", "icon": "📈"}
+        manifest = json.loads((app / "app.json").read_text())
+        assert {k: manifest[k] for k in ("name", "icon")} == {"name": "Vendor burn-up", "icon": "📈"}
         assert "Apps tab" in out
 
     def test_defaults_the_name_and_keeps_earlier_manifest_fields(
@@ -126,7 +126,8 @@ class TestBuildApp:
         (app / "app.json").write_text(json.dumps({"description": "kept", "icon": "📈"}))
         self._stub(monkeypatch, {"ok": True, "html": "x", "bytes": 1, "stray": []})
         self._build({"slug": "burnup", "source": "apps/burnup/src"}, tmp_path)
-        assert json.loads((app / "app.json").read_text()) == {
+        manifest = json.loads((app / "app.json").read_text())
+        assert {k: manifest[k] for k in ("description", "icon", "name")} == {
             "description": "kept", "icon": "📈", "name": "Burnup"}
 
     def test_surfaces_the_build_log_and_installs_nothing(
@@ -145,9 +146,101 @@ class TestBuildApp:
         assert "WARNING" in out and "logo-Bx1.png" in out
 
     def test_reports_an_unreachable_build_service(self, tmp_path, src, monkeypatch):
-        def boom(name):
+        def boom(name, **_):
             raise RuntimeError("no such deployment")
 
         monkeypatch.setattr(cycls, "remote", boom)
         out = self._build({"slug": "burnup", "source": "apps/burnup/src"}, tmp_path)
         assert "build service is unavailable" in out
+
+
+class TestBuildAppHardening:
+    """The build path used to fail silently, destructively, or not at all."""
+
+    def _stub(self, monkeypatch, result):
+        monkeypatch.setattr(cycls, "remote", lambda name, **_: (lambda **kw: result))
+
+    def _build(self, inp, ws):
+        return asyncio.run(tools._exec_build_app(inp, ws))
+
+    @pytest.fixture
+    def src(self, tmp_path):
+        d = tmp_path / "apps" / "burnup" / "src"
+        d.mkdir(parents=True)
+        (d / "index.html").write_text("<html>")
+        return d
+
+    @pytest.mark.parametrize("reply", [None, "a string", [], {"ok": True}, {"ok": True, "html": 7}])
+    def test_a_malformed_reply_is_a_build_error_not_an_exception(
+            self, tmp_path, src, monkeypatch, reply):
+        self._stub(monkeypatch, reply)
+        assert self._build({"slug": "burnup", "source": "apps/burnup/src"}, tmp_path
+                           ).startswith("Build failed:")
+
+    def test_a_failed_build_names_the_packages_that_were_available(
+            self, tmp_path, src, monkeypatch):
+        self._stub(monkeypatch, {"ok": False, "error": "no such module: zod",
+                                 "log": "", "packages": ["zod", "sonner"]})
+        assert "Available packages: zod, sonner." in self._build(
+            {"slug": "burnup", "source": "apps/burnup/src"}, tmp_path)
+
+    def test_a_rebuild_keeps_the_bundle_it_replaces(self, tmp_path, src, monkeypatch):
+        self._stub(monkeypatch, {"ok": True, "html": "v1", "bytes": 2, "stray": []})
+        self._build({"slug": "burnup", "source": "apps/burnup/src"}, tmp_path)
+        self._stub(monkeypatch, {"ok": True, "html": "v2", "bytes": 2, "stray": []})
+        self._build({"slug": "burnup", "source": "apps/burnup/src"}, tmp_path)
+        assert (tmp_path / "apps" / "burnup" / "index.html").read_text() == "v2"
+        kept = [p.read_text() for p in (tmp_path / ".trash").rglob("index.html")]
+        assert "v1" in kept, "the replaced bundle must be recoverable"
+
+    def test_the_manifest_records_what_produced_the_bundle(self, tmp_path, src, monkeypatch):
+        self._stub(monkeypatch, {"ok": True, "html": "x", "bytes": 1, "stray": [],
+                                 "version": "a5b4c9c40eb7"})
+        self._build({"slug": "burnup", "source": "apps/burnup/src"}, tmp_path)
+        built = json.loads((tmp_path / "apps" / "burnup" / "app.json").read_text())["built"]
+        assert built["builder"] == "a5b4c9c40eb7"
+        assert built["source"] == "apps/burnup/src" and built["at"].startswith("20")
+
+    def test_an_older_builder_that_sends_no_version_still_installs(
+            self, tmp_path, src, monkeypatch):
+        self._stub(monkeypatch, {"ok": True, "html": "x", "bytes": 1, "stray": []})
+        self._build({"slug": "burnup", "source": "apps/burnup/src"}, tmp_path)
+        built = json.loads((tmp_path / "apps" / "burnup" / "app.json").read_text())["built"]
+        assert built["builder"] == "unknown"
+
+    def test_the_result_asks_for_the_data_contract(self, tmp_path, src, monkeypatch):
+        self._stub(monkeypatch, {"ok": True, "html": "x", "bytes": 1, "stray": []})
+        out = self._build({"slug": "burnup", "source": "apps/burnup/src"}, tmp_path)
+        assert "apps/burnup/README.md" in out and "apps/burnup/data/" in out
+
+    def test_an_oversized_file_is_refused_here_and_named(self, tmp_path):
+        (tmp_path / "index.html").write_text("<html>")
+        (tmp_path / "huge.tsx").write_text("x" * (tools._APP_SRC_MAX_FILE + 1))
+        with pytest.raises(ValueError, match="huge.tsx"):
+            tools._collect_source(tmp_path)
+
+
+class TestAppCatalog:
+    def test_lists_each_app_from_its_manifest(self, tmp_path):
+        tools._apps_cache.clear()
+        d = tmp_path / "apps" / "burnup"; d.mkdir(parents=True)
+        (d / "app.json").write_text(json.dumps({"name": "Burn-up", "description": "Sprint burn-up"}))
+        text = tools.app_catalog(str(tmp_path))
+        assert "- burnup: Burn-up — Sprint burn-up" in text and "README.md" in text
+
+    def test_a_workspace_with_no_apps_costs_nothing(self, tmp_path):
+        tools._apps_cache.clear()
+        assert tools.app_catalog(str(tmp_path)) == ""
+
+    def test_a_broken_manifest_never_hides_the_app(self, tmp_path):
+        tools._apps_cache.clear()
+        d = tmp_path / "apps" / "burnup"; d.mkdir(parents=True)
+        (d / "app.json").write_text("{broken")
+        assert "- burnup: burnup" in tools.app_catalog(str(tmp_path))
+
+    def test_the_scan_is_cached_because_the_volume_is_gcsfuse(self, tmp_path):
+        tools._apps_cache.clear()
+        (tmp_path / "apps").mkdir()
+        assert tools.app_catalog(str(tmp_path)) == ""
+        (tmp_path / "apps" / "late").mkdir()
+        assert tools.app_catalog(str(tmp_path)) == "", "a second scan inside the TTL"
