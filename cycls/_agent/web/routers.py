@@ -723,7 +723,10 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         else:
             source = request.stream()
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = file_path.with_name(file_path.name + ".part")
+        # unique, and out of the way: a shared name lets two writers interleave into a torn file
+        scratch = Path(ws.root) / ".tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        tmp = scratch / f"{uuid.uuid4().hex}.part"
         size = 0
         try:
             with open(tmp, "wb") as out:
@@ -773,11 +776,19 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
                            for i in infos]
                 sem = asyncio.Semaphore(8)
 
+                scratch = Path(ws.root) / ".tmp"
+                scratch.mkdir(parents=True, exist_ok=True)
+
                 async def _extract(info, dest):
                     def _do():
                         dest.parent.mkdir(parents=True, exist_ok=True)
-                        with zf.open(info) as src, open(dest, "wb") as out:
-                            shutil.copyfileobj(src, out, 1 << 20)
+                        tmp = scratch / f"{uuid.uuid4().hex}.part"
+                        try:
+                            with zf.open(info) as src, open(tmp, "wb") as out:
+                                shutil.copyfileobj(src, out, 1 << 20)
+                            tmp.replace(dest)
+                        finally:
+                            tmp.unlink(missing_ok=True)
                     async with sem:
                         await asyncio.to_thread(_do)
 
@@ -786,10 +797,14 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         return {"ok": True, "files": len(targets)}
 
     @r.patch("/files/{path:path}")
-    async def rename(path: str, request: Request, ws: Workspace = ws_dep):
+    async def rename(path: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
         src = _safe_path(ws.root, path)
         if not src.exists():
             raise HTTPException(status_code=404, detail="Not found")
+        # a move out of apps/ removes an app as surely as a delete, and leaves no trash row
+        rel = str(src.relative_to(Path(ws.root).resolve()))
+        if trash.owned_by_app(rel) and not await _admin(cycls_app, user, ws, volume, base):
+            raise HTTPException(status_code=403, detail="Only workspace admins can move apps")
         data = await request.json()
         dest = _safe_path(ws.root, data["to"])
         if dest.exists():
@@ -818,7 +833,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             raise HTTPException(status_code=404, detail="Not found")
         rel = str(target.relative_to(Path(ws.root).resolve()))
         # Apps are shared team assets — only admins remove them.
-        if trash.kind_of(rel, target.is_dir()) == "app" and not await _admin(cycls_app, user, ws, volume, base):
+        if trash.owned_by_app(rel) and not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can delete apps")
         meta = await asyncio.to_thread(trash.trash_path, ws.root, rel, "user")
         _catalog_drop(ws.root)
@@ -1153,9 +1168,12 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             try:
                 src = resolve_path(ws_source.root, ap)
                 dst = resolve_path(ws_fork.root, ap)
-                if src.is_file():
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(src, dst)
+                # a fork only ADDS: overwriting is an arbitrary write from a public link, and
+                # AGENT.md reaches the system prompt, so it is never copied at all
+                if not src.is_file() or dst.exists() or Path(ap).name.lower() == "agent.md":
+                    continue
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
             except Exception:
                 pass
         return {"id": new_id}
@@ -1391,6 +1409,20 @@ def workspaces_router(cycls_app, user_dep, volume, base):
 
 # ---- Connectors ----
 
+RELAY_PER_MINUTE = 240   # per instance — bounds a runaway, not a determined caller
+_relay_hits = {}
+
+
+def _relay_budget(subject, name):
+    """Under the per-minute cap? In memory: a shared counter is a round trip per call."""
+    now, key = int(time.time() // 60), (subject, name)
+    minute, n = _relay_hits.get(key, (now, 0))
+    if minute != now: minute, n = now, 0
+    _relay_hits[key] = (minute, n + 1)
+    if len(_relay_hits) > 10_000: _relay_hits.clear()
+    return n < RELAY_PER_MINUTE
+
+
 def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
     """Connect, list and disconnect grants. The callback is reached by the
     provider's redirect — no JWT — so it trusts the signed state, which names
@@ -1562,9 +1594,16 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
         o = _get(name)
         if name in (await oauth.blocked(ws) | await oauth.off(ws)):
             raise HTTPException(status_code=403, detail="Connector is switched off")
+        # the model's path is gated per tool; an app's is gated by the reserved `_relay` key
+        if (await oauth.permissions(ws, name)).get(oauth.RELAY_KEY) == "never":
+            raise HTTPException(status_code=403, detail="Apps may not use this connector")
+        if not _relay_budget(ws.subject, name):
+            raise HTTPException(status_code=429, detail="Too many connector calls from this app")
         status, body, ctype = await oauth.relay(
             o, ws, path, method=request.method, headers=dict(request.headers),
             body=await request.body() if request.method != "GET" else None)
+        log("relay", user=getattr(ws, "subject", None), connector=name, method=request.method,
+            path=path[:200], status=status, bytes=len(body or b""))
         return Response(content=body, status_code=status, media_type=ctype)
 
     @r.get("/connectors/{name}/prompts")
