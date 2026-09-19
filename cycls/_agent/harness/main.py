@@ -18,7 +18,7 @@ from .compact import COMPACT_BUFFER
 from ..logs import log
 from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
-from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, interrupted_note, register_labels, detailed, excerpt, ToolContext
+from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, interrupted_note, register_labels, detailed, excerpt, app_catalog, ToolContext
 from ..tools import skills as skills_mod
 
 
@@ -30,6 +30,7 @@ MAX_DELAY_MS = 32_000
 # 500 included: model servers surface transient capacity failures (CUDA OOM
 # on a saturated GPU) as plain 500s that clear within seconds.
 _RETRYABLE_STATUSES = {429, 500, 502, 503, 504, 529}
+_FAILED = ("Error:", "Build failed:")   # how a tool says it failed — it returns, it does not raise
 MAX_CONTINUATIONS = 4         # auto-continue rounds after a max_tokens cut
 MAX_PAUSES = 8                # pause_turn resends before giving up
 CANCEL_DRAIN = 2              # seconds a cancelled tool batch gets to unwind
@@ -243,7 +244,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                base_url=None, api_key=None, headers=None, handlers=None, mcp_servers=None,
                thinking="adaptive", vision=True, web_search="brave",
                instructions="AGENT.md", skills=[], price=None, context_window=None,
-               extra_body=None, approvals=(), mentions=(), auto=True):
+               extra_body=None, approvals=(), mentions=(), auto=True, api_connectors=()):
     vendor, bare_model = model.split("/", 1)
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key,
                              headers=headers, vision=vision)
@@ -307,7 +308,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
     client_side = [s for s in mcp_servers or [] if not s._server_side]
     # An org admin's switch and the person's own resolve the same way here: the tools never enter the turn.
-    hidden = (await connectors.blocked(workspace) | await connectors.off(workspace)) if any(s._connector for s in client_side) else set()
+    hidden = (await connectors.blocked(workspace) | await connectors.off(workspace)) if (any(s._connector for s in client_side) or api_connectors) else set()
     deferred, catalog, objs = {}, {}, {}   # a connector's schemas wait behind `find_tools`
     for server in client_side:
         if server._connector and server._connector.name in hidden:
@@ -364,6 +365,29 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         system_text += "\n\nConnectors this person has connected. Their tools are not loaded yet — call " \
                        "`find_tools` once with what you need, then call the tools it returns.\n" + \
                        "\n".join(connectors.index_line(objs[n], sum(len(e[2]) for e in es)) for n, es in sorted(deferred.items()))
+    # CONN-4: a connector with a REST base and no MCP server contributes one tool — otherwise a
+    # stored key is unreachable, since everything above only walks servers.
+    for o in api_connectors or ():
+        if not o.api or o.servers or o.name in hidden or not await o.bearer(workspace):
+            continue
+        schema, fn, label, writes = connectors.api_tool(o)
+        tools_list.append(schema)
+        handlers[schema["name"]] = connectors.gated(fn, schema["name"], label, o.name, writes)
+        mcp_names.add(schema["name"])
+        owners[schema["name"]] = o
+        register_labels({}, {schema["name"]: label}, {schema["name"]: o.name}, details=(schema["name"],))
+
+    if any(t.get("name") == "build_app" for t in tools_list):
+        if cat := await asyncio.to_thread(app_catalog, workspace.root):
+            system_text += "\n\n" + cat
+        # CONN-6: an app calls these live from the page; nothing else tells the model they exist.
+        if apis := [o for o in {**{s._connector.name: s._connector for s in client_side if s._connector},
+                                **{o.name: o for o in api_connectors or ()}}.values()
+                    if o.api and o.name not in hidden]:
+            system_text += ("\n\nInside an app, `await cycls.connector(name).json(path, init)` calls these "
+                            "live, with the credential attached server-side:\n"
+                            + "\n".join(f"- {o.name}: {o.api}" for o in apis))
+
     for guidance in tool_prompts(tools_list):
         system_text += "\n\n" + guidance
     window = context_window or DEFAULT_WINDOW
@@ -509,13 +533,15 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
             results, terminal, waiting, cards = [], False, False, []
             for block, (out, ms) in zip(blocks, timed):
+                # `ok` routes the result; `good` is the outcome, and a returned error is one
                 ok = not isinstance(out, BaseException)
+                good = ok and not (isinstance(out, str) and out.startswith(_FAILED))
                 o = owners.get(block["name"])
                 log("tool_call", user=user, chat_id=session.chat_id,
-                    model=bare_model, tool=block["name"], tool_use_id=block["id"], ms=ms, ok=ok,
+                    model=bare_model, tool=block["name"], tool_use_id=block["id"], ms=ms, ok=good,
                     connector=o.name if o else None, credential_scope=o.scope if o else None,
                     output_bytes=len(out) if isinstance(out, (str, bytes)) else None,
-                    error=None if ok else _cause(out))
+                    error=None if good else (_cause(out) if not ok else out[:200]))
                 if not ok: out = f"Error: {_cause(out)}"
                 content, evs, waits = _shape(block, out, ok, handlers, mcp_names)
                 for ev in evs: yield ev
@@ -526,7 +552,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     content = spill.spill(content, workspace.root, session.chat_id, f"{block['name']}-{block['id'][-6:]}")
                 results.append({"type": "tool_result", "tool_use_id": block["id"], "content": content})
                 if block["name"] in mcp_names or detailed(block["name"]):   # the step shows the outcome, bounded; a card (a ui dict) is its own outcome
-                    yield {"type": "step", "id": block["id"], "ok": ok,
+                    yield {"type": "step", "id": block["id"], "ok": good,
                            **({} if isinstance(out, dict) and out.get("type") == "ui" else {"result": excerpt(content)})}
                 # Only a call that reached the user ends the turn — a malformed
                 # `ask` gets another turn to fix itself.
