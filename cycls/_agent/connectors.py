@@ -191,6 +191,7 @@ def links_of(row, o):
 
 # ---- Tool permissions: allow / ask / never, per user, per connector ----
 MODES = ("allow", "ask", "never")
+RELAY_KEY = "_relay"   # reserved: the app relay's own allow/never, stored beside the tool choices
 _WRITES = re.compile(r"^(create|write|update|delete|remove|send|post|put|patch|upload|copy|move|rename|set|add|insert|share|publish|execute|run|edit|modify|trash|archive|cancel|refund)")
 
 
@@ -279,6 +280,45 @@ async def tools_for(server, ws):
             names)
 
 
+def api_schema(o):
+    """One tool for a connector with a REST base and no MCP server — without it a stored key is
+    unreachable, because the loop only ever walks a connector's servers."""
+    title, desc = copy_of(o)
+    return {"type": "custom", "name": f"{o.name}_request",
+            "description": (f"Call the {title or o.name} REST API at {o.api}. "
+                            f"{(desc or '').strip()}\n"
+                            "The credential is attached server-side; never ask the user for it, "
+                            "and never put it in an argument. Paths are relative to the base."),
+            "input_schema": {"type": "object", "required": ["path"], "properties": {
+                "method": {"type": "string", "enum": list(RELAY_METHODS), "description": "Default GET."},
+                "path": {"type": "string", "description": "Path under the base, e.g. `v1/orders?limit=10`."},
+                "body": {"type": "string", "description": "JSON request body, as a string. Omit for GET."},
+                "context": {"type": "string", "description": "One short line on what this call is for."}}}}
+
+
+RELAY_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
+_API_WRITES = ("POST", "PUT", "PATCH", "DELETE")
+
+
+def api_tool(o):
+    """(schema, handler, label, writes) — the handler is the same `relay` an app uses."""
+    name = f"{o.name}_request"
+
+    async def call(inp, ctx):
+        method = str((inp or {}).get("method") or "GET").upper()
+        status, body, _ = await relay(o, ctx.workspace, (inp or {}).get("path") or "",
+                                      method=method, body=(inp or {}).get("body"))
+        if status == 401:
+            return not_connected(o.name)
+        text = body.decode("utf-8", "replace") if isinstance(body, bytes) else str(body)
+        return text if status < 400 else f"Error: {o.name} {status}: {text[:2000]}"
+
+    def writes(tool, args):
+        return str((args or {}).get("method") or "GET").upper() in _API_WRITES
+
+    return api_schema(o), call, f"{o.name} · request", writes
+
+
 RELAY_HEADERS = ("content-type", "accept")   # the app sets these; Authorization is ours alone
 RELAY_MAX_BYTES = 5_000_000
 
@@ -297,13 +337,22 @@ async def relay(o, ws, path, *, method="GET", headers=None, body=None, timeout=3
     url = f"{o.api}/{path.lstrip('/')}"
     if not url.startswith(o.api + "/") or urlparse(url).netloc != urlparse(o.api).netloc:
         return 400, b'{"error":"path escapes the connector"}', "application/json"
-    if (method := str(method or "GET").upper()) not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+    if (method := str(method or "GET").upper()) not in RELAY_METHODS:
         return 405, b'{"error":"method not allowed"}', "application/json"
     send = {k: v for k, v in (headers or {}).items() if str(k).lower() in RELAY_HEADERS}
     send.update(o.api_headers)          # what the API requires of every caller
-    send["Authorization"] = f"Bearer {token}"
+    params = None
+    kind, field = o.auth, o.auth_name
+    if kind == "basic":
+        send["Authorization"] = "Basic " + base64.b64encode(f"{token}:".encode()).decode()
+    elif kind == "header":
+        send[field] = token
+    elif kind == "query":
+        params = {field: token}
+    else:
+        send["Authorization"] = f"Bearer {token}"
     async with httpx2.AsyncClient(timeout=timeout, follow_redirects=False) as c:
-        r = await c.request(method, url, headers=send, content=body)
+        r = await c.request(method, url, headers=send, content=body, params=params)
     out = r.content[:RELAY_MAX_BYTES]
     return r.status_code, out, r.headers.get("content-type", "application/octet-stream")
 
@@ -346,11 +395,17 @@ class Connector:
     kind = hint = None
     addressed = False   # True when the secret IS the server address, not a token sent to it
 
+    AUTH = ("bearer", "basic", "header", "query")
+
     def __init__(self, name, *, scope="user", description=None, icon=None, prompts=(), developer=None, category=None,
                  website=None, title=None, about=None, use_cases=(), skills=(), privacy=None, terms=None, docs=None,
-                 api=None, api_headers=None, relay=True):
+                 api=None, api_headers=None, relay=True, auth="bearer", auth_name=None):
         if scope not in ("user", "workspace", "either"):
             raise ValueError(f'scope must be "user", "workspace" or "either"; got {scope!r}')
+        if auth not in self.AUTH:
+            raise ValueError(f"auth must be one of {self.AUTH}; got {auth!r}")
+        self.auth = auth
+        self.auth_name = auth_name or ("X-API-Key" if auth == "header" else "api_key")
         if api and not str(api).startswith("https://"):
             raise ValueError(f"api must be an https base url; got {api!r}")
         self.relay = relay   # False for a fixed app whose console we would rather not touch — it keeps its own callback
