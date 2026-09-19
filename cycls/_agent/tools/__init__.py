@@ -375,7 +375,6 @@ _BUILTINS = {
     "DataBase": [_DATABASE_TOOL],
     "Canvas":   [_CANVAS_TOOL],
     "Apps":     [_BUILD_APP_TOOL],
-    "MiniApp":  [_BUILD_APP_TOOL],   # legacy alias for Apps
     "Suggest":  [_SUGGEST_TOOL],
     "Ask":      [_ASK_TOOL],
 }
