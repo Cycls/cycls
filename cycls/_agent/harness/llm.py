@@ -34,6 +34,7 @@ class LLM:
         self._icons = {}
         self._details = frozenset()
         self._mcp = []
+        self._connectors = []
         self._loop = None
         self._thinking = "adaptive"
         self._vision = True
@@ -112,6 +113,11 @@ class LLM:
         "low"})`. None clears."""
         return self._copy(_extra_body=dict(params) if params else None)
 
+    def connectors(self, *os):
+        """Connectors whose tools the loop should offer. A cycls.Key with `api=` and no MCP
+        server becomes one `{name}_request` tool; declare the same objects on cycls.Web."""
+        return self._copy(_connectors=[*self._connectors, *os])
+
     def mcp(self, *servers):
         """Connect to one or more remote MCP servers (cycls.MCP). Their tools
         run server-side via the Anthropic MCP connector — anthropic/* only."""
@@ -185,6 +191,7 @@ class LLM:
             headers=self._headers,
             handlers=self._handlers,
             mcp_servers=self._mcp,
+            api_connectors=self._connectors,
             approvals=getattr(context, "approvals", None) or (), auto=getattr(context, "auto", True),
             mentions=getattr(context, "connectors", None) or (),
             thinking=self._thinking,

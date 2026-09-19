@@ -2,8 +2,9 @@
 API shape (`type` / `name` / `description` / `input_schema`) and registered in
 `_BUILTINS`; `build_tools` emits them as-is. User-supplied custom tools come
 through `_normalize_tool` (accepts the camelCase `inputSchema` form too)."""
-import asyncio, base64, inspect, ipaddress, json, os, pathlib, re, socket, uuid
+import asyncio, base64, inspect, ipaddress, json, os, pathlib, re, socket, time, uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import NamedTuple
 from . import pdf, skills
@@ -75,9 +76,11 @@ _DATABASE_TOOL = {
     "name": "database",
     "description": (
         "Persistent key-value store scoped to this workspace. Use for state that must "
-        "survive across turns or chat sessions: notes, user preferences, task progress, "
-        "anything you'd otherwise jam into a JSON file. Atomic per-key writes, prefix "
-        "scans. Prefer this over writing JSON files via bash.\n\n"
+        "survive across turns or chat sessions: notes, user preferences, task progress. "
+        "Atomic per-key writes, prefix scans.\n\n"
+        "This store is PER USER, so other members of the workspace cannot see it and "
+        "neither can an app. Data an app reads belongs in `apps/<slug>/data/`, written "
+        "with the editor.\n\n"
         "Commands:\n"
         "- get:    read a value at `key`. Returns the stored JSON or 'not found'.\n"
         "- put:    write `value` (any JSON-serializable type) at `key`.\n"
@@ -255,11 +258,12 @@ _BUILD_APP_TOOL = {
         "component, `index.html` as the entry — then call this with that folder. "
         "The source stays in the workspace so you can edit and rebuild it later; "
         "do NOT paste source into this call.\n\n"
-        "The bundler inlines everything (an app runs sandboxed, where an "
-        "external script, stylesheet or font is blocked). Available to import: "
-        "react, react-dom, recharts, lucide-react, date-fns, clsx, tailwind-merge, "
-        "and Tailwind v4 via `@import \"tailwindcss\"`. Nothing else — you cannot "
-        "add a dependency.\n\n"
+        "The bundler inlines everything into one file and stamps a Content-Security-Policy\n"
+        "on it, so an external script, stylesheet or font is blocked at load and the app\n"
+        "cannot make network requests of its own. React is 19.2.8, so use `createRoot`,\n"
+        "not `ReactDOM.render`. Tailwind v4 via `@import \"tailwindcss\"`. Also available\n"
+        "to import: @base-ui/react, @dnd-kit/core, @dnd-kit/modifiers, @dnd-kit/sortable, @dnd-kit/utilities, @hookform/resolvers, @radix-ui/react-slot, @tanstack/react-table, @tanstack/react-virtual, class-variance-authority, clsx, cmdk, date-fns, embla-carousel-react, input-otp, lucide-react, motion, radix-ui, react-day-picker, react-dom, react-hook-form, recharts, sonner, tailwind-merge, tailwind-variants, tw-animate-css, vaul, zod.\n"
+        "Nothing else — you cannot add a dependency.\n\n"
         "Inside the app, `cycls.read`/`write` reach files in the app's own folder, "
         "`cycls.get`/`set` are a key-value store, and `cycls.save(name, content)` "
         "asks the user where to put a file anywhere in the workspace.\n\n"
@@ -727,6 +731,8 @@ def _app_identity(path, fallback):
 APP_BUILDER = os.environ.get("CYCLS_APP_BUILDER", "miniapp-build")
 _APP_SRC_MAX_FILES = 400
 _APP_SRC_MAX_BYTES = 12_000_000
+_APP_SRC_MAX_FILE = 2_000_000    # the builder's cap, mirrored so it fails here naming the file
+_APP_BUILD_TIMEOUT = 420         # the build function is killed at this
 _APP_SLUG_OK = set("abcdefghijklmnopqrstuvwxyz0123456789-_")
 
 
@@ -744,11 +750,43 @@ def _collect_source(src_dir):
             text = p.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
-        total += len(text.encode())
+        size = len(text.encode())
+        if size > _APP_SRC_MAX_FILE:
+            raise ValueError(f"{'/'.join(parts)} is {size // 1000} KB; the limit is "
+                             f"{_APP_SRC_MAX_FILE // 1_000_000} MB per file — split it")
+        total += size
         if len(files) >= _APP_SRC_MAX_FILES or total > _APP_SRC_MAX_BYTES:
             raise ValueError("source folder is too large to build")
         files["/".join(parts)] = text
     return files
+
+
+_APPS_TTL = 30.0
+_apps_cache = {}   # root -> (deadline, text)
+
+
+def app_catalog(root):
+    """One line per app, so the model knows they exist without a scan per turn."""
+    hit = _apps_cache.get(root)
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    lines = []
+    try:
+        for d in sorted((pathlib.Path(root) / "apps").iterdir()):
+            if not d.is_dir() or d.name.startswith("."):
+                continue
+            try: m = json.loads((d / "app.json").read_text(encoding="utf-8"))
+            except Exception: m = {}
+            m = m if isinstance(m, dict) else {}
+            desc = str(m.get("description") or "").strip()[:100]
+            lines.append(f"- {d.name}: {m.get('name') or d.name}" + (f" — {desc}" if desc else ""))
+    except OSError:
+        pass
+    text = ("## Apps in this workspace\n"
+            "Their data is in apps/<slug>/data/. Read apps/<slug>/README.md before changing it.\n"
+            + "\n".join(lines)) if lines else ""
+    _apps_cache[root] = (time.monotonic() + _APPS_TTL, text)
+    return text
 
 
 async def _exec_build_app(inp, workspace):
@@ -773,17 +811,27 @@ async def _exec_build_app(inp, workspace):
         return f"Error: {inp.get('source')} has no index.html"
 
     try:
-        result = await asyncio.to_thread(cycls.remote(APP_BUILDER), files=files)
+        build = cycls.remote(APP_BUILDER, timeout=_APP_BUILD_TIMEOUT)
+        result = await asyncio.to_thread(build, files=files)
     except Exception as e:
         return f"Error: the build service is unavailable ({type(e).__name__}: {e})"
 
+    if not isinstance(result, dict):
+        return f"Build failed: the build service returned {type(result).__name__}, not a result."
     if not result.get("ok"):
+        have = result.get("packages") or []
         return (f"Build failed: {result.get('error')}\n\n{result.get('log', '')}"[:MAX_OUTPUT]
+                + (f"\n\nAvailable packages: {', '.join(have)}." if have else "")
                 + "\n\nFix the source and call build_app again.")
+    if not isinstance(result.get("html"), str):
+        return "Build failed: the build service reported success but returned no html."
 
     app_dir = pathlib.Path(workspace) / "apps" / slug
     app_dir.mkdir(parents=True, exist_ok=True)
-    (app_dir / "index.html").write_text(result["html"], encoding="utf-8")
+    entry = app_dir / "index.html"
+    if entry.exists():   # a bad rebuild stays recoverable, as `edit` keeps an overwrite
+        trash.trash_path(workspace, f"apps/{slug}/index.html", by="agent", reason="rebuild")
+    entry.write_text(result["html"], encoding="utf-8")
 
     manifest_path = app_dir / "app.json"
     try:
@@ -797,10 +845,16 @@ async def _exec_build_app(inp, workspace):
     if inp.get("icon"):
         manifest["icon"] = str(inp["icon"])[:512]
     manifest.setdefault("name", slug.replace("-", " ").replace("_", " ").title())
+    manifest["built"] = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                         "source": str(inp.get("source") or ""),
+                         "builder": str(result.get("version") or "unknown")}
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    kb = result["bytes"] / 1024
-    out = f"Installed apps/{slug}/index.html ({kb:.0f} KB). It is in the Apps tab."
+    kb = (result.get("bytes") or len(result["html"].encode())) / 1024
+    out = (f"Installed apps/{slug}/index.html ({kb:.0f} KB). It is in the Apps tab.\n"
+           f"Now write apps/{slug}/README.md describing each file the app reads under "
+           f"apps/{slug}/data/ and its shape. A later session updates that data without "
+           f"you — and without it, the only way to learn the schema is to read the bundle.")
     if result.get("stray"):
         out += ("\nWARNING: these assets could not be inlined and will be blocked "
                 f"when the app runs: {', '.join(result['stray'])}")
@@ -1046,7 +1100,7 @@ def interrupted_note(name, reason):
 
 
 _custom_labels, _custom_names, _custom_owners, _custom_icons = {}, {}, {}, {}
-_detailed = set()   # tools whose step row carries Request and Response — every MCP tool, and `.on(details=True)`
+_detailed = {"build_app"}   # step row carries Request/Response, and can show a failure; MCP tools join at runtime
 
 
 def register_labels(labels, names=None, owners=None, icons=None, details=()):
