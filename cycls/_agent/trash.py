@@ -32,6 +32,14 @@ def kind_of(rel, is_dir):
     return "dir" if is_dir else "file"
 
 
+def owned_by_app(rel):
+    """Is this path part of an app? The admin gate keyed on `kind_of` alone let anyone
+    delete apps/<slug>/index.html, which breaks the app just as surely as removing the
+    folder — it was classified an ordinary file because it is three segments deep."""
+    parts = rel.strip("/").split("/")
+    return len(parts) >= 2 and parts[0] == "apps" and bool(parts[1])
+
+
 def trash_path(ws, rel, by="user", reason="delete"):
     """Move *rel* into the trash; returns its meta row."""
     ws = Path(ws).resolve()
