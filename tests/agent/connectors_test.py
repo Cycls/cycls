@@ -1,10 +1,11 @@
 """cycls.OAuth2: a signed state that names its user, PKCE end to end, a bearer
 that refreshes itself, and routes that store the grant where its scope says."""
-import asyncio, time
+import asyncio, sys, time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlparse
 import pytest
+import cycls
 from cycls._agent import connectors as c, credentials
 from cycls._app.db import workspace
 
@@ -500,8 +501,8 @@ def _fake_httpx(captured):
     class C:
         async def __aenter__(self): return self
         async def __aexit__(self, *a): return False
-        async def request(self, method, url, headers=None, content=None):
-            captured.update(method=method, url=url, headers=headers, content=content)
+        async def request(self, method, url, headers=None, content=None, params=None):
+            captured.update(method=method, url=url, headers=headers, content=content, params=params)
             return R()
     return SimpleNamespace(AsyncClient=lambda **kw: C())
 
@@ -704,3 +705,49 @@ def test_a_connector_can_stay_off_the_relay(monkeypatch):
     assert c.OAuth2("salla", mcp="https://mcp.x/mcp").relay is True
     assert c.OAuth2("google", authorize="a", token="t", client_id="i", relay=False).relay is False
     assert c.Key("posthog").relay is True
+
+
+# ---- A pasted key is a tool, not just a stored secret ----
+
+def test_a_key_with_an_api_base_becomes_one_tool(key):
+    o = cycls.Key("stripe", hint="sk_…", api="https://api.stripe.com")
+    schema, _, label, writes = c.api_tool(o)
+    assert schema["name"] == "stripe_request" and label == "stripe · request"
+    assert schema["input_schema"]["required"] == ["path"]
+    assert "api.stripe.com" in schema["description"]
+
+
+@pytest.mark.parametrize("method,expected", [
+    ("GET", False), (None, False), ("POST", True), ("DELETE", True), ("patch", True)])
+def test_the_api_tool_classifies_writes_by_method(key, method, expected):
+    _, _, _, writes = c.api_tool(cycls.Key("x", api="https://x.dev"))
+    assert writes("x_request", {"method": method} if method else {}) is expected
+
+
+@pytest.mark.parametrize("auth,name,check", [
+    ("bearer", None, lambda h, p: h["Authorization"] == "Bearer tok" and p is None),
+    ("header", "X-Api-Key", lambda h, p: h["X-Api-Key"] == "tok" and "Authorization" not in h),
+    ("header", None, lambda h, p: h["X-API-Key"] == "tok"),
+    ("query", "api_key", lambda h, p: p == {"api_key": "tok"} and "Authorization" not in h),
+    ("basic", None, lambda h, p: h["Authorization"].startswith("Basic ")),
+])
+def test_the_relay_presents_the_credential_the_api_asks_for(key, tmp_path, auth, name, check):
+    o = cycls.Key("svc", api="https://svc.dev", auth=auth, auth_name=name)
+    ws = workspace("org:u1", tmp_path, base=f"file://{tmp_path}")
+    asyncio.run(credentials.put(ws, "svc", {"key": "tok"}))
+    got = {}
+    with patch.dict(sys.modules, {"httpx2": _fake_httpx(got)}):
+        asyncio.run(c.relay(o, ws, "/v1/ping"))
+    assert check(got["headers"], got["params"])
+
+
+def test_an_unknown_auth_style_is_refused_at_declaration(key):
+    with pytest.raises(ValueError, match="auth must be one of"):
+        cycls.Key("x", api="https://x.dev", auth="magic")
+
+
+def test_the_api_tool_returns_the_connect_card_when_there_is_no_key(key, tmp_path):
+    o = cycls.Key("svc", api="https://svc.dev")
+    _, call, _, _ = c.api_tool(o)
+    ctx = SimpleNamespace(workspace=workspace("org:u1", tmp_path, base=f"file://{tmp_path}"))
+    assert asyncio.run(call({"path": "/v1"}, ctx))["action"] == "connect"
