@@ -130,7 +130,7 @@ Three tiers, mirrored to source:
 
 ```
 tests/
-├── conftest.py                  # autouse SlateDB pool reset; --live flag
+├── conftest.py                  # autouse store-pool reset; --live flag
 ├── function/                    # Function class + Image
 ├── app/                         # App, Sandbox argv, Workspace/DB, fence retry
 ├── agent/
@@ -145,7 +145,8 @@ tests/
 │   ├── workspaces_test.py       # registry, ACL, team workspaces, admin lifecycle
 │   ├── integration_test.py      # Agent on top of App
 │   └── scenarios/
-│       ├── test_load_repair.py  # SlateDB roundtrip + repair invariants
+│       ├── test_load_repair.py  # store roundtrip + repair invariants
+│       ├── test_build_contract.py # @pytest.mark.live, the real miniapp-build service
 │       ├── test_database.py     # the `database` tool over the agent KV
 │       └── test_live.py         # @pytest.mark.live, real Anthropic
 └── client/tests/                # vitest — useChat, auth headers, mentions, apps, mini-app bridge
