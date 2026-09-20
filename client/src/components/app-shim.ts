@@ -52,7 +52,7 @@ const SHIM = `<script>(function(){
     var p = waiting.get(m.id);
     if (!p) return;
     waiting.delete(m.id);
-    if (!m.ok) return p.rej(new Error(m.error || 'failed'));
+    if (!m.ok) { var err = new Error(m.error || 'failed'); err.status = m.status; return p.rej(err); }
     p.res(m.type === 'cycls:data:result' ? m.result
         : m.type === 'cycls:read:result' ? m.content
         : m.type === 'cycls:save:result' ? m.path
@@ -113,7 +113,7 @@ const SHIM = `<script>(function(){
     };
   }
 
-  var kv = null, loading = null, timer = null, pending = null, settle = null, dirty = new Set();
+  var kv = null, loading = null, timer = null, pending = null, settle = null, dirty = new Set(), clipped = false;
 
   // Concurrent callers share one list, or a later one would clobber the
   // mutations an earlier set() already made.
@@ -122,7 +122,9 @@ const SHIM = `<script>(function(){
     if (!loading) loading = (async function(){
       var next = {};
       try {
-        (await data({ op: 'list' }) || []).forEach(function(r){ next[r.key] = r.value; });
+        var page = await data({ op: 'list' }) || {};
+        (page.rows || []).forEach(function(r){ next[r.key] = r.value; });
+        clipped = !!page.truncated;
       } catch (e) {}
       kv = next;
       loading = null;
@@ -175,13 +177,33 @@ const SHIM = `<script>(function(){
     },
     get: async function(key, fallback){
       var s = await load();
-      return Object.prototype.hasOwnProperty.call(s, key) ? s[key] : fallback;
+      if (Object.prototype.hasOwnProperty.call(s, key)) return s[key];
+      // The shelf did not fit in one page, so "absent" here is not an answer.
+      if (clipped) throw new Error('cycls.get: this app has too many keys to load at once — use cycls.me.all(prefix) or keep fewer');
+      return fallback;
     },
     set: async function(key, value){
       var s = await load();
       if (value === undefined) delete s[key]; else s[key] = value;
       dirty.add(key);
       return schedule();
+    },
+    // Read-modify-write that does not lose a concurrent one: the write carries
+    // the version it read, and a 412 means someone got there first, so re-read
+    // and re-apply rather than overwrite them.
+    update: async function(key, fn){
+      for (var i = 0; i < 5; i++) {
+        var cur = await data({ op: 'get', key: String(key) });
+        var next = await fn(cur ? cur.value : undefined);
+        try {
+          await data({ op: 'put', key: String(key), value: next, version: cur ? cur.version : '' });
+          if (kv) kv[key] = next;
+          return next;
+        } catch (e) {
+          if (e.status !== 412) throw e;
+        }
+      }
+      throw new Error('cycls.update: gave up after 5 tries on ' + key);
     },
     // A connector's own API, live. The app never holds a token: the host resolves the
     // workspace's grant per call, so a refreshed one is inherited with no change here.

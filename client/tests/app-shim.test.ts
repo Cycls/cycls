@@ -158,7 +158,7 @@ describe("the injected cycls api", () => {
     const done = Promise.all([api.set("a", 1), api.set("b", 2), api.set("a", 3)]);
     await new Promise((r) => setTimeout(r, 0));
     const list = posted.find((m) => m.type === "cycls:data")!;
-    deliver({ type: "cycls:data:result", id: list.id, ok: true, result: [] });
+    deliver({ type: "cycls:data:result", id: list.id, ok: true, result: { rows: [] } });
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));   // load resolves, then the flush timer
     const puts = posted.filter((m) => m.op === "put");
@@ -172,7 +172,7 @@ describe("the injected cycls api", () => {
     const done = api.set("gone", undefined);
     await new Promise((r) => setTimeout(r, 0));
     const list = posted.find((m) => m.type === "cycls:data")!;
-    deliver({ type: "cycls:data:result", id: list.id, ok: true, result: [{ key: "gone", value: 1 }] });
+    deliver({ type: "cycls:data:result", id: list.id, ok: true, result: { rows: [{ key: "gone", value: 1 }] } });
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));   // load resolves, then the flush timer
     const del = posted.find((m) => m.op === "delete")!;
@@ -186,7 +186,7 @@ describe("the injected cycls api", () => {
     const p = api.get("missing", "dflt");
     await new Promise((r) => setTimeout(r, 0));
     const list = posted.find((m) => m.type === "cycls:data")!;
-    deliver({ type: "cycls:data:result", id: list.id, ok: true, result: [{ key: "kept", value: 7 }] });
+    deliver({ type: "cycls:data:result", id: list.id, ok: true, result: { rows: [{ key: "kept", value: 7 }] } });
     await expect(p).resolves.toBe("dflt");
     await expect(api.get("kept")).resolves.toBe(7);
     await expect(api.keys()).resolves.toEqual(["kept"]);
@@ -198,7 +198,7 @@ describe("the injected cycls api", () => {
       const p = api.keys();
       await new Promise((r) => setTimeout(r, 0));
       const list = posted.find((m) => m.type === "cycls:data")!;
-      deliver({ type: "cycls:data:result", id: list.id, ok, result: [], error: "403" });
+      deliver({ type: "cycls:data:result", id: list.id, ok, result: { rows: [] }, error: "403" });
       await expect(p).resolves.toEqual([]);
     }
   });
@@ -222,5 +222,65 @@ describe("the injected cycls api", () => {
     expect(sent[0].key).toBe("draft");
     expect(sent.some((m) => "user" in m)).toBe(false);
     deliver({ type: "cycls:data:result", id: sent[0].id, ok: true, result: { ok: true } });
+  });
+});
+
+describe("the store's two safety rails", () => {
+  function load(scope: string) {
+    const js = injectShim("<html><head></head></html>").match(/<script>([\s\S]*)<\/script>/)![1];
+    const posted: Record<string, unknown>[] = [];
+    const listeners: ((e: { data: unknown }) => void)[] = [];
+    const win: Record<string, unknown> = {};
+    new Function("window", "parent", "addEventListener", "setTimeout", "clearTimeout", js)(
+      win,
+      { postMessage: (m: Record<string, unknown>) => posted.push(m) },
+      (t: string, fn: (e: { data: unknown }) => void) => t === "message" && listeners.push(fn),
+      (fn: () => void) => setTimeout(fn, 0),
+      clearTimeout,
+    );
+    const api = win.cycls as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    const deliver = (data: unknown) => listeners.forEach((fn) => fn({ data }));
+    deliver({ type: "cycls:init", path: `${scope}/index.html`, scope, canWrite: true });
+    return { api, posted, deliver };
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  // A truncated shelf makes "absent" meaningless: the key may well exist in the
+  // page that was cut. Returning the fallback would be a confident wrong answer.
+  it("refuses to answer get() from a page it knows is incomplete", async () => {
+    const { api, posted, deliver } = load("apps/burnup");
+    const p = api.get("maybe", "dflt");
+    await tick();
+    const list = posted.find((m) => m.type === "cycls:data")!;
+    deliver({ type: "cycls:data:result", id: list.id, ok: true,
+              result: { rows: [{ key: "here", value: 1 }], truncated: true } });
+    await expect(p).rejects.toThrow(/too many keys/);
+    await expect(api.get("here")).resolves.toBe(1);   // a key it did see is still fine
+  });
+
+  it("update() re-reads and re-applies when someone wrote first", async () => {
+    const { api, posted, deliver } = load("apps/burnup");
+    const done = (api.update as (k: string, f: (v: unknown) => unknown) => Promise<unknown>)(
+      "items", (cur) => [...((cur as number[]) ?? []), 9]);
+    const sent = (op: string, n: number) => posted.filter((m) => m.op === op)[n];
+
+    await tick();
+    deliver({ type: "cycls:data:result", id: sent("get", 0).id, ok: true,
+              result: { value: [1], version: "v1" } });
+    await tick();
+    expect(sent("put", 0).version).toBe("v1");
+    expect(sent("put", 0).value).toEqual([1, 9]);
+
+    // someone else landed a write in between
+    deliver({ type: "cycls:data:result", id: sent("put", 0).id, ok: false, error: "412", status: 412 });
+    await tick();
+    deliver({ type: "cycls:data:result", id: sent("get", 1).id, ok: true,
+              result: { value: [1, 2], version: "v2" } });
+    await tick();
+    // re-applied onto what is actually there — nobody's write is lost
+    expect(sent("put", 1).value).toEqual([1, 2, 9]);
+    expect(sent("put", 1).version).toBe("v2");
+    deliver({ type: "cycls:data:result", id: sent("put", 1).id, ok: true, result: { ok: true } });
+    await expect(done).resolves.toEqual([1, 2, 9]);
   });
 });

@@ -5,7 +5,7 @@ listing path: object storage uses LIST + custom-meta; FS uses `pathlib.glob`
 + body reads (no metadata channel locally). `meta=` on `db.put` is an
 object-storage-only perf hint — body is canonical on FS.
 """
-import asyncio, json, os, re
+import asyncio, hashlib, json, os, re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -82,12 +82,18 @@ async def _gcs_auth():
     return {"Authorization": f"Bearer {_gcs_token}"}
 
 
+def _gen_of(data):
+    """An opaque token that changes when the bytes do — the file store's generation."""
+    return None if data is None else hashlib.sha256(data).hexdigest()[:16]
+
+
 class Conflict(Exception):
-    """A `create=True` write found the key already there. Carries `written` so a
-    caller that was part-way through a batch knows how far it got."""
-    def __init__(self, key, written=0):
-        super().__init__(f"{key} already exists")
-        self.key, self.written = key, written
+    """A conditional write lost: `create=True` found the key there, or `gen=` no
+    longer matches because someone else wrote first. Carries `written` so a caller
+    part-way through a batch knows how far it got."""
+    def __init__(self, key, written=0, stale=False):
+        super().__init__(f"{key} changed since it was read" if stale else f"{key} already exists")
+        self.key, self.written, self.stale = key, written, stale
 
 
 class _FileStore:
@@ -102,9 +108,19 @@ class _FileStore:
             except FileNotFoundError: return None
         return await asyncio.to_thread(_do)
 
-    async def write(self, key, data, meta=None, create=False):
+    async def read_gen(self, key):
+        data = await self.read(key)
+        return data, _gen_of(data)
+
+    async def write(self, key, data, meta=None, create=False, gen=None):
         def _do():
             p = self._path(key)
+            if gen is not None:
+                # Compare-then-replace, not atomic — this store is dev and test,
+                # where there is one writer. GCS does it properly.
+                try: current = p.read_bytes()
+                except FileNotFoundError: current = None
+                if _gen_of(current) != gen: raise Conflict(key, stale=True)
             p.parent.mkdir(parents=True, exist_ok=True)
             # Unique tmp name: a shared one lets two concurrent writers interleave
             # their bytes and leave a torn file that every later read raises on.
@@ -189,12 +205,15 @@ class _GCSStore:
         return await _gcs_client_get().request(method, url, **kw)
 
     async def read(self, key):
-        r = await self._req("GET", f"{self._STORAGE}/storage/v1/b/{self.bucket}/o/{self._obj(key)}?alt=media")
-        if r.status_code == 404: return None
-        r.raise_for_status()
-        return r.content
+        return (await self.read_gen(key))[0]
 
-    async def write(self, key, data, meta=None, create=False):
+    async def read_gen(self, key):
+        r = await self._req("GET", f"{self._STORAGE}/storage/v1/b/{self.bucket}/o/{self._obj(key)}?alt=media")
+        if r.status_code == 404: return None, None
+        r.raise_for_status()
+        return r.content, r.headers.get("x-goog-generation")
+
+    async def write(self, key, data, meta=None, create=False, gen=None):
         info = {"name": self._name(key)}
         if meta: info["metadata"] = meta
         body = b"\r\n".join([
@@ -208,9 +227,10 @@ class _GCSStore:
         # passed as params=, which httpx would use to replace uploadType.
         url = f"{self._STORAGE}/upload/storage/v1/b/{self.bucket}/o?uploadType=multipart"
         if create: url += "&ifGenerationMatch=0"
+        elif gen is not None: url += f"&ifGenerationMatch={gen or 0}"
         r = await self._req("POST", url,
             headers={"Content-Type": "multipart/related; boundary=cycls"}, content=body)
-        if create and r.status_code == 412: raise Conflict(key)
+        if r.status_code == 412: raise Conflict(key, stale=gen is not None)
         r.raise_for_status()
 
     async def remove(self, key):
@@ -263,13 +283,22 @@ class DB:
         data = await self._store.read(key)
         return json.loads(data) if data is not None else default
 
-    async def put(self, key, value, *, meta=None, create=False):
-        """`create=True` refuses to overwrite: raises `Conflict` if the key is
-        taken. Default off so every existing caller keeps its semantics."""
+    async def put(self, key, value, *, meta=None, create=False, gen=None):
+        """`create=True` refuses to overwrite. `gen=` is compare-and-swap: the
+        write lands only if the key is still at the version that was read, and
+        raises `Conflict(stale=True)` otherwise. Both default off, so every
+        existing caller keeps last-write-wins."""
         if meta:
             bad = [(k, type(v).__name__) for k, v in meta.items() if not isinstance(v, str)]
             if bad: raise TypeError(f"meta values must be str; got non-string: {bad}")
-        await self._store.write(key, json.dumps(value).encode(), meta=meta, create=create)
+        await self._store.write(key, json.dumps(value).encode(), meta=meta, create=create, gen=gen)
+
+    async def get_gen(self, key, default=None):
+        """(value, version). Pass the version back to `put(gen=…)` to make the
+        write conditional on nothing having changed. A missing key reads as
+        version `""`, which only a `create` write satisfies."""
+        data, gen = await self._store.read_gen(key)
+        return (default if data is None else json.loads(data)), (gen or "")
 
     async def delete(self, target):
         if not target or target.startswith("/") or ".." in target.split("/"):

@@ -157,6 +157,7 @@ export function useFiles(baseUrl: string = "") {
     const q = new URLSearchParams();
     if (op.who) q.set("who", String(op.who));
     if (kind === "list" && op.prefix) q.set("prefix", String(op.prefix));
+    if (kind === "put" && op.version !== undefined) q.set("version", String(op.version));
     const key = kind === "list" ? "" : `/${String(op.key ?? "").replace(/^\/+/, "")}`;
     const method = kind === "put" ? "PUT" : kind === "delete" ? "DELETE" : "GET";
     const query = q.toString();
@@ -166,7 +167,9 @@ export function useFiles(baseUrl: string = "") {
       body: method === "PUT" ? JSON.stringify(op.value ?? null) : undefined,
     });
     if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`);
+    // 412 is the CAS answer, not a failure — the caller re-reads and retries.
+    if (!res.ok) throw Object.assign(new Error(`${res.status} ${(await res.text()).slice(0, 200)}`),
+                                     { status: res.status });
     return res.json();
   }, [baseUrl, authHeaders]);
 
