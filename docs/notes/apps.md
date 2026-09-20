@@ -400,9 +400,15 @@ masked — so a 30-day TTL expiry cannot await a `remove_prefix`. Rows can outli
 They are invisible, cost nothing, and can never be inherited, because the build-time purge catches
 them.
 
-**There is no migration from `data/state.json`.** Nothing in production used it, so the shelf starts
-empty and the file is not read. An app that still wants a file uses `cycls.read`/`write`, which is
-what injaz does with `data/<PROJECT>.json` — those are files and are unaffected.
+**There is no migration from the old `state.json`.** The shelf starts empty and the file is not read.
+A couple of apps do have one, written by the deployed client at `apps/<slug>/state.json` — not
+`data/state.json`, which only became the write root later, so the seed had been reading the wrong
+path anyway. What is in them is a handful of per-player UI preferences, which under `cycls.me`
+belong in a different shelf than an import would have put them in. Moving that by hand after a
+deploy beats carrying migration code for it.
+
+An app that wants a file still uses `cycls.read`/`write`, which is what injaz does with
+`data/<PROJECT>.json` — those are files and are unaffected.
 
 ## Known limitations
 
