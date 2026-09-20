@@ -82,6 +82,9 @@ async def _gcs_auth():
     return {"Authorization": f"Bearer {_gcs_token}"}
 
 
+FETCH_WIDTH = 32   # concurrent reads behind one items() call
+
+
 def _gen_of(data):
     """An opaque token that changes when the bytes do — the file store's generation."""
     return None if data is None else hashlib.sha256(data).hexdigest()[:16]
@@ -311,8 +314,10 @@ class DB:
     async def items(self, *, prefix=None, glob=None, limit=None):
         keys = sorted(await self._store.list_keys(prefix=prefix, glob=glob))
         if limit is not None: keys = keys[:limit]
+        gate = asyncio.Semaphore(FETCH_WIDTH)   # a wide prefix is one GET per key
         async def _fetch(k):
-            data = await self._store.read(k)
+            async with gate:
+                data = await self._store.read(k)
             return None if data is None else (k, json.loads(data))
         for r in await asyncio.gather(*[_fetch(k) for k in keys]):
             if r is not None: yield r

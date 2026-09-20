@@ -213,6 +213,9 @@ The page never holds a token, inherits a refreshed one for free, and keeps worki
 that built it has ended. Grant resolution is user → workspace, so two members opening the same shared
 app each act with their own credential.
 
+This path is live today — shim `cycls:fetch` → bridge → `fetchConnector` → `/connectors/{name}/fetch/{path}`
+→ `oauth.relay()` — and **it has no tests**, at either end.
+
 An app is a second, non-LLM caller of the same grant, so the relay carries what the tool path
 carries: a `relay` audit line naming the connector and the caller, the org and personal switches,
 a per-minute budget, and `never` on the reserved `_relay` key for a person who does not want
@@ -300,8 +303,15 @@ its compare-then-replace is not atomic — it is the dev and test store, where t
 
 ### A list says when it did not fit
 
-`cycls.get` loads the whole shared shelf into a map once and answers from it, so a shelf that does
-not fit in one page makes "absent" meaningless: the key may be in the part that was cut. The list
+Nothing truncates an app's *files* — `cycls.read`/`write` are unchanged. The cap is on how many KV
+rows one list returns, and it exists because `items()` is a LIST plus one GET per row.
+
+The real protection is `FETCH_WIDTH`, a semaphore of 32 concurrent reads inside `items()`: a wide
+prefix used to fan out one request per key all at once. With the fan-out bounded, the row cap is a
+backstop at 10,000 rather than a policy — no realistic app is cut by it.
+
+If one ever is, it is told. `cycls.get` loads the whole shared shelf into a map once and answers
+from it, so a cut page makes "absent" meaningless: the key may be in the part that was dropped. The
 reply carries `truncated`, and `cycls.get` **throws** rather than return a fallback for a key it
 cannot vouch for. A key it did see still answers normally.
 
@@ -377,20 +387,20 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
   round-trip; an image or a database must be base64 at rest.
 - A bridge *file* write is capped at 1,000,000 UTF-16 units and rewrites the whole file. There is no
   append, no delete and no directory listing. A data row is capped at the same size.
-- CAS exists (`put(gen=…)` → `ifGenerationMatch`) but is opt-in. Nothing else in the codebase uses
-  it yet — chats, the agent KV and connector grants are all still last-write-wins.
+- CAS exists (`put(gen=…)` → `ifGenerationMatch`) but is opt-in, and only app data uses it. Chats
+  and the agent KV stay last-write-wins on purpose: both are `{slot}/{user}`, one person per shelf,
+  so there is no second writer to lose to.
 - A flush that fails rejects the pending `set`, so a tab closing on a dead connection can still lose
   its last 250 ms.
 
 **App data**
-- A list is capped at 1000 rows. It says so (`truncated`) and `cycls.get` throws rather than lie,
-  but there is still **no cursor** — the only way past the cap is a narrower `prefix`. Keep the
-  `get`/`set` working set small.
+- A list is capped at 10,000 rows. It says so (`truncated`) and `cycls.get` throws rather than lie,
+  but there is still **no cursor** — the only way past the cap is a narrower `prefix`.
 - `set` is last-write-wins by design; only `update` is safe against a concurrent writer. An app that
   does `get` → mutate → `set` is still losing writes, and nothing warns it.
 - `update` retries five times and then throws. Under heavy contention on one key it gives up.
-- `items()` is a LIST plus **one GET per row**, so a 1000-row list is 1001 round-trips in one
-  request. A prefix is the only thing that makes it cheaper.
+- `items()` is a LIST plus **one GET per row**, 32 at a time. A 1000-row list is 1001 reads however
+  it is paced; a prefix is the only thing that makes it cheaper.
 - `who=` costs a `resolve_role()` — one or two more object reads per request, uncached.
 - A non-admin write to a shared shelf reads `app.json` to check `write: admin`. One small gcsfuse
   read per write, and writes are debounced, so it is not hot — but it is not free either.
