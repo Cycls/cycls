@@ -205,28 +205,22 @@ Until 1 and 2 land, pin the phone to file-backed apps or accept the divergence k
 ## Connectors from inside an app
 
 `cycls.connector("salla").json(path, init)` → `cycls:fetch` → the host calls
-`/connectors/{name}/fetch/{path}` with the signed-in user's JWT → `connectors.relay()` resolves that
+`/connectors/{name}/fetch/{path}` with the signed-in user's JWT → `oauth.relay()` resolves that
 user's grant, bounds the host to the connector's declared `api` base, and attaches the credential
 server-side.
 
 The page never holds a token, inherits a refreshed one for free, and keeps working after the chat
-that built it has ended. Grant resolution is user → workspace, so two members opening the same shared
-app each act with their own credential.
+that built it has ended. Grant resolution is user → workspace, so two members opening the same
+shared app each act with their own credential. A shared or gallery view gets no connectors at all —
+`fetchConnector` is withheld, and the app is told so.
 
-This path is live today — shim `cycls:fetch` → bridge → `fetchConnector` → `/connectors/{name}/fetch/{path}`
-→ `oauth.relay()` — and **it has no tests**, at either end.
+This is why `connect-src 'none'` costs the app nothing: it never needed a network of its own.
 
-An app is a second, non-LLM caller of the same grant, so the relay carries what the tool path
-carries: a `relay` audit line naming the connector and the caller, the org and personal switches,
-a per-minute budget, and `never` on the reserved `_relay` key for a person who does not want
-their apps reaching a connector at all. `ask` is not offered — an HTTP route has no chat to ask in.
-
-**A connector with a REST base and no MCP server** contributes one `{name}_request` tool, handled
-by the same `relay`. Without it a pasted key could be stored, encrypted, scoped and listed in the
-directory while the agent never learned it existed, because the loop only ever walks servers.
-`auth=` picks how the credential is presented: `bearer` (default), `basic`, `header`, `query`.
-Declare it on `cycls.Web().connectors(...)` as usual **and** on `cycls.LLM().connectors(...)`, which
-is how the loop sees a connector that has no server to walk.
+Everything on the other side of the bridge — the path bounding, the `auth=` styles, the `_relay`
+switch, the budget, and the `{name}_request` tool a REST-only connector contributes — is one
+mechanism shared with the model's tool path, and lives in
+[plugins-connectors.md](plugins-connectors.md) under **The API relay**. Note that the *connect*
+relay in that note is a different component: it brokers an OAuth code once, at connect time.
 
 ## Where app data lives — the `.apps` slot
 
@@ -388,8 +382,10 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
 - A bridge *file* write is capped at 25 MB of UTF-8 and rewrites the whole file — there is no
   append, no delete and no directory listing. The cap used to be 1,000,000 `.length`, which is
   UTF-16 units, so it was ~1 MB of English and ~2 MB of Arabic under a name that said bytes.
-- A **data row** is capped at 1 MB, and deliberately stays there: a list reads every row, so a value
-  is a value and anything bigger belongs in a file.
+- A **data row** is capped at 1 MB and stays there. `cycls.get` loads the whole shelf, so a row's
+  cost is its size times how many there are — rows travel in a herd, files travel alone. It is the
+  same number Firestore picked for the same reason; stores with big values (Cloudflare KV, Redis)
+  are the ones you never list wholesale.
 - CAS exists (`put(gen=…)` → `ifGenerationMatch`) but is opt-in, and only app data uses it. Chats
   and the agent KV stay last-write-wins on purpose: both are `{slot}/{user}`, one person per shelf,
   so there is no second writer to lose to.
@@ -437,8 +433,8 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
 **Access control**
 - An app may write `data/` only, but the **agent** may write anything in the folder, and an
   injected agent writing `src/` then rebuilding is not gated.
-- `RELAY_PER_MINUTE` is per instance. Cloud Run runs several, so it bounds a runaway, not a
-  determined caller.
+- The connector relay's limits are in [plugins-connectors.md](plugins-connectors.md); the one that
+  bites an app is `RELAY_PER_MINUTE`, counted per instance.
 
 **Fixed, and worth not regressing**
 - A failed tool used to log `ok=true`: `log("tool_call")` derived it from whether an exception was
