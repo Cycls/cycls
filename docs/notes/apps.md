@@ -213,29 +213,33 @@ calls a function instead of hand-rolling the postMessage protocol.
 **`cycls.save(name, content)`** is the only way out of the folder, and it opens a host dialog every
 time. An app never holds standing permission to write elsewhere.
 
-## Porting the phone client
+## The phone client
 
-`~/Desktop/code/mobile-app` stages the bundle to a `file://` URI in a WebView with
-`originWhitelist: ["*"]`. It predates all of this, so today the same app reads rows on the web and
-writes a file on a phone — and **nothing reads that file**. A phone user's `cycls.set` is invisible
-to the web, to other members and to the agent. This is the item, not a nice-to-have.
+`~/Desktop/code/mobile-app` runs the same bridge. It stages the bundle to a `file://` URI in a
+WebView rather than an iframe, because Android truncates `loadData` past roughly 2 MB and a 2.4 MB
+bundle rendered blank in production.
 
-In order of what breaks without it:
+`src/ui/appShim.ts` is the shim above with the transport swapped and nothing else: app → host goes
+over `ReactNativeWebView.postMessage` when that global exists, host → app is a `message` event the
+native side dispatches carrying a JSON string, and `receive` parses a string before reading it. The
+shelves, the 250 ms flush, `update`'s CAS retry and the `truncated` throw are copied verbatim — a
+diff that ignores comments shows only those transport lines, which is the point: a stale copy is how
+the two hosts start disagreeing about what an app may reach.
 
-1. **Handle `cycls:data`.** The frame sends `{type, id, op, key, value, who, prefix}`; reply with
-   `{type:"cycls:data:result", id, ok, result}` or `{ok:false, error}`. Map it to
-   `GET|PUT|DELETE /apps/<slug>/data[/<key>][?who=&prefix=&limit=]` with the viewer's JWT. `ok:false`
-   must carry the status text, because a 403 from the role gate is how an app tells which view to
-   render.
-2. **Ship the current shim.** `app-shim.ts` is one string; a stale copy still writes
-   `data/state.json`, which nothing reads. Nothing else in the shim is web-specific.
-3. **Transfer a MessagePort with `cycls:init`.** Optional — the shim falls back to the window — but
-   without it a frame that navigates itself keeps receiving workspace data.
-4. **Send `canWrite`** the same way, or `cycls.write` silently no-ops.
-5. **Bundle size.** Android truncates `loadData` past roughly 2 MB; a 2.4 MB bundle rendered blank
-   in production. Stage to a file URI, do not inline.
+`src/core/apps.mjs` holds the shared half — `appScope`, `inScope`, `canWrite`, `overWriteLimit`,
+`safeName`, `relayError` and `appDataRequest`, which builds the method, path and query for the four
+ops so both clients cannot disagree about what `who=` or `?version=` mean. It is plain ESM so
+`node --test` runs it.
 
-Until 1 and 2 land, pin the phone to file-backed apps or accept the divergence knowingly.
+Two things differ, both forced:
+
+- **No MessagePort.** Native cannot transfer one, so `cycls:init` arrives on the window and stays
+  there. The frame is a `file://` page the host staged and no script in it can navigate the WebView
+  to someone else's document without going through `onShouldStartLoadWithRequest`, so the threat the
+  port closes on web — a self-navigating frame inheriting the channel — needs a different answer
+  here rather than the same one.
+- **Subresource errors.** A `file://` page's failed `<script>`/`<link>` never reaches the WebView's
+  `onError`, so the shim's `error` listener captures in addition to reporting `e.message`.
 
 ## Connectors from inside an app
 
