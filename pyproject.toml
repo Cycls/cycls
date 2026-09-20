@@ -26,6 +26,7 @@ test = [
     "anthropic>=0.40.0",  # for --live tests against the real API
     "openai>=1.0.0",      # for --live tests against the real OpenAI API
     "hypercorn>=0.18.0",
+    "playwright==1.62.0",  # browser_test imports it; the pin _app/main.py bakes into the agent image
 ]
 
 [build-system]
