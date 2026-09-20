@@ -935,6 +935,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
 # ---- Share ----
 
 APP_DATA_MAX = 1_000_000   # per value, matching the bridge's file write cap
+APP_LIST_MAX = 1000        # rows per list — items() is a GET each
 
 
 def apps_router(cycls_app, ws_dep, user_dep, volume, base):
@@ -970,11 +971,13 @@ def apps_router(cycls_app, ws_dep, user_dep, volume, base):
             raise HTTPException(403, "Only workspace admins can write this app's shared data")
 
     @r.get("/apps/{slug}/data")
-    async def list_data(slug: str, prefix: str = "", who: str = "",
+    async def list_data(slug: str, prefix: str = "", who: str = "", limit: int = APP_LIST_MAX,
                         ws: Workspace = ws_dep, user: Any = user_dep):
+        # items() is one GET per row, so an uncapped list is one request fanning
+        # out over the whole shelf. Narrow with `prefix`.
         key = await _scope(slug, who, user, ws)
         root, out = key(""), []
-        async for k, v in state.apps_db(ws).items(prefix=key(prefix)):
+        async for k, v in state.apps_db(ws).items(prefix=key(prefix), limit=max(1, min(limit, APP_LIST_MAX))):
             rel = k[len(root):]
             if not who and rel.split("/")[0] == state.USER_MARK:
                 continue
