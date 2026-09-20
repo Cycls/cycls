@@ -850,6 +850,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             dst = state.app_shelf(new)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        await db.delete(dst)   # the folder was free, so rows there are a dead app's
         async for k, v in db.items(prefix=src):
             await db.put(dst + k[len(src):], v)
         await db.delete(src)

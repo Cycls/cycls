@@ -741,3 +741,39 @@ def test_an_app_built_before_the_store_keeps_its_data(tmp_path):
     # the import happens once: the rows are the source of truth afterwards
     client.put("/apps/burnup/data/seen", json=[3], headers=h)
     assert client.get("/apps/burnup/data/seen", headers=h).json() == {"value": [3]}
+
+
+def test_renaming_an_app_renames_its_shelf(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    client.post("/files/apps/standup", headers=h)
+    client.put("/apps/standup/data/entries/1", json="shipped", headers=h)
+    client.put("/apps/standup/data/draft?who=me", json="half a sen", headers=h)
+    assert client.patch("/files/apps/standup", json={"to": "apps/daily"}, headers=h).status_code == 200
+    assert client.get("/apps/daily/data/entries/1", headers=h).json() == {"value": "shipped"}
+    assert client.get("/apps/daily/data/draft?who=me", headers=h).json() == {"value": "half a sen"}
+    assert client.get("/apps/standup/data", headers=h).json() == []
+
+
+def test_a_rename_does_not_inherit_a_dead_apps_rows(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    client.post("/files/apps/standup", headers=h)
+    client.put("/apps/standup/data/keep", json="new", headers=h)
+    client.put("/apps/daily/data/stale", json="from an app that is gone", headers=h)
+    client.patch("/files/apps/standup", json={"to": "apps/daily"}, headers=h)
+    assert client.get("/apps/daily/data", headers=h).json() == [{"key": "keep", "value": "new"}]
+
+
+def test_moving_an_app_out_of_apps_leaves_its_rows_alone(tmp_path):
+    """Not a rename — the folder stops being an app, so the rows stay put rather
+    than being deleted without a trash row to restore from."""
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    client.post("/files/apps/standup", headers=h)
+    client.put("/apps/standup/data/keep", json="v", headers=h)
+    client.patch("/files/apps/standup", json={"to": "archive/standup"}, headers=h)
+    assert client.get("/apps/standup/data/keep", headers=h).json() == {"value": "v"}
