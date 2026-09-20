@@ -1,7 +1,7 @@
 # The CLI
 
-One command, and its verbs mirror the object API — **`run` is local,
-`--remote` is cloud, `deploy` freezes** — so learning either teaches both.
+One command, and its verbs mirror the object API. **`run` is local,
+`--remote` is cloud, `deploy` freezes**, so learning either teaches both.
 
 | command | meaning |
 |---|---|
@@ -21,12 +21,12 @@ Auth for anything that hits the cloud: set `CYCLS_API_KEY`, or
 via `uv run cycls ...`; end users with cycls from PyPI call it directly.
 
 `file` is `path.py`, or `path.py::name` to pick one of several decorated
-instances. Every command imports the file — keep it side-effect-free
+instances. Every command imports the file, so keep it side-effect-free
 (no top-level `.run()`/`.remote()` calls).
 
 ## `cycls init [name]`
 
-Scaffold a starter agent file at `{name}.py` (default: `my_agent.py`) — a
+Scaffold a starter agent file at `{name}.py` (default: `my_agent.py`), a
 minimal `@cycls.agent` with Clerk auth, a system prompt, and an Anthropic
 model. Edit it, then `run` or `deploy`.
 
@@ -40,17 +40,17 @@ cycls init notes
 The dev loop: watch the file (and any `copy`'d files), rerun on every save.
 Where things run follows the one rule:
 
-- **Functions** rerun locally in Docker — or, with `--remote`, on a warm
+- **Functions** rerun locally in Docker, or, with `--remote`, on a warm
   per-image executor in the cloud (provisioned once, ~90s the first time,
   then ~1s per save, no Docker needed). Remote `print()`s stream back live.
-- **Apps** serve locally in Docker — or, with `--remote`, on a live dev URL
+- **Apps** serve locally in Docker, or, with `--remote`, on a live dev URL
   (`dev-{name}.cycls.ai`): each save hot-swaps the running app, no redeploy,
   with the server's request log streaming into your terminal.
 
 ```bash
-cycls run examples/function/remote.py --remote --n 1000
+cycls run examples/functions/dev_loop.py --remote --n 1000
 # 3.2            ← edit anything, save, reprints in ~1s
-cycls run examples/app/fast.py --remote
+cycls run examples/apps/api.py --remote
 #   https://dev-fast.cycls.ai
 #   │ 200 GET /
 ```
@@ -58,12 +58,12 @@ cycls run examples/app/fast.py --remote
 Trailing `--name value` args bind to the target's signature: annotated
 params convert via their annotation, the rest literal-eval, else string.
 
-For orchestration — several calls, `.map()`, mixed local/remote — mark a
+For orchestration (several calls, `.map()`, mixed local and remote), mark a
 driver with `@cycls.local_entrypoint`. Its code chooses the verbs, so
 `--remote` doesn't apply there and is rejected. Keep driver calls inside
 the entrypoint, not at module top level.
 
-Saves during a run queue the next run rather than killing the current one —
+Saves during a run queue the next run rather than killing the current one
 a save can never interrupt a provision.
 
 ## `cycls deploy <file>`
@@ -79,11 +79,11 @@ cycls deploy notes.py
 
 `deploy` reads the function's contract: a function that takes `port` is a
 server and serves it; a bare function deploys as a **remote-callable
-endpoint** — frozen at deploy time, callable by name from any machine with
+endpoint**, frozen at deploy time, callable by name from any machine with
 your `CYCLS_API_KEY`, no Docker:
 
 ```bash
-cycls deploy examples/function/remote.py
+cycls deploy examples/functions/dev_loop.py
 # Deployed: https://simulate.cycls.ai
 # Call it: cycls.remote("simulate")(...)
 ```
@@ -95,24 +95,24 @@ results = cycls.remote("simulate").map([10**6] * 100)
 ```
 
 Auth is a token derived from your API key (nothing stored server-side), and
-every call carries its Python/cloudpickle versions — the endpoint refuses
+every call carries its Python and cloudpickle versions. The endpoint refuses
 pickles that can't cross a version boundary with an explicit error. First
 call after idle pays a cold start (a few seconds). See
 [function.md](function.md) for the full remote-execution story.
 
 ## `cycls shell <file>`
 
-Interactive bash inside the target's built image — the exact environment
+Interactive bash inside the target's built image: the exact environment
 `run` and `deploy` execute in. Builds (or reuses) the cached image, drops
 you in `/app`, cleans up on exit.
 
 ```bash
-cycls shell examples/function/c.py
+cycls shell examples/functions/toolchain.py
 # Entering cycls/triangle:730f149a (exit to leave)
 root@a1b2c3:/app# gcc --version
 ```
 
-Use it to verify what an `Image()` actually produced — check packages,
+Use it to verify what an `Image()` actually produced: check packages,
 linked libraries, test commands before adding them to `.run(...)`.
 
 ## `cycls ls`
@@ -125,7 +125,7 @@ cycls ls
 # notes         https://notes.cycls.ai         [us-central1]   2026-05-10T09:00
 ```
 
-Dev artifacts show up here too — `exec-*` (function executors) and `dev-*`
+Dev artifacts show up here too, `exec-*` (function executors) and `dev-*`
 (app dev services). They scale to zero and cost nothing idle; `rm` reaps
 them.
 
@@ -137,7 +137,7 @@ Delete a deployment. Asks for confirmation unless `-y`.
 cycls rm notes -y
 ```
 
-Doesn't delete the workspace storage — state survives, and redeploying the
+Deleting a deployment does not delete its storage. State survives, and redeploying the
 same name picks it back up.
 
 ## `cycls logs <name>`
@@ -164,7 +164,7 @@ When a user reports that reference, grep for it. Filter via
 
 | field | values |
 |---|---|
-| `source` | `"agent"` — emitted by the agent runtime |
+| `source` | `"agent"`, emitted by the agent runtime |
 | `level` | `"error"` |
 | `error_id` | short hex id, also shown to the user |
 | `message` | `str(exception)`, untruncated |
@@ -178,14 +178,14 @@ cycls logs super-stage --query 'jsonPayload.user_id="user_2yY1..."'
 cycls logs super-stage --query 'jsonPayload.chat_id="abc-123"'
 ```
 
-`-f` works with `-q` — the filter is reapplied on every poll. Errors the
+`-f` works with `-q`, the filter is reapplied on every poll. Errors the
 harness catches and shows as callouts (rate-limit retries, compaction
-failures, tool timeouts) are *not* structured-logged — they're handled, not
+failures, tool timeouts) are *not* structured-logged. They're handled, not
 QA signals.
 
 ### Cost logging
 
-Each model turn also emits a structured `level=usage` line — queryable
+Each model turn also emits a structured `level=usage` line, which is queryable
 per-user / per-chat / per-model / time range:
 
 | field | values |
@@ -201,7 +201,7 @@ Per-chat aggregates also persist in the chat index and surface via
 
 ## `cycls cost <name>`
 
-Aggregate spend across the `level=usage` stream — the friendly shortcut for
+Aggregate spend across the `level=usage` stream: the friendly shortcut for
 the common question.
 
 ```bash
@@ -212,14 +212,14 @@ cycls cost super-stage --month 2026-04
 cycls cost super-stage --by user      # or: chat, model
 ```
 
-- `-s, --since` — `30m`, `24h`, `7d` (default `24h`)
-- `-m, --month [YYYY-MM]` — calendar month (no value = current); mutually
+- `-s, --since`, `30m`, `24h`, `7d` (default `24h`)
+- `-m, --month [YYYY-MM]`, calendar month (no value = current); mutually
   exclusive with `--since`
-- `-b, --by user|chat|model` — group rows
+- `-b, --by user|chat|model`, group rows
 
 ## `cycls sql [QUERY]`
 
-SQL across all your deployment data — two tables, scoped automatically to
+SQL across all your deployment data. Two tables, scoped automatically to
 the deployments your API key owns. The escape hatch when `cost`'s canned
 slicing isn't enough.
 
@@ -233,7 +233,7 @@ Output: aligned table on a TTY, JSON when piped; `--format table|json|csv`
 overrides, `--json` is a shortcut. Empty results print `(0 rows)` to stderr
 and exit 0.
 
-**`logs`** — every log entry, Log Analytics shape. Structured SDK emissions
+**`logs`**, every log entry, Log Analytics shape. Structured SDK emissions
 land in `json_payload`:
 
 | column | type | notes |
@@ -243,7 +243,7 @@ land in `json_payload`:
 | `json_payload` | JSON | by `level`: `error` (`error_id`, `message`, `stack`), `usage` (`model`, tokens, `cost`, `ms`), `tool_call` (`tool`, `ms`, `ok`, `output_bytes`) |
 | `text_payload` | STRING | plain stdout/stderr |
 
-**`billing`** — per-SKU per-day cost rows:
+**`billing`**, per-SKU per-day cost rows:
 
 | column | type | notes |
 |---|---|---|
@@ -280,11 +280,11 @@ GROUP BY tool ORDER BY p95_ms DESC
 Notes, honestly: the first `cycls sql` call after a deployment is created
 can take 5–10s (lazy server-side setup); a per-query scanned-bytes cap is
 enforced (add `LIMIT` or narrower predicates); SQL-engine errors surface
-verbatim — they're actionable.
+verbatim, because they're actionable.
 
 ## `cycls volume <command>`
 
-Manage [volumes](volume.md) — named persistent storage, attached to
+Manage [volumes](volume.md): named persistent storage, attached to
 deployments via `volumes=` on any decorator.
 
 ```bash
@@ -296,12 +296,12 @@ cycls volume ls training-data models/      # contents under a prefix
 cycls volume put training-data ./model.bin models/model.bin
 cycls volume get training-data outputs/result.parquet .
 cycls volume rm training-data models/old.bin   # remove a file
-cycls volume delete training-data [-y]     # delete the volume — refuses while
+cycls volume delete training-data [-y]     # delete the volume; refuses while
                                            # attached; recoverable for 7 days
 ```
 
 `put`/`get` move bytes directly to storage (no size limit through the API).
-`rm` removes a file; `delete` removes the volume — deleting a *deployment*
+`rm` removes a file; `delete` removes the volume. Deleting a *deployment*
 never touches volume data.
 
 ## `cycls version`

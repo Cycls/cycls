@@ -1,4 +1,6 @@
-# uv run cycls deploy examples/function/embed.py
+# A model loaded once per instance, then warm on every later call.
+#
+#   uv run cycls deploy examples/functions/warm_model.py
 import cycls
 
 @cycls.function(image=cycls.Image().pip("fastembed"))

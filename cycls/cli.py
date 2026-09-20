@@ -376,7 +376,7 @@ llm = (
 @cycls.agent(image=image, web=web, volumes={{"/workspace": chats}})
 async def {name}(context):
     async for ev in llm.run(context=context):
-        yield cycls.to_ui(ev)
+        yield ev
 '''
 
 

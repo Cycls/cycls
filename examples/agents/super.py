@@ -1,5 +1,5 @@
-# uv run cycls run examples/agent/super.py
-# uv run cycls deploy examples/agent/super.py
+# uv run cycls run examples/agents/super.py
+# uv run cycls deploy examples/agents/super.py
 # cd client && npm run dev
 # uv run pytest tests/agent/ -v
 
@@ -149,7 +149,7 @@ llm = (
     # .vision(False)  # text-only model: attached media stays in the workspace with a note
     # .extra_body({"reasoning_effort": "low"})  # vendor extras merged last — your keys win
     # .web_search("native")  # Anthropic server-side search; default "brave" runs on any model (BRAVE_API_KEY)
-    # .skills("examples/agent/skills")  # ship skill folders (<name>/SKILL.md) with the agent
+    # .skills("examples/agents/skills")  # ship skill folders (<name>/SKILL.md) with the agent
     # .instructions("AGENT.md")  # workspace instructions file in the system prompt — this is the default
     .mcp(*SERVERS, posthog_server)  # remote MCP, any provider; tools are `{label}_*`, e.g. `drive_*`
     # .mcp(cycls.MCP("https://x/mcp").name("x").connector(o))  # one server on its own, wired to its connector
@@ -196,7 +196,7 @@ async def super(context):
         yield cycls.to_ui(ev)
 
 
-# uv run examples/agent/super.py
+# uv run examples/agents/super.py
 # if __name__ == "__main__":
 #     super.local()
 #     super.deploy()

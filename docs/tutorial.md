@@ -1,12 +1,12 @@
 # Cycls Tutorial
 
-Cycls is the deep-stack AI SDK for Python. Every layer of an AI agent — container, UI, LLM, storage — is a composable primitive. Write an agent in one file, deploy it with one command.
+Cycls is the deep-stack AI SDK for Python. Every layer of an AI agent (container, UI, LLM, storage) is a composable primitive. Write an agent in one file, deploy it with one command.
 
 ## Prerequisites
 
 - Python 3.10+
 - Docker running
-- A Cycls API key from [cycls.com](https://cycls.com) (for deployment)
+- A Cycls API key from [cloud.cycls.com](https://cloud.cycls.com) (for deployment)
 
 ## Installation
 
@@ -31,7 +31,7 @@ llm = (
 @cycls.agent(volumes={"/workspace": cycls.Volume("hello-chats")})
 async def hello(context):
     async for ev in llm.run(context=context):
-        yield cycls.to_ui(ev)
+        yield ev
 ```
 
 Run it:
@@ -43,7 +43,7 @@ cycls deploy hello.py  # production
 
 You now have a streaming chat interface backed by Claude, live at `http://localhost:8080` (or `https://hello.cycls.ai` for the deploy).
 
-Agents keep chat state on a [volume](volume.md) mounted at `/workspace` — the decorator requires one. Locally `cycls run` ignores volumes (your code sees the local filesystem); in the cloud the named volume is created on first deploy and outlives the deployment.
+Agents keep chat state on a [volume](volume.md) mounted at `/workspace`. The decorator requires one. Locally `cycls run` ignores volumes (your code sees the local filesystem); in the cloud the named volume is created on first deploy and outlives the deployment.
 
 ---
 
@@ -75,20 +75,20 @@ llm = (
              volumes={"/workspace": cycls.Volume("my-agent")})
 async def my_agent(context):
     async for ev in llm.run(context=context):
-        yield cycls.to_ui(ev)
+        yield ev
 ```
 
-- **`cycls.Image`** — container build config (pip, apt, copy, run commands)
-- **`cycls.Web`** — UI, auth, branding, CMS, analytics
-- **`cycls.LLM`** — model, system prompt, tools, handlers, allowed builtins, sandbox
-- **`cycls.Volume`** — named persistent storage, attached by mount path
-- **`cycls.DB`** — per-user JSON store over the workspace (see [Free-tier quota recipe](#free-tier-quota-recipe))
+- **`cycls.Image`**: container build config (pip, apt, copy, run commands)
+- **`cycls.Web`**: UI, auth, branding, CMS, analytics
+- **`cycls.LLM`**: model, system prompt, tools, handlers, allowed builtins, sandbox
+- **`cycls.Volume`**: named persistent storage, attached by mount path
+- **`cycls.DB`**: per-user JSON store over the workspace (see [Free-tier quota recipe](#free-tier-quota-recipe))
 
 Each decorator accepts exactly the primitives it needs:
 
-- `@cycls.function(image=, volumes=, schedule=)` — non-blocking compute
-- `@cycls.app(image=, volumes=)` — blocking ASGI service
-- `@cycls.agent(image=, web=, volumes=)` — managed chat product (LLM is consumed inside the body; a `/workspace` volume is required)
+- `@cycls.function(image=, volumes=, schedule=)`: non-blocking compute
+- `@cycls.app(image=, volumes=)`: blocking ASGI service
+- `@cycls.agent(image=, web=, volumes=)`: managed chat product (LLM is consumed inside the body; a `/workspace` volume is required)
 
 ---
 
@@ -103,9 +103,9 @@ async def my_agent(context):
     context.last_message  # shortcut: last user message text
     context.user          # User(id, org_id, plan, features, ...) when auth is set
     context.chat_id       # current chat session id
-    context.prod          # True when running via .deploy(), False on .local() — gate billing/analytics
+    context.prod          # True when running via .deploy(), False on .local(); gate billing/analytics
     context.workspace     # per-user file scope on the /workspace volume
-    context.disabled_tools  # tools the person switched off in Settings, e.g. ["WebSearch"] — LLM.run() drops them for the turn
+    context.disabled_tools  # tools the person switched off in Settings, e.g. ["WebSearch"]; LLM.run() drops them for the turn
 ```
 
 ---
@@ -123,7 +123,7 @@ yield "This is **bold** and *italic*.\n"
 
 ### Thinking bubbles
 
-Multiple `thinking` yields append to the same bubble until a different type is yielded. Provider reasoning deltas (Claude extended thinking, OpenAI `delta.reasoning`) automatically map here — you get thinking bubbles for free when using `llm.run()`.
+Multiple `thinking` yields append to the same bubble until a different type is yielded. Provider reasoning deltas (Claude extended thinking, OpenAI `delta.reasoning`) automatically map here, so you get thinking bubbles for free when using `llm.run()`.
 
 ```python
 yield {"type": "thinking", "thinking": "Let me "}
@@ -159,7 +159,7 @@ yield {"type": "image", "src": "/public/chart.png", "alt": "Chart"}
 
 ### UI actions
 
-Fire-and-forget client-side triggers — nothing is rendered in the conversation and nothing is persisted in session history. Use these to drive the chat UI from agent logic.
+Fire-and-forget client-side triggers. Nothing is rendered in the conversation and nothing is persisted in session history. Use these to drive the chat UI from agent logic.
 
 ```python
 # Free-tier hit their limit? Pop the plan modal.
@@ -173,14 +173,14 @@ Supported actions:
 
 | Action | Fields | Behavior |
 |--------|--------|----------|
-| `open_plan_modal` | — | Opens the pricing modal. FE auto-picks `user` vs `organization` based on the active Clerk org. |
+| `open_plan_modal` |, | Opens the pricing modal. FE auto-picks `user` vs `organization` based on the active Clerk org. |
 | `open_canvas` | `path`, `name?` | Opens a workspace file in the canvas viewer. An `apps/<slug>/index.html` path opens under its manifest name and icon. |
 | `suggest` | `text` | One follow-up chip above the composer; click sends it, `↑` in an empty composer edits it. Users switch the chips off in Settings. |
-| `ask` | `questions` | A question card above the composer (up to 3 questions, each with `options` and optional `header`/`multi_select`). Answers arrive as the next user message — the options are shortcuts, not a gate, and typing any reply answers too. Users switch the card off in Settings. |
+| `ask` | `questions` | A question card above the composer (up to 3 questions, each with `options` and optional `header`/`multi_select`). Answers arrive as the next user message; the options are shortcuts, not a gate, and typing any reply answers too. Users switch the card off in Settings. |
 
 The `Canvas`, `Suggest` and `Ask` builtins fire these for you; yield them
 directly only from a custom loop. Unlike the rest, `ask` also **ends the turn**
-when the builtin fires it — see [notes/tool-rows.md](notes/tool-rows.md).
+when the builtin fires it. See [notes/tool-rows.md](notes/tool-rows.md).
 
 ### Component reference
 
@@ -193,14 +193,14 @@ when the builtin fires it — see [notes/tool-rows.md](notes/tool-rows.md).
 | `callout` | `callout`, `style` | Single |
 | `status` | `status` | Replaces previous |
 | `image` | `src` | Single |
-| `sources` | `sources` | Citation chips — `[{title, url, snippet}]`. Emitted by `WebSearch`; a link in the answer matching one of these URLs becomes a chip too |
+| `sources` | `sources` | Citation chips from `[{title, url, snippet}]`. Emitted by `WebSearch`; a link in the answer matching one of these URLs becomes a chip too |
 | `ui` | `action` | Fire-and-forget client action |
 
 HTML strings pass through for custom styling.
 
 ---
 
-## `cycls.Image` — Container Build Config
+## `cycls.Image`, Container Build Config
 
 `cycls.Image` is a fluent dict-builder. Chain methods to declare packages, files, and build commands; pass it to any decorator via `image=`.
 
@@ -236,8 +236,8 @@ Cycls hashes image config to create deterministic Docker tags. Same inputs = ins
 A common pattern is to split a project `.env` into two files so CLI-only tokens never end up in the shipped image:
 
 ```
-.env              # CYCLS_API_KEY, UV_PUBLISH_TOKEN — stays on dev machine
-.providers.env    # OPENAI_API_KEY, ANTHROPIC_API_KEY — ships inside the container
+.env              # CYCLS_API_KEY, UV_PUBLISH_TOKEN (stays on your machine)
+.providers.env    # OPENAI_API_KEY, ANTHROPIC_API_KEY (ships inside the container)
 ```
 
 ```python
@@ -248,7 +248,7 @@ image = cycls.Image().copy(".providers.env", ".env")
 
 ---
 
-## `cycls.Volume` — Persistent Storage
+## `cycls.Volume`, Persistent Storage
 
 ```python
 data = cycls.Volume("training-data")
@@ -259,11 +259,11 @@ def crunch(day):
     return pd.read_parquet(f"/data/events-{day}.parquet").sum()
 ```
 
-Named storage attached to any deployment at any mount path — created on first reference, shared by name across deployments, and alive until you explicitly `cycls volume delete` it. `.read_only()` and `.sub_path("a/b")` restrict a mount. Agents require one at `/workspace` (chat state lives there); `cycls rm` detaches volumes but never deletes their data. Seed and extract data with `cycls volume put/get`. Full story: [volume.md](volume.md).
+Named storage attached to any deployment at any mount path, created on first reference, shared by name across deployments, and alive until you explicitly `cycls volume delete` it. `.read_only()` and `.sub_path("a/b")` restrict a mount. Agents require one at `/workspace` (chat state lives there); `cycls rm` detaches volumes but never deletes their data. Seed and extract data with `cycls volume put/get`. Full story: [volume.md](volume.md).
 
 ---
 
-## `cycls.Web` — UI, Auth, Branding
+## `cycls.Web`, UI, Auth, Branding
 
 ```python
 web = (
@@ -280,15 +280,15 @@ web = (
 | Method | Purpose |
 |---|---|
 | `.auth(provider)` | Set auth provider (`cycls.Clerk()` or `cycls.JWT(...)`) |
-| `.auth(cycls.Clerk(one_tap=True))` | Google One Tap on the signed-out page — the "Continue as …" card. Needs Google enabled in Clerk with **custom credentials**, and each agent origin in that OAuth client's authorized JavaScript origins |
+| `.auth(cycls.Clerk(one_tap=True))` | Google One Tap on the signed-out page: the "Continue as …" card. Needs Google enabled in Clerk with **custom credentials**, and each agent origin in that OAuth client's authorized JavaScript origins |
 | `.title(str)` | Browser tab + app title |
 | `.brand(locale=, name=, description=, logo=, brand=, og=, favicon=)` | Static branding per locale. `logo` is the agent icon (chat hero); `brand` is the wordmark shown in the nav bar (falls back to the Cycls logo when unset); `og`/`favicon` are global |
 | `.theme(name)` | `"default"` or `"dev"` |
 | `.colors(primary=, secondary=, primary_dark=, secondary_dark=)` | Theme accent colors (any CSS color). `primary` drives highlights and active states, `secondary` chips and bubbles; the `_dark` variants override dark mode |
 | `.cms(brand=, explore=, token=)` | Pull branding and/or the explore menu from any CMS: plain GET URLs returning the contract JSON, optional bearer `token`. Static `.brand()`/`.explore()` win, piece by piece |
 | `.explore(*agents)` | Static explore menu (the agents dropdown): `{"name", "url", "logo"?, ...}` entries. Overrides the CMS list; with neither, the menu is hidden |
-| `.seo(title=, description=)` | Page/SEO copy when it should differ from the brand — the `<title>` tag, meta + og description |
-| `.head(html)` | Append raw HTML to `<head>` — site verification, custom meta. Repeatable |
+| `.seo(title=, description=)` | Page/SEO copy when it should differ from the brand: the `<title>` tag, meta and og description |
+| `.head(html)` | Append raw HTML to `<head>` for site verification or custom meta. Repeatable |
 | `.suggestions(on=True)` | Show prompt-starter suggestions on the empty-chat screen. Off by default |
 | `.affiliate(api_key)` | Affiliate/referral tracking (e.g. a Rewardful key); the FE loads the tracker and reports conversions on checkout |
 | `.max_upload(mb)` | Per-file upload cap in MB (default 512). Enforced server-side, pre-checked client-side |
@@ -296,7 +296,7 @@ web = (
 | `.notifications(cycls.OneSignal(app_id))` | Web push as a plugin; the permission card is ours, the trigger is a PostHog flag (docs/notes/engagement.md) |
 | `.suggestions(bool)` | Prompt-starter suggestions on the empty-chat screen (default off) |
 | `.copy_public(*files)` | Static files served at `/public` |
-| `.workspaces(create="member")` | Multi-workspace mode: every user gets a personal workspace, teams are shared with role-based access, selected per request via the `X-Workspace` header. Requires `.auth(...)`. `create` sets who may create team workspaces (`"member"` or `"admin"`) — see [docs/workspaces.md](workspaces.md) |
+| `.workspaces(create="member")` | Multi-workspace mode: every user gets a personal workspace, teams are shared with role-based access, selected per request via the `X-Workspace` header. Requires `.auth(...)`. `create` sets who may create team workspaces (`"member"` or `"admin"`). See [docs/workspaces.md](workspaces.md) |
 | `.iap(cycls.AppleIAP(...))` | Apple In-App Purchase entitlements: a StoreKit 2 signed transaction (JWS) in a header is verified offline against the bundled Apple root cert and, when valid, upgrades the request's `user.plan`. See below |
 
 Static files land at `https://your-app.cycls.ai/public/logo.png`.
@@ -325,8 +325,8 @@ Details: [docs/notes/office-preview.md](notes/office-preview.md).
 
 ### Browser automation
 
-Give an agent a **real browser** — open pages behind JavaScript, read them, click,
-fill forms, log in, run multi-step flows, screenshot — without shipping Chromium
+Give an agent a **real browser**: open pages behind JavaScript, read them, click,
+fill forms, log in, run multi-step flows and screenshot, all without shipping Chromium
 in the image. The heavy part (real Chrome) runs in a shared service the agent
 calls over HTTP; the SDK ships only the client and the built-in `Browser` tool.
 
@@ -342,23 +342,23 @@ BROWSER_URL=https://cycls-browser.cycls.ai   # your deployed browser service
 BROWSER_SECRET=<the shared service secret>
 ```
 
-The model drives one stateful `browser` tool step by step — `open` a url, `read`
+The model drives one stateful `browser` tool step by step, `open` a url, `read`
 it (returns the page text + a numbered list of clickable/typable elements), then
 `click`/`type` by number, `press`, `back`, or `screenshot` (which renders on the
 canvas). The page persists between calls in the turn, so logins and forms work.
-Unset the env and the tool simply isn't offered — no crash, exactly like the
+Unset the env and the tool isn't offered at all, with no crash, exactly like the
 office fallback.
 
 The service is a small FastAPI + Playwright app deployed **as a cycls function**
 (the office-render sibling), so it ships with your `CYCLS_API_KEY` and no separate
-cloud creds — real Chromium lives in it, not in any agent image. Deploy it once,
+cloud creds. Real Chromium lives in it, not in any agent image. Deploy it once,
 pinned to a single instance (sessions are in-memory):
 
 ```bash
 python browser_service.py        # → https://cycls-browser.cycls.ai
 ```
 
-(Self-hosted **Steel Browser** over CDP is an alternative backing — set
+(Self-hosted **Steel Browser** over CDP is an alternative backing: set
 `BROWSER_PROVIDER=steel`.) Details: [docs/notes/browser.md](notes/browser.md).
 
 ### Apple IAP entitlements
@@ -384,7 +384,7 @@ Gate features on the upgraded plan inside the agent via `context.user.plan`.
 
 ---
 
-## `cycls.LLM` — Model, Tools, Loop
+## `cycls.LLM`, Model, Tools, Loop
 
 ```python
 llm = (
@@ -400,48 +400,57 @@ llm = (
 )
 
 async for ev in llm.run(context=context):
-    yield cycls.to_ui(ev)
+    yield ev
 ```
 
 | Method | Purpose |
 |---|---|
-| `.model(str)` | `provider/model` string — `anthropic/...`, `openai/...`, `groq/...`, etc. |
+| `.model(str)` | `provider/model` string: `anthropic/...`, `openai/...`, `groq/...`, etc. |
 | `.system(str)` | System prompt |
 | `.tools(list)` | Custom tool JSON schemas |
-| `.on(name, fn, label=)` | Register async handler for a custom tool; `label` (input → str) renders the step line in the UI, like `Bash(command)` — default is the input's first string value |
+| `.on(name, fn, label=)` | Register async handler for a custom tool; `label` (input → str) renders the step line in the UI, like `Bash(command)`; the default is the input's first string value |
 | `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `Browser`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user. `Browser` is offered only when a browser service is configured (see below) |
 | `.instructions(path)` | Workspace instructions file auto-loaded into the system prompt (default `AGENT.md`; `None` disables) |
 | `.skills(*dirs)` | Ship skills with the agent (dirs of `<name>/SKILL.md` folders; `None` disables skills) |
-| `.context(n)` | Model context window in tokens — sets when compaction kicks in (default 1M; set it for smaller models) |
+| `.context(n)` | Model context window in tokens; sets when compaction kicks in (default 1M; set it for smaller models) |
 | `.max_tokens(n)` | Max output tokens per request (default 8k) |
 | `.price(input=, output=, cache_read=, cache_write=)` | Token prices in USD per 1M for cost tracking; unset → costs report as $0 |
-| `.thinking(spec)` | Unified reasoning level: `"low"`/`"medium"`/`"high"`, `"adaptive"` (default), or `None` — translated to each vendor's dialect (OpenAI/Gemini/Grok/Mistral `reasoning_effort`, GLM/DeepSeek toggles, Qwen budgets, Kimi tiers, OpenRouter `reasoning`) |
-| `.extra_body(params)` | Vendor-specific request extras sent with every model call, merged after the built-in thinking mapping — your keys win. The escape hatch for unmapped vendors/params; `None` clears |
-| `.vision(bool)` | Whether the model accepts base64 media (images, PDFs). Default on; pass `False` for text-only models (GLM, most local) — attachments then stay in the workspace and the model gets a note naming the file, instead of the provider rejecting the request |
+| `.thinking(spec)` | Unified reasoning level: `"low"`/`"medium"`/`"high"`, `"adaptive"` (default), or `None`. Translated to each vendor's dialect (OpenAI/Gemini/Grok/Mistral `reasoning_effort`, GLM/DeepSeek toggles, Qwen budgets, Kimi tiers, OpenRouter `reasoning`) |
+| `.extra_body(params)` | Vendor-specific request extras sent with every model call, merged after the built-in thinking mapping, so your keys win. The escape hatch for unmapped vendors/params; `None` clears |
+| `.vision(bool)` | Whether the model accepts base64 media (images, PDFs). Default on; pass `False` for text-only models (GLM, most local); attachments then stay in the workspace and the model gets a note naming the file, instead of the provider rejecting the request |
 | `.web_search(mode)` | `"brave"` (default, any model, needs `BRAVE_API_KEY`) or `"native"` (Anthropic server-side) |
 | `.mcp(*servers)` | Remote MCP servers via `cycls.MCP` (Anthropic models only) |
 | `.bash_timeout(secs)` | Bash sandbox timeout |
 | `.sandbox(network=False)` | Cut bash off from the network (`curl`, `pip`, `git`). Default on |
 | `.base_url(url)` | Custom endpoint (Groq, vLLM, HUMAIN, self-hosted) |
 | `.api_key(key)` | Override API key |
+| `.connectors(*objs)` | Offer a connector's tools (see [Connectors](#connectors) below) |
+| `.headers(mapping)` | Extra HTTP headers on every model request, for proxy-authenticated endpoints |
 | `.loop(fn)` | Replace the built-in loop (see *Hooking the loop* below) |
 
-The Bash tool runs inside a `bubblewrap` sandbox with the workspace bound at `/workspace` and a sanitized environ. Network is on by default so `curl`/`pip`/`git` just work — but a prompt-injected bash could exfiltrate anything it can read, so pass `.sandbox(network=False)` when the agent doesn't need it. See [sandbox-security.md](notes/sandbox-security.md) for the full threat model.
+The Bash tool runs inside a `bubblewrap` sandbox with the workspace bound at `/workspace` and a sanitized environ. Network is on by default so `curl`/`pip`/`git` just work, but a prompt-injected bash could exfiltrate anything it can read, so pass `.sandbox(network=False)` when the agent doesn't need it. See [sandbox-security.md](notes/sandbox-security.md) for the full threat model.
 
 ### Hooking the loop
 
-`llm.run()` yields *typed events* (`cycls.events` — `TextDelta`, `Thinking`, `Step`, `Usage`, `Failed`, `Compacting`, …). The body `to_ui`s them through; pattern-match first to react:
+`llm.run()` yields the same dicts the body streams (`text`, `thinking`, `step`,
+`callout`, `tool_call`, `ui`) plus bare strings for text deltas. Check the type to
+react, then pass the event through:
 
 ```python
 async for ev in llm.run(context=context):
-    match ev:
-        case cycls.events.Step(query, "Web Search"): log_search(query)
-        case cycls.events.Failed(msg):               alert_ops(msg)
-        case _: pass
-    yield cycls.to_ui(ev)
+    if isinstance(ev, dict):
+        if ev.get("type") == "step" and ev.get("tool_name") == "web_search":
+            log_search(ev["step"])
+        if ev.get("type") == "callout" and ev.get("style") == "error":
+            alert_ops(ev["callout"])
+    yield ev
 ```
 
-Need more than a hook? `.loop(fn)` swaps the loop entirely — `fn` is an async generator with the default loop's signature that yields events. The building blocks live in `cycls._agent.harness`: `default_loop`, `make_provider`, `Session` (the message log + persistence — `add_user` checkpoints, so the person's turn is durable before the model is called, and `rollback()` drops only the assistant tail), `build_tools`, `dispatch`, `compact`, `events`.
+`cycls.to_ui(ev)` appears in older examples. It is now an identity function kept
+for backwards compatibility, so `yield ev` and the older
+`yield cycls.to_ui(ev)` do the same thing.
+
+Need more than a hook? `.loop(fn)` swaps the loop entirely. `fn` is an async generator with the default loop's signature that yields events. The building blocks live in `cycls._agent.harness`: `default_loop`, `make_provider`, `Session` (the message log and its persistence; `add_user` checkpoints, so the person's turn is durable before the model is called, and `rollback()` drops only the assistant tail), `build_tools`, `dispatch`, `compact`, `events`.
 
 ### Multi-provider
 
@@ -459,7 +468,7 @@ Thinking/reasoning events, tool calls, and streaming are unified across provider
 
 ### Custom tools
 
-Tool schemas are bare JSON dicts. Handlers are plain async functions registered via `.on()`. The handler's return value is used as BOTH the UI stream event AND the `tool_result` content the LLM sees — one return, both destinations.
+Tool schemas are bare JSON dicts. Handlers are plain async functions registered via `.on()`. The handler's return value is used as BOTH the UI stream event AND the `tool_result` content the LLM sees, one return, both destinations.
 
 ```python
 TOOLS = [
@@ -484,7 +493,7 @@ llm = cycls.LLM().tools(TOOLS).on("render_image", render_image)
 
 ### Workspace instructions and skills
 
-**AGENT.md** — every turn, the harness reads `AGENT.md` from the user's workspace root (if present) and appends it to the system prompt, fenced as user preferences subordinate to your `.system()` prompt. Users edit it via the files panel or by asking the agent. Capped at 24KB (truncated beyond that); binary or unreadable files are ignored. Rename via `.instructions("NOTES.md")` or disable with `.instructions(None)`.
+**AGENT.md**, every turn, the harness reads `AGENT.md` from the user's workspace root (if present) and appends it to the system prompt, fenced as user preferences subordinate to your `.system()` prompt. Users edit it via the files panel or by asking the agent. Capped at 24KB (truncated beyond that); binary or unreadable files are ignored. Rename via `.instructions("NOTES.md")` or disable with `.instructions(None)`.
 
 **Skills** are packs of task-specific instructions the model loads on demand: only each skill's name + description sit in the system prompt; the full body enters context when the model calls the `skill` tool (a reserved tool name). A skill is a folder with a `SKILL.md`:
 
@@ -500,7 +509,7 @@ description: Generate branded PDF reports from CSV data. Use when the user asks 
 
 Skills come from two places:
 
-- **Shipped with the agent** — put a `skills/` dir in your project, include it in the image, and register it:
+- **Shipped with the agent**: put a `skills/` dir in your project, include it in the image, and register it:
 
   ```python
   image = cycls.Image().copy("skills/")
@@ -509,13 +518,86 @@ Skills come from two places:
 
   Shipped skills are read-only; each mounts at `/skills/<name>/` inside the bash sandbox, so the model runs `python /skills/pdf-reports/scripts/render.py` and scripts read their own templates from there. They version with your deploys.
 
-- **User-created** — any `skills/<name>/SKILL.md` in a user's workspace joins the catalog automatically (rescanned every ~30s) and wins name collisions with shipped skills.
+- **User-created**: any `skills/<name>/SKILL.md` in a user's workspace joins the catalog automatically (rescanned every ~30s) and wins name collisions with shipped skills.
 
 ---
 
+### Connectors and MCP
+
+A connector is a grant a person makes, for themselves or for a workspace, plus
+the policy over the tools that use it. Declare it on both builders: `cycls.Web`
+serves the directory and the connect routes, `cycls.LLM` decides whose tools the
+loop may offer.
+
+```python
+notion = cycls.OAuth2(
+    "notion",
+    authorize="https://api.notion.com/v1/oauth/authorize",
+    token="https://api.notion.com/v1/oauth/token",
+    client_id=cycls.env("NOTION_CLIENT_ID"),
+    secret=cycls.env("NOTION_CLIENT_SECRET"),
+    scopes=["read_content", "update_content"],
+    api="https://api.notion.com",                       # gives the loop a {name}_request tool
+    api_headers={"Notion-Version": "2022-06-28"},
+    scope="either",                                     # "user", "workspace" or "either"
+)
+
+web = cycls.Web().auth(cycls.Clerk()).connectors(notion)
+llm = cycls.LLM().model("anthropic/claude-sonnet-4-6").connectors(notion)
+```
+
+Three kinds of grant:
+
+- **`cycls.OAuth2`**: authorization code with PKCE against a registered app, or
+  against an MCP server that publishes its own authorization server.
+- **`cycls.Key`**: a key the person pastes, with `hint=` as the field placeholder.
+- **`cycls.Endpoint`**: a private URL that is itself the credential, bounded by
+  `host=` so a typo or an internal address is refused.
+
+Secrets in a declaration are `cycls.env("NAME")` references, resolved from the
+deployment environment when used and never pickled. Storing a grant needs
+`CYCLS_SECRET_KEY` in the container.
+
+**MCP servers.** `cycls.MCP` connects a remote MCP server. The harness speaks
+Streamable HTTP itself, so every provider gets MCP, not only Anthropic. Tools are
+discovered once per url and token and cached; a session opens only when a tool is
+called.
+
+```python
+server = (
+    cycls.MCP("https://mcp.example.com/mcp")
+    .name("example")
+    .token(cycls.env("EXAMPLE_TOKEN"))   # or .connector(notion) to act with a user's grant
+    .allow("search", "create_issue")
+)
+
+llm = cycls.LLM().mcp(server)
+```
+
+`.server_side()` hands the server to the Anthropic connector instead, which is
+anthropic/* only.
+
+**Loading on demand.** A connector contributes one index line (about fifteen
+tokens) to the system prompt, and the model calls `find_tools` to pull in the
+schemas it needs. Loaded tools stay for the rest of the conversation.
+
+**Approvals.** Every tool call is classified: reads always run, writes follow the
+composer's Auto switch, destructive calls ask in both modes. An approval binds to
+the exact arguments on the card, so a changed call asks again. Each person can
+set allow / ask / never per tool, and an org admin can switch a connector off for
+everyone.
+
+**Declaration hygiene.** Connector objects are built on your machine and pickled
+into the deployment, so a file of declarations must hold no functions and no
+module-level values a callable would close over. A `.writes()` classifier or a
+tool handler lives in the file you deploy, not in an imported module.
+
+---
+
+
 ## Authentication
 
-Auth providers are first-class objects. Both `cycls.Clerk` and `cycls.JWT` support dev/prod dual-mode out of the box — Cycls picks the right JWKS URL at serve time.
+Auth providers are first-class objects. Both `cycls.Clerk` and `cycls.JWT` support dev/prod dual-mode out of the box, Cycls picks the right JWKS URL at serve time.
 
 ```python
 # Cycls's hosted Clerk (default), dual-mode
@@ -612,10 +694,10 @@ async def my_agent(context):
     await db.put(f"usage/{month}", entry)
 
     async for ev in llm.run(context=context):
-        yield cycls.to_ui(ev)
+        yield ev
 ```
 
-`cycls.DB(context.workspace)` is a per-user JSON store persisted on the `/workspace` volume: `await db.get(key, default)`, `await db.put(key, value)`, `db.items(prefix=...)`, `db.delete(...)`. `cycls.log(level, user=, chat_id=, **fields)` emits one structured line the log backend captures — queryable later via `cycls logs -q` and `cycls sql`.
+`cycls.DB(context.workspace)` is a per-user JSON store persisted on the `/workspace` volume: `await db.get(key, default)`, `await db.put(key, value)`, `db.items(prefix=...)`, `db.delete(...)`. `cycls.log(level, user=, chat_id=, **fields)` emits one structured line the log backend captures, queryable later via `cycls logs -q` and `cycls sql`.
 
 ---
 
@@ -631,7 +713,7 @@ from fastapi import Depends
              volumes={"/workspace": cycls.Volume("my-agent")})
 async def my_agent(context):
     async for ev in llm.run(context=context):
-        yield cycls.to_ui(ev)
+        yield ev
 
 
 @my_agent.server.api_route("/webhook", methods=["POST"])
@@ -685,7 +767,7 @@ if __name__ == "__main__":
 
 ---
 
-## `@cycls.function` — Containerized Compute
+## `@cycls.function`, Containerized Compute
 
 For batch jobs, data processing, and services without a chat UI.
 
@@ -721,7 +803,7 @@ api_server.run(port=8000)
 
 ### Scheduling
 
-Bare functions deploy as remote-callable endpoints (`cycls.remote("name")(...)`). Add `schedule=` and the platform calls the deployed function on a cron — pair it with a volume so output lands somewhere durable:
+Bare functions deploy as remote-callable endpoints (`cycls.remote("name")(...)`). Add `schedule=` and the platform calls the deployed function on a cron, pair it with a volume so output lands somewhere durable:
 
 ```python
 @cycls.function(schedule=cycls.Cron("0 3 * * *", timezone="Asia/Riyadh"),
@@ -832,10 +914,11 @@ image = cycls.Image().pip("numpy").rebuild()
 
 ## Next Steps
 
-- [function.md](function.md) — the full remote-execution story
-- [volume.md](volume.md) — persistent storage in depth
-- [cron.md](cron.md) — scheduled functions
-- [cli.md](cli.md) — every CLI verb
+- [function.md](function.md), the full remote-execution story
+- [volume.md](volume.md), persistent storage in depth
+- [cron.md](cron.md), scheduled functions
+- [cli.md](cli.md), every CLI verb
 - Explore the [examples](../examples/) directory for working code
 - Read the [README](../README.md) for the architectural overview
-- Visit [cycls.com](https://cycls.com) for deploy + billing
+- Visit [cloud.cycls.com](https://cloud.cycls.com) for deploys and billing
+- Full documentation at [docs.cycls.com](https://docs.cycls.com)

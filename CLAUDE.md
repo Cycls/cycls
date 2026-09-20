@@ -4,6 +4,8 @@ Python SDK for building, deploying, and monetizing AI agents. Write a function, 
 
 For a comprehensive walk through the primitives, decorators, CLI, and end-to-end patterns, see [docs/tutorial.md](docs/tutorial.md).
 
+Published documentation lives at [docs.cycls.com](https://docs.cycls.com), source in [github.com/Cycls/docs](https://github.com/Cycls/docs). Keep it in step when the public surface changes.
+
 ## Tech Stack
 
 - Python >= 3.9 (3.10+ for deployment)
@@ -30,10 +32,10 @@ uv run pytest tests/agent/scenarios/test_live.py --live
 cd client && npm test
 
 # Run example app
-uv run examples/app/app.py
+uv run cycls run examples/apps/api.py
 
 # Run example function
-uv run examples/function/add.py
+uv run cycls run examples/functions/hello.py
 
 # Clean up Docker
 docker system prune -af

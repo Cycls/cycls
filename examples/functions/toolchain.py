@@ -1,4 +1,6 @@
-# uv run python examples/function/c.py
+# The image is the world: any toolchain you declare, driven from Python.
+#
+#   uv run cycls run examples/functions/toolchain.py
 import cycls
 
 C_CODE = r"""

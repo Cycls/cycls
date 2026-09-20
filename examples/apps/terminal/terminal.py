@@ -1,4 +1,4 @@
-# uv run cycls run examples/app/terminal/terminal.py
+# uv run cycls run examples/apps/terminal/terminal.py
 """Per-tenant terminal — toy agent with no LLM.
 
 Each user gets their own /workspace (gcsfuse-backed in prod), a bwrap-

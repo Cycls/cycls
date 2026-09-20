@@ -1,3 +1,7 @@
+# A scheduled function: the platform calls it, with no worker of yours to keep
+# alive. Pair it with a volume so the output lands somewhere durable.
+#
+#   uv run cycls deploy examples/functions/nightly.py
 import cycls
 
 reports = cycls.Volume("daily-reports")

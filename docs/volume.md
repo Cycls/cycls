@@ -1,7 +1,7 @@
 # Volumes
 
-Named, persistent storage — created once, attached to any deployment at any
-mount path, alive for as long as you want regardless of what gets deployed
+Named, persistent storage. Created once, attached to any deployment at any
+mount path, and alive for as long as you want regardless of what gets deployed
 or deleted around it.
 
 ```python
@@ -16,7 +16,7 @@ def crunch(day):
 ```
 
 Inside the container, `/data` is the volume. Files written there persist
-across calls, instances, and redeploys — and any *other* deployment that
+across calls, instances, and redeploys, and any *other* deployment that
 mounts `training-data` sees the same files.
 
 ## The mental model
@@ -33,8 +33,8 @@ filesystem operations. Two things follow:
 ## Creating volumes
 
 Referencing a volume creates it: the first deploy that mentions
-`training-data` brings it into existence, and the deploy output says so —
-`Created new volume 'training-data'` — so a typo'd name is a visible oops,
+`training-data` brings it into existence, and the deploy output says so
+with `Created new volume 'training-data'`, so a typo'd name is a visible oops,
 not a silent empty volume. If you prefer explicit-first:
 
 ```bash
@@ -46,7 +46,7 @@ error pointing at `create`.
 
 ## Attaching
 
-`volumes=` maps mount paths to `Volume` objects on any decorator —
+`volumes=` maps mount paths to `Volume` objects on any decorator:
 `@cycls.function`, `@cycls.app`, `@cycls.agent`:
 
 ```python
@@ -61,40 +61,40 @@ prod_data = cycls.Volume("app-data")
 def staging(port): ...
 ```
 
-- `.read_only()` — mount without write access. The canonical use: prod data
+- `.read_only()`: mount without write access. The canonical use: prod data
   visible inside a dev deployment that can't corrupt it.
-- `.sub_path("a/b")` — mount only a subdirectory of the volume.
+- `.sub_path("a/b")`: mount only a subdirectory of the volume.
 
 **The workspace.** `/workspace` is the well-known path where apps and agents
-keep their state — chats, `workspace`/`db` files. The path is convention;
+keep their state: chats and `workspace`/`db` files. The path is convention;
 the volume backing it is always yours, declared explicitly like any other.
 Agents require one (the decorator errors without a `/workspace` entry);
-apps only need one if they use `workspace`/`db` — the error arrives on
-first use otherwise. Nothing is ever named or created implicitly: your
+apps only need one if they use `workspace`/`db`; otherwise the error arrives
+on first use. Nothing is ever named or created implicitly: your
 storage is exactly what your source declares. Renaming a deployment
-changes nothing about its data — the volume reference is the identity.
+changes nothing about its data. The volume reference is the identity.
 
 Mounting one workspace volume into two *live* apps or agents means
-concurrent writers on state — last-write-wins applies to your sessions.
+concurrent writers on state: last-write-wins applies to your sessions.
 Legal (blue/green cutovers), sharp if done casually.
 
-Local `cycls run` ignores volumes — they exist in the cloud; locally your
+Local `cycls run` ignores volumes. They exist in the cloud; locally your
 code just sees the local filesystem.
 
 ## Lifecycle
 
-Volumes outlive deployments — that's the point:
+Volumes outlive deployments. That is the point:
 
 - `cycls rm <deployment>` **detaches** its volumes; the data is untouched.
   Redeploying the same name re-attaches them, files intact.
 - Deleting data is always explicit: `cycls volume delete <name>`. It refuses
   while any deployment has the volume attached (the error names them), and
-  deleted volumes remain recoverable for 7 days — if you deleted the wrong
+  deleted volumes remain recoverable for 7 days. If you deleted the wrong
   thing, contact support before the week is out.
 
 ## Moving data in and out
 
-The CLI talks directly to storage — uploads and downloads don't proxy
+The CLI talks directly to storage. Uploads and downloads don't proxy
 through the API, so file size is effectively unlimited:
 
 ```bash
@@ -126,6 +126,6 @@ def transform(day): ...    # reads raw/, writes clean/
 def dashboard(port): ...   # serves clean/, can't corrupt it
 ```
 
-One volume, three deployments, no copying — and deleting any of the three
+One volume, three deployments, no copying. Deleting any of the three
 never touches the data. Put a [schedule](cron.md) on the producer and the
 whole pipeline runs itself.

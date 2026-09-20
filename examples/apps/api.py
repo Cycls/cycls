@@ -1,6 +1,8 @@
-# uv run cycls run examples/app/fast.py            # localhost, reload on save
-# uv run cycls run examples/app/fast.py --remote   # live dev URL, hot-swap on save
-# uv run cycls deploy examples/app/fast.py         # production
+# An ASGI service: return a FastAPI app and get a URL.
+#
+#   uv run cycls run examples/apps/api.py            # localhost, reload on save
+#   uv run cycls run examples/apps/api.py --remote   # live dev URL, hot-swap on save
+#   uv run cycls deploy examples/apps/api.py         # production
 import cycls
 
 @cycls.app()

@@ -696,7 +696,7 @@ happened to also spell out.
 **Code owns behaviour, the CMS owns copy.** `name`, `kind`, `scope`, `hint`, the OAuth endpoints and the
 servers stay in the agent file — nothing a CMS edit can reach may change what a connector is able to do.
 The CMS owns `title`, `description`, `category`, `story`, `prompts`, `icon`, `showcase`, `gallery`,
-`gradient`, `links`, `developer`. `examples/agent/catalog.py` is the worked example: eleven connectors,
+`gradient`, `links`, `developer`. `examples/agents/catalog.py` is the worked example: eleven connectors,
 not one line of copy among them, and a test that keeps it that way.
 
 **The showcase leads the content**, with no heading over it: prompts on their gradient, or the gallery

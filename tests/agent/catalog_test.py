@@ -1,4 +1,4 @@
-"""examples/agent/catalog.py — the connector catalog a deploy file imports.
+"""examples/agents/catalog.py — the connector catalog a deploy file imports.
 
 Constructing it is the test: `Connector.__init__` validates scope and the api base, `OAuth2.__init__`
 wants authorize/token/client_id unless it discovers them, and today those raise only on deploy. This
@@ -11,7 +11,7 @@ from cycls._agent.connectors import Connector
 
 @pytest.fixture(scope="module")
 def catalog():
-    sys.path.insert(0, "examples/agent")
+    sys.path.insert(0, "examples/agents")
     try:
         import catalog as mod
     finally:

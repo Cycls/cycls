@@ -1,4 +1,4 @@
-# uv run cycls run examples/app/notes/notes.py
+# uv run cycls run examples/apps/notes/notes.py
 """Notes — per-user search via inverted index over a flat DB.
 
   docs/{doc_id}        → {id, title, body, createdAt}

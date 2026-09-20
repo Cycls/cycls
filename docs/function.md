@@ -1,7 +1,7 @@
 # Functions
 
-`@cycls.function` turns a Python function into something that runs anywhere —
-your Docker, the cloud, a teammate's laptop — without changing a line of it.
+`@cycls.function` turns a Python function into something that runs anywhere
+your Docker, the cloud, a teammate's laptop, all without changing a line of it.
 One decorator, three verbs:
 
 ```python
@@ -17,7 +17,7 @@ def simulate(n=1_000_000):
 ```python
 simulate.run(1000)        # local Docker
 simulate.remote(1000)     # cloud, current code
-simulate.deploy()         # cloud, frozen — callable by name from anywhere
+simulate.deploy()         # cloud, frozen, callable by name from anywhere
 ```
 
 The mental model: **`run` is local, `remote` is cloud, `deploy` freezes.**
@@ -26,8 +26,8 @@ The CLI uses the same words (`cycls run`, `cycls run --remote`,
 
 ## How it works
 
-The function is serialized with cloudpickle — bytecode, closures, captured
-variables and all — and executed inside a container built from your `Image`
+The function is serialized with cloudpickle (bytecode, closures and captured
+variables included) and executed inside a container built from your `Image`
 declaration. Locally the container runs on your Docker; remotely it runs on
 Cycls Cloud. Same image, same Python, same pickle: what you ran in dev is
 byte-for-byte what runs in prod.
@@ -59,7 +59,7 @@ cached everywhere the same config appears.
 
 - `.rebuild()` forces a full rebuild (drops the cache).
 - Anything installed via `pip`/`apt` is importable inside the function.
-- Anything `copy`'d lands in `/app`, which is on `sys.path` — so
+- Anything `copy`'d lands in `/app`, which is on `sys.path`, so
   `import routes` works remotely if you declared `copy("routes.py")`.
   Closures, lambdas, and functions defined in the same file travel in the
   pickle automatically; **imports of your own modules need `copy`**.
@@ -70,7 +70,7 @@ cached everywhere the same config appears.
 result = simulate.run(1000)      # build (or reuse) the image, execute, return
 ```
 
-A function that takes a `port` parameter is a *server* — `run(port=8000)`
+A function that takes a `port` parameter is a *server*, `run(port=8000)`
 starts it in Docker with the port published. Anything that binds a port is
 fair game:
 
@@ -99,13 +99,13 @@ cycls run file.py --n 1000      # args bind to the function's signature
 ```
 
 `cycls run` watches your file (and any `copy`'d files) and re-runs on every
-save. Runs are sequential — a save during a run queues the next one instead
+save. Runs are sequential: a save during a run queues the next one instead
 of killing it. Trailing `--name value` arguments bind to the function's
 signature: annotated parameters convert through their annotation
 (`n: int` → `int`), unannotated ones are literal-eval'd (`--data "[1,2]"`
 becomes a list), and anything else stays a string.
 
-For orchestration — several calls, mixed local/remote, `.map` — mark a
+For orchestration (several calls, mixed local and remote, `.map`), mark a
 driver:
 
 ```python
@@ -118,7 +118,7 @@ def main(n: int = 1_000_000):
 The entrypoint runs *locally* on every save; the verbs inside it decide
 where work happens (so `--remote` doesn't apply and is rejected). CLI args
 bind to the entrypoint's signature the same way. Keep driver calls inside
-it — top-level `simulate.remote(...)` fires on **every import**, including
+it. A top-level `simulate.remote(...)` fires on **every import**, including
 `cycls deploy` and `cycls shell`.
 
 ## Cloud, current code: `remote` and `map`
@@ -128,14 +128,14 @@ simulate.remote(1000)            # this exact code, in the cloud, now
 simulate.map([10**6] * 100)      # one call per item, autoscaled, ordered
 ```
 
-`f.remote()` ships the live bytecode to an **executor** — a small service
+`f.remote()` ships the live bytecode to an **executor**, a small service
 provisioned once per image (named `exec-{hash}`, shared by every function
 with the same image). The first call per image config provisions it
 (~90s, one time); every call after is roughly network + compute. Edit the
 function and call again: the new code runs. No redeploy, ever.
 
 `f.map(items)` fans one call per item across autoscaled instances and
-returns results in input order. It raises on the first failure — for
+returns results in input order. It raises on the first failure, so for
 per-item fault tolerance, return errors as data:
 
 ```python
@@ -148,7 +148,7 @@ def scrape(url):
 ```
 
 If the executor vanishes mid-fan, the whole fan retries after
-reprovisioning — side effects should be idempotent.
+reprovisioning, so side effects should be idempotent.
 
 **Live output:** anything the function `print`s streams back to your
 terminal *while it runs*, not after. (Concurrent `.map` output interleaves.)
@@ -163,7 +163,7 @@ cycls deploy file.py
 
 `deploy` reads the function's contract: a function that takes `port` deploys
 as a **server** on its own URL; a bare function deploys as a **remote
-endpoint** — frozen at deploy time, callable by name from any machine with
+endpoint**, frozen at deploy time, callable by name from any machine with
 your API key:
 
 ```python
@@ -174,11 +174,11 @@ results = cycls.remote("simulate").map([10**6] * 100)
 
 The split matters: `f.remote()` runs *the code you're holding* (dev);
 `cycls.remote("name")` calls *what was deployed* (product). You rarely want
-last week's build while holding the source — and callers who don't have the
+last week's build while holding the source, and callers without the
 source get a stable, named API.
 
 Redeploying the same name updates it in place. `cycls ls` lists deployments,
-`cycls rm <name>` deletes one. Its storage is detached, not deleted — data
+`cycls rm <name>` deletes one. Its storage is detached, not deleted: data
 lives in [volumes](volume.md), which outlive deployments; redeploying the
 same name re-attaches them, files intact.
 
@@ -193,7 +193,7 @@ data = cycls.Volume("training-data")
 def crunch(day): ...
 ```
 
-Functions mount exactly what they declare — nothing implicit. Apps and
+Functions mount exactly what they declare, with nothing implicit. Apps and
 agents resolve their state from the volume mounted at `/workspace`: agents
 require one, apps only if they use `workspace`/`db`. See
 [volume.md](volume.md) for creation, sharing, `read_only`/`sub_path`
@@ -201,7 +201,7 @@ mounts, lifecycle, and the `cycls volume` CLI.
 
 ## Schedules
 
-A bare function can carry a schedule — the platform fires its frozen
+A bare function can carry a schedule: the platform fires its frozen
 invocation on it, no caller needed:
 
 ```python
@@ -210,7 +210,7 @@ invocation on it, no caller needed:
 def nightly(): ...
 ```
 
-Delete the `schedule=` line and redeploy to remove it — source is truth.
+Delete the `schedule=` line and redeploy to remove it. Source is truth.
 See [cron.md](cron.md) for semantics (at-least-once, overlap, the
 thirty-minute ceiling) and what can't be scheduled.
 
@@ -218,7 +218,7 @@ thirty-minute ceiling) and what can't be scheduled.
 
 Remote calls are pickle-RPC over HTTPS, protected twice:
 
-- **Auth:** a token derived as `sha256(api_key : name)` — computed
+- **Auth:** a token derived as `sha256(api_key : name)`: computed
   independently by deployer and caller, stored nowhere. Any machine with
   your `CYCLS_API_KEY` can call your deployments; nobody else can. Rotating
   the key strands existing services (their baked token is from the old key);
@@ -229,7 +229,7 @@ Remote calls are pickle-RPC over HTTPS, protected twice:
   cryptic unpickle crash. Redeploy from the calling environment to resolve.
 
 One boundary to know: deployments under the same account share a trust
-domain — code running in one can reach the others' workspace storage. For
+domain: code running in one can reach the others' workspace storage. For
 hard isolation (prod vs experiments, or per-client separation), deploy from
 a separate organization; each org is its own tenant with its own boundary.
 
@@ -237,7 +237,7 @@ URLs follow the convention `https://{name}.cycls.ai`.
 
 ## Patterns
 
-**Warm state** — the process lives across calls on an instance, so cache
+**Warm state.** The process lives across calls on an instance, so cache
 expensive setup in a mutable default and pay it once per instance:
 
 ```python
@@ -250,9 +250,9 @@ def embed(texts, _model={}):
 ```
 
 First call loads the model; every call after is warm. That's a self-hosted
-embedding API in ten lines (`examples/function/embed.py`).
+embedding API in ten lines (`examples/functions/warm_model.py`).
 
-**Any toolchain** — the image is the world; the closure carries the payload:
+**Any toolchain**, the image is the world; the closure carries the payload:
 
 ```python
 @cycls.function(image=cycls.Image().apt("gcc", "libc6-dev"))
@@ -264,7 +264,7 @@ def triangle():
     return subprocess.run(["./t"], capture_output=True, text=True).stdout
 ```
 
-**Agents calling heavy compute** — keep the agent image thin; deploy the
+**Agents calling heavy compute**, keep the agent image thin; deploy the
 heavy function separately and call it by name from a tool handler:
 
 ```python
@@ -272,9 +272,10 @@ read = cycls.remote("scrape")
 llm = cycls.LLM().on("read_pages", lambda inp: asyncio.to_thread(read.map, inp["urls"]))
 ```
 
-More in `examples/function/`: `add.py`, `c.py`, `remote.py`, `scrape.py`,
-`extract.py`, `embed.py`, `monte_carlo.py`, plus the server-shaped
-`fast.py`, `jupyter.py`, `marimo.py`.
+More in [`examples/`](../examples/): `functions/hello.py`,
+`functions/dev_loop.py`, `functions/fanout.py`, `functions/warm_model.py`,
+`functions/toolchain.py`, `functions/nightly.py`, plus the warehouse trio in
+`warehouse/` and the server-shaped `apps/api.py`.
 
 ## Limits, honestly
 
@@ -284,10 +285,10 @@ More in `examples/function/`: `add.py`, `c.py`, `remote.py`, `scrape.py`,
 - **Executors linger** (`exec-*` in `cycls ls`). They're free while idle;
   `cycls rm` reaps them.
 - **Payloads** should stay well under ~30MB per call.
-- **Tracebacks from remote code lack source lines** — the container has your
+- **Tracebacks from remote code lack source lines**: the container has your
   bytecode, not your files. The filename and line number are still correct.
 - **Calls time out after an hour.** Long jobs should checkpoint or split.
-- `cycls run`/`deploy`/`shell` all **import your file** — keep it
+- `cycls run`/`deploy`/`shell` all **import your file**, keep it
   side-effect-free (no top-level `.run()`/`.remote()` calls).
 
 ## Reference
