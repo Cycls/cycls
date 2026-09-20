@@ -376,26 +376,16 @@ the `_resolve_path` rejection, in the tool and file-route path checks alike. `.t
 neither: bash must read it and `read` must reach it. It is hidden from listings, deleted for
 real by the `rm` shim, refused by `canvas`, and removed on chat purge.
 
-## Turning them off for a deployment
+## A deployment with no connectors has no connectors UI
 
-Not declaring a connector has always turned it off. What `CYCLS_CONNECTORS` adds is doing that
-**without a code change**, which is what you want when a provider breaks or a deployment should not
-reach anything at all:
+Not declaring any is the off switch, and it reaches all the way to the browser without a flag
+anywhere: `install_routers` mounts `connectors_router` only `if cycls_app.connectors`, so `/connectors`
+404s, the client's load catches that into `[]`, and both entry points — the composer's plus menu and
+the Settings row — are gated on that list being non-empty.
 
-| value | serves |
-|---|---|
-| unset | everything declared |
-| `off` (also `0`, `false`, `none`) | nothing |
-| `salla,posthog` | only those, an allowlist |
-
-`connectors.declared()` applies it to **both** declarations — `cycls.Web().connectors(...)`, which
-feeds the directory, the connect routes and the relay, and `cycls.LLM().connectors(...)`, which
-feeds the loop. Filtering one and not the other would leave a Connect button for something the agent
-has no tool for.
-
-A name in the list that matches nothing declared is not an error — you get fewer connectors and no
-complaint — so it logs `connectors_filtered` with what it could not find. Check that before assuming
-a typo did nothing.
+An env var to turn declared connectors off was tried and removed: it is a second way to say what not
+calling `.connectors(...)` already says, and the only thing it added was flipping them without a
+redeploy — not worth a filter applied at two wiring points that could drift apart.
 
 ## The connect relay — OAuth redirects
 
