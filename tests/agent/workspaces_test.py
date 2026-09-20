@@ -859,3 +859,41 @@ def test_app_data_works_for_a_solo_account_with_no_org(tmp_path):
     assert client.get("/apps/notes/data/today", headers=h).json()["value"] == "hi"
     assert client.get("/apps/notes/data/draft?who=me", headers=h).json()["value"] == "wip"
     assert client.get("/apps/notes/data", headers=h).json()["rows"] == [{"key": "today", "value": "hi"}]
+
+
+# Identity, not workspace. Two kinds of account reach an agent: a personal one
+# (`sub` is the user) and an org one (`sub` is `org:user`). Workspaces are off by
+# default, and then there is no ACL to name an admin — which is fine for deleting
+# an app and wrong for reading a colleague's private rows.
+
+def test_a_personal_account_with_workspaces_off_is_alone_and_sees_everything(tmp_path):
+    client = _client(tmp_path, workspaces=None)
+    h = {"X-Test-User": "solo"}
+    client.put("/apps/notes/data/pinned", json="a", headers=h)
+    client.put("/apps/notes/data/draft?who=me", json="wip", headers=h)
+    assert client.get("/apps/notes/data/draft?who=me", headers=h).json()["value"] == "wip"
+    assert client.get("/apps/notes/data?who=all", headers=h).json()["rows"] == [
+        {"user": "solo", "key": "draft", "value": "wip"}]
+
+
+def test_an_org_with_workspaces_off_has_no_admin_to_be(tmp_path):
+    """The legacy layout shares one root, so files are open to every member — but
+    chats and the agent KV stay per-user there, and so must cycls.me."""
+    client = _client(tmp_path, workspaces=None)
+    client.put("/apps/hr/data/salary?who=me", json={"amount": 99}, headers={"X-Test-User": "user_1"})
+    other = {"X-Test-User": "user_2"}
+    assert client.get("/apps/hr/data?who=all", headers=other).status_code == 403
+    assert client.get("/apps/hr/data/salary?who=user_1", headers=other).status_code == 403
+    # an org admin is no different: the role exists only once workspaces are on
+    assert client.get("/apps/hr/data?who=all", headers={"X-Test-User": "admin_1"}).status_code == 403
+    # and each member still has their own shelf
+    assert client.get("/apps/hr/data/salary?who=me", headers=other).status_code == 404
+    assert client.get("/apps/hr/data/salary?who=me",
+                      headers={"X-Test-User": "user_1"}).json()["value"] == {"amount": 99}
+
+
+def test_the_shared_shelf_is_still_shared_with_workspaces_off(tmp_path):
+    client = _client(tmp_path, workspaces=None)
+    client.put("/apps/hr/data/policy", json="v1", headers={"X-Test-User": "user_1"})
+    assert client.get("/apps/hr/data/policy",
+                      headers={"X-Test-User": "user_2"}).json()["value"] == "v1"

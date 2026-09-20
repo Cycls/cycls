@@ -948,9 +948,18 @@ def apps_router(cycls_app, ws_dep, user_dep, volume, base):
         except Exception:
             return {}
 
+    async def _elevated(user, ws):
+        """May this caller read other people's rows? `_admin` answers "is anyone
+        above you?", which is yes-by-default where no ACL is configured — right
+        for deleting an app, wrong for reading a colleague's. With workspaces off
+        an org has no admin to be, and a personal account is alone in there."""
+        if not getattr(getattr(cycls_app, "config", None), "workspaces", None):
+            return not getattr(user, "org_id", None)
+        return await _admin(cycls_app, user, ws, volume, base)
+
     async def _scope(slug, who, user, ws):
         """`who` -> a key builder for that audience, once the role allows it."""
-        if who and who != "me" and not await _admin(cycls_app, user, ws, volume, base):
+        if who and who != "me" and not await _elevated(user, ws):
             raise HTTPException(403, "Only workspace admins reach other members' app data")
         kw = ({} if not who else {"user": state.actor_of(ws.subject)} if who == "me"
               else {"everyone": True} if who == "all" else {"user": who})
