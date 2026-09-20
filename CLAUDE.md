@@ -116,6 +116,7 @@ Yield these from app functions:
 - `CYCLS_API_KEY` - API key for production deployment
 - `CYCLS_BASE_URL` - Base URL for deployment service
 - `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` - For examples
+- `CYCLS_CONNECTORS` - `off` serves no connectors; a comma list is an allowlist (default: all declared)
 
 ## Code Style
 

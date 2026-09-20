@@ -171,6 +171,7 @@ class LLM:
             raise ValueError("LLM.model(...) is required before .run()")
         from .main import _run
         from ..tools import register_labels
+        from .. import connectors
         register_labels(self._labels, icons=self._icons, details=self._details)   # also read by the refetch projection
         loop = self._loop or _run
         # A switch in Settings turns a tool off for this person; it never
@@ -191,7 +192,7 @@ class LLM:
             headers=self._headers,
             handlers=self._handlers,
             mcp_servers=self._mcp,
-            api_connectors=self._connectors,
+            api_connectors=connectors.declared(self._connectors),
             approvals=getattr(context, "approvals", None) or (), auto=getattr(context, "auto", True),
             mentions=getattr(context, "connectors", None) or (),
             thinking=self._thinking,
