@@ -29,6 +29,35 @@ it makes the builder replaceable rather than load-bearing, and it makes the brid
 one. Every other HTML file in the workspace opens in the canvas as an inert document with no bridge
 at all, because opening a document must never hand that document your workspace.
 
+**Where it lands, for every account shape that exists:**
+
+| account | files | shared shelf | one person's |
+|---|---|---|---|
+| personal, workspaces off | `/vol/user_7/apps/<slug>/` | `user_7/.apps/<slug>/<key>` | `user_7/.apps/<slug>/u/user_7/<key>` |
+| personal, workspaces on | *identical to above* | *identical* | *identical* |
+| org, workspaces off | `/vol/org_3/apps/<slug>/` | `org_3/.apps/<slug>/<key>` | `org_3/.apps/<slug>/u/user_7/<key>` |
+| org, own personal ws | `/vol/org_3/ws/u-user_7/apps/<slug>/` | `org_3/ws/u-user_7/.apps/<slug>/<key>` | `...u/user_7/<key>` |
+| org, team ws | `/vol/org_3/ws/t-eng/apps/<slug>/` | `org_3/ws/t-eng/.apps/<slug>/<key>` | `...u/user_7/<key>` |
+
+**Two identities reach an agent.** A personal account's `sub` is the user, so `workspace()` builds
+`{user}/...` with no user segment left to add; an org account's is `{org}:{user}`, so the folder is
+the org's and the person becomes a segment inside the slot. `apps_db()` targets the org part in both
+cases, which is what makes the shelf one copy either way. Rows one and two are the same on purpose:
+`workspace()` folds `u-{id}` back to the account root when the workspace is the person's own, so
+enabling workspaces on a personal account moves nothing. There, `u/<user>/` names its only occupant
+— redundant, and what lets the same app code keep working if they later join an org.
+
+**With workspaces off there is no admin to be.** That is the default, `resolve_ws_id` returns `None`,
+and no ACL exists. `_admin()` answers yes in that mode, which is right for "is anyone above you?" —
+the question that gates deleting an app — and wrong for "may you read a colleague's private rows?".
+`_elevated()` is the second question: an org is refused, because there is no role to hold, while a
+personal account is allowed because it is alone in there. Files in that mode are shared anyway, but
+chats and the agent KV stay per-user, and so must `cycls.me`. Row three is where this bit: one shelf
+for the whole org and nothing to say who may read across it.
+
+`write: admin` is unenforceable in that mode too, and there it fails open — refusing everyone would
+make the app read-only for its own owner.
+
 **Personal workspaces are workspaces.** `ws/u-<user>/apps/<slug>/` is an ordinary app folder with an
 ordinary `.apps/<slug>/` shelf beside it — haseef runs one in production. The owner is its admin, so
 `cycls.users` is theirs; nobody else reaches it, not even an org admin, because `resolve_role`
