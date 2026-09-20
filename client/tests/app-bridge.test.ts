@@ -325,3 +325,55 @@ describe("the write limit counts bytes, not characters", () => {
     expect(overWriteLimit(arabic)).toBe(true);
   });
 });
+
+// The frame picks a connector and a path; everything that decides whether the
+// call is allowed, and the credential itself, stay on this side of the bridge.
+describe("cycls:fetch — an app calling a connector", () => {
+  function wired(fetchConnector?: unknown) {
+    const posted: Record<string, unknown>[] = [];
+    const frame = { contentWindow: { postMessage: (m: Record<string, unknown>) => posted.push(m) } };
+    const stop = attachBridge({
+      frame: frame as unknown as HTMLIFrameElement,
+      appPath: "apps/burnup/index.html",
+      readFile: async () => "",
+      fetchConnector: fetchConnector as never,
+    });
+    return { posted, send: (msg: Record<string, unknown>) => send(frame.contentWindow, msg), stop };
+  }
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  it("passes a valid call through and returns what the host got", async () => {
+    const calls: unknown[][] = [];
+    const { posted, send, stop } = wired(async (...a: unknown[]) => {
+      calls.push(a);
+      return { status: 200, body: '{"ok":1}', contentType: "application/json" };
+    });
+    send({ type: MSG.fetch, id: 1, name: "salla", path: "orders", method: "get",
+           headers: { accept: "application/json", authorization: "Bearer mine" } });
+    await settle();
+    expect(calls[0][0]).toBe("salla");
+    expect(calls[0][1]).toBe("orders");
+    // the app may set content-type and accept; Authorization is the server's alone
+    expect((calls[0][2] as { headers: Record<string, string> }).headers).toEqual({ accept: "application/json" });
+    expect((calls[0][2] as { method: string }).method).toBe("GET");
+    expect(posted.at(-1)).toMatchObject({ type: MSG.fetchResult, id: 1, ok: true, status: 200 });
+    stop();
+  });
+
+  it("refuses a bad connector, a climbing path, an odd method, and a shared view", async () => {
+    const { posted, send, stop } = wired(async () => ({ status: 200, body: "", contentType: "" }));
+    send({ type: MSG.fetch, id: 2, name: "../../etc", path: "x" });
+    send({ type: MSG.fetch, id: 3, name: "salla", path: "../../../secrets" });
+    send({ type: MSG.fetch, id: 4, name: "salla", path: "x", method: "TRACE" });
+    await settle();
+    expect(posted.map((m) => m.error)).toEqual([
+      "a connector name is required", "a valid path is required", "method not allowed"]);
+    stop();
+
+    const shared = wired(undefined);
+    shared.send({ type: MSG.fetch, id: 5, name: "salla", path: "x" });
+    await settle();
+    expect(shared.posted.at(-1)).toMatchObject({ ok: false, error: "connectors are not available here" });
+    shared.stop();
+  });
+});

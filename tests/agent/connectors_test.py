@@ -751,3 +751,56 @@ def test_the_api_tool_returns_the_connect_card_when_there_is_no_key(key, tmp_pat
     _, call, _, _ = c.api_tool(o)
     ctx = SimpleNamespace(workspace=workspace("org:u1", tmp_path, base=f"file://{tmp_path}"))
     assert asyncio.run(call({"path": "/v1"}, ctx))["action"] == "connect"
+
+
+# The relay function is covered above; these are the route's own gates, which an
+# app reaches and the model never does.
+
+def _relay_app(tmp_path, o, captured):
+    import sys
+    from unittest.mock import patch as _patch
+    client, ws = _app(tmp_path, o)
+    asyncio.run(credentials.put(ws, o.name, {"key": "phx_live"}))
+    return client, ws, _patch.dict(sys.modules, {"httpx2": _fake_httpx(captured)})
+
+
+def test_the_fetch_route_carries_an_apps_call_to_the_relay(key, tmp_path):
+    got = {}
+    client, ws, fake = _relay_app(tmp_path, c.Key("posthog", api="https://us.posthog.com"), got)
+    with fake:
+        r = client.get("/connectors/posthog/fetch/api/projects/1/")
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert got["url"] == "https://us.posthog.com/api/projects/1/"
+    assert got["headers"]["Authorization"] == "Bearer phx_live"
+
+
+def test_a_person_can_shut_their_apps_out_of_a_connector(key, tmp_path):
+    """`_relay: never` is the app's own switch — the model's tools keep working."""
+    got = {}
+    o = c.Key("posthog", api="https://us.posthog.com")
+    client, ws, fake = _relay_app(tmp_path, o, got)
+    asyncio.run(c.set_permissions(ws, "posthog", {c.RELAY_KEY: "never"}))
+    with fake:
+        r = client.get("/connectors/posthog/fetch/api/x")
+    assert r.status_code == 403 and not got
+
+
+def test_the_route_refuses_a_connector_that_is_switched_off(key, tmp_path):
+    got = {}
+    o = c.Key("posthog", api="https://us.posthog.com")
+    client, ws, fake = _relay_app(tmp_path, o, got)
+    asyncio.run(c.set_off(ws, "posthog", True))
+    with fake:
+        r = client.get("/connectors/posthog/fetch/api/x")
+    assert r.status_code == 403 and not got
+
+
+def test_a_runaway_app_is_cut_off(key, tmp_path, monkeypatch):
+    from cycls._agent.web import routers
+    monkeypatch.setattr(routers, "RELAY_PER_MINUTE", 2)
+    routers._relay_hits.clear()
+    got = {}
+    client, ws, fake = _relay_app(tmp_path, c.Key("posthog", api="https://us.posthog.com"), got)
+    with fake:
+        codes = [client.get("/connectors/posthog/fetch/api/x").status_code for _ in range(4)]
+    assert codes == [200, 200, 429, 429]

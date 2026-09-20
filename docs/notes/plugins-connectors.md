@@ -376,7 +376,10 @@ the `_resolve_path` rejection, in the tool and file-route path checks alike. `.t
 neither: bash must read it and `read` must reach it. It is hidden from listings, deleted for
 real by the `rm` shim, refused by `canvas`, and removed on chat purge.
 
-## The connect relay
+## The connect relay — OAuth redirects
+
+Not the API relay below. This one brokers the *authorization code* once, at connect time, and
+stores nothing; that one proxies *every API call* an app or a REST-only tool makes.
 
 Every agent is on its own subdomain and every provider requires an **exact** registered
 redirect URI, so registering one per agent per provider does not scale — some providers cap
@@ -404,6 +407,66 @@ a registry rather than a wildcard (customers may bring their own domains), and P
 wherever the provider supports it so an intercepted code cannot be exchanged.
 
 It is a stateless service with one route and one secret — a `@cycls.function` would do.
+
+## The API relay — `oauth.relay()`
+
+One outbound call to a connector's own REST API, with the credential attached server-side. Two
+callers use it, and they are not the same kind of caller:
+
+| caller | route in | gated by |
+|---|---|---|
+| an app in the canvas | `/connectors/{name}/fetch/{path}` | the `_relay` key, below |
+| the model, via a `{name}_request` tool | the tool path | the tool's own permission |
+
+```
+cycls.connector("salla").json("orders?limit=5")     in the app
+  → cycls:fetch over the bridge                     the frame holds no token and has no network
+  → GET /connectors/salla/fetch/orders?limit=5      the viewer's JWT
+  → oauth.relay(o, ws, path, …)                     resolves the grant, attaches the credential
+```
+
+Resolution is per call, so a refreshed token is inherited with no change in the app, and it goes
+**user first, then workspace** — two members opening one shared app each act as themselves.
+
+**`api` is a boundary, not a prefix.** `relay()` rejects `..`, backslashes, nulls, `://` and a
+leading `//`, then rebuilds the URL and checks both that it still starts with `api + "/"` and that
+the netloc is unchanged. Redirects are not followed (`follow_redirects=False`), or a 302 would walk
+the credential off the host it was scoped to. The response is cut at `RELAY_MAX_BYTES`.
+
+**`auth=` on the connector says how the credential is presented** — not to be confused with `auth=`
+on a tool row, which declares a scope:
+
+| `auth=` | what goes on the wire |
+|---|---|
+| `bearer` (default) | `Authorization: Bearer <token>` |
+| `basic` | `Authorization: Basic base64(token + ":")` |
+| `header` | `<auth_name>: <token>` |
+| `query` | `?<auth_name>=<token>` |
+
+Only `content-type` and `accept` survive from the caller's headers; `api_headers` is then applied on
+top, so what the API demands of every caller cannot be overridden by an app.
+
+### A REST connector with no MCP server
+
+It contributes one `{name}_request` tool. Without it, a pasted key could be stored, encrypted,
+scoped and listed in the directory while the agent never learned the connector existed — the loop
+only ever walks servers. Declare it on `cycls.Web().connectors(...)` as usual **and** on
+`cycls.LLM().connectors(...)`, which is how the loop sees a connector with no server to walk.
+
+### What bounds an app
+
+An app is a second, non-LLM caller of one person's grant, so the relay carries what the tool path
+carries: a `relay` audit line naming connector, caller, method, path and status; the org and
+personal switches (`blocked` / `off`); a per-minute budget; and `never` on the reserved `_relay`
+permission key, for someone who does not want their apps reaching a connector at all. `ask` is not
+offered — an HTTP route has no chat to ask in.
+
+`RELAY_PER_MINUTE` is counted **per instance**, and Cloud Run runs several, so it bounds a runaway
+loop rather than a determined caller.
+
+Covered by tests at three levels: `relay()` itself (the grant, the host boundary, not-connected,
+required headers), the route's gates (`_relay: never`, switched off, the budget), and the bridge
+handler (the header allowlist, a climbing path, an odd method, a shared view with no workspace).
 
 ## Context budget
 
