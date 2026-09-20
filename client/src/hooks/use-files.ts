@@ -150,6 +150,26 @@ export function useFiles(baseUrl: string = "") {
     return { status: res.status, body: await res.text(), contentType: res.headers.get("content-type") || "" };
   }, [baseUrl, authHeaders]);
 
+  // An app's rows. Raw fetch, like the connector relay: a 403 from the role gate
+  // is an answer the app renders, not a toast over someone's dashboard.
+  const appData = useCallback(async (slug: string, op: Record<string, unknown>) => {
+    const kind = String(op.op || "get");
+    const q = new URLSearchParams();
+    if (op.who) q.set("who", String(op.who));
+    if (kind === "list" && op.prefix) q.set("prefix", String(op.prefix));
+    const key = kind === "list" ? "" : `/${String(op.key ?? "").replace(/^\/+/, "")}`;
+    const method = kind === "put" ? "PUT" : kind === "delete" ? "DELETE" : "GET";
+    const query = q.toString();
+    const res = await fetch(`${baseUrl}/apps/${slug}/data${key}${query ? `?${query}` : ""}`, {
+      method,
+      headers: { ...(await authHeaders()), ...(method === "PUT" ? { "content-type": "application/json" } : {}) },
+      body: method === "PUT" ? JSON.stringify(op.value ?? null) : undefined,
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`);
+    return res.json();
+  }, [baseUrl, authHeaders]);
+
   // Overwrite a text file from the canvas editor.
   const writeFile = useCallback(async (filePath: string, text: string, silent = false) => {
     await api(`/files/${filePath}`, { method: "PUT", body: new Blob([text]), silent });
@@ -197,7 +217,7 @@ export function useFiles(baseUrl: string = "") {
     return `${window.location.origin}${url}`;
   }, [api]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchConnector, searchFiles, listFolders, shareFile, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchConnector, appData, searchFiles, listFolders, shareFile, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

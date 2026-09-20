@@ -146,10 +146,10 @@ tests/
 │   ├── integration_test.py      # Agent on top of App
 │   └── scenarios/
 │       ├── test_load_repair.py  # store roundtrip + repair invariants
-│       ├── test_build_contract.py # @pytest.mark.live, the real miniapp-build service
+│       ├── test_build_contract.py # @pytest.mark.live, the real app-build service
 │       ├── test_database.py     # the `database` tool over the agent KV
 │       └── test_live.py         # @pytest.mark.live, real Anthropic
-└── client/tests/                # vitest — useChat, auth headers, mentions, apps, mini-app bridge
+└── client/tests/                # vitest — useChat, auth headers, mentions, apps, the app bridge
 ```
 
 **Mocked tier** (default): no API calls, no docker. Runs in ~2min.

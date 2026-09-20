@@ -813,7 +813,11 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         # shutil.move (not rename) so directory moves work on the gcsfuse
         # workspace mount, which doesn't support renaming directories — it falls
         # back to recursive copy + delete.
+        was_app = trash.kind_of(rel, src.is_dir()) == "app"
         shutil.move(str(src), str(dest))
+        dst = str(dest.relative_to(Path(ws.root).resolve()))
+        if was_app and trash.kind_of(dst, True) == "app":
+            await _move_app_data(ws, rel.split("/")[1], dst.split("/")[1])
         _catalog_drop(ws.root)
         return {"ok": True}
 
@@ -838,6 +842,24 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         meta = await asyncio.to_thread(trash.trash_path, ws.root, rel, "user")
         _catalog_drop(ws.root)
         return {"ok": True, "trash_id": meta["id"], "kind": meta["kind"]}
+
+    async def _move_app_data(ws, old, new):
+        """Renaming an app renames its shelf: the slug is the only thing joining them."""
+        db, src = state.apps_db(ws), state.app_shelf(old)
+        try:
+            dst = state.app_shelf(new)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        async for k, v in db.items(prefix=src):
+            await db.put(dst + k[len(src):], v)
+        await db.delete(src)
+
+    async def _drop_app_data(ws, metas):
+        """An app's rows outlive its folder until the trash entry goes for good."""
+        db = state.apps_db(ws)
+        for m in metas:
+            if m and m.get("kind") == "app":
+                await db.delete(state.app_shelf(m["path"].split("/")[1]))
 
     async def _trashed_chats(ws):
         rows = []
@@ -891,16 +913,17 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             spill.purge(ws.root, tid[5:])
             return {"ok": True}
         try:
-            await asyncio.to_thread(trash.purge, ws.root, tid)
+            meta = await asyncio.to_thread(trash.purge, ws.root, tid)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Not found")
+        await _drop_app_data(ws, [meta])
         return {"ok": True}
 
     @r.delete("/trash")
     async def empty_trash(ws: Workspace = ws_dep, user: Any = user_dep):
         if not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can delete forever")
-        await asyncio.to_thread(trash.empty, ws.root)
+        await _drop_app_data(ws, await asyncio.to_thread(trash.empty, ws.root))
         for c in await _trashed_chats(ws):
             await state.delete_chat(ws, c["chat_id"])
         return {"ok": True}
@@ -909,6 +932,105 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
 
 
 # ---- Share ----
+
+APP_DATA_MAX = 1_000_000   # per value, matching the bridge's file write cap
+
+
+def apps_router(cycls_app, ws_dep, user_dep, volume, base):
+    """App data: the workspace's shelf, the viewer's own, and — for admins — everyone's."""
+    r = APIRouter()
+
+    def _manifest(ws, slug):
+        try:
+            return json.loads((Path(ws.root) / "apps" / slug / "app.json").read_text())
+        except Exception:
+            return {}
+
+    async def _scope(slug, who, user, ws):
+        """`who` -> a key builder for that audience, once the role allows it."""
+        if who and who != "me" and not await _admin(cycls_app, user, ws, volume, base):
+            raise HTTPException(403, "Only workspace admins reach other members' app data")
+        kw = ({} if not who else {"user": state.actor_of(ws.subject)} if who == "me"
+              else {"everyone": True} if who == "all" else {"user": who})
+
+        def key(k):
+            try:
+                return state.app_shelf(slug, k, **kw)
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+        return key
+
+    async def _may_write(slug, k, who, user, ws):
+        if not k.strip("/"):
+            raise HTTPException(400, "key required")
+        if who or _manifest(ws, slug).get("write") != "admin":
+            return
+        if not await _admin(cycls_app, user, ws, volume, base):
+            raise HTTPException(403, "Only workspace admins can write this app's shared data")
+
+    @r.get("/apps/{slug}/data")
+    async def list_data(slug: str, prefix: str = "", who: str = "",
+                        ws: Workspace = ws_dep, user: Any = user_dep):
+        key = await _scope(slug, who, user, ws)
+        root, out = key(""), []
+        async for k, v in state.apps_db(ws).items(prefix=key(prefix)):
+            rel = k[len(root):]
+            if not who and rel.split("/")[0] == state.USER_MARK:
+                continue
+            owner, _, rest = rel.partition("/")
+            out.append({"user": owner, "key": rest, "value": v} if who == "all" else {"key": rel, "value": v})
+        return out or (await _seed(ws, slug) if not who and not prefix else [])
+
+    async def _seed(ws, slug):
+        """An app built before the store keeps its data: import data/state.json once."""
+        try:
+            was = json.loads((Path(ws.root) / "apps" / slug / "data" / "state.json").read_text())
+        except Exception:
+            return []
+        if not isinstance(was, dict):
+            return []
+        db = state.apps_db(ws)
+        for k, v in was.items():
+            try:
+                await db.put(state.app_shelf(slug, str(k)), v)
+            except ValueError:
+                continue
+        return [{"key": str(k), "value": v} for k, v in was.items()]
+
+    @r.get("/apps/{slug}/data/{k:path}")
+    async def get_data(slug: str, k: str, who: str = "",
+                       ws: Workspace = ws_dep, user: Any = user_dep):
+        key = await _scope(slug, who, user, ws)
+        v = await state.apps_db(ws).get(key(k))
+        if v is None:
+            raise HTTPException(404, "Not found")
+        return {"value": v}
+
+    @r.put("/apps/{slug}/data/{k:path}")
+    async def put_data(slug: str, k: str, request: Request, who: str = "",
+                       ws: Workspace = ws_dep, user: Any = user_dep):
+        body = await request.body()
+        if len(body) > APP_DATA_MAX:
+            raise HTTPException(413, "Value too large")
+        key = await _scope(slug, who, user, ws)
+        await _may_write(slug, k, who, user, ws)
+        try:
+            value = json.loads(body)
+        except ValueError:
+            raise HTTPException(400, "Body must be JSON")
+        await state.apps_db(ws).put(key(k), value)
+        return {"ok": True}
+
+    @r.delete("/apps/{slug}/data/{k:path}")
+    async def delete_data(slug: str, k: str, who: str = "",
+                          ws: Workspace = ws_dep, user: Any = user_dep):
+        key = await _scope(slug, who, user, ws)
+        await _may_write(slug, k, who, user, ws)
+        await state.apps_db(ws).delete(key(k))
+        return {"ok": True}
+
+    return r
+
 
 def share_router(cycls_app, ws_dep, user_dep, volume, base):
     r = APIRouter()
@@ -1676,6 +1798,7 @@ def install_routers(cycls_app, app, required_auth, volume, base):
     app.include_router(chats_router(ws_dep))
     app.include_router(tools_router(ws_dep, required_auth))
     app.include_router(files_router(cycls_app, ws_dep, required_auth, volume, base))
+    app.include_router(apps_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))
     if mode:
         app.include_router(workspaces_router(cycls_app, required_auth, volume, base))

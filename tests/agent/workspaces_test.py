@@ -5,7 +5,7 @@ header-switched fake auth (`X-Test-User`) so one client can act as several
 org members: a regular member, a second member, an org admin, and an
 outsider from another org.
 """
-import asyncio
+import asyncio, json
 
 from cycls._agent import state
 from cycls._app.auth import User
@@ -655,3 +655,89 @@ def test_chat_delete_is_a_tombstone(tmp_path):
     client.delete("/chats/c1")
     assert client.delete("/trash/chat:c1").status_code == 200
     assert client.get("/trash").json() == [] and client.get("/chats").json() == []
+
+
+# ---------------------------------------------------------------------------
+# App data — the three audiences (docs/notes/apps.md)
+# ---------------------------------------------------------------------------
+
+def test_shared_shelf_is_one_copy_for_the_whole_workspace(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    client.put("/workspaces/%s/members/user_2" % ws, json={"role": "editor"})
+    h1, h2 = {"X-Workspace": ws}, {"X-Workspace": ws, "X-Test-User": "user_2"}
+    assert client.put("/apps/standup/data/entries/1", json="shipped it", headers=h1).status_code == 200
+    assert client.get("/apps/standup/data/entries/1", headers=h2).json() == {"value": "shipped it"}
+
+
+def test_a_member_cannot_reach_another_members_shelf(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    client.put("/workspaces/%s/members/user_2" % ws, json={"role": "editor"})
+    h1, h2 = {"X-Workspace": ws}, {"X-Workspace": ws, "X-Test-User": "user_2"}
+    client.put("/apps/expenses/data/sep?who=me", json={"total": 40}, headers=h1)
+    # user_2's own shelf is empty, and there is no parameter that reaches user_1's
+    assert client.get("/apps/expenses/data/sep?who=me", headers=h2).status_code == 404
+    assert client.get("/apps/expenses/data/sep?who=user_1", headers=h2).status_code == 403
+    assert client.get("/apps/expenses/data?who=all", headers=h2).status_code == 403
+
+
+def test_an_admin_sees_every_members_shelf(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    client.put("/workspaces/%s/members/user_2" % ws, json={"role": "editor"})
+    for u in ("user_1", "user_2"):
+        client.put("/apps/expenses/data/sep?who=me", json={"by": u},
+                   headers={"X-Workspace": ws, "X-Test-User": u})
+    admin = {"X-Workspace": ws, "X-Test-User": "admin_1"}
+    rows = client.get("/apps/expenses/data?who=all", headers=admin).json()
+    assert sorted((r["user"], r["key"]) for r in rows) == [("user_1", "sep"), ("user_2", "sep")]
+    # and may write into one
+    assert client.put("/apps/expenses/data/sep?who=user_2", json={"approved": True},
+                      headers=admin).status_code == 200
+    assert client.get("/apps/expenses/data/sep?who=me",
+                      headers={"X-Workspace": ws, "X-Test-User": "user_2"}
+                      ).json() == {"value": {"approved": True}}
+
+
+def test_private_rows_stay_out_of_the_shared_listing(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    client.put("/apps/standup/data/entries/1", json="shared", headers=h)
+    client.put("/apps/standup/data/draft?who=me", json="private", headers=h)
+    assert client.get("/apps/standup/data", headers=h).json() == [{"key": "entries/1", "value": "shared"}]
+
+
+def test_u_and_traversal_are_rejected_on_the_shared_shelf(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    assert client.put("/apps/standup/data/u/user_2/draft", json="x", headers=h).status_code == 400
+    assert client.put("/apps/standup/data/../../escape", json="x", headers=h).status_code in (400, 404)
+
+
+def test_write_admin_apps_are_read_only_for_members(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    client.put("/workspaces/%s/members/user_2" % ws, json={"role": "editor"})
+    h2 = {"X-Workspace": ws, "X-Test-User": "user_2"}
+    client.post("/files/apps/holidays", headers={"X-Workspace": ws})
+    client.put("/files/apps/holidays/app.json", content=json.dumps({"write": "admin"}),
+               headers={"X-Workspace": ws})
+    assert client.put("/apps/holidays/data/eid", json="10 Apr", headers=h2).status_code == 403
+    admin = {"X-Workspace": ws, "X-Test-User": "admin_1"}
+    assert client.put("/apps/holidays/data/eid", json="10 Apr", headers=admin).status_code == 200
+    assert client.get("/apps/holidays/data/eid", headers=h2).json() == {"value": "10 Apr"}
+
+
+def test_an_app_built_before_the_store_keeps_its_data(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    client.post("/files/apps/burnup/data", headers=h)
+    client.put("/files/apps/burnup/data/state.json", content=json.dumps({"seen": [1, 2]}), headers=h)
+    assert client.get("/apps/burnup/data", headers=h).json() == [{"key": "seen", "value": [1, 2]}]
+    # the import happens once: the rows are the source of truth afterwards
+    client.put("/apps/burnup/data/seen", json=[3], headers=h)
+    assert client.get("/apps/burnup/data/seen", headers=h).json() == {"value": [3]}

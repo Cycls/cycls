@@ -649,6 +649,37 @@ async def ensure_general(user, volume, base):
 
 
 # ---- Agent KV (LLM-facing tool) ----
+#
+# A key under `apps/` addresses the workspace's app data; anything else is the
+# agent's own memory. `u` is reserved under a slug — see docs/notes/apps.md.
+
+APPS_SLOT, APPS_ROOT, USER_MARK = ".apps", "apps/", "u"
+
+
+def actor_of(subject):
+    """The person in a `{org}:{user}` subject — the org itself on a solo account."""
+    org, _, user = subject.partition(":")
+    return user or org
+
+
+def apps_db(ws):
+    """One shelf per workspace, not per person: target the org so `workspace()` adds no user."""
+    return DB(workspace(ws.subject.partition(":")[0], ws.volume, base=ws.base, slot=APPS_SLOT, ws=ws.ws))
+
+
+def app_shelf(slug, key="", *, user=None, everyone=False):
+    """Store key for app data — the workspace's shelf, one member's, or the whole `u/` subtree."""
+    if not slug or slug in (".", "..") or "/" in slug:
+        raise ValueError(f"invalid app: {slug!r}")
+    if key: _validate_db_key(key)
+    if everyone: return f"{slug}/{USER_MARK}/{key}"
+    if user:
+        if "/" in user or user in (".", ".."): raise ValueError(f"invalid member: {user!r}")
+        return f"{slug}/{USER_MARK}/{user}/{key}"
+    if key.split("/")[0] == USER_MARK:
+        raise ValueError(f"{USER_MARK!r} is reserved: a member's own app data is not reachable here")
+    return f"{slug}/{key}"
+
 
 def _validate_db_key(key):
     """Allow trailing slash (= subtree marker for delete); reject empty,
@@ -659,30 +690,43 @@ def _validate_db_key(key):
         raise ValueError(f"invalid key: {key!r}")
 
 
+def _route(ws, key, *, prefix=False):
+    """(db, store key). `apps/<slug>/…` is the workspace's app shelf; anything else the agent's own."""
+    if key.startswith(APPS_ROOT):
+        slug, _, rest = key[len(APPS_ROOT):].partition("/")
+        if not rest.strip("/") and not prefix:
+            raise ValueError(f"app key needs apps/<slug>/<key>: {key!r}")
+        return apps_db(ws), app_shelf(slug, rest)
+    if not prefix: _validate_db_key(key)
+    return DB(workspace(ws.subject, ws.volume, base=ws.base, slot=".database", ws=ws.ws)), key
+
+
 async def _exec_database(inp, ws):
     """All returns are strings — Anthropic tool_result.content accepts
     str or content-blocks (each with a `type`); raw dicts/lists from JSON
     values would 400. JSON-encode the data ones."""
-    agent_ws = workspace(ws.subject, ws.volume, base=ws.base, slot=".database", ws=ws.ws)
-    db = DB(agent_ws)
     cmd, key = inp.get("command"), inp.get("key", "")
     try:
         if cmd == "get":
-            _validate_db_key(key)
-            v = await db.get(key)
+            db, k = _route(ws, key)
+            v = await db.get(k)
             return json.dumps(v) if v is not None else f"Error: key {key!r} not found"
         if cmd == "put":
-            _validate_db_key(key)
-            await db.put(key, inp.get("value"))
+            db, k = _route(ws, key)
+            await db.put(k, inp.get("value"))
             return f"Stored {key!r}"
         if cmd == "delete":
-            _validate_db_key(key)
-            await db.delete(key)
+            db, k = _route(ws, key)
+            await db.delete(k)
             return f"Deleted {key!r}"
         if cmd == "scan":
             prefix = inp.get("prefix", "")
+            db, p = _route(ws, prefix, prefix=True)
+            app = prefix.startswith(APPS_ROOT)
             limit = max(1, int(inp.get("limit", 100)))
-            pairs = [{"key": k, "value": v} async for k, v in db.items(prefix=prefix, limit=limit + 1)]
+            pairs = [{"key": APPS_ROOT + k if app else k, "value": v}
+                     async for k, v in db.items(prefix=p, limit=limit + 1)
+                     if not (app and k.split("/")[1:2] == [USER_MARK])]
             truncated = len(pairs) > limit
             if truncated: pairs = pairs[:limit]
             if not pairs: return f"No keys with prefix {prefix!r}"

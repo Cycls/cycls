@@ -106,18 +106,24 @@ def restore(ws, tid):
 
 
 def purge(ws, tid):
+    """Returns the meta of what went, so a caller can drop what lives off-disk."""
     entry = _root(ws) / tid
     if not entry.is_dir():
         raise FileNotFoundError(tid)
+    meta = _read(entry)
     shutil.rmtree(entry, ignore_errors=True)
+    return meta
 
 
 def empty(ws):
     root = _root(ws)
+    gone = []
     if root.is_dir():
         for e in root.iterdir():
             if e.is_dir():
+                gone.append(_read(e))
                 shutil.rmtree(e, ignore_errors=True)
+    return [m for m in gone if m]
 
 
 def sweep(ws, now=None):

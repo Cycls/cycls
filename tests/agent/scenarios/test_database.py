@@ -155,3 +155,64 @@ def test_ws_mode_kv_lands_inside_workspace(tmp_path):
     assert (tmp_path / "org" / "ws" / "u-u1" / ".database" / "u1" / "k1.json").exists()
     out = _run(_exec_database({"command": "get", "key": "k1"}, ws))
     assert json.loads(out) == 1
+
+
+# ---- apps/ routes to the workspace app shelf (docs/notes/apps.md) ----
+
+def _ws_user(tmp_path):
+    return workspace("tenant:alice", tmp_path, base=f"file://{tmp_path}", ws="t-eng")
+
+
+def test_app_key_lands_in_the_apps_slot_not_the_agent_db(tmp_path):
+    ws = _ws_user(tmp_path)
+    _run(_exec_database({"command": "put", "key": "apps/standup/config", "value": {"days": "mon"}}, ws))
+    shelf = DB(workspace("tenant", tmp_path, base=f"file://{tmp_path}", slot=".apps", ws="t-eng"))
+    assert _run(shelf.get("standup/config")) == {"days": "mon"}
+
+
+def test_app_shelf_is_shared_across_members(tmp_path):
+    a = workspace("tenant:alice", tmp_path, base=f"file://{tmp_path}", ws="t-eng")
+    b = workspace("tenant:bob", tmp_path, base=f"file://{tmp_path}", ws="t-eng")
+    _run(_exec_database({"command": "put", "key": "apps/standup/entries/1", "value": "hi"}, a))
+    out = _run(_exec_database({"command": "get", "key": "apps/standup/entries/1"}, b))
+    assert json.loads(out) == "hi"
+
+
+def test_agent_db_stays_per_user(tmp_path):
+    a = workspace("tenant:alice", tmp_path, base=f"file://{tmp_path}", ws="t-eng")
+    b = workspace("tenant:bob", tmp_path, base=f"file://{tmp_path}", ws="t-eng")
+    _run(_exec_database({"command": "put", "key": "note", "value": "mine"}, a))
+    assert "not found" in _run(_exec_database({"command": "get", "key": "note"}, b))
+
+
+def test_u_is_reserved_under_a_slug(tmp_path):
+    ws = _ws_user(tmp_path)
+    for key in ("apps/standup/u/bob/draft", "apps/standup/u"):
+        out = _run(_exec_database({"command": "put", "key": key, "value": "x"}, ws))
+        assert out.startswith("Error:") and "reserved" in out
+
+
+def test_u_is_only_reserved_directly_under_the_slug(tmp_path):
+    ws = _ws_user(tmp_path)
+    out = _run(_exec_database({"command": "put", "key": "apps/standup/notes/u/x", "value": 1}, ws))
+    assert out.startswith("Stored")
+
+
+def test_scan_hides_members_private_rows_and_reprefixes(tmp_path):
+    ws = _ws_user(tmp_path)
+    shelf = DB(workspace("tenant", tmp_path, base=f"file://{tmp_path}", slot=".apps", ws="t-eng"))
+    _run(shelf.put("standup/entries/1", "shared"))
+    _run(shelf.put("standup/u/bob/draft", "private"))
+    out = _run(_exec_database({"command": "scan", "prefix": "apps/standup/"}, ws))
+    assert json.loads(out) == [{"key": "apps/standup/entries/1", "value": "shared"}]
+
+
+def test_a_bare_slug_cannot_be_deleted_from_the_tool(tmp_path):
+    ws = _ws_user(tmp_path)
+    out = _run(_exec_database({"command": "delete", "key": "apps/standup/"}, ws))
+    assert out.startswith("Error:")
+
+
+def test_app_key_needs_a_slug(tmp_path):
+    ws = _ws_user(tmp_path)
+    assert _run(_exec_database({"command": "get", "key": "apps/"}, ws)).startswith("Error:")

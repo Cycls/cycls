@@ -14,7 +14,7 @@ workspace, `/files`, the canvas, the trash and the connector relay that all alre
   README.md       what the app reads and the shape of it — written at build time
   src/            the source the agent wrote; stays, so a rebuild is possible
   data/           the ONLY path the app may write
-    state.json      the key-value store behind cycls.get / cycls.set
+    state.json      pre-store apps only; the shelf imports it once (see `.apps`, below)
 ```
 
 `canWrite` is an allowlist: the app writes under `data/` and nowhere else. As a denylist it
@@ -32,8 +32,9 @@ at all, because opening a document must never hand that document your workspace.
 **An app is shared by the whole workspace.** `workspace()` returns
 `root = {volume}/{org}/ws/{ws}` with **no user segment** (`workspace()` in `cycls/_app/db.py`), and every
 `/files` route resolves against `ws.root`. So the bundle, the source and the data are one copy that
-every member reads and writes. This is the settled requirement, and it is the reason app data lives
-in the folder rather than in the agent KV — the KV path is `{slot}/{user}`, which is per person.
+every member reads and writes. This is the settled requirement, and it is why app data cannot sit in
+`.database`, whose path ends `{slot}/{user}` and is therefore one shelf per person. The `.apps` slot
+below is scoped per app instead.
 
 ## What the agent knows about an app
 
@@ -53,7 +54,7 @@ where a duplicate-ID corruption came from.
 ## The build
 
 `build_app` (`_exec_build_app` in `cycls/_agent/tools/__init__.py`) collects the text files under it
-and hands them to a deployed Cycls function, `miniapp-build`. The service is **not in this repo** —
+and hands them to a deployed Cycls function, `app-build`. The service is **not in this repo** —
 it lives at `~/Desktop/code/remote_build_function` and has its own git history.
 
 It is remote on purpose, for three reasons:
@@ -96,7 +97,7 @@ CSP so "fetch works" would be removing the only thing that bounds a generated pa
 
 ```
  1  the agent writes source          apps/<slug>/src/*        (edit tool)
- 2  build_app(slug, source)          → miniapp-build          → apps/<slug>/index.html
+ 2  build_app(slug, source)          → app-build          → apps/<slug>/index.html
 
  3  the user opens the app           Apps tab → canvas
  4  GET /files/apps/<slug>/index.html                         Authorization: Bearer <JWT>
@@ -135,12 +136,11 @@ app without the shim is a blank white frame with no message. `app-shim.ts` insta
 typed API — `read`, `write`, `save`, `get`/`set`, `connector`, `resize` — so an app calls a function
 instead of hand-rolling the postMessage protocol.
 
-**`cycls.get`/`set`** coalesce: `set` mutates memory and schedules one write 250 ms later, so a
-burst of updates costs one PUT. The flush then **re-reads and merges only the keys this frame
-touched** — writing the whole cached object meant a second tab, another device or the agent lost
-everything it had changed. A key removed locally is removed in the merge, so a delete carries.
-It is still not compare-and-swap: two writers touching the same key inside one GET→PUT window
-lose one.
+**`cycls.get`/`set`** coalesce: `set` mutates memory and schedules the writes 250 ms later, so a
+burst of updates costs one write per key touched rather than one per call. Each key is its own row,
+so two writers now collide only on the same key — the whole-file rewrite this replaced lost
+everything another tab, another device or the agent had changed. It is still not compare-and-swap:
+two writers on one key inside the same window, and one loses.
 
 **An app that throws says so.** The shim posts `cycls:loaderror` from `error` and
 `unhandledrejection`, and the canvas shows it. A crashed app used to be a white rectangle.
@@ -171,6 +171,109 @@ directory while the agent never learned it existed, because the loop only ever w
 Declare it on `cycls.Web().connectors(...)` as usual **and** on `cycls.LLM().connectors(...)`, which
 is how the loop sees a connector that has no server to walk.
 
+## Where app data lives — the `.apps` slot
+
+`cycls.get`/`set` used to be one JSON file, `data/state.json`, rewritten whole on every flush: no
+per-key granularity, and one torn write lost an app's entire state. App data is rows in the object
+store now, in a third slot beside the two that were already there.
+
+| slot | holds | scoped |
+|---|---|---|
+| `.db` | chats | per user |
+| `.database` | the agent's memory | per user |
+| `.apps` | app data | **per app**, with a per-viewer shelf inside it |
+
+```
+{org}/ws/{ws}/.apps/<slug>/<key>            the workspace's copy — every member reads and writes
+{org}/ws/{ws}/.apps/<slug>/u/<user>/<key>   this viewer's own — drafts, filters, submissions
+```
+
+A standup board keeps its entries in the first and each person's unsent draft in the second.
+`state.app_shelf()` is the only thing that builds either, so both the tool and the route obey one
+set of rules.
+
+### Three verbs, and the route decides what each may do
+
+```js
+cycls.get(key) / set(key, v)                    the workspace's shelf — every member
+cycls.me.get(key) / set(key, v) / all(prefix)   this viewer's own
+cycls.users.all(prefix) / get(u, k) / set(u, k, v)   everyone's — admins only
+```
+
+An app that must keep one member's data from another uses `cycls.me`, and it is not an `if` in the
+bundle: the app is model-written HTML in a browser the viewer controls, so a client-side filter is
+no boundary at all. **The frame names an audience, never a person.** `who=me` is resolved from the
+session and `who=all` from `_admin()`, so there is no id in the call to get wrong and nothing to
+forge. An app finds out which view to render by whether `cycls.users` resolves or rejects — the 403
+is the answer.
+
+`app.json` carries one flag, the only thing the route cannot infer:
+
+```json
+{ "write": "admin" }   // shared shelf becomes admin-write, member-read
+```
+
+Per-member privacy needs no flag (it is the verb) and admin-reads-all needs none (it is the role).
+The default is that any member writes the shared shelf, matching the app's files, which every editor
+can already write — a stricter default would have broken every app on the day it migrated.
+
+### Scope is in the path, permission is on the route
+
+Keeping those apart is what lets an app flip from open to admin-write without moving a single row,
+and it is why there is no `a/` prefix or per-key ACL. The path answers *who is this for*; the
+request answers *who is asking*.
+
+`u` is reserved directly under a slug. Without the marker every user id that will ever exist would
+be a forbidden shared key, and nothing could check that locally — the write path has no list of
+people. With it the check is one string compare, and `database scan apps/standup/` can leave other
+members' rows out of what the agent sees.
+
+### The slug is the only join, and the builder never learns it
+
+`apps/<slug>/` is the folder and `.apps/<slug>/` is its shelf. Five apps are five folders and five
+prefixes; no id, no registry, no manifest field that can drift.
+
+`app-build` is `files → html` — handed source, returns a bundle, and knows nothing of the slug, the
+workspace or the store. The scope is resolved at *runtime* by the host from the path the file was
+served from, the same `appScope()` that decides whether a document gets a bridge at all. If the
+frame could pass a slug, the invoices app could write the standup app's shelf. A bundle is therefore
+portable: rename `apps/standup/` to `apps/daily/` and the same bytes address `.apps/daily/`.
+
+### Deleting an app takes its data — at purge, not at delete
+
+A delete is a move, and `data/state.json` used to ride inside the folder into `.trash/`, recoverable
+for 30 days. Hard-deleting rows on delete would have thrown that away, so the rows follow the
+folder's lifecycle one step behind:
+
+| event | folder | rows |
+|---|---|---|
+| delete app | → `.trash/<id>/` | untouched |
+| restore | ← back | untouched — the data reappears, **zero copies** |
+| purge entry / empty trash | gone | `remove_prefix(.apps/<slug>/)` |
+| `build_app` on a slug with no folder | fresh | stale rows purged first |
+| rename app | moved | the shelf moves with it — O(N), admin-gated, rare |
+| delete workspace | gone | swept by `wipe_workspace`'s existing prefix removal |
+
+Why the viewer's shelf nests *under* the app rather than beside it: `.apps/<slug>/` is one prefix
+delete that takes the shared rows, every member's private rows, and the rows of people who left
+months ago. The alternative — `s/<slug>/` and `u/<user>/<slug>/` — needs the member list to find the
+second half, and the member list is not the set of people holding rows. Data that outlives the list
+that would have deleted it is the failure being avoided. Forgetting one person costs N deletes
+instead of one, where N is the app count: single digits, and listable from `apps/` itself.
+
+The reused-slug purge is what stops silent corruption: delete `standup`, build a new `standup` two
+weeks later, and without it the new app opens onto the dead one's rows with a schema that does not
+match.
+
+`trash.sweep()` is sync and stdlib-only on purpose — the sandbox `rm` shim calls it, where `/app` is
+masked — so a 30-day TTL expiry cannot await a `remove_prefix`. Rows can outlive their trash entry.
+They are invisible, cost nothing, and can never be inherited, because the build-time purge catches
+them.
+
+**`data/state.json` still works.** The first list of an empty shelf imports it once, so an app built
+before the store keeps its data. injaz is the reminder that not every app used `state.json`: it
+writes `data/<PROJECT>.json` through `cycls.read`/`write`, and those stay files.
+
 ## Known limitations
 
 Current behaviour, not aspiration. Each is a real constraint someone will hit.
@@ -181,21 +284,23 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
   therefore impossible**, in every persistence flavour.
 - The bridge is **text-only in both directions**. `readFile` decodes as UTF-8, so binary cannot
   round-trip; an image or a database must be base64 at rest.
-- A bridge write is capped at 1,000,000 UTF-16 units and rewrites the whole file. There is no
-  append, no delete and no directory listing.
-- No compare-and-swap anywhere: `PUT /files` is an unconditional whole-file replace. The shim's
-  merge narrows the loss to one key inside one GET→PUT window; it does not remove it.
-- A flush that cannot re-read writes nothing rather than clobbering, so a tab closing on a dead
-  connection can lose its last 250 ms.
+- A bridge *file* write is capped at 1,000,000 UTF-16 units and rewrites the whole file. There is no
+  append, no delete and no directory listing. A data row is capped at the same size.
+- No compare-and-swap anywhere. Per-key rows shrink the blast radius from the whole app to one key;
+  they do not remove it, and the object store offers only create-if-absent.
+- A flush that fails rejects the pending `set`, so a tab closing on a dead connection can still lose
+  its last 250 ms.
 
 **The frame**
 - A shared or gallery view has no workspace. The app now gets the shim, so it renders, but every
   `cycls.read` rejects — an app that needs its data shows nothing in a share.
 - On mobile the app is staged to a `file://` URI in a WebView with `originWhitelist: ["*"]`, and
   Android truncates `loadData` past roughly 2 MB — a 2.4 MB bundle rendered blank in production.
-- The mobile host has not been ported yet: it sends no MessagePort (so that frame still talks on
-  the window), keeps the old `state.json` path, and does not merge on flush. Until it ships,
-  the same app on web and on a phone writes two different files.
+- The mobile host has not been ported: it sends no MessagePort (so that frame still talks on the
+  window) and knows nothing of `cycls:data`, so it still writes `state.json` as a file. The same app
+  now reads rows on web and a file on a phone — the widest this divergence has been, and the
+  strongest reason to port. The seed runs off the file, so mobile writes are not lost, but they stop
+  being seen once the shelf has rows. `~/Desktop/code/mobile-app`.
 
 **The build**
 - `_collect_source` skips binaries, so an app cannot ship an image file; icons must be data URIs.

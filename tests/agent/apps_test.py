@@ -5,6 +5,12 @@ import cycls
 import pytest
 
 from cycls._agent import tools
+from cycls._app.db import workspace
+
+
+def _ws(root):
+    """A Workspace whose root IS `root` — build_app needs the object, not the path."""
+    return workspace(root.name, root.parent, base=f"file://{root}")
 
 
 @pytest.fixture
@@ -94,7 +100,7 @@ class TestBuildApp:
         monkeypatch.setattr(cycls, "remote", lambda name, **_: (lambda **kw: result))
 
     def _build(self, inp, ws):
-        return asyncio.run(tools._exec_build_app(inp, ws))
+        return asyncio.run(tools._exec_build_app(inp, _ws(ws)))
 
     @pytest.mark.parametrize("slug", ["", "Has Caps", "a/b", "x!"])
     def test_rejects_an_unusable_slug(self, tmp_path, slug):
@@ -161,7 +167,7 @@ class TestBuildAppHardening:
         monkeypatch.setattr(cycls, "remote", lambda name, **_: (lambda **kw: result))
 
     def _build(self, inp, ws):
-        return asyncio.run(tools._exec_build_app(inp, ws))
+        return asyncio.run(tools._exec_build_app(inp, _ws(ws)))
 
     @pytest.fixture
     def src(self, tmp_path):
@@ -254,7 +260,7 @@ def test_the_manifest_carries_the_description_the_catalog_reads(tmp_path, monkey
                         lambda name, **_: (lambda **kw: {"ok": True, "html": "x", "bytes": 1, "stray": []}))
     asyncio.run(tools._exec_build_app(
         {"slug": "burnup", "source": "apps/burnup/src", "name": "Burn-up",
-         "description": "Sprint burn-up over projects/*.json"}, tmp_path))
+         "description": "Sprint burn-up over projects/*.json"}, _ws(tmp_path)))
     assert json.loads((tmp_path / "apps" / "burnup" / "app.json").read_text())[
         "description"] == "Sprint burn-up over projects/*.json"
     tools._apps_cache.clear()
