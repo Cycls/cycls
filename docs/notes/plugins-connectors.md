@@ -376,6 +376,27 @@ the `_resolve_path` rejection, in the tool and file-route path checks alike. `.t
 neither: bash must read it and `read` must reach it. It is hidden from listings, deleted for
 real by the `rm` shim, refused by `canvas`, and removed on chat purge.
 
+## Turning them off for a deployment
+
+Not declaring a connector has always turned it off. What `CYCLS_CONNECTORS` adds is doing that
+**without a code change**, which is what you want when a provider breaks or a deployment should not
+reach anything at all:
+
+| value | serves |
+|---|---|
+| unset | everything declared |
+| `off` (also `0`, `false`, `none`) | nothing |
+| `salla,posthog` | only those, an allowlist |
+
+`connectors.declared()` applies it to **both** declarations — `cycls.Web().connectors(...)`, which
+feeds the directory, the connect routes and the relay, and `cycls.LLM().connectors(...)`, which
+feeds the loop. Filtering one and not the other would leave a Connect button for something the agent
+has no tool for.
+
+A name in the list that matches nothing declared is not an error — you get fewer connectors and no
+complaint — so it logs `connectors_filtered` with what it could not find. Check that before assuming
+a typo did nothing.
+
 ## The connect relay — OAuth redirects
 
 Not the API relay below. This one brokers the *authorization code* once, at connect time, and

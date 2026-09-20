@@ -30,6 +30,26 @@ def env(name):
     return Env(name)
 
 
+OFF = ("off", "0", "false", "none")
+
+
+def declared(connectors):
+    """`CYCLS_CONNECTORS` narrows what a deployment actually serves, without a code
+    change: unset is everything declared, `off` is nothing, and a comma list is an
+    allowlist. Applied to both declarations — the routes and the loop — so there is
+    no half-on state where the directory offers what the agent cannot call."""
+    want = os.environ.get("CYCLS_CONNECTORS", "").strip()
+    if not want:
+        return list(connectors)
+    if want.lower() in OFF:
+        return []
+    names = {n.strip() for n in want.split(",") if n.strip()}
+    kept = [o for o in connectors if o.name in names]
+    if missing := names - {o.name for o in kept}:
+        log("connectors_filtered", missing=sorted(missing), kept=[o.name for o in kept])
+    return kept
+
+
 def _val(x):
     return x.get() if isinstance(x, Env) else x
 

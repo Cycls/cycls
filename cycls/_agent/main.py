@@ -14,6 +14,7 @@ from .web.routers import install_routers
 from .web import Web, web, Config
 from .web.server import PassMetadata
 from .tools import TRASH_MOUNT, SHIMS_MOUNT
+from . import connectors
 
 CYCLS_PATH = importlib.resources.files('cycls')
 
@@ -80,7 +81,7 @@ class Agent(App):
         self.config._og_image = web._og_bytes
         self._iap = web._iap
         self._on_run = web._on_run
-        self.connectors = web._connectors
+        self.connectors = connectors.declared(web._connectors)
 
         # Merge Web's copy_public files under public/. App.__init__ adds
         # the cycls source tree on top.

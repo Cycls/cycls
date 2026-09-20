@@ -804,3 +804,51 @@ def test_a_runaway_app_is_cut_off(key, tmp_path, monkeypatch):
     with fake:
         codes = [client.get("/connectors/posthog/fetch/api/x").status_code for _ in range(4)]
     assert codes == [200, 200, 429, 429]
+
+
+# CYCLS_CONNECTORS narrows what a deployment serves without touching code. It has
+# to reach both declarations or the directory offers what the agent cannot call.
+
+def _two():
+    return [c.Key("alpha", api="https://alpha.example.com"),
+            c.Key("beta", api="https://beta.example.com")]
+
+
+def test_connectors_are_all_on_when_nothing_is_set(monkeypatch):
+    monkeypatch.delenv("CYCLS_CONNECTORS", raising=False)
+    assert [o.name for o in c.declared(_two())] == ["alpha", "beta"]
+
+
+@pytest.mark.parametrize("value", ["off", "OFF", "0", "false", "none", " off "])
+def test_one_setting_takes_every_connector_out(monkeypatch, value):
+    monkeypatch.setenv("CYCLS_CONNECTORS", value)
+    assert c.declared(_two()) == []
+
+
+def test_a_list_is_an_allowlist(monkeypatch):
+    monkeypatch.setenv("CYCLS_CONNECTORS", "beta")
+    assert [o.name for o in c.declared(_two())] == ["beta"]
+    monkeypatch.setenv("CYCLS_CONNECTORS", " beta , alpha ")
+    assert [o.name for o in c.declared(_two())] == ["alpha", "beta"]
+
+
+def test_a_name_that_matches_nothing_is_logged_not_guessed(monkeypatch):
+    """A typo yields fewer connectors and no error, so it has to leave a trace."""
+    monkeypatch.setenv("CYCLS_CONNECTORS", "beta,betta")
+    seen = {}
+    monkeypatch.setattr(c, "log", lambda ev, **kw: seen.update(event=ev, **kw))
+    assert [o.name for o in c.declared(_two())] == ["beta"]
+    assert seen["event"] == "connectors_filtered" and seen["missing"] == ["betta"]
+
+
+def test_both_declarations_are_filtered(monkeypatch, tmp_path):
+    """Web feeds the routes, LLM feeds the loop; half-off would offer a Connect
+    button for a connector the agent has no tool for."""
+    import cycls
+    monkeypatch.setenv("CYCLS_CONNECTORS", "off")
+
+    @cycls.agent(volumes={"/workspace": cycls.Volume("t")}, web=cycls.Web().connectors(*_two()))
+    async def a(context):
+        yield ""
+    assert a.connectors == []
+    assert [o.name for o in c.declared(cycls.LLM().connectors(*_two())._connectors)] == []
