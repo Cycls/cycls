@@ -748,7 +748,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     onMentionSearch: account || searchFiles ? searchMentions : undefined,
     connectors: connectors?.filter((c) => c.connected),
     approveSwitch: !!connectors?.length,
-    onOpenConnectors: account ? () => openConnectors("plus") : undefined,
+    onOpenConnectors: account && connectors?.length ? () => openConnectors("plus") : undefined,
     onToggleConnector: (c: Connector, on: boolean) => {
       setConnectors((prev) => prev?.map((x) => (x.name === c.name ? { ...x, on } : x)) ?? prev);
       track("connector_toggled", { connector: c.name, to: on ? "on" : "off", level: "user" });
@@ -1140,7 +1140,8 @@ export function Chat({ chat, onShare, files, account, config }: {
         </Popover>
       )}
       {settingsOpen && account && (
-        <SettingsDialog account={account} onClose={() => setSettingsOpen(false)} onOpenConnectors={() => { setSettingsOpen(false); openConnectors("settings"); }} />
+        <SettingsDialog account={account} onClose={() => setSettingsOpen(false)}
+                        onOpenConnectors={connectors?.length ? () => { setSettingsOpen(false); openConnectors("settings"); } : undefined} />
       )}
       </div>
       <div className={cn(
