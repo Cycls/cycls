@@ -228,7 +228,7 @@ def test_the_writer_appends_past_disk_instead_of_repairing_it(tmp_path):
 
 
 def test_a_reader_cannot_move_a_live_sessions_slots(tmp_path):
-    """The production failure, in miniature (super a95500f1, haseef 48b79700):
+    """The production failure, in miniature — two chats, same shape:
     a run holds turn 2 as its next index while its tool_use is unpaired on disk;
     a reader normalizes that turn away and renumbers; the run's next append then
     lands in a slot that means something else, leaving a hole."""

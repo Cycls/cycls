@@ -1,8 +1,7 @@
 # Runs — the loop outlives the request
 
 **Status**: proposed (2026-09-09), revised 2026-09-15 against HEAD — an audit of
-everything that landed since, plus an invariant scan of every chat on super and
-haseef. The revision did not change the design's shape. It found that two of its
+everything that landed since, plus an invariant scan of every chat on two production deployments. The revision did not change the design's shape. It found that two of its
 parts corrupt chats when combined, and that the corruption is already happening
 at a low rate for a different reason.
 
@@ -19,12 +18,12 @@ stops mattering.
 
 ## What the logs say
 
-| super + haseef, 14 days | at 2026-09-07 | at 2026-09-15 |
+| two deployments, 14 days | at 2026-09-07 | at 2026-09-15 |
 | --- | --- | --- |
-| streams closed from the client side mid-work (hypercorn `- POST /chat`) | ~245 | **388** (super 209, haseef 179) |
+| streams closed from the client side mid-work (hypercorn `- POST /chat`) | ~245 | **388** (209 and 179) |
 | of those, runs longer than 60s | ~100 | not re-measured |
 | runs killed by the Cloud Run 1200s request timeout | 4 | not re-measured |
-| container OOM kills at 1Gi | 7 (3 events) | **73** (super 70) |
+| container OOM kills at 1Gi | 7 (3 events) | **73** (70 on one) |
 | user messages lost because the cut came before the first checkpoint | 44 | 42 still on disk (see below) |
 
 The loop never stops itself in these cases. Every cut is the request ending under
@@ -35,10 +34,10 @@ involved. Cloud Run's own guidance for long requests is to "design request
 handlers in such a way that they can resume from the point where they left off".
 
 Two caveats on this table. The OOM jump is two crash-loops on one revision
-(`super-00026-xld`, Sep 10 and Sep 13), not a steady rate — but during the Sep 10
+(one revision, two days), not a steady rate — but during the first
 window seven users sent 36 POSTs across seven chats, retrying into a service whose
 containers kept dying, so container death is no longer the rare event the failure
-table below once assumed. And super moved from `anthropic/claude-sonnet-4-6` to
+table below once assumed. And one of them moved from `anthropic/claude-sonnet-4-6` to
 Modal-hosted K3 through the OpenAI provider (5a21709) *after* the first window, so
 the "loop never stops itself" row describes a configuration no longer deployed:
 on the SGLang path an overflow error falls through `_OVERFLOW_RE` and kills the
@@ -51,17 +50,17 @@ An invariant scan of all 2,499 chats on the two volumes (101,160 objects), looki
 for turn indices that are not contiguous and for chats whose stored history cannot
 be read back as valid:
 
-- **Two chats have holes.** super `a95500f1` lost turns 4–5 on Sep 10 — a whole
-  user message and its reply. haseef `48b79700` lost turns 9–16 on Sep 14. Both
-  times two runs were writing one chat: the super chat has two POSTs two seconds
-  apart on one instance; the haseef chat's file timestamps are interleaved out of
+- **Two chats have holes.** One lost turns 4–5 — a whole user message and its
+  reply. Another lost turns 9–16. Both times two runs were writing one chat: the
+  first has two POSTs two seconds apart on one instance; the second's file
+  timestamps are interleaved out of
   order (0–2 at 14:28:37, 17–19 at :40, 3–4 at :44), one session appending at its
   own `_saved` while another renumbered the chat underneath it.
 - **The trigger is almost never armed today: 0 of 500 sampled chats** end on an
   unpaired `tool_use`. The loop writes the assistant turn and its `tool_result`s
   in one checkpoint, so disk is paired within microseconds and the repair path
   below effectively never fires.
-- **42 chats hold a title and no turns at all** (30 super, 12 haseef) — the title
+- **42 chats hold a title and no turns at all** (30 and 12) — the title
   is derived from the user's first message, so the message reached the server and
   never reached disk. They sit in the user's chat list, named, empty.
 
@@ -70,7 +69,7 @@ be read back as valid:
 Measured 2026-09-15, 30 days, all services: 139 OOM log rows, 26 container kills.
 Four chats account for 24 of them, across at least two distinct causes.
 
-- **One super chat, 10 kills — the agent installs Chrome into RAM.** super's
+- **One chat, 10 kills — the agent installs Chrome into RAM.** That deployment's
   `allowed_tools` has no `Browser`, so asked for screenshots the model builds its
   own Playwright over Bash: 17 issued commands wrap `mount -t tmpfs tmpfs /tmp/x`
   (no `size=`) in `unshare -rm`, after `mount -o remount,exec /tmp` failed. It
@@ -78,7 +77,7 @@ Four chats account for 24 of them, across at least two distinct causes.
   RAM charged to the container's cgroup, so that is ~500MB resident before Chrome
   starts, inside 1Gi. It killed 10 consecutive *fresh* containers in 18 minutes,
   each dying 23–51s in, because every retry re-ran the same unpack.
-- **Two more super chats by the same user, 9 kills — cause not established.**
+- **Two more chats by the same user, 9 kills — cause not established.**
   They only `cat` the script the first chat left on the volume; neither ever ran
   `unshare`. A first grep counted them as the same pattern — it was matching file
   contents echoed into the transcript, not commands. The likely candidate is our
@@ -86,8 +85,8 @@ Four chats account for 24 of them, across at least two distinct causes.
   stage hundreds of MB by default, but nothing measured confirms it.
   Transcript size is irrelevant either way: one of these chats is 38KB, below
   median. The behaviour is also rare — 0 of 25 sampled chats used `unshare`.
-- **One haseef chat, 6 kills — a 3MB, 413-turn, image-bearing chat submitted five
-  times within 12ms.** Its first turn is `اكمل`. This is the cut-stream bug feeding
+- **One chat, 6 kills — a 3MB, 413-turn, image-bearing chat submitted five
+  times within 12ms.** Its first turn is a one-word retry. This is the cut-stream bug feeding
   the OOM: cut, resubmit, five concurrent runs each expanding the same images.
   `_claim` (§1) fixes this one by construction.
 
@@ -128,7 +127,7 @@ keeps `_saved`, the number of turns it has already written, and appends at it
 (`append_messages(..., start_idx=self._saved)`). Renumber the files underneath it
 and that counter is stale.
 
-Put together, on the haseef chat:
+Put together, on that chat:
 
 1. 17 turns on disk, `000000`–`000016`. A run opens it: `_saved = 17`.
 2. The run works and checkpoints → `000017`, `000018`, `000019`.
@@ -455,8 +454,8 @@ mostly unnecessary.
    the chat list, card rebuilt from the transcript, stop endpoint, no aborts on
    navigation, Web Lock, and the analytics moves.
 4. **Cloud**: `cpu_idle`, memory, concurrency as deploy fields. Enable on
-   super-dev, watch `stream_broken`, the cut count and memory for a few days, then
-   super and haseef.
+   a dev deployment, watch `stream_broken`, the cut count and memory for a few
+   days, then production.
 5. **Lease takeover**: a stale heartbeat lets the next container resume the run
    from its checkpoint instead of waiting for the user to press Continue. Sized as
    optional when OOM looked rare; at 73 in 14 days it is the difference between
@@ -479,7 +478,7 @@ precise state. Step 4 makes it complete.
 
 ## Related
 
-Prerequisites for step 4, not footnotes — both sit on the path super now runs:
+Prerequisites for step 4, not footnotes — both sit on the path production now runs:
 `_OVERFLOW_RE` in `harness/main.py` does not match SGLang's "longer than the
 model's context length", so an overflowing chat errors instead of compacting; the
 OpenAI provider stubs every attached document, so files never reach the model on
