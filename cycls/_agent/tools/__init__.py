@@ -10,7 +10,7 @@ from typing import NamedTuple
 from . import pdf, skills
 from ..connectors import approval_key
 from ..logs import log
-from ..state import _exec_database
+from ..state import _exec_database, app_shelf, apps_db
 from .. import credentials, spill, trash
 
 TRASH_MOUNT, SHIMS_MOUNT = "/workspace-trash", "/opt/cycls-bin"   # created by the image (Agent._base_run)
@@ -687,11 +687,11 @@ def _app_identity(path, fallback):
 
 
 # The build runs as a deployed Cycls function; override to point at your own.
-APP_BUILDER = os.environ.get("CYCLS_APP_BUILDER", "miniapp-build")
+APP_BUILDER = os.environ.get("CYCLS_APP_BUILDER", "app-build")
 _APP_SRC_MAX_FILES = 400
 _APP_SRC_MAX_BYTES = 12_000_000
 _APP_SRC_MAX_FILE = 2_000_000    # the builder's cap, mirrored so it fails here naming the file
-_APP_BUILD_TIMEOUT = 420         # the build function is killed at this
+_APP_BUILD_TIMEOUT = 420         # seconds — the build function itself is killed at 300+120
 _APP_SLUG_OK = set("abcdefghijklmnopqrstuvwxyz0123456789-_")
 
 
@@ -748,8 +748,10 @@ def app_catalog(root):
     return text
 
 
-async def _exec_build_app(inp, workspace):
+async def _exec_build_app(inp, ws):
     import cycls
+
+    workspace = ws.root
 
     slug = str(inp.get("slug", "")).strip().lower()
     if not slug or set(slug) - _APP_SLUG_OK:
@@ -786,7 +788,10 @@ async def _exec_build_app(inp, workspace):
         return "Build failed: the build service reported success but returned no html."
 
     app_dir = pathlib.Path(workspace) / "apps" / slug
+    fresh = not app_dir.exists()
     app_dir.mkdir(parents=True, exist_ok=True)
+    if fresh:   # a reused slug must not inherit the rows of the app that had it
+        await apps_db(ws).delete(app_shelf(slug))
     entry = app_dir / "index.html"
     if entry.exists():   # a bad rebuild stays recoverable, as `edit` keeps an overwrite
         trash.trash_path(workspace, f"apps/{slug}/index.html", by="agent", reason="rebuild")
@@ -1026,7 +1031,7 @@ _TOOLS = {
                        once=True, terminal=True, prompt=SUGGEST_GUIDANCE),
     "ask":        Tool(lambda inp, ws, **_: _exec_ask(inp), _ask_step,
                        once=True, terminal=True, prompt=ASK_GUIDANCE),
-    "build_app":  Tool(lambda inp, ws, **_: _exec_build_app(inp, ws.root),
+    "build_app":  Tool(lambda inp, ws, **_: _exec_build_app(inp, ws),
                        lambda inp: {"tool_name": "Building app", "step": inp.get("slug", "")}),
     "skill":      Tool(lambda inp, ws, **_: skills._exec_skill(inp, ws.root),
                        lambda inp: {"tool_name": "Skill", "step": inp.get("name", "")}),

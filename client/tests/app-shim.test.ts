@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { injectShim, STATE_FILE } from "../src/components/app-shim";
+import { injectShim } from "../src/components/app-shim";
 
 const shimOf = (html: string) => injectShim(html).match(/<script>[\s\S]*?<\/script>/)?.[0] ?? "";
 
@@ -37,9 +37,10 @@ describe("injectShim", () => {
     expect(() => new Function(js)).not.toThrow();
   });
 
-  it("persists through one JSON file in the app's folder", () => {
-    expect(STATE_FILE).toBe("data/state.json");
-    expect(shimOf("<html><head></head></html>")).toContain('"data/state.json"');
+  it("persists as rows in the store, not as a file", () => {
+    const js = shimOf("<html><head></head></html>");
+    expect(js).toContain("cycls:data");
+    expect(js).not.toContain("data/state.json");
   });
 });
 
@@ -150,37 +151,33 @@ describe("the injected cycls api", () => {
     await expect(p).rejects.toThrow("nope");
   });
 
-  it("coalesces a burst of sets into one write", async () => {
+  // One row per key: two writers now collide only on the same key, where the
+  // whole-file rewrite this replaced lost everything the other had changed.
+  it("coalesces a burst of sets into one write per key", async () => {
     const { api, posted, deliver } = load("apps/burnup");
     const done = Promise.all([api.set("a", 1), api.set("b", 2), api.set("a", 3)]);
     await new Promise((r) => setTimeout(r, 0));
-    const reads = () => posted.filter((m) => m.type === "cycls:read");
-    deliver({ type: "cycls:read:result", id: reads()[0].id, ok: true, content: "{}" });
-    await new Promise((r) => setTimeout(r, 20));
-    // the flush re-reads before writing, so the second read is the merge
-    deliver({ type: "cycls:read:result", id: reads()[1].id, ok: true, content: "{}" });
+    const list = posted.find((m) => m.type === "cycls:data")!;
+    deliver({ type: "cycls:data:result", id: list.id, ok: true, result: [] });
     await new Promise((r) => setTimeout(r, 0));
-    const writes = posted.filter((m) => m.type === "cycls:write");
-    expect(writes).toHaveLength(1);
-    expect(JSON.parse(writes[0].content as string)).toEqual({ a: 3, b: 2 });
-    deliver({ type: "cycls:write:result", id: writes[0].id, ok: true });
+    await new Promise((r) => setTimeout(r, 0));   // load resolves, then the flush timer
+    const puts = posted.filter((m) => m.op === "put");
+    expect(puts.map((m) => [m.key, m.value])).toEqual([["a", 3], ["b", 2]]);
+    puts.forEach((m) => deliver({ type: "cycls:data:result", id: m.id, ok: true, result: { ok: true } }));
     await expect(done).resolves.toBeDefined();
   });
 
-  it("keeps a key another writer added, and carries a delete through", async () => {
+  it("carries a delete through as its own row", async () => {
     const { api, posted, deliver } = load("apps/burnup");
-    const done = api.set("mine", 1);
+    const done = api.set("gone", undefined);
     await new Promise((r) => setTimeout(r, 0));
-    const reads = () => posted.filter((m) => m.type === "cycls:read");
-    deliver({ type: "cycls:read:result", id: reads()[0].id, ok: true, content: '{"gone":1}' });
-    await new Promise((r) => setTimeout(r, 20));
-    // another tab wrote `theirs` and removed nothing; only `mine` is ours to apply
-    deliver({ type: "cycls:read:result", id: reads()[1].id, ok: true,
-              content: '{"theirs":2,"gone":1}' });
+    const list = posted.find((m) => m.type === "cycls:data")!;
+    deliver({ type: "cycls:data:result", id: list.id, ok: true, result: [{ key: "gone", value: 1 }] });
     await new Promise((r) => setTimeout(r, 0));
-    const writes = posted.filter((m) => m.type === "cycls:write");
-    expect(JSON.parse(writes[0].content as string)).toEqual({ mine: 1, theirs: 2, gone: 1 });
-    deliver({ type: "cycls:write:result", id: writes[0].id, ok: true });
+    await new Promise((r) => setTimeout(r, 0));   // load resolves, then the flush timer
+    const del = posted.find((m) => m.op === "delete")!;
+    expect(del.key).toBe("gone");
+    deliver({ type: "cycls:data:result", id: del.id, ok: true, result: { ok: true } });
     await expect(done).resolves.toBeUndefined();
   });
 
@@ -188,22 +185,42 @@ describe("the injected cycls api", () => {
     const { api, posted, deliver } = load("apps/burnup");
     const p = api.get("missing", "dflt");
     await new Promise((r) => setTimeout(r, 0));
-    const read = posted.find((m) => m.type === "cycls:read")!;
-    deliver({ type: "cycls:read:result", id: read.id, ok: true, content: '{"kept":7}' });
+    const list = posted.find((m) => m.type === "cycls:data")!;
+    deliver({ type: "cycls:data:result", id: list.id, ok: true, result: [{ key: "kept", value: 7 }] });
     await expect(p).resolves.toBe("dflt");
     await expect(api.get("kept")).resolves.toBe(7);
     await expect(api.keys()).resolves.toEqual(["kept"]);
   });
 
-  it("starts empty when state.json is absent or not an object", async () => {
-    for (const body of [null, '["a"]', "not json"]) {
+  it("starts empty when the shelf has no rows or the list fails", async () => {
+    for (const ok of [true, false]) {
       const { api, posted, deliver } = load("apps/burnup");
       const p = api.keys();
       await new Promise((r) => setTimeout(r, 0));
-      const read = posted.find((m) => m.type === "cycls:read")!;
-      if (body === null) deliver({ type: "cycls:read:result", id: read.id, ok: false, error: "404" });
-      else deliver({ type: "cycls:read:result", id: read.id, ok: true, content: body });
+      const list = posted.find((m) => m.type === "cycls:data")!;
+      deliver({ type: "cycls:data:result", id: list.id, ok, result: [], error: "403" });
       await expect(p).resolves.toEqual([]);
     }
+  });
+
+  // The frame names an audience, never a person: the server fills in the viewer
+  // from the session, so there is no id here to get wrong.
+  it("sends me/ and users/ reads with who, and no user id of its own", async () => {
+    const { api, posted, deliver } = load("apps/burnup");
+    const shelves = api as unknown as {
+      me: { get: (k: string) => Promise<unknown>; set: (k: string, v: unknown) => Promise<unknown> };
+      users: { all: (p?: string) => Promise<unknown>; set: (u: string, k: string, v: unknown) => Promise<unknown> };
+    };
+    shelves.me.set("draft", "half a sen");
+    shelves.users.all("");
+    shelves.users.set("user_2", "sep", { approved: true });
+    await new Promise((r) => setTimeout(r, 0));
+    const sent = posted.filter((m) => m.type === "cycls:data");
+    expect(sent.map((m) => [m.op, m.who])).toEqual([
+      ["put", "me"], ["list", "all"], ["put", "user_2"],
+    ]);
+    expect(sent[0].key).toBe("draft");
+    expect(sent.some((m) => "user" in m)).toBe(false);
+    deliver({ type: "cycls:data:result", id: sent[0].id, ok: true, result: { ok: true } });
   });
 });

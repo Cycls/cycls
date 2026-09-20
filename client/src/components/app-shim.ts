@@ -1,9 +1,9 @@
 // Injected into every app, so an app calls `cycls.get`/`set`/`read`/`write`
-// instead of hand-rolling postMessage. The key-value store is one JSON file in
-// the app's folder; `set` mutates memory and coalesces writes, so a burst of
-// updates costs one PUT rather than one each.
+// instead of hand-rolling postMessage. `get`/`set` are the workspace's shelf in
+// the object store, one row per key; `cycls.me` is the viewer's own and
+// `cycls.users` is everyone's, which the server allows admins only.
 
-export const STATE_FILE = "data/state.json";   // data/ is the one place an app may write
+export const STATE_FILE = "data/state.json";   // pre-store apps; the server seeds from it once
 
 const SHIM = `<script>(function(){
   // A sandboxed frame has an opaque origin, so even READING window.localStorage
@@ -49,12 +49,14 @@ const SHIM = `<script>(function(){
       return;
     }
     if (m.type !== 'cycls:read:result' && m.type !== 'cycls:write:result'
-        && m.type !== 'cycls:save:result' && m.type !== 'cycls:fetch:result') return;
+        && m.type !== 'cycls:save:result' && m.type !== 'cycls:fetch:result'
+        && m.type !== 'cycls:data:result') return;
     var p = waiting.get(m.id);
     if (!p) return;
     waiting.delete(m.id);
     if (!m.ok) return p.rej(new Error(m.error || 'failed'));
-    p.res(m.type === 'cycls:read:result' ? m.content
+    p.res(m.type === 'cycls:data:result' ? m.result
+        : m.type === 'cycls:read:result' ? m.content
         : m.type === 'cycls:save:result' ? m.path
         : m.type === 'cycls:fetch:result' ? { status: m.status, body: m.body, contentType: m.contentType }
         : undefined);
@@ -97,17 +99,34 @@ const SHIM = `<script>(function(){
     return call('cycls:write', { path: resolve(p), content: String(content) });
   }
 
+  async function data(op){ await ready; return call('cycls:data', op); }
+
+  // One shelf, one audience. The server re-derives it: the viewer comes from
+  // the session and the role from the workspace, so who is a hint, not a claim.
+  function shelf(who){
+    return {
+      get: async function(key, fallback){
+        var r = await data({ op: 'get', key: String(key), who: who });
+        return r ? r.value : fallback;
+      },
+      set: function(key, value){ return data({ op: 'put', key: String(key), value: value, who: who }); },
+      remove: function(key){ return data({ op: 'delete', key: String(key), who: who }); },
+      all: function(prefix){ return data({ op: 'list', prefix: prefix || '', who: who }); }
+    };
+  }
+
   var kv = null, loading = null, timer = null, pending = null, settle = null, dirty = new Set();
 
-  // Concurrent callers share one fetch, or a later parse would clobber the
+  // Concurrent callers share one list, or a later one would clobber the
   // mutations an earlier set() already made.
   function load(){
     if (kv) return Promise.resolve(kv);
     if (!loading) loading = (async function(){
+      var next = {};
       try {
-        var parsed = JSON.parse(await read(${JSON.stringify(STATE_FILE)}));
-        kv = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-      } catch (e) { kv = {}; }
+        (await data({ op: 'list' }) || []).forEach(function(r){ next[r.key] = r.value; });
+      } catch (e) {}
+      kv = next;
       loading = null;
       return kv;
     })();
@@ -124,22 +143,20 @@ const SHIM = `<script>(function(){
     return pending;
   }
 
-  // Re-read and apply only the keys this frame touched. Writing the whole cached object
-  // meant a second tab, another device or the agent lost everything it had changed.
+  // One row per key, so a burst of set()s costs one write each and two writers
+  // only collide on the same key — the whole-file rewrite this replaced lost
+  // everything another tab or the agent had changed.
   async function flush(){
     clearTimeout(timer);
     if (!pending) return;
     var s = settle, mine = dirty;
     pending = null; settle = null; dirty = new Set();
     try {
-      var remote = {};
-      try { remote = JSON.parse(await read(${JSON.stringify(STATE_FILE)})); } catch (e) {}
-      if (!remote || typeof remote !== 'object' || Array.isArray(remote)) remote = {};
-      mine.forEach(function(k){
-        if (Object.prototype.hasOwnProperty.call(kv, k)) remote[k] = kv[k]; else delete remote[k];
-      });
-      kv = remote;
-      await write(${JSON.stringify(STATE_FILE)}, JSON.stringify(kv));
+      await Promise.all(Array.from(mine).map(function(k){
+        return Object.prototype.hasOwnProperty.call(kv, k)
+          ? data({ op: 'put', key: k, value: kv[k] })
+          : data({ op: 'delete', key: k });
+      }));
       s.res();
     } catch (e) { s.rej(e); }
   }
@@ -187,6 +204,21 @@ const SHIM = `<script>(function(){
       };
     },
     all: async function(){ return Object.assign({}, await load()); },
+    // This viewer's own rows — nobody else's, and no id to get wrong.
+    me: shelf('me'),
+    // Every member's, for an admin. It rejects for anyone else, which is both the
+    // boundary and how an app tells which of the two views to render.
+    users: {
+      all: function(prefix){ return data({ op: 'list', prefix: prefix || '', who: 'all' }); },
+      get: async function(user, key){
+        var r = await data({ op: 'get', key: String(key), who: String(user) });
+        return r ? r.value : undefined;
+      },
+      set: function(user, key, value){
+        return data({ op: 'put', key: String(key), value: value, who: String(user) });
+      },
+      remove: function(user, key){ return data({ op: 'delete', key: String(key), who: String(user) }); }
+    },
     keys: async function(){ return Object.keys(await load()); },
     flush: flush,
     resize: function(h){ parent.postMessage({ type: 'cycls:resize', height: h }, '*'); }

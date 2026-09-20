@@ -14,6 +14,8 @@ export const MSG = {
   fetch: "cycls:fetch",
   fetchResult: "cycls:fetch:result",
   loadError: "cycls:loaderror",
+  data: "cycls:data",
+  dataResult: "cycls:data:result",
 } as const;
 
 export const RELAY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
@@ -82,10 +84,13 @@ export interface BridgeOptions {
   fetchConnector?: (name: string, path: string,
                     init: { method: string; headers: Record<string, string>; body?: string })
                    => Promise<{ status: number; body: string; contentType: string }>;
+  // The app's rows in the object store. `who` picks the audience; the server
+  // resolves the viewer and the role, so the frame cannot name someone else.
+  appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
 }
 
 export function attachBridge({
-  frame, appPath, readFile, writeFile, requestSave, context, onResize, onError, fetchConnector,
+  frame, appPath, readFile, writeFile, requestSave, context, onResize, onError, fetchConnector, appData,
 }: BridgeOptions) {
   const folder = appScope(appPath);
   if (folder === null) return () => {};
@@ -104,6 +109,17 @@ export function attachBridge({
 
     if (msg.type === MSG.loadError) {
       onError?.(String((msg as { message?: unknown }).message ?? "").slice(0, 500));
+      return;
+    }
+
+    if (msg.type === MSG.data) {
+      const reply = (p: object) => post({ type: MSG.dataResult, id: msg.id, ...p });
+      if (!appData) return reply({ ok: false, error: "this view has no workspace" });
+      try {
+        reply({ ok: true, result: await appData(scope.split("/")[1], msg as Record<string, unknown>) });
+      } catch (e) {
+        reply({ ok: false, error: String((e as Error)?.message ?? e).slice(0, 300) });
+      }
       return;
     }
 
