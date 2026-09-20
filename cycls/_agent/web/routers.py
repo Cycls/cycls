@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Request, Response, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 
-from cycls._app.db import DB, Workspace, workspace
+from cycls._app.db import DB, Conflict, Workspace, workspace
 from cycls._agent import connectors as oauth, credentials, spill, state, trash
 from cycls._agent.web import office
 from cycls._agent.logs import log
@@ -976,26 +976,33 @@ def apps_router(cycls_app, ws_dep, user_dep, volume, base):
         # items() is one GET per row, so an uncapped list is one request fanning
         # out over the whole shelf. Narrow with `prefix`.
         key = await _scope(slug, who, user, ws)
-        root, out = key(""), []
-        async for k, v in state.apps_db(ws).items(prefix=key(prefix), limit=max(1, min(limit, APP_LIST_MAX))):
+        cap = max(1, min(limit, APP_LIST_MAX))
+        root, out, seen = key(""), [], 0
+        async for k, v in state.apps_db(ws).items(prefix=key(prefix), limit=cap + 1):
+            seen += 1
+            if seen > cap:
+                break
             rel = k[len(root):]
             if not who and rel.split("/")[0] == state.USER_MARK:
                 continue
             owner, _, rest = rel.partition("/")
             out.append({"user": owner, "key": rest, "value": v} if who == "all" else {"key": rel, "value": v})
-        return out
+        # `seen`, not len(out): a shared list drops u/ rows, and reporting on
+        # what survived would call a truncated page complete.
+        return {"rows": out, "truncated": seen > cap}
 
     @r.get("/apps/{slug}/data/{k:path}")
     async def get_data(slug: str, k: str, who: str = "",
                        ws: Workspace = ws_dep, user: Any = user_dep):
         key = await _scope(slug, who, user, ws)
-        v = await state.apps_db(ws).get(key(k))
+        v, version = await state.apps_db(ws).get_gen(key(k))
         if v is None:
             raise HTTPException(404, "Not found")
-        return {"value": v}
+        return {"value": v, "version": version}
 
     @r.put("/apps/{slug}/data/{k:path}")
     async def put_data(slug: str, k: str, request: Request, who: str = "",
+                       version: Optional[str] = None,
                        ws: Workspace = ws_dep, user: Any = user_dep):
         body = await request.body()
         if len(body) > APP_DATA_MAX:
@@ -1006,7 +1013,13 @@ def apps_router(cycls_app, ws_dep, user_dep, volume, base):
             value = json.loads(body)
         except ValueError:
             raise HTTPException(400, "Body must be JSON")
-        await state.apps_db(ws).put(key(k), value)
+        # No `version` is last-write-wins, which is what `set` means. With one,
+        # the write lands only if nothing changed — "" meaning it must be new.
+        cond = {} if version is None else ({"create": True} if version == "" else {"gen": version})
+        try:
+            await state.apps_db(ws).put(key(k), value, **cond)
+        except Conflict:
+            raise HTTPException(412, "changed since it was read")
         return {"ok": True}
 
     @r.delete("/apps/{slug}/data/{k:path}")

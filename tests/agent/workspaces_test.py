@@ -667,7 +667,7 @@ def test_shared_shelf_is_one_copy_for_the_whole_workspace(tmp_path):
     client.put("/workspaces/%s/members/user_2" % ws, json={"role": "editor"})
     h1, h2 = {"X-Workspace": ws}, {"X-Workspace": ws, "X-Test-User": "user_2"}
     assert client.put("/apps/standup/data/entries/1", json="shipped it", headers=h1).status_code == 200
-    assert client.get("/apps/standup/data/entries/1", headers=h2).json() == {"value": "shipped it"}
+    assert client.get("/apps/standup/data/entries/1", headers=h2).json()["value"] == "shipped it"
 
 
 def test_a_member_cannot_reach_another_members_shelf(tmp_path):
@@ -690,14 +690,14 @@ def test_an_admin_sees_every_members_shelf(tmp_path):
         client.put("/apps/expenses/data/sep?who=me", json={"by": u},
                    headers={"X-Workspace": ws, "X-Test-User": u})
     admin = {"X-Workspace": ws, "X-Test-User": "admin_1"}
-    rows = client.get("/apps/expenses/data?who=all", headers=admin).json()
+    rows = client.get("/apps/expenses/data?who=all", headers=admin).json()["rows"]
     assert sorted((r["user"], r["key"]) for r in rows) == [("user_1", "sep"), ("user_2", "sep")]
     # and may write into one
     assert client.put("/apps/expenses/data/sep?who=user_2", json={"approved": True},
                       headers=admin).status_code == 200
     assert client.get("/apps/expenses/data/sep?who=me",
                       headers={"X-Workspace": ws, "X-Test-User": "user_2"}
-                      ).json() == {"value": {"approved": True}}
+                      ).json()["value"] == {"approved": True}
 
 
 def test_private_rows_stay_out_of_the_shared_listing(tmp_path):
@@ -706,7 +706,7 @@ def test_private_rows_stay_out_of_the_shared_listing(tmp_path):
     h = {"X-Workspace": ws}
     client.put("/apps/standup/data/entries/1", json="shared", headers=h)
     client.put("/apps/standup/data/draft?who=me", json="private", headers=h)
-    assert client.get("/apps/standup/data", headers=h).json() == [{"key": "entries/1", "value": "shared"}]
+    assert client.get("/apps/standup/data", headers=h).json()["rows"] == [{"key": "entries/1", "value": "shared"}]
 
 
 def test_u_and_traversal_are_rejected_on_the_shared_shelf(tmp_path):
@@ -728,7 +728,7 @@ def test_write_admin_apps_are_read_only_for_members(tmp_path):
     assert client.put("/apps/holidays/data/eid", json="10 Apr", headers=h2).status_code == 403
     admin = {"X-Workspace": ws, "X-Test-User": "admin_1"}
     assert client.put("/apps/holidays/data/eid", json="10 Apr", headers=admin).status_code == 200
-    assert client.get("/apps/holidays/data/eid", headers=h2).json() == {"value": "10 Apr"}
+    assert client.get("/apps/holidays/data/eid", headers=h2).json()["value"] == "10 Apr"
 
 
 def test_renaming_an_app_renames_its_shelf(tmp_path):
@@ -739,9 +739,9 @@ def test_renaming_an_app_renames_its_shelf(tmp_path):
     client.put("/apps/standup/data/entries/1", json="shipped", headers=h)
     client.put("/apps/standup/data/draft?who=me", json="half a sen", headers=h)
     assert client.patch("/files/apps/standup", json={"to": "apps/daily"}, headers=h).status_code == 200
-    assert client.get("/apps/daily/data/entries/1", headers=h).json() == {"value": "shipped"}
-    assert client.get("/apps/daily/data/draft?who=me", headers=h).json() == {"value": "half a sen"}
-    assert client.get("/apps/standup/data", headers=h).json() == []
+    assert client.get("/apps/daily/data/entries/1", headers=h).json()["value"] == "shipped"
+    assert client.get("/apps/daily/data/draft?who=me", headers=h).json()["value"] == "half a sen"
+    assert client.get("/apps/standup/data", headers=h).json()["rows"] == []
 
 
 def test_a_rename_does_not_inherit_a_dead_apps_rows(tmp_path):
@@ -752,7 +752,7 @@ def test_a_rename_does_not_inherit_a_dead_apps_rows(tmp_path):
     client.put("/apps/standup/data/keep", json="new", headers=h)
     client.put("/apps/daily/data/stale", json="from an app that is gone", headers=h)
     client.patch("/files/apps/standup", json={"to": "apps/daily"}, headers=h)
-    assert client.get("/apps/daily/data", headers=h).json() == [{"key": "keep", "value": "new"}]
+    assert client.get("/apps/daily/data", headers=h).json()["rows"] == [{"key": "keep", "value": "new"}]
 
 
 def test_moving_an_app_out_of_apps_leaves_its_rows_alone(tmp_path):
@@ -764,7 +764,7 @@ def test_moving_an_app_out_of_apps_leaves_its_rows_alone(tmp_path):
     client.post("/files/apps/standup", headers=h)
     client.put("/apps/standup/data/keep", json="v", headers=h)
     client.patch("/files/apps/standup", json={"to": "archive/standup"}, headers=h)
-    assert client.get("/apps/standup/data/keep", headers=h).json() == {"value": "v"}
+    assert client.get("/apps/standup/data/keep", headers=h).json()["value"] == "v"
 
 
 def test_a_list_is_capped(tmp_path):
@@ -773,5 +773,55 @@ def test_a_list_is_capped(tmp_path):
     h = {"X-Workspace": ws}
     for i in range(5):
         client.put(f"/apps/big/data/k{i}", json=i, headers=h)
-    assert len(client.get("/apps/big/data?limit=2", headers=h).json()) == 2
-    assert len(client.get("/apps/big/data", headers=h).json()) == 5
+    assert len(client.get("/apps/big/data?limit=2", headers=h).json()["rows"]) == 2
+    assert len(client.get("/apps/big/data", headers=h).json()["rows"]) == 5
+
+
+def test_a_list_says_when_it_did_not_fit(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    for i in range(5):
+        client.put(f"/apps/big/data/k{i}", json=i, headers=h)
+    assert client.get("/apps/big/data?limit=2", headers=h).json()["truncated"] is True
+    assert client.get("/apps/big/data", headers=h).json()["truncated"] is False
+
+
+# Compare-and-swap: the write lands only if nothing moved under it. Without this
+# a read-modify-write by two people silently keeps one and drops the other.
+def test_a_stale_write_is_refused_and_the_value_survives(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    client.put("/apps/board/data/items", json=[1], headers=h)
+    stale = client.get("/apps/board/data/items", headers=h).json()["version"]
+    client.put("/apps/board/data/items", json=[1, 2], headers=h)          # someone else
+    r = client.put(f"/apps/board/data/items?version={stale}", json=[1, 9], headers=h)
+    assert r.status_code == 412
+    assert client.get("/apps/board/data/items", headers=h).json()["value"] == [1, 2]
+
+
+def test_a_fresh_version_lands(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    client.put("/apps/board/data/items", json=[1], headers=h)
+    v = client.get("/apps/board/data/items", headers=h).json()["version"]
+    assert client.put(f"/apps/board/data/items?version={v}", json=[1, 9], headers=h).status_code == 200
+    assert client.get("/apps/board/data/items", headers=h).json()["value"] == [1, 9]
+
+
+def test_an_empty_version_means_it_must_be_new(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    assert client.put("/apps/board/data/fresh?version=", json=1, headers=h).status_code == 200
+    assert client.put("/apps/board/data/fresh?version=", json=2, headers=h).status_code == 412
+
+
+def test_no_version_is_still_last_write_wins(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    client.put("/apps/board/data/x", json=1, headers=h)
+    assert client.put("/apps/board/data/x", json=2, headers=h).status_code == 200

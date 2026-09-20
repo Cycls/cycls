@@ -251,6 +251,7 @@ set of rules.
 
 ```js
 cycls.get(key) / set(key, v)                    the workspace's shelf — every member
+cycls.update(key, fn)                           read-modify-write that cannot lose one
 cycls.me.get(key) / set(key, v) / all(prefix)   this viewer's own
 cycls.users.all(prefix) / get(u, k) / set(u, k, v)   everyone's — admins only
 ```
@@ -271,6 +272,41 @@ is the answer.
 Per-member privacy needs no flag (it is the verb) and admin-reads-all needs none (it is the role).
 The default is that any member writes the shared shelf, matching the app's files, which every editor
 can already write — a stricter default would have broken every app on the day it migrated.
+
+### `set` overwrites, `update` does not
+
+`set(key, v)` is last-write-wins, because "put this value here" is what it says. The lost update
+happens when an app *meant* read-modify-write:
+
+```js
+const items = await cycls.get("items", []);   // Sara and Khalid both read [a, b]
+items.push(x);
+await cycls.set("items", items);              // one of them silently disappears
+```
+
+Per-key rows do not help — both touched the same key. `cycls.update` does:
+
+```js
+await cycls.update("items", (cur = []) => [...cur, x]);
+```
+
+It reads value **and version**, applies `fn`, and writes with `?version=`. The store passes that to
+GCS as `ifGenerationMatch`, so a write whose row moved underneath comes back 412; the shim re-reads,
+re-applies `fn` to what is actually there, and writes again — up to five times before giving up.
+Nobody's write is lost, and the loser is the one that retries.
+
+`get_gen()` and `put(gen=…)` are the DB surface. The file store's version is a hash of the bytes and
+its compare-then-replace is not atomic — it is the dev and test store, where there is one writer.
+
+### A list says when it did not fit
+
+`cycls.get` loads the whole shared shelf into a map once and answers from it, so a shelf that does
+not fit in one page makes "absent" meaningless: the key may be in the part that was cut. The list
+reply carries `truncated`, and `cycls.get` **throws** rather than return a fallback for a key it
+cannot vouch for. A key it did see still answers normally.
+
+Truncation is judged on rows *fetched*, not rows returned — a shared list drops `u/` rows, and
+counting survivors would call a cut page complete.
 
 ### Scope is in the path, permission is on the route
 
@@ -341,16 +377,18 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
   round-trip; an image or a database must be base64 at rest.
 - A bridge *file* write is capped at 1,000,000 UTF-16 units and rewrites the whole file. There is no
   append, no delete and no directory listing. A data row is capped at the same size.
-- No compare-and-swap anywhere. Per-key rows shrink the blast radius from the whole app to one key;
-  they do not remove it, and the object store offers only create-if-absent.
+- CAS exists (`put(gen=…)` → `ifGenerationMatch`) but is opt-in. Nothing else in the codebase uses
+  it yet — chats, the agent KV and connector grants are all still last-write-wins.
 - A flush that fails rejects the pending `set`, so a tab closing on a dead connection can still lose
   its last 250 ms.
 
 **App data**
-- A list is capped at 1000 rows and **truncates silently** — there is no cursor and no `truncated`
-  flag. `cycls.get`/`set` loads the whole shared shelf on first use, so an app with more than 1000
-  keys sees only part of it and `get` returns the fallback for the rest. Keep the `get`/`set`
-  working set small; browse bigger shelves with `me.all(prefix)` / `users.all(prefix)`.
+- A list is capped at 1000 rows. It says so (`truncated`) and `cycls.get` throws rather than lie,
+  but there is still **no cursor** — the only way past the cap is a narrower `prefix`. Keep the
+  `get`/`set` working set small.
+- `set` is last-write-wins by design; only `update` is safe against a concurrent writer. An app that
+  does `get` → mutate → `set` is still losing writes, and nothing warns it.
+- `update` retries five times and then throws. Under heavy contention on one key it gives up.
 - `items()` is a LIST plus **one GET per row**, so a 1000-row list is 1001 round-trips in one
   request. A prefix is the only thing that makes it cheaper.
 - `who=` costs a `resolve_role()` — one or two more object reads per request, uncached.

@@ -118,7 +118,8 @@ export function attachBridge({
       try {
         reply({ ok: true, result: await appData(scope.split("/")[1], msg as Record<string, unknown>) });
       } catch (e) {
-        reply({ ok: false, error: String((e as Error)?.message ?? e).slice(0, 300) });
+        reply({ ok: false, error: String((e as Error)?.message ?? e).slice(0, 300),
+                status: (e as { status?: number })?.status });
       }
       return;
     }
