@@ -466,8 +466,7 @@ class Session:
 
         The turn is durable when this returns. It used to reach disk only at the
         first checkpoint, after the first tool batch, so a run that died before
-        then lost what the person typed — 42 chats on super and haseef hold a
-        title and no turns at all. Shielded because this runs outside the loop's
+        then lost what the person typed. Shielded because this runs outside the loop's
         try, where a disconnect cancels at the nearest await."""
         msg = {"role": "user", "content": content}
         if internal:
