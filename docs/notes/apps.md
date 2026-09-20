@@ -251,7 +251,7 @@ folder's lifecycle one step behind:
 | restore | ← back | untouched — the data reappears, **zero copies** |
 | purge entry / empty trash | gone | `remove_prefix(.apps/<slug>/)` |
 | `build_app` on a slug with no folder | fresh | stale rows purged first |
-| rename app | moved | the shelf moves with it — O(N), admin-gated, rare |
+| rename app (`PATCH /files`) | moved | the shelf moves with it — O(N), admin-gated, rare |
 | delete workspace | gone | swept by `wipe_workspace`'s existing prefix removal |
 
 Why the viewer's shelf nests *under* the app rather than beside it: `.apps/<slug>/` is one prefix
@@ -308,6 +308,13 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
   resolvable. Only a *used* import fails the build.
 - The service is a separate deployment in another repo. `--live` covers the contract; nothing
   covers it on every commit.
+
+**Renaming**
+- Only `PATCH /files` moves the shelf. `bash mv apps/a apps/b` does not go through the route, so the
+  rows stay at `.apps/a/` and the renamed app opens empty. Nothing is lost — `database scan apps/a/`
+  still finds them — but the agent has no rename *tool*, so bash is the only way it can rename, and
+  it will hit this. An `mv` shim cannot fix it the way the `rm` shim does: shims are stdlib-only and
+  sync, with no path to the store.
 
 **Access control**
 - An app may write `data/` only, but the **agent** may write anything in the folder, and an
