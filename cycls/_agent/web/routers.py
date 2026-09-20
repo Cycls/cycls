@@ -983,23 +983,7 @@ def apps_router(cycls_app, ws_dep, user_dep, volume, base):
                 continue
             owner, _, rest = rel.partition("/")
             out.append({"user": owner, "key": rest, "value": v} if who == "all" else {"key": rel, "value": v})
-        return out or (await _seed(ws, slug) if not who and not prefix else [])
-
-    async def _seed(ws, slug):
-        """An app built before the store keeps its data: import data/state.json once."""
-        try:
-            was = json.loads((Path(ws.root) / "apps" / slug / "data" / "state.json").read_text())
-        except Exception:
-            return []
-        if not isinstance(was, dict):
-            return []
-        db = state.apps_db(ws)
-        for k, v in was.items():
-            try:
-                await db.put(state.app_shelf(slug, str(k)), v)
-            except ValueError:
-                continue
-        return [{"key": str(k), "value": v} for k, v in was.items()]
+        return out
 
     @r.get("/apps/{slug}/data/{k:path}")
     async def get_data(slug: str, k: str, who: str = "",

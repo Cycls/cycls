@@ -731,18 +731,6 @@ def test_write_admin_apps_are_read_only_for_members(tmp_path):
     assert client.get("/apps/holidays/data/eid", headers=h2).json() == {"value": "10 Apr"}
 
 
-def test_an_app_built_before_the_store_keeps_its_data(tmp_path):
-    client = _client(tmp_path)
-    ws = _mk_team(client)
-    h = {"X-Workspace": ws}
-    client.post("/files/apps/burnup/data", headers=h)
-    client.put("/files/apps/burnup/data/state.json", content=json.dumps({"seen": [1, 2]}), headers=h)
-    assert client.get("/apps/burnup/data", headers=h).json() == [{"key": "seen", "value": [1, 2]}]
-    # the import happens once: the rows are the source of truth afterwards
-    client.put("/apps/burnup/data/seen", json=[3], headers=h)
-    assert client.get("/apps/burnup/data/seen", headers=h).json() == {"value": [3]}
-
-
 def test_renaming_an_app_renames_its_shelf(tmp_path):
     client = _client(tmp_path)
     ws = _mk_team(client)
