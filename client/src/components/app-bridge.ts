@@ -36,7 +36,17 @@ export function relayHeaders(raw: unknown): Record<string, string> {
 // components/ — code the browser writes and the agent later runs.
 export const DATA_DIR = "data";
 
-export const MAX_WRITE_BYTES = 1_000_000;
+export const MAX_WRITE_BYTES = 25_000_000;
+
+// It counts UTF-8 bytes, which is what the name always claimed: `.length` is
+// UTF-16 code units, so the old cap was ~1 MB of English and ~2 MB of Arabic.
+// Bytes are never fewer than units and never more than 3× them, so the two
+// bounds settle almost every write without encoding 25 MB to measure it.
+export function overWriteLimit(text: string): boolean {
+  if (text.length > MAX_WRITE_BYTES) return true;
+  if (text.length * 3 <= MAX_WRITE_BYTES) return false;
+  return new Blob([text]).size > MAX_WRITE_BYTES;
+}
 
 // A save leaves the app's folder, so the app proposes a name and nothing else.
 export function safeName(raw: unknown): string | null {
@@ -140,7 +150,7 @@ export function attachBridge({
       if (!writeFile) return fail("writes are not enabled here");
       if (!canWrite(scope, msg.path)) return fail("not a writable path for this app");
       if (typeof msg.content !== "string") return fail("content must be a string");
-      if (msg.content.length > MAX_WRITE_BYTES) return fail("too large");
+      if (overWriteLimit(msg.content)) return fail("too large");
       try {
         await writeFile(msg.path, msg.content);
         post({ type: MSG.writeResult, id: msg.id, ok: true });
@@ -156,7 +166,7 @@ export function attachBridge({
       const name = safeName((msg as { name?: unknown }).name);
       if (!name) return fail("a file name is required");
       if (typeof msg.content !== "string") return fail("content must be a string");
-      if (msg.content.length > MAX_WRITE_BYTES) return fail("too large");
+      if (overWriteLimit(msg.content)) return fail("too large");
       try {
         const path = await requestSave(name, msg.content);
         if (!path) return fail("cancelled");
