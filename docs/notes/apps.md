@@ -14,7 +14,7 @@ workspace, `/files`, the canvas, the trash and the connector relay that all alre
   README.md       what the app reads and the shape of it — written at build time
   src/            the source the agent wrote; stays, so a rebuild is possible
   data/           the ONLY path the app may write
-    state.json      pre-store apps only; the shelf imports it once (see `.apps`, below)
+                    (an app's own files; cycls.get/set is the `.apps` shelf, below)
 ```
 
 `canWrite` is an allowlist: the app writes under `data/` and nowhere else. As a denylist it
@@ -142,7 +142,7 @@ posts back. The frame never sees a token, a URL or a workspace path it did not a
 
 |  | before | now |
 |---|---|---|
-| first `get` | `cycls:read data/state.json` → `GET /files/...` → `JSON.parse` the whole file | `cycls:data {op:"list"}` → `GET /apps/<slug>/data` → rows |
+| first `get` | `cycls:read data/state.json` → `GET /files/…` → `JSON.parse` the whole file | `cycls:data {op:"list"}` → `GET /apps/<slug>/data` → rows |
 | `set` | mutate memory, mark dirty, wait 250 ms | unchanged |
 | the flush | **re-read** the file, merge the dirty keys onto it, `PUT` the whole object back | one `{op:"put", key, value}` per dirty key, in parallel |
 | a delete | drop the key, rewrite the whole file | `{op:"delete", key}` |
@@ -181,9 +181,9 @@ time. An app never holds standing permission to write elsewhere.
 ## Porting the phone client
 
 `~/Desktop/code/mobile-app` stages the bundle to a `file://` URI in a WebView with
-`originWhitelist: ["*"]`. It predates all of this, so today the same app reads rows on the web and a
-file on a phone. The seed means nothing is lost — the shelf imports `data/state.json` on its first
-empty list — but once the shelf has rows, the phone's writes stop being seen by anyone else.
+`originWhitelist: ["*"]`. It predates all of this, so today the same app reads rows on the web and
+writes a file on a phone — and **nothing reads that file**. A phone user's `cycls.set` is invisible
+to the web, to other members and to the agent. This is the item, not a nice-to-have.
 
 In order of what breaks without it:
 
@@ -192,8 +192,8 @@ In order of what breaks without it:
    `GET|PUT|DELETE /apps/<slug>/data[/<key>][?who=&prefix=&limit=]` with the viewer's JWT. `ok:false`
    must carry the status text, because a 403 from the role gate is how an app tells which view to
    render.
-2. **Ship the current shim.** `app-shim.ts` is one string; a stale copy still points at
-   `data/state.json`. Nothing else in the shim is web-specific.
+2. **Ship the current shim.** `app-shim.ts` is one string; a stale copy still writes
+   `data/state.json`, which nothing reads. Nothing else in the shim is web-specific.
 3. **Transfer a MessagePort with `cycls:init`.** Optional — the shim falls back to the window — but
    without it a frame that navigates itself keeps receiving workspace data.
 4. **Send `canWrite`** the same way, or `cycls.write` silently no-ops.
@@ -229,7 +229,8 @@ is how the loop sees a connector that has no server to walk.
 
 `cycls.get`/`set` used to be one JSON file, `data/state.json`, rewritten whole on every flush: no
 per-key granularity, and one torn write lost an app's entire state. App data is rows in the object
-store now, in a third slot beside the two that were already there.
+store now, in a third slot beside the two that were already there. Nothing in production depended on
+the old file, so there is no migration path — the shelf simply starts empty.
 
 | slot | holds | scoped |
 |---|---|---|
@@ -324,9 +325,9 @@ masked — so a 30-day TTL expiry cannot await a `remove_prefix`. Rows can outli
 They are invisible, cost nothing, and can never be inherited, because the build-time purge catches
 them.
 
-**`data/state.json` still works.** The first list of an empty shelf imports it once, so an app built
-before the store keeps its data. injaz is the reminder that not every app used `state.json`: it
-writes `data/<PROJECT>.json` through `cycls.read`/`write`, and those stay files.
+**There is no migration from `data/state.json`.** Nothing in production used it, so the shelf starts
+empty and the file is not read. An app that still wants a file uses `cycls.read`/`write`, which is
+what injaz does with `data/<PROJECT>.json` — those are files and are unaffected.
 
 ## Known limitations
 
@@ -355,10 +356,6 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
 - `who=` costs a `resolve_role()` — one or two more object reads per request, uncached.
 - A non-admin write to a shared shelf reads `app.json` to check `write: admin`. One small gcsfuse
   read per write, and writes are debounced, so it is not hot — but it is not free either.
-- Two tabs opening an empty shelf both run the `state.json` seed. It writes the same values, so the
-  race is harmless, but it is a race.
-- The seed is one-way and one-time. After it, `data/state.json` is stale on disk and nothing prunes
-  it; an app still reading that file with `cycls.read` sees frozen data.
 - `cycls.users` has no "list the members" verb — it lists rows, so a member who has written nothing
   is invisible to an admin view.
 
@@ -368,10 +365,9 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
 - On mobile the app is staged to a `file://` URI in a WebView with `originWhitelist: ["*"]`, and
   Android truncates `loadData` past roughly 2 MB — a 2.4 MB bundle rendered blank in production.
 - The mobile host has not been ported: it sends no MessagePort (so that frame still talks on the
-  window) and knows nothing of `cycls:data`, so it still writes `state.json` as a file. The same app
-  now reads rows on web and a file on a phone — the widest this divergence has been, and the
-  strongest reason to port. The seed runs off the file, so mobile writes are not lost, but they stop
-  being seen once the shelf has rows. `~/Desktop/code/mobile-app`.
+  window) and knows nothing of `cycls:data`, so `cycls.set` there still writes `state.json` as a
+  file. **Nothing reads it.** With no seed, a phone user's writes are invisible to the web and to
+  the agent until the port lands — the strongest reason to do it. `~/Desktop/code/mobile-app`.
 
 **The build**
 - `_collect_source` skips binaries, so an app cannot ship an image file; icons must be data URIs.

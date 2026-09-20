@@ -3,8 +3,6 @@
 // the object store, one row per key; `cycls.me` is the viewer's own and
 // `cycls.users` is everyone's, which the server allows admins only.
 
-export const STATE_FILE = "data/state.json";   // pre-store apps; the server seeds from it once
-
 const SHIM = `<script>(function(){
   // A sandboxed frame has an opaque origin, so even READING window.localStorage
   // throws SecurityError. That kills any app — or any library inside one — that
