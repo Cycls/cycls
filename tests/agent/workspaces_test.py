@@ -825,3 +825,37 @@ def test_no_version_is_still_last_write_wins(tmp_path):
     h = {"X-Workspace": ws}
     client.put("/apps/board/data/x", json=1, headers=h)
     assert client.put("/apps/board/data/x", json=2, headers=h).status_code == 200
+
+
+# A personal workspace is ws/u-<user>; haseef runs an app in one in production.
+
+def test_app_data_works_in_a_personal_workspace(tmp_path):
+    client = _client(tmp_path)
+    h = {"X-Workspace": "u-user_1"}
+    client.put("/apps/legal/data/registry", json={"n": 1}, headers=h)
+    client.put("/apps/legal/data/filter?who=me", json="open", headers=h)
+    assert client.get("/apps/legal/data/registry", headers=h).json()["value"] == {"n": 1}
+    assert client.get("/apps/legal/data/filter?who=me", headers=h).json()["value"] == "open"
+    # the owner of a personal workspace is its admin, so the whole-shelf view is theirs
+    assert client.get("/apps/legal/data?who=all", headers=h).json()["rows"] == [
+        {"user": "user_1", "key": "filter", "value": "open"}]
+
+
+def test_nobody_else_reaches_a_personal_workspaces_app(tmp_path):
+    client = _client(tmp_path)
+    client.put("/apps/legal/data/registry", json={"n": 1}, headers={"X-Workspace": "u-user_1"})
+    other = {"X-Workspace": "u-user_1", "X-Test-User": "user_2"}
+    assert client.get("/apps/legal/data/registry", headers=other).status_code == 404
+    admin = {"X-Workspace": "u-user_1", "X-Test-User": "admin_1"}
+    assert client.get("/apps/legal/data/registry", headers=admin).status_code == 404
+
+
+def test_app_data_works_for_a_solo_account_with_no_org(tmp_path):
+    """No org segment at all: workspace() folds u-<id> back to the account root."""
+    client = _client(tmp_path)
+    h = {"X-Workspace": "u-solo", "X-Test-User": "solo"}
+    client.put("/apps/notes/data/today", json="hi", headers=h)
+    client.put("/apps/notes/data/draft?who=me", json="wip", headers=h)
+    assert client.get("/apps/notes/data/today", headers=h).json()["value"] == "hi"
+    assert client.get("/apps/notes/data/draft?who=me", headers=h).json()["value"] == "wip"
+    assert client.get("/apps/notes/data", headers=h).json()["rows"] == [{"key": "today", "value": "hi"}]
