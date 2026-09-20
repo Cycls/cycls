@@ -6,10 +6,10 @@ import { isHtml, isMd, isPdf, codeLang, ext, editWorkingPath } from "../src/comp
 // extension. Every renderer check must therefore key off the path — keyed off
 // the name, an app falls through to the "no preview for this file type" card.
 describe("fileKind", () => {
-  const app = { path: "apps/injaz/index.html", name: "Injaz Portfolio" };
+  const app = { path: "apps/burnup/index.html", name: "Sales Portfolio" };
 
   it("resolves an app to its entry, not its title", () => {
-    expect(fileKind(app)).toBe("apps/injaz/index.html");
+    expect(fileKind(app)).toBe("apps/burnup/index.html");
     expect(isHtml(fileKind(app))).toBe(true);
     expect(isHtml(app.name)).toBe(false);   // the bug this guards
   });

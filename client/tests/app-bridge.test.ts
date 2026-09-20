@@ -109,7 +109,7 @@ describe("attachBridge", () => {
     const readFile = vi.fn(async () => "secret");
     detach = attachBridge({ frame, appPath: "report.html", readFile });
     send(contentWindow, { type: MSG.ready });
-    send(contentWindow, { type: MSG.read, id: 1, path: "apps/injaz/data/PRJ-001.json" });
+    send(contentWindow, { type: MSG.read, id: 1, path: "apps/burnup/data/report.json" });
     await settle();
     expect(readFile).not.toHaveBeenCalled();
     expect(sent).toEqual([]);

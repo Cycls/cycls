@@ -21,7 +21,7 @@ import { slide, cn } from "../lib/utils";
 import { t, getLang } from "../lib/i18n";
 
 // Renderer choice comes from the PATH, never the display name: an app's tab
-// is titled by its manifest ("Injaz Portfolio"), which has no extension, and
+// is titled by its manifest ("Sales Portfolio"), which has no extension, and
 // every type check would fall through to the unsupported-file card.
 export const fileKind = (file: { path: string; name: string }) => file.path || file.name;
 

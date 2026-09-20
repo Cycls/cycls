@@ -15,38 +15,38 @@ def _ws(root):
 
 @pytest.fixture
 def ws(tmp_path):
-    app = tmp_path / "apps" / "injaz"
+    app = tmp_path / "apps" / "burnup"
     app.mkdir(parents=True)
     (app / "index.html").write_text("<h1>x</h1>")
     return tmp_path
 
 
 def entry(ws):
-    return ws / "apps" / "injaz" / "index.html"
+    return ws / "apps" / "burnup" / "index.html"
 
 
 def manifest(ws, payload):
-    (ws / "apps" / "injaz" / "app.json").write_text(
+    (ws / "apps" / "burnup" / "app.json").write_text(
         payload if isinstance(payload, str) else json.dumps(payload))
 
 
 class TestAppIdentity:
     def test_titleises_the_folder_without_a_manifest(self, ws):
-        assert tools._app_identity(entry(ws), "index.html") == {"name": "Injaz"}
+        assert tools._app_identity(entry(ws), "index.html") == {"name": "Burnup"}
 
     def test_uses_the_manifest_name_and_emoji(self, ws):
-        manifest(ws, {"name": "Injaz Portfolio", "icon": "📊"})
+        manifest(ws, {"name": "Sales Portfolio", "icon": "📊"})
         assert tools._app_identity(entry(ws), "index.html") == {
-            "name": "Injaz Portfolio", "icon": "📊"}
+            "name": "Sales Portfolio", "icon": "📊"}
 
     def test_passes_an_image_icon_through(self, ws):
-        manifest(ws, {"name": "Injaz", "icon": "logo.png"})
+        manifest(ws, {"name": "Burnup", "icon": "logo.png"})
         assert tools._app_identity(entry(ws), "index.html")["icon"] == "logo.png"
 
     @pytest.mark.parametrize("bad", ["{broken", "[]", "null", '"str"'])
     def test_a_broken_manifest_never_hides_the_app(self, ws, bad):
         manifest(ws, bad)
-        assert tools._app_identity(entry(ws), "index.html") == {"name": "Injaz"}
+        assert tools._app_identity(entry(ws), "index.html") == {"name": "Burnup"}
 
     def test_caps_runaway_fields(self, ws):
         manifest(ws, {"name": "n" * 500, "icon": "i" * 50})
