@@ -59,7 +59,7 @@ for the whole org and nothing to say who may read across it.
 make the app read-only for its own owner.
 
 **Personal workspaces are workspaces.** `ws/u-<user>/apps/<slug>/` is an ordinary app folder with an
-ordinary `.apps/<slug>/` shelf beside it — haseef runs one in production. The owner is its admin, so
+ordinary `.apps/<slug>/` shelf beside it, and deployments do run apps there. The owner is its admin, so
 `cycls.users` is theirs; nobody else reaches it, not even an org admin, because `resolve_role`
 returns `None` for someone else's personal workspace. A solo account with no org is the same again:
 `workspace()` folds `u-<id>` back to the account root and the shelf follows.
@@ -82,9 +82,9 @@ a scan per turn is the pattern `plugins-connectors.md` warns about.
 
 **A README, written when the shape is known.** The agent that builds an app knows its data
 model; three weeks later, in another chat, it does not. So `build_app`'s success message asks
-for `apps/<slug>/README.md`. Before it did, one injaz session spent **51 of 66 bash calls**
-grepping a 2.4 MB minified bundle to reverse-engineer a schema — and got it wrong, which is
-where a duplicate-ID corruption came from.
+for `apps/<slug>/README.md`. Before it did, a session could spend most of its shell calls grepping
+a multi-megabyte minified bundle to reverse-engineer a schema it then got wrong, which is one way a
+duplicate-key corruption gets written.
 
 ## The build
 
@@ -401,14 +401,12 @@ They are invisible, cost nothing, and can never be inherited, because the build-
 them.
 
 **There is no migration from the old `state.json`.** The shelf starts empty and the file is not read.
-A couple of apps do have one, written by the deployed client at `apps/<slug>/state.json` — not
-`data/state.json`, which only became the write root later, so the seed had been reading the wrong
-path anyway. What is in them is a handful of per-player UI preferences, which under `cycls.me`
-belong in a different shelf than an import would have put them in. Moving that by hand after a
-deploy beats carrying migration code for it.
+Where an older bundle wrote one it is at `apps/<slug>/state.json`, not `data/state.json` — `data/`
+only became the write root later — so a seed reading the documented path would have missed it. An
+operator can move such a file by hand; carrying migration code for it is not worth the surface.
 
-An app that wants a file still uses `cycls.read`/`write`, which is what injaz does with
-`data/<PROJECT>.json` — those are files and are unaffected.
+An app that wants a file still uses `cycls.read`/`write` on its own JSON under `data/`, and those
+are unaffected.
 
 ## Known limitations
 
@@ -479,8 +477,8 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
 
 **Fixed, and worth not regressing**
 - A failed tool used to log `ok=true`: `log("tool_call")` derived it from whether an exception was
-  raised, while every tool in this codebase reports failure by *returning* `Error: …`. One injaz
-  agent ran broken for eight weeks behind 1063 rows and a single recorded failure.
+  raised, while every tool in this codebase reports failure by *returning* `Error: …`. An agent can
+  run broken for weeks behind a thousand tool rows and a single recorded failure.
 - `PUT /files` staged through a deterministic `<name>.part`, so two concurrent writers interleaved
   into a torn file while one of them got HTTP 200. Now a unique name under `.tmp/`.
 - The canvas unmounted the open document at the end of every agent turn, destroying an open app and
