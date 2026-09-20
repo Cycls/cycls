@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { appScope, inScope, canWrite, attachBridge, MSG, MAX_WRITE_BYTES } from "../src/components/app-bridge";
+import { appScope, inScope, canWrite, attachBridge, MSG, MAX_WRITE_BYTES, overWriteLimit } from "../src/components/app-bridge";
 
 const APP = "apps/burnup/index.html";
 const scope = appScope(APP)!;
@@ -307,5 +307,21 @@ describe("attachBridge", () => {
     send(contentWindow, { type: MSG.ready });
     await settle();
     expect(sent).toEqual([]);
+  });
+});
+
+// `.length` is UTF-16 code units, so the old check passed ~2 MB of Arabic under a
+// cap that called itself bytes. Bytes are never fewer than units and never more
+// than 3× them, which is how this settles most writes without encoding 25 MB.
+describe("the write limit counts bytes, not characters", () => {
+  it("passes ASCII up to the cap and rejects one past it", () => {
+    expect(overWriteLimit("x".repeat(MAX_WRITE_BYTES))).toBe(false);
+    expect(overWriteLimit("x".repeat(MAX_WRITE_BYTES + 1))).toBe(true);
+  });
+
+  it("rejects text that fits in units but not in bytes", () => {
+    const arabic = "ا".repeat(Math.ceil(MAX_WRITE_BYTES * 0.6));   // 1 unit, 2 bytes each
+    expect(arabic.length).toBeLessThan(MAX_WRITE_BYTES);
+    expect(overWriteLimit(arabic)).toBe(true);
   });
 });

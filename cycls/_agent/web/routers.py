@@ -934,7 +934,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
 
 # ---- Share ----
 
-APP_DATA_MAX = 1_000_000   # per value, matching the bridge's file write cap
+APP_DATA_MAX = 1_000_000   # per row: a list reads every one of them, so a value is not a payload
 APP_LIST_MAX = 10_000      # a backstop, not a policy: apps below it are never cut
 
 

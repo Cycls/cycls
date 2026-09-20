@@ -385,8 +385,11 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
   therefore impossible**, in every persistence flavour.
 - The bridge is **text-only in both directions**. `readFile` decodes as UTF-8, so binary cannot
   round-trip; an image or a database must be base64 at rest.
-- A bridge *file* write is capped at 1,000,000 UTF-16 units and rewrites the whole file. There is no
-  append, no delete and no directory listing. A data row is capped at the same size.
+- A bridge *file* write is capped at 25 MB of UTF-8 and rewrites the whole file — there is no
+  append, no delete and no directory listing. The cap used to be 1,000,000 `.length`, which is
+  UTF-16 units, so it was ~1 MB of English and ~2 MB of Arabic under a name that said bytes.
+- A **data row** is capped at 1 MB, and deliberately stays there: a list reads every row, so a value
+  is a value and anything bigger belongs in a file.
 - CAS exists (`put(gen=…)` → `ifGenerationMatch`) but is opt-in, and only app data uses it. Chats
   and the agent KV stay last-write-wins on purpose: both are `{slot}/{user}`, one person per shelf,
   so there is no second writer to lose to.
