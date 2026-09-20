@@ -777,3 +777,13 @@ def test_moving_an_app_out_of_apps_leaves_its_rows_alone(tmp_path):
     client.put("/apps/standup/data/keep", json="v", headers=h)
     client.patch("/files/apps/standup", json={"to": "archive/standup"}, headers=h)
     assert client.get("/apps/standup/data/keep", headers=h).json() == {"value": "v"}
+
+
+def test_a_list_is_capped(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    for i in range(5):
+        client.put(f"/apps/big/data/k{i}", json=i, headers=h)
+    assert len(client.get("/apps/big/data?limit=2", headers=h).json()) == 2
+    assert len(client.get("/apps/big/data", headers=h).json()) == 5

@@ -95,32 +95,68 @@ CSP so "fetch works" would be removing the only thing that bounds a generated pa
 
 ## The dance
 
+Nothing here is a new primitive. The host page holds the session; the frame holds none of it and
+asks for everything. Six of these steps are unchanged from the file era — only 10–12 moved.
+
 ```
  1  the agent writes source          apps/<slug>/src/*        (edit tool)
- 2  build_app(slug, source)          → app-build          → apps/<slug>/index.html
+ 2  build_app(slug, source)          → app-build              → apps/<slug>/index.html
 
- 3  the user opens the app           Apps tab → canvas
+ 3  the person opens the app         Apps tab → canvas
  4  GET /files/apps/<slug>/index.html                         Authorization: Bearer <JWT>
  5  injectShim(html)                 prepend window.cycls      canvas.tsx, HtmlDoc
  6  <iframe sandbox="allow-scripts allow-popups" srcDoc={html}>
 
- 7  frame → host    cycls:ready                               on the window, once
+ 7  frame → host    cycls:ready                               on the window, retried 40× / 50 ms
  8  host checks     e.source === frame.contentWindow           (opaque origin has no e.origin)
  9  host → frame    cycls:init + a transferred MessagePort
 
-10  app calls       cycls.read("data/x.json")
-11  frame → host    cycls:read                                 over the port, not the window
-12  host checks     inScope(scope, path)                       app-bridge.ts
-13  host fetches    GET /files/apps/<slug>/data/x.json         with the USER's JWT
-14  host → frame    cycls:read:result
+10  app calls       cycls.get("total")
+11  frame → host    cycls:data {op:"list"}                     over the port, not the window
+12  host            appData(slug, op)  →  GET /apps/<slug>/data      with the VIEWER's JWT
+13  server          _scope() picks the audience, app_shelf() builds the key
+14  host → frame    cycls:data:result {result:[{key,value}…]}
 ```
 
-**Everything after the handshake rides a private port.** A window reply needs
-`targetOrigin: "*"` — an opaque origin has none to name — and a sandboxed frame may navigate
-*itself*, with `frame.contentWindow` following it, so the identity check still passed and the
-replacement document received workspace data. A port belongs to the document that received it:
-navigate away and it is gone. A host that sends no port (an older mobile build) still works on
-the window alone.
+### Client side, step by step
+
+**Mounting (3–6).** `appScope(file.path)` returns `apps/<slug>` for `apps/<slug>/index.html` and
+`null` for every other HTML file, and that single check decides whether a document gets a bridge at
+all. `injectShim` splices the shim into `<head>`; the iframe is `srcDoc`, so there is no URL and no
+origin. A shared or gallery view still mounts the shim — without it the first library that touches
+`localStorage` white-screens the frame — but its bridge answers every request with a refusal.
+
+**Handshake (7–9).** The shim posts `cycls:ready` on the window and keeps retrying, because nothing
+guarantees the host's listener mounted first. The host cannot check `e.origin` (it is `"null"` for
+an opaque origin), so identity is the window handle. It replies with `cycls:init` and **transfers a
+MessagePort**; everything after that rides the port. A window reply would need `targetOrigin: "*"`,
+and a sandboxed frame may navigate *itself* with `frame.contentWindow` following it — so the handle
+check would still pass and the replacement document would receive workspace data. A port belongs to
+the document that received it. A host that sends no port still works on the window alone.
+
+**A call (10–14).** The shim keeps a `waiting` map keyed by a sequence number, posts, and resolves
+on the matching `:result`. The host validates, calls the one function the canvas handed it, and
+posts back. The frame never sees a token, a URL or a workspace path it did not already know.
+
+### What changed: `cycls.get`/`set`
+
+|  | before | now |
+|---|---|---|
+| first `get` | `cycls:read data/state.json` → `GET /files/...` → `JSON.parse` the whole file | `cycls:data {op:"list"}` → `GET /apps/<slug>/data` → rows |
+| `set` | mutate memory, mark dirty, wait 250 ms | unchanged |
+| the flush | **re-read** the file, merge the dirty keys onto it, `PUT` the whole object back | one `{op:"put", key, value}` per dirty key, in parallel |
+| a delete | drop the key, rewrite the whole file | `{op:"delete", key}` |
+| two writers | last full write wins unless the merge catches it | collide only on the same key |
+| audiences | one, shared by everyone | three — see the slot section |
+
+The merge existed only because the whole file was rewritten; per-key rows make it unnecessary, so it
+is gone. What is *not* gone: there is still no compare-and-swap, so two writers on one key inside
+the same 250 ms window still lose one.
+
+`cycls.read`/`write`/`save` are untouched — those are files, and `canWrite` still allows `data/`
+only.
+
+### Why the frame is shaped like this
 
 **The sandbox is load-bearing.** `sandbox="allow-scripts"` with no `allow-same-origin` gives the
 document an opaque origin. Without it, model-written HTML embedded in the agent's own page would be
@@ -133,20 +169,38 @@ that cannot be traded away.
 `window.localStorage` throws `SecurityError`, and most libraries touch storage during render — so an
 app without the shim is a blank white frame with no message. `app-shim.ts` installs an in-memory
 `localStorage`/`sessionStorage` replacement (it forgets on reload, which beats not rendering) and a
-typed API — `read`, `write`, `save`, `get`/`set`, `connector`, `resize` — so an app calls a function
-instead of hand-rolling the postMessage protocol.
-
-**`cycls.get`/`set`** coalesce: `set` mutates memory and schedules the writes 250 ms later, so a
-burst of updates costs one write per key touched rather than one per call. Each key is its own row,
-so two writers now collide only on the same key — the whole-file rewrite this replaced lost
-everything another tab, another device or the agent had changed. It is still not compare-and-swap:
-two writers on one key inside the same window, and one loses.
+typed API — `read`, `write`, `save`, `get`/`set`, `me`, `users`, `connector`, `resize` — so an app
+calls a function instead of hand-rolling the postMessage protocol.
 
 **An app that throws says so.** The shim posts `cycls:loaderror` from `error` and
 `unhandledrejection`, and the canvas shows it. A crashed app used to be a white rectangle.
 
 **`cycls.save(name, content)`** is the only way out of the folder, and it opens a host dialog every
 time. An app never holds standing permission to write elsewhere.
+
+## Porting the phone client
+
+`~/Desktop/code/mobile-app` stages the bundle to a `file://` URI in a WebView with
+`originWhitelist: ["*"]`. It predates all of this, so today the same app reads rows on the web and a
+file on a phone. The seed means nothing is lost — the shelf imports `data/state.json` on its first
+empty list — but once the shelf has rows, the phone's writes stop being seen by anyone else.
+
+In order of what breaks without it:
+
+1. **Handle `cycls:data`.** The frame sends `{type, id, op, key, value, who, prefix}`; reply with
+   `{type:"cycls:data:result", id, ok, result}` or `{ok:false, error}`. Map it to
+   `GET|PUT|DELETE /apps/<slug>/data[/<key>][?who=&prefix=&limit=]` with the viewer's JWT. `ok:false`
+   must carry the status text, because a 403 from the role gate is how an app tells which view to
+   render.
+2. **Ship the current shim.** `app-shim.ts` is one string; a stale copy still points at
+   `data/state.json`. Nothing else in the shim is web-specific.
+3. **Transfer a MessagePort with `cycls:init`.** Optional — the shim falls back to the window — but
+   without it a frame that navigates itself keeps receiving workspace data.
+4. **Send `canWrite`** the same way, or `cycls.write` silently no-ops.
+5. **Bundle size.** Android truncates `loadData` past roughly 2 MB; a 2.4 MB bundle rendered blank
+   in production. Stage to a file URI, do not inline.
+
+Until 1 and 2 land, pin the phone to file-backed apps or accept the divergence knowingly.
 
 ## Connectors from inside an app
 
@@ -291,9 +345,26 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
 - A flush that fails rejects the pending `set`, so a tab closing on a dead connection can still lose
   its last 250 ms.
 
+**App data**
+- A list is capped at 1000 rows and **truncates silently** — there is no cursor and no `truncated`
+  flag. `cycls.get`/`set` loads the whole shared shelf on first use, so an app with more than 1000
+  keys sees only part of it and `get` returns the fallback for the rest. Keep the `get`/`set`
+  working set small; browse bigger shelves with `me.all(prefix)` / `users.all(prefix)`.
+- `items()` is a LIST plus **one GET per row**, so a 1000-row list is 1001 round-trips in one
+  request. A prefix is the only thing that makes it cheaper.
+- `who=` costs a `resolve_role()` — one or two more object reads per request, uncached.
+- A non-admin write to a shared shelf reads `app.json` to check `write: admin`. One small gcsfuse
+  read per write, and writes are debounced, so it is not hot — but it is not free either.
+- Two tabs opening an empty shelf both run the `state.json` seed. It writes the same values, so the
+  race is harmless, but it is a race.
+- The seed is one-way and one-time. After it, `data/state.json` is stale on disk and nothing prunes
+  it; an app still reading that file with `cycls.read` sees frozen data.
+- `cycls.users` has no "list the members" verb — it lists rows, so a member who has written nothing
+  is invisible to an admin view.
+
 **The frame**
 - A shared or gallery view has no workspace. The app now gets the shim, so it renders, but every
-  `cycls.read` rejects — an app that needs its data shows nothing in a share.
+  `cycls.read` and every `cycls.get` rejects — an app that needs its data shows nothing in a share.
 - On mobile the app is staged to a `file://` URI in a WebView with `originWhitelist: ["*"]`, and
   Android truncates `loadData` past roughly 2 MB — a 2.4 MB bundle rendered blank in production.
 - The mobile host has not been ported: it sends no MessagePort (so that frame still talks on the
