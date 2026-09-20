@@ -827,7 +827,7 @@ def test_no_version_is_still_last_write_wins(tmp_path):
     assert client.put("/apps/board/data/x", json=2, headers=h).status_code == 200
 
 
-# A personal workspace is ws/u-<user>; haseef runs an app in one in production.
+# A personal workspace is ws/u-<user>, and apps do run in one.
 
 def test_app_data_works_in_a_personal_workspace(tmp_path):
     client = _client(tmp_path)
