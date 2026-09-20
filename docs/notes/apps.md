@@ -29,6 +29,12 @@ it makes the builder replaceable rather than load-bearing, and it makes the brid
 one. Every other HTML file in the workspace opens in the canvas as an inert document with no bridge
 at all, because opening a document must never hand that document your workspace.
 
+**Personal workspaces are workspaces.** `ws/u-<user>/apps/<slug>/` is an ordinary app folder with an
+ordinary `.apps/<slug>/` shelf beside it — haseef runs one in production. The owner is its admin, so
+`cycls.users` is theirs; nobody else reaches it, not even an org admin, because `resolve_role`
+returns `None` for someone else's personal workspace. A solo account with no org is the same again:
+`workspace()` folds `u-<id>` back to the account root and the shelf follows.
+
 **An app is shared by the whole workspace.** `workspace()` returns
 `root = {volume}/{org}/ws/{ws}` with **no user segment** (`workspace()` in `cycls/_app/db.py`), and every
 `/files` route resolves against `ws.root`. So the bundle, the source and the data are one copy that
