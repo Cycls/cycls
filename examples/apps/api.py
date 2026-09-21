@@ -2,7 +2,7 @@
 #
 #   uv run cycls run examples/apps/api.py            # localhost, reload on save
 #   uv run cycls run examples/apps/api.py --remote   # live dev URL, hot-swap on save
-#   uv run cycls deploy examples/apps/api.py         # production
+#   uv run cycls deploy examples/apps/api.py         # production, at fast.cycls.ai
 import cycls
 
 @cycls.app()
@@ -17,7 +17,7 @@ def fast():
 
     return app
 
-# Or drive the loop yourself — the entrypoint's code chooses the verbs:
+# Or drive the loop yourself. The entrypoint's code chooses the verbs:
 # @cycls.local_entrypoint
 # def main():
 #     fast.remote()
