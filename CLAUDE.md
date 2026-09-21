@@ -179,6 +179,19 @@ Function tests need Docker running.
 ## Publishing
 
 When asked to "publish":
-1. Bump the version in `pyproject.toml`
-2. Commit and push the changes to git (do not coauthor)
-3. Run: `rm -rf dist && export $(cat .env | xargs) && uv build && uv publish`
+1. **Build the web client first** — `cd client && npm run build`. It writes into
+   `cycls/_agent/web/themes/default`, which the wheel ships as an artifact, so the package
+   carries whatever was last built there. `uv build` does **not** rebuild it. Skip this and you
+   publish a server speaking the current protocol with a browser bundle that does not —
+   0.0.2.142 went out that way.
+2. Bump the version in `pyproject.toml`
+3. Commit and push the changes to git, rebuilt assets included (do not coauthor)
+4. Run: `rm -rf dist && export $(cat .env | xargs) && uv build && uv publish`
+5. Check the bundle inside the wheel, not the source tree — minification renames identifiers, so
+   grep for a literal you changed rather than a function name:
+   `python3 -c "import zipfile;z=zipfile.ZipFile('dist/cycls-<v>-py3-none-any.whl');print('<literal>' in z.read([n for n in z.namelist() if 'themes/default/assets/index-' in n and n.endswith('.js')][0]).decode())"`
+
+PyPI's `latest` in the JSON API serves stale edge caches for a few minutes. `curl -o /dev/null -w
+"%{http_code}" https://pypi.org/pypi/cycls/<version>/json` is the straight answer.
+
+Yanking a bad release is **web UI only** — PyPI's upload endpoint returns 405 for `:action=yank`.
