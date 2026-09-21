@@ -224,8 +224,9 @@ yet (shares, trash, examples, surveys, announcements), not a second vocabulary.
 | `client_error` | mobile-only. The web toasts a server's own message; the app shows an eight-hex reference and this is the only record of what it stood for (`src/net/errors.ts`) |
 | `session_lost` | mobile-only. A session that ended without the person asking. The web has no equivalent because a browser tab losing auth is not the same complaint |
 | `token_cache_error` | mobile-only. The keychain read behind the session; `src/auth/tokenCache.ts` retries rather than deleting, and records when it still fails |
-| `push_marketing_opt_in` / `_opt_out` | mobile-only. The Settings switch, distinct from `notification_prompt_answered`, which is the OS prompt |
-| `analytics_opt_in` / `_opt_out` | mobile-only. The app ships an explicit consent switch; the web does not |
+| `push_marketing_opt_in` / `push_marketing_opt_out` | mobile-only. The Settings switch, distinct from `notification_prompt_answered`, which is the OS prompt |
+| `analytics_opt_in` / `analytics_opt_out` | mobile-only. The app ships an explicit consent switch; the web does not |
+| `redeem_code_opened` | mobile-only. StoreKit's offer-code sheet was opened from the paywall — the only promo path iOS allows, since Clerk checkout cannot ship there |
 | `checkout_start` / `purchase` | same names, same GA4 shape — `plan_id`, `plan_name`, `value`, `currency` — but StoreKit is the source, not Clerk. `billing_period` is always `month` because annual was cut on iOS, `payer_type` is always `user` because the store bills a person and not an org, and there is no `transaction_id` in Clerk's sense. `value` and `currency` come off the store product, so they are the storefront's, localised by StoreKit |
 | `sign_up` | routed to the Firebase destination only, never through `track()`. PostHog observes the fact through `$identify`, and `user_signed_up` is on the denylist; Google Ads needs GA4's reserved name to import it as a conversion (`conversion()` in `src/net/analytics.ts`) |
 
