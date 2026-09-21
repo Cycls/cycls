@@ -1120,12 +1120,16 @@ def tool_step(name, input):
 # `rm` and `rmdir` are not here: the sandbox shims them into the trash (30 days, restorable), so a
 # delete is a move and Auto lets it run. These have no trash behind them.
 _DESTRUCTIVE_CMD = re.compile(
-    r"\b(shred|mkfs|dd\s+if=|truncate\s|drop\s+(table|database)|"
-    r"git\s+(push\s+(-f|--force)|reset\s+--hard|clean\s+-\w*[fdx])|killall\s)"
-    # Outside the \b group on purpose: a word boundary cannot sit between a space
-    # and `>`, so `> /dev/sda` — overwriting a disk — never matched, while
-    # `2>/dev/null` did, because `2` is a word character. The rule was inverted,
-    # and it asked for approval on the commonest idiom in shell.
+    # Each has to be an invocation, not the word sitting in a filename, a quoted
+    # string or a comment — `shredder.py` and `grep "truncate the list"` were both
+    # asking for approval. `dd` is only a write when it names an `of=`.
+    r"\bshred\s|\bmkfs(\.\w+)?\s|\btruncate\s+-|\bdd\s[^;|&]*\bof="
+    r"|\bdrop\s+(table|database)\b"
+    r"|\bgit\s+(push\s+(-f|--force)|reset\s+--hard|clean\s+-\w*[fdx])"
+    r"|\bkillall\s"
+    # A redirect into a block device overwrites a disk. Outside the groups above on
+    # purpose: a word boundary cannot sit between a space and `>`, so `> /dev/sda`
+    # never matched while `2>/dev/null` did — the rule was inverted.
     r"|>\s*/dev/r?(sd|hd|vd|nvme|mmcblk|loop|disk)", re.I)
 
 

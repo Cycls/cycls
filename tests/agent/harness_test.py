@@ -1152,6 +1152,35 @@ def test_a_builtin_follows_the_composer_switch_and_always_stops_for_the_destruct
     assert asyncio.run(coro)["action"] == "confirm"
 
 
+def test_only_what_has_no_way_back_asks_for_approval():
+    """Auto is the default and writes run under it, so anything matched here stops
+    a user mid-task. Two production chats in one day hit that on `2>/dev/null`.
+    The rule now has to be an invocation, not the word in a filename, a quoted
+    string or a comment."""
+    from cycls._agent.tools import risk
+
+    # routine work — Auto runs these, no card
+    for cmd in ("python3 shredder.py --input data.csv",     # not `shred`
+                "grep -n 'truncate the list' notes.md",     # a read, and the word is quoted
+                "echo '# truncate ' >> notes.md",
+                "dd if=input.iso",                          # no of=, so nothing is written
+                "find . -name '*.pdf' 2>/dev/null",
+                "cat x >/dev/null 2>&1",
+                "rm -rf build",                             # the shim moves it to the trash
+                "mv a.txt b.txt",
+                'python3 -c "d.delete_page(3); d.save(\'out.pdf\')"',
+                "npm run build"):
+        assert risk("bash", {"command": cmd}) != "destructive", cmd
+
+    # no trash, no undo — these ask even under Auto
+    for cmd in ("shred -u secrets.txt", "mkfs.ext4 /dev/sda1", "truncate -s 0 important.log",
+                "dd if=/dev/zero of=/dev/sda", "dd if=/dev/zero of=important.db",
+                "cat evil > /dev/nvme0n1", "echo x >/dev/vda", "cat i > /dev/rdisk2",
+                "git reset --hard", "git clean -fdx", "git push --force",
+                "killall node", "psql -c 'drop table users'"):
+        assert risk("bash", {"command": cmd}) == "destructive", cmd
+
+
 def test_a_redirect_to_dev_null_is_not_destructive():
     """A production chat asked for approval six times in one day on routine work.
     The rule was `>\\s*/dev/` inside a `\\b(...)` group, so it was inverted twice
