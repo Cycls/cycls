@@ -1119,8 +1119,16 @@ def tool_step(name, input):
 # ---- What a builtin risks (docs/notes/plugins-connectors.md, Approvals) ----
 # `rm` and `rmdir` are not here: the sandbox shims them into the trash (30 days, restorable), so a
 # delete is a move and Auto lets it run. These have no trash behind them.
-_DESTRUCTIVE_CMD = re.compile(r"\b(shred|mkfs|dd\s+if=|truncate\s|drop\s+(table|database)|"
-                              r"git\s+(push\s+(-f|--force)|reset\s+--hard|clean\s+-\w*[fdx])|killall\s|>\s*/dev/)", re.I)
+_DESTRUCTIVE_CMD = re.compile(
+    r"\b(shred|mkfs|dd\s+if=|truncate\s|drop\s+(table|database)|"
+    r"git\s+(push\s+(-f|--force)|reset\s+--hard|clean\s+-\w*[fdx])|killall\s)"
+    # Outside the \b group on purpose: a word boundary cannot sit between a space
+    # and `>`, so `> /dev/sda` — overwriting a disk — never matched, while
+    # `2>/dev/null` did, because `2` is a word character. The rule was inverted,
+    # and it asked for approval on the commonest idiom in shell.
+    r"|>\s*/dev/r?(sd|hd|vd|nvme|mmcblk|loop|disk)", re.I)
+
+
 _READ_CMD = re.compile(r"^\s*(ls|cat|head|tail|wc|grep|rg|find|stat|file|du|df|pwd|echo|which|type|tree|sort|uniq|diff|awk|sed\s+-n)\b", re.I)
 
 

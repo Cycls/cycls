@@ -1150,3 +1150,23 @@ def test_a_builtin_follows_the_composer_switch_and_always_stops_for_the_destruct
     block = {"id": "b1", "name": "bash", "input": {"command": "git clean -fdx"}}
     _, coro = dispatch(block, SimpleNamespace(root="/tmp"), 5, ctx=auto)
     assert asyncio.run(coro)["action"] == "confirm"
+
+
+def test_a_redirect_to_dev_null_is_not_destructive():
+    """A production chat asked for approval six times in one day on routine work.
+    The rule was `>\\s*/dev/` inside a `\\b(...)` group, so it was inverted twice
+    over: `\\b` cannot sit between a space and `>`, so `> /dev/sda` — overwriting
+    a disk — never matched, while `2>/dev/null` did, because `2` is a word
+    character. The commonest idiom in shell was the only thing it caught."""
+    from cycls._agent.tools import risk
+    harmless = ['python3 -c "import fitz" 2>/dev/null',
+                "cat x >/dev/null 2>&1",
+                "grep -r foo . 2> /dev/null",
+                "make 1>/dev/null 2>/dev/null"]
+    for cmd in harmless:
+        assert risk("bash", {"command": cmd}) != "destructive", cmd
+
+    # what the rule was always meant to catch, and never did
+    for cmd in ("cat evil > /dev/sda1", "echo x >/dev/vda", "cat i > /dev/nvme0n1",
+                "cat i > /dev/rdisk2", "cat i >/dev/mmcblk0", "dd if=/dev/zero of=/dev/sda"):
+        assert risk("bash", {"command": cmd}) == "destructive", cmd
