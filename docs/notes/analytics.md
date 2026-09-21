@@ -226,7 +226,7 @@ yet (shares, trash, examples, surveys, announcements), not a second vocabulary.
 | `token_cache_error` | mobile-only. The keychain read behind the session; `src/auth/tokenCache.ts` retries rather than deleting, and records when it still fails |
 | `push_marketing_opt_in` / `_opt_out` | mobile-only. The Settings switch, distinct from `notification_prompt_answered`, which is the OS prompt |
 | `analytics_opt_in` / `_opt_out` | mobile-only. The app ships an explicit consent switch; the web does not |
-| `purchase` | same name, different payload. StoreKit, not Clerk — so `sku`, `tier` and the store's `displayPrice`, and no `transaction_id` in Clerk's sense |
+| `checkout_start` / `purchase` | same names, same GA4 shape — `plan_id`, `plan_name`, `value`, `currency` — but StoreKit is the source, not Clerk. `billing_period` is always `month` because annual was cut on iOS, `payer_type` is always `user` because the store bills a person and not an org, and there is no `transaction_id` in Clerk's sense. `value` and `currency` come off the store product, so they are the storefront's, localised by StoreKit |
 | `sign_up` | routed to the Firebase destination only, never through `track()`. PostHog observes the fact through `$identify`, and `user_signed_up` is on the denylist; Google Ads needs GA4's reserved name to import it as a conversion (`conversion()` in `src/net/analytics.ts`) |
 
 **Not emitted yet**, because the surface does not exist on mobile: the sharing
