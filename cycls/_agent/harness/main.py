@@ -37,10 +37,14 @@ CANCEL_DRAIN = 2              # seconds a cancelled tool batch gets to unwind
 _CONTINUE = ("Your previous message was cut off at the output-token limit. "
              "Continue exactly from where you stopped. Do not repeat anything.")
 # Providers report context overflow as an error, each with its own wording.
+# One phrasing per provider, because each says it differently and a miss here is
+# not a smaller context — it is the error reaching the user instead of a compact
+# and retry. SGLang's wording was missing while it served production.
 _OVERFLOW_RE = re.compile(
     r"prompt is too long|request_too_large|exceeds the context window"
     r"|maximum context length|input token count.*exceeds"
-    r"|context[_ ]length[_ ]exceeded|too many tokens", re.I)
+    r"|context[_ ]length[_ ]exceeded|too many tokens"
+    r"|is longer than the model", re.I)
 DEFAULT_WINDOW = 1_000_000    # context window when .context() is unset — set it for smaller models
 DEFAULT_MAX_TOKENS = 8_192    # output cap when .max_tokens() is unset — safe on every model
 

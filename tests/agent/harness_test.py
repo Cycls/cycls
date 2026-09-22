@@ -1199,3 +1199,22 @@ def test_a_redirect_to_dev_null_is_not_destructive():
     for cmd in ("cat evil > /dev/sda1", "echo x >/dev/vda", "cat i > /dev/nvme0n1",
                 "cat i > /dev/rdisk2", "cat i >/dev/mmcblk0", "dd if=/dev/zero of=/dev/sda"):
         assert risk("bash", {"command": cmd}) == "destructive", cmd
+
+
+def test_every_provider_wording_for_a_full_context_is_recognised():
+    """A miss here is not a smaller context — the loop compacts and retries only
+    when it recognises the error, so an unmatched phrasing surfaces the raw 400 to
+    the user. Two production chats died that way in thirteen minutes: SGLang says
+    "is longer than the model's context length" and nothing matched it, while it
+    was the provider serving production."""
+    from cycls._agent.harness.main import _OVERFLOW_RE
+    for msg in ("prompt is too long: 250000 tokens > 200000 maximum",                   # Anthropic
+                "This model's maximum context length is 128000 tokens",                 # OpenAI
+                "context_length_exceeded",
+                "The input (1477992 tokens) is longer than the model's context "
+                "length (1048576 tokens).",                                             # SGLang
+                "The input (1477992 tokens) is longer than the model\\'s context "
+                "length (1048576 tokens)."):                                            # ...as it arrives, escaped
+        assert _OVERFLOW_RE.search(msg), msg
+    for msg in ("Error code: 400 - invalid api key", "rate limit exceeded", "upstream timeout"):
+        assert not _OVERFLOW_RE.search(msg), msg
