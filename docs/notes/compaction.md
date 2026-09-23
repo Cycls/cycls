@@ -236,7 +236,6 @@ with edited tool inputs in old turns), OpenRouter, Moonshot, Fireworks.
 - **The end-of-run summary holds the stream open.** A fully detached one needs CPU
   after the response ends, which Cloud Run throttles — see [runs.md](runs.md).
 - **The mobile app** shows the step label in English.
-- **Public docs** (`cycls-docs`) still say compaction happens "when the window fills".
 
 ## Related
 
