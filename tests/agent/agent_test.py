@@ -13,7 +13,7 @@ import pytest
 
 from cycls._agent.harness import providers as _providers
 from cycls._agent.harness.main import (_run, MAX_RETRIES, MAX_CONTINUATIONS, MAX_PAUSES,
-                                      _is_retryable, _ingest, DEFAULT_WINDOW)
+                                      _is_retryable, _ingest, DEFAULT_WINDOW, DEFAULT_MAX_TOKENS)
 
 
 @pytest.fixture(autouse=True)
@@ -760,7 +760,7 @@ def test_compaction_triggers_when_approaching_window(agent_env):
     ws, ctx = agent_env
 
     window = DEFAULT_WINDOW
-    high_usage = _usage(inp=window - COMPACT_BUFFER + 1)
+    high_usage = _usage(inp=window - DEFAULT_MAX_TOKENS - COMPACT_BUFFER + 1)
 
     # Build a few tool rounds so the message list clears the compaction guard
     rounds = []
@@ -840,7 +840,7 @@ def test_compaction_failure_still_saves_history(agent_env):
     ws, ctx = agent_env
 
     window = DEFAULT_WINDOW
-    high_usage = _usage(inp=window - COMPACT_BUFFER + 1)
+    high_usage = _usage(inp=window - DEFAULT_MAX_TOKENS - COMPACT_BUFFER + 1)
 
     round1 = _make_response([_tool_use_block("t1")], stop_reason="tool_use", usage=high_usage)
     final = _make_response([_text_block("Important answer")])
@@ -869,7 +869,7 @@ def test_compaction_appends_marker_and_keeps_raw_history(agent_env):
     from cycls._agent.state import get_compaction
 
     window = DEFAULT_WINDOW
-    high_usage = _usage(inp=window - COMPACT_BUFFER + 1)
+    high_usage = _usage(inp=window - DEFAULT_MAX_TOKENS - COMPACT_BUFFER + 1)
 
     rounds = [_make_response([_tool_use_block(f"t{i}")], stop_reason="tool_use", usage=high_usage)
               for i in range(6)]

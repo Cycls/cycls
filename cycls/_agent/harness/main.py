@@ -407,7 +407,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
     while True:
         try:
-            if tokens_since_compact > window - COMPACT_BUFFER and len(messages) - session.first_kept > 2:
+            if tokens_since_compact > window - max_tokens - COMPACT_BUFFER and len(messages) - session.first_kept > 2:
                 yield events.step("Compacting context...")
                 try:
                     provider.last_usage = None
