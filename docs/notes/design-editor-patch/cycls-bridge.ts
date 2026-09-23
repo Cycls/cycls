@@ -242,6 +242,16 @@ export function startCyclsEmbedBridge(): void {
       void (async () => {
         try {
           await openFileInNewTab(new File([decodeBase64(fig)], name))
+          // Ensure the loaded document's fonts (referenced + any fallback packs) so
+          // text re-shapes once fonts are ready. Arabic text is authored with an
+          // explicit Arabic family by the render service, so it renders directly;
+          // this also covers any fallback a document happens to need.
+          const store = getActiveStore()
+          if (store) {
+            const page = store.graph.getNode(store.state.currentPageId)
+            if (page) await ensureGraphFonts(store.graph, page.childIds, store.renderer)
+            store.requestRender?.()
+          }
           lastVersion = getActiveStore()?.state.sceneVersion ?? -1
           post({ type: 'loaded', name })
         } catch (error) {
