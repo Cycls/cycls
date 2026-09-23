@@ -401,6 +401,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     pauses = 0
     overflowed = False
 
+    def request():
+        """Everything a call sends besides its messages. The summary sends it too, so its prefix is cached."""
+        return dict(system=system_text, tools=tools_list, mcp_servers=mcp_servers, thinking=thinking, extra_body=extra_body)
+
     def compacted(tier, reason, tokens, ok=True):
         """The analytics record of one compaction: a log row, and a `ui` event the client tracks."""
         log("compaction", user=user, chat_id=session.chat_id, model=bare_model,
@@ -417,7 +421,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         yield events.step("Summarizing earlier messages to keep this chat going...")
         try:
             provider.last_usage = None
-            task = asyncio.ensure_future(session.compact(provider, keep, max_tokens))
+            task = asyncio.ensure_future(session.compact(provider, keep, max_tokens, request()))
             while not task.done():   # pings keep proxies from cutting a long silent call; a cut leaves it running
                 await asyncio.wait([task], timeout=15.0)
                 if not task.done(): yield {"type": "ping"}
@@ -425,9 +429,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             yield compacted(2, reason, tokens_since_compact, DROPPED not in session.summary)
             # The summarizer call is a real billed turn — track it too.
             if u := getattr(provider, "last_usage", None):
-                c = _cost(price, u[0], u[1], 0, 0)
+                c = _cost(price, *u)
                 log("usage", user=user, chat_id=session.chat_id, model=bare_model,
-                    input=u[0], output=u[1], cached=0, cache_create=0,
+                    input=u[0], output=u[1], cached=u[2], cache_create=u[3],
                     cost=round(c, 6), ms=0, compact=True)
                 if session.chat_id and c:
                     try: await state.add_cost(workspace, session.chat_id, c)
@@ -453,10 +457,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             partial_text = ""
             turn_t0 = time.monotonic()
             try:
-                async for ev in _stream_with_retry(provider, messages=state.normalize(session.context()), system=system_text,
-                                                   tools=tools_list, max_tokens=max_tokens,
-                                                   mcp_servers=mcp_servers, thinking=thinking,
-                                                   extra_body=extra_body):
+                async for ev in _stream_with_retry(provider, messages=state.normalize(session.context()),
+                                                   max_tokens=max_tokens, **request()):
                     if isinstance(ev, Turn): turn = ev
                     else:
                         if isinstance(ev, str): partial_text += ev

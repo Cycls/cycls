@@ -462,11 +462,11 @@ class Session:
         await self._mark()
         return True
 
-    async def compact(self, provider, keep=20_000, max_tokens=8_192):
+    async def compact(self, provider, keep=20_000, max_tokens=8_192, request=None):
         """Fold the projected context into a summary marker — raw turns on disk
         are never touched, so the full transcript survives for the UI."""
         from .harness.compact import compact
-        result = await compact(provider, self.context(), keep, max_tokens)
+        result = await compact(provider, self.context(), keep, max_tokens, request)
         self.summary = result[0]["content"]
         self.first_kept = len(self.messages) - (len(result) - 2)
         await self._mark()

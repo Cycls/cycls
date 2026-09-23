@@ -1,6 +1,7 @@
 """Context compaction — stub old tool results first, summarize old turns when that frees too little."""
 import asyncio, json, re
-from .prompts import COMPACT_SYSTEM
+from .events import Turn
+from .prompts import COMPACT_PROMPT
 
 COMPACT_AT = 0.7          # compact past this share of the window
 KEEP_RECENT = 0.3         # keep this share of the window verbatim
@@ -8,7 +9,6 @@ CLEAR_AT_LEAST = 0.25     # stubbing a warm cache must free this share, or the s
 CLEAR_COLD = 0.1          # ... and this share after a pause, when the provider cache is gone anyway
 COLD_AFTER = 1_200        # idle seconds until the cache is mostly gone (K3: 94% cached at 5–10 min, 19% at 20–40)
 COMPACT_BUFFER = 30_000   # headroom past input + max_tokens
-SUMMARY_MAX = 16_384      # summary output cap, reasoning included; more needs streaming on Anthropic
 SUMMARY_TIMEOUT = 300     # seconds before the summary counts as failed
 
 _SUMMARY_REQUEST = (
@@ -103,11 +103,19 @@ def clear_to(messages, start, keep):
     return cut, sum(_tokens(m.get("content")) for m in old) - sum(_tokens(m.get("content")) for m in clear(old))
 
 
-async def _summarize(provider, old, max_tokens):
+async def _summarize(provider, old, max_tokens, request):
+    """Asked as the loop's own next turn — its system prompt, tools and message prefix — so the
+    provider serves `old` from its cache instead of reading it all again."""
     from ..state import normalize
-    raw = await asyncio.wait_for(provider.complete(
-        messages=normalize(old) + [{"role": "user", "content": _SUMMARY_REQUEST}],
-        system=COMPACT_SYSTEM, max_tokens=max_tokens), SUMMARY_TIMEOUT)
+    async def ask():
+        turn = None
+        async for ev in provider.stream(messages=normalize(old) + [
+                {"role": "user", "content": COMPACT_PROMPT + "\n\n" + _SUMMARY_REQUEST}], max_tokens=max_tokens, **request):
+            if isinstance(ev, Turn): turn = ev
+        return turn
+    turn = await asyncio.wait_for(ask(), SUMMARY_TIMEOUT)
+    provider.last_usage = (turn.input, turn.output, turn.cached, turn.cache_create)
+    raw = "".join(b.get("text", "") for b in turn.content if b.get("type") == "text")
     raw = re.sub(r"<analysis>[\s\S]*?</analysis>", "", raw)
     m = re.search(r"<summary>([\s\S]*?)</summary>", raw)
     if not (summary := (m.group(1) if m else raw).strip()):
@@ -115,14 +123,14 @@ async def _summarize(provider, old, max_tokens):
     return summary
 
 
-async def compact(provider, messages, keep, max_tokens):
+async def compact(provider, messages, keep, max_tokens, request=None):
     """Old turns → one summary; recent turns kept verbatim. Always shrinks —
     a failed summary drops the old turns instead, so the next request fits."""
     cut = _cut(messages, keep)
     files = _ledger(messages)
     old, recent = messages[:cut], messages[cut:]
     try:
-        summary = await _summarize(provider, old, min(max_tokens, SUMMARY_MAX))
+        summary = await _summarize(provider, old, max_tokens, request or {"system": COMPACT_PROMPT, "tools": []})
     except Exception:
         summary = DROPPED
     head = "This session continues from a previous conversation. Summary of earlier work:\n\n" + summary

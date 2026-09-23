@@ -24,7 +24,7 @@ def _clear_client_cache():
     yield
     _providers._clients.clear()
 from cycls._agent.harness.compact import COMPACT_AT, COMPACT_BUFFER, compact
-from cycls._agent.harness.events import to_ui
+from cycls._agent.harness.events import Turn, to_ui
 from cycls._agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path
 from cycls._agent.state import load_messages, load_tail
 from cycls._app.db import workspace
@@ -110,6 +110,21 @@ async def _drain(gen):
     """Drain the loop's typed events into the FE-shaped dicts/strings the
     agent body would yield — `_run` emits Events, the body to_ui's them."""
     return [to_ui(ev) async for ev in gen]
+
+
+def _is_summary(kw):
+    return "Summarize the conversation above" in str(kw["messages"][-1])
+
+
+def _stream(responses, summary="<summary>Summary here</summary>", calls=None):
+    """A `messages.stream` mock: a summary request gets `summary` (an Exception raises),
+    every other call takes the next of `responses`."""
+    def stream(**kw):
+        if calls is not None: calls.append(kw)
+        if not _is_summary(kw): return FakeStream(next(responses))
+        if isinstance(summary, Exception): raise summary
+        return FakeStream(_make_response([_text_block(summary)]))
+    return stream
 
 
 def _mock_anthropic(client):
@@ -770,9 +785,7 @@ def test_compaction_triggers_when_approaching_window(agent_env):
     responses = iter(rounds)
 
     mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
-    mock_client.messages.create = AsyncMock(return_value=MagicMock(
-        content=[MagicMock(text="<analysis>thinking</analysis><summary>Summary here</summary>")]))
+    mock_client.messages.stream = _stream(responses)
 
     with _mock_anthropic(mock_client), \
          patch("cycls._agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
@@ -804,9 +817,9 @@ def test_no_compaction_when_under_threshold(agent_env):
 
 
 def test_compact_returns_internal_summary_pair_plus_recent():
-    """compact() runs `complete`, parses <summary>, strips <analysis>, and
-    returns [user(summary, internal), assistant(understood, internal), *recent].
-    `complete` is called with the OLD slice + a summary-request user message."""
+    """compact() asks with the caller's request (system, tools) over the OLD slice + a
+    summary-request user message, parses <summary>, strips <analysis>, and returns
+    [user(summary, internal), assistant(understood, internal), *recent]."""
     old = [{"role": "user", "content": "older q"},
            {"role": "assistant", "content": [{"type": "text", "text": "older a"}]}]
     # ~100 tokens each ⇒ the 250-token budget keeps these 3, cuts after `old`.
@@ -815,11 +828,13 @@ def test_compact_returns_internal_summary_pair_plus_recent():
 
     seen = {}
     class FakeProvider:
-        async def complete(self, *, messages, system, max_tokens):
-            seen["messages"], seen["system"], seen["max_tokens"] = messages, system, max_tokens
-            return "<analysis>scratch work</analysis><summary>User asked about X.</summary>"
+        async def stream(self, *, messages, max_tokens, **request):
+            seen["messages"], seen["max_tokens"], seen["request"] = messages, max_tokens, request
+            yield Turn(content=[{"type": "text", "text": "<analysis>scratch work</analysis><summary>User asked about X.</summary>"}],
+                       stop_reason="end_turn")
 
-    result = asyncio.run(compact(FakeProvider(), messages, 250, 8192))
+    request = {"system": "the agent's own prompt", "tools": [{"name": "bash"}]}
+    result = asyncio.run(compact(FakeProvider(), messages, 250, 8192, request))
 
     assert [m["role"] for m in result[:2]] == ["user", "assistant"]
     assert result[0].get("internal") is True and result[1].get("internal") is True
@@ -828,8 +843,8 @@ def test_compact_returns_internal_summary_pair_plus_recent():
     assert "Understood" in result[1]["content"]
     assert result[2:] == recent  # recent slice passes through verbatim
 
-    assert seen["max_tokens"] == 8192
-    assert seen["messages"][-1]["role"] == "user"
+    assert seen["max_tokens"] == 8192 and seen["request"] == request
+    assert seen["messages"][:-1] == old and seen["messages"][-1]["role"] == "user"
     assert "summary" in seen["messages"][-1]["content"].lower()
 
 
@@ -845,8 +860,7 @@ def test_compaction_failure_still_saves_history(agent_env):
     responses = iter([round1, final])
 
     mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
-    mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
+    mock_client.messages.stream = _stream(responses, summary=Exception("API down"))
 
     with _mock_anthropic(mock_client), \
          patch("cycls._agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
@@ -876,9 +890,7 @@ def test_compaction_appends_marker_and_keeps_raw_history(agent_env):
     responses = iter(rounds)
 
     mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
-    mock_client.messages.create = AsyncMock(return_value=MagicMock(
-        content=[MagicMock(text="<summary>Summary here</summary>")]))
+    mock_client.messages.stream = _stream(responses)
 
     with _mock_anthropic(mock_client), \
          patch("cycls._agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
@@ -889,6 +901,7 @@ def test_compaction_appends_marker_and_keeps_raw_history(agent_env):
     assert "Final answer" in "".join(str(m.get("content")) for m in history)
     marker = asyncio.run(get_compaction(ctx.workspace, ctx.chat_id))
     assert marker and marker["summary"].startswith("This session continues") and marker["first_kept"] >= 0
+    assert "Summary here" in marker["summary"]
 
 
 def test_a_run_that_ends_past_the_trigger_compacts_before_it_closes(agent_env):
@@ -897,13 +910,14 @@ def test_a_run_that_ends_past_the_trigger_compacts_before_it_closes(agent_env):
     high = _usage(inp=int(DEFAULT_WINDOW * COMPACT_AT) + 1)
     calls = []
     mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: calls.append(1) or FakeStream(_make_response([_text_block("big")], usage=high))
-    mock_client.messages.create = AsyncMock(return_value=MagicMock(
-        content=[MagicMock(text="<summary>Summary here</summary>")], usage=_usage()))
+    mock_client.messages.stream = _stream(iter([_make_response([_text_block("big")], usage=high)]), calls=calls)
     with _mock_anthropic(mock_client):
         items = asyncio.run(_drain(_run(context=ctx)))
 
-    assert len(calls) == 1 and mock_client.messages.create.called   # one answer, then the summary
+    assert [_is_summary(c) for c in calls] == [False, True]   # one answer, then the summary
+    # The loop's own request, so the provider serves the summary's prefix from its cache.
+    assert calls[1]["system"] == calls[0]["system"] and calls[1]["tools"] == calls[0]["tools"]
+    assert calls[1]["messages"][:-1] == calls[0]["messages"][:len(calls[1]["messages"]) - 1]
     assert [i for i in items if isinstance(i, dict) and i.get("action") == "compacted"] == [
         {"type": "ui", "action": "compacted", "tier": 2, "reason": "trigger", "tokens": int(DEFAULT_WINDOW * COMPACT_AT) + 1, "ok": True}]
     assert [i for i in items if isinstance(i, dict) and i.get("step") == "Summarizing earlier messages to keep this chat going..."]
@@ -976,9 +990,7 @@ def test_context_overflow_stop_reason_compacts_and_retries(agent_env):
     responses = iter([_make_response([_text_block("partial")], stop_reason="model_context_window_exceeded"),
                       _make_response([_text_block("Recovered")])])
     mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
-    mock_client.messages.create = AsyncMock(return_value=MagicMock(
-        content=[MagicMock(text="<summary>S</summary>")]))
+    mock_client.messages.stream = _stream(responses)
     with _mock_anthropic(mock_client):
         items = asyncio.run(_drain(_run(context=ctx)))
 
@@ -1000,8 +1012,6 @@ def test_context_overflow_error_text_compacts_and_retries(agent_env):
         return FakeStream(_make_response([_text_block("Recovered")]))
     mock_client = MagicMock()
     mock_client.messages.stream = stream_side_effect
-    mock_client.messages.create = AsyncMock(return_value=MagicMock(
-        content=[MagicMock(text="<summary>S</summary>")]))
     with _mock_anthropic(mock_client):
         items = asyncio.run(_drain(_run(context=ctx)))
 
@@ -1010,18 +1020,23 @@ def test_context_overflow_error_text_compacts_and_retries(agent_env):
 
 
 class _FakeSummarizer:
-    async def complete(self, *, messages, system, max_tokens):
-        return "<summary>ok</summary>"
+    content = [{"type": "text", "text": "<summary>ok</summary>"}]
+    async def stream(self, **kw):
+        yield Turn(content=self.content, stop_reason="end_turn")
 
 
 class _BrokenSummarizer:
-    async def complete(self, *, messages, system, max_tokens):
+    async def stream(self, **kw):
         raise RuntimeError("summarizer down")
+        yield
 
 
-class _EmptySummarizer:   # a reasoning model that spent its whole budget thinking
-    async def complete(self, *, messages, system, max_tokens):
-        return "<analysis>still thinking</analysis>"
+class _EmptySummarizer(_FakeSummarizer):   # a reasoning model that spent its whole budget thinking
+    content = [{"type": "text", "text": "<analysis>still thinking</analysis>"}]
+
+
+class _ToolSummarizer(_FakeSummarizer):   # the request carries the tools now; a tool call is not a summary
+    content = [{"type": "tool_use", "id": "t", "name": "bash", "input": {"command": "ls"}}]
 
 
 def test_compact_shrinks_and_recent_starts_with_user():
@@ -1075,10 +1090,10 @@ def test_compact_keeps_recent_tool_rounds_without_a_user_turn():
 
 
 def test_compact_shrinks_even_when_summary_fails():
-    """A failed or empty summary still shrinks — old turns are dropped, not raised."""
+    """A failed, empty or tool-calling summary still shrinks — old turns are dropped, not raised."""
     messages = [{"role": "user", "content": "u" * 400} for _ in range(10)]
 
-    for summarizer in (_BrokenSummarizer(), _EmptySummarizer()):
+    for summarizer in (_BrokenSummarizer(), _EmptySummarizer(), _ToolSummarizer()):
         result = asyncio.run(compact(summarizer, messages, 200, 8192))
         assert len(result) < len(messages)
         assert "could not be summarized" in result[0]["content"]
@@ -1119,20 +1134,16 @@ def test_cheap_tier_stubs_old_tool_results_instead_of_summarizing(agent_env):
     high = _usage(inp=int(DEFAULT_WINDOW * COMPACT_AT) + 1)
     responses = iter([_make_response([_tool_use_block("t")], stop_reason="tool_use", usage=high),
                       _make_response([_text_block("Done")])])
-    sent = {}
-    def stream(**kw):
-        sent["messages"] = kw["messages"]
-        return FakeStream(next(responses))
+    calls = []
     mock_client = MagicMock()
-    mock_client.messages.stream = stream
-    mock_client.messages.create = AsyncMock()
+    mock_client.messages.stream = _stream(responses, calls=calls)
     with _mock_anthropic(mock_client), \
          patch("cycls._agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         items = asyncio.run(_drain(_run(context=ctx)))
 
-    assert not mock_client.messages.create.called
+    assert not any(_is_summary(c) for c in calls)
     assert not [i for i in items if isinstance(i, dict) and i.get("step") == "Summarizing earlier messages to keep this chat going..."]
-    blocks = [b for m in sent["messages"] if isinstance(m["content"], list) for b in m["content"]]
+    blocks = [b for m in calls[-1]["messages"] if isinstance(m["content"], list) for b in m["content"]]
     results = [b["content"] for b in blocks if b.get("type") == "tool_result"]
     inputs = [b["input"] for b in blocks if b.get("type") == "tool_use" and b["name"] == "edit"]
     assert results[0] == "[skill: deck]\n\nTitles are 35pt."

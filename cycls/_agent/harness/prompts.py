@@ -85,7 +85,7 @@ def fence_instructions(text):
     )
 
 
-COMPACT_SYSTEM = """CRITICAL: Respond with TEXT ONLY. Do NOT call any tools. Tool calls will be REJECTED.
+COMPACT_PROMPT = """CRITICAL: Respond with TEXT ONLY. Do NOT call any tools. Tool calls will be REJECTED.
 Your entire response must be an <analysis> block followed by a <summary> block.
 
 Before writing your summary, use <analysis> tags to organize your thoughts:

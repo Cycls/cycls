@@ -103,14 +103,29 @@ So the bar follows the cache:
 
 Runs when clearing frees too little, or when the window has already overflowed (then
 clearing is skipped). The part before the recent 30% — what the model currently sees,
-stubs included — goes to `provider.complete()` with `COMPACT_SYSTEM`, a nine-section
-prompt modelled on Claude Code's. `<analysis>` is stripped, `<summary>` kept.
+stubs included — is sent as the loop's own next request: the same system prompt, tools and
+settings (`request()` in `_run`), with `COMPACT_PROMPT`, a nine-section prompt modelled on
+Claude Code's, as one final user message. The system prompt is sent, never summarized.
+`<analysis>` is stripped, `<summary>` kept.
 
-- **Budget**: `max_tokens`, capped at 16,384. A reasoning model needs room to think
-  before it writes; the Anthropic SDK refuses much more without streaming.
+The provider has just read that prefix, so it serves it from its cache. Measured 2026-09-23
+on a 16k-token chat, cached share of the summary's prompt:
+
+| provider | as the loop's request | with a separate summarizer prompt |
+| --- | --- | --- |
+| Modal K3 (production) | 99.6% | 0% |
+| OpenAI gpt-4o-mini | 97% | 0% |
+| Z.ai GLM-5.2 | 98% | 0% |
+| Baseten Kimi-K3 | 98% | 0% |
+
+At super's prices, summarizing ~400k tokens drops from ~$1.20 to ~$0.12, and the call
+starts without re-reading them.
+
+- **Budget**: the loop's `max_tokens` — a reasoning model needs room to think before it
+  writes.
 - **Timeout**: 300s.
-- **Failure** (error, timeout, or an empty summary) drops the old turns with a sentence
-  saying so. Compaction always shrinks, so the next request fits.
+- **Failure** (error, timeout, or no text — a model that only calls a tool writes none)
+  drops the old turns with a sentence saying so. Compaction always shrinks, so the next request fits.
 - **Result**: two internal messages stand in for the folded turns — the summary plus
   `Files touched so far: …` (read/edit paths, carried across summaries), and an
   acknowledgement.
@@ -211,11 +226,8 @@ with edited tool inputs in old turns), OpenRouter, Moonshot, Fireworks.
 
 ## Open
 
-- **The summary call is uncached.** It has its own system prompt and no tools, so it
-  pays full price for the whole prefix. Reusing the main system prompt, tools and
-  message prefix (Claude Code's approach) makes it a cache hit — and settles whether
-  Anthropic accepts tool history without `tools`, which is unverified: the live test
-  avoids tool calls.
+- **Modal K3 sometimes misses on an identical repeat** — likely a request reaching another
+  container. Production still averages 95% cached.
 - **A failed summary is logged without its cause** — `ok=false`, but not why.
 - **The estimate is `chars / 4`.** Good enough to place cuts; base64 images are
   overcounted badly (a 1 MB image estimates ~330k tokens and bills ~1.5k). Each
