@@ -113,6 +113,37 @@ body {
   margin: 1em 0;
 }
 
+/* The canvas editor (md-editor.tsx): checklist boxes sit at each item's inline start, either side. */
+.md-checklist { list-style: none; padding-inline-start: 0.1em; }
+.md-check { position: relative; list-style: none; padding-inline-start: 1.7em; }
+.md-check::before {
+  content: ""; position: absolute; inset-inline-start: 0; top: 0.22em; width: 1.05em; height: 1.05em;
+  border: 1.5px solid var(--color-border); border-radius: 0.3em; cursor: pointer; transition: background 0.12s, border-color 0.12s;
+}
+.md-checked { color: var(--color-muted-foreground); text-decoration: line-through; }
+.md-checked::before { background: var(--color-foreground); border-color: var(--color-foreground); }
+.md-checked::after {
+  content: ""; position: absolute; inset-inline-start: 0.37em; top: 0.36em; width: 0.32em; height: 0.58em;
+  border: solid var(--color-background); border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.md-drag {
+  position: absolute; left: 0; top: 0; padding: 2px; border-radius: 4px; opacity: 0; cursor: grab;
+  color: var(--color-muted-foreground); will-change: transform; transition: opacity 0.12s;
+}
+.md-drag:hover { background: var(--color-secondary); color: var(--color-foreground); }
+.md-drag:active { cursor: grabbing; }
+.md-drop {
+  position: absolute; left: 0; top: 0; height: 3px; border-radius: 2px; opacity: 0; pointer-events: none;
+  background: var(--color-foreground); will-change: transform;
+}
+.prose table.md-table { display: table; width: 100%; table-layout: fixed; }
+.md-th, .md-td { vertical-align: top; min-width: 5rem; }
+.md-td p, .md-th p { margin: 0; }
+.md-code {
+  display: block; margin: 0.75em 0; padding: 0.75em 1em; border-radius: 0.5rem; background: var(--color-secondary);
+  font-size: 0.8125rem; white-space: pre-wrap; direction: ltr; text-align: left;
+}
+
 /* Loading bar */
 @keyframes slide {
   0% { transform: translateX(-100%); }

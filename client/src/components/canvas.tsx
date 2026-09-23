@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence, Reorder } from "framer-motion";
 import { Icon } from "./icon";
@@ -25,6 +25,16 @@ import { t, getLang } from "../lib/i18n";
 // every type check would fall through to the unsupported-file card.
 export const fileKind = (file: { path: string; name: string }) => file.path || file.name;
 
+const MdEditor = lazy(() => import("./md-editor"));
+// A document's image paths are relative to its folder, as markdown means them; agents sometimes
+// write them from the workspace root, so that is the fallback. Silent: a miss beside it is normal.
+export const mediaResolver = (docPath: string, openFile: (path: string, silent?: boolean) => Promise<string>) => {
+  const folder = docPath.slice(0, docPath.lastIndexOf("/") + 1);
+  return (p: string) => (folder ? openFile(folder + p, true).catch(() => openFile(p, true)) : openFile(p, true));
+};
+// Markdown the rich editor can't carry through a save — math, HTML, footnotes — edits as plain text.
+export const PLAIN_MD = /\$\$|\\\(|\\\[|\$[^$\n]+\$|<\/?[a-z][a-z0-9-]*(\s[^>]*)?>|\[\^[^\]]+\]/im;
+
 export interface CanvasFile {
   path: string;
   name: string;
@@ -32,6 +42,7 @@ export interface CanvasFile {
   icon?: string;      // emoji
   iconSrc?: string;   // image (data: or blob:)
   letter?: string;    // first letter of the app name
+  writable?: boolean; // a document written here (the instructions): missing opens empty, Edit sits in the header
 }
 
 // Fetch a file's content for the canvas. pdf → blob URL (native viewer);
@@ -69,15 +80,15 @@ export function useFileContent(
     // fetch their raw bytes (a blob URL) for the native renderer; other office
     // files fetch the server's PDF render.
     const load = isMd(kind) || isHtml(kind) || codeLang(kind) != null
-      ? readFile(file.path)
+      ? readFile(file.path, file.writable)
       : isPresentation(kind)
       ? readFile(`${file.path}?as=slides`, true)
       : (isOffice(kind) ? openFile(`${file.path}?as=pdf`, true) : openFile(file.path))
           .then((url) => { blobUrl = url; return url; });
     load.then((v) => { if (!cancelled) setContent(v); })
-        .catch(() => { if (!cancelled) setError(true); });
+        .catch((e) => { if (!cancelled) { if (file.writable && e?.status === 404) setContent(""); else setError(true); } });
     return () => { cancelled = true; if (blobUrl) URL.revokeObjectURL(blobUrl); };
-  }, [file?.path, file?.name, readFile, openFile, reloadKey]);
+  }, [file?.path, file?.name, file?.writable, readFile, openFile, reloadKey]);
 
   return { content, setContent, error };
 }
@@ -214,8 +225,9 @@ function NoPreviewCard({ file, onDownload, onShare }: {
   );
 }
 
-export function CanvasDoc({ file, content, error, shared = false, readFile, writeFile, listFolders, fetchConnector, appData, onDownload, onShare }: {
+export function CanvasDoc({ file, content, error, shared = false, readFile, resolveMedia, writeFile, listFolders, fetchConnector, appData, onDownload, onShare }: {
   file: CanvasFile;
+  resolveMedia?: (path: string) => Promise<string>;
   content: string | null;
   error: boolean;
   shared?: boolean;
@@ -314,7 +326,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
   if (isMd(fileKind(file))) {
     return (
       <div className="h-full overflow-y-auto px-6 py-5 sm:px-8">
-        <TextPart text={content ?? ""} />
+        <TextPart text={content ?? ""} resolveMedia={resolveMedia} />
       </div>
     );
   }
@@ -329,7 +341,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, fetchConnector, appData, org, onShareFile, railWidth = 0, reloadKey, working }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, listFolders, fetchConnector, appData, org, onShareFile, railWidth = 0, reloadKey, working }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -347,8 +359,9 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   onAddApp?: (app: AppInfo) => void;
   searchFiles?: (q: string) => Promise<{ name: string; path: string }[]>;
   readFile: (path: string) => Promise<string>;   // authed text fetch (md/html/code source)
-  openFile: (path: string) => Promise<string>;    // authed blob URL (pdf / download)
+  openFile: (path: string, silent?: boolean) => Promise<string>;    // authed blob URL (pdf / download / media)
   writeFile: (path: string, text: string) => Promise<void>;  // overwrite (editor)
+  uploadFile?: (dir: string, file: File) => Promise<void>;   // images and videos dropped into the editor
   listFolders?: () => Promise<{ name: string; path: string }[]>;  // app save dialog
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;   // an app's live call to a connector API
@@ -425,6 +438,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
           readFile={readFile}
           openFile={openFile}
           writeFile={writeFile}
+          uploadFile={uploadFile}
           listFolders={listFolders}
           fetchConnector={fetchConnector}
           appData={appData}
@@ -647,10 +661,11 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
 }
 
 // Keyed by path from the parent, so per-file state resets on tab switch.
-function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetchConnector, appData, org, onShareFile, reloadKey }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, listFolders, fetchConnector, appData, org, onShareFile, reloadKey }: {
   file: CanvasFile;
+  uploadFile?: (dir: string, file: File) => Promise<void>;
   readFile: (path: string) => Promise<string>;
-  openFile: (path: string) => Promise<string>;
+  openFile: (path: string, silent?: boolean) => Promise<string>;
   writeFile: (path: string, text: string) => Promise<void>;
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
@@ -660,6 +675,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetc
   reloadKey?: number;
 }) {
   const { content, setContent, error } = useFileContent(file, readFile, openFile, reloadKey);
+  const resolveMedia = useMemo(() => mediaResolver(file.path, openFile), [file.path, openFile]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -689,6 +705,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetc
   };
 
   const startEdit = () => { setDraft(content ?? ""); setEditing(true); };
+  useEffect(() => { if (file.writable && content === "") { setDraft(""); setEditing(true); } }, [file.writable, content]);
 
   const save = async () => {
     setSaving(true);
@@ -744,13 +761,15 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetc
         ) : (
           <>
             {saved && <span className="text-xs text-muted-foreground">{t("saved")}</span>}
+            {isText && content != null && (
+              <button onClick={startEdit} className="text-xs font-medium text-foreground bg-secondary hover:bg-secondary/80 rounded-md px-3 py-1.5 transition-colors cursor-pointer">
+                {t("edit")}
+              </button>
+            )}
             {(() => {
               const items = [
                 ...(onShareFile ? [{ label: t("share"), onClick: () => setShareOpen(true) }] : []),
-                ...(isText && content != null ? [
-                  { label: copied ? t("copied") : t("copy"), onClick: copy },
-                  { label: t("edit"), onClick: startEdit },
-                ] : []),
+                ...(isText && content != null ? [{ label: copied ? t("copied") : t("copy"), onClick: copy }] : []),
                 ...(isHtml(fileKind(file)) && content != null
                   ? [{ label: t("openInTab"), onClick: openInTab }] : []),
                 ...(md ? [{ label: t("exportPdf"), onClick: () => window.print() }] : []),
@@ -774,16 +793,33 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetc
 
       {/* Body */}
       <div className="flex-1 overflow-hidden">
-        {editing ? (
+        {editing && md && content != null && !PLAIN_MD.test(content) ? (
+          <Suspense fallback={<LoadingBar />}>
+            <MdEditor value={draft} onChange={setDraft} placeholder={file.writable ? t("instructionsPlaceholder") : undefined}
+                      resolveMedia={resolveMedia} upload={uploadFile && (async (f) => {
+                        const name = `${Date.now().toString(36)}-${f.name.replace(/[^\p{L}\p{N}._-]+/gu, "-")}`;   // nothing markdown reads as syntax
+                        await uploadFile(`${file.path.slice(0, file.path.lastIndexOf("/") + 1)}media`, new File([f], name, { type: f.type }));
+                        return `media/${name}`;   // beside the document, relative to it
+                      })} />
+          </Suspense>
+        ) : editing ? (
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onEditorKey}
+            placeholder={file.writable ? t("instructionsPlaceholder") : undefined}
             spellCheck={false}
             className="h-full w-full resize-none border-0 bg-background px-4 py-4 sm:px-6 font-mono text-[13px] leading-relaxed text-foreground focus:outline-none"
           />
+        ) : file.writable && content === "" ? (
+          <div className="flex h-full flex-col items-center justify-center gap-4 px-6">
+            <p className="max-w-sm whitespace-pre-line text-sm leading-relaxed text-muted-foreground" dir="auto">{t("instructionsPlaceholder")}</p>
+            <button onClick={startEdit} className="rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary/80 cursor-pointer">
+              {t("edit")}
+            </button>
+          </div>
         ) : (
-          <CanvasDoc file={file} content={content} error={error} readFile={readFile} writeFile={writeFile} listFolders={listFolders}
+          <CanvasDoc file={file} content={content} error={error} readFile={readFile} resolveMedia={resolveMedia} writeFile={writeFile} listFolders={listFolders}
                      fetchConnector={fetchConnector}
                      appData={appData}
                      onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
@@ -795,7 +831,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetc
       {md && content != null && createPortal(
         <div className="print-root">
           <div className="prose mx-auto max-w-[46rem] p-8">
-            <TextPart text={content} />
+            <TextPart text={content} resolveMedia={resolveMedia} />
           </div>
         </div>,
         document.body,
