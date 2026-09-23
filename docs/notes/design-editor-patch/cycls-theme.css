@@ -58,8 +58,16 @@ body, button, input, select, textarea {
 }
 
 /* Strip OpenPencil UI that doesn't belong in Cycls: the built-in AI tab (Super IS
-   the AI) and the collab Share button (Cycls owns sharing). */
+   the AI), the collab Share button (Cycls owns sharing), and the AI "vectorize"
+   context action (calls an external AI service). */
 [data-test-id="properties-tab-ai"],
-[data-test-id="collab-share-button"] {
+[data-test-id="collab-share-button"],
+[data-test-id="context-vectorize"] {
   display: none !important;
+}
+
+/* Chrome logo is the Cycls white mark (crisp on the dark chrome) — invert it in
+   light mode so it stays visible on light panels. */
+html[data-theme="light"] img[data-test-id="app-logo"] {
+  filter: invert(1);
 }
