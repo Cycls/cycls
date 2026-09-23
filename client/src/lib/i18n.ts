@@ -19,6 +19,7 @@ const translations = {
     verbSkill: "used a skill",
     sendMessage: "Ask anything",
     workingInBackground: "Still working — you can close this tab",
+    compacting: "Summarizing earlier messages to keep this chat going…",
     working: "Working",
     stopRun: "Stop",
     runElapsed: "running for",
@@ -375,6 +376,7 @@ const translations = {
     verbSkill: "استخدمت مهارة",
     sendMessage: "اسأل أي شيء",
     workingInBackground: "لا زلت أشتغل — تقدر تسكّر الصفحة",
+    compacting: "ألخّص الرسائل السابقة عشان نكمّل المحادثة…",
     working: "أشتغل",
     stopRun: "إيقاف",
     runElapsed: "يشتغل من",
@@ -737,6 +739,12 @@ export function t(key: keyof typeof translations.en): string {
 export function tIn(lang: Lang, key: keyof typeof translations.en): string {
   return translations[lang][key];
 }
+
+// The server's own step lines, in the UI's language.
+const SERVER_STEPS: Record<string, keyof typeof translations.en> = {
+  "Summarizing earlier messages to keep this chat going...": "compacting",
+};
+export const stepText = (s: string) => (SERVER_STEPS[s] ? t(SERVER_STEPS[s]) : s);
 
 const _ARABIC = /[\u0600-\u06FF]/;
 

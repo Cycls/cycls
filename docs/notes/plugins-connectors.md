@@ -493,7 +493,7 @@ Three layers. We have the third; the gaps are the first generically and the seco
 | layer | when | LLM? | today |
 |---|---|---|---|
 | cap at ingest | as each result returns | no | builtins only (`bash` 30k, `web_fetch` 20k) |
-| prune old results | mid-conversation | no | only inside `compact()` |
+| prune old results | past 70% of the window | no | ✅ `Session.clear()` |
 | summarize | near the window | yes | ✅ `compact()` |
 
 **Cap → spill.** Above ~20–30 KB, write the full result to `.tmp/{chat_id}/<name>.json`
@@ -510,8 +510,8 @@ chats; a total-size cap with LRU bounds a chat that pulls a hundred dumps. The T
 outlive a working session because the path lives in the durable transcript; a missing file
 degrades to a re-fetch.
 
-**Prune.** `microcompact` already blanks tool results model-free — it just fires too late.
-Run it on results older than K turns against a token budget, before the window is near.
+**Prune.** Past 70% of the window, `Session.clear()` stubs tool results and long arguments
+older than the recent 30%, model-free; the summary runs only when that frees under 10%.
 
 **Guards.** `canvas` refuses a `.tmp` path, and deliverables are written outside it: opening
 a file the sweeper may delete tonight is a bug generator.

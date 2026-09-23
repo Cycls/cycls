@@ -778,7 +778,7 @@ def test_compaction_triggers_when_approaching_window(agent_env):
          patch("cycls._agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         items = asyncio.run(_drain(_run(context=ctx)))
 
-    steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Compacting context..."]
+    steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Summarizing earlier messages to keep this chat going..."]
     assert len(steps) >= 1
 
 
@@ -795,7 +795,7 @@ def test_no_compaction_when_under_threshold(agent_env):
     with _mock_anthropic(mock_client):
         items = asyncio.run(_drain(_run(context=ctx)))
 
-    steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Compacting context..."]
+    steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Summarizing earlier messages to keep this chat going..."]
     assert len(steps) == 0
 
     history = _read_history(ctx)
@@ -819,7 +819,7 @@ def test_compact_returns_internal_summary_pair_plus_recent():
             seen["messages"], seen["system"], seen["max_tokens"] = messages, system, max_tokens
             return "<analysis>scratch work</analysis><summary>User asked about X.</summary>"
 
-    result = asyncio.run(compact(FakeProvider(), messages, 250))
+    result = asyncio.run(compact(FakeProvider(), messages, 250, 8192))
 
     assert [m["role"] for m in result[:2]] == ["user", "assistant"]
     assert result[0].get("internal") is True and result[1].get("internal") is True
@@ -890,25 +890,21 @@ def test_compaction_appends_marker_and_keeps_raw_history(agent_env):
     assert marker and marker["summary"].startswith("This session continues") and marker["first_kept"] >= 0
 
 
-def test_compaction_seeds_from_stored_history(agent_env):
-    """A chat whose last stored turn is near the window compacts on the FIRST
-    call of the next request — not only mid-request."""
-    ws, ctx = agent_env
-    high = _usage(inp=DEFAULT_WINDOW - COMPACT_BUFFER + 1)
+def test_a_run_that_ends_past_the_trigger_compacts_before_it_closes(agent_env):
+    """The summary runs while the answer is read, not when the next message waits on it."""
+    ctx = _seeded_env(agent_env)
+    high = _usage(inp=int(DEFAULT_WINDOW * COMPACT_AT) + 1)
+    calls = []
     mock_client = MagicMock()
-    mock_client.messages.stream = lambda **kw: FakeStream(_make_response([_text_block("big")], usage=high))
+    mock_client.messages.stream = lambda **kw: calls.append(1) or FakeStream(_make_response([_text_block("big")], usage=high))
+    mock_client.messages.create = AsyncMock(return_value=MagicMock(
+        content=[MagicMock(text="<summary>Summary here</summary>")], usage=_usage()))
     with _mock_anthropic(mock_client):
-        asyncio.run(_drain(_run(context=ctx)))
-    _providers._clients.clear()
-
-    mock_client2 = MagicMock()
-    mock_client2.messages.stream = lambda **kw: FakeStream(_make_response([_text_block("Done")]))
-    mock_client2.messages.create = AsyncMock(return_value=MagicMock(
-        content=[MagicMock(text="<summary>Summary here</summary>")]))
-    with _mock_anthropic(mock_client2):
         items = asyncio.run(_drain(_run(context=ctx)))
 
-    assert [i for i in items if isinstance(i, dict) and i.get("step") == "Compacting context..."]
+    assert len(calls) == 1 and mock_client.messages.create.called   # one answer, then the summary
+    assert [i for i in items if isinstance(i, dict) and i.get("step") == "Summarizing earlier messages to keep this chat going..."]
+    assert not [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
 
 
 def test_max_tokens_autocontinues(agent_env):
@@ -983,7 +979,7 @@ def test_context_overflow_stop_reason_compacts_and_retries(agent_env):
     with _mock_anthropic(mock_client):
         items = asyncio.run(_drain(_run(context=ctx)))
 
-    assert any(isinstance(i, dict) and i.get("step") == "Compacting context..." for i in items)
+    assert any(isinstance(i, dict) and i.get("step") == "Summarizing earlier messages to keep this chat going..." for i in items)
     history = _read_history(ctx)
     assert "Recovered" in str(history[-1]["content"])
     assert "partial" not in str(history)  # the failed turn was dropped, not saved
@@ -1006,7 +1002,7 @@ def test_context_overflow_error_text_compacts_and_retries(agent_env):
     with _mock_anthropic(mock_client):
         items = asyncio.run(_drain(_run(context=ctx)))
 
-    assert any(isinstance(i, dict) and i.get("step") == "Compacting context..." for i in items)
+    assert any(isinstance(i, dict) and i.get("step") == "Summarizing earlier messages to keep this chat going..." for i in items)
     assert "Recovered" in str(_read_history(ctx))
 
 
@@ -1020,6 +1016,11 @@ class _BrokenSummarizer:
         raise RuntimeError("summarizer down")
 
 
+class _EmptySummarizer:   # a reasoning model that spent its whole budget thinking
+    async def complete(self, *, messages, system, max_tokens):
+        return "<analysis>still thinking</analysis>"
+
+
 def test_compact_shrinks_and_recent_starts_with_user():
     """Result is shorter than the input, and `recent` begins with a user
     message so roles stay alternating after the internal assistant ack."""
@@ -1028,7 +1029,7 @@ def test_compact_shrinks_and_recent_starts_with_user():
         messages.append({"role": "user", "content": "u" * 400})
         messages.append({"role": "assistant", "content": [{"type": "text", "text": "a" * 400}]})
 
-    result = asyncio.run(compact(_FakeSummarizer(), messages, 200))
+    result = asyncio.run(compact(_FakeSummarizer(), messages, 200, 8192))
 
     assert len(result) < len(messages)
     assert result[0]["role"] == "user" and result[0].get("internal") is True
@@ -1046,7 +1047,7 @@ def test_compact_cut_never_splits_a_tool_pair():
         {"role": "user", "content": "next question"},
     ]
 
-    result = asyncio.run(compact(_FakeSummarizer(), messages, 100))
+    result = asyncio.run(compact(_FakeSummarizer(), messages, 100, 8192))
 
     assert result[2:] == [{"role": "user", "content": "next question"}]  # pair stayed in `old`
 
@@ -1061,7 +1062,7 @@ def test_compact_keeps_recent_tool_rounds_without_a_user_turn():
         messages.append({"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": f"t{i}", "content": "r" * 400}]})
 
-    result = asyncio.run(compact(_FakeSummarizer(), messages, 300))
+    result = asyncio.run(compact(_FakeSummarizer(), messages, 300, 8192))
 
     recent = result[2:]
     assert recent, "recent window must survive a tool-only tail"
@@ -1071,13 +1072,13 @@ def test_compact_keeps_recent_tool_rounds_without_a_user_turn():
 
 
 def test_compact_shrinks_even_when_summary_fails():
-    """A failed summarizer still shrinks — old turns are dropped, not raised."""
+    """A failed or empty summary still shrinks — old turns are dropped, not raised."""
     messages = [{"role": "user", "content": "u" * 400} for _ in range(10)]
 
-    result = asyncio.run(compact(_BrokenSummarizer(), messages, 200))
-
-    assert len(result) < len(messages)
-    assert "could not be summarized" in result[0]["content"]
+    for summarizer in (_BrokenSummarizer(), _EmptySummarizer()):
+        result = asyncio.run(compact(summarizer, messages, 200, 8192))
+        assert len(result) < len(messages)
+        assert "could not be summarized" in result[0]["content"]
 
 
 def test_compact_accumulates_file_ledger():
@@ -1089,43 +1090,49 @@ def test_compact_accumulates_file_ledger():
         {"role": "user", "content": "x" * 400},
     ]
 
-    result = asyncio.run(compact(_FakeSummarizer(), messages, 50))
+    result = asyncio.run(compact(_FakeSummarizer(), messages, 50, 8192))
 
     assert "Files touched so far: a.py, b.py" in result[0]["content"]
 
 
 def test_cheap_tier_stubs_old_tool_results_instead_of_summarizing(agent_env):
-    """Past the trigger with bulky tool results, the loop stubs the old ones in the
-    model's view — no summary call — and the transcript on disk keeps them."""
+    """Past the trigger with bulky tool calls, the loop stubs the old results and long
+    arguments in the model's view — no summary call — and the transcript keeps them."""
     ws, ctx = agent_env
     from cycls._agent.state import append_messages, get_compaction
     history = []
     for i in range(10):   # ~50k tokens of tool result per round
         history += [{"role": "user", "content": f"q{i}"},
-                    {"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "read", "input": {"path": "f"}}]},
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "edit",
+                                                        "input": {"path": "f", "new": "n" * 5_000}}]},
                     {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "r" * 200_000}]},
                     {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}]
-    history[-1]["usage"] = {"input": int(DEFAULT_WINDOW * COMPACT_AT) + 1}
     asyncio.run(append_messages(ctx.workspace, ctx.chat_id, history, 0))
 
+    high = _usage(inp=int(DEFAULT_WINDOW * COMPACT_AT) + 1)
+    responses = iter([_make_response([_tool_use_block("t")], stop_reason="tool_use", usage=high),
+                      _make_response([_text_block("Done")])])
     sent = {}
     def stream(**kw):
         sent["messages"] = kw["messages"]
-        return FakeStream(_make_response([_text_block("Done")]))
+        return FakeStream(next(responses))
     mock_client = MagicMock()
     mock_client.messages.stream = stream
     mock_client.messages.create = AsyncMock()
-    with _mock_anthropic(mock_client):
+    with _mock_anthropic(mock_client), \
+         patch("cycls._agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
         items = asyncio.run(_drain(_run(context=ctx)))
 
     assert not mock_client.messages.create.called
-    assert not [i for i in items if isinstance(i, dict) and i.get("step") == "Compacting context..."]
-    results = [b["content"] for m in sent["messages"] if isinstance(m["content"], list)
-               for b in m["content"] if b.get("type") == "tool_result"]
-    assert results[0] == "[Old tool result cleared]" and results[-1] == "r" * 200_000
+    assert not [i for i in items if isinstance(i, dict) and i.get("step") == "Summarizing earlier messages to keep this chat going..."]
+    blocks = [b for m in sent["messages"] if isinstance(m["content"], list) for b in m["content"]]
+    results = [b["content"] for b in blocks if b.get("type") == "tool_result"]
+    inputs = [b["input"] for b in blocks if b.get("type") == "tool_use" and b["name"] == "edit"]
+    assert results[0] == "[Old tool result cleared]" and results[-2] == "r" * 200_000
+    assert inputs[0] == {"path": "f", "new": "[Old input cleared]"} and inputs[-1]["new"] == "n" * 5_000
     marker = asyncio.run(get_compaction(ctx.workspace, ctx.chat_id))
     assert marker["summary"] is None and marker["cleared"] > 0
-    assert "[Old tool result cleared]" not in str(_read_history(ctx))
+    assert "cleared]" not in str(_read_history(ctx))
 
 
 # ---------------------------------------------------------------------------

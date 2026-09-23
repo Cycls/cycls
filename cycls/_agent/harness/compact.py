@@ -1,11 +1,13 @@
 """Context compaction — stub old tool results first, summarize old turns when that frees too little."""
-import json, re
+import asyncio, json, re
 from .prompts import COMPACT_SYSTEM
 
 COMPACT_AT = 0.7          # compact past this share of the window
 KEEP_RECENT = 0.3         # keep this share of the window verbatim
 CLEAR_AT_LEAST = 0.1      # stubbing must free this share, or the summary runs instead
 COMPACT_BUFFER = 30_000   # headroom past input + max_tokens
+SUMMARY_MAX = 16_384      # summary output cap, reasoning included; more needs streaming on Anthropic
+SUMMARY_TIMEOUT = 300     # seconds before the summary counts as failed
 
 _SUMMARY_REQUEST = (
     "Summarize the conversation above following the structured format. "
@@ -15,7 +17,6 @@ _SUMMARY_REQUEST = (
 _LEDGER = "Files touched so far: "
 _LEDGER_RE = re.compile(re.escape(_LEDGER) + r"(.+)")
 _ACK = "Understood. I have the full context. Recent messages follow."
-_CLEARED = "[Old tool result cleared]"
 
 
 def prefix(summary):
@@ -27,8 +28,8 @@ def prefix(summary):
 
 
 def _tokens(content):
-    """~4 chars/token estimate over the JSON form — picks the cut point only."""
-    return len(content if isinstance(content, str) else json.dumps(content, default=str)) // 4
+    """~4 chars/token estimate over the JSON form — sizes cuts, never bills."""
+    return len(content if isinstance(content, str) else json.dumps(content, default=str, ensure_ascii=False)) // 4
 
 
 def _is_tool_result(m):
@@ -73,36 +74,48 @@ def _ledger(messages):
     return list(dict.fromkeys(files))
 
 
+def _stub(b):
+    t = isinstance(b, dict) and b.get("type")
+    if t == "tool_result": return {**b, "content": "[Old tool result cleared]"}
+    if t == "tool_use":   # long arguments (an app's code, an edit's text) go too; paths and commands stay
+        return {**b, "input": {k: "[Old input cleared]" if isinstance(v, str) and len(v) > 1_000 else v
+                               for k, v in (b.get("input") or {}).items()}}
+    return b
+
+
 def clear(messages):
-    """Copies with every tool result stubbed — the transcript keeps the originals."""
-    return [{**m, "content": [{**b, "content": _CLEARED} if b.get("type") == "tool_result" else b
-                              for b in m["content"]]} if _is_tool_result(m) else m for m in messages]
+    """Copies with tool results and long tool arguments stubbed — the transcript keeps the originals."""
+    return [{**m, "content": [_stub(b) for b in m["content"]]} if isinstance(m.get("content"), list) else m
+            for m in messages]
 
 
 def clear_to(messages, start, keep):
     """Where stubbing stops short of the recent `keep` tokens, and ~the tokens it frees from `start`."""
     cut = _cut(messages, keep)
-    return cut, sum(_tokens(m["content"]) for m in messages[start:cut] if _is_tool_result(m))
+    old = messages[start:cut]
+    return cut, sum(_tokens(m.get("content")) for m in old) - sum(_tokens(m.get("content")) for m in clear(old))
 
 
-async def _summarize(provider, old):
+async def _summarize(provider, old, max_tokens):
     from ..state import normalize
-    raw = await provider.complete(
+    raw = await asyncio.wait_for(provider.complete(
         messages=normalize(old) + [{"role": "user", "content": _SUMMARY_REQUEST}],
-        system=COMPACT_SYSTEM, max_tokens=8_192)
+        system=COMPACT_SYSTEM, max_tokens=max_tokens), SUMMARY_TIMEOUT)
     raw = re.sub(r"<analysis>[\s\S]*?</analysis>", "", raw)
     m = re.search(r"<summary>([\s\S]*?)</summary>", raw)
-    return m.group(1).strip() if m else raw.strip()
+    if not (summary := (m.group(1) if m else raw).strip()):
+        raise ValueError("empty summary")   # a reasoning model can spend the whole budget thinking
+    return summary
 
 
-async def compact(provider, messages, keep):
+async def compact(provider, messages, keep, max_tokens):
     """Old turns → one summary; recent turns kept verbatim. Always shrinks —
     a failed summary drops the old turns instead, so the next request fits."""
     cut = _cut(messages, keep)
     files = _ledger(messages)
     old, recent = messages[:cut], messages[cut:]
     try:
-        summary = await _summarize(provider, old)
+        summary = await _summarize(provider, old, min(max_tokens, SUMMARY_MAX))
     except Exception:
         summary = "(Earlier conversation could not be summarized; it was dropped to free up context.)"
     head = "This session continues from a previous conversation. Summary of earlier work:\n\n" + summary

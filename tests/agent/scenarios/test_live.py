@@ -312,7 +312,7 @@ def test_compaction_real_roundtrip(tmp_path):
     with patch("cycls._agent.harness.main.COMPACT_BUFFER", 999_999_999):
         events = asyncio.run(_collect(llm, ctx))
 
-    assert any(isinstance(e, dict) and e.get("step") == "Compacting context..." for e in events), \
+    assert any(isinstance(e, dict) and e.get("step") == "Summarizing earlier messages to keep this chat going..." for e in events), \
         f"expected Compacting step; got {events!r}"
 
     # Raw transcript is preserved (append-only) — the prior turns survive and

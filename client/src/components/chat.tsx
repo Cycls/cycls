@@ -24,7 +24,7 @@ import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
-import { t, getLang, setLang, useLang } from "../lib/i18n";
+import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
 import { useToast } from "../lib/toast";
@@ -1575,7 +1575,7 @@ function RunIndicator({ step, startedAt, onStop }: {
       <div className="flex items-center gap-2 rounded-2xl border border-border bg-secondary/40 py-1.5 ps-3 pe-1.5">
         <span className="inline-block size-1.5 shrink-0 rounded-full bg-emerald-500 animate-pulse" />
         <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground" dir="auto">
-          {step || t("working")}
+          {(step && stepText(step)) || t("working")}
           {elapsed && <span className="ms-2 tabular-nums text-muted-foreground/60">{elapsed}</span>}
         </span>
         <button

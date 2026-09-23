@@ -396,40 +396,41 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         system_text += "\n\n" + guidance
     window = context_window or DEFAULT_WINDOW
     trigger, keep = min(window * COMPACT_AT, window - max_tokens - COMPACT_BUFFER), int(window * KEEP_RECENT)
-    # Seed from the last stored turn so a long chat compacts before its first
-    # call — not only mid-request. The first_kept slice skips stale
-    # pre-compaction usage that would re-trigger a compaction that already ran.
-    tokens_since_compact = next(
-        (m["usage"].get("input", 0) + m["usage"].get("cached", 0) + m["usage"].get("cache_create", 0)
-         for m in reversed(messages[session.first_kept:]) if m.get("usage")), 0)
+    tokens_since_compact = 0
     continuations = 0
     pauses = 0
     overflowed = False
 
+    async def fold():
+        """Past the trigger: the cheap tier, or the summary when it frees too little or the window overflowed."""
+        if tokens_since_compact <= trigger or len(messages) - session.first_kept <= 2: return
+        if tokens_since_compact < window and await session.clear(keep, window * CLEAR_AT_LEAST): return
+        yield events.step("Summarizing earlier messages to keep this chat going...")
+        try:
+            provider.last_usage = None
+            task = asyncio.ensure_future(session.compact(provider, keep, max_tokens))
+            while not task.done():   # pings keep proxies from cutting a long silent call; a cut leaves it running
+                await asyncio.wait([task], timeout=15.0)
+                if not task.done(): yield {"type": "ping"}
+            task.result()
+            # The summarizer call is a real billed turn — track it too.
+            if u := getattr(provider, "last_usage", None):
+                c = _cost(price, u[0], u[1], 0, 0)
+                log("usage", user=user, chat_id=session.chat_id, model=bare_model,
+                    input=u[0], output=u[1], cached=0, cache_create=0,
+                    cost=round(c, 6), ms=0, compact=True)
+                if session.chat_id and c:
+                    try: await state.add_cost(workspace, session.chat_id, c)
+                    except Exception as e: log("warn", user=user, chat_id=session.chat_id, message=f"add_cost failed: {e}")
+        except Exception as ce:
+            # degrades the loop until the context hard-overflows — never silent
+            yield _user_warn(user, session.chat_id,
+                             "Long-chat compression failed — this chat may hit its length limit sooner.",
+                             f"compaction failed: {ce}")
+
     while True:
         try:
-            # The cheap tier first; the summary when it frees too little, or the window already overflowed.
-            if (tokens_since_compact > trigger and len(messages) - session.first_kept > 2
-                    and (tokens_since_compact >= window or not await session.clear(keep, window * CLEAR_AT_LEAST))):
-                yield events.step("Compacting context...")
-                try:
-                    provider.last_usage = None
-                    await session.compact(provider, keep)
-                    tokens_since_compact = 0
-                    # The summarizer call is a real billed turn — track it too.
-                    if u := getattr(provider, "last_usage", None):
-                        c = _cost(price, u[0], u[1], 0, 0)
-                        log("usage", user=user, chat_id=session.chat_id, model=bare_model,
-                            input=u[0], output=u[1], cached=0, cache_create=0,
-                            cost=round(c, 6), ms=0, compact=True)
-                        if session.chat_id and c:
-                            try: await state.add_cost(workspace, session.chat_id, c)
-                            except Exception as e: log("warn", user=user, chat_id=session.chat_id, message=f"add_cost failed: {e}")
-                except Exception as ce:
-                    # degrades the loop until the context hard-overflows — never silent
-                    yield _user_warn(user, session.chat_id,
-                                     "Long-chat compression failed — this chat may hit its length limit sooner.",
-                                     f"compaction failed: {ce}")
+            async for ev in fold(): yield ev
 
             turn = None
             partial_text = ""
@@ -596,3 +597,5 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             # `normalize` sanitizes any dangling tool_use on next send.
             session.rollback()
             raise
+
+    async for ev in fold(): yield ev   # now, while the answer is read — not when the next message waits on it

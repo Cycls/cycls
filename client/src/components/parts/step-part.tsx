@@ -3,6 +3,7 @@ import { cn } from "../../lib/utils";
 import { Icon, type IconName } from "../icon";
 import { Favicon } from "./sources-part";
 import { ext, tintTile, tintLabel } from "../canvas-utils";
+import { stepText } from "../../lib/i18n";
 
 // A built-in tool wears its own glyph, the way a connector wears its logo. A row with a face keeps no
 // check: the shimmer stopping is what says it finished, and a red tint is what says it didn't.
@@ -93,7 +94,7 @@ export const StepPart = memo(function StepPart({
             )}
           </>
         ) : (
-          step
+          stepText(step)
         )}
       </span>
     </div>
