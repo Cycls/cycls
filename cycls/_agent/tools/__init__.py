@@ -261,17 +261,33 @@ _DESIGN_TOOL = {
         "an image and to an editable design file saved in the workspace.\n\n"
         "Two ways to call:\n"
         "- render {spec, name, format?} — the normal way. `spec` is a JSON design:\n"
-        "    {\"size\": [W, H], \"fill\": \"#0f172a\", \"nodes\": [ ... ]}\n"
-        "  Coordinates are pixels from the top-left. Node types:\n"
-        "    {\"type\":\"text\", \"text\":\"…\", \"x\":, \"y\":, \"w\"?:, \"size\":, "
-        "\"font\":\"Inter Bold\"|\"Inter Regular\"|\"Arial\", \"color\":\"#fff\", "
-        "\"align\"?:\"left|center|right\", \"lineHeight\"?:px}\n"
-        "    {\"type\":\"rect\", \"x\":, \"y\":, \"w\":, \"h\":, \"radius\"?:, \"fill\":\"#3b82f6\"}\n"
-        "  Give any multi-word text a `w` (wrap width). Common sizes: 1080×1080 "
+        "    {\"size\": [W, H], \"fill\": <paint>, \"nodes\": [ ... ]}\n"
+        "  Coordinates are pixels from the top-left. Common sizes: 1080×1080 "
         "(square post), 1080×1920 (story), 1920×1080 (slide).\n"
-        "  LAYOUT: leave vertical room for text that WRAPS — a headline with a wrap "
-        "width `w` can run 2–3 lines (budget ~1.2×`size` per line, or set "
-        "`lineHeight`), and put the NEXT node below the whole wrapped block so "
+        "  A <paint> (any `fill`, or a text `color`) is a solid \"#4f46e5\" OR a "
+        "gradient {\"gradient\":[\"#4f46e5\",\"#db2777\"], \"angle\":135} — even stops, "
+        "angle 0=→ 45=↘ 90=↓ 135=↙. A gradient background reads far richer than a "
+        "flat colour.\n"
+        "  Node types:\n"
+        "    text    {\"type\":\"text\",\"text\":\"…\",\"x\":,\"y\":,\"w\"?:,\"size\":,"
+        "\"font\":\"Inter Bold\"|\"Inter Regular\"|\"Arial\",\"color\":<paint>,"
+        "\"align\"?:\"left|center|right\",\"lineHeight\"?:px,\"letterSpacing\"?:px,\"opacity\"?:0-1}\n"
+        "    rect    {\"type\":\"rect\",\"x\":,\"y\":,\"w\":,\"h\":,\"radius\"?:,\"fill\":<paint>,"
+        "\"stroke\"?:\"#hex\",\"strokeWeight\"?:,\"opacity\"?:,\"shadow\"?:}\n"
+        "    ellipse {\"type\":\"ellipse\",\"x\":,\"y\":,\"w\":,\"h\":,\"fill\":<paint>,\"stroke\"?:,\"shadow\"?:}  (a circle when w==h)\n"
+        "    line    {\"type\":\"line\",\"x\":,\"y\":,\"w\":,\"h\"?:2,\"fill\":\"#hex\"}  a thin divider\n"
+        "  `shadow` is true or {\"blur\":40,\"y\":16,\"opacity\":0.25,\"color\"?,\"x\"?,\"spread\"?} "
+        "— a drop shadow that lifts a card or button off the background.\n"
+        "  DESIGN — make it look intentional, not a wireframe: one clear idea, a strong "
+        "hierarchy (a big bold headline 72–120px, a small letter-spaced eyebrow ~24px "
+        "with letterSpacing 4–6, a muted subtitle ~32px), a tight palette (a gradient "
+        "or one background colour + white / near-white text + ONE accent), generous "
+        "margins (~8–10% of the width), and a touch of depth (a shadow on the button or "
+        "a card, or a big soft low-opacity ellipse bleeding off an edge for flair). "
+        "A pill button = a rect with radius = h/2 and centered text.\n"
+        "  LAYOUT: leave vertical room for text that WRAPS — give any multi-word text a "
+        "`w` (wrap width); a headline can run 2–3 lines (budget ~1.2×`size` per line, or "
+        "set `lineHeight`), and put the NEXT node below the whole wrapped block so "
         "nothing overlaps. Sketch the y positions top-to-bottom before you emit them.\n"
         "- For a multi-slide DECK, pass frames instead of a single design:\n"
         "    {\"frames\": [ {\"size\":[1920,1080], \"fill\":…, \"nodes\":[…]}, … ]}\n"
@@ -301,7 +317,7 @@ _DESIGN_TOOL = {
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["render", "script", "edit"],
                    "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), or `edit` the design open in the editor (live)."},
-        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}, or a deck {frames: [{size, fill, nodes}, ...]} (one per slide, export as pptx)."},
+        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes} or a deck {frames:[...]} (one per slide, export pptx). Nodes are text/rect/ellipse/line; a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s)."},
         "intent": {"type": "string",

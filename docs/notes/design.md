@@ -63,20 +63,39 @@ agent's live `edit` changed it under their cursor.
 
 ```jsonc
 {
-  "size": [1080, 1080],          // frame size
-  "fill": "#0f172a",             // hex background (omit for none)
+  "size": [1080, 1080],
+  "fill": { "gradient": ["#4f46e5", "#db2777"], "angle": 135 },  // solid "#hex" or a gradient
   "nodes": [
-    { "type": "text", "text": "Agents that design.",
-      "x": 96, "y": 360, "w": 888,          // give multi-word text a wrap width
+    { "type": "ellipse", "x": 600, "y": -160, "w": 640, "h": 640,
+      "fill": "#ffffff", "opacity": 0.08 },                       // soft flair, bleeds off the edge
+    { "type": "text", "text": "NEW RELEASE", "x": 90, "y": 150,
+      "font": "Inter Bold", "size": 26, "color": "#ffffff",
+      "letterSpacing": 6, "opacity": 0.85 },                      // tracked eyebrow
+    { "type": "text", "text": "Design that ships itself.",
+      "x": 90, "y": 205, "w": 900,                                // wrap width → auto height
       "font": "Inter Bold", "size": 96, "color": "#ffffff", "lineHeight": 100 },
-    { "type": "rect", "x": 96, "y": 760, "w": 320, "h": 96,
-      "radius": 14, "fill": "#3b82f6" }
+    { "type": "rect", "x": 90, "y": 780, "w": 340, "h": 100,
+      "radius": 50, "fill": "#ffffff",
+      "shadow": { "blur": 44, "y": 18, "opacity": 0.28 } },        // pill (radius=h/2) + drop shadow
+    { "type": "text", "text": "Try it free", "x": 90, "y": 810, "w": 340,
+      "font": "Inter Bold", "size": 36, "color": "#4f46e5", "align": "center" }
   ]
 }
 ```
 
+A **paint** — any `fill`, or a text `color` — is a solid `"#4f46e5"` or a linear
+gradient `{ "gradient": ["#a", "#b", …], "angle": deg }` (even stops; `angle`
+0 = →, 45 = ↘, 90 = ↓ default, 135 = ↙). **Node types**: `text`, `rect`
+(`radius`, `stroke`/`strokeWeight`), `ellipse` (a circle when `w == h`), and
+`line` (a thin divider, `h` defaults to 2). Every node also takes `opacity`
+(0–1) and `shadow` (`true` or `{ blur, x, y, spread, color, opacity }`), so a
+design has depth and overlays, not just flat rectangles. Text opacity is applied
+as fill alpha (setting a text node's own opacity collapses its auto-width box).
+
 Fonts available headless: **Inter**, **Arial**. Common sizes: 1080×1080 (square
-post), 1080×1920 (story), 1920×1080 (slide).
+post), 1080×1920 (story), 1920×1080 (slide). The tool description carries the
+same vocabulary plus design guidance (hierarchy, tight palette, margins, depth)
+so the model produces something intentional, not a wireframe.
 
 **Decks** are a list of frames — one per slide — exported as PowerPoint:
 
