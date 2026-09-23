@@ -1,9 +1,11 @@
-"""Context compaction — summarize old turns, keep recent ones verbatim."""
+"""Context compaction — stub old tool results first, summarize old turns when that frees too little."""
 import json, re
 from .prompts import COMPACT_SYSTEM
 
-COMPACT_BUFFER = 30_000        # compact within this many tokens of the window
-KEEP_RECENT_TOKENS = 20_000    # keep this many recent tokens verbatim
+COMPACT_AT = 0.7          # compact past this share of the window
+KEEP_RECENT = 0.3         # keep this share of the window verbatim
+CLEAR_AT_LEAST = 0.1      # stubbing must free this share, or the summary runs instead
+COMPACT_BUFFER = 30_000   # headroom past input + max_tokens
 
 _SUMMARY_REQUEST = (
     "Summarize the conversation above following the structured format. "
@@ -13,6 +15,7 @@ _SUMMARY_REQUEST = (
 _LEDGER = "Files touched so far: "
 _LEDGER_RE = re.compile(re.escape(_LEDGER) + r"(.+)")
 _ACK = "Understood. I have the full context. Recent messages follow."
+_CLEARED = "[Old tool result cleared]"
 
 
 def prefix(summary):
@@ -34,15 +37,15 @@ def _is_tool_result(m):
         isinstance(b, dict) and b.get("type") == "tool_result" for b in c)
 
 
-def _cut(messages):
-    """Index where the recent window starts: walk back to KEEP_RECENT_TOKENS,
+def _cut(messages, keep):
+    """Index where the recent window starts: walk back `keep` tokens,
     then snap forward to a real user turn — never inside a tool_use/tool_result
     pair, and roles alternate after our ack."""
     total, cut = 0, len(messages)
     for i in range(len(messages) - 1, 0, -1):
         total += _tokens(messages[i].get("content"))
         cut = i
-        if total >= KEEP_RECENT_TOKENS: break
+        if total >= keep: break
     start = cut
     while cut < len(messages) and (messages[cut].get("role") != "user" or _is_tool_result(messages[cut])):
         cut += 1
@@ -70,14 +73,16 @@ def _ledger(messages):
     return list(dict.fromkeys(files))
 
 
-def microcompact(messages):
-    """Blank string tool results in place — the summary keeps what mattered."""
-    for msg in messages:
-        if msg.get("role") != "user" or not isinstance(msg.get("content"), list):
-            continue
-        for block in msg["content"]:
-            if block.get("type") == "tool_result" and isinstance(block.get("content"), str):
-                block["content"] = "[Old tool result cleared]"
+def clear(messages):
+    """Copies with every tool result stubbed — the transcript keeps the originals."""
+    return [{**m, "content": [{**b, "content": _CLEARED} if b.get("type") == "tool_result" else b
+                              for b in m["content"]]} if _is_tool_result(m) else m for m in messages]
+
+
+def clear_to(messages, start, keep):
+    """Where stubbing stops short of the recent `keep` tokens, and ~the tokens it frees from `start`."""
+    cut = _cut(messages, keep)
+    return cut, sum(_tokens(m["content"]) for m in messages[start:cut] if _is_tool_result(m))
 
 
 async def _summarize(provider, old):
@@ -90,13 +95,12 @@ async def _summarize(provider, old):
     return m.group(1).strip() if m else raw.strip()
 
 
-async def compact(provider, messages):
+async def compact(provider, messages, keep):
     """Old turns → one summary; recent turns kept verbatim. Always shrinks —
     a failed summary drops the old turns instead, so the next request fits."""
-    cut = _cut(messages)
+    cut = _cut(messages, keep)
     files = _ledger(messages)
     old, recent = messages[:cut], messages[cut:]
-    microcompact(old)
     try:
         summary = await _summarize(provider, old)
     except Exception:

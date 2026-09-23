@@ -14,7 +14,7 @@ from .. import connectors, spill, state
 from ..state import Session
 from . import events
 from .events import Turn
-from .compact import COMPACT_BUFFER
+from .compact import COMPACT_AT, COMPACT_BUFFER, CLEAR_AT_LEAST, KEEP_RECENT
 from ..logs import log
 from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
@@ -395,6 +395,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     for guidance in tool_prompts(tools_list):
         system_text += "\n\n" + guidance
     window = context_window or DEFAULT_WINDOW
+    trigger, keep = min(window * COMPACT_AT, window - max_tokens - COMPACT_BUFFER), int(window * KEEP_RECENT)
     # Seed from the last stored turn so a long chat compacts before its first
     # call — not only mid-request. The first_kept slice skips stale
     # pre-compaction usage that would re-trigger a compaction that already ran.
@@ -407,11 +408,13 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
     while True:
         try:
-            if tokens_since_compact > window - max_tokens - COMPACT_BUFFER and len(messages) - session.first_kept > 2:
+            # The cheap tier first; the summary when it frees too little, or the window already overflowed.
+            if (tokens_since_compact > trigger and len(messages) - session.first_kept > 2
+                    and (tokens_since_compact >= window or not await session.clear(keep, window * CLEAR_AT_LEAST))):
                 yield events.step("Compacting context...")
                 try:
                     provider.last_usage = None
-                    await session.compact(provider)
+                    await session.compact(provider, keep)
                     tokens_since_compact = 0
                     # The summarizer call is a real billed turn — track it too.
                     if u := getattr(provider, "last_usage", None):

@@ -23,7 +23,7 @@ def _clear_client_cache():
     _providers._clients.clear()
     yield
     _providers._clients.clear()
-from cycls._agent.harness.compact import COMPACT_BUFFER, microcompact, compact
+from cycls._agent.harness.compact import COMPACT_AT, COMPACT_BUFFER, compact
 from cycls._agent.harness.events import to_ui
 from cycls._agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path
 from cycls._agent.state import load_messages, load_tail
@@ -760,7 +760,7 @@ def test_compaction_triggers_when_approaching_window(agent_env):
     ws, ctx = agent_env
 
     window = DEFAULT_WINDOW
-    high_usage = _usage(inp=window - DEFAULT_MAX_TOKENS - COMPACT_BUFFER + 1)
+    high_usage = _usage(inp=int(window * COMPACT_AT) + 1)
 
     # Build a few tool rounds so the message list clears the compaction guard
     rounds = []
@@ -803,12 +803,10 @@ def test_no_compaction_when_under_threshold(agent_env):
     assert roles == ["user", "assistant"]
 
 
-def test_compact_returns_internal_summary_pair_plus_recent(monkeypatch):
+def test_compact_returns_internal_summary_pair_plus_recent():
     """compact() runs `complete`, parses <summary>, strips <analysis>, and
     returns [user(summary, internal), assistant(understood, internal), *recent].
     `complete` is called with the OLD slice + a summary-request user message."""
-    import importlib
-    monkeypatch.setattr(importlib.import_module("cycls._agent.harness.compact"), "KEEP_RECENT_TOKENS", 250)
     old = [{"role": "user", "content": "older q"},
            {"role": "assistant", "content": [{"type": "text", "text": "older a"}]}]
     # ~100 tokens each ⇒ the 250-token budget keeps these 3, cuts after `old`.
@@ -821,7 +819,7 @@ def test_compact_returns_internal_summary_pair_plus_recent(monkeypatch):
             seen["messages"], seen["system"], seen["max_tokens"] = messages, system, max_tokens
             return "<analysis>scratch work</analysis><summary>User asked about X.</summary>"
 
-    result = asyncio.run(compact(FakeProvider(), messages))
+    result = asyncio.run(compact(FakeProvider(), messages, 250))
 
     assert [m["role"] for m in result[:2]] == ["user", "assistant"]
     assert result[0].get("internal") is True and result[1].get("internal") is True
@@ -1022,21 +1020,15 @@ class _BrokenSummarizer:
         raise RuntimeError("summarizer down")
 
 
-def _keep_tokens(monkeypatch, n):
-    import importlib
-    monkeypatch.setattr(importlib.import_module("cycls._agent.harness.compact"), "KEEP_RECENT_TOKENS", n)
-
-
-def test_compact_shrinks_and_recent_starts_with_user(monkeypatch):
+def test_compact_shrinks_and_recent_starts_with_user():
     """Result is shorter than the input, and `recent` begins with a user
     message so roles stay alternating after the internal assistant ack."""
-    _keep_tokens(monkeypatch, 200)  # ~100 tokens/message ⇒ keep the last couple
     messages = []
     for _ in range(10):
         messages.append({"role": "user", "content": "u" * 400})
         messages.append({"role": "assistant", "content": [{"type": "text", "text": "a" * 400}]})
 
-    result = asyncio.run(compact(_FakeSummarizer(), messages))
+    result = asyncio.run(compact(_FakeSummarizer(), messages, 200))
 
     assert len(result) < len(messages)
     assert result[0]["role"] == "user" and result[0].get("internal") is True
@@ -1044,10 +1036,9 @@ def test_compact_shrinks_and_recent_starts_with_user(monkeypatch):
     assert result[2]["role"] == "user"  # alternation preserved across the cut
 
 
-def test_compact_cut_never_splits_a_tool_pair(monkeypatch):
+def test_compact_cut_never_splits_a_tool_pair():
     """The cut lands on a real user turn — never on a tool_result whose
     tool_use would be summarized away, orphaning it."""
-    _keep_tokens(monkeypatch, 100)
     messages = [
         {"role": "user", "content": "u" * 800},
         {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "read", "input": {"path": "a"}}]},
@@ -1055,15 +1046,14 @@ def test_compact_cut_never_splits_a_tool_pair(monkeypatch):
         {"role": "user", "content": "next question"},
     ]
 
-    result = asyncio.run(compact(_FakeSummarizer(), messages))
+    result = asyncio.run(compact(_FakeSummarizer(), messages, 100))
 
     assert result[2:] == [{"role": "user", "content": "next question"}]  # pair stayed in `old`
 
 
-def test_compact_keeps_recent_tool_rounds_without_a_user_turn(monkeypatch):
+def test_compact_keeps_recent_tool_rounds_without_a_user_turn():
     """One user request + many tool rounds has no plain user turn to cut at —
     the fallback cuts at an assistant boundary instead of folding everything."""
-    _keep_tokens(monkeypatch, 300)
     messages = [{"role": "user", "content": "analyze the files"}]
     for i in range(20):
         messages.append({"role": "assistant", "content": [
@@ -1071,7 +1061,7 @@ def test_compact_keeps_recent_tool_rounds_without_a_user_turn(monkeypatch):
         messages.append({"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": f"t{i}", "content": "r" * 400}]})
 
-    result = asyncio.run(compact(_FakeSummarizer(), messages))
+    result = asyncio.run(compact(_FakeSummarizer(), messages, 300))
 
     recent = result[2:]
     assert recent, "recent window must survive a tool-only tail"
@@ -1080,20 +1070,18 @@ def test_compact_keeps_recent_tool_rounds_without_a_user_turn(monkeypatch):
     assert recent[1]["content"][0]["tool_use_id"] == recent[0]["content"][0]["id"]
 
 
-def test_compact_shrinks_even_when_summary_fails(monkeypatch):
+def test_compact_shrinks_even_when_summary_fails():
     """A failed summarizer still shrinks — old turns are dropped, not raised."""
-    _keep_tokens(monkeypatch, 200)
     messages = [{"role": "user", "content": "u" * 400} for _ in range(10)]
 
-    result = asyncio.run(compact(_BrokenSummarizer(), messages))
+    result = asyncio.run(compact(_BrokenSummarizer(), messages, 200))
 
     assert len(result) < len(messages)
     assert "could not be summarized" in result[0]["content"]
 
 
-def test_compact_accumulates_file_ledger(monkeypatch):
+def test_compact_accumulates_file_ledger():
     """Files from read/edit calls and a prior ledger line carry forward."""
-    _keep_tokens(monkeypatch, 50)
     messages = [
         {"role": "user", "internal": True, "content": "Summary.\n\nFiles touched so far: a.py"},
         {"role": "assistant", "content": [{"type": "tool_use", "name": "edit", "input": {"path": "b.py"}}]},
@@ -1101,29 +1089,43 @@ def test_compact_accumulates_file_ledger(monkeypatch):
         {"role": "user", "content": "x" * 400},
     ]
 
-    result = asyncio.run(compact(_FakeSummarizer(), messages))
+    result = asyncio.run(compact(_FakeSummarizer(), messages, 50))
 
     assert "Files touched so far: a.py, b.py" in result[0]["content"]
 
 
-# ---------------------------------------------------------------------------
-# Microcompact tests
-# ---------------------------------------------------------------------------
+def test_cheap_tier_stubs_old_tool_results_instead_of_summarizing(agent_env):
+    """Past the trigger with bulky tool results, the loop stubs the old ones in the
+    model's view — no summary call — and the transcript on disk keeps them."""
+    ws, ctx = agent_env
+    from cycls._agent.state import append_messages, get_compaction
+    history = []
+    for i in range(10):   # ~50k tokens of tool result per round
+        history += [{"role": "user", "content": f"q{i}"},
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "read", "input": {"path": "f"}}]},
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "r" * 200_000}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}]
+    history[-1]["usage"] = {"input": int(DEFAULT_WINDOW * COMPACT_AT) + 1}
+    asyncio.run(append_messages(ctx.workspace, ctx.chat_id, history, 0))
 
-def test_microcompact_clears_old_tool_results():
-    """String tool results in the given list are replaced with a stub."""
-    messages = []
-    for i in range(5):
-        messages.append({"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}"}]})
-        messages.append({"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": f"t{i}", "content": f"result {i}"}
-        ]})
+    sent = {}
+    def stream(**kw):
+        sent["messages"] = kw["messages"]
+        return FakeStream(_make_response([_text_block("Done")]))
+    mock_client = MagicMock()
+    mock_client.messages.stream = stream
+    mock_client.messages.create = AsyncMock()
+    with _mock_anthropic(mock_client):
+        items = asyncio.run(_drain(_run(context=ctx)))
 
-    microcompact(messages)
-
-    for m in messages:
-        if m["role"] == "user":
-            assert m["content"][0]["content"] == "[Old tool result cleared]"
+    assert not mock_client.messages.create.called
+    assert not [i for i in items if isinstance(i, dict) and i.get("step") == "Compacting context..."]
+    results = [b["content"] for m in sent["messages"] if isinstance(m["content"], list)
+               for b in m["content"] if b.get("type") == "tool_result"]
+    assert results[0] == "[Old tool result cleared]" and results[-1] == "r" * 200_000
+    marker = asyncio.run(get_compaction(ctx.workspace, ctx.chat_id))
+    assert marker["summary"] is None and marker["cleared"] > 0
+    assert "[Old tool result cleared]" not in str(_read_history(ctx))
 
 
 # ---------------------------------------------------------------------------
