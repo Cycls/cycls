@@ -850,8 +850,9 @@ def test_compaction_failure_still_saves_history(agent_env):
 
     with _mock_anthropic(mock_client), \
          patch("cycls._agent.tools._exec_bash", new_callable=lambda: AsyncMock(return_value="ok")):
-        asyncio.run(_drain(_run(context=ctx)))
+        items = asyncio.run(_drain(_run(context=ctx)))
 
+    assert any(isinstance(i, dict) and i.get("action") == "compacted" and i["ok"] is False for i in items)
     history = _read_history(ctx)
     assert len(history) >= 2
     # The actual answer must not be lost
@@ -903,6 +904,8 @@ def test_a_run_that_ends_past_the_trigger_compacts_before_it_closes(agent_env):
         items = asyncio.run(_drain(_run(context=ctx)))
 
     assert len(calls) == 1 and mock_client.messages.create.called   # one answer, then the summary
+    assert [i for i in items if isinstance(i, dict) and i.get("action") == "compacted"] == [
+        {"type": "ui", "action": "compacted", "tier": 2, "reason": "trigger", "tokens": int(DEFAULT_WINDOW * COMPACT_AT) + 1, "ok": True}]
     assert [i for i in items if isinstance(i, dict) and i.get("step") == "Summarizing earlier messages to keep this chat going..."]
     assert not [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
 
@@ -1101,7 +1104,7 @@ def test_cheap_tier_stubs_old_tool_results_instead_of_summarizing(agent_env):
     ws, ctx = agent_env
     from cycls._agent.state import append_messages, get_compaction
     history = []
-    for i in range(10):   # ~50k tokens of tool result per round
+    for i in range(12):   # ~50k tokens of tool result per round
         history += [{"role": "user", "content": f"q{i}"},
                     {"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "edit",
                                                         "input": {"path": "f", "new": "n" * 5_000}}]},
@@ -1133,6 +1136,37 @@ def test_cheap_tier_stubs_old_tool_results_instead_of_summarizing(agent_env):
     marker = asyncio.run(get_compaction(ctx.workspace, ctx.chat_id))
     assert marker["summary"] is None and marker["cleared"] > 0
     assert "cleared]" not in str(_read_history(ctx))
+    assert [i for i in items if isinstance(i, dict) and i.get("action") == "compacted"] == [
+        {"type": "ui", "action": "compacted", "tier": 1, "reason": "trigger", "tokens": int(DEFAULT_WINDOW * COMPACT_AT) + 1, "ok": True}]
+
+
+def test_a_chat_back_after_a_pause_is_cleared_before_its_first_call(agent_env):
+    """Idle past COLD_AFTER, the provider cache is gone, so stubbing costs no miss — it runs
+    before the first call, at the lower bar. A chat idle for a minute keeps its cache warm."""
+    from datetime import datetime, timedelta, timezone
+    from cycls._agent.state import append_messages
+    ws, ctx = agent_env
+    for minutes, cold in ((120, True), (1, False)):
+        ctx.chat_id = f"idle-{minutes}"
+        history = []
+        for i in range(12):
+            history += [{"role": "user", "content": f"q{i}"},
+                        {"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "read", "input": {"path": "f"}}]},
+                        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "r" * 200_000}]},
+                        {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}]
+        history[-1]["usage"] = {"input": 1_000, "cached": 600_000,
+                                "at": (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()}
+        asyncio.run(append_messages(ctx.workspace, ctx.chat_id, history, 0))
+        sent = []
+        mock_client = MagicMock()
+        mock_client.messages.stream = lambda **kw: sent.append(kw["messages"]) or FakeStream(_make_response([_text_block("Done")]))
+        with _mock_anthropic(mock_client):
+            items = asyncio.run(_drain(_run(context=ctx)))
+        _providers._clients.clear()
+
+        assert ("[Old tool result cleared]" in str(sent[0])) is cold
+        assert ([i for i in items if isinstance(i, dict) and i.get("action") == "compacted"]
+                == ([{"type": "ui", "action": "compacted", "tier": 1, "reason": "cold", "tokens": 601_000, "ok": True}] if cold else []))
 
 
 # ---------------------------------------------------------------------------

@@ -132,6 +132,7 @@ Identified users also carry **person properties** (via identify): `email`,
 | event | fires when | key props / question |
 |---|---|---|
 | `turn_completed` | the run ends — from the stream when it carried the turn to the end, otherwise from the poll (`detached: true`, `status`) | `tools` {name: count}, `tool_calls`, `duration_s`, `produced_artifact`, `errored`, `stopped`, `origin` — the shape of the work, without per-tool-call volume |
+| `context_compacted` | the loop compacted the chat's context — its `ui` event `compacted` ([compaction.md](compaction.md)) | `tier` (1 old tool results stubbed, 2 summarized), `reason` (`trigger` / `cold` / `overflow`), `tokens` (the prompt that set it off), `ok` (false when the summary failed and old turns were dropped). The server logs the same as a `compaction` row, which also covers runs no client watched; mobile counts it as `ui_action{compacted}` |
 | `generation_stopped` | user hits stop mid-stream | impatience / runaway signal |
 | `message_retried` / `message_regenerated` / `message_failed` | recovery paths | friction |
 | `stream_broken` | the stream ended without the server's end marker | `reason`, `visibility`, `online`, `seconds_since_byte`, `run_seconds` — why connections drop, per user. The run itself is unaffected; the client polls |

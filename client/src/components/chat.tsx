@@ -385,6 +385,8 @@ export function Chat({ chat, onShare, files, account, config }: {
         setConfirm({ tool: ev.tool, key: ev.key, connector: typeof ev.connector === "string" ? ev.connector : undefined,
                      label: typeof ev.label === "string" ? ev.label : ev.tool, args: ev.args });
         track("ui_action", { action: "confirm", tool: ev.tool });
+      } else if (ev.action === "compacted") {
+        track("context_compacted", { tier: ev.tier, reason: ev.reason, tokens: ev.tokens, ok: ev.ok });
       } else {
         track("ui_action", { action: ev.action, handled: false });
       }

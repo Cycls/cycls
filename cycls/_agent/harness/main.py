@@ -14,7 +14,7 @@ from .. import connectors, spill, state
 from ..state import Session
 from . import events
 from .events import Turn
-from .compact import COMPACT_AT, COMPACT_BUFFER, CLEAR_AT_LEAST, KEEP_RECENT
+from .compact import COMPACT_AT, COMPACT_BUFFER, CLEAR_AT_LEAST, CLEAR_COLD, COLD_AFTER, DROPPED, KEEP_RECENT
 from ..logs import log
 from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
@@ -401,10 +401,19 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     pauses = 0
     overflowed = False
 
+    def compacted(tier, reason, tokens, ok=True):
+        """The analytics record of one compaction: a log row, and a `ui` event the client tracks."""
+        log("compaction", user=user, chat_id=session.chat_id, model=bare_model,
+            tier=tier, reason=reason, tokens=tokens, ok=ok)
+        return {"type": "ui", "action": "compacted", "tier": tier, "reason": reason, "tokens": tokens, "ok": ok}
+
     async def fold():
         """Past the trigger: the cheap tier, or the summary when it frees too little or the window overflowed."""
         if tokens_since_compact <= trigger or len(messages) - session.first_kept <= 2: return
-        if tokens_since_compact < window and await session.clear(keep, window * CLEAR_AT_LEAST): return
+        reason = "overflow" if tokens_since_compact >= window else "trigger"
+        if reason == "trigger" and await session.clear(keep, window * CLEAR_AT_LEAST):
+            yield compacted(1, reason, tokens_since_compact)
+            return
         yield events.step("Summarizing earlier messages to keep this chat going...")
         try:
             provider.last_usage = None
@@ -413,6 +422,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 await asyncio.wait([task], timeout=15.0)
                 if not task.done(): yield {"type": "ping"}
             task.result()
+            yield compacted(2, reason, tokens_since_compact, DROPPED not in session.summary)
             # The summarizer call is a real billed turn — track it too.
             if u := getattr(provider, "last_usage", None):
                 c = _cost(price, u[0], u[1], 0, 0)
@@ -424,9 +434,16 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     except Exception as e: log("warn", user=user, chat_id=session.chat_id, message=f"add_cost failed: {e}")
         except Exception as ce:
             # degrades the loop until the context hard-overflows — never silent
+            yield compacted(2, reason, tokens_since_compact, False)
             yield _user_warn(user, session.chat_id,
                              "Long-chat compression failed — this chat may hit its length limit sooner.",
                              f"compaction failed: {ce}")
+
+    # Back after a pause the provider cache is gone, so stubbing now costs no miss.
+    last = next((m["usage"] for m in reversed(messages) if m.get("usage")), {})
+    if (last.get("at") and (datetime.now(timezone.utc) - datetime.fromisoformat(last["at"])).total_seconds() > COLD_AFTER
+            and await session.clear(keep, window * CLEAR_COLD)):
+        yield compacted(1, "cold", last.get("input", 0) + last.get("cached", 0) + last.get("cache_create", 0))
 
     while True:
         try:

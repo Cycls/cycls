@@ -4,7 +4,9 @@ from .prompts import COMPACT_SYSTEM
 
 COMPACT_AT = 0.7          # compact past this share of the window
 KEEP_RECENT = 0.3         # keep this share of the window verbatim
-CLEAR_AT_LEAST = 0.1      # stubbing must free this share, or the summary runs instead
+CLEAR_AT_LEAST = 0.25     # stubbing a warm cache must free this share, or the summary runs instead
+CLEAR_COLD = 0.1          # ... and this share after a pause, when the provider cache is gone anyway
+COLD_AFTER = 1_200        # idle seconds until the cache is mostly gone (K3: 94% cached at 5–10 min, 19% at 20–40)
 COMPACT_BUFFER = 30_000   # headroom past input + max_tokens
 SUMMARY_MAX = 16_384      # summary output cap, reasoning included; more needs streaming on Anthropic
 SUMMARY_TIMEOUT = 300     # seconds before the summary counts as failed
@@ -17,6 +19,7 @@ _SUMMARY_REQUEST = (
 _LEDGER = "Files touched so far: "
 _LEDGER_RE = re.compile(re.escape(_LEDGER) + r"(.+)")
 _ACK = "Understood. I have the full context. Recent messages follow."
+DROPPED = "(Earlier conversation could not be summarized; it was dropped to free up context.)"
 
 
 def prefix(summary):
@@ -117,7 +120,7 @@ async def compact(provider, messages, keep, max_tokens):
     try:
         summary = await _summarize(provider, old, min(max_tokens, SUMMARY_MAX))
     except Exception:
-        summary = "(Earlier conversation could not be summarized; it was dropped to free up context.)"
+        summary = DROPPED
     head = "This session continues from a previous conversation. Summary of earlier work:\n\n" + summary
     if files:
         head += "\n\n" + _LEDGER + ", ".join(files)
