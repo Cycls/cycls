@@ -1100,10 +1100,14 @@ def test_compact_accumulates_file_ledger():
 
 def test_cheap_tier_stubs_old_tool_results_instead_of_summarizing(agent_env):
     """Past the trigger with bulky tool calls, the loop stubs the old results and long
-    arguments in the model's view — no summary call — and the transcript keeps them."""
+    arguments in the model's view — no summary call — and the transcript keeps them.
+    A loaded skill is instructions, so its result is never stubbed."""
     ws, ctx = agent_env
     from cycls._agent.state import append_messages, get_compaction
-    history = []
+    history = [{"role": "user", "content": "use the deck skill"},
+               {"role": "assistant", "content": [{"type": "tool_use", "id": "s0", "name": "skill", "input": {"name": "deck"}}]},
+               {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "s0", "content": "[skill: deck]\n\nTitles are 35pt."}]},
+               {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}]
     for i in range(12):   # ~50k tokens of tool result per round
         history += [{"role": "user", "content": f"q{i}"},
                     {"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "edit",
@@ -1131,7 +1135,8 @@ def test_cheap_tier_stubs_old_tool_results_instead_of_summarizing(agent_env):
     blocks = [b for m in sent["messages"] if isinstance(m["content"], list) for b in m["content"]]
     results = [b["content"] for b in blocks if b.get("type") == "tool_result"]
     inputs = [b["input"] for b in blocks if b.get("type") == "tool_use" and b["name"] == "edit"]
-    assert results[0] == "[Old tool result cleared]" and results[-2] == "r" * 200_000
+    assert results[0] == "[skill: deck]\n\nTitles are 35pt."
+    assert results[1] == "[Old tool result cleared]" and results[-2] == "r" * 200_000
     assert inputs[0] == {"path": "f", "new": "[Old input cleared]"} and inputs[-1]["new"] == "n" * 5_000
     marker = asyncio.run(get_compaction(ctx.workspace, ctx.chat_id))
     assert marker["summary"] is None and marker["cleared"] > 0

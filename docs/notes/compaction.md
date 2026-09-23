@@ -14,7 +14,9 @@ The rest is the conversation, and it only grows. Three layers keep it bounded:
 | summarize (tier 2) | past the trigger when clearing frees too little, or on overflow | yes | `Session.compact`, `compact.compact` |
 
 The transcript on disk is never rewritten. Clearing and summaries are a projection over
-it, so the UI always shows the full chat.
+it, so the UI always shows the full chat. The system prompt — the agent's own, `AGENT.md`
+(read fresh every run), the skill catalog, tool guidance — is not part of the conversation,
+so nothing here ever clears or summarizes it.
 
 ## Caps at ingest
 
@@ -63,7 +65,9 @@ model with:
   `[Old input cleared]`
 
 Paths, commands and short arguments stay, so the model still knows what it did and the
-file ledger still finds files. The index is persisted as `cleared` in the marker, and
+file ledger still finds files. A loaded skill's result is never stubbed: it is the skill's
+instructions, and stubbing it would change how the agent behaves. A summary (tier 2) still
+folds skills like any other turn. The index is persisted as `cleared` in the marker, and
 `Session.context()` applies the stubs on every request.
 
 There is no model call, no UI and no wait. This is the approach of Anthropic's
