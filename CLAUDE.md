@@ -69,7 +69,7 @@ cycls/
     │   │   ├── anthropic.py  # native Messages (cache breakpoints, thinking, MCP, server search)
     │   │   └── openai.py     # Chat Completions — also GLM (zai/*), Gemini-compat, Groq, vLLM via base_url
     │   ├── events.py       # typed loop events + to_ui (FE projection)
-    │   ├── compact.py      # compaction — tool-result clearing, then a summary; append-only marker, file ledger
+    │   ├── compact.py      # compaction — tool-result clearing, then a summary; append-only marker, file ledger (docs/notes/compaction.md)
     │   └── prompts.py      # system + compaction prompts + workspace instructions (AGENT.md)
     └── web/                # FastAPI chat server, state routers, OG images, themes
 ```
