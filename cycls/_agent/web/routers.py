@@ -485,7 +485,7 @@ def _walk_catalog(root):
                             "type": "directory", "size": 0, "modified": "",
                             "kind": "folder", "_dir": rel_dir})
         for fn in sorted(names):
-            if fn.startswith("."):
+            if fn.startswith(".") or (p == root and fn.lower() == "agent.md"):   # AGENT.md has its own row
                 continue
             try:
                 st = (p / fn).stat()
@@ -623,7 +623,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         """Only reached above _CATALOG_MAX."""
         out = []
         for entry in os.scandir(target):
-            if entry.name.startswith("."):
+            if entry.name.startswith(".") or Path(entry.path).relative_to(root).as_posix().lower() == "agent.md":
                 continue
             st = entry.stat()
             is_dir = entry.is_dir()
@@ -1782,6 +1782,23 @@ def tools_router(ws_dep, user_dep):
     async def clear_builtin(tool: str, ws: Workspace = ws_dep, user: Any = user_dep):
         await oauth.set_permissions(ws, "_builtin", {k: v for k, v in (await oauth.permissions(ws, "_builtin")).items() if k != tool})
         log("connector", user=user, action="permissions", connector="_builtin", tools={tool: None})
+        return {"ok": True}
+
+    @r.get("/memory")
+    async def memory(ws: Workspace = ws_dep):
+        """The person's memory: the `database` tool's own store, never the apps' shelf."""
+        return [{"key": k, "value": v} async for k, v in state.memory_db(ws).items(limit=500)]
+
+    @r.put("/memory/{key:path}")
+    async def put_memory(key: str, request: Request, ws: Workspace = ws_dep):
+        try: state._validate_db_key(key)
+        except ValueError as e: raise HTTPException(status_code=400, detail=str(e))
+        await state.memory_db(ws).put(key, (await request.json()).get("value"))
+        return {"ok": True}
+
+    @r.delete("/memory/{key:path}")
+    async def delete_memory(key: str, ws: Workspace = ws_dep):
+        await state.memory_db(ws).delete(key)
         return {"ok": True}
 
     @r.put("/tools/{tool}")

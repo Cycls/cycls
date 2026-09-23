@@ -1130,6 +1130,31 @@ def test_legacy_mode_files_land_in_org_root(tmp_path):
     assert (tmp_path / "org_1" / "notes.txt").read_bytes() == b"hi"
 
 
+def test_agent_md_has_its_own_row_not_a_files_entry(tmp_path):
+    """The root AGENT.md is the workspace's instructions, opened from its own row — not a file
+    in the list. It still reads by path; another folder's AGENT.md is just a file."""
+    client = _ws_routers_client(tmp_path)
+    client.put("/files/AGENT.md", content=b"Formal Arabic.")
+    client.put("/files/docs/AGENT.md", content=b"a doc")
+    listed = {e["path"] for e in client.get("/files", params={"recursive": 1}).json()}
+    assert "AGENT.md" not in listed and "docs/AGENT.md" in listed
+    assert "AGENT.md" not in {e["path"] for e in client.get("/files").json()}
+    assert client.get("/files/AGENT.md").text == "Formal Arabic."
+
+
+def test_memory_is_listed_edited_and_deleted_from_settings(tmp_path):
+    client = _ws_routers_client(tmp_path)
+    assert client.get("/memory").json() == []
+    client.put("/memory/prefs/tone", json={"value": "formal"})
+    client.put("/memory/family", json={"value": {"daughter": "Sara"}})
+    assert client.get("/memory").json() == [{"key": "family", "value": {"daughter": "Sara"}},
+                                            {"key": "prefs/tone", "value": "formal"}]
+    client.put("/memory/prefs/tone", json={"value": "casual"})
+    assert client.delete("/memory/family").status_code == 200
+    assert client.get("/memory").json() == [{"key": "prefs/tone", "value": "casual"}]
+    assert client.put("/memory/a//b", json={"value": 1}).status_code == 400
+
+
 def test_web_builder_workspaces_option():
     from cycls._agent.web import Web
     assert Web()._workspaces is None

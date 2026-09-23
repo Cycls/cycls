@@ -705,6 +705,11 @@ def _validate_db_key(key):
         raise ValueError(f"invalid key: {key!r}")
 
 
+def memory_db(ws):
+    """The person's own `database` store in this workspace — no teammate or app reads it."""
+    return DB(workspace(ws.subject, ws.volume, base=ws.base, slot=".database", ws=ws.ws))
+
+
 def _route(ws, key, *, prefix=False):
     """(db, store key). `apps/<slug>/…` is the workspace's app shelf; anything else the agent's own."""
     if key.startswith(APPS_ROOT):
@@ -713,7 +718,7 @@ def _route(ws, key, *, prefix=False):
             raise ValueError(f"app key needs apps/<slug>/<key>: {key!r}")
         return apps_db(ws), app_shelf(slug, rest)
     if not prefix: _validate_db_key(key)
-    return DB(workspace(ws.subject, ws.volume, base=ws.base, slot=".database", ws=ws.ws)), key
+    return memory_db(ws), key
 
 
 async def _exec_database(inp, ws):
