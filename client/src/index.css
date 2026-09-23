@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* `dark:` follows the app's theme (utils.ts toggles .dark on body), not the OS setting. */
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --color-background: #ffffff;
