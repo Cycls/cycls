@@ -1,0 +1,28 @@
+/* Cycls design system → OpenPencil editor chrome (dark). Neutral/monochrome,
+   Cycls token values, system font. Canvas content (CanvasKit) is untouched. */
+:root, .dark, html[data-theme="dark"], [data-theme="dark"] {
+  --background: #0a0a0a;
+  --color-canvas: #0a0a0a;
+  --color-surface: #e5e5e5;           /* BASE TEXT (Cycls foreground) — app.css colors text with this */
+  --color-panel: #141414;
+  --color-panel-field: #1c1c1c;
+  --color-panel-field-hover: #262626;
+  --color-input: #1c1c1c;
+  --color-hover: #1c1c1c;
+  --color-border: #262626;
+  --color-ruler-bg: #141414;
+  --color-ruler-text: #6b6b6b;
+  --color-ruler-tick: #404040;
+  --color-ruler-label: #e5e5e5;
+  --color-inverted: #0a0a0a;
+  --color-muted: #a3a3a3;
+  /* accents: blue -> Cycls neutral (accent 1:1 with the Cycls SDK token) */
+  --color-accent: #737373;
+  --color-primary: #e5e5e5;
+  --color-panel-focus: #525252;
+  --color-panel-selected: #404040;
+  --color-panel-selected-muted: #262626;
+}
+body, button, input, select, textarea {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
