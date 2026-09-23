@@ -250,7 +250,16 @@ export function startCyclsEmbedBridge(): void {
           if (store) {
             const page = store.graph.getNode(store.state.currentPageId)
             if (page) await ensureGraphFonts(store.graph, page.childIds, store.renderer)
+            // Backdrop follows the editor's light/dark so it always matches the
+            // chrome (dark #0a0a0a / light #f3f4f6), whatever the doc has stored.
+            const dark = (document.documentElement.dataset.theme ?? 'dark') !== 'light'
+            try {
+              ;(store.state as { pageColor?: { r: number; g: number; b: number; a: number } }).pageColor =
+                dark ? { r: 0.039, g: 0.039, b: 0.039, a: 1 } : { r: 0.953, g: 0.957, b: 0.965, a: 1 }
+            } catch { /* ignore */ }
             store.requestRender?.()
+            // Open centred/fit to the viewport instead of at an arbitrary zoom.
+            try { (store as { zoomToFit?: () => void }).zoomToFit?.() } catch { /* ignore */ }
           }
           lastVersion = getActiveStore()?.state.sceneVersion ?? -1
           post({ type: 'loaded', name })

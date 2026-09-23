@@ -1,10 +1,14 @@
-/* Cycls design system → OpenPencil editor chrome (dark). Neutral/monochrome,
-   Cycls token values, system font. Canvas content (CanvasKit) is untouched. */
-:root, .dark, html[data-theme="dark"], [data-theme="dark"] {
+/* Cycls design system → OpenPencil editor chrome. Neutral/monochrome, mapped from
+   the Cycls SDK tokens (client/src/index.css). Light + dark, switched by the app's
+   html[data-theme]. Canvas CONTENT (CanvasKit) is untouched — only the chrome. */
+
+/* --- Cycls DARK --- */
+html[data-theme="dark"] {
   --background: #0a0a0a;
   --color-canvas: #0a0a0a;
-  --color-surface: #e5e5e5;           /* BASE TEXT (Cycls foreground) — app.css colors text with this */
+  --color-surface: #e5e5e5;            /* BASE TEXT (app.css colors text with --color-surface) */
   --color-panel: #141414;
+  --color-panel-secondary: #171717;
   --color-panel-field: #1c1c1c;
   --color-panel-field-hover: #262626;
   --color-input: #1c1c1c;
@@ -16,13 +20,46 @@
   --color-ruler-label: #e5e5e5;
   --color-inverted: #0a0a0a;
   --color-muted: #a3a3a3;
-  /* accents: blue -> Cycls neutral (accent 1:1 with the Cycls SDK token) */
   --color-accent: #737373;
   --color-primary: #e5e5e5;
   --color-panel-focus: #525252;
   --color-panel-selected: #404040;
   --color-panel-selected-muted: #262626;
 }
+
+/* --- Cycls LIGHT --- */
+html[data-theme="light"] {
+  --background: #ffffff;
+  --color-canvas: #ffffff;
+  --color-surface: #0a0a0a;            /* BASE TEXT (dark on light) */
+  --color-panel: #fbfbfb;
+  --color-panel-secondary: #f5f5f5;
+  --color-panel-field: #f5f5f5;
+  --color-panel-field-hover: #ececec;
+  --color-input: #f5f5f5;
+  --color-hover: #f5f5f5;
+  --color-border: #e5e5e5;
+  --color-ruler-bg: #f5f5f5;
+  --color-ruler-text: #a3a3a3;
+  --color-ruler-tick: #d4d4d4;
+  --color-ruler-label: #0a0a0a;
+  --color-inverted: #ffffff;
+  --color-muted: #737373;
+  --color-accent: #737373;
+  --color-primary: #0a0a0a;
+  --color-panel-focus: #a3a3a3;
+  --color-panel-selected: #d4d4d4;
+  --color-panel-selected-muted: #e5e5e5;
+}
+
+/* System font stack (Cycls uses the platform font) across the chrome. */
 body, button, input, select, textarea {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Strip OpenPencil UI that doesn't belong in Cycls: the built-in AI tab (Super IS
+   the AI) and the collab Share button (Cycls owns sharing). */
+[data-test-id="properties-tab-ai"],
+[data-test-id="collab-share-button"] {
+  display: none !important;
 }

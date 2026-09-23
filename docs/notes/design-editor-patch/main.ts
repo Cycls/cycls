@@ -24,6 +24,23 @@ function injectCyclsTheme(): void {
   document.head.appendChild(el)
 }
 
+// Sync the editor's light/dark to the mode Cycls passes via ?theme=<dark|light>,
+// BEFORE the app boots (theme.ts reads this localStorage key on first tick).
+try {
+  const t = new URLSearchParams(location.search).get('theme')
+  if (t === 'dark' || t === 'light') {
+    localStorage.setItem('open-pencil:theme', t)
+    // OpenPencil's theme store is a module-level useLocalStorage that already read
+    // this key at import time — a plain setItem won't update its ref. Nudge it with
+    // a storage event so the mode actually applies before the app renders.
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: 'open-pencil:theme', newValue: t, oldValue: 'dark', storageArea: localStorage, url: location.href,
+    }))
+  }
+} catch {
+  /* no location/localStorage */
+}
+
 preloadFonts()
 const head = createHead()
 createApp(App).use(router).use(head).use(createRetainedScopePlugin()).mount('#app')

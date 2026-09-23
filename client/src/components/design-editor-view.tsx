@@ -33,7 +33,10 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile }: {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "saved" | "error">("loading");
   const base = editorUrl.replace(/\/+$/, "");
-  const src = `${base}/?embed=cycls`;
+  // Sync the editor's light/dark to the app's current mode (set at load; re-open
+  // to re-sync). Cycls toggles a `.dark` class on the document root.
+  const theme = typeof document !== "undefined" && document.documentElement.classList.contains("dark") ? "dark" : "light";
+  const src = `${base}/?embed=cycls&theme=${theme}`;
   const origin = (() => { try { return new URL(editorUrl).origin; } catch { return "*"; } })();
 
   useEffect(() => {
