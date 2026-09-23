@@ -308,6 +308,19 @@ def test_exec_read_with_offset_and_limit(tmp_path):
     assert "line5" not in result
 
 
+def test_exec_read_caps_a_large_file_and_says_where_to_continue(tmp_path):
+    from cycls._agent.tools import READ_MAX
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "deck.html").write_text("\n".join(f"<p>slide {i}</p>" for i in range(100_000)))
+
+    result = asyncio.run(_exec_read({"path": "deck.html"}, str(ws)))
+    assert len(result) < READ_MAX + 100 and "of 100000" in result
+    nxt = int(result.rsplit("offset=", 1)[1].rstrip(".]"))
+    again = asyncio.run(_exec_read({"path": "deck.html", "offset": nxt}, str(ws)))
+    assert again.lstrip().startswith(f"{nxt}\t<p>slide {nxt - 1}</p>")
+
+
 def test_exec_read_image_returns_base64(tmp_path):
     """Reading a .png file should return an image content block."""
     ws = tmp_path / "workspace"
