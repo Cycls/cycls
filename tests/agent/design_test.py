@@ -144,6 +144,22 @@ def test_render_saves_and_opens_canvas(tmp_path, monkeypatch):
     assert ui["action"] == "open_canvas" and ui["path"] == "designs/launch.png" and ui["name"] == "launch.png"
 
 
+def test_render_opens_the_fig_editor_when_editor_configured(tmp_path, monkeypatch):
+    # With an editor wired up (DESIGN_EDITOR_URL), a render lands the user directly in
+    # the editable .fig editor — not a flat PNG — so any design is immediately editable.
+    monkeypatch.setenv("DESIGN_EDITOR_URL", "https://cycls-design.cycls.ai")
+    _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design(
+        {"action": "render", "name": "launch", "spec": {"size": [1080, 1080]}, "format": "png"},
+        _ws(tmp_path)))
+    # both files still saved; the canvas opens the EDITABLE .fig, not the image
+    assert (tmp_path / "designs" / "launch.png").read_bytes() == b"\x89PNGrender"
+    assert (tmp_path / "designs" / "launch.fig").read_bytes() == b"FIGZ"
+    ui = out["_ui"]
+    assert ui["action"] == "open_canvas" and ui["path"] == "designs/launch.fig" and ui["name"] == "launch.fig"
+    assert "designs/launch.fig" in out["_model"] and "editor" in out["_model"]
+
+
 def test_render_dedupes_name_so_nothing_overwrites(tmp_path, monkeypatch):
     ws = _ws(tmp_path)
     _fake_render(monkeypatch, image=b"FIRST", fig=b"FIRSTFIG")

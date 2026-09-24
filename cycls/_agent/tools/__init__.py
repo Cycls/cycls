@@ -1183,6 +1183,16 @@ async def _exec_design(inp, workspace):
     await asyncio.to_thread((pathlib.Path(workspace.root) / fig_rel).write_bytes, fig)
     note = (f" (named '{name}' so it doesn't overwrite the existing '{requested}')"
             if name != requested else "")
+    # Open the EDITABLE .fig in the in-canvas editor by default — the user came to
+    # DESIGN, so every render lands them in a live editor they can refine, not a flat
+    # PNG. The image is still saved (for download/sharing). Fall back to opening the
+    # image only where no editor is wired up (DESIGN_EDITOR_URL unset).
+    if os.environ.get("DESIGN_EDITOR_URL"):
+        return {"_model": f"Design saved ({rel}, {len(image) // 1024} KB{note}); its editable "
+                          f"source {fig_rel} is now OPEN in the in-canvas editor — the user can "
+                          f"edit it live. Tell them they can tweak it directly there, or ask you "
+                          f"to change it (colors, copy, layout) and you'll apply it with Design edit.",
+                "_ui": {"type": "ui", "action": "open_canvas", "path": fig_rel, "name": f"{name}.fig"}}
     return {"_model": f"Design saved to {rel} ({len(image) // 1024} KB){note} and opened on the "
                       f"canvas. Editable source: {fig_rel}.",
             "_ui": {"type": "ui", "action": "open_canvas", "path": rel, "name": f"{name}.{fmt}"}}
