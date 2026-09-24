@@ -31,16 +31,27 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile }: {
   writeFile: (path: string, data: BlobPart, silent?: boolean) => Promise<void>;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const [status, setStatus] = useState<"loading" | "ready" | "saved" | "error">("loading");
+  const [status, setStatus] = useState<"loading" | "ready" | "saved" | "error" | "saveerror">("loading");
   const base = editorUrl.replace(/\/+$/, "");
   // Sync the editor's light/dark to the app's current mode (set at load; re-open
-  // to re-sync). Cycls toggles a `.dark` class on the document root.
-  const theme = typeof document !== "undefined" && document.documentElement.classList.contains("dark") ? "dark" : "light";
+  // to re-sync). Cycls toggles the `.dark` class on document.body (see lib/utils
+  // applyTheme + use-dark-mode) — NOT on <html> — so read it there.
+  const theme = typeof document !== "undefined" && document.body.classList.contains("dark") ? "dark" : "light";
   const src = `${base}/?embed=cycls&theme=${theme}`;
   const origin = (() => { try { return new URL(editorUrl).origin; } catch { return "*"; } })();
 
   useEffect(() => {
     let disposed = false;
+    // Once the editor reports the doc loaded, it's live and editable. A later
+    // "error" is a background hiccup (e.g. an auto-save blip), NOT a broken editor —
+    // so it must not latch the scary permanent "Editor error". Only a failure
+    // BEFORE load is a real, sticky error.
+    let loaded = false;
+    const flash = (s: "saved" | "saveerror") => {
+      if (disposed) return;
+      setStatus(s);
+      window.setTimeout(() => { if (!disposed) setStatus("ready"); }, 1500);
+    };
     const post = (msg: Record<string, unknown>) =>
       frameRef.current?.contentWindow?.postMessage({ target: "cycls-editor", ...msg }, origin);
 
@@ -56,21 +67,22 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile }: {
           if (!disposed) setStatus("error");
         }
       } else if (m.type === "loaded") {
+        loaded = true;
         if (!disposed) setStatus("ready");
       } else if (m.type === "saved" && typeof m.fig === "string") {
         try {
           // Cast: TS 5.7 types Uint8Array as Uint8Array<ArrayBufferLike>, which
           // doesn't structurally match BlobPart's ArrayBufferView<ArrayBuffer>.
           await writeFile(path, fromBase64(m.fig) as unknown as BlobPart);
-          if (!disposed) {
-            setStatus("saved");
-            window.setTimeout(() => { if (!disposed) setStatus("ready"); }, 1500);
-          }
+          flash("saved");
         } catch {
-          if (!disposed) setStatus("error");
+          flash("saveerror");
         }
       } else if (m.type === "error") {
-        if (!disposed) setStatus("error");
+        // Pre-load: the editor genuinely failed to open → sticky "Editor error".
+        // Post-load: a background blip (e.g. an auto-save) → transient, then the
+        // live editor stays up.
+        if (!disposed) loaded ? flash("saveerror") : setStatus("error");
       }
     };
     // The agent edits an open design live: chat.tsx dispatches this when its
@@ -97,7 +109,13 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile }: {
       <iframe ref={frameRef} src={src} title={name} className="h-full w-full border-0" />
       {status !== "ready" && (
         <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow backdrop-blur">
-          {status === "error" ? "Editor error" : status === "saved" ? "Saved ✓" : "Loading editor…"}
+          {status === "error"
+            ? "Editor error"
+            : status === "saveerror"
+              ? "Couldn’t save — will retry"
+              : status === "saved"
+                ? "Saved ✓"
+                : "Loading editor…"}
         </div>
       )}
     </div>

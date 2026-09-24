@@ -135,7 +135,8 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
       fetchConnector: shared ? undefined : fetchConnector,
       appData: shared ? undefined : appData,
       context: {
-        theme: document.documentElement.classList.contains("dark") ? "dark" : "light",
+        // Dark mode lives on document.body (lib/utils applyTheme), not <html>.
+        theme: document.body.classList.contains("dark") ? "dark" : "light",
         locale: document.documentElement.lang || "en",
       },
     });

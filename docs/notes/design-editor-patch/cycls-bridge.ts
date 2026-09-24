@@ -123,6 +123,11 @@ export function startCyclsEmbedBridge(): void {
   let name = 'design.fig'
   let lastVersion = -1
   let saving = false
+  // A freshly loaded doc keeps mutating for a beat (fonts re-shape, the first
+  // frame renders) before the human touches anything. We hold auto-save off until
+  // past this timestamp AND the renderer is warm, so we never fire a save against
+  // a cold renderer — that early save fails and surfaces as a spurious editor error.
+  let settleUntil = 0
 
   const post = (msg: Record<string, unknown>): void => {
     parentWindow.postMessage({ source: 'cycls-editor', ...msg }, '*')
@@ -262,6 +267,7 @@ export function startCyclsEmbedBridge(): void {
             try { (store as { zoomToFit?: () => void }).zoomToFit?.() } catch { /* ignore */ }
           }
           lastVersion = getActiveStore()?.state.sceneVersion ?? -1
+          settleUntil = performance.now() + 2500 // absorb the post-load settling
           post({ type: 'loaded', name })
         } catch (error) {
           post({ type: 'error', message: String((error as Error)?.message ?? error) })
@@ -282,10 +288,14 @@ export function startCyclsEmbedBridge(): void {
   }
   window.setInterval(() => {
     const store = getActiveStore()
-    if (store && lastVersion !== -1 && store.state.sceneVersion !== lastVersion) {
-      lastVersion = store.state.sceneVersion   // mark seen so we don't re-trigger every tick
-      scheduleSave()
-    }
+    if (!store || lastVersion === -1) return
+    if (store.state.sceneVersion === lastVersion) return
+    lastVersion = store.state.sceneVersion   // mark seen so we don't re-trigger every tick
+    // Only persist a genuine post-settle edit, and only once the renderer is warm
+    // (exportFigFile needs its CanvasKit). Changes during the initial settle are the
+    // doc rendering itself, not the human — re-baseline above and skip the save.
+    const warm = !!(store as { renderer?: { ck?: unknown } }).renderer?.ck
+    if (warm && performance.now() >= settleUntil) scheduleSave()
   }, 700)
 
   post({ type: 'ready' })
