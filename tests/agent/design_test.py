@@ -121,6 +121,24 @@ def test_service_error_is_runtimeerror(monkeypatch):
     assert not isinstance(ei.value, design.Unavailable)        # service is up → a plain error
 
 
+@pytest.mark.parametrize("status,words", [(413, "too large"), (429, "too many")])
+def test_bare_413_and_429_read_as_sentences(monkeypatch, status, words):
+    # The platform's front end refuses an oversized body before the service sees
+    # it (no JSON) — the agent still gets a sentence, not "design service 413: ".
+    monkeypatch.setenv("DESIGN_URL", "https://d")
+    _mock(monkeypatch, _FakeResp(status, None))
+    with pytest.raises(RuntimeError) as ei:
+        asyncio.run(design.render({}))
+    assert words in str(ei.value)
+
+
+def test_the_services_own_429_message_wins(monkeypatch):
+    monkeypatch.setenv("DESIGN_URL", "https://d")
+    _mock(monkeypatch, _FakeResp(429, {"ok": False, "error": "too many design requests — retry in 7 s"}))
+    with pytest.raises(RuntimeError, match="retry in 7 s"):
+        asyncio.run(design.render({}))
+
+
 # ---- the Design tool (executor + gating + label), with render faked ----
 
 def _ws(tmp_path):

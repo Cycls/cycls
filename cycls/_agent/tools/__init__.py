@@ -361,7 +361,7 @@ _DESIGN_TOOL = {
                    "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), or `edit` a rendered design (checked, saved, replayed live in the editor)."},
         "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes} or a deck {frames:[...]} (one per slide, export pptx); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image (image `src` = a workspace file); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
-                   "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s)."},
+                   "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s). Scripts may use only `figma` (and `console`): no `this`, globals, network, eval/Function or `.constructor` — anything else is refused before it runs."},
         "intent": {"type": "string",
                    "description": "For `edit`: a short label of the change (e.g. 'making the headline gold') shown on the live 'Super' cursor."},
         "name": {"type": "string", "description": "Output file base name, e.g. `launch` (lowercase, no extension)."},

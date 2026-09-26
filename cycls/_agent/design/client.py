@@ -67,8 +67,14 @@ async def _post(path, body, user_id=None):
     except Exception:
         data = None
     if resp.status_code != 200 or not (isinstance(data, dict) and data.get("ok")):
-        # A well-formed failure carries {ok:false,error}; anything else is raw.
+        # A well-formed failure carries {ok:false,error}; anything else is raw. A
+        # request over the size cap can be refused by the platform's front end
+        # before the service sees it (no JSON), so that one is named here too.
         detail = data.get("error") if isinstance(data, dict) else None
+        if not detail and resp.status_code == 413:
+            detail = "the design request is too large — use smaller or fewer images"
+        if not detail and resp.status_code == 429:
+            detail = "too many design requests — wait a moment and try again"
         raise RuntimeError(detail or f"design service {resp.status_code}: {resp.text[:200]}")
     return data
 
