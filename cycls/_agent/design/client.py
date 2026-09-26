@@ -90,6 +90,15 @@ async def render(spec, fmt="png", scale=2, user_id=None):
     return _decode(await _post("/render", {"spec": spec, "format": fmt, "scale": scale, "preview": True}, user_id))
 
 
+async def export(fig, fmt="png", scale=2, width=None, user_id=None):
+    """Re-export an edited `.fig` (bytes) → image bytes. `width`, the old image's
+    pixel width, keeps its resolution (the service derives the scale from it)."""
+    body = {"fig": base64.b64encode(fig).decode(), "format": fmt, "scale": scale}
+    if width:
+        body["width"] = width
+    return base64.b64decode((await _post("/export", body, user_id))["image_base64"])
+
+
 async def evaluate(script, fmt="png", scale=2, user_id=None):
     """Escape hatch: run a raw OpenPencil/Figma-API script (it must log
     `__FRAME__<id>`) → (image_bytes, fig_bytes, frame_id, fmt, preview_bytes)."""

@@ -196,7 +196,26 @@ chat.tsx ──▶ CustomEvent("cycls:design-command") ──▶ DesignEditorVie
                                                         │  PUT /files
                                                         ▼
                                          designs/<name>.fig (workspace)
+                                                        │  design/refresh (debounced)
+                                                        ▼  POST /export {fig, format, width}
+                                         designs/<name>.png|jpg|webp|svg|pptx re-exported
 ```
+
+**The image follows the `.fig`.** A render saves `designs/<name>.<fmt>` beside the
+`.fig`, but every edit after that — the human's or the agent's `edit`, including a
+self-QA fix — lands only in the `.fig`. Left alone, the image goes stale: a
+download, a `read`, or a bash `cp` into an email or a deck gets the pre-edit
+design. So the `PUT /files` route hands every save to `design/refresh.schedule`,
+which, for a `designs/*.fig` (only there — a user's own `logo.fig` + `logo.png`
+elsewhere is never touched), re-exports each image **already beside it** through
+the service's `POST /export` once the saves go quiet (2 s debounce; the editor
+saves in bursts while someone drags, and a newer save cancels an export in
+flight). A raster sends its old pixel width, and the service sets the scale to
+width ÷ frame width, so a @1x render stays @1x. Best effort: a failure logs and
+leaves the old image — it never fails the save. Eager rather than on-read,
+because the sandbox reads the file straight off the volume where no hook can
+intercept it. The `edit` ack tells the model the image catches up a few seconds
+after the save.
 
 The embedded editor is a **patched** OpenPencil fork (three source patches +
 forcing synchronous `.fig` compression so the in-page save doesn't hang on the

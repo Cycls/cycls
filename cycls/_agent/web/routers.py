@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 from cycls._app.db import DB, Conflict, Workspace, workspace
 from cycls._agent import connectors as oauth, credentials, spill, state, trash
 from cycls._agent.web import office
+from cycls._agent.design import refresh as design_refresh
 from cycls._agent.logs import log
 from cycls._agent.tools import tool_step, detailed, excerpt
 
@@ -740,6 +741,9 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             tmp.unlink(missing_ok=True)
             raise
         _catalog_drop(ws.root)
+        # The design editor saves an edited designs/<name>.fig here; re-export the
+        # image beside it so a download (or the agent) never gets the pre-edit one.
+        design_refresh.schedule(ws.root, file_path.relative_to(Path(ws.root).resolve()).as_posix(), ws.subject)
         return {"ok": True}
 
     @r.post("/files-batch/{path:path}")

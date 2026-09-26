@@ -1032,6 +1032,17 @@ def test_raw_body_upload_streams_to_disk(tmp_path):
     assert not dest.with_name("big.bin.part").exists()
 
 
+def test_put_schedules_a_design_reexport(tmp_path, monkeypatch):
+    """The design editor saves an edited .fig with a PUT — that must schedule the
+    re-export of the image beside it (the refresh module filters to designs/*.fig)."""
+    from cycls._agent.design import refresh
+    seen = []
+    monkeypatch.setattr(refresh, "schedule", lambda root, rel, user_id=None: seen.append((rel, user_id)))
+    client = _ws_routers_client(tmp_path)
+    assert client.put("/files/designs/launch.fig", content=b"FIG").status_code == 200
+    assert seen and seen[-1][0] == "designs/launch.fig"
+
+
 def test_raw_body_upload_over_cap_413(tmp_path):
     client = _ws_routers_client(tmp_path, max_upload=1)
     r = client.put("/files/big.bin", content=b"\0" * (1024 * 1024 + 1))

@@ -1414,7 +1414,8 @@ async def _exec_design(inp, workspace):
         if intent := inp.get("intent"):
             ui["intent"] = str(intent)[:80]   # shown on the live "Super" cursor
         return {"_model": f"Sent the edit to the open editor for {rel} — the Super cursor applies it "
-                          f"live on the canvas and it auto-saves.",
+                          f"live on the canvas and it auto-saves; the image beside it (designs/{name}.png "
+                          f"etc.) re-exports from the saved design a few seconds later.",
                 "_ui": ui}
     notes = []
     try:

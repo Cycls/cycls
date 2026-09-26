@@ -556,3 +556,83 @@ def test_a_shape_color_is_its_fill(tmp_path, monkeypatch):
     line, rect = calls["spec"]["nodes"]
     assert line["fill"] == "#3d2b1f" and "color" not in line               # the model's colour, not the accent
     assert rect["fill"] == "#ff0000"                                        # an explicit fill wins
+
+
+# ---- an edited .fig re-exports the image beside it ----
+
+from cycls._agent.design import refresh
+
+
+def test_export_posts_the_fig(monkeypatch):
+    monkeypatch.setenv("DESIGN_URL", "https://d")
+    _mock(monkeypatch, _FakeResp(200, {"ok": True, "format": "png", "image_base64": base64.b64encode(b"NEWPNG").decode()}))
+    assert asyncio.run(design.export(b"FIGBYTES", fmt="png", width=2160, user_id="u")) == b"NEWPNG"
+    last = _FakeClient.last
+    assert last["url"] == "https://d/export"
+    assert last["json"] == {"fig": base64.b64encode(b"FIGBYTES").decode(), "format": "png", "scale": 2, "width": 2160}
+
+
+def _refresh_env(tmp_path, monkeypatch, fail=False):
+    monkeypatch.setenv("DESIGN_URL", "https://d")
+    monkeypatch.setattr(refresh, "DELAY", 0.05)
+    calls = []
+
+    async def _export(fig, fmt="png", scale=2, width=None, user_id=None):
+        calls.append({"fig": fig, "fmt": fmt, "width": width, "user_id": user_id})
+        if fail:
+            raise RuntimeError("service down")
+        return f"NEW-{fmt}".encode()
+    monkeypatch.setattr(refresh, "export", _export)
+    d = tmp_path / "designs"
+    d.mkdir()
+    (d / "launch.fig").write_bytes(b"EDITED-FIG")
+    (d / "launch.png").write_bytes(_png(2160, 2160))
+    (d / "launch.pptx").write_bytes(b"OLD-PPTX")
+    return calls
+
+
+def _saves(root, *rels):
+    async def go():
+        for rel in rels:
+            refresh.schedule(root, rel, "org:u")
+        tasks = [t for t in refresh._pending.values()]
+        await asyncio.gather(*tasks, return_exceptions=True)
+    asyncio.run(go())
+
+
+def test_saved_fig_reexports_its_existing_images(tmp_path, monkeypatch):
+    calls = _refresh_env(tmp_path, monkeypatch)
+    _saves(tmp_path, "designs/launch.fig")
+    d = tmp_path / "designs"
+    assert (d / "launch.png").read_bytes() == b"NEW-png" and (d / "launch.pptx").read_bytes() == b"NEW-pptx"
+    assert not (d / "launch.jpg").exists()                                  # only images already beside it
+    by = {c["fmt"]: c for c in calls}
+    assert set(by) == {"png", "pptx"} and by["png"]["fig"] == b"EDITED-FIG"
+    assert by["png"]["width"] == 2160 and by["pptx"]["width"] is None       # a raster keeps its resolution
+    assert by["png"]["user_id"] == "org:u"
+    assert refresh._pending == {}
+
+
+def test_a_burst_of_saves_exports_once(tmp_path, monkeypatch):
+    calls = _refresh_env(tmp_path, monkeypatch)
+    _saves(tmp_path, "designs/launch.fig", "designs/launch.fig", "designs/launch.fig")
+    assert sorted(c["fmt"] for c in calls) == ["png", "pptx"]               # debounced: the last save only
+
+
+def test_reexport_failure_keeps_the_old_image(tmp_path, monkeypatch):
+    _refresh_env(tmp_path, monkeypatch, fail=True)
+    old = (tmp_path / "designs" / "launch.png").read_bytes()
+    _saves(tmp_path, "designs/launch.fig")                                  # logs, never raises
+    assert (tmp_path / "designs" / "launch.png").read_bytes() == old
+
+
+def test_only_design_figs_reexport(tmp_path, monkeypatch):
+    calls = _refresh_env(tmp_path, monkeypatch)
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "notes" / "logo.fig").write_bytes(b"FIG")
+    (tmp_path / "notes" / "logo.png").write_bytes(_png(10, 10))             # a user's own pair — never overwritten
+    _saves(tmp_path, "notes/logo.fig", "designs/launch.png")
+    assert calls == [] and (tmp_path / "notes" / "logo.png").read_bytes() == _png(10, 10)
+    monkeypatch.delenv("DESIGN_URL")                                        # no service → nothing to do
+    _saves(tmp_path, "designs/launch.fig")
+    assert calls == []
