@@ -95,10 +95,38 @@ thin divider, `h` defaults to 2), and `image` (below). A shape given `color` but
 design has depth and overlays, not just flat rectangles. Text opacity is applied
 as fill alpha (setting a text node's own opacity collapses its auto-width box).
 
-Fonts available headless: **Inter** only — Light, Regular, Medium, Bold, Black. Any
-other family (Arial included) renders the text **blank**, so `_exec_design` maps
-every font onto Inter at the nearest weight and names the swap in the ack. (Arabic text is set in the bundled
-Noto Naskh Arabic automatically). `size` is `[W, H]` or a **preset** the SDK
+**Fonts: any Google Font.** A text `font` is a family plus a style —
+`"Playfair Display Bold"`, `"Montserrat Extra Bold Italic"` — or `{family, style}`,
+with optional `weight` (100–900) and `italic`. The renderer (OpenPencil core) takes
+Inter and Noto Naskh Arabic from its bundle and everything else from Google Fonts /
+Fontsource at export; the editor in a browser loads the same families from
+Fontsource. The service's `fonts.ts` makes that dependable before every render:
+
+- **Parsing.** Style words are peeled off the *end*, so `"Noto Sans"` stays one
+  family and `"Black Ops One"` keeps its "Black". (The old builder split at the first
+  space — `"Playfair Display Bold"` became family "Playfair" — which is why every
+  multi-word family rendered blank and fonts were wrongly believed to be Inter-only.)
+- **Figma style names, with spaces.** OpenPencil's `fontName` setter maps only
+  `"Semi Bold"` / `"Extra Bold"` / `"Extra Light"`; `"SemiBold"` silently became 400.
+  Every resolved style is the spaced form, in the service and the builder.
+- **Open twins.** Arial / Helvetica → Arimo, Times → Tinos, Courier → Cousine,
+  Georgia → Gelasio, Calibri → Carlito, … (noted to the model).
+- **Arabic.** Arabic text keeps an Arabic-capable face (Cairo, Tajawal, Almarai, IBM
+  Plex Sans Arabic, Amiri, Noto Kufi Arabic, …); anything else becomes Noto Naskh
+  Arabic, since a Latin face would render the Arabic blank in the editor.
+- **RTL alignment.** The renderer reads LEFT/RIGHT as start/end in the paragraph's own
+  direction, so an Arabic line set `align: "right"` landed on the left. The builder
+  swaps the two for a paragraph whose first strong letter is Arabic/Hebrew, so `align`
+  means the visual side. (Edit scripts set `textAlignHorizontal` raw — the tool
+  description tells the model it follows the text's direction there.)
+- **Availability.** Each face is checked with the renderer's own `WebFontResolver`
+  (cached per process). A weight the family lacks falls back to its Regular with a
+  note; an unknown family is a 422 naming it — never blank text. `/apply` checks the
+  fonts an edit leaves on the page the same way.
+
+The service returns `notes` for what it changed; the SDK appends them to the ack.
+
+`size` is `[W, H]` or a **preset** the SDK
 resolves before the request: `square` 1080², `post-portrait` 1080×1350, `story` /
 `reel` 1080×1920, `slide` / `wide` 1920×1080, `x-post` 1600×900, `a4-poster`
 1240×1754 (150dpi, so the default @2x render is print-ready 300dpi). An unknown
@@ -113,7 +141,7 @@ skill's file), `_exec_design` fills what the spec **left out**: a frame `fill` �
 the brand primary, a shape `fill` → the accent. It never overrides a value the
 model set, and reads only the two colours (flat `primary_color`/`accent_color`,
 or the older nested `colors: primary/accent`) with a pattern — the SDK carries no
-YAML dependency. Brand fonts are not applied: the service renders Inter only. With a kit present, the ack says what it filled, or flags a design that uses
+YAML dependency. Brand fonts (`font_heading`, `font_body`, or nested `fonts:`) fill a text node with no `font` — the heading face at display sizes (≥ 48px), the body face below; a fonts-only kit applies no colours. With a kit present, the ack says what it filled, or flags a design that uses
 neither brand colour. Independently of brand, text with no `color` gets white or
 near-black by WCAG luminance against its frame's fill, so a forgotten colour is
 never black-on-navy.

@@ -74,9 +74,9 @@ def test_render_posts_and_decodes(monkeypatch):
     monkeypatch.setenv("DESIGN_URL", "https://d.cycls.ai/")     # trailing slash trimmed
     monkeypatch.setenv("DESIGN_SECRET", "sek")
     _mock(monkeypatch, _FakeResp(200, _ok(b"\x89PNGdata", b"figdata")))
-    img, fig, fid, fmt, preview = asyncio.run(design.render({"size": [1080, 1080]}, fmt="png", scale=2, user_id="org:u"))
+    img, fig, fid, fmt, preview, notes = asyncio.run(design.render({"size": [1080, 1080]}, fmt="png", scale=2, user_id="org:u"))
     assert img == b"\x89PNGdata" and fig == b"figdata" and fid == "0:6" and fmt == "png"
-    assert preview is None                                     # a service that predates previews
+    assert preview is None and notes == []                     # a service that predates previews / notes
     last = _FakeClient.last
     assert last["url"] == "https://d.cycls.ai/render"
     assert last["headers"]["Authorization"] == "Bearer sek"
@@ -133,12 +133,12 @@ def _text(out):
     return m if isinstance(m, str) else next(b["text"] for b in m if b["type"] == "text")
 
 
-def _fake_render(monkeypatch, image=b"\x89PNGrender", fig=b"FIGZ", preview=None):
+def _fake_render(monkeypatch, image=b"\x89PNGrender", fig=b"FIGZ", preview=None, notes=()):
     calls = {}
 
     async def _r(spec, fmt="png", scale=2, user_id=None):
         calls.update(spec=spec, fmt=fmt, scale=scale, user_id=user_id)
-        return image, fig, "0:6", fmt, preview
+        return image, fig, "0:6", fmt, preview, list(notes)
 
     monkeypatch.setattr("cycls._agent.design.render", _r)
     return calls
@@ -201,7 +201,7 @@ def test_script_escape_hatch(tmp_path, monkeypatch):
 
     async def _e(script, fmt="png", scale=2, user_id=None):
         got.update(script=script, fmt=fmt)
-        return b"PPTX", b"FIG", "0:1", fmt, None
+        return b"PPTX", b"FIG", "0:1", fmt, None, []
 
     monkeypatch.setattr("cycls._agent.design.evaluate", _e)
     out = asyncio.run(_exec_design(
@@ -443,15 +443,38 @@ def test_unknown_node_type_is_an_error(tmp_path, monkeypatch):
     assert calls == {}                                                      # never rendered a silently-missing node
 
 
-def test_fonts_map_onto_inter(tmp_path, monkeypatch):
-    # Arial (once advertised) and any other family render the text BLANK — Inter only.
-    calls = _fake_render(monkeypatch)
-    fonts = ["Arial", "Arial Bold", "Playfair Display SemiBold", "Montserrat Black", "Inter Medium", "Lato Light"]
+def test_fonts_go_to_the_service_as_written(tmp_path, monkeypatch):
+    # The service resolves any Google Font (and swaps what isn't open); the SDK no
+    # longer forces Inter — that guard hid a working capability.
+    calls = _fake_render(monkeypatch, notes=["Arial isn't an open font; used Arimo, its closest open match"])
+    fonts = ["Playfair Display Bold", {"family": "Cairo", "style": "Semi Bold"}, "Arial"]
     out = asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [
-        {"type": "text", "text": "x", "font": f} for f in fonts]}}, _ws(tmp_path)))
-    assert [n["font"] for n in calls["spec"]["nodes"]] == [
-        "Inter Regular", "Inter Bold", "Inter Bold", "Inter Black", "Inter Medium", "Inter Light"]
-    assert "Arial → Inter Regular" in _text(out) and "Inter Medium →" not in _text(out)   # only real changes named
+        {"type": "text", "text": "x", "font": f, "weight": 800} for f in fonts]}}, _ws(tmp_path)))
+    assert [n["font"] for n in calls["spec"]["nodes"]] == fonts
+    assert all(n["weight"] == 800 for n in calls["spec"]["nodes"])          # weight / italic ride along
+    assert "used Arimo" in _text(out)                                     # the service's note reaches the model
+
+
+def test_brand_fonts_fill_only_unset_fonts(tmp_path, monkeypatch):
+    _brand(tmp_path, "primary_color: '#0c2340'\nfont_heading: Playfair Display\nfont_body: \"DM Sans\"\n")
+    calls = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [
+        {"type": "text", "text": "Big", "size": 96},                     # display size → heading face
+        {"type": "text", "text": "small", "size": 28},                   # body
+        {"type": "text", "text": "mine", "size": 96, "font": "Bebas Neue"},   # explicit → kept
+    ]}}, _ws(tmp_path)))
+    assert [n["font"] for n in calls["spec"]["nodes"]] == ["Playfair Display", "DM Sans", "Bebas Neue"]
+    assert "Brand fonts applied to 2 text node(s)" in _text(out)
+
+
+def test_a_fonts_only_brand_kit_leaves_colours_alone(tmp_path, monkeypatch):
+    _brand(tmp_path, "fonts:\n  heading: Cairo\n  body: Tajawal\n")
+    calls = _fake_render(monkeypatch)
+    asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [
+        {"type": "rect", "w": 10, "h": 10}, {"type": "text", "text": "x", "size": 20}]}}, _ws(tmp_path)))
+    s = calls["spec"]
+    assert "fill" not in s and "fill" not in s["nodes"][0]                # no colours to apply
+    assert s["nodes"][1]["font"] == "Tajawal"
 
 
 

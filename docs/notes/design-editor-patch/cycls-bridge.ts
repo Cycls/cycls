@@ -18,6 +18,7 @@
 //   than leave this editor on a stale document it could later auto-save over it.
 import { encodeBase64, decodeBase64 } from '@open-pencil/core/bytes'
 import { exportFigFile } from '@open-pencil/core/io/formats/fig'
+import { fontManager } from '@open-pencil/core/text'
 import { wrapEvalCode } from '@open-pencil/core/tools'
 import { releaseFigPopulationWorker } from '#core/kiwi/fig/population/client'
 import { releaseOriginalFigArchive } from '#core/kiwi/fig/session/original-archive'
@@ -282,6 +283,42 @@ export function startCyclsEmbedBridge(): void {
       void saveBack()
     }
   })
+
+  // Late fonts. A web-font subset (the Arabic letters of Cairo, a fallback pack)
+  // can register AFTER a text node was first drawn. The renderer only re-shapes the
+  // nodes it was tracking as waiting on a font, so an untracked one keeps its cached
+  // picture — the glyphs it lacked stay blank (Arabic text raced: same doc, same
+  // build, blank on one load in two). Whenever the font set changes, drop every
+  // cached text picture so the next frame shapes with the fonts loaded now — the
+  // same reset the renderer's own settleFontDemand applies to the nodes it tracked.
+  // Plain property resets, not graph edits: the scene version doesn't move, so this
+  // never triggers an auto-save.
+  let fontGeneration = fontManager.generation()
+  window.setInterval(() => {
+    const generation = fontManager.generation()
+    if (generation === fontGeneration) return
+    fontGeneration = generation
+    let store: ReturnType<typeof getActiveStore>
+    try { store = getActiveStore() } catch { return }
+    const renderer = store?.renderer as unknown as {
+      fontGeneration?: number
+      textPictureGenerations?: Map<string, unknown>
+      invalidateAllPictures?: () => void
+    } | null
+    if (!store || !renderer) return
+    try {
+      for (const node of store.graph.getAllNodes()) {
+        if (node.type === 'TEXT') (node as { textPicture: Uint8Array | null }).textPicture = null
+      }
+      renderer.textPictureGenerations?.clear()
+      renderer.fontGeneration = generation
+      renderer.invalidateAllPictures?.()
+      store.requestRender()
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.log('[cycls] font refresh failed', error)
+    }
+  }, 400)
 
   // Auto-persist: watch the scene version and save the edited .fig back to the
   // parent shortly after the human stops editing (debounced), so the workspace

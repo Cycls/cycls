@@ -74,19 +74,22 @@ async def _post(path, body, user_id=None):
 
 
 def _decode(data):
-    """Service JSON → (image_bytes, fig_bytes, frame_id, format, preview_bytes).
+    """Service JSON → (image_bytes, fig_bytes, frame_id, format, preview_bytes, notes).
     The preview — a small @1x JPEG of the first frame, what the agent looks at to
-    QA its render — is None from a service that predates it."""
+    QA its render — is None from a service that predates it. `notes` are what the
+    service changed to make the design render (a font swapped for its open twin, a
+    weight the family lacks) — lines for the agent's ack."""
     return (base64.b64decode(data["image_base64"]),
             base64.b64decode(data["fig_base64"]),
             data.get("frameId"), data.get("format"),
-            base64.b64decode(data["preview_base64"]) if data.get("preview_base64") else None)
+            base64.b64decode(data["preview_base64"]) if data.get("preview_base64") else None,
+            [str(n) for n in data.get("notes") or []])
 
 
 async def render(spec, fmt="png", scale=2, user_id=None):
     """Render a declarative design spec → (image_bytes, fig_bytes, frame_id, fmt,
-    preview_bytes). `spec` is `{size:[w,h], fill, nodes:[...]}` (see the Design
-    tool description)."""
+    preview_bytes, notes). `spec` is `{size:[w,h], fill, nodes:[...]}` (see the
+    Design tool description)."""
     return _decode(await _post("/render", {"spec": spec, "format": fmt, "scale": scale, "preview": True}, user_id))
 
 
@@ -109,5 +112,5 @@ async def export(fig, fmt="png", scale=2, width=None, user_id=None):
 
 async def evaluate(script, fmt="png", scale=2, user_id=None):
     """Escape hatch: run a raw OpenPencil/Figma-API script (it must log
-    `__FRAME__<id>`) → (image_bytes, fig_bytes, frame_id, fmt, preview_bytes)."""
+    `__FRAME__<id>`) → (image_bytes, fig_bytes, frame_id, fmt, preview_bytes, notes)."""
     return _decode(await _post("/eval", {"script": script, "format": fmt, "scale": scale, "preview": True}, user_id))

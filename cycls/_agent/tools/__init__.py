@@ -273,8 +273,8 @@ _DESIGN_TOOL = {
         "than a flat colour.\n"
         "  Node types (every node needs its `type`):\n"
         "    text    {\"type\":\"text\",\"text\":\"…\",\"x\":,\"y\":,\"w\"?:,\"size\":,"
-        "\"font\":\"Inter Bold\"|\"Inter Medium\"|\"Inter Regular\"|\"Inter Light\"|\"Inter Black\" "
-        "(Inter is the only family),\"color\":<paint>,"
+        "\"font\"?:\"Playfair Display Bold\"|{\"family\":,\"style\":},\"weight\"?:100-900,\"italic\"?:bool,"
+        "\"color\":<paint>,"
         "\"align\"?:\"left|center|right\",\"lineHeight\"?:px,\"letterSpacing\"?:px,\"opacity\"?:0-1}\n"
         "    rect    {\"type\":\"rect\",\"x\":,\"y\":,\"w\":,\"h\":,\"radius\"?:,\"fill\":<paint>,"
         "\"stroke\"?:\"#hex\",\"strokeWeight\"?:,\"opacity\"?:,\"shadow\"?:}\n"
@@ -301,10 +301,20 @@ _DESIGN_TOOL = {
         "margins (~8–10% of the width), and a touch of depth (a shadow on the button or "
         "a card, or a big soft low-opacity ellipse bleeding off an edge for flair). "
         "A pill button = a rect with radius = h/2 and centered text.\n"
-        "  BRAND: if the workspace has a brand kit (brand/brand.yaml), a background `fill` "
-        "you leave out becomes the brand primary and a shape `fill` the brand accent — or "
-        "write the brand's hex colours yourself. Text with no `color` gets white or "
-        "near-black, whichever reads on its background.\n"
+        "  FONTS: any Google Font by its exact family name plus a style — \"Playfair Display "
+        "Bold\", \"DM Sans Medium\", \"Montserrat Extra Bold Italic\", \"Bebas Neue\" — or "
+        "{\"family\":\"Poppins\",\"style\":\"Semi Bold\"}; `weight` and `italic` work too; the "
+        "default is Inter. Pair a characterful headline face (a serif or display font) with a "
+        "clean sans for body copy. Arabic text needs an Arabic font — Cairo, Tajawal, Almarai, "
+        "IBM Plex Sans Arabic, Amiri, Noto Kufi Arabic, Readex Pro; any other face falls back "
+        "to Noto Naskh Arabic. Arial / Helvetica / Times are swapped for their open twins. A "
+        "font that doesn't exist is an error; a weight the family lacks falls back to Regular "
+        "— the result tells you either way.\n"
+        "  BRAND: if the workspace has a brand kit (brand/brand.yaml), what you leave out comes "
+        "from it: a background `fill` → the brand primary, a shape `fill` → the accent, a text "
+        "`font` → the brand heading face (display sizes, ≥48px) or body face — or write the "
+        "brand's colours and fonts yourself. Text with no `color` gets white or near-black, "
+        "whichever reads on its background.\n"
         "  LAYOUT: leave vertical room for text that WRAPS — give any multi-word text a "
         "`w` (wrap width); a headline can run 2–3 lines (budget ~1.2×`size` per line, or "
         "set `lineHeight`), and put the NEXT node below the whole wrapped block so "
@@ -331,7 +341,11 @@ _DESIGN_TOOL = {
         "design is open, the user WATCHES a labeled 'Super' cursor replay your change live. "
         "ALWAYS set `figma.currentPage.selection` to the node(s) you change so it highlights "
         "under the cursor, and pass a short `intent` (e.g. 'making the headline gold') shown "
-        "on that cursor. Use `edit` to tweak a design ('bigger headline', 'move the button "
+        "on that cursor. To change a font set `t.fontName={family:'Poppins',style:'Semi Bold'}` "
+        "— Figma style names, with the spaces ('Semi Bold', 'Extra Bold'). In an edit, "
+        "`textAlignHorizontal` follows the text's own direction: on an Arabic line 'LEFT' is "
+        "its start, the RIGHT side (the spec's `align` already means the visual side). Use `edit` to tweak "
+        "a design ('bigger headline', 'move the button "
         "down'); use `render`/`script` to CREATE one. `name` is the design's base name (e.g. "
         "`launch`). No `console.log` needed.\n\n"
         "`format` is png (default), jpg, webp, svg, or pptx (PowerPoint; use it for "
@@ -1155,10 +1169,11 @@ def _norm_hex(c):
 
 def _load_brand(root):
     """The workspace brand kit — `brand/brand.yaml`, written by the brand-kit skill —
-    as {primary, accent}, or None when there is none or it names no hex primary.
-    Reads the flat keys (`primary_color: "#0c2340"`) and the older nested ones
-    (`colors:` / `  primary: …`) with a pattern, not a YAML parser: two colours are
-    all a design needs, and the SDK carries no YAML dependency."""
+    as {primary, accent, heading, body} (any may be None), or None when there is no
+    kit or it names neither a hex primary nor a font. Reads the flat keys
+    (`primary_color: "#0c2340"`, `font_heading: "Playfair Display"`) and the older
+    nested ones (`colors:` / `  primary: …`, `fonts:` / `  heading: …`) with a
+    pattern, not a YAML parser — the SDK carries no YAML dependency."""
     try:
         text = (pathlib.Path(root) / "brand" / "brand.yaml").read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -1169,8 +1184,15 @@ def _load_brand(root):
              or re.search(rf"^\s+{nested}\s*:\s*['\"]?({_HEX.pattern})\b", text, re.M))
         return _norm_hex(m.group(1)) if m else None
 
+    def font(flat, nested):
+        value = r"""\s*:\s*['"]?([A-Za-z][A-Za-z0-9 \-]*?)['"]?\s*(?:#.*)?$"""
+        m = re.search(rf"^{flat}{value}", text, re.M) or re.search(rf"^\s+{nested}{value}", text, re.M)
+        return m.group(1).strip() if m and m.group(1).strip().lower() not in ("null", "none", "") else None
+
     primary = pick("primary_color", "primary")
-    return {"primary": primary, "accent": pick("accent_color", "accent") or primary} if primary else None
+    brand = {"primary": primary, "accent": pick("accent_color", "accent") or primary,
+             "heading": font("font_heading", "heading"), "body": font("font_body", "body")}
+    return brand if primary or brand["heading"] or brand["body"] else None
 
 
 def _first_color(paint):
@@ -1191,18 +1213,6 @@ def _readable_on(bg):
         return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
     r, g, b = (int(bg[i:i + 2], 16) for i in (1, 3, 5))
     return "#ffffff" if 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b) < 0.179 else "#111111"
-
-
-def _design_font(font):
-    """A text `font` the renderer can draw. The service has Inter only — any other
-    family (Arial included) renders the text BLANK — so a font maps to Inter at the
-    nearest weight it carries: Light, Regular, Medium, Bold or Black."""
-    s = str(font).lower()
-    for keys, weight in ((("black", "heavy"), "Black"), (("bold",), "Bold"),
-                         (("medium",), "Medium"), (("light", "thin"), "Light")):
-        if any(k in s for k in keys):
-            return f"Inter {weight}"
-    return "Inter Regular"
 
 
 # An image node's bytes ride to the stateless service as base64 inside the spec,
@@ -1356,7 +1366,7 @@ def _prepare_spec(spec, brand, root=None):
     colors = {_norm_hex(m) for m in _HEX.findall(json.dumps(spec))}
     spec = json.loads(json.dumps(spec))
     frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
-    filled, fonts, image_bytes = 0, {}, 0
+    filled, branded_fonts, image_bytes = 0, 0, 0
     for fr in frames:
         if not isinstance(fr, dict):
             continue
@@ -1364,7 +1374,7 @@ def _prepare_spec(spec, brand, root=None):
             fr["size"] = W, H = _frame_size(fr)
         except ValueError as e:
             return None, f"Error: {e}.", []
-        if brand and fr.get("fill") is None:
+        if brand and brand["primary"] and fr.get("fill") is None:
             fr["fill"], filled = brand["primary"], filled + 1
         bg = _first_color(fr.get("fill"))
         for n in fr.get("nodes") or []:
@@ -1378,14 +1388,20 @@ def _prepare_spec(spec, brand, root=None):
                 if k in n and n[k] is not None:
                     n[k] = _num(n[k])
             if n.get("type") == "text":
-                if n.get("font") is not None and (f := _design_font(n["font"])) != n["font"]:
-                    fonts[str(n["font"])], n["font"] = f, f
+                # Fonts go to the service as written — it resolves any Google Font
+                # (and says what it swapped). A brand kit's fonts fill in where the spec
+                # named none: the heading face for display sizes, the body face below.
+                if brand and n.get("font") is None:
+                    face = brand["heading"] if (n.get("size") or 32) >= 48 else brand["body"]
+                    face = face or brand["heading"] or brand["body"]
+                    if face:
+                        n["font"], branded_fonts = face, branded_fonts + 1
                 if bg and n.get("color") is None and n.get("fill") is None:
                     n["color"] = _readable_on(bg)
             elif n.get("type") in ("rect", "ellipse", "line"):
                 if n.get("fill") is None and n.get("color") is not None:
                     n["fill"] = n.pop("color")          # a shape draws `fill` only — as text reads either
-                if brand and n.get("fill") is None:
+                if brand and brand["accent"] and n.get("fill") is None:
                     n["fill"], filled = brand["accent"], filled + 1
             elif n.get("type") == "image":
                 try:
@@ -1406,13 +1422,13 @@ def _prepare_spec(spec, brand, root=None):
                               f"{W}×{H} frame — set the frame's `size` (e.g. \"story\" for 1080×1920) "
                               f"or move it inside."), []
     notes = []
-    if fonts:
-        notes.append("The renderer has Inter only, so " + ", ".join(f"{a} → {b}" for a, b in fonts.items())
-                     + " (Inter Light / Regular / Medium / Bold / Black all work).")
+    if branded_fonts:
+        notes.append(f"Brand fonts applied to {branded_fonts} text node(s) with no font "
+                     f"(heading {brand['heading'] or brand['body']}, body {brand['body'] or brand['heading']}).")
     if brand and filled:
         notes.append(f"Brand kit applied to {filled} unset fill(s) "
                      f"(primary {brand['primary']}, accent {brand['accent']}).")
-    elif brand and not colors & {brand["primary"], brand["accent"]}:
+    elif brand and brand["primary"] and not colors & {brand["primary"], brand["accent"]}:
         notes.append(f"Note: the workspace has a brand kit (primary {brand['primary']}, accent "
                      f"{brand['accent']}) and this design uses neither — if it should be on-brand, fix that.")
     return spec, None, notes
@@ -1490,11 +1506,12 @@ async def _exec_design(inp, workspace):
             spec, err, notes = await asyncio.to_thread(lambda: _prepare_spec(inp["spec"], _load_brand(root), root))
             if err:
                 return err
-            image, fig, _fid, _fmt, preview = await design.render(spec, fmt=fmt, scale=scale, user_id=subject)
+            image, fig, _fid, _fmt, preview, service_notes = await design.render(spec, fmt=fmt, scale=scale, user_id=subject)
+            notes = [*notes, *service_notes]
         elif action == "script":
             if not inp.get("script"):
                 return "Error: `script` needs a `script` string ending in console.log('__FRAME__'+id)."
-            image, fig, _fid, _fmt, preview = await design.evaluate(inp["script"], fmt=fmt, scale=scale, user_id=subject)
+            image, fig, _fid, _fmt, preview, _notes = await design.evaluate(inp["script"], fmt=fmt, scale=scale, user_id=subject)
         else:
             return f"Error: unknown design action {action!r} (render or script)."
     except design.Unavailable as e:
