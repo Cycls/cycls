@@ -636,3 +636,52 @@ def test_only_design_figs_reexport(tmp_path, monkeypatch):
     monkeypatch.delenv("DESIGN_URL")                                        # no service → nothing to do
     _saves(tmp_path, "designs/launch.fig")
     assert calls == []
+
+
+# ---- layouts that would silently pile up at the frame edge ----
+
+def test_quoted_numbers_are_numbers(tmp_path, monkeypatch):
+    # A string y reached the renderer as "1300": its bounds check concatenated strings and
+    # clamped EVERY text box to the bottom — the whole post piled up (a live prod turn).
+    calls = _fake_render(monkeypatch)
+    asyncio.run(_exec_design({"action": "render", "spec": {"size": [1080, 1920], "nodes": [
+        {"type": "text", "text": "Hi", "x": "90", "y": "1300", "size": "96px", "opacity": "0.8"}]}}, _ws(tmp_path)))
+    n = calls["spec"]["nodes"][0]
+    assert (n["x"], n["y"], n["size"], n["opacity"]) == (90, 1300, 96, 0.8)
+
+
+def test_a_non_number_is_an_error(tmp_path, monkeypatch):
+    calls = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [
+        {"type": "text", "text": "Hi", "y": "50%"}]}}, _ws(tmp_path)))
+    assert out.startswith("Error") and "`y` must be a number" in out and calls == {}
+
+
+def test_size_shapes_resolve(tmp_path, monkeypatch):
+    calls = _fake_render(monkeypatch)
+    for spec, want in (({"size": "1080x1920"}, [1080, 1920]), ({"size": {"w": 800, "h": "600"}}, [800, 600]),
+                       ({"width": 1200, "height": 627}, [1200, 627]), ({}, [1080, 1080])):
+        asyncio.run(_exec_design({"action": "render", "spec": spec}, _ws(tmp_path)))
+        assert calls["spec"]["size"] == want and "width" not in calls["spec"]
+    out = asyncio.run(_exec_design({"action": "render", "spec": {"size": [0, 5]}}, _ws(tmp_path)))
+    assert out.startswith("Error") and "isn't a size" in out
+
+
+def test_content_outside_the_frame_is_an_error(tmp_path, monkeypatch):
+    # A story laid out in a frame left at the 1080² default: the renderer would clamp every
+    # box below 1080 up to the bottom edge. Name the frame size instead.
+    calls = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [
+        {"type": "text", "text": "EYEBROW", "x": 90, "y": 200},
+        {"type": "text", "text": "Big Headline", "x": 90, "y": 1300}]}}, _ws(tmp_path)))
+    assert out.startswith("Error") and "'Big Headline'" in out and "1080×1080" in out and "story" in out
+    _img(tmp_path, "a.png", _png(10, 10))
+    out = asyncio.run(_exec_design({"action": "render", "spec": {"size": "square", "nodes": [
+        {"type": "image", "src": "a.png", "x": 1200, "y": 0, "w": 100}]}}, _ws(tmp_path)))
+    assert out.startswith("Error") and "an image" in out
+    assert calls == {}
+    # Bleeding past an edge (a decorative circle, text the clamp nudges back in) is fine.
+    asyncio.run(_exec_design({"action": "render", "spec": {"size": "square", "nodes": [
+        {"type": "ellipse", "x": 900, "y": -200, "w": 600, "h": 600},
+        {"type": "text", "text": "Hi", "x": -20, "y": 1000, "w": 400}]}}, _ws(tmp_path)))
+    assert len(calls["spec"]["nodes"]) == 2

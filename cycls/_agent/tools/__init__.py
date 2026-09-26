@@ -1307,6 +1307,43 @@ def _place_image(n, root):
     return len(data)
 
 
+_NUMERIC = ("x", "y", "w", "h", "size", "radius", "lineHeight", "letterSpacing",
+            "opacity", "strokeWeight", "rotation")
+
+
+def _num(v):
+    """A number the model may have quoted ("1500", "96px") → int/float, else None."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return v
+    if isinstance(v, str) and (m := re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)\s*(?:px)?\s*", v)):
+        f = float(m.group(1))
+        return int(f) if f.is_integer() else f
+    return None
+
+
+def _frame_size(fr):
+    """A frame's [W, H] from whatever shape the model gave it — [W, H], a preset
+    name, "1080x1920", {w, h}, or width/height keys on the frame — else the
+    renderer's own 1080² default. Raises ValueError for anything else."""
+    s = fr.get("size")
+    if s is None and "width" in fr and "height" in fr:
+        s = [fr.pop("width"), fr.pop("height")]
+    if isinstance(s, dict):
+        s = [s.get("w", s.get("width")), s.get("h", s.get("height"))]
+    if s is None:
+        return [1080, 1080]
+    if isinstance(s, str):
+        key = s.strip().lower()
+        if key in _DESIGN_SIZES:
+            return list(_DESIGN_SIZES[key])
+        if m := re.fullmatch(r"(\d+)\s*[x×]\s*(\d+)", key):
+            return [int(m.group(1)), int(m.group(2))]
+        raise ValueError(f"unknown size {s!r} — use [W, H] or one of: {', '.join(_DESIGN_SIZES)}")
+    if isinstance(s, (list, tuple)) and len(s) == 2 and all((_num(v) or 0) > 0 for v in s):
+        return [_num(v) for v in s]
+    raise ValueError(f"`size` {s!r} isn't a size — use [W, H] or a preset ({', '.join(_DESIGN_SIZES)})")
+
+
 def _prepare_spec(spec, brand, root=None):
     """The spec the service renders, made safe to draw: preset sizes resolved to
     [W, H]; a node with `text` but no `type` typed as text (the renderer silently
@@ -1323,12 +1360,10 @@ def _prepare_spec(spec, brand, root=None):
     for fr in frames:
         if not isinstance(fr, dict):
             continue
-        if isinstance(fr.get("size"), str):
-            size = _DESIGN_SIZES.get(fr["size"].strip().lower())
-            if not size:
-                return None, (f"Error: unknown size {fr['size']!r} — use [W, H] or one of: "
-                              f"{', '.join(_DESIGN_SIZES)}."), []
-            fr["size"] = size
+        try:
+            fr["size"] = W, H = _frame_size(fr)
+        except ValueError as e:
+            return None, f"Error: {e}.", []
         if brand and fr.get("fill") is None:
             fr["fill"], filled = brand["primary"], filled + 1
         bg = _first_color(fr.get("fill"))
@@ -1337,6 +1372,11 @@ def _prepare_spec(spec, brand, root=None):
                 continue
             if n.get("type") is None and ("text" in n or "src" in n):
                 n["type"] = "text" if "text" in n else "image"
+            for k in _NUMERIC:                           # "1500" would reach the renderer as a string —
+                if k in n and n[k] is not None and _num(n[k]) is None:     # and a string y sinks the text
+                    return None, f"Error: `{k}` must be a number, not {n[k]!r} ({json.dumps(n)[:80]}).", []
+                if k in n and n[k] is not None:
+                    n[k] = _num(n[k])
             if n.get("type") == "text":
                 if n.get("font") is not None and (f := _design_font(n["font"])) != n["font"]:
                     fonts[str(n["font"])], n["font"] = f, f
@@ -1358,6 +1398,13 @@ def _prepare_spec(spec, brand, root=None):
             else:
                 return None, (f"Error: a node has type {n.get('type')!r} ({json.dumps(n)[:80]}) — "
                               f"every node needs a `type`: text, rect, ellipse, line or image."), []
+            # Content placed wholly outside the frame is a layout built for another size:
+            # the renderer would clamp every such text box to the edge, piling it up.
+            if n["type"] in ("text", "image") and ((n.get("x") or 0) >= W or (n.get("y") or 0) >= H):
+                what = repr(n.get("text"))[:40] if n["type"] == "text" else "an image"
+                return None, (f"Error: {what} starts at ({n.get('x') or 0}, {n.get('y') or 0}), outside the "
+                              f"{W}×{H} frame — set the frame's `size` (e.g. \"story\" for 1080×1920) "
+                              f"or move it inside."), []
     notes = []
     if fonts:
         notes.append("The renderer has Inter only, so " + ", ".join(f"{a} → {b}" for a, b in fonts.items())

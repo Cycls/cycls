@@ -102,7 +102,9 @@ Noto Naskh Arabic automatically). `size` is `[W, H]` or a **preset** the SDK
 resolves before the request: `square` 1080², `post-portrait` 1080×1350, `story` /
 `reel` 1080×1920, `slide` / `wide` 1920×1080, `x-post` 1600×900, `a4-poster`
 1240×1754 (150dpi, so the default @2x render is print-ready 300dpi). An unknown
-preset is an error back to the model, never a guessed size. The tool description
+preset is an error back to the model, never a guessed size. `size` also takes `"1080x1920"`, `{w, h}`, or `width`/`height` on the frame; left out, it is written as the renderer's 1080² default so SDK and service agree.
+
+**Layout guards.** Two silent pile-ups seen on a live prod turn: coordinates quoted as strings (`"y": "1300"`) reach the builder's text clamp as strings, whose bounds check then concatenates and pulls *every* text box to the bottom edge; and a story laid out in a frame left at 1080² gets everything below 1080 clamped to the bottom. So numeric fields (`x y w h size radius lineHeight letterSpacing opacity strokeWeight rotation`) are coerced from `"1500"` / `"96px"` and anything else is an error, and a text or image node that *starts* outside its frame is an error naming the frame size — the clamp is for a box that overruns an edge, not a layout built for another size. (The model had blamed the tool and rebuilt the post in Pillow, losing the editable `.fig`.) The tool description
 carries the same vocabulary plus design guidance (hierarchy, tight palette,
 margins, depth) so the model produces something intentional, not a wireframe.
 
