@@ -261,16 +261,19 @@ _DESIGN_TOOL = {
         "an image and to an editable design file saved in the workspace.\n\n"
         "Two ways to call:\n"
         "- render {spec, name, format?} — the normal way. `spec` is a JSON design:\n"
-        "    {\"size\": [W, H], \"fill\": <paint>, \"nodes\": [ ... ]}\n"
-        "  Coordinates are pixels from the top-left. Common sizes: 1080×1080 "
-        "(square post), 1080×1920 (story), 1920×1080 (slide).\n"
+        "    {\"size\": [W, H] | \"<preset>\", \"fill\": <paint>, \"nodes\": [ ... ]}\n"
+        "  Coordinates are pixels from the top-left. `size` takes a preset name instead of "
+        "[W, H]: square 1080×1080, post-portrait 1080×1350, story / reel 1080×1920, "
+        "slide / wide 1920×1080, x-post 1600×900, a4-poster 1240×1754 (print-ready at the "
+        "default @2x).\n"
         "  A <paint> (any `fill`, or a text `color`) is a solid \"#4f46e5\" OR a "
         "gradient {\"gradient\":[\"#4f46e5\",\"#db2777\"], \"angle\":135} — even stops, "
         "angle 0=→ 45=↘ 90=↓ 135=↙. A gradient background reads far richer than a "
         "flat colour.\n"
-        "  Node types:\n"
+        "  Node types (every node needs its `type`):\n"
         "    text    {\"type\":\"text\",\"text\":\"…\",\"x\":,\"y\":,\"w\"?:,\"size\":,"
-        "\"font\":\"Inter Bold\"|\"Inter Regular\"|\"Arial\",\"color\":<paint>,"
+        "\"font\":\"Inter Bold\"|\"Inter Medium\"|\"Inter Regular\"|\"Inter Light\"|\"Inter Black\" "
+        "(Inter is the only family),\"color\":<paint>,"
         "\"align\"?:\"left|center|right\",\"lineHeight\"?:px,\"letterSpacing\"?:px,\"opacity\"?:0-1}\n"
         "    rect    {\"type\":\"rect\",\"x\":,\"y\":,\"w\":,\"h\":,\"radius\"?:,\"fill\":<paint>,"
         "\"stroke\"?:\"#hex\",\"strokeWeight\"?:,\"opacity\"?:,\"shadow\"?:}\n"
@@ -285,6 +288,10 @@ _DESIGN_TOOL = {
         "margins (~8–10% of the width), and a touch of depth (a shadow on the button or "
         "a card, or a big soft low-opacity ellipse bleeding off an edge for flair). "
         "A pill button = a rect with radius = h/2 and centered text.\n"
+        "  BRAND: if the workspace has a brand kit (brand/brand.yaml), a background `fill` "
+        "you leave out becomes the brand primary and a shape `fill` the brand accent — or "
+        "write the brand's hex colours yourself. Text with no `color` gets white or "
+        "near-black, whichever reads on its background.\n"
         "  LAYOUT: leave vertical room for text that WRAPS — give any multi-word text a "
         "`w` (wrap width); a headline can run 2–3 lines (budget ~1.2×`size` per line, or "
         "set `lineHeight`), and put the NEXT node below the whole wrapped block so "
@@ -316,14 +323,16 @@ _DESIGN_TOOL = {
         "just updates.\n\n"
         "`format` is png (default), jpg, webp, svg, or pptx (PowerPoint; use it for "
         "decks). `name` is the file base name, e.g. `launch`. The render opens on the "
-        "canvas; the editable `.fig` is saved beside it for later edits. A fresh "
+        "canvas; the editable `.fig` is saved beside it for later edits. A png/jpg/webp "
+        "render also comes back to YOU as an image — look at it and fix what's off "
+        "before you present it. A fresh "
         "`render`/`script` NEVER overwrites an earlier design — if the name is taken "
         "it gets a numeric suffix (`launch-2`); to CHANGE an existing design use `edit`."
     ),
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["render", "script", "edit"],
                    "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), or `edit` the design open in the editor (live)."},
-        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes} or a deck {frames:[...]} (one per slide, export pptx). Nodes are text/rect/ellipse/line; a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
+        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes} or a deck {frames:[...]} (one per slide, export pptx); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line; a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s)."},
         "intent": {"type": "string",
@@ -1108,6 +1117,134 @@ def _browser_step(inp):
 _DESIGN_EXTS = {"png", "jpg", "webp", "svg", "pptx"}
 
 
+# Named sizes a spec may pass as `size` instead of [W, H], so a common format is
+# never guessed or mis-sized. The A4 poster is 150dpi — the default @2x render
+# lands it at print-quality 300dpi.
+_DESIGN_SIZES = {
+    "square": [1080, 1080], "post-portrait": [1080, 1350],
+    "story": [1080, 1920], "reel": [1080, 1920],
+    "slide": [1920, 1080], "wide": [1920, 1080],
+    "x-post": [1600, 900], "a4-poster": [1240, 1754],
+}
+_HEX = re.compile(r"#(?:[0-9a-fA-F]{3}){1,2}")
+# A render the model sees, to QA before presenting it — bounded like `read`.
+_DESIGN_QA_TYPES = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}
+_DESIGN_QA_MAX = 3 * 1024 * 1024
+
+
+def _norm_hex(c):
+    """`#abc`/`#AABBCC` → `#aabbcc`; anything else → None."""
+    if not isinstance(c, str) or not _HEX.fullmatch(c.strip()):
+        return None
+    h = c.strip()[1:].lower()
+    return "#" + (h if len(h) == 6 else "".join(ch * 2 for ch in h))
+
+
+def _load_brand(root):
+    """The workspace brand kit — `brand/brand.yaml`, written by the brand-kit skill —
+    as {primary, accent}, or None when there is none or it names no hex primary.
+    Reads the flat keys (`primary_color: "#0c2340"`) and the older nested ones
+    (`colors:` / `  primary: …`) with a pattern, not a YAML parser: two colours are
+    all a design needs, and the SDK carries no YAML dependency."""
+    try:
+        text = (pathlib.Path(root) / "brand" / "brand.yaml").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+    def pick(flat, nested):
+        m = (re.search(rf"^{flat}\s*:\s*['\"]?({_HEX.pattern})\b", text, re.M)
+             or re.search(rf"^\s+{nested}\s*:\s*['\"]?({_HEX.pattern})\b", text, re.M))
+        return _norm_hex(m.group(1)) if m else None
+
+    primary = pick("primary_color", "primary")
+    return {"primary": primary, "accent": pick("accent_color", "accent") or primary} if primary else None
+
+
+def _first_color(paint):
+    """A paint's representative colour: the hex itself, or a gradient's first stop."""
+    if isinstance(paint, dict) and isinstance(paint.get("gradient"), list) and paint["gradient"]:
+        paint = paint["gradient"][0]
+        if isinstance(paint, (list, tuple)) and paint:
+            paint = paint[0]
+        elif isinstance(paint, dict):
+            paint = paint.get("color")
+    return _norm_hex(paint)
+
+
+def _readable_on(bg):
+    """White or near-black — whichever text reads better on `bg` (WCAG luminance)."""
+    def lin(v):
+        v /= 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    r, g, b = (int(bg[i:i + 2], 16) for i in (1, 3, 5))
+    return "#ffffff" if 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b) < 0.179 else "#111111"
+
+
+def _design_font(font):
+    """A text `font` the renderer can draw. The service has Inter only — any other
+    family (Arial included) renders the text BLANK — so a font maps to Inter at the
+    nearest weight it carries: Light, Regular, Medium, Bold or Black."""
+    s = str(font).lower()
+    for keys, weight in ((("black", "heavy"), "Black"), (("bold",), "Bold"),
+                         (("medium",), "Medium"), (("light", "thin"), "Light")):
+        if any(k in s for k in keys):
+            return f"Inter {weight}"
+    return "Inter Regular"
+
+
+def _prepare_spec(spec, brand):
+    """The spec the service renders, made safe to draw: preset sizes resolved to
+    [W, H]; a node with `text` but no `type` typed as text (the renderer silently
+    drops an untyped node); fonts mapped onto Inter; with a brand kit, a frame `fill`
+    left out becomes the brand primary and a shape `fill` the accent; text with no
+    colour gets white or near-black against its frame. Never overrides a colour the
+    model set. A copy — the model's input stays as written. Returns (spec, error,
+    notes), notes being lines for the model's ack."""
+    colors = {_norm_hex(m) for m in _HEX.findall(json.dumps(spec))}
+    spec = json.loads(json.dumps(spec))
+    frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
+    filled, fonts = 0, {}
+    for fr in frames:
+        if not isinstance(fr, dict):
+            continue
+        if isinstance(fr.get("size"), str):
+            size = _DESIGN_SIZES.get(fr["size"].strip().lower())
+            if not size:
+                return None, (f"Error: unknown size {fr['size']!r} — use [W, H] or one of: "
+                              f"{', '.join(_DESIGN_SIZES)}."), []
+            fr["size"] = size
+        if brand and fr.get("fill") is None:
+            fr["fill"], filled = brand["primary"], filled + 1
+        bg = _first_color(fr.get("fill"))
+        for n in fr.get("nodes") or []:
+            if not isinstance(n, dict):
+                continue
+            if n.get("type") is None and "text" in n:
+                n["type"] = "text"
+            if n.get("type") == "text":
+                if n.get("font") is not None and (f := _design_font(n["font"])) != n["font"]:
+                    fonts[str(n["font"])], n["font"] = f, f
+                if bg and n.get("color") is None and n.get("fill") is None:
+                    n["color"] = _readable_on(bg)
+            elif n.get("type") in ("rect", "ellipse", "line"):
+                if brand and n.get("fill") is None:
+                    n["fill"], filled = brand["accent"], filled + 1
+            else:
+                return None, (f"Error: a node has type {n.get('type')!r} ({json.dumps(n)[:80]}) — "
+                              f"every node needs a `type`: text, rect, ellipse or line."), []
+    notes = []
+    if fonts:
+        notes.append("The renderer has Inter only, so " + ", ".join(f"{a} → {b}" for a, b in fonts.items())
+                     + " (Inter Light / Regular / Medium / Bold / Black all work).")
+    if brand and filled:
+        notes.append(f"Brand kit applied to {filled} unset fill(s) "
+                     f"(primary {brand['primary']}, accent {brand['accent']}).")
+    elif brand and not colors & {brand["primary"], brand["accent"]}:
+        notes.append(f"Note: the workspace has a brand kit (primary {brand['primary']}, accent "
+                     f"{brand['accent']}) and this design uses neither — if it should be on-brand, fix that.")
+    return spec, None, notes
+
+
 def _dedupe_design_name(designs_dir, name, fmt):
     """A base name whose `<name>.<fmt>` and `<name>.fig` are both free under
     `designs_dir`, so a fresh render never overwrites an existing design:
@@ -1153,11 +1290,15 @@ async def _exec_design(inp, workspace):
         return {"_model": f"Sent the edit to the open editor for {rel} — the Super cursor applies it "
                           f"live on the canvas and it auto-saves.",
                 "_ui": ui}
+    notes = []
     try:
         if action == "render":
             if not isinstance(inp.get("spec"), dict):
                 return "Error: `render` needs a `spec` object, e.g. {size:[1080,1080], fill:'#0f172a', nodes:[...]}."
-            image, fig, _fid, _fmt = await design.render(inp["spec"], fmt=fmt, scale=scale, user_id=subject)
+            spec, err, notes = _prepare_spec(inp["spec"], _load_brand(workspace.root))
+            if err:
+                return err
+            image, fig, _fid, _fmt = await design.render(spec, fmt=fmt, scale=scale, user_id=subject)
         elif action == "script":
             if not inp.get("script"):
                 return "Error: `script` needs a `script` string ending in console.log('__FRAME__'+id)."
@@ -1187,15 +1328,34 @@ async def _exec_design(inp, workspace):
     # DESIGN, so every render lands them in a live editor they can refine, not a flat
     # PNG. The image is still saved (for download/sharing). Fall back to opening the
     # image only where no editor is wired up (DESIGN_EDITOR_URL unset).
-    if os.environ.get("DESIGN_EDITOR_URL"):
-        return {"_model": f"Design saved ({rel}, {len(image) // 1024} KB{note}); its editable "
-                          f"source {fig_rel} is now OPEN in the in-canvas editor — the user can "
-                          f"edit it live. Tell them they can tweak it directly there, or ask you "
-                          f"to change it (colors, copy, layout) and you'll apply it with Design edit.",
-                "_ui": {"type": "ui", "action": "open_canvas", "path": fig_rel, "name": f"{name}.fig"}}
-    return {"_model": f"Design saved to {rel} ({len(image) // 1024} KB){note} and opened on the "
-                      f"canvas. Editable source: {fig_rel}.",
-            "_ui": {"type": "ui", "action": "open_canvas", "path": rel, "name": f"{name}.{fmt}"}}
+    editor = bool(os.environ.get("DESIGN_EDITOR_URL"))
+    if editor:
+        ack = (f"Design saved ({rel}, {len(image) // 1024} KB{note}); its editable "
+               f"source {fig_rel} is now OPEN in the in-canvas editor — the user can "
+               f"edit it live. Tell them they can tweak it directly there, or ask you "
+               f"to change it (colors, copy, layout) and you'll apply it with Design edit.")
+        ui = {"type": "ui", "action": "open_canvas", "path": fig_rel, "name": f"{name}.fig"}
+    else:
+        ack = (f"Design saved to {rel} ({len(image) // 1024} KB){note} and opened on the "
+               f"canvas. Editable source: {fig_rel}.")
+        ui = {"type": "ui", "action": "open_canvas", "path": rel, "name": f"{name}.{fmt}"}
+    for line in notes:
+        ack += " " + line
+    # Show the model its own render, so it QAs what it made before the user judges
+    # it — a check the spec alone can't give (hierarchy, overlap, legibility, typos).
+    # Only a raster within `read`'s bound; a deck/svg keeps the text ack.
+    media = _DESIGN_QA_TYPES.get(fmt)
+    if not media or len(image) > _DESIGN_QA_MAX:
+        return {"_model": ack, "_ui": ui}
+    fix = "Design edit (live, same design — don't re-render)" if editor else "a fresh render"
+    ack += (" The render is attached — QA it before you present: headline clearly dominant; "
+            "margins ~8–10%, nothing crammed at an edge; every text legible on what's behind it; "
+            "aligned, nothing overlapping or cut off; copy exactly right (spelling, names, "
+            f"numbers); on-brand. If anything is off, fix it now with {fix}, then present.")
+    return {"_model": [{"type": "image", "source": {"type": "base64", "media_type": media,
+                                                    "data": base64.b64encode(image).decode()}},
+                       {"type": "text", "text": ack}],
+            "_ui": ui}
 
 
 def _design_step(inp):

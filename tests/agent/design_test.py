@@ -15,7 +15,7 @@ from cycls._agent.tools import _exec_design, build_tools, tool_step
 
 @pytest.fixture(autouse=True)
 def _clear_env(monkeypatch):
-    for k in ("DESIGN_URL", "DESIGN_SECRET"):
+    for k in ("DESIGN_URL", "DESIGN_SECRET", "DESIGN_EDITOR_URL"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -120,6 +120,12 @@ def _ws(tmp_path):
     return types.SimpleNamespace(root=str(tmp_path), subject="org_1:user_1")
 
 
+def _text(out):
+    """The ack the model reads — a raster render is [image, text], else a string."""
+    m = out["_model"]
+    return m if isinstance(m, str) else next(b["text"] for b in m if b["type"] == "text")
+
+
 def _fake_render(monkeypatch, image=b"\x89PNGrender", fig=b"FIGZ"):
     calls = {}
 
@@ -139,7 +145,7 @@ def test_render_saves_and_opens_canvas(tmp_path, monkeypatch):
     assert (tmp_path / "designs" / "launch.png").read_bytes() == b"\x89PNGrender"
     assert (tmp_path / "designs" / "launch.fig").read_bytes() == b"FIGZ"   # editable source beside it
     assert calls["user_id"] == "org_1:user_1" and calls["spec"] == {"size": [1080, 1080]}
-    assert "saved to designs/launch.png" in out["_model"] and "canvas" in out["_model"]
+    assert "saved to designs/launch.png" in _text(out) and "canvas" in _text(out)
     ui = out["_ui"]
     assert ui["action"] == "open_canvas" and ui["path"] == "designs/launch.png" and ui["name"] == "launch.png"
 
@@ -157,7 +163,7 @@ def test_render_opens_the_fig_editor_when_editor_configured(tmp_path, monkeypatc
     assert (tmp_path / "designs" / "launch.fig").read_bytes() == b"FIGZ"
     ui = out["_ui"]
     assert ui["action"] == "open_canvas" and ui["path"] == "designs/launch.fig" and ui["name"] == "launch.fig"
-    assert "designs/launch.fig" in out["_model"] and "editor" in out["_model"]
+    assert "designs/launch.fig" in _text(out) and "editor" in _text(out)
 
 
 def test_render_dedupes_name_so_nothing_overwrites(tmp_path, monkeypatch):
@@ -171,7 +177,7 @@ def test_render_dedupes_name_so_nothing_overwrites(tmp_path, monkeypatch):
     out2 = asyncio.run(_exec_design({"action": "render", "name": "launch", "spec": {}}, ws))
     assert out2["_ui"]["path"] == "designs/launch-2.png"
     assert out2["_ui"]["name"] == "launch-2.png"
-    assert "launch-2" in out2["_model"] and "launch" in out2["_model"]   # ack explains the rename
+    assert "launch-2" in _text(out2) and "launch" in _text(out2)         # ack explains the rename
     assert (tmp_path / "designs" / "launch.png").read_bytes() == b"FIRST"        # untouched
     assert (tmp_path / "designs" / "launch.fig").read_bytes() == b"FIRSTFIG"     # untouched
     assert (tmp_path / "designs" / "launch-2.png").read_bytes() == b"SECOND"
@@ -270,3 +276,133 @@ def test_build_tools_gates_on_configured(monkeypatch):
 
 def test_design_step_label():
     assert tool_step("design", {"action": "render", "name": "launch"})["step"] == "render launch"
+
+
+# ---- self-QA: the render comes back to the model as an image ----
+
+def test_render_attaches_the_image_for_self_qa(tmp_path, monkeypatch):
+    _fake_render(monkeypatch, image=b"\x89PNGpixels")
+    out = asyncio.run(_exec_design({"action": "render", "name": "launch", "spec": {}}, _ws(tmp_path)))
+    img, txt = out["_model"]
+    assert img["type"] == "image" and img["source"]["media_type"] == "image/png"
+    assert base64.b64decode(img["source"]["data"]) == b"\x89PNGpixels"      # the model sees its own render
+    assert "QA it before you present" in txt["text"] and "a fresh render" in txt["text"]
+
+    # With the editor wired, a fix goes through the live editor, not a re-render.
+    monkeypatch.setenv("DESIGN_EDITOR_URL", "https://cycls-design.cycls.ai")
+    out = asyncio.run(_exec_design({"action": "render", "name": "launch", "spec": {}}, _ws(tmp_path)))
+    assert "Design edit" in _text(out)
+
+
+def test_no_qa_image_for_decks_svg_or_oversized(tmp_path, monkeypatch):
+    _fake_render(monkeypatch)
+    ws = _ws(tmp_path)
+    for fmt in ("pptx", "svg"):
+        out = asyncio.run(_exec_design({"action": "render", "spec": {}, "format": fmt}, ws))
+        assert isinstance(out["_model"], str) and "QA" not in out["_model"]
+    monkeypatch.setattr("cycls._agent.tools._DESIGN_QA_MAX", 4)             # bigger than `read` allows
+    out = asyncio.run(_exec_design({"action": "render", "spec": {}}, ws))
+    assert isinstance(out["_model"], str)
+
+
+# ---- size presets ----
+
+def test_size_preset_resolves_to_pixels(tmp_path, monkeypatch):
+    calls = _fake_render(monkeypatch)
+    spec = {"size": "Story", "nodes": []}
+    asyncio.run(_exec_design({"action": "render", "spec": spec}, _ws(tmp_path)))
+    assert calls["spec"]["size"] == [1080, 1920]
+    assert spec["size"] == "Story"                                          # the model's input is untouched
+
+    asyncio.run(_exec_design({"action": "render", "spec": {"frames": [{"size": "slide"}, {"size": [800, 600]}]},
+                              "format": "pptx"}, _ws(tmp_path)))
+    assert [f["size"] for f in calls["spec"]["frames"]] == [[1920, 1080], [800, 600]]   # arrays pass through
+
+
+def test_unknown_size_preset_is_an_error(tmp_path, monkeypatch):
+    calls = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "spec": {"size": "billboard"}}, _ws(tmp_path)))
+    assert out.startswith("Error") and "story" in out                       # names the valid presets
+    assert calls == {}                                                      # never reached the service
+
+
+# ---- auto-brand ----
+
+def _brand(tmp_path, text):
+    (tmp_path / "brand").mkdir()
+    (tmp_path / "brand" / "brand.yaml").write_text(text, encoding="utf-8")
+
+
+def test_brand_fills_only_what_the_spec_left_unset(tmp_path, monkeypatch):
+    # As the brand-kit skill writes it (yaml.safe_dump: single-quoted hex, block list).
+    _brand(tmp_path, "entity_name: Acme\nprimary_color: '#0C2340'\naccent_color: '#c9a227'\n"
+                     "palette:\n- '#0c2340'\n- '#c9a227'\n")
+    calls = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "spec": {"size": [1080, 1080], "nodes": [
+        {"type": "text", "text": "Hi"},                         # unset → readable on the navy
+        {"type": "rect", "x": 0, "y": 0, "w": 10, "h": 10},     # unset → accent
+        {"type": "ellipse", "fill": "#ff0000"},                 # explicit → kept
+        {"type": "text", "text": "Yo", "color": "#00ff00"},     # explicit → kept
+    ]}}, _ws(tmp_path)))
+    s = calls["spec"]
+    assert s["fill"] == "#0c2340"
+    assert [n.get("color") or n.get("fill") for n in s["nodes"]] == ["#ffffff", "#c9a227", "#ff0000", "#00ff00"]
+    assert "Brand kit applied to 2 unset fill(s)" in _text(out)
+
+
+def test_brand_never_overrides_an_explicit_background(tmp_path, monkeypatch):
+    _brand(tmp_path, 'primary_color: "#0c2340"\n')
+    calls = _fake_render(monkeypatch)
+    spec = {"fill": {"gradient": ["#fafafa", "#eeeeee"]}, "nodes": [{"type": "text", "text": "x"}]}
+    out = asyncio.run(_exec_design({"action": "render", "spec": spec}, _ws(tmp_path)))
+    assert calls["spec"]["fill"] == spec["fill"]
+    assert calls["spec"]["nodes"][0]["color"] == "#111111"                  # dark text on the light gradient
+    assert "uses neither" in _text(out)                                     # off-brand → the model is told
+
+
+def test_brand_reads_the_legacy_nested_shape(tmp_path, monkeypatch):
+    _brand(tmp_path, "colors:\n  primary: '#abc'\n  accent: '#123456'\nlogo:\n  primary: brand/logo.png\n")
+    calls = _fake_render(monkeypatch)
+    asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [{"type": "line"}]}}, _ws(tmp_path)))
+    assert calls["spec"]["fill"] == "#aabbcc" and calls["spec"]["nodes"][0]["fill"] == "#123456"
+
+
+def test_no_brand_kit_leaves_the_spec_alone(tmp_path, monkeypatch):
+    calls = _fake_render(monkeypatch)
+    spec = {"size": [1080, 1080], "nodes": [{"type": "rect"}, {"type": "text", "text": "x"}]}
+    out = asyncio.run(_exec_design({"action": "render", "spec": spec}, _ws(tmp_path)))
+    assert calls["spec"] == spec                                            # no fill to pick against → nothing added
+    assert "brand kit" not in _text(out).lower()
+    _brand(tmp_path, "primary_color: navy\n")                               # no hex primary → still no brand
+    asyncio.run(_exec_design({"action": "render", "spec": spec}, _ws(tmp_path)))
+    assert calls["spec"] == spec
+
+
+# ---- renderer guards: what the service would silently drop or blank ----
+
+def test_untyped_text_node_is_typed_not_dropped(tmp_path, monkeypatch):
+    # A real Kimi turn left `type` off every text node — the renderer skips an untyped
+    # node, so the post came back with no text at all.
+    calls = _fake_render(monkeypatch)
+    asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [
+        {"text": "NEW ARRIVAL", "x": 140, "y": 150, "size": 26}]}}, _ws(tmp_path)))
+    assert calls["spec"]["nodes"][0]["type"] == "text"
+
+
+def test_unknown_node_type_is_an_error(tmp_path, monkeypatch):
+    calls = _fake_render(monkeypatch)
+    for node in ({"type": "circle", "w": 10}, {"x": 0, "y": 0, "w": 10, "h": 10}):
+        out = asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [node]}}, _ws(tmp_path)))
+        assert out.startswith("Error") and "text, rect, ellipse or line" in out
+    assert calls == {}                                                      # never rendered a silently-missing node
+
+
+def test_fonts_map_onto_inter(tmp_path, monkeypatch):
+    # Arial (once advertised) and any other family render the text BLANK — Inter only.
+    calls = _fake_render(monkeypatch)
+    fonts = ["Arial", "Arial Bold", "Playfair Display SemiBold", "Montserrat Black", "Inter Medium", "Lato Light"]
+    out = asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [
+        {"type": "text", "text": "x", "font": f} for f in fonts]}}, _ws(tmp_path)))
+    assert [n["font"] for n in calls["spec"]["nodes"]] == [
+        "Inter Regular", "Inter Bold", "Inter Bold", "Inter Black", "Inter Medium", "Inter Light"]
+    assert "Arial → Inter Regular" in _text(out) and "Inter Medium →" not in _text(out)   # only real changes named

@@ -92,10 +92,35 @@ gradient `{ "gradient": ["#a", "#b", …], "angle": deg }` (even stops; `angle`
 design has depth and overlays, not just flat rectangles. Text opacity is applied
 as fill alpha (setting a text node's own opacity collapses its auto-width box).
 
-Fonts available headless: **Inter**, **Arial**. Common sizes: 1080×1080 (square
-post), 1080×1920 (story), 1920×1080 (slide). The tool description carries the
-same vocabulary plus design guidance (hierarchy, tight palette, margins, depth)
-so the model produces something intentional, not a wireframe.
+Fonts available headless: **Inter** only — Light, Regular, Medium, Bold, Black. Any
+other family (Arial included) renders the text **blank**, so `_exec_design` maps
+every font onto Inter at the nearest weight and names the swap in the ack. (Arabic text is set in the bundled
+Noto Naskh Arabic automatically). `size` is `[W, H]` or a **preset** the SDK
+resolves before the request: `square` 1080², `post-portrait` 1080×1350, `story` /
+`reel` 1080×1920, `slide` / `wide` 1920×1080, `x-post` 1600×900, `a4-poster`
+1240×1754 (150dpi, so the default @2x render is print-ready 300dpi). An unknown
+preset is an error back to the model, never a guessed size. The tool description
+carries the same vocabulary plus design guidance (hierarchy, tight palette,
+margins, depth) so the model produces something intentional, not a wireframe.
+
+**Brand.** When the workspace has a brand kit (`brand/brand.yaml`, the brand-kit
+skill's file), `_exec_design` fills what the spec **left out**: a frame `fill` →
+the brand primary, a shape `fill` → the accent. It never overrides a value the
+model set, and reads only the two colours (flat `primary_color`/`accent_color`,
+or the older nested `colors: primary/accent`) with a pattern — the SDK carries no
+YAML dependency. Brand fonts are not applied: the service renders Inter/Arial
+only. With a kit present, the ack says what it filled, or flags a design that uses
+neither brand colour. Independently of brand, text with no `color` gets white or
+near-black by WCAG luminance against its frame's fill, so a forgotten colour is
+never black-on-navy.
+
+**Self-QA.** A png/jpg/webp render (≤ 3 MB, `read`'s bound) comes back to the
+model as an image beside the ack, with a short rubric — headline dominant, ~8–10%
+margins, legible text, nothing overlapping or cut off, exact copy, on-brand — and
+the instruction to fix anything off (with `edit` when the editor is wired, else a
+fresh render) before presenting. The tool does this rather than a prompt rule:
+a "read your render" instruction competing with the tool's own ack gets narrated,
+not acted on. Decks (pptx) and svg keep the text ack.
 
 **Decks** are a list of frames — one per slide — exported as PowerPoint:
 
@@ -109,7 +134,8 @@ Each top-level frame becomes a slide. The `.fig` holds the whole deck, editable.
 
 `_exec_design` (in `_agent/tools`) saves the render to `designs/<name>.<fmt>` and
 the editable source to `designs/<name>.fig`, then returns the two-channel result
-the loop already understands: the model reads a short ack, and the client gets an
+the loop already understands: the model reads a short ack (plus the render itself,
+for self-QA), and the client gets an
 `open_canvas` event for the render (the same event the Canvas tool and browser
 screenshots use). PNGs render inline; a `.pptx` deck shows in the slide viewer when
 office-render is configured, else a download card.
