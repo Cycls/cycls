@@ -11,6 +11,11 @@
 //   parent → editor : { target:'cycls-editor', type:'load', name, fig:<base64> }
 //                     { target:'cycls-editor', type:'save' }
 //   editor → parent : { source:'cycls-editor', type:'ready' | 'loaded' | 'saved' | 'error', ... }
+//                     { source:'cycls-editor', type:'applied' | 'commandError', message? }
+//   `commandError` is a live agent edit that failed HERE — distinct from a save
+//   `error`. The server applied and saved the same edit before sending it (Cycls
+//   checks every edit headlessly first), so the host re-opens the saved file rather
+//   than leave this editor on a stale document it could later auto-save over it.
 import { encodeBase64, decodeBase64 } from '@open-pencil/core/bytes'
 import { exportFigFile } from '@open-pencil/core/io/formats/fig'
 import { wrapEvalCode } from '@open-pencil/core/tools'
@@ -185,7 +190,7 @@ export function startCyclsEmbedBridge(): void {
   async function runCommand(script: string, intent?: string): Promise<void> {
     const store = getActiveStore()
     if (!store) {
-      post({ type: 'error', message: 'no active store' })
+      post({ type: 'commandError', message: 'no active store' })
       return
     }
     showAgent(intent) // Super glides onto the canvas before it acts
@@ -229,7 +234,7 @@ export function startCyclsEmbedBridge(): void {
       pulseAgent()
       post({ type: 'applied' }) // the scene changed → auto-save persists it
     } catch (error) {
-      post({ type: 'error', message: String((error as Error)?.message ?? error) })
+      post({ type: 'commandError', message: String((error as Error)?.message ?? error) })
     } finally {
       idleAgent()
     }

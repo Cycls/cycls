@@ -90,6 +90,14 @@ async def render(spec, fmt="png", scale=2, user_id=None):
     return _decode(await _post("/render", {"spec": spec, "format": fmt, "scale": scale, "preview": True}, user_id))
 
 
+async def apply(fig, script, user_id=None):
+    """Run an `edit` script on a `.fig` (bytes) with the editor's own plugin API →
+    the edited `.fig` bytes. A script that throws raises RuntimeError carrying the
+    script's error (e.g. "null is not an object …")."""
+    data = await _post("/apply", {"fig": base64.b64encode(fig).decode(), "script": script}, user_id)
+    return base64.b64decode(data["fig_base64"])
+
+
 async def export(fig, fmt="png", scale=2, width=None, user_id=None):
     """Re-export an edited `.fig` (bytes) → image bytes. `width`, the old image's
     pixel width, keeps its resolution (the service derives the scale from it)."""

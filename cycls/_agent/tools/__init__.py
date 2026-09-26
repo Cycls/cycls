@@ -322,18 +322,18 @@ _DESIGN_TOOL = {
         "- script {script, name, format?} — escape hatch: a raw OpenPencil / Figma "
         "plugin-API script for what the spec can't express. It MUST end with "
         "`console.log('__FRAME__'+frame.id)` naming the frame to export.\n"
-        "- edit {script, name, intent?} — modify the design ALREADY OPEN in the editor "
-        "(the user is looking at it). The script is a Figma plugin-API snippet that "
-        "mutates the live document — e.g. `const t=figma.currentPage.children[0]; "
-        "t.fills=[{type:'SOLID',color:{r:0,g:0,b:0}}]; figma.currentPage.selection=[t]` "
-        "— and the user WATCHES a labeled 'Super' cursor glide in and your change "
-        "appear on the canvas; it auto-saves. ALWAYS set `figma.currentPage.selection` "
-        "to the node(s) you change so it highlights under the cursor, and pass a short "
-        "`intent` (e.g. 'making the headline gold') shown on that cursor. Use `edit` to "
-        "tweak an open design ('bigger headline', 'move the button down'); use "
-        "`render`/`script` to CREATE one. `name` is the open design's base name (e.g. "
-        "`launch`). No `console.log` needed — nothing is exported, the live canvas "
-        "just updates.\n\n"
+        "- edit {script, name, intent?} — change a design you rendered (designs/<name>.fig). "
+        "The script is a Figma plugin-API snippet that mutates the document — e.g. "
+        "`const t=figma.currentPage.findOne(n=>n.type==='TEXT'&&n.characters==='Old'); "
+        "t.characters='New'; figma.currentPage.selection=[t]`. It is applied to the saved "
+        "design first, so if it throws (a node you look up isn't there) you get that error "
+        "and nothing changes; on success the .fig is saved and its image re-exported. If the "
+        "design is open, the user WATCHES a labeled 'Super' cursor replay your change live. "
+        "ALWAYS set `figma.currentPage.selection` to the node(s) you change so it highlights "
+        "under the cursor, and pass a short `intent` (e.g. 'making the headline gold') shown "
+        "on that cursor. Use `edit` to tweak a design ('bigger headline', 'move the button "
+        "down'); use `render`/`script` to CREATE one. `name` is the design's base name (e.g. "
+        "`launch`). No `console.log` needed.\n\n"
         "`format` is png (default), jpg, webp, svg, or pptx (PowerPoint; use it for "
         "decks). `name` is the file base name, e.g. `launch`. The render opens on the "
         "canvas; the editable `.fig` is saved beside it for later edits. Every render "
@@ -344,7 +344,7 @@ _DESIGN_TOOL = {
     ),
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["render", "script", "edit"],
-                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), or `edit` the design open in the editor (live)."},
+                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), or `edit` a rendered design (checked, saved, replayed live in the editor)."},
         "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes} or a deck {frames:[...]} (one per slide, export pptx); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image (image `src` = a workspace file); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s)."},
@@ -1449,20 +1449,37 @@ async def _exec_design(inp, workspace):
     # Base name only, no extension the model may have tacked on.
     name = _safe_filename(inp.get("name") or "design", "design").rsplit(".", 1)[0] or "design"
     subject = getattr(workspace, "subject", None)
-    # `edit` drives the LIVE editor the user has open — it doesn't touch the render
-    # service. Fire a UI event the FE forwards to that editor, which applies the
-    # script to the live canvas (the user watches) and auto-saves the .fig.
+    # `edit` changes a saved design. The service runs the script on the .fig first —
+    # the editor's own plugin API, headless — so a script that throws is the model's
+    # error now (it used to fail silently inside the browser), and a success is saved
+    # and re-exported whether or not an editor is open. Then a UI event replays the
+    # same script in the live editor, where the user watches the Super cursor make it.
     if action == "edit":
         script = inp.get("script")
         if not script:
             return "Error: `edit` needs a `script` (a Figma plugin-API snippet mutating the OPEN design)."
         rel = f"designs/{name}.fig"
+        fig_path = pathlib.Path(workspace.root) / rel
+        if not fig_path.is_file():
+            return f"Error: {rel} doesn't exist — `edit` changes a design you rendered; `render` creates one."
+        try:
+            edited = await design.apply(await asyncio.to_thread(fig_path.read_bytes), script, user_id=subject)
+        except design.Unavailable as e:
+            return f"Error: design unavailable — {e}"
+        except Exception as e:
+            return (f"Error: the edit script failed on {rel} — {e}. Nothing was changed; fix the "
+                    f"script (check the node you look up exists) and try again.")
+        tmp = fig_path.with_name(f".{fig_path.name}.part")
+        await asyncio.to_thread(tmp.write_bytes, edited)
+        await asyncio.to_thread(tmp.replace, fig_path)
+        from cycls._agent.design import refresh
+        refresh.schedule(workspace.root, rel, subject)        # the image beside it follows
         ui = {"type": "ui", "action": "design_command", "path": rel, "script": script}
         if intent := inp.get("intent"):
             ui["intent"] = str(intent)[:80]   # shown on the live "Super" cursor
-        return {"_model": f"Sent the edit to the open editor for {rel} — the Super cursor applies it "
-                          f"live on the canvas and it auto-saves; the image beside it (designs/{name}.png "
-                          f"etc.) re-exports from the saved design a few seconds later.",
+        return {"_model": f"Edit applied and saved to {rel}; the image beside it (designs/{name}.png etc.) "
+                          f"re-exports in a few seconds. If the design is open in the editor, the Super "
+                          f"cursor replays the change live there.",
                 "_ui": ui}
     notes = []
     try:

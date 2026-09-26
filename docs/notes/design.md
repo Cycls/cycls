@@ -179,12 +179,22 @@ config value to it. Two directions meet at the shared `designs/<name>.fig`:
   (`load`), and writes the editor's saved bytes back to the workspace
   (`PUT /files`) after each change. Runs entirely in the browser (CanvasKit/WASM) —
   no service call. The agent picks up the human's edits on its next turn.
-- **Agent edits live** — the `edit` action returns *instantly* (no render-service
-  call) with a `design_command` UI event. The FE relays the Figma-plugin-API
-  `script` over `postMessage` to the open editor, which applies it to the live
-  canvas the human is watching; the same auto-save persists it. Use `edit` to tweak
-  an open design ("bigger headline", "make the button green"); use `render` /
-  `script` to *create* one.
+- **Agent edits** — the `edit` action first runs the script on the saved
+  `designs/<name>.fig` through the service's `POST /apply` (the same OpenPencil
+  plugin API, headless). A script that throws — a node it looks up isn't there —
+  is the model's error, verbatim, and nothing changes; a success is written back
+  to the `.fig` and its image re-exported (`design/refresh`), whether or not an
+  editor is open. Only then does the `design_command` UI event go out: the FE
+  relays the script over `postMessage` to the open editor, which *replays* it on
+  the live canvas the human is watching (the Super cursor). If that replay fails
+  in the browser, the bridge posts `commandError` and the host re-opens the editor
+  on the saved file (a fresh fetch — the canvas's copy may predate the edit), so
+  a stale document can never auto-save over the agent's change. This replaced a
+  fire-and-forget path where a throwing script failed silently in the browser
+  (surfacing only as a misleading "Couldn't save" pill), a closed editor dropped
+  the edit entirely, and the model said "done" either way. Use `edit` to tweak a
+  design ("bigger headline", "make the button green"); use `render` / `script` to
+  *create* one.
 
 ```
 Tool `edit` ──▶ {_ui:{action:"design_command", path, script}}

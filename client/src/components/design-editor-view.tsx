@@ -7,7 +7,13 @@ import { useEffect, useRef, useState } from "react";
 //
 // postMessage protocol (matches the editor's cycls embed-bridge):
 //   host   → editor : { target:"cycls-editor", type:"load", name, fig:<base64> }  |  { type:"save" }
-//   editor → host   : { source:"cycls-editor", type:"ready"|"loaded"|"saved"|"error", fig?, message? }
+//   editor → host   : { source:"cycls-editor", type:"ready"|"loaded"|"saved"|"error"|"applied"|"commandError", fig?, message? }
+//
+// An agent edit is applied and saved on the server BEFORE it reaches us (the Design
+// tool checks every edit headlessly), then replayed here for the live cursor. If the
+// replay fails (`commandError`) the saved file already has the edit, so we re-open
+// the editor on it — never leave a stale document that a later auto-save would
+// write back over the agent's change.
 
 function toBase64(bytes: Uint8Array): string {
   let s = "";
@@ -23,14 +29,17 @@ function fromBase64(b64: string): Uint8Array {
   return out;
 }
 
-export function DesignEditorView({ url, path, name, editorUrl, writeFile }: {
+export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload }: {
   url: string;        // blob URL of the .fig bytes (already fetched, authed)
   path: string;       // workspace path to write edits back to
   name: string;
   editorUrl: string;  // base URL of the deployed editor (config.design_editor_url)
   writeFile: (path: string, data: BlobPart, silent?: boolean) => Promise<void>;
+  reload?: () => Promise<string>;   // a FRESH blob URL of the saved .fig (re-open after a failed replay)
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const [frameKey, setFrameKey] = useState(0);        // bump → the editor iframe remounts
+  const sourceRef = useRef<string | null>(null);      // what the next `ready` loads, if not `url`
   const [status, setStatus] = useState<"loading" | "ready" | "saved" | "error" | "saveerror">("loading");
   const base = editorUrl.replace(/\/+$/, "");
   // Sync the editor's light/dark to the app's current mode (set at load; re-open
@@ -60,11 +69,14 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile }: {
       const m = e.data as { source?: string; type?: string; fig?: string };
       if (!m || m.source !== "cycls-editor") return;
       if (m.type === "ready") {
+        const source = sourceRef.current ?? url;
         try {
-          const buf = await (await fetch(url)).arrayBuffer();
+          const buf = await (await fetch(source)).arrayBuffer();
           if (!disposed) post({ type: "load", name, fig: toBase64(new Uint8Array(buf)) });
         } catch {
           if (!disposed) setStatus("error");
+        } finally {
+          if (sourceRef.current) { URL.revokeObjectURL(sourceRef.current); sourceRef.current = null; }
         }
       } else if (m.type === "loaded") {
         loaded = true;
@@ -78,6 +90,14 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile }: {
         } catch {
           flash("saveerror");
         }
+      } else if (m.type === "commandError") {
+        // The live replay of an agent edit failed; the saved file already holds the
+        // edit. Re-open the editor on it (a fresh fetch — `url` may predate the edit).
+        try { sourceRef.current = reload ? await reload() : null; } catch { sourceRef.current = null; }
+        if (disposed) return;
+        loaded = false;
+        setStatus("loading");
+        setFrameKey((k) => k + 1);
       } else if (m.type === "error") {
         // Pre-load: the editor genuinely failed to open → sticky "Editor error".
         // Post-load: a background blip (e.g. an auto-save) → transient, then the
@@ -100,13 +120,13 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile }: {
       window.removeEventListener("message", onMessage);
       window.removeEventListener("cycls:design-command", onCommand as EventListener);
     };
-  }, [url, path, name, origin, writeFile]);
+  }, [url, path, name, origin, writeFile, reload]);
 
   return (
     <div className="relative h-full w-full">
       {/* Own-origin editor iframe (not sandboxed): the app needs its full
           capabilities — CanvasKit, workers, storage — on its real origin. */}
-      <iframe ref={frameRef} src={src} title={name} className="h-full w-full border-0" />
+      <iframe key={frameKey} ref={frameRef} src={src} title={name} className="h-full w-full border-0" />
       {status !== "ready" && (
         <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow backdrop-blur">
           {status === "error"

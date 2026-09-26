@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence, Reorder } from "framer-motion";
 import { Icon } from "./icon";
@@ -216,7 +216,7 @@ function NoPreviewCard({ file, onDownload, onShare }: {
   );
 }
 
-export function CanvasDoc({ file, content, error, shared = false, readFile, writeFile, listFolders, fetchConnector, appData, designEditorUrl, onDownload, onShare }: {
+export function CanvasDoc({ file, content, error, shared = false, readFile, writeFile, listFolders, fetchConnector, appData, designEditorUrl, reloadFile, onDownload, onShare }: {
   file: CanvasFile;
   content: string | null;
   error: boolean;
@@ -227,6 +227,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, writ
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   designEditorUrl?: string;   // when set, .fig opens the embedded editor
+  reloadFile?: () => Promise<string>;   // fresh blob URL of this file (the .fig editor re-opens on it)
   onDownload?: () => void;
   onShare?: () => void;
 }) {
@@ -259,7 +260,8 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, writ
   if (isDesignEditor(fileKind(file))) {
     return content && designEditorUrl ? (
       <DesignEditorView url={content} path={file.path} name={file.name}
-                        editorUrl={designEditorUrl} writeFile={writeFile ?? (async () => {})} />
+                        editorUrl={designEditorUrl} writeFile={writeFile ?? (async () => {})}
+                        reload={reloadFile} />
     ) : (
       <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />
     );
@@ -697,6 +699,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetc
   };
 
   const download = () => openFile(file.path).then((url) => saveBlob(url, file.path.split('/').pop() || file.name)).catch(() => {});
+  const reloadFile = useCallback(() => openFile(file.path), [openFile, file.path]);
 
   // Open HTML as a standalone page (its own browsing context) — a stable,
   // full-window render that doesn't reflow with the drawer, plus print/PDF.
@@ -803,7 +806,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetc
           <CanvasDoc file={file} content={content} error={error} readFile={readFile} writeFile={writeFile} listFolders={listFolders}
                      fetchConnector={fetchConnector}
                      appData={appData}
-                     designEditorUrl={designEditorUrl}
+                     designEditorUrl={designEditorUrl} reloadFile={reloadFile}
                      onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
         )}
       </div>

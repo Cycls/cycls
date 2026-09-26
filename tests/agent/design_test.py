@@ -211,29 +211,66 @@ def test_script_escape_hatch(tmp_path, monkeypatch):
     assert got["script"].startswith("console.log") and out["_ui"]["path"] == "designs/deck.pptx"
 
 
-def test_edit_sends_design_command(tmp_path, monkeypatch):
-    # `edit` drives the LIVE editor — no service is contacted; it emits a
-    # `design_command` UI event the FE forwards to the open .fig's editor.
-    called = {"n": 0}
+def _fake_apply(monkeypatch, result=b"EDITED-FIG", error=None):
+    """`design.apply` faked: records the call, returns the edited .fig or raises the
+    script's error. `refresh.schedule` is captured instead of run."""
+    calls = {}
 
-    async def _r(*a, **k):
-        called["n"] += 1
-    monkeypatch.setattr("cycls._agent.design.render", _r)
-    monkeypatch.setattr("cycls._agent.design.evaluate", _r)
+    async def _apply(fig, script, user_id=None):
+        calls.update(fig=fig, script=script, user_id=user_id)
+        if error:
+            raise RuntimeError(error)
+        return result
+    monkeypatch.setattr("cycls._agent.design.apply", _apply)
+    scheduled = []
+    monkeypatch.setattr("cycls._agent.design.refresh.schedule",
+                        lambda root, rel, user_id=None: scheduled.append(rel))
+    return calls, scheduled
 
+
+def _design(tmp_path, name="launch", data=b"ORIGINAL-FIG"):
+    (tmp_path / "designs").mkdir(exist_ok=True)
+    (tmp_path / "designs" / f"{name}.fig").write_bytes(data)
+
+
+def test_edit_applies_saves_and_replays(tmp_path, monkeypatch):
+    # `edit` runs the script on the saved .fig first (the editor's plugin API,
+    # headless), saves the result and re-exports its image — whether or not an editor
+    # is open — then replays it in the live editor with the Super cursor.
+    _design(tmp_path)
+    calls, scheduled = _fake_apply(monkeypatch)
     script = "const t=figma.currentPage.children[0]; t.fills=[{type:'SOLID',color:{r:0,g:0,b:0}}]; figma.currentPage.selection=[t]"
     out = asyncio.run(_exec_design(
         {"action": "edit", "name": "launch", "script": script, "intent": "darken the background"},
         _ws(tmp_path)))
-    assert called["n"] == 0                                     # never hits the render service
+    assert calls["fig"] == b"ORIGINAL-FIG" and calls["script"] == script and calls["user_id"] == "org_1:user_1"
+    assert (tmp_path / "designs" / "launch.fig").read_bytes() == b"EDITED-FIG"   # persisted
+    assert scheduled == ["designs/launch.fig"]                                    # the image follows
     ui = out["_ui"]
     assert ui["action"] == "design_command" and ui["path"] == "designs/launch.fig" and ui["script"] == script
     assert ui["intent"] == "darken the background"             # narrated on the live cursor
-    assert "designs/launch.fig" in out["_model"]               # ack names the open design
+    assert "applied and saved to designs/launch.fig" in out["_model"]
 
     # intent is optional — omit it and the key simply isn't sent.
     out2 = asyncio.run(_exec_design({"action": "edit", "name": "launch", "script": script}, _ws(tmp_path)))
     assert "intent" not in out2["_ui"]
+
+
+def test_edit_script_error_reaches_the_model(tmp_path, monkeypatch):
+    # A script that throws used to fail silently inside the browser while the model
+    # said "done". Now the model reads the script's own error and nothing changes.
+    _design(tmp_path)
+    _, scheduled = _fake_apply(monkeypatch, error="null is not an object (evaluating 't.characters = \"x\"')")
+    out = asyncio.run(_exec_design({"action": "edit", "name": "launch", "script": "t.characters='x'"}, _ws(tmp_path)))
+    assert isinstance(out, str) and out.startswith("Error") and "null is not an object" in out
+    assert (tmp_path / "designs" / "launch.fig").read_bytes() == b"ORIGINAL-FIG"
+    assert scheduled == []                                      # no replay, no re-export
+
+
+def test_edit_needs_a_rendered_design(tmp_path, monkeypatch):
+    calls, _ = _fake_apply(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "edit", "name": "nope", "script": "figma.root"}, _ws(tmp_path)))
+    assert out.startswith("Error") and "doesn't exist" in out and calls == {}
 
 
 def test_edit_needs_script(tmp_path):
@@ -241,7 +278,9 @@ def test_edit_needs_script(tmp_path):
     assert out.startswith("Error")                             # no script → nothing to apply
 
 
-def test_edit_name_is_sanitized(tmp_path):
+def test_edit_name_is_sanitized(tmp_path, monkeypatch):
+    _design(tmp_path, "evil")
+    _fake_apply(monkeypatch)
     out = asyncio.run(_exec_design(
         {"action": "edit", "name": "../../evil", "script": "figma.root"}, _ws(tmp_path)))
     assert out["_ui"]["path"] == "designs/evil.fig"            # basename only, no traversal
@@ -685,3 +724,15 @@ def test_content_outside_the_frame_is_an_error(tmp_path, monkeypatch):
         {"type": "ellipse", "x": 900, "y": -200, "w": 600, "h": 600},
         {"type": "text", "text": "Hi", "x": -20, "y": 1000, "w": 400}]}}, _ws(tmp_path)))
     assert len(calls["spec"]["nodes"]) == 2
+
+
+def test_apply_posts_fig_and_script(monkeypatch):
+    monkeypatch.setenv("DESIGN_URL", "https://d")
+    _mock(monkeypatch, _FakeResp(200, {"ok": True, "fig_base64": base64.b64encode(b"EDITED").decode()}))
+    assert asyncio.run(design.apply(b"FIG", "t.characters='x'", user_id="u")) == b"EDITED"
+    assert _FakeClient.last["url"] == "https://d/apply"
+    assert _FakeClient.last["json"] == {"fig": base64.b64encode(b"FIG").decode(), "script": "t.characters='x'"}
+    _mock(monkeypatch, _FakeResp(422, {"ok": False, "error": "null is not an object"}))
+    with pytest.raises(RuntimeError) as ei:
+        asyncio.run(design.apply(b"FIG", "t.characters='x'"))
+    assert "null is not an object" in str(ei.value)             # the script's own error, verbatim
