@@ -269,6 +269,8 @@ _DESIGN_TOOL = {
         "  A <paint> (any `fill`, or a text `color`) is a solid \"#4f46e5\" OR a "
         "gradient {\"gradient\":[\"#4f46e5\",\"#db2777\"], \"angle\":135} — even stops, "
         "angle 0=→ 45=↘ 90=↓ 135=↙ (or placed stops [[\"#a\",0],[\"#b\",0.6],[\"#c\",1]]). "
+        "A glow is a radial gradient: {\"gradient\":[\"#fde68a\",\"#b4530900\"],\"type\":\"radial\","
+        "\"center\":[0.7,0.3],\"radius\":0.6} (centre and radius are fractions of the box). "
         "A colour may carry alpha as #rrggbbaa. A gradient background reads far richer "
         "than a flat colour.\n"
         "  Node types (every node needs its `type`):\n"

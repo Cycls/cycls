@@ -20,6 +20,9 @@ import { encodeBase64, decodeBase64 } from '@open-pencil/core/bytes'
 import { exportFigFile } from '@open-pencil/core/io/formats/fig'
 import { fontManager } from '@open-pencil/core/text'
 import { wrapEvalCode } from '@open-pencil/core/tools'
+// The same prelude the service runs ahead of every script (src/figma-compat.js), so
+// a live edit and the server-side check behave the same.
+import FIGMA_COMPAT from './figma-compat.js?raw'
 import { releaseFigPopulationWorker } from '#core/kiwi/fig/population/client'
 import { releaseOriginalFigArchive } from '#core/kiwi/fig/session/original-archive'
 
@@ -241,7 +244,7 @@ export function startCyclsEmbedBridge(): void {
       const AsyncFunction = Object.getPrototypeOf(async function () {
         /* noop */
       }).constructor
-      const fn = new AsyncFunction('figma', wrapEvalCode(script))
+      const fn = new AsyncFunction('figma', wrapEvalCode(`${FIGMA_COMPAT}\nfigmaCompat(figma);\n${script}`))
       await wait(300) // let the cursor glide in before it acts
       await store.runMutationWithLayout(
         () => fn(figma),

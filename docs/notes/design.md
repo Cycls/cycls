@@ -284,13 +284,23 @@ export web-worker). The patches and build recipe live in
 - **OpenPencil 0.14.0 packaging fix.** Every `@open-pencil/*` package's `exports`
   map declares a `bun` condition pointing at unpublished `./src/**/*.ts`; the
   service strips those on install so Bun falls back to the shipped `dist` builds.
+- **Nodes join their frame before they're positioned.** OpenPencil's `appendChild`
+  keeps a node's page position, so a node placed first and appended after landed
+  outside any frame not at the origin — every deck slide after the first rendered
+  blank until the builder switched the order (golden `deck.2`).
+- **Pixel spacing, radial glows.** `letterSpacing` / `lineHeight` are pixel numbers
+  (a Figma-style `{value, unit}` object saved as NaN); a `figma-compat` prelude runs
+  ahead of every script — service `eval` and the editor bridge alike — so an agent's
+  Figma-style edit works too. Radial gradients take `center` + `radius`.
+- The service keeps a registry of every OpenPencil quirk, its guard and the test that
+  pins it: `cycls-design/docs/quirks.md`. Goldens (Linux renders) cover each one.
 
 ## Configuration
 
 | Env                 | Meaning                                                     |
 |---------------------|-------------------------------------------------------------|
 | `DESIGN_URL`        | render-service base URL, e.g. `https://cycls-design.cycls.ai`. Gates the whole `Design` tool. |
-| `DESIGN_SECRET`     | shared render-service secret (Bearer). Optional — a local dev instance may run open; a deployed service sets one and rejects calls without it. |
+| `DESIGN_SECRET`     | shared render-service secret (Bearer). A local dev instance may run open; the deployed service requires it (its `deploy.py` refuses to deploy without one, since the render API runs caller-written scripts). |
 | `DESIGN_EDITOR_URL` | the embedded editor's own origin (a static OpenPencil build). Injected into `/config` as `design_editor_url`. Unset → `.fig` files show the download card and there is no open editor for `edit` to drive; generation (`render` / `script`) is unaffected. |
 
 Unset `DESIGN_URL` and `design.configured()` is false: the `Design` tool is never
@@ -310,3 +320,9 @@ client. It's a Bun HTTP server wrapping the OpenPencil headless CLI:
 
 Both return `{ ok, frameId, frames, format, image_base64, fig_base64 }`. It's
 stateless (state is the caller's workspace), so it scales horizontally.
+
+It guards itself (`cycls-design/src/guard.ts`): 30 MB per request; 100 frames, 1500
+nodes, 5000 characters per text; caller-written scripts (`script`, `edit`) parsed and
+screened to the `figma` API; a per-user rate limit (429 + retry-after, which the
+client turns into a sentence); and the engine's child process gets no secrets and 90 s
+per step.
