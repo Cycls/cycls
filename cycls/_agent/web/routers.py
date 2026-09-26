@@ -220,7 +220,7 @@ def resolve_path(workspace, rel):
     ws = workspace.resolve()
     if not resolved.is_relative_to(ws):
         raise ValueError("Path traversal denied")
-    for name in (".db", ".database", ".trash", ".secrets", ".connectors"):
+    for name in (".db", ".database", ".trash", ".secrets", ".connectors", ".settings"):
         reserved = ws / name
         if resolved == reserved or resolved.is_relative_to(reserved):
             raise ValueError(f"Reserved path: {name}/ is managed by cycls")
@@ -1769,18 +1769,19 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
 
 
 def tools_router(ws_dep, user_dep):
-    """The builtins' own allow / ask, per person — what the card's *Always allow* writes. Stored beside
-    the connector choices, under a name no connector can take."""
+    """The builtins' own allow / ask / never, per person — what the card's *Always allow* and Settings write.
+    Plain rows in the person's `.settings`, so they work on a deployment with no CYCLS_SECRET_KEY."""
     r = APIRouter()
 
     @r.get("/tools")
     async def builtin_modes(ws: Workspace = ws_dep):
         """Only what the person chose — a tool they never touched follows the composer switch."""
-        return await oauth.permissions(ws, "_builtin")
+        return await state.settings_db(ws).get("tools", {})
 
     @r.delete("/tools/{tool}")
     async def clear_builtin(tool: str, ws: Workspace = ws_dep, user: Any = user_dep):
-        await oauth.set_permissions(ws, "_builtin", {k: v for k, v in (await oauth.permissions(ws, "_builtin")).items() if k != tool})
+        db = state.settings_db(ws)
+        await db.put("tools", {k: v for k, v in (await db.get("tools", {})).items() if k != tool})
         log("connector", user=user, action="permissions", connector="_builtin", tools={tool: None})
         return {"ok": True}
 
@@ -1806,7 +1807,8 @@ def tools_router(ws_dep, user_dep):
         mode = (await request.json()).get("mode")
         if mode not in oauth.MODES:
             raise HTTPException(status_code=400, detail="mode is allow, ask or never")
-        await oauth.set_permissions(ws, "_builtin", {**await oauth.permissions(ws, "_builtin"), tool: mode})
+        db = state.settings_db(ws)
+        await db.put("tools", {**await db.get("tools", {}), tool: mode})
         log("connector", user=user, action="permissions", connector="_builtin", tools={tool: mode})
         return {"ok": True}
 

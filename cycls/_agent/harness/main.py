@@ -259,7 +259,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
     session = await Session.open(context)
     # the person's own allow / ask / never for the builtins, read once — no subject means no per-user store
-    modes = await connectors.permissions(workspace, "_builtin") if getattr(workspace, "subject", None) else {}
+    modes = await state.settings_db(workspace).get("tools", {}) if getattr(workspace, "subject", None) else {}
     if off := {_SETTINGS_NAME[k] for k, v in modes.items() if v == "never" and k in _SETTINGS_NAME}:
         allowed_tools = [t for t in allowed_tools if t not in off]
     ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes)

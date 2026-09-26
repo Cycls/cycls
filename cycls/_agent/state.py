@@ -710,6 +710,11 @@ def memory_db(ws):
     return DB(workspace(ws.subject, ws.volume, base=ws.base, slot=".database", ws=ws.ws))
 
 
+def settings_db(ws):
+    """The person's own settings, the same in every workspace. Preferences, not secrets: plain, no key needed."""
+    return DB(workspace(ws.subject, ws.volume, base=ws.base, slot=".settings"))
+
+
 def _route(ws, key, *, prefix=False):
     """(db, store key). `apps/<slug>/…` is the workspace's app shelf; anything else the agent's own."""
     if key.startswith(APPS_ROOT):

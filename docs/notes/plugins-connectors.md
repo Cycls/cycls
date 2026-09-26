@@ -368,10 +368,11 @@ workspace, and under the user's own segment so no other user's request can reach
 account's root *is* its user id, so both resolve there too.
 
 A record is `{access_token, refresh_token, expires_at}`, Fernet-encrypted under a key derived
-from `CYCLS_SECRET_KEY`; one the current key cannot decrypt reads as absent, so rotation
-means re-auth, never a crash. Resolution is user → workspace; env is not consulted for grants.
+from `CYCLS_SECRET_KEY`; one that cannot be decrypted, because the key rotated or is missing,
+reads as absent (a missing key also logs a warning), so it means re-auth, never a crash.
+Resolution is user → workspace; env is not consulted for grants.
 
-`.secrets` and `.connectors` get **both** guards `.db` has — the bwrap `--tmpfs` mask *and*
+`.secrets`, `.connectors` and `.settings` get **both** guards `.db` has — the bwrap `--tmpfs` mask *and*
 the `_resolve_path` rejection, in the tool and file-route path checks alike. `.tmp` gets
 neither: bash must read it and `read` must reach it. It is hidden from listings, deleted for
 real by the `rm` shim, refused by `canvas`, and removed on chat purge.
@@ -769,10 +770,11 @@ is what has no trash behind it: `database delete` (keys go, a trailing slash tak
 | `bash` | per call, like a one-tool server | runs; a command with no trash behind it asks | asks unless the command is a plain read (`ls`, `cat`, `grep`, `find`, …) |
 | `canvas`, `ask`, `suggest` | how the agent talks to the person | never asks | never asks |
 
-The builtins have no connector page, so layer 2 reaches them through the card: *Always allow* writes
-`PUT /tools/{tool}` into the same per-user store under the reserved name `_builtin`, and the loop reads
-those choices once a turn onto `ToolContext.modes`. A Settings list that shows and unsets them is the
-remaining half.
+The builtins have no connector page, so layer 2 reaches them through the card and Settings: *Always
+allow* writes `PUT /tools/{tool}` as a plain row in the person's `.settings`, the same in every workspace,
+and the loop reads those choices once a turn onto `ToolContext.modes`. They are preferences, not secrets,
+so no `CYCLS_SECRET_KEY` is involved. They used to sit encrypted beside the connector choices, and a
+deployment that lost the key then failed every message of anyone who had clicked *Always allow*.
 
 **A card ends the turn.** The ack tells the model to stop, and a model that ignores it used to call the
 same tool again and get a second card, and a third — a loop the person could not answer out of. The loop

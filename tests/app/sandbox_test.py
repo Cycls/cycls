@@ -50,10 +50,10 @@ def test_bash_sandbox_hides_db(tmp_path):
         f"expected --tmpfs /workspace/.db in argv, got: {argv}"
 
 
-def test_bash_sandbox_hides_credentials(tmp_path):
+def test_bash_sandbox_hides_credentials_and_settings(tmp_path):
     argv = _capture_bash_argv(tmp_path)
     masked = {argv[i + 1] for i, a in enumerate(argv) if a == "--tmpfs"}
-    assert {"/workspace/.secrets", "/workspace/.connectors"} <= masked
+    assert {"/workspace/.secrets", "/workspace/.connectors", "/workspace/.settings"} <= masked
 
 
 def test_bash_touches_nothing_on_the_workspace_for_scratch(tmp_path):

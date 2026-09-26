@@ -1709,6 +1709,22 @@ def test_builtins_are_never_behind_discovery(agent_env):
     assert "bash" in [t["name"] for t in calls[0]["tools"]]
 
 
+def test_a_run_reads_tool_settings_without_the_secret_key(agent_env, monkeypatch):
+    """A deployment that lost CYCLS_SECRET_KEY failed every message of anyone holding an encrypted
+    *Always allow*. The settings are plain now: the old row is never read, and a saved `never` still holds."""
+    from cycls._agent import credentials, state
+    ws, ctx = agent_env
+    with patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}):
+        asyncio.run(credentials.put(ctx.workspace, "_permissions/_builtin", {"tools": {"bash": "allow"}}))
+    monkeypatch.delenv("CYCLS_SECRET_KEY", raising=False)
+    asyncio.run(state.settings_db(ctx.workspace).put("tools", {"bash": "never"}))
+    client, calls = _capturing_client([_make_response([_text_block("ok")])])
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Bash", "Editor"])))
+    names = [t["name"] for t in calls[0]["tools"]]
+    assert "bash" not in names and "edit" in names
+
+
 def test_find_tools_matches_on_what_the_tools_do(agent_env):
     """The index carries a connector's name and blurb; matching also reads the tool
     descriptions behind it, so "spreadsheet" finds Drive without naming it."""

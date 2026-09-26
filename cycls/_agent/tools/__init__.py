@@ -398,7 +398,7 @@ def _resolve_path(raw_path, workspace):
     rel = raw_path.removeprefix("~/").removeprefix("/workspace/").lstrip("/")
     path = (ws / rel).resolve()
     if not path.is_relative_to(ws): raise ValueError("path escapes workspace")
-    for name in (".db", ".database", ".trash", credentials.USER, credentials.SHARED):
+    for name in (".db", ".database", ".trash", ".settings", credentials.USER, credentials.SHARED):
         reserved = ws / name
         if path == reserved or path.is_relative_to(reserved):
             raise ValueError(f"{name}/ is managed by cycls")
@@ -425,6 +425,7 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
           .tmpfs("/workspace/.trash")
           .tmpfs(f"/workspace/{credentials.USER}")
           .tmpfs(f"/workspace/{credentials.SHARED}")
+          .tmpfs("/workspace/.settings")  # the person's tool settings: bash must not grant itself "allow"
           .bind(trash_dir, TRASH_MOUNT)
           .ro_bind(shims, SHIMS_MOUNT)
           .tmpfs("/app")

@@ -350,13 +350,16 @@ def test_discovery_is_silent_for_an_unconnected_server_that_only_lists_for_the_s
         asyncio.run(c.tools_for(server, ws))
 
 
-def test_a_builtin_keeps_its_own_allow_beside_the_connector_ones(tmp_path):
-    """The card's *Always allow* on a builtin writes here; the gate reads it once a turn."""
+def test_a_builtin_allow_needs_no_secret_key(tmp_path, monkeypatch):
+    """The card's *Always allow* and Settings write plain rows in the person's `.settings`; the gate
+    reads them once a turn. Encrypted, they failed every message once a deployment lost its key."""
+    from cycls._agent import state
     from cycls._agent.tools import ToolContext, _gate
-    client, ws = _app(tmp_path, _google())
+    monkeypatch.delenv("CYCLS_SECRET_KEY")
+    client, ws = _app(tmp_path)
     assert client.put("/tools/bash", json={"mode": "sometimes"}).status_code == 400
     assert client.put("/tools/bash", json={"mode": "allow"}).json() == {"ok": True}
-    modes = asyncio.run(c.permissions(ws, "_builtin"))
+    modes = asyncio.run(state.settings_db(ws).get("tools"))
     assert modes == {"bash": "allow"}
     step = {"tool_name": "Bash", "step": "wipe"}
     hard = {"command": "git clean -fdx"}
