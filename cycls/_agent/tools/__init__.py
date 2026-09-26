@@ -2,7 +2,7 @@
 API shape (`type` / `name` / `description` / `input_schema`) and registered in
 `_BUILTINS`; `build_tools` emits them as-is. User-supplied custom tools come
 through `_normalize_tool` (accepts the camelCase `inputSchema` form too)."""
-import asyncio, base64, inspect, ipaddress, json, os, pathlib, re, socket, time, uuid
+import asyncio, base64, inspect, ipaddress, json, os, pathlib, re, socket, struct, time, uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -268,8 +268,9 @@ _DESIGN_TOOL = {
         "default @2x).\n"
         "  A <paint> (any `fill`, or a text `color`) is a solid \"#4f46e5\" OR a "
         "gradient {\"gradient\":[\"#4f46e5\",\"#db2777\"], \"angle\":135} — even stops, "
-        "angle 0=→ 45=↘ 90=↓ 135=↙. A gradient background reads far richer than a "
-        "flat colour.\n"
+        "angle 0=→ 45=↘ 90=↓ 135=↙ (or placed stops [[\"#a\",0],[\"#b\",0.6],[\"#c\",1]]). "
+        "A colour may carry alpha as #rrggbbaa. A gradient background reads far richer "
+        "than a flat colour.\n"
         "  Node types (every node needs its `type`):\n"
         "    text    {\"type\":\"text\",\"text\":\"…\",\"x\":,\"y\":,\"w\"?:,\"size\":,"
         "\"font\":\"Inter Bold\"|\"Inter Medium\"|\"Inter Regular\"|\"Inter Light\"|\"Inter Black\" "
@@ -279,6 +280,18 @@ _DESIGN_TOOL = {
         "\"stroke\"?:\"#hex\",\"strokeWeight\"?:,\"opacity\"?:,\"shadow\"?:}\n"
         "    ellipse {\"type\":\"ellipse\",\"x\":,\"y\":,\"w\":,\"h\":,\"fill\":<paint>,\"stroke\"?:,\"shadow\"?:}  (a circle when w==h)\n"
         "    line    {\"type\":\"line\",\"x\":,\"y\":,\"w\":,\"h\"?:2,\"fill\":\"#hex\"}  a thin divider\n"
+        "    image   {\"type\":\"image\",\"src\":\"attachments/photo.jpg\",\"x\":,\"y\":,\"w\"?:,\"h\"?:,"
+        "\"fit\"?:\"cover|contain\",\"radius\"?:,\"opacity\"?:,\"shadow\"?:}\n"
+        "  An image is a PNG / JPEG / WebP / GIF already IN the workspace (an upload, a stock "
+        "photo you saved, brand/logo.png) — `src` is its path; save a web image to the workspace "
+        "first. `cover` (default) fills the w×h box and crops the overflow; `contain` fits the "
+        "whole image inside it (logos). Give w, h or both — a missing one follows the image's "
+        "aspect. A full-bleed photo background = an image at 0,0 the frame's size FIRST in "
+        "`nodes`, then a SCRIM behind where the text sits — a rect whose gradient fades from "
+        "transparent to dark, e.g. fill {\"gradient\":[\"#00000000\",\"#000000cc\"],\"angle\":90} "
+        "over the lower half (no hard edge across the photo) — and text with an explicit light "
+        "`color` on top; the auto text colour only knows the frame's fill, not a photo. "
+        "A round avatar = a square image with radius = w/2.\n"
         "  `shadow` is true or {\"blur\":40,\"y\":16,\"opacity\":0.25,\"color\"?,\"x\"?,\"spread\"?} "
         "— a drop shadow that lifts a card or button off the background.\n"
         "  DESIGN — make it look intentional, not a wireframe: one clear idea, a strong "
@@ -323,16 +336,16 @@ _DESIGN_TOOL = {
         "just updates.\n\n"
         "`format` is png (default), jpg, webp, svg, or pptx (PowerPoint; use it for "
         "decks). `name` is the file base name, e.g. `launch`. The render opens on the "
-        "canvas; the editable `.fig` is saved beside it for later edits. A png/jpg/webp "
-        "render also comes back to YOU as an image — look at it and fix what's off "
-        "before you present it. A fresh "
+        "canvas; the editable `.fig` is saved beside it for later edits. Every render "
+        "also comes back to YOU as an image (a deck: its first slide) — look at it and "
+        "fix what's off before you present it. A fresh "
         "`render`/`script` NEVER overwrites an earlier design — if the name is taken "
         "it gets a numeric suffix (`launch-2`); to CHANGE an existing design use `edit`."
     ),
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["render", "script", "edit"],
                    "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), or `edit` the design open in the editor (live)."},
-        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes} or a deck {frames:[...]} (one per slide, export pptx); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line; a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
+        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes} or a deck {frames:[...]} (one per slide, export pptx); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image (image `src` = a workspace file); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s)."},
         "intent": {"type": "string",
@@ -1192,18 +1205,121 @@ def _design_font(font):
     return "Inter Regular"
 
 
-def _prepare_spec(spec, brand):
+# An image node's bytes ride to the stateless service as base64 inside the spec,
+# and back inside the .fig — bounded so a render stays well within the service's
+# request/response limits. The SDK carries no imaging library to shrink a photo,
+# so an oversized one is an error naming the fix.
+_DESIGN_IMAGE_MAX = 5 * 1024 * 1024
+_DESIGN_IMAGES_MAX = 8 * 1024 * 1024
+
+
+def _exif_orientation(tiff):
+    """The Orientation tag (0x0112) of an EXIF TIFF block, else 1."""
+    try:
+        e = {b"II": "<", b"MM": ">"}[tiff[:2]]
+        off = struct.unpack(e + "I", tiff[4:8])[0]
+        for k in range(struct.unpack(e + "H", tiff[off:off + 2])[0]):
+            p = off + 2 + 12 * k
+            if struct.unpack(e + "H", tiff[p:p + 2])[0] == 0x0112:
+                return struct.unpack(e + "H", tiff[p + 8:p + 10])[0]
+    except (KeyError, struct.error):
+        pass
+    return 1
+
+
+def _jpeg_size(data):
+    i, turned = 2, False
+    while i + 9 <= len(data) and data[i] == 0xFF:
+        marker = data[i + 1]
+        if marker == 0xFF:                                  # fill byte
+            i += 1
+            continue
+        seg = struct.unpack(">H", data[i + 2:i + 4])[0]
+        if marker == 0xE1 and data[i + 4:i + 10] == b"Exif\x00\x00":
+            turned = _exif_orientation(data[i + 10:i + 2 + seg]) in (5, 6, 7, 8)
+        elif 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            h, w = struct.unpack(">HH", data[i + 5:i + 9])
+            return (h, w) if turned else (w, h)
+        i += 2 + seg
+    return None
+
+
+def _image_size(data):
+    """(width, height) of a PNG / JPEG / WebP / GIF as the renderer DRAWS it — a
+    JPEG's EXIF quarter-turn (orientation 5–8) swaps the two, since the renderer
+    honours it — else None (an SVG included)."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR":
+        return struct.unpack(">II", data[16:24])
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return struct.unpack("<HH", data[6:10])
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        kind = data[12:16]
+        if kind == b"VP8X":
+            return (int.from_bytes(data[24:27], "little") + 1, int.from_bytes(data[27:30], "little") + 1)
+        if kind == b"VP8 ":
+            w, h = struct.unpack("<HH", data[26:30])
+            return (w & 0x3FFF, h & 0x3FFF)
+        if kind == b"VP8L":
+            b = int.from_bytes(data[21:25], "little")
+            return ((b & 0x3FFF) + 1, ((b >> 14) & 0x3FFF) + 1)
+        return None
+    if data[:2] == b"\xff\xd8":
+        return _jpeg_size(data)
+    return None
+
+
+def _place_image(n, root):
+    """An image node's `src` (a workspace file) → the bytes the service draws, in
+    its final box: `fit` "cover" (default) fills w×h, cropping the overflow;
+    "contain" shrinks the box to the image's aspect and centres it (the renderer's
+    own FIT distorts). Give w, h or both — a missing one follows the image's
+    aspect. Rewrites the node in place; returns the byte count. Raises ValueError
+    with the fix."""
+    src = n.get("src")
+    if not isinstance(src, str) or not src.strip():
+        raise ValueError("an image node needs `src` — a workspace file, e.g. attachments/photo.jpg")
+    if src.startswith(("http://", "https://", "data:")):
+        raise ValueError(f"image src {src[:60]!r} must be a workspace file — save it into the workspace first")
+    path = _resolve_path(src, root)
+    if not path.is_file():
+        raise ValueError(f"image {src!r} does not exist in the workspace")
+    if (size := path.stat().st_size) > _DESIGN_IMAGE_MAX:
+        raise ValueError(f"image {src!r} is {size / 2**20:.1f} MB, over the {_DESIGN_IMAGE_MAX >> 20} MB "
+                         f"a design takes — save a smaller copy (longest side ~2000px) and use that")
+    data = path.read_bytes()
+    if not (dims := _image_size(data)) or not all(dims):
+        raise ValueError(f"image {src!r} isn't a PNG, JPEG, WebP or GIF (convert an SVG to PNG first)")
+    (iw, ih), w, h = dims, n.get("w"), n.get("h")
+    if not w and not h:
+        raise ValueError(f"image {src!r} needs `w` and/or `h` (the other follows its {iw}×{ih} aspect)")
+    w, h = (w or h * iw / ih), (h or w * ih / iw)
+    fit = str(n.pop("fit", "cover")).lower()
+    if fit == "contain":
+        s = min(w / iw, h / ih)
+        n["x"] = (n.get("x") or 0) + (w - iw * s) / 2
+        n["y"] = (n.get("y") or 0) + (h - ih * s) / 2
+        w, h = iw * s, ih * s
+    elif fit != "cover":
+        raise ValueError(f"image `fit` is cover or contain, not {fit!r}")
+    n["w"], n["h"] = round(w, 2), round(h, 2)
+    n["image"] = base64.b64encode(data).decode()
+    del n["src"]
+    return len(data)
+
+
+def _prepare_spec(spec, brand, root=None):
     """The spec the service renders, made safe to draw: preset sizes resolved to
     [W, H]; a node with `text` but no `type` typed as text (the renderer silently
-    drops an untyped node); fonts mapped onto Inter; with a brand kit, a frame `fill`
-    left out becomes the brand primary and a shape `fill` the accent; text with no
-    colour gets white or near-black against its frame. Never overrides a colour the
-    model set. A copy — the model's input stays as written. Returns (spec, error,
-    notes), notes being lines for the model's ack."""
+    drops an untyped node); fonts mapped onto Inter; image `src` files read from the
+    workspace under `root` and placed (see _place_image); with a brand kit, a frame
+    `fill` left out becomes the brand primary and a shape `fill` the accent; text
+    with no colour gets white or near-black against its frame. Never overrides a
+    colour the model set. A copy — the model's input stays as written. Returns
+    (spec, error, notes), notes being lines for the model's ack."""
     colors = {_norm_hex(m) for m in _HEX.findall(json.dumps(spec))}
     spec = json.loads(json.dumps(spec))
     frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
-    filled, fonts = 0, {}
+    filled, fonts, image_bytes = 0, {}, 0
     for fr in frames:
         if not isinstance(fr, dict):
             continue
@@ -1219,19 +1335,29 @@ def _prepare_spec(spec, brand):
         for n in fr.get("nodes") or []:
             if not isinstance(n, dict):
                 continue
-            if n.get("type") is None and "text" in n:
-                n["type"] = "text"
+            if n.get("type") is None and ("text" in n or "src" in n):
+                n["type"] = "text" if "text" in n else "image"
             if n.get("type") == "text":
                 if n.get("font") is not None and (f := _design_font(n["font"])) != n["font"]:
                     fonts[str(n["font"])], n["font"] = f, f
                 if bg and n.get("color") is None and n.get("fill") is None:
                     n["color"] = _readable_on(bg)
             elif n.get("type") in ("rect", "ellipse", "line"):
+                if n.get("fill") is None and n.get("color") is not None:
+                    n["fill"] = n.pop("color")          # a shape draws `fill` only — as text reads either
                 if brand and n.get("fill") is None:
                     n["fill"], filled = brand["accent"], filled + 1
+            elif n.get("type") == "image":
+                try:
+                    image_bytes += _place_image(n, root)
+                except ValueError as e:
+                    return None, f"Error: {e}", []
+                if image_bytes > _DESIGN_IMAGES_MAX:
+                    return None, (f"Error: the design's images total over {_DESIGN_IMAGES_MAX >> 20} MB — "
+                                  f"use smaller copies (longest side ~2000px)."), []
             else:
                 return None, (f"Error: a node has type {n.get('type')!r} ({json.dumps(n)[:80]}) — "
-                              f"every node needs a `type`: text, rect, ellipse or line."), []
+                              f"every node needs a `type`: text, rect, ellipse, line or image."), []
     notes = []
     if fonts:
         notes.append("The renderer has Inter only, so " + ", ".join(f"{a} → {b}" for a, b in fonts.items())
@@ -1295,14 +1421,15 @@ async def _exec_design(inp, workspace):
         if action == "render":
             if not isinstance(inp.get("spec"), dict):
                 return "Error: `render` needs a `spec` object, e.g. {size:[1080,1080], fill:'#0f172a', nodes:[...]}."
-            spec, err, notes = _prepare_spec(inp["spec"], _load_brand(workspace.root))
+            root = workspace.root   # reads the brand kit + any image files: off the loop
+            spec, err, notes = await asyncio.to_thread(lambda: _prepare_spec(inp["spec"], _load_brand(root), root))
             if err:
                 return err
-            image, fig, _fid, _fmt = await design.render(spec, fmt=fmt, scale=scale, user_id=subject)
+            image, fig, _fid, _fmt, preview = await design.render(spec, fmt=fmt, scale=scale, user_id=subject)
         elif action == "script":
             if not inp.get("script"):
                 return "Error: `script` needs a `script` string ending in console.log('__FRAME__'+id)."
-            image, fig, _fid, _fmt = await design.evaluate(inp["script"], fmt=fmt, scale=scale, user_id=subject)
+            image, fig, _fid, _fmt, preview = await design.evaluate(inp["script"], fmt=fmt, scale=scale, user_id=subject)
         else:
             return f"Error: unknown design action {action!r} (render or script)."
     except design.Unavailable as e:
@@ -1343,17 +1470,20 @@ async def _exec_design(inp, workspace):
         ack += " " + line
     # Show the model its own render, so it QAs what it made before the user judges
     # it — a check the spec alone can't give (hierarchy, overlap, legibility, typos).
-    # Only a raster within `read`'s bound; a deck/svg keeps the text ack.
-    media = _DESIGN_QA_TYPES.get(fmt)
-    if not media or len(image) > _DESIGN_QA_MAX:
+    # The service's small @1x JPEG preview when it sent one (a photo-heavy @2x PNG
+    # runs several MB; a deck has no image), else the render itself if it's a raster
+    # within `read`'s bound; otherwise the text ack alone.
+    look, media = (preview, "image/jpeg") if preview else (image, _DESIGN_QA_TYPES.get(fmt))
+    if not media or len(look) > _DESIGN_QA_MAX:
         return {"_model": ack, "_ui": ui}
     fix = "Design edit (live, same design — don't re-render)" if editor else "a fresh render"
-    ack += (" The render is attached — QA it before you present: headline clearly dominant; "
+    shown = "The first slide is attached" if fmt == "pptx" else "The render is attached"
+    ack += (f" {shown} — QA it before you present: headline clearly dominant; "
             "margins ~8–10%, nothing crammed at an edge; every text legible on what's behind it; "
             "aligned, nothing overlapping or cut off; copy exactly right (spelling, names, "
             f"numbers); on-brand. If anything is off, fix it now with {fix}, then present.")
     return {"_model": [{"type": "image", "source": {"type": "base64", "media_type": media,
-                                                    "data": base64.b64encode(image).decode()}},
+                                                    "data": base64.b64encode(look).decode()}},
                        {"type": "text", "text": ack}],
             "_ui": ui}
 

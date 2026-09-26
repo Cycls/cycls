@@ -84,10 +84,13 @@ agent's live `edit` changed it under their cursor.
 ```
 
 A **paint** — any `fill`, or a text `color` — is a solid `"#4f46e5"` or a linear
-gradient `{ "gradient": ["#a", "#b", …], "angle": deg }` (even stops; `angle`
-0 = →, 45 = ↘, 90 = ↓ default, 135 = ↙). **Node types**: `text`, `rect`
-(`radius`, `stroke`/`strokeWeight`), `ellipse` (a circle when `w == h`), and
-`line` (a thin divider, `h` defaults to 2). Every node also takes `opacity`
+gradient `{ "gradient": ["#a", "#b", …], "angle": deg }` (even stops, or placed
+`[["#a",0],["#b",0.6]]`; `angle` 0 = →, 45 = ↘, 90 = ↓ default, 135 = ↙). A colour
+may carry alpha as `#rrggbbaa`, so a gradient can fade to transparent — the scrim
+that darkens a photo behind text without a hard edge. **Node types**: `text`, `rect`
+(`radius`, `stroke`/`strokeWeight`), `ellipse` (a circle when `w == h`), `line` (a
+thin divider, `h` defaults to 2), and `image` (below). A shape given `color` but no
+`fill` takes it as the fill, as text reads either. Every node also takes `opacity`
 (0–1) and `shadow` (`true` or `{ blur, x, y, spread, color, opacity }`), so a
 design has depth and overlays, not just flat rectangles. Text opacity is applied
 as fill alpha (setting a text node's own opacity collapses its auto-width box).
@@ -108,19 +111,40 @@ skill's file), `_exec_design` fills what the spec **left out**: a frame `fill` �
 the brand primary, a shape `fill` → the accent. It never overrides a value the
 model set, and reads only the two colours (flat `primary_color`/`accent_color`,
 or the older nested `colors: primary/accent`) with a pattern — the SDK carries no
-YAML dependency. Brand fonts are not applied: the service renders Inter/Arial
-only. With a kit present, the ack says what it filled, or flags a design that uses
+YAML dependency. Brand fonts are not applied: the service renders Inter only. With a kit present, the ack says what it filled, or flags a design that uses
 neither brand colour. Independently of brand, text with no `color` gets white or
 near-black by WCAG luminance against its frame's fill, so a forgotten colour is
 never black-on-navy.
 
-**Self-QA.** A png/jpg/webp render (≤ 3 MB, `read`'s bound) comes back to the
-model as an image beside the ack, with a short rubric — headline dominant, ~8–10%
-margins, legible text, nothing overlapping or cut off, exact copy, on-brand — and
-the instruction to fix anything off (with `edit` when the editor is wired, else a
-fresh render) before presenting. The tool does this rather than a prompt rule:
-a "read your render" instruction competing with the tool's own ack gets narrated,
-not acted on. Decks (pptx) and svg keep the text ack.
+**Images.** `{ "type": "image", "src": "attachments/photo.jpg", x, y, w?, h?,
+"fit"?: "cover" | "contain", radius?, opacity?, shadow?, stroke? }` places a PNG /
+JPEG / WebP / GIF that is already in the workspace. `_exec_design` resolves `src`
+with `_resolve_path` (no traversal, no reserved dirs; URLs and SVG are errors
+naming the fix), reads the pixel size from the file header, and ships the bytes
+as base64 inside the spec — the service stays stateless and the `.fig` archives
+them, so the editor shows the photo too. `cover` (default) fills the box and
+crops; `contain` is done by **geometry** — the box shrinks to the image's aspect
+and centres — because the renderer's own FIT scales non-uniformly (upstream bug;
+its STRETCH also falls through to FILL, and the `.fig` codec has no CROP). Give
+`w`, `h` or both; a missing side follows the aspect. The renderer honours a JPEG's
+EXIF rotation, so a quarter-turn (orientation 5–8) swaps the header's width and
+height — without that every portrait phone photo would be mis-sized. No imaging
+library in the SDK, so no resize: an image over 5 MB, or 8 MB across a design, is
+an error asking for a smaller copy. A round avatar is a square image with
+`radius = w/2`; a full-bleed photo is an image at 0,0 the frame's size, first in
+`nodes`, with a gradient scrim and explicitly light text over it (the automatic
+text colour only knows the frame's fill).
+
+**Self-QA.** Every render comes back to the model as an image beside the ack,
+with a short rubric — headline dominant, ~8–10% margins, legible text, nothing
+overlapping or cut off, exact copy, on-brand — and the instruction to fix anything
+off (with `edit` when the editor is wired, else a fresh render) before presenting.
+The image is the service's `preview`: a @1x JPEG of the first frame (~50–150 KB)
+exported beside the render, since a photo-heavy @2x PNG runs several MB and a deck
+has no image of its own — so a deck is QA'd on its first slide. Against a service
+without previews it falls back to the render itself when it is a raster within
+`read`'s 3 MB. The tool does this rather than a prompt rule: a "read your render"
+instruction competing with the tool's own ack gets narrated, not acted on.
 
 **Decks** are a list of frames — one per slide — exported as PowerPoint:
 

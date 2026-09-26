@@ -74,13 +74,20 @@ def test_render_posts_and_decodes(monkeypatch):
     monkeypatch.setenv("DESIGN_URL", "https://d.cycls.ai/")     # trailing slash trimmed
     monkeypatch.setenv("DESIGN_SECRET", "sek")
     _mock(monkeypatch, _FakeResp(200, _ok(b"\x89PNGdata", b"figdata")))
-    img, fig, fid, fmt = asyncio.run(design.render({"size": [1080, 1080]}, fmt="png", scale=2, user_id="org:u"))
+    img, fig, fid, fmt, preview = asyncio.run(design.render({"size": [1080, 1080]}, fmt="png", scale=2, user_id="org:u"))
     assert img == b"\x89PNGdata" and fig == b"figdata" and fid == "0:6" and fmt == "png"
+    assert preview is None                                     # a service that predates previews
     last = _FakeClient.last
     assert last["url"] == "https://d.cycls.ai/render"
     assert last["headers"]["Authorization"] == "Bearer sek"
     assert last["headers"]["X-User-Id"] == "org:u"             # attribution, not auth
-    assert last["json"] == {"spec": {"size": [1080, 1080]}, "format": "png", "scale": 2}
+    assert last["json"] == {"spec": {"size": [1080, 1080]}, "format": "png", "scale": 2, "preview": True}
+
+
+def test_render_decodes_the_qa_preview(monkeypatch):
+    monkeypatch.setenv("DESIGN_URL", "https://d")
+    _mock(monkeypatch, _FakeResp(200, {**_ok(), "preview_base64": base64.b64encode(b"JPEGsmall").decode()}))
+    assert asyncio.run(design.render({}))[4] == b"JPEGsmall"
 
 
 def test_eval_posts_script(monkeypatch):
@@ -126,12 +133,12 @@ def _text(out):
     return m if isinstance(m, str) else next(b["text"] for b in m if b["type"] == "text")
 
 
-def _fake_render(monkeypatch, image=b"\x89PNGrender", fig=b"FIGZ"):
+def _fake_render(monkeypatch, image=b"\x89PNGrender", fig=b"FIGZ", preview=None):
     calls = {}
 
     async def _r(spec, fmt="png", scale=2, user_id=None):
         calls.update(spec=spec, fmt=fmt, scale=scale, user_id=user_id)
-        return image, fig, "0:6", fmt
+        return image, fig, "0:6", fmt, preview
 
     monkeypatch.setattr("cycls._agent.design.render", _r)
     return calls
@@ -194,7 +201,7 @@ def test_script_escape_hatch(tmp_path, monkeypatch):
 
     async def _e(script, fmt="png", scale=2, user_id=None):
         got.update(script=script, fmt=fmt)
-        return b"PPTX", b"FIG", "0:1", fmt
+        return b"PPTX", b"FIG", "0:1", fmt, None
 
     monkeypatch.setattr("cycls._agent.design.evaluate", _e)
     out = asyncio.run(_exec_design(
@@ -393,7 +400,7 @@ def test_unknown_node_type_is_an_error(tmp_path, monkeypatch):
     calls = _fake_render(monkeypatch)
     for node in ({"type": "circle", "w": 10}, {"x": 0, "y": 0, "w": 10, "h": 10}):
         out = asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [node]}}, _ws(tmp_path)))
-        assert out.startswith("Error") and "text, rect, ellipse or line" in out
+        assert out.startswith("Error") and "text, rect, ellipse, line or image" in out
     assert calls == {}                                                      # never rendered a silently-missing node
 
 
@@ -406,3 +413,146 @@ def test_fonts_map_onto_inter(tmp_path, monkeypatch):
     assert [n["font"] for n in calls["spec"]["nodes"]] == [
         "Inter Regular", "Inter Bold", "Inter Bold", "Inter Black", "Inter Medium", "Inter Light"]
     assert "Arial → Inter Regular" in _text(out) and "Inter Medium →" not in _text(out)   # only real changes named
+
+
+
+# ---- the QA look prefers the service's small preview ----
+
+def test_qa_uses_the_preview_even_when_the_render_is_huge(tmp_path, monkeypatch):
+    _fake_render(monkeypatch, image=b"\x89PNG" + b"x" * 64, preview=b"\xff\xd8JPEGpreview")
+    monkeypatch.setattr("cycls._agent.tools._DESIGN_QA_MAX", 32)             # the @2x PNG is over the bound
+    img, txt = asyncio.run(_exec_design({"action": "render", "spec": {}}, _ws(tmp_path)))["_model"]
+    assert img["source"]["media_type"] == "image/jpeg"
+    assert base64.b64decode(img["source"]["data"]) == b"\xff\xd8JPEGpreview"
+    assert (tmp_path / "designs" / "design.png").read_bytes().startswith(b"\x89PNG")   # the saved render is full size
+
+
+def test_a_deck_gets_its_first_slide_to_qa(tmp_path, monkeypatch):
+    _fake_render(monkeypatch, image=b"PPTX", preview=b"\xff\xd8slide1")
+    img, txt = asyncio.run(_exec_design({"action": "render", "spec": {"frames": [{}]}, "format": "pptx"},
+                                        _ws(tmp_path)))["_model"]
+    assert base64.b64decode(img["source"]["data"]) == b"\xff\xd8slide1" and "first slide" in txt["text"]
+
+
+# ---- images ----
+
+import struct
+from cycls._agent.tools import _image_size
+
+
+def _png(w, h):
+    return b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + struct.pack(">II", w, h) + b"\x08\x06\x00\x00\x00" + b"\x00" * 8
+
+
+def _jpeg(w, h, orientation=None):
+    out = b"\xff\xd8"
+    if orientation:
+        tiff = b"II*\x00\x08\x00\x00\x00" + struct.pack("<H", 1) + struct.pack("<HHIHH", 0x0112, 3, 1, orientation, 0) + b"\x00" * 4
+        out += b"\xff\xe1" + struct.pack(">H", 2 + 6 + len(tiff)) + b"Exif\x00\x00" + tiff
+    out += b"\xff\xdb" + struct.pack(">H", 4) + b"\x00\x00"                       # a DQT to skip
+    return out + b"\xff\xc2" + struct.pack(">HBHHB", 11, 8, h, w, 3) + b"\x00" * 9   # progressive SOF2
+
+
+def test_image_size_reads_headers():
+    assert _image_size(_png(1600, 900)) == (1600, 900)
+    assert _image_size(b"GIF89a" + struct.pack("<HH", 32, 16) + b"\x00" * 8) == (32, 16)
+    assert _image_size(_jpeg(4032, 3024)) == (4032, 3024)
+    assert _image_size(_jpeg(4032, 3024, orientation=6)) == (3024, 4032)     # a portrait phone photo: drawn turned
+    assert _image_size(_jpeg(4032, 3024, orientation=3)) == (4032, 3024)     # 180° keeps the shape
+    riff = lambda chunk: b"RIFF" + b"\x00" * 4 + b"WEBP" + chunk
+    assert _image_size(riff(b"VP8X" + b"\x00" * 8 + (1199).to_bytes(3, "little") + (799).to_bytes(3, "little"))) == (1200, 800)
+    assert _image_size(riff(b"VP8L" + b"\x00" * 5 + ((640 - 1) | (480 - 1) << 14).to_bytes(4, "little"))) == (640, 480)
+    assert _image_size(riff(b"VP8 " + b"\x00" * 10 + struct.pack("<HH", 300, 200))) == (300, 200)
+    assert _image_size(b"<svg xmlns='http://www.w3.org/2000/svg'/>") is None
+
+
+def _img(tmp_path, rel, data):
+    p = tmp_path / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(data)
+    return data
+
+
+def test_image_cover_ships_bytes_in_the_box(tmp_path, monkeypatch):
+    data = _img(tmp_path, "attachments/photo.png", _png(1600, 900))
+    calls = _fake_render(monkeypatch)
+    asyncio.run(_exec_design({"action": "render", "spec": {"size": [1080, 1080], "nodes": [
+        {"type": "image", "src": "attachments/photo.png", "x": 0, "y": 0, "w": 1080, "h": 1080, "radius": 24}]}},
+        _ws(tmp_path)))
+    n = calls["spec"]["nodes"][0]
+    assert base64.b64decode(n["image"]) == data and "src" not in n
+    assert (n["x"], n["y"], n["w"], n["h"], n["radius"]) == (0, 0, 1080, 1080, 24)   # cover keeps the box
+
+
+def test_image_missing_side_follows_the_aspect(tmp_path, monkeypatch):
+    _img(tmp_path, "logo.png", _png(400, 100))
+    calls = _fake_render(monkeypatch)
+    asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [
+        {"type": "image", "src": "logo.png", "x": 10, "y": 10, "w": 200},
+        {"src": "logo.png", "h": 50}]}}, _ws(tmp_path)))                # untyped + src → an image
+    a, b = calls["spec"]["nodes"]
+    assert (a["w"], a["h"]) == (200, 50) and (b["type"], b["w"], b["h"]) == ("image", 200, 50)
+
+
+def test_image_contain_centres_the_whole_image(tmp_path, monkeypatch):
+    _img(tmp_path, "brand/logo.png", _png(1128, 191))
+    calls = _fake_render(monkeypatch)
+    asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [
+        {"type": "image", "src": "brand/logo.png", "x": 90, "y": 60, "w": 900, "h": 400, "fit": "contain"}]}},
+        _ws(tmp_path)))
+    n = calls["spec"]["nodes"][0]
+    assert n["w"] == 900 and n["h"] == round(191 * 900 / 1128, 2)          # the image's aspect, full width
+    assert n["x"] == 90 and abs(n["y"] - (60 + (400 - 191 * 900 / 1128) / 2)) < 1e-6   # centred vertically
+    assert "fit" not in n
+
+
+def test_image_errors_name_the_fix(tmp_path, monkeypatch):
+    calls = _fake_render(monkeypatch)
+    ws = _ws(tmp_path)
+    _img(tmp_path, "logo.svg", b"<svg xmlns='http://www.w3.org/2000/svg'/>")
+    _img(tmp_path, "p.png", _png(10, 10))
+    def err(node):
+        out = asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [{"type": "image", **node}]}}, ws))
+        assert isinstance(out, str) and out.startswith("Error"), out
+        return out
+    assert "workspace file" in err({"w": 10})                                       # no src
+    assert "does not exist" in err({"src": "nope.png", "w": 10})
+    assert "escapes" in err({"src": "../../etc/passwd", "w": 10})                   # traversal
+    assert "save it into the workspace" in err({"src": "https://x.com/a.png", "w": 10})
+    assert "SVG" in err({"src": "logo.svg", "w": 10})
+    assert "w` and/or `h" in err({"src": "p.png"})
+    assert "cover or contain" in err({"src": "p.png", "w": 10, "fit": "stretch"})
+    monkeypatch.setattr("cycls._agent.tools._DESIGN_IMAGE_MAX", 8)
+    assert "smaller copy" in err({"src": "p.png", "w": 10})
+    assert calls == {}                                                             # none reached the service
+
+
+def test_images_have_a_total_budget(tmp_path, monkeypatch):
+    _img(tmp_path, "a.png", _png(10, 10))
+    calls = _fake_render(monkeypatch)
+    monkeypatch.setattr("cycls._agent.tools._DESIGN_IMAGES_MAX", 40)
+    out = asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [
+        {"type": "image", "src": "a.png", "w": 10}, {"type": "image", "src": "a.png", "w": 10}]}}, _ws(tmp_path)))
+    assert out.startswith("Error") and "total" in out and calls == {}
+
+
+def test_brand_never_fills_an_image(tmp_path, monkeypatch):
+    _brand(tmp_path, 'primary_color: "#0c2340"\naccent_color: "#c9a227"\n')
+    _img(tmp_path, "a.png", _png(10, 10))
+    calls = _fake_render(monkeypatch)
+    asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [{"type": "image", "src": "a.png", "w": 10}]}},
+                             _ws(tmp_path)))
+    assert "fill" not in calls["spec"]["nodes"][0]
+
+
+def test_a_shape_color_is_its_fill(tmp_path, monkeypatch):
+    # A live turn wrote `color` on a divider line — a shape draws `fill` only, so it came
+    # out black (or brand-accent). Shapes take either, as text does.
+    _brand(tmp_path, 'primary_color: "#0c2340"\naccent_color: "#c9a227"\n')
+    calls = _fake_render(monkeypatch)
+    asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [
+        {"type": "line", "w": 120, "color": "#3d2b1f"}, {"type": "rect", "fill": "#ff0000", "color": "#00ff00"}]}},
+        _ws(tmp_path)))
+    line, rect = calls["spec"]["nodes"]
+    assert line["fill"] == "#3d2b1f" and "color" not in line               # the model's colour, not the accent
+    assert rect["fill"] == "#ff0000"                                        # an explicit fill wins
