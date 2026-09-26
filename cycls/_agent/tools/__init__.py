@@ -1134,20 +1134,31 @@ _DESTRUCTIVE_CMD = re.compile(
     r"|\bdrop\s+(table|database)\b"
     r"|\bgit\s+(push\s+(-f|--force)|reset\s+--hard|clean\s+-\w*[fdx])"
     r"|\bkillall\s"
+    r"|\bfind\s[^\n]*\s-delete\b"   # unlinks by itself, so the rm shim never moves it to the trash
     # A redirect into a block device overwrites a disk. Outside the groups above on
     # purpose: a word boundary cannot sit between a space and `>`, so `> /dev/sda`
     # never matched while `2>/dev/null` did — the rule was inverted.
     r"|>\s*/dev/r?(sd|hd|vd|nvme|mmcblk|loop|disk)", re.I)
 
 
-_READ_CMD = re.compile(r"^\s*(ls|cat|head|tail|wc|grep|rg|find|stat|file|du|df|pwd|echo|which|type|tree|sort|uniq|diff|awk|sed\s+-n)\b", re.I)
+_READ_CMD = re.compile(r"^\s*(ls|cat|head|tail|wc|grep|rg|find|stat|file|du|df|pwd|echo|which|type|tree|sort|uniq|diff|awk|true|sed\s+-n)\b", re.I)
+
+
+def _reads(cmd):
+    """Every command in the line only reads, not just the first. Quoted text is data; a redirect into a file,
+    a substitution or a `find` action is not a read."""
+    if re.search(r"\$\(|`|[<>]\(", cmd):
+        return False
+    bare = re.sub(r"\d*>>?\s*/dev/null\b|&>>?\s*/dev/null\b|\d*>&[\d-]", " ", re.sub(r"'[^']*'|\"(?:\\.|[^\"\\])*\"", "''", cmd))
+    return ">" not in bare and all(_READ_CMD.match(s) and not re.search(r"\s-(delete|exec|execdir|ok|okdir|fprint0?|fprintf|fls)\b", s)
+                                   for s in re.split(r"\|\||&&|[;|&\n]", bare) if s.strip())
 
 
 def risk(name, inp):
     """None (a read — always runs), "write" (follows the composer switch) or "destructive" (asks in both modes)."""
     if name == "bash":
         cmd = str(inp.get("command") or "")
-        return "destructive" if _DESTRUCTIVE_CMD.search(cmd) else None if _READ_CMD.match(cmd) else "write"
+        return "destructive" if _DESTRUCTIVE_CMD.search(cmd) else None if _reads(cmd) else "write"
     if name == "database":
         return {"delete": "destructive", "put": "write"}.get(inp.get("command"))
     return "write" if name in ("edit", "build_app") else None

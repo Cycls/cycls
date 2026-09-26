@@ -761,13 +761,14 @@ and its destructive test reads the command itself, so `call flag-update` runs un
 workspace targets into the trash (30 days, restorable), and `edit`'s overwrite trashes the old content
 first — so Auto lets those run and the card would have been asking about a move. What stays destructive
 is what has no trash behind it: `database delete` (keys go, a trailing slash takes a namespace),
-`git reset --hard`, `git clean -fdx`, `git push --force`, and `shred` / `dd` / `truncate` / `mkfs`.
+`git reset --hard`, `git clean -fdx`, `git push --force`, `shred` / `dd` / `truncate` / `mkfs`, and
+`find -delete`, which unlinks by itself so the shim never sees it.
 
 | tool | class | Auto | Manual |
 |---|---|---|---|
 | `read`, `web_search`, `web_fetch`, `skill` | read | runs | runs |
 | `edit`, `database` (write), `build_app` | write | runs | asks |
-| `bash` | per call, like a one-tool server | runs; a command with no trash behind it asks | asks unless the command is a plain read (`ls`, `cat`, `grep`, `find`, …) |
+| `bash` | per call, like a one-tool server | runs; a command with no trash behind it asks | asks unless every command in the line is a plain read (`ls`, `cat`, `grep`, `find`, …) with no redirect into a file |
 | `canvas`, `ask`, `suggest` | how the agent talks to the person | never asks | never asks |
 
 The builtins have no connector page, so layer 2 reaches them through the card and Settings: *Always
