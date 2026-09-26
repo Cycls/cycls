@@ -307,6 +307,11 @@ export web-worker). The patches and build recipe live in
   editor replays (`design_command`), so both copies change identically; the edited
   design comes back to the model with a layout check. A raw `script` still works as
   the escape hatch.
+- **More primitives, bigger photos.** icon (Iconify), svg (a file or markup), qr,
+  line (from/to, arrowheads), list, chart (column/bar/stacked/line/area/pie/donut),
+  table, rich-text `runs`, blur / backdropBlur, image `shape`/`focus`/`crop`. The
+  service's job prepares them (fits photos to their box, fetches icons, draws QR/SVG
+  as paths), so photos up to 15 MB each / 20 MB per render go through.
 
 ## Configuration
 

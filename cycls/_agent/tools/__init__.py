@@ -288,6 +288,24 @@ _DESIGN_TOOL = {
         "\"fit\"?:\"cover|contain\",\"radius\"?:,\"opacity\"?:,\"shadow\"?:}\n"
         "    stack   {\"type\":\"stack\",\"x\":,\"y\":,\"w\"?:,\"gap\"?:24,\"direction\"?:\"vertical|horizontal\","
         "\"align\"?:\"start|center|end\",\"anchor\"?:\"top|center|bottom\",\"children\":[nodes without x/y]}\n"
+        "    icon    {\"type\":\"icon\",\"name\":\"lucide:rocket\",\"x\":,\"y\":,\"size\":64,\"color\"?:}  any Iconify icon "
+        "(sets: lucide, tabler, mdi, ph, heroicons, ri…)\n"
+        "    svg     {\"type\":\"svg\",\"src\":\"brand/logo.svg\"|\"svg\":\"<svg…>\",\"x\":,\"y\":,\"w\":,\"h\"?:,\"color\"?:}  a logo or mark\n"
+        "    qr      {\"type\":\"qr\",\"text\":\"https://…\",\"x\":,\"y\":,\"size\":240}\n"
+        "    line    {\"type\":\"line\",\"from\":[x,y],\"to\":[x,y],\"color\":,\"width\"?:4,\"end\"?:\"arrow\",\"start\"?:\"arrow\"}  "
+        "(a connector or pointer; the old x/y/w form is a divider)\n"
+        "    list    {\"type\":\"list\",\"items\":[\"…\"],\"marker\"?:\"•|1.|—|none\",\"x\":,\"y\":,\"w\":,\"size\":,\"color\"?:}  "
+        "bullets or steps with a hanging indent (right-to-left for Arabic)\n"
+        "    chart   {\"type\":\"chart\",\"kind\":\"column|bar|stacked|line|area|pie|donut\",\"x\":,\"y\":,\"w\":,\"h\":,"
+        "\"data\":{\"labels\":[…],\"series\":[{\"name\":,\"values\":[…],\"color\"?:}]},\"values\"?:true,"
+        "\"prefix\"?:\"$\",\"suffix\"?:\"%\",\"short\"?:true}  real data → a clean chart\n"
+        "    table   {\"type\":\"table\",\"x\":,\"y\":,\"w\":,\"columns\":[…],\"rows\":[[…]],\"widths\"?:[fractions],"
+        "\"headerFill\"?:,\"zebra\"?:}  rows sized to their text\n"
+        "  A text takes \"runs\":[{\"text\":\"Grow \"},{\"text\":\"3×\",\"color\":\"#f59e0b\",\"font\":\"Playfair Display Bold\"}] "
+        "instead of `text` for mixed styles in one line. Any node takes `blur`, and `backdropBlur` "
+        "(frosted glass: a translucent card, e.g. fill \"#ffffff26\", over a photo). An image takes "
+        "shape:\"circle\" (an avatar), `focus`:[x,y] (0–1, what stays in frame when cover crops) and "
+        "`crop`:[x,y,w,h] (fractions). Photos up to 15 MB are fine — they're fitted to their box.\n"
         "  A STACK lays its children out one after another, `gap` apart, from their REAL "
         "measured sizes — a headline that wraps to three lines pushes the subtitle down. "
         "Use one for every block of text (eyebrow → headline → subtitle → button): no y to "
@@ -1237,12 +1255,13 @@ def _readable_on(bg):
     return "#ffffff" if 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b) < 0.179 else "#111111"
 
 
-# An image node's bytes ride to the stateless service as base64 inside the spec,
-# and back inside the .fig — bounded so a render stays well within the service's
-# request/response limits. The SDK carries no imaging library to shrink a photo,
-# so an oversized one is an error naming the fix.
-_DESIGN_IMAGE_MAX = 5 * 1024 * 1024
-_DESIGN_IMAGES_MAX = 8 * 1024 * 1024
+# An image node's bytes ride to the stateless service as base64 inside the spec —
+# bounded so a request stays under the platform's 32 MiB (base64 adds a third). The
+# service fits each photo to its box (cover-crop, at most 2× the box) before it's
+# drawn, so the .fig stays light however big the original.
+_DESIGN_IMAGE_MAX = 15 * 1024 * 1024
+_DESIGN_IMAGES_MAX = 20 * 1024 * 1024
+_DESIGN_SVG_MAX = 200 * 1024
 
 
 def _exif_orientation(tiff):
@@ -1340,7 +1359,7 @@ def _place_image(n, root):
 
 
 _NUMERIC = ("x", "y", "w", "h", "size", "radius", "lineHeight", "letterSpacing",
-            "opacity", "strokeWeight", "rotation", "gap")
+            "opacity", "strokeWeight", "rotation", "gap", "width", "blur", "backdropBlur")
 
 
 def _num(v):
@@ -1434,6 +1453,32 @@ def _prepare_spec(spec, brand, root=None):
                 if image_bytes > _DESIGN_IMAGES_MAX:
                     return (f"Error: the design's images total over {_DESIGN_IMAGES_MAX >> 20} MB — "
                             f"use smaller copies (longest side ~2000px).")
+            elif n.get("type") in ("icon", "svg", "qr", "list", "chart", "table"):
+                kind = n["type"]
+                if kind == "icon" and not (isinstance(n.get("name"), str) and ":" in n["name"]):
+                    return f"Error: an icon needs `name` — an Iconify name like \"lucide:rocket\" or \"mdi:coffee\" ({json.dumps(n)[:80]})."
+                if kind == "svg" and n.get("src") and not n.get("svg"):
+                    path = _resolve_path(str(n.pop("src")), root)
+                    if not path.is_file() or path.suffix.lower() != ".svg":
+                        return f"Error: svg `src` must be an .svg file in the workspace ({json.dumps(n)[:80]})."
+                    if path.stat().st_size > _DESIGN_SVG_MAX:
+                        return f"Error: {path.name} is over {_DESIGN_SVG_MAX >> 10} KB — use a simpler SVG (or a PNG image)."
+                    n["svg"] = path.read_text(encoding="utf-8", errors="replace")
+                if kind == "svg" and not (isinstance(n.get("svg"), str) and "<svg" in n["svg"]):
+                    return "Error: an svg node needs `svg` (the markup) or `src` (an .svg file in the workspace)."
+                if kind == "qr" and not str(n.get("text") or "").strip():
+                    return "Error: a qr node needs `text` — the link or text to encode."
+                if kind == "list" and not isinstance(n.get("items"), list):
+                    return "Error: a list needs `items` — a list of strings."
+                if kind == "chart" and not isinstance((n.get("data") or {}).get("series") or n.get("values"), list):
+                    return "Error: a chart needs `data`: {labels:[…], series:[{name, values:[…]}]}."
+                if kind == "table" and not isinstance(n.get("rows"), list):
+                    return "Error: a table needs `rows` (a list of rows, each a list of cells) and usually `columns`."
+                # Marks and text-bearing nodes read on their background like text does.
+                if bg and n.get("color") is None and kind != "svg":
+                    n["color"] = _readable_on(bg)
+                if brand and n.get("font") is None and kind in ("list", "chart", "table") and brand["body"]:
+                    n["font"], branded_fonts = brand["body"], branded_fonts + 1
             elif n.get("type") == "stack":
                 kids = n.get("children")
                 if not isinstance(kids, list) or not kids:
@@ -1445,11 +1490,12 @@ def _prepare_spec(spec, brand, root=None):
                         return err
             else:
                 return (f"Error: a node has type {n.get('type')!r} ({json.dumps(n)[:80]}) — "
-                        f"every node needs a `type`: text, rect, ellipse, line, image or stack.")
+                        f"every node needs a `type`: text, rect, ellipse, line, image, stack, list, "
+                        f"table, chart, icon, svg or qr.")
             # Content placed wholly outside the frame is a layout built for another size:
             # the renderer would clamp every such text box to the edge, piling it up.
             # (A stack places its children itself.)
-            if top and n["type"] in ("text", "image", "stack") and ((n.get("x") or 0) >= W or (n.get("y") or 0) >= H):
+            if top and n["type"] not in ("rect", "ellipse", "line") and ((n.get("x") or 0) >= W or (n.get("y") or 0) >= H):
                 what = repr(n.get("text"))[:40] if n["type"] == "text" else f"a{'n' if n['type'] == 'image' else ''} {n['type']}"
                 return (f"Error: {what} starts at ({n.get('x') or 0}, {n.get('y') or 0}), outside the "
                         f"{W}×{H} frame — set the frame's `size` (e.g. \"story\" for 1080×1920) "

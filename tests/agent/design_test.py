@@ -458,7 +458,7 @@ def test_unknown_node_type_is_an_error(tmp_path, monkeypatch):
     calls = _fake_render(monkeypatch)
     for node in ({"type": "circle", "w": 10}, {"x": 0, "y": 0, "w": 10, "h": 10}):
         out = asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [node]}}, _ws(tmp_path)))
-        assert out.startswith("Error") and "text, rect, ellipse, line, image or stack" in out
+        assert out.startswith("Error") and "text, rect, ellipse, line, image, stack, list, table, chart, icon, svg or qr" in out
     assert calls == {}                                                      # never rendered a silently-missing node
 
 
@@ -889,4 +889,55 @@ def test_the_client_inspects_and_applies_ops(monkeypatch):
     r = asyncio.run(design.apply(b"FIG", ops=[{"op": "delete", "node": "x"}], preview=True))
     assert r == {"fig": b"E", "lint": [], "script": "S", "preview": b"J"}
     assert _FakeClient.last["json"] == {"fig": base64.b64encode(b"FIG").decode(), "ops": [{"op": "delete", "node": "x"}], "preview": True}
+
+
+# ---- M5: more node types, bigger photos ----
+
+def test_new_node_types_are_prepared(tmp_path, monkeypatch):
+    (tmp_path / "brand").mkdir()
+    (tmp_path / "brand" / "logo.svg").write_text("<svg viewBox='0 0 10 10'><circle cx='5' cy='5' r='4'/></svg>", encoding="utf-8")
+    calls = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "spec": {"size": [1080, 1080], "fill": "#0f172a", "nodes": [
+        {"type": "icon", "name": "lucide:rocket", "x": 10, "y": 10, "size": "64"},
+        {"type": "svg", "src": "brand/logo.svg", "x": 100, "y": 10, "w": 200},
+        {"type": "qr", "text": "https://cycls.com", "x": 10, "y": 300, "size": 240},
+        {"type": "list", "items": ["one", "two"], "x": 400, "y": 300, "w": 500},
+        {"type": "chart", "kind": "column", "x": 10, "y": 600, "w": 500, "h": 300, "data": {"labels": ["a"], "series": [{"name": "s", "values": [1]}]}},
+        {"type": "table", "x": 520, "y": 600, "w": 500, "columns": ["a"], "rows": [["1"]]},
+        {"type": "line", "from": [0, 1000], "to": [500, 1000], "width": "4", "end": "arrow"},
+    ]}}, _ws(tmp_path)))
+    assert not _text(out).startswith("Error"), _text(out)
+    icon, svg, qr, lst, chart, table, line = calls["spec"]["nodes"]
+    assert icon["size"] == 64 and icon["color"] == "#ffffff"          # reads on the navy like text
+    assert "<svg" in svg["svg"] and "src" not in svg                  # the file's markup travels
+    assert lst["color"] == "#ffffff" and chart["color"] == "#ffffff" and table["color"] == "#ffffff"
+    assert line["width"] == 4
+
+
+def test_new_node_types_say_what_they_need(tmp_path, monkeypatch):
+    calls = _fake_render(monkeypatch)
+    cases = [({"type": "icon", "name": "rocket"}, "Iconify name"),
+             ({"type": "svg", "x": 0, "y": 0}, "needs `svg`"),
+             ({"type": "qr", "x": 0, "y": 0}, "needs `text`"),
+             ({"type": "chart", "x": 0, "y": 0}, "needs `data`"),
+             ({"type": "table", "x": 0, "y": 0}, "needs `rows`")]
+    for node, words in cases:
+        out = asyncio.run(_exec_design({"action": "render", "spec": {"size": [100, 100], "nodes": [node]}}, _ws(tmp_path)))
+        assert out.startswith("Error") and words in out, out
+    assert calls == {}
+
+
+def test_photos_up_to_15_mb_go_through(tmp_path, monkeypatch):
+    calls = _fake_render(monkeypatch)
+    (tmp_path / "attachments").mkdir()
+    big = _png(4000, 3000) + b"\0" * (12 * 1024 * 1024)                 # a 12 MB photo: fine now
+    (tmp_path / "attachments" / "big.png").write_bytes(big)
+    out = asyncio.run(_exec_design({"action": "render", "spec": {"size": [1080, 1080], "nodes": [
+        {"type": "image", "src": "attachments/big.png", "x": 0, "y": 0, "w": 1080, "h": 1080, "focus": [0.5, 0.2]}]}}, _ws(tmp_path)))
+    assert not _text(out).startswith("Error"), _text(out)
+    assert calls["spec"]["nodes"][0]["focus"] == [0.5, 0.2]              # the service crops around it
+    (tmp_path / "attachments" / "huge.png").write_bytes(_png(10, 10) + b"\0" * (16 * 1024 * 1024))
+    out = asyncio.run(_exec_design({"action": "render", "spec": {"size": [1080, 1080], "nodes": [
+        {"type": "image", "src": "attachments/huge.png", "x": 0, "y": 0, "w": 100}]}}, _ws(tmp_path)))
+    assert out.startswith("Error") and "over the 15 MB" in out
 
