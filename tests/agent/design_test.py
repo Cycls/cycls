@@ -229,16 +229,17 @@ def test_script_escape_hatch(tmp_path, monkeypatch):
     assert got["script"].startswith("console.log") and out["_ui"]["path"] == "designs/deck.pptx"
 
 
-def _fake_apply(monkeypatch, result=b"EDITED-FIG", error=None):
-    """`design.apply` faked: records the call, returns the edited .fig or raises the
-    script's error. `refresh.schedule` is captured instead of run."""
+def _fake_apply(monkeypatch, result=b"EDITED-FIG", error=None, compiled=None, preview=None, lint=()):
+    """`design.apply` faked: records the call, returns the edited .fig (plus the
+    compiled script, preview and lint the service sends) or raises the edit's error.
+    `refresh.schedule` is captured instead of run."""
     calls = {}
 
-    async def _apply(fig, script, user_id=None):
-        calls.update(fig=fig, script=script, user_id=user_id)
+    async def _apply(fig, script=None, user_id=None, ops=None, preview_=None, **kw):
+        calls.update(fig=fig, script=script, ops=ops, user_id=user_id, preview=kw.get("preview"))
         if error:
             raise RuntimeError(error)
-        return result
+        return {"fig": result, "lint": list(lint), "script": compiled, "preview": preview}
     monkeypatch.setattr("cycls._agent.design.apply", _apply)
     scheduled = []
     monkeypatch.setattr("cycls._agent.design.refresh.schedule",
@@ -770,7 +771,8 @@ def test_content_outside_the_frame_is_an_error(tmp_path, monkeypatch):
 def test_apply_posts_fig_and_script(monkeypatch):
     monkeypatch.setenv("DESIGN_URL", "https://d")
     _mock(monkeypatch, _FakeResp(200, {"ok": True, "fig_base64": base64.b64encode(b"EDITED").decode()}))
-    assert asyncio.run(design.apply(b"FIG", "t.characters='x'", user_id="u")) == b"EDITED"
+    assert asyncio.run(design.apply(b"FIG", "t.characters='x'", user_id="u")) == \
+        {"fig": b"EDITED", "lint": [], "script": None, "preview": None}
     assert _FakeClient.last["url"] == "https://d/apply"
     assert _FakeClient.last["json"] == {"fig": base64.b64encode(b"FIG").decode(), "script": "t.characters='x'"}
     _mock(monkeypatch, _FakeResp(422, {"ok": False, "error": "null is not an object"}))
@@ -821,4 +823,70 @@ def test_the_client_decodes_lint(monkeypatch):
     monkeypatch.setenv("DESIGN_URL", "https://d")
     _mock(monkeypatch, _FakeResp(200, {**_ok(), "lint": [{"frame": 1, "node": "x", "issue": "y", "fix": "z"}]}))
     assert asyncio.run(design.render({}))[6] == [{"frame": 1, "node": "x", "issue": "y", "fix": "z"}]
+
+
+# ---- M4: inspect, edit ops ----
+
+def test_edit_with_ops_resolves_files_and_replays_the_compiled_script(tmp_path, monkeypatch):
+    _design(tmp_path)
+    (tmp_path / "attachments").mkdir()
+    (tmp_path / "attachments" / "p.png").write_bytes(_png(40, 20))
+    calls, scheduled = _fake_apply(monkeypatch, compiled="/*compiled*/ await applyOps([])", preview=_jpeg(8, 8),
+                                   lint=[{"frame": 0, "node": "tag", "issue": "sits 4px from the edge", "fix": "keep margins"}])
+    ops = [{"op": "set_text", "node": "headline", "text": "New"},
+           {"op": "move", "node": "cta", "dy": "40"},                              # quoted number → number
+           {"op": "replace_image", "node": "photo", "src": "attachments/p.png"},   # file → bytes
+           {"op": "add", "node": {"text": "NEW", "x": 10, "y": 10, "size": "24"}}]  # untyped → text; numbers
+    out = asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": ops, "intent": "swap the photo"}, _ws(tmp_path)))
+    sent = calls["ops"]
+    assert calls["script"] is None and calls["preview"] is True
+    assert sent[1]["dy"] == 40
+    assert "src" not in sent[2] and base64.b64decode(sent[2]["image"]) == _png(40, 20)
+    assert sent[3]["node"]["type"] == "text" and sent[3]["node"]["size"] == 24
+    assert (tmp_path / "designs" / "launch.fig").read_bytes() == b"EDITED-FIG" and scheduled == ["designs/launch.fig"]
+    assert out["_ui"]["script"] == "/*compiled*/ await applyOps([])"         # the editor replays the same code
+    text = _text(out)
+    assert "Layout check found 1 issue: tag sits 4px from the edge" in text
+    assert out["_model"][0]["type"] == "image"                               # the edited design comes back to check
+
+
+def test_edit_ops_errors_come_back_verbatim(tmp_path, monkeypatch):
+    _design(tmp_path)
+    _fake_apply(monkeypatch, error='op 1 (set_text nope): no node named "nope" — this design has: headline, cta')
+    out = asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": [{"op": "set_text", "node": "nope", "text": "x"}]}, _ws(tmp_path)))
+    assert out.startswith("Error") and 'no node named "nope"' in out and "headline, cta" in out
+    bad = asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": [{"op": "move", "node": "cta", "dy": "lots"}]}, _ws(tmp_path)))
+    assert bad.startswith("Error") and "`dy` must be a number" in bad
+
+
+def test_inspect_lists_frames_and_nodes(tmp_path, monkeypatch):
+    _design(tmp_path)
+    got = {}
+
+    async def _inspect(fig, user_id=None):
+        got.update(fig=fig, user_id=user_id)
+        return [{"slide": 1, "name": "slide", "size": [1080, 1080], "fill": "#0f172a", "nodes": [
+            {"name": "headline", "type": "text", "x": 90, "y": 120, "w": 900, "h": 220, "text": "Night Roast",
+             "font": "Playfair Display Bold", "size": 96, "color": "#ffffff"},
+            {"name": "cta", "type": "rect", "x": 90, "y": 900, "w": 240, "h": 72, "fill": "#f5a623", "radius": 36}]}]
+    monkeypatch.setattr("cycls._agent.design.inspect", _inspect)
+    out = asyncio.run(_exec_design({"action": "inspect", "name": "launch"}, _ws(tmp_path)))
+    assert got["fig"] == b"ORIGINAL-FIG"
+    assert "slide 1 (1080×1080, fill #0f172a):" in out
+    assert 'headline  text  (90,120 900×220)  "Night Roast"  Playfair Display Bold 96px #ffffff' in out
+    assert "cta  rect  (90,900 240×72)  fill #f5a623  radius 36" in out
+    missing = asyncio.run(_exec_design({"action": "inspect", "name": "nope"}, _ws(tmp_path)))
+    assert missing.startswith("Error") and "doesn't exist" in missing
+
+
+def test_the_client_inspects_and_applies_ops(monkeypatch):
+    monkeypatch.setenv("DESIGN_URL", "https://d")
+    _mock(monkeypatch, _FakeResp(200, {"ok": True, "frames": [{"slide": 1, "nodes": []}]}))
+    assert asyncio.run(design.inspect(b"FIG")) == [{"slide": 1, "nodes": []}]
+    assert _FakeClient.last["url"] == "https://d/inspect"
+    _mock(monkeypatch, _FakeResp(200, {"ok": True, "fig_base64": base64.b64encode(b"E").decode(), "script": "S",
+                                       "preview_base64": base64.b64encode(b"J").decode(), "lint": []}))
+    r = asyncio.run(design.apply(b"FIG", ops=[{"op": "delete", "node": "x"}], preview=True))
+    assert r == {"fig": b"E", "lint": [], "script": "S", "preview": b"J"}
+    assert _FakeClient.last["json"] == {"fig": base64.b64encode(b"FIG").decode(), "ops": [{"op": "delete", "node": "x"}], "preview": True}
 

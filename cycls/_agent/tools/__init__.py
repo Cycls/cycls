@@ -346,22 +346,28 @@ _DESIGN_TOOL = {
         "- script {script, name, format?} — escape hatch: a raw OpenPencil / Figma "
         "plugin-API script for what the spec can't express. It MUST end with "
         "`console.log('__FRAME__'+frame.id)` naming the frame to export.\n"
-        "- edit {script, name, intent?} — change a design you rendered (designs/<name>.fig). "
-        "The script is a Figma plugin-API snippet that mutates the document — e.g. "
-        "`const t=figma.currentPage.findOne(n=>n.type==='TEXT'&&n.characters==='Old'); "
-        "t.characters='New'; figma.currentPage.selection=[t]`. It is applied to the saved "
-        "design first, so if it throws (a node you look up isn't there) you get that error "
-        "and nothing changes; on success the .fig is saved and its image re-exported. If the "
-        "design is open, the user WATCHES a labeled 'Super' cursor replay your change live. "
-        "ALWAYS set `figma.currentPage.selection` to the node(s) you change so it highlights "
-        "under the cursor, and pass a short `intent` (e.g. 'making the headline gold') shown "
-        "on that cursor. To change a font set `t.fontName={family:'Poppins',style:'Semi Bold'}` "
-        "— Figma style names, with the spaces ('Semi Bold', 'Extra Bold'). In an edit, "
-        "`textAlignHorizontal` follows the text's own direction: on an Arabic line 'LEFT' is "
-        "its start, the RIGHT side (the spec's `align` already means the visual side). Use `edit` to tweak "
-        "a design ('bigger headline', 'move the button "
-        "down'); use `render`/`script` to CREATE one. `name` is the design's base name (e.g. "
-        "`launch`). No `console.log` needed.\n\n"
+        "- inspect {name} — the design's frames and every node by name (its `id`, else "
+        "text-1, rect-2…), with its box, text, font and colour. Do this before an edit you "
+        "can't name from the spec you wrote.\n"
+        "- edit {ops, name, intent?} — change a design you rendered (designs/<name>.fig) with "
+        "named operations, applied in order: "
+        "[{\"op\":\"set_text\",\"node\":\"headline\",\"text\":\"New\"}, "
+        "{\"op\":\"style\",\"node\":\"headline\",\"color\":\"#f5a623\",\"font\":\"Playfair Display Bold\"}, "
+        "{\"op\":\"move\",\"node\":\"cta\",\"dy\":40}, {\"op\":\"add\",\"node\":{…a spec node…}}] — "
+        "the full list is in the `ops` field. Ops paint, set fonts and lay out exactly as a "
+        "render does. The edit is applied to the saved design first: a node that doesn't "
+        "exist is an error listing the ones that do, and nothing changes; on success the "
+        ".fig is saved, its image re-exported, and the edited design comes back to you to "
+        "check, with a layout check. If the design is open, the user WATCHES a labeled "
+        "'Super' cursor replay the change live — pass a short `intent` ('making the "
+        "headline gold') shown on it. Use `edit` to tweak a design ('bigger headline', "
+        "'move the button down'); `render` to CREATE one. `name` is the design's base name "
+        "(e.g. `launch`).\n"
+        "  For what ops can't do, `edit` also takes a raw `script` instead: a Figma "
+        "plugin-API snippet mutating the document (figma.currentPage.findOne(…)); set "
+        "`figma.currentPage.selection` to what you change. Fonts there are "
+        "{family:'Poppins',style:'Semi Bold'} (spaced style names); `textAlignHorizontal` "
+        "follows the text's direction (on Arabic 'LEFT' is the right side).\n\n"
         "`format` is png (default), jpg, webp, svg, or pptx (PowerPoint; use it for "
         "decks). `name` is the file base name, e.g. `launch`. The render opens on the "
         "canvas; the editable `.fig` is saved beside it for later edits. Every render "
@@ -371,8 +377,10 @@ _DESIGN_TOOL = {
         "it gets a numeric suffix (`launch-2`); to CHANGE an existing design use `edit`."
     ),
     "input_schema": {"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["render", "script", "edit"],
-                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), or `edit` a rendered design (checked, saved, replayed live in the editor)."},
+        "action": {"type": "string", "enum": ["render", "script", "edit", "inspect"],
+                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes), or `edit` it (checked, saved, replayed live in the editor)."},
+        "ops": {"type": "array", "items": {"type": "object"},
+                "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?}; resize {node, w?, h?}; delete {node}; duplicate {node, dx?, dy?, id?}; replace_image {node, src}; add {node:<spec node>, frame?}. `frame` (slide index from 0) narrows a name to one slide."},
         "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes} or a deck {frames:[...]} (one per slide, export pptx); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s). Scripts may use only `figma` (and `console`): no `this`, globals, network, eval/Function or `.constructor` — anything else is refused before it runs."},
@@ -1464,6 +1472,74 @@ def _prepare_spec(spec, brand, root=None):
     return spec, None, notes
 
 
+_OP_NUMERIC = ("x", "y", "dx", "dy", "w", "h", "size", "radius", "opacity", "letterSpacing",
+               "lineHeight", "strokeWeight", "frame")
+
+
+def _prepare_ops(ops, root):
+    """Edit ops made safe to send: numbers the model quoted become numbers; a
+    replace_image `src` (a workspace file) becomes the image bytes; an `add`ed node
+    goes through the render path (types, numbers, image files). → (ops, error)."""
+    if not isinstance(ops, list):
+        return None, "Error: `ops` must be a list of operations."
+    ops = json.loads(json.dumps(ops))
+    for k, op in enumerate(ops, 1):
+        if not isinstance(op, dict) or not op.get("op"):
+            return None, f"Error: op {k} must be an object with an `op` (set_text, style, move, …)."
+        for key in _OP_NUMERIC:
+            if key in op and op[key] is not None:
+                if (v := _num(op[key])) is None:
+                    return None, f"Error: op {k}: `{key}` must be a number, not {op[key]!r}."
+                op[key] = v
+        if op["op"] == "replace_image":
+            probe = {"src": op.pop("src", None), "w": 1, "h": 1}
+            try:
+                _place_image(probe, root)
+            except ValueError as e:
+                return None, f"Error: op {k}: {e}"
+            op["image"] = probe["image"]
+        elif op["op"] == "add":
+            if not isinstance(op.get("node"), dict):
+                return None, f"Error: op {k}: `add` needs a `node` (a spec node, e.g. a text or a stack)."
+            spec, err, _ = _prepare_spec({"size": [100000, 100000], "nodes": [op["node"]]}, None, root)
+            if err:
+                return None, err.replace("Error: ", f"Error: op {k}: ", 1)
+            op["node"] = spec["nodes"][0]
+    return ops, None
+
+
+def _outline_text(rel, frames):
+    """A design's outline (from the service's inspect) as compact lines for the model:
+    each frame, then each node — name, type, box, and its text/font/colour or fill."""
+    if not frames:
+        return f"{rel} has no frames."
+    out = [f"{rel} — {len(frames)} frame{'s' if len(frames) != 1 else ''}. Edit with ops that name these nodes."]
+    for f in frames:
+        w, h = (f.get("size") or [0, 0])[:2]
+        out.append(f"slide {f.get('slide')} ({w}×{h}{', fill ' + f['fill'] if f.get('fill') else ''}):")
+        for n in f.get("nodes") or []:
+            box = f"({n.get('x')},{n.get('y')} {n.get('w')}×{n.get('h')})"
+            bits = [f"  {n.get('name')}", n.get("type", ""), box]
+            if n.get("in"):
+                bits.append(f"in {n['in']}")
+            if "text" in n:
+                bits.append(json.dumps(n["text"], ensure_ascii=False))
+                bits.append(f"{n.get('font')} {n.get('size')}px {n.get('color', '')}".strip())
+                if n.get("align"):
+                    bits.append(f"align {n['align']}")
+            else:
+                if n.get("fill"):
+                    bits.append(f"fill {n['fill']}")
+                if n.get("radius"):
+                    bits.append(f"radius {n['radius']}")
+                if n.get("stroke"):
+                    bits.append(f"stroke {n['stroke']}")
+            if n.get("opacity") is not None:
+                bits.append(f"opacity {n['opacity']}")
+            out.append("  ".join(str(b) for b in bits if b != ""))
+    return "\n".join(out)
+
+
 def _dedupe_design_name(designs_dir, name, fmt):
     """A base name whose `<name>.<fmt>` and `<name>.fig` are both free under
     `designs_dir`, so a fresh render never overwrites an existing design:
@@ -1500,32 +1576,62 @@ async def _exec_design(inp, workspace):
     # error now (it used to fail silently inside the browser), and a success is saved
     # and re-exported whether or not an editor is open. Then a UI event replays the
     # same script in the live editor, where the user watches the Super cursor make it.
-    if action == "edit":
-        script = inp.get("script")
-        if not script:
-            return "Error: `edit` needs a `script` (a Figma plugin-API snippet mutating the OPEN design)."
+    if action in ("edit", "inspect"):
         rel = f"designs/{name}.fig"
         fig_path = pathlib.Path(workspace.root) / rel
         if not fig_path.is_file():
-            return f"Error: {rel} doesn't exist — `edit` changes a design you rendered; `render` creates one."
+            return (f"Error: {rel} doesn't exist — `{action}` works on a design you rendered; "
+                    f"`render` creates one.")
+    # `inspect` lists a design's frames and their named nodes — what `edit` ops name.
+    if action == "inspect":
         try:
-            edited = await design.apply(await asyncio.to_thread(fig_path.read_bytes), script, user_id=subject)
+            frames = await design.inspect(await asyncio.to_thread(fig_path.read_bytes), user_id=subject)
         except design.Unavailable as e:
             return f"Error: design unavailable — {e}"
         except Exception as e:
-            return (f"Error: the edit script failed on {rel} — {e}. Nothing was changed; fix the "
-                    f"script (check the node you look up exists) and try again.")
+            return f"Error: couldn't inspect {rel} — {e}"
+        return _outline_text(rel, frames)
+    # `edit` changes a saved design: named `ops` (the normal way) or a raw `script`.
+    # The service applies it to the .fig first — the editor's own plugin API, headless
+    # — so an edit that fails is the model's error now (it used to fail silently in
+    # the browser), and a success is saved and re-exported whether or not an editor is
+    # open. Then a UI event replays the same script in the live editor, where the user
+    # watches the Super cursor make it. The model gets the result back to check.
+    if action == "edit":
+        script, ops = inp.get("script"), inp.get("ops")
+        if not ops and not script:
+            return ("Error: `edit` needs `ops` — e.g. [{\"op\":\"set_text\",\"node\":\"headline\",\"text\":\"…\"}] "
+                    "(Design inspect lists the node names) — or a raw `script`.")
+        if ops:
+            ops, err = await asyncio.to_thread(_prepare_ops, ops, workspace.root)
+            if err:
+                return err
+        try:
+            r = await design.apply(await asyncio.to_thread(fig_path.read_bytes), script=None if ops else script,
+                                   ops=ops or None, preview=True, user_id=subject)
+        except design.Unavailable as e:
+            return f"Error: design unavailable — {e}"
+        except Exception as e:
+            return (f"Error: the edit failed on {rel} — {e}. Nothing was changed; fix the "
+                    f"{'ops' if ops else 'script'} (Design inspect lists the nodes) and try again.")
         tmp = fig_path.with_name(f".{fig_path.name}.part")
-        await asyncio.to_thread(tmp.write_bytes, edited)
+        await asyncio.to_thread(tmp.write_bytes, r["fig"])
         await asyncio.to_thread(tmp.replace, fig_path)
         from cycls._agent.design import refresh
         refresh.schedule(workspace.root, rel, subject)        # the image beside it follows
-        ui = {"type": "ui", "action": "design_command", "path": rel, "script": script}
+        ui = {"type": "ui", "action": "design_command", "path": rel, "script": r.get("script") or script}
         if intent := inp.get("intent"):
             ui["intent"] = str(intent)[:80]   # shown on the live "Super" cursor
-        return {"_model": f"Edit applied and saved to {rel}; the image beside it (designs/{name}.png etc.) "
-                          f"re-exports in a few seconds. If the design is open in the editor, the Super "
-                          f"cursor replays the change live there.",
+        ack = (f"Edit applied and saved to {rel}; the image beside it (designs/{name}.png etc.) "
+               f"re-exports in a few seconds. If the design is open in the editor, the Super "
+               f"cursor replays the change live there." + _layout_check(r.get("lint"), "png"))
+        if not r.get("preview") or len(r["preview"]) > _DESIGN_QA_MAX:
+            return {"_model": ack, "_ui": ui}
+        ack += (" The edited design is attached — check the change landed as intended and "
+                "nothing else moved or collides; if not, edit again.")
+        return {"_model": [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                        "data": base64.b64encode(r["preview"]).decode()}},
+                           {"type": "text", "text": ack}],
                 "_ui": ui}
     notes = []
     try:

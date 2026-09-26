@@ -300,6 +300,13 @@ export web-worker). The patches and build recipe live in
   returns `lint` (overlapping text, off/crowded edges, too-small text, low contrast on
   what's behind it); `_exec_design` turns it into the ack's "Layout check" line, next
   to the QA image. Nodes carry names from the spec's `id`.
+- **Edits by name.** `inspect` returns a design's outline (frames, named nodes with
+  box/text/font/colour); `edit` takes `ops` — set_text, style, move, resize, delete,
+  duplicate, replace_image, add — which the service compiles with the builder's own
+  code and applies to the saved .fig. The reply's compiled script is what the live
+  editor replays (`design_command`), so both copies change identically; the edited
+  design comes back to the model with a layout check. A raw `script` still works as
+  the escape hatch.
 
 ## Configuration
 

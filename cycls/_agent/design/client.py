@@ -101,12 +101,34 @@ async def render(spec, fmt="png", scale=2, user_id=None):
     return _decode(await _post("/render", {"spec": spec, "format": fmt, "scale": scale, "preview": True}, user_id))
 
 
-async def apply(fig, script, user_id=None):
-    """Run an `edit` script on a `.fig` (bytes) with the editor's own plugin API →
-    the edited `.fig` bytes. A script that throws raises RuntimeError carrying the
-    script's error (e.g. "null is not an object …")."""
-    data = await _post("/apply", {"fig": base64.b64encode(fig).decode(), "script": script}, user_id)
-    return base64.b64decode(data["fig_base64"])
+async def apply(fig, script=None, user_id=None, ops=None, preview=False):
+    """Edit a saved `.fig` (bytes) with the editor's own plugin API, headless — by
+    `ops` (named operations: set_text, style, move, …) or a raw plugin-API `script` →
+    a dict: `fig` (the edited document), `lint` (the layout check of the result),
+    `script` (for ops, the compiled script the live editor replays; else None) and
+    `preview` (a @1x JPEG of the first frame, when asked). A failing edit raises
+    RuntimeError carrying its own error (e.g. 'no node named "cta" — this design
+    has: …' or "null is not an object …")."""
+    body = {"fig": base64.b64encode(fig).decode()}
+    if ops is not None:
+        body["ops"] = ops
+    else:
+        body["script"] = script
+    if preview:
+        body["preview"] = True
+    data = await _post("/apply", body, user_id)
+    return {"fig": base64.b64decode(data["fig_base64"]),
+            "lint": [dict(i) for i in data.get("lint") or [] if isinstance(i, dict)],
+            "script": data.get("script"),
+            "preview": base64.b64decode(data["preview_base64"]) if data.get("preview_base64") else None}
+
+
+async def inspect(fig, user_id=None):
+    """A saved `.fig`'s outline → [{slide, name, size, fill?, nodes: [{name, type, x,
+    y, w, h, text?, font?, size?, color?, fill?, radius?, …}]}] — every frame and its
+    nodes by name, measured, for edits that name nodes which exist."""
+    data = await _post("/inspect", {"fig": base64.b64encode(fig).decode()}, user_id)
+    return data.get("frames") or []
 
 
 async def export(fig, fmt="png", scale=2, width=None, user_id=None):
