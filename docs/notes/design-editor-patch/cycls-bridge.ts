@@ -120,11 +120,51 @@ function idleAgent(delay = 1600): void {
 
 const wait = (ms: number): Promise<void> => new Promise((r) => window.setTimeout(r, ms))
 
+// The editor's web fonts come from the render service's /font — one complete file
+// per face, the very file the export renders with. In a browser the editor would
+// otherwise fetch Fontsource subset files and register them under one family name,
+// and an Arabic web font (Cairo, Tajawal…) drew blank in the editor while the export
+// was right. Every remote load goes through here (a document's fonts, the agent's
+// live edits, a font picked in the UI); a face the service lacks falls back to the
+// stock loader.
+function useServiceFonts(): void {
+  const fm = fontManager as unknown as {
+    loadRemoteFont(family: string, style?: string, characters?: string, signal?: AbortSignal): Promise<ArrayBuffer | null>
+    markLoaded(family: string, style: string, data: ArrayBuffer, source?: string): void
+    loadedData(family: string, style: string): ArrayBuffer | null
+  }
+  const stock = fm.loadRemoteFont.bind(fm)
+  const tried = new Set<string>()
+  fm.loadRemoteFont = async (family: string, style = 'Regular', characters = '', signal?: AbortSignal) => {
+    const key = `${family}|${style}`
+    if (!tried.has(key)) {
+      tried.add(key)
+      try {
+        const res = await fetch(`/font?family=${encodeURIComponent(family)}&style=${encodeURIComponent(style)}`, { signal })
+        if (res.ok) {
+          const buffer = await res.arrayBuffer()
+          if (buffer.byteLength > 1024) {
+            // A recorded source (the service resolves Google Fonts first) keeps the
+            // editor's font-status check from flagging the face as substituted.
+            fm.markLoaded(family, style, buffer, 'google')
+            return fm.loadedData(family, style)
+          }
+        }
+      } catch {
+        if (signal?.aborted) throw signal.reason
+        /* fall through to the stock loader */
+      }
+    }
+    return stock(family, style, characters, signal)
+  }
+}
+
 export function startCyclsEmbedBridge(): void {
   const params = new URLSearchParams(window.location.search)
   if (params.get('embed') !== 'cycls') return
   const parentWindow = window.parent
   if (!parentWindow || parentWindow === window) return
+  useServiceFonts()
 
   let name = 'design.fig'
   let lastVersion = -1

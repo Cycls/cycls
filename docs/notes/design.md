@@ -126,6 +126,15 @@ Fontsource. The service's `fonts.ts` makes that dependable before every render:
 
 The service returns `notes` for what it changed; the SDK appends them to the ack.
 
+**The editor draws with the export's fonts.** In a browser the editor fetches a web font
+as Fontsource *subset* files registered under one family name, and an Arabic web font
+(Cairo, Tajawal…) drew blank there while the export was right (default Arabic — the
+bundled Noto Naskh — was fine). The bridge replaces the font manager's remote loader with
+one that asks the service's `GET /font` first: one complete file per face, fetched with
+the renderer's own resolver — so the editor and the PNG shape text from the same file. It
+also drops cached text pictures whenever the font set changes, so text drawn before a
+late font arrived re-shapes.
+
 `size` is `[W, H]` or a **preset** the SDK
 resolves before the request: `square` 1080², `post-portrait` 1080×1350, `story` /
 `reel` 1080×1920, `slide` / `wide` 1920×1080, `x-post` 1600×900, `a4-poster`
