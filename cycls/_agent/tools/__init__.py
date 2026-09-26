@@ -277,13 +277,24 @@ _DESIGN_TOOL = {
         "    text    {\"type\":\"text\",\"text\":\"…\",\"x\":,\"y\":,\"w\"?:,\"size\":,"
         "\"font\"?:\"Playfair Display Bold\"|{\"family\":,\"style\":},\"weight\"?:100-900,\"italic\"?:bool,"
         "\"color\":<paint>,"
-        "\"align\"?:\"left|center|right\",\"lineHeight\"?:px,\"letterSpacing\"?:px,\"opacity\"?:0-1}\n"
+        "\"align\"?:\"left|center|right\",\"lineHeight\"?:px,\"letterSpacing\"?:px,\"opacity\"?:0-1,"
+        "\"h\"?:,\"fit\"?:\"shrink\"}  (with `h`, fit:\"shrink\" steps the size down until it fits the box)\n"
         "    rect    {\"type\":\"rect\",\"x\":,\"y\":,\"w\":,\"h\":,\"radius\"?:,\"fill\":<paint>,"
         "\"stroke\"?:\"#hex\",\"strokeWeight\"?:,\"opacity\"?:,\"shadow\"?:}\n"
-        "    ellipse {\"type\":\"ellipse\",\"x\":,\"y\":,\"w\":,\"h\":,\"fill\":<paint>,\"stroke\"?:,\"shadow\"?:}  (a circle when w==h)\n"
+        "    ellipse {\"type\":\"ellipse\",\"x\":,\"y\":,\"w\":,\"h\":,\"fill\":<paint>,\"stroke\"?:,\"shadow\"?:}  (a circle when w==h; "
+        "only a `stroke` and no `fill` = an outline ring)\n"
         "    line    {\"type\":\"line\",\"x\":,\"y\":,\"w\":,\"h\"?:2,\"fill\":\"#hex\"}  a thin divider\n"
         "    image   {\"type\":\"image\",\"src\":\"attachments/photo.jpg\",\"x\":,\"y\":,\"w\"?:,\"h\"?:,"
         "\"fit\"?:\"cover|contain\",\"radius\"?:,\"opacity\"?:,\"shadow\"?:}\n"
+        "    stack   {\"type\":\"stack\",\"x\":,\"y\":,\"w\"?:,\"gap\"?:24,\"direction\"?:\"vertical|horizontal\","
+        "\"align\"?:\"start|center|end\",\"anchor\"?:\"top|center|bottom\",\"children\":[nodes without x/y]}\n"
+        "  A STACK lays its children out one after another, `gap` apart, from their REAL "
+        "measured sizes — a headline that wraps to three lines pushes the subtitle down. "
+        "Use one for every block of text (eyebrow → headline → subtitle → button): no y to "
+        "guess, nothing overlaps. In a vertical stack a text child without `w` wraps to the "
+        "stack's width and takes its `align`; `anchor`:\"bottom\" makes `y` the stack's "
+        "bottom edge (a caption block over a photo). Give any node an `id` (\"headline\") "
+        "— it's the node's name in the file, for edits and the layout check.\n"
         "  An image is a PNG / JPEG / WebP / GIF already IN the workspace (an upload, a stock "
         "photo you saved, brand/logo.png) — `src` is its path; save a web image to the workspace "
         "first. `cover` (default) fills the w×h box and crops the overflow; `contain` fits the "
@@ -317,10 +328,11 @@ _DESIGN_TOOL = {
         "`font` → the brand heading face (display sizes, ≥48px) or body face — or write the "
         "brand's colours and fonts yourself. Text with no `color` gets white or near-black, "
         "whichever reads on its background.\n"
-        "  LAYOUT: leave vertical room for text that WRAPS — give any multi-word text a "
-        "`w` (wrap width); a headline can run 2–3 lines (budget ~1.2×`size` per line, or "
-        "set `lineHeight`), and put the NEXT node below the whole wrapped block so "
-        "nothing overlaps. Sketch the y positions top-to-bottom before you emit them.\n"
+        "  LAYOUT: put text blocks in a stack. Text outside one needs room to WRAP — "
+        "give any multi-word text a `w` and put the next node below the whole wrapped "
+        "block. Every render comes back with a LAYOUT CHECK (overlapping text, text off or "
+        "crowding an edge, text too small, low contrast on what's behind it) — fix what "
+        "it lists before you present.\n"
         "  RTL: for Arabic / Hebrew set text `align`:\"right\" and give it a `w`, then "
         "ANCHOR it to the right margin — place the box so its right edge (`x`+`w`) sits "
         "inside the frame (`x` ≈ frameW − margin − `w`), NOT at the small `x` you'd use "
@@ -361,7 +373,7 @@ _DESIGN_TOOL = {
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["render", "script", "edit"],
                    "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), or `edit` a rendered design (checked, saved, replayed live in the editor)."},
-        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes} or a deck {frames:[...]} (one per slide, export pptx); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image (image `src` = a workspace file); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
+        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes} or a deck {frames:[...]} (one per slide, export pptx); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s). Scripts may use only `figma` (and `console`): no `this`, globals, network, eval/Function or `.constructor` — anything else is refused before it runs."},
         "intent": {"type": "string",
@@ -1320,7 +1332,7 @@ def _place_image(n, root):
 
 
 _NUMERIC = ("x", "y", "w", "h", "size", "radius", "lineHeight", "letterSpacing",
-            "opacity", "strokeWeight", "rotation")
+            "opacity", "strokeWeight", "rotation", "gap")
 
 
 def _num(v):
@@ -1379,14 +1391,15 @@ def _prepare_spec(spec, brand, root=None):
         if brand and brand["primary"] and fr.get("fill") is None:
             fr["fill"], filled = brand["primary"], filled + 1
         bg = _first_color(fr.get("fill"))
-        for n in fr.get("nodes") or []:
-            if not isinstance(n, dict):
-                continue
+
+        def prepare(n, top):
+            """One node, made safe (a stack's children too). → an error, or None."""
+            nonlocal filled, branded_fonts, image_bytes
             if n.get("type") is None and ("text" in n or "src" in n):
                 n["type"] = "text" if "text" in n else "image"
             for k in _NUMERIC:                           # "1500" would reach the renderer as a string —
                 if k in n and n[k] is not None and _num(n[k]) is None:     # and a string y sinks the text
-                    return None, f"Error: `{k}` must be a number, not {n[k]!r} ({json.dumps(n)[:80]}).", []
+                    return f"Error: `{k}` must be a number, not {n[k]!r} ({json.dumps(n)[:80]})."
                 if k in n and n[k] is not None:
                     n[k] = _num(n[k])
             if n.get("type") == "text":
@@ -1403,26 +1416,41 @@ def _prepare_spec(spec, brand, root=None):
             elif n.get("type") in ("rect", "ellipse", "line"):
                 if n.get("fill") is None and n.get("color") is not None:
                     n["fill"] = n.pop("color")          # a shape draws `fill` only — as text reads either
-                if brand and brand["accent"] and n.get("fill") is None:
+                if brand and brand["accent"] and n.get("fill") is None and not n.get("stroke"):
                     n["fill"], filled = brand["accent"], filled + 1
             elif n.get("type") == "image":
                 try:
                     image_bytes += _place_image(n, root)
                 except ValueError as e:
-                    return None, f"Error: {e}", []
+                    return f"Error: {e}"
                 if image_bytes > _DESIGN_IMAGES_MAX:
-                    return None, (f"Error: the design's images total over {_DESIGN_IMAGES_MAX >> 20} MB — "
-                                  f"use smaller copies (longest side ~2000px)."), []
+                    return (f"Error: the design's images total over {_DESIGN_IMAGES_MAX >> 20} MB — "
+                            f"use smaller copies (longest side ~2000px).")
+            elif n.get("type") == "stack":
+                kids = n.get("children")
+                if not isinstance(kids, list) or not kids:
+                    return f"Error: a stack needs `children` — the nodes it lays out ({json.dumps(n)[:80]})."
+                for c in kids:
+                    if not isinstance(c, dict):
+                        return f"Error: a stack's children are nodes, not {c!r}."
+                    if err := prepare(c, False):
+                        return err
             else:
-                return None, (f"Error: a node has type {n.get('type')!r} ({json.dumps(n)[:80]}) — "
-                              f"every node needs a `type`: text, rect, ellipse, line or image."), []
+                return (f"Error: a node has type {n.get('type')!r} ({json.dumps(n)[:80]}) — "
+                        f"every node needs a `type`: text, rect, ellipse, line, image or stack.")
             # Content placed wholly outside the frame is a layout built for another size:
             # the renderer would clamp every such text box to the edge, piling it up.
-            if n["type"] in ("text", "image") and ((n.get("x") or 0) >= W or (n.get("y") or 0) >= H):
-                what = repr(n.get("text"))[:40] if n["type"] == "text" else "an image"
-                return None, (f"Error: {what} starts at ({n.get('x') or 0}, {n.get('y') or 0}), outside the "
-                              f"{W}×{H} frame — set the frame's `size` (e.g. \"story\" for 1080×1920) "
-                              f"or move it inside."), []
+            # (A stack places its children itself.)
+            if top and n["type"] in ("text", "image", "stack") and ((n.get("x") or 0) >= W or (n.get("y") or 0) >= H):
+                what = repr(n.get("text"))[:40] if n["type"] == "text" else f"a{'n' if n['type'] == 'image' else ''} {n['type']}"
+                return (f"Error: {what} starts at ({n.get('x') or 0}, {n.get('y') or 0}), outside the "
+                        f"{W}×{H} frame — set the frame's `size` (e.g. \"story\" for 1080×1920) "
+                        f"or move it inside.")
+            return None
+
+        for n in fr.get("nodes") or []:
+            if isinstance(n, dict) and (err := prepare(n, True)):
+                return None, err, []
     notes = []
     if branded_fonts:
         notes.append(f"Brand fonts applied to {branded_fonts} text node(s) with no font "
@@ -1508,12 +1536,12 @@ async def _exec_design(inp, workspace):
             spec, err, notes = await asyncio.to_thread(lambda: _prepare_spec(inp["spec"], _load_brand(root), root))
             if err:
                 return err
-            image, fig, _fid, _fmt, preview, service_notes = await design.render(spec, fmt=fmt, scale=scale, user_id=subject)
+            image, fig, _fid, _fmt, preview, service_notes, lint = await design.render(spec, fmt=fmt, scale=scale, user_id=subject)
             notes = [*notes, *service_notes]
         elif action == "script":
             if not inp.get("script"):
                 return "Error: `script` needs a `script` string ending in console.log('__FRAME__'+id)."
-            image, fig, _fid, _fmt, preview, _notes = await design.evaluate(inp["script"], fmt=fmt, scale=scale, user_id=subject)
+            image, fig, _fid, _fmt, preview, _notes, lint = await design.evaluate(inp["script"], fmt=fmt, scale=scale, user_id=subject)
         else:
             return f"Error: unknown design action {action!r} (render or script)."
     except design.Unavailable as e:
@@ -1552,6 +1580,7 @@ async def _exec_design(inp, workspace):
         ui = {"type": "ui", "action": "open_canvas", "path": rel, "name": f"{name}.{fmt}"}
     for line in notes:
         ack += " " + line
+    ack += _layout_check(lint, fmt)
     # Show the model its own render, so it QAs what it made before the user judges
     # it — a check the spec alone can't give (hierarchy, overlap, legibility, typos).
     # The service's small @1x JPEG preview when it sent one (a photo-heavy @2x PNG
@@ -1570,6 +1599,22 @@ async def _exec_design(inp, workspace):
                                                     "data": base64.b64encode(look).decode()}},
                        {"type": "text", "text": ack}],
             "_ui": ui}
+
+
+def _layout_check(lint, fmt):
+    """The service's layout check of a render, as one line for the ack: what's
+    wrong, where, and the fix — the mechanical backstop to the model's own look."""
+    if not lint:
+        return " Layout check: clean."
+    slide = fmt == "pptx" or any(i.get("frame") for i in lint)
+
+    def line(i):
+        where = f"slide {int(i.get('frame') or 0) + 1}: " if slide else ""
+        return f"{where}{i.get('node', '')} {i.get('issue', '')} — {i.get('fix', '')}"
+    items = [line(i) for i in lint[:6]]
+    more = f" (+{len(lint) - 6} more)" if len(lint) > 6 else ""
+    return (f" Layout check found {len(lint)} issue{'s' if len(lint) != 1 else ''}{more}: "
+            + "; ".join(items) + ". Fix these before you present.")
 
 
 def _design_step(inp):

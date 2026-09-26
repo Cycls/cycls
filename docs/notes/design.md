@@ -294,6 +294,12 @@ export web-worker). The patches and build recipe live in
   Figma-style edit works too. Radial gradients take `center` + `radius`.
 - The service keeps a registry of every OpenPencil quirk, its guard and the test that
   pins it: `cycls-design/docs/quirks.md`. Goldens (Linux renders) cover each one.
+- **Stacks and the layout check.** The service measures text while the builder runs
+  (one `job.ts` process per render), so a `stack` node lays its children out from
+  their real sizes — the model no longer guesses y for wrapped text. Every render
+  returns `lint` (overlapping text, off/crowded edges, too-small text, low contrast on
+  what's behind it); `_exec_design` turns it into the ack's "Layout check" line, next
+  to the QA image. Nodes carry names from the spec's `id`.
 
 ## Configuration
 

@@ -74,7 +74,7 @@ def test_render_posts_and_decodes(monkeypatch):
     monkeypatch.setenv("DESIGN_URL", "https://d.cycls.ai/")     # trailing slash trimmed
     monkeypatch.setenv("DESIGN_SECRET", "sek")
     _mock(monkeypatch, _FakeResp(200, _ok(b"\x89PNGdata", b"figdata")))
-    img, fig, fid, fmt, preview, notes = asyncio.run(design.render({"size": [1080, 1080]}, fmt="png", scale=2, user_id="org:u"))
+    img, fig, fid, fmt, preview, notes, lint = asyncio.run(design.render({"size": [1080, 1080]}, fmt="png", scale=2, user_id="org:u"))
     assert img == b"\x89PNGdata" and fig == b"figdata" and fid == "0:6" and fmt == "png"
     assert preview is None and notes == []                     # a service that predates previews / notes
     last = _FakeClient.last
@@ -151,12 +151,12 @@ def _text(out):
     return m if isinstance(m, str) else next(b["text"] for b in m if b["type"] == "text")
 
 
-def _fake_render(monkeypatch, image=b"\x89PNGrender", fig=b"FIGZ", preview=None, notes=()):
+def _fake_render(monkeypatch, image=b"\x89PNGrender", fig=b"FIGZ", preview=None, notes=(), lint=()):
     calls = {}
 
     async def _r(spec, fmt="png", scale=2, user_id=None):
         calls.update(spec=spec, fmt=fmt, scale=scale, user_id=user_id)
-        return image, fig, "0:6", fmt, preview, list(notes)
+        return image, fig, "0:6", fmt, preview, list(notes), list(lint)
 
     monkeypatch.setattr("cycls._agent.design.render", _r)
     return calls
@@ -219,7 +219,7 @@ def test_script_escape_hatch(tmp_path, monkeypatch):
 
     async def _e(script, fmt="png", scale=2, user_id=None):
         got.update(script=script, fmt=fmt)
-        return b"PPTX", b"FIG", "0:1", fmt, None, []
+        return b"PPTX", b"FIG", "0:1", fmt, None, [], []
 
     monkeypatch.setattr("cycls._agent.design.evaluate", _e)
     out = asyncio.run(_exec_design(
@@ -457,7 +457,7 @@ def test_unknown_node_type_is_an_error(tmp_path, monkeypatch):
     calls = _fake_render(monkeypatch)
     for node in ({"type": "circle", "w": 10}, {"x": 0, "y": 0, "w": 10, "h": 10}):
         out = asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [node]}}, _ws(tmp_path)))
-        assert out.startswith("Error") and "text, rect, ellipse, line or image" in out
+        assert out.startswith("Error") and "text, rect, ellipse, line, image or stack" in out
     assert calls == {}                                                      # never rendered a silently-missing node
 
 
@@ -777,3 +777,48 @@ def test_apply_posts_fig_and_script(monkeypatch):
     with pytest.raises(RuntimeError) as ei:
         asyncio.run(design.apply(b"FIG", "t.characters='x'"))
     assert "null is not an object" in str(ei.value)             # the script's own error, verbatim
+
+
+# ---- M3: stacks, the layout check ----
+
+def test_a_stack_and_its_children_are_prepared(tmp_path, monkeypatch):
+    _brand(tmp_path, "primary_color: '#0C2340'\naccent_color: '#c9a227'\nfont_heading: Playfair Display\nfont_body: Inter\n")
+    calls = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "spec": {"size": "square", "nodes": [
+        {"type": "stack", "x": "90", "y": 120, "gap": "24", "children": [
+            {"text": "Big title", "size": 96},                  # untyped → text; brand heading; readable colour
+            {"type": "text", "text": "Body", "size": "32"},
+            {"type": "ellipse", "w": 40, "h": 40, "stroke": "#ffffff"},   # an outline stays hollow — no accent fill
+        ]}]}}, _ws(tmp_path)))
+    assert not _text(out).startswith("Error"), _text(out)
+    stack = calls["spec"]["nodes"][0]
+    assert stack["x"] == 90 and stack["gap"] == 24
+    title, body, ring = stack["children"]
+    assert title["type"] == "text" and title["font"] == "Playfair Display" and title["color"]
+    assert body["size"] == 32 and body["font"] == "Inter"
+    assert "fill" not in ring
+
+
+def test_a_stack_needs_children_and_must_start_inside(tmp_path, monkeypatch):
+    calls = _fake_render(monkeypatch)
+    for node, words in (({"type": "stack", "x": 0, "y": 0}, "needs `children`"),
+                        ({"type": "stack", "x": 0, "y": 5000, "children": [{"type": "text", "text": "x"}]}, "outside the")):
+        out = asyncio.run(_exec_design({"action": "render", "spec": {"size": [1080, 1080], "nodes": [node]}}, _ws(tmp_path)))
+        assert out.startswith("Error") and words in out, out
+    assert calls == {}
+
+
+def test_the_layout_check_reaches_the_ack(tmp_path, monkeypatch):
+    _fake_render(monkeypatch, lint=[{"frame": 0, "node": '"Subtitle"', "issue": 'overlaps "Headline"', "fix": "move one"}])
+    out = asyncio.run(_exec_design({"action": "render", "spec": {"size": [1080, 1080]}}, _ws(tmp_path)))
+    assert 'Layout check found 1 issue: "Subtitle" overlaps "Headline" — move one' in _text(out)
+    _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "spec": {"size": [1080, 1080]}}, _ws(tmp_path)))
+    assert "Layout check: clean." in _text(out)
+
+
+def test_the_client_decodes_lint(monkeypatch):
+    monkeypatch.setenv("DESIGN_URL", "https://d")
+    _mock(monkeypatch, _FakeResp(200, {**_ok(), "lint": [{"frame": 1, "node": "x", "issue": "y", "fix": "z"}]}))
+    assert asyncio.run(design.render({}))[6] == [{"frame": 1, "node": "x", "issue": "y", "fix": "z"}]
+

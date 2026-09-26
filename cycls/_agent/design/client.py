@@ -80,21 +80,23 @@ async def _post(path, body, user_id=None):
 
 
 def _decode(data):
-    """Service JSON → (image_bytes, fig_bytes, frame_id, format, preview_bytes, notes).
+    """Service JSON → (image_bytes, fig_bytes, frame_id, format, preview_bytes, notes, lint).
     The preview — a small @1x JPEG of the first frame, what the agent looks at to
     QA its render — is None from a service that predates it. `notes` are what the
     service changed to make the design render (a font swapped for its open twin, a
-    weight the family lacks) — lines for the agent's ack."""
+    weight the family lacks, a headline shrunk to fit) — lines for the agent's ack.
+    `lint` is the service's layout check of the result: [{frame, node, issue, fix}]."""
     return (base64.b64decode(data["image_base64"]),
             base64.b64decode(data["fig_base64"]),
             data.get("frameId"), data.get("format"),
             base64.b64decode(data["preview_base64"]) if data.get("preview_base64") else None,
-            [str(n) for n in data.get("notes") or []])
+            [str(n) for n in data.get("notes") or []],
+            [dict(i) for i in data.get("lint") or [] if isinstance(i, dict)])
 
 
 async def render(spec, fmt="png", scale=2, user_id=None):
     """Render a declarative design spec → (image_bytes, fig_bytes, frame_id, fmt,
-    preview_bytes, notes). `spec` is `{size:[w,h], fill, nodes:[...]}` (see the
+    preview_bytes, notes, lint). `spec` is `{size:[w,h], fill, nodes:[...]}` (see the
     Design tool description)."""
     return _decode(await _post("/render", {"spec": spec, "format": fmt, "scale": scale, "preview": True}, user_id))
 
@@ -118,5 +120,5 @@ async def export(fig, fmt="png", scale=2, width=None, user_id=None):
 
 async def evaluate(script, fmt="png", scale=2, user_id=None):
     """Escape hatch: run a raw OpenPencil/Figma-API script (it must log
-    `__FRAME__<id>`) → (image_bytes, fig_bytes, frame_id, fmt, preview_bytes, notes)."""
+    `__FRAME__<id>`) → (image_bytes, fig_bytes, frame_id, fmt, preview_bytes, notes, lint)."""
     return _decode(await _post("/eval", {"script": script, "format": fmt, "scale": scale, "preview": True}, user_id))
