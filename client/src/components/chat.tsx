@@ -37,6 +37,7 @@ import { ExamplesGallery } from "./examples";
 import { AskCard, type AskQuestion } from "./ask-card";
 import { Surfaces } from "./surfaces";
 import { SurveyStrip, useSurvey } from "./survey-strip";
+import type { DeckOp } from "./deck-view";
 
 export interface PassAgent {
   slug: string;
@@ -83,6 +84,7 @@ export interface FilesPanelProps {
   onOpenFile: (path: string) => Promise<string>;
   readFile: (path: string) => Promise<string>;
   writeFile: (path: string, data: BlobPart) => Promise<void>;   // binary too — the .fig editor writes raw bytes
+  deckOp?: (path: string, body: DeckOp) => Promise<void>;       // the deck viewer's slide moves / copies / deletes
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
@@ -1175,6 +1177,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           readFile={files.readFile}
           openFile={files.onOpenFile}
           writeFile={files.writeFile}
+          deckOp={files.deckOp}
           fetchConnector={files.fetchConnector}
           appData={files.appData}
           listFolders={files.listFolders}

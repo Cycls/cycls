@@ -180,6 +180,12 @@ export function useFiles(baseUrl: string = "") {
     track("file_saved", { path: filePath });
   }, [api]);
 
+  // A deck viewer's own slide change — move / duplicate / delete, slides from 1 — run on
+  // the deck's .fig by the server (POST /deck/<deck document or .fig>).
+  const deckOp = useCallback(async (deckPath: string, body: { op: "move" | "duplicate" | "delete"; number: number; to?: number }) => {
+    await api(`/deck/${deckPath}`, { method: "POST", json: body });
+  }, [api]);
+
   // Backs the composer's @-picker. The server matches, ranks and caps, so this
   // and the mobile client can't disagree about what a query means; `recursive=1`
   // rides along so a server predating `search` still returns a tree we can
@@ -221,7 +227,7 @@ export function useFiles(baseUrl: string = "") {
     return `${window.location.origin}${url}`;
   }, [api]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchConnector, appData, searchFiles, listFolders, shareFile, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, deckOp, fetchConnector, appData, searchFiles, listFolders, shareFile, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

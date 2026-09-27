@@ -104,6 +104,36 @@ describe("DeckView", () => {
     expect(screen.getByTestId("deck-counter").textContent).toBe("3 / 3");
   });
 
+  it("the owner reorders by drag, duplicates and deletes (with a confirm) from the grid", async () => {
+    const onSlideOp = vi.fn(async () => {});
+    const onReload = vi.fn();
+    render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" onSlideOp={onSlideOp} onReload={onReload} />);
+    fireEvent.click(screen.getByRole("button", { name: "Grid" }));
+    const cards = screen.getAllByTestId("grid-slide");
+    const dt = { effectAllowed: "", setData: () => {}, getData: () => "" };
+    fireEvent.dragStart(cards[2], { dataTransfer: dt });
+    fireEvent.dragOver(cards[0], { dataTransfer: dt });
+    await act(async () => { fireEvent.drop(cards[0], { dataTransfer: dt }); });
+    expect(onSlideOp).toHaveBeenLastCalledWith({ op: "move", number: 3, to: 1 });
+    expect(onReload).toHaveBeenCalled();
+    fireEvent.click(screen.getAllByRole("button", { name: "Slide actions" })[1]);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Duplicate" })); });
+    expect(onSlideOp).toHaveBeenLastCalledWith({ op: "duplicate", number: 2 });
+    fireEvent.click(screen.getAllByRole("button", { name: "Slide actions" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(screen.getByText("Delete slide 1?")).toBeTruthy();
+    expect(onSlideOp).toHaveBeenCalledTimes(2);                     // nothing deleted until confirmed
+    await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "Delete" }).at(-1)!); });
+    expect(onSlideOp).toHaveBeenLastCalledWith({ op: "delete", number: 1 });
+  });
+
+  it("a shared deck (no slide ops) shows no slide actions", () => {
+    render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" />);
+    fireEvent.click(screen.getByRole("button", { name: "Grid" }));
+    expect(screen.queryByRole("button", { name: "Slide actions" })).toBeNull();
+    expect(screen.getAllByTestId("grid-slide")[0].getAttribute("draggable")).toBe("false");
+  });
+
   it("a bad manifest says so", () => {
     render(<DeckView data="not json" path="designs/pitch.deck.json" />);
     expect(screen.getByText("Couldn't show this deck.")).toBeTruthy();

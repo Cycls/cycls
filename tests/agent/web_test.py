@@ -1701,6 +1701,30 @@ def test_deck_errors(tmp_path, monkeypatch):
     assert client.get("/files/designs/pitch.deck.json", params={"as": "slides"}).status_code == 415   # → download card
 
 
+def test_deck_route_moves_duplicates_and_deletes_slides(tmp_path, monkeypatch):
+    """The deck viewer's own slide changes go through the same service op as the agent's."""
+    from cycls._agent import design
+    from cycls._agent.design import refresh
+    root = _seed(tmp_path, {"designs/pitch.fig": b"FIG", "designs/pitch.deck.json": _DECK_DOC})
+    seen = []
+
+    async def apply(fig, script=None, user_id=None, ops=None, preview=False):
+        seen.append(ops)
+        return {"fig": b"NEW", "lint": [], "script": "S", "preview": None, "previews": [], "touched": [], "slides": [{}] * 3}
+    monkeypatch.setattr(design, "apply", apply)
+    monkeypatch.setattr(refresh, "schedule", lambda *a, **k: None)
+    client = _ws_routers_client(tmp_path)
+    r = client.post("/deck/designs/pitch.deck.json", json={"op": "move", "number": 3, "to": 1})
+    assert r.status_code == 200 and r.json() == {"ok": True, "slides": 3}
+    assert seen[-1] == [{"op": "slide_move", "index": 2, "to": 0}]
+    assert (root / "designs" / "pitch.fig").read_bytes() == b"NEW"
+    client.post("/deck/designs/pitch.fig", json={"op": "duplicate", "number": 1})
+    assert seen[-1] == [{"op": "slide_duplicate", "index": 0}]
+    assert client.post("/deck/designs/pitch.deck.json", json={"op": "move", "number": 2}).status_code == 400   # no `to`
+    assert client.post("/deck/designs/pitch.deck.json", json={"op": "explode", "number": 1}).status_code == 400
+    assert client.post("/deck/notes/pitch.deck.json", json={"op": "delete", "number": 1}).status_code == 404   # outside designs/
+
+
 # ---- office module: the office-render /v1/convert client ----
 
 def test_office_convertible_and_configured(monkeypatch):

@@ -363,11 +363,11 @@ python browser_service.py        # → https://cycls-browser.cycls.ai
 
 ### Design (posts & slides)
 
-Let an agent **create graphics** — social-media posts and slide decks — and show
-them on the canvas, with no design engine in the image. The agent describes a
-design as a small JSON spec; a shared service (OpenPencil, headless) renders it to
-an image (and a real `.pptx` for decks) plus an editable `.fig` source. Same split
-as browser/office: the SDK ships only the client and the built-in `Design` tool.
+Let an agent **create graphics and presentations** — social posts, stories, posters,
+carousels and slide decks — and show them on the canvas, with no design engine in the
+image. The agent describes a design as JSON; a shared service (OpenPencil, headless)
+renders it to an image, a real `.pptx` or a `.pdf`, plus an editable `.fig` source. Same
+split as browser/office: the SDK ships only the client and the built-in `Design` tool.
 
 Enable it by adding `"Design"` to `allowed_tools` and pointing env at the service:
 
@@ -376,29 +376,51 @@ llm = cycls.LLM().model(...).allowed_tools(["Bash", "Editor", "Design"])
 ```
 ```
 DESIGN_URL=https://cycls-design.cycls.ai        # your deployed render service
-DESIGN_SECRET=<the shared service secret>       # optional; a local dev instance runs open
-DESIGN_EDITOR_URL=https://design-editor.cycls.ai # optional; the in-canvas editor
+DESIGN_SECRET=<the shared service secret>       # the deployed service requires it
+DESIGN_EDITOR_URL=https://cycls-design.cycls.ai # optional; the in-canvas editor
 ```
 
-The model calls one `design` tool. `render {spec}` where `spec` is
-`{size:[w,h], fill, nodes:[…]}` — `text` and `rect` nodes with explicit geometry,
-hex colors, and Inter/Arial fonts — or a **deck** `{frames:[…]}` (one frame per
-slide) exported as `pptx`. Formats: png (default), jpg, webp, svg, pptx. The render
-opens on the canvas; the editable `.fig` is saved beside it for later tweaks. A raw
-`script` escape hatch runs an OpenPencil / Figma plugin-API script for anything the
-spec can't express. Unset the env and the tool simply isn't offered — no crash,
-like the office fallback.
+The model calls one `design` tool:
 
-**Editing.** Set `DESIGN_EDITOR_URL` and a `.fig` opens on the canvas as a full
-OpenPencil editor (embedded from its own origin), so the human hand-edits the same
-design the agent rendered — saved straight back to the workspace file. The agent
-can also edit an open design live: the `edit {script}` action pushes a Figma
-plugin-API snippet into that editor ("make the button green"), which the human
-watches apply on the canvas and which auto-saves.
+- **`render {spec}`** — a single design `{size, fill, nodes:[…]}`: text (any Google
+  Font, rich runs, fit-to-box), shapes, gradients and glows, photos from the workspace
+  (cover / contain, crop, focus), stacks that lay text out from its measured size,
+  icons, SVG logos, QR codes, arrows, lists, charts and tables. `size` takes presets
+  (`square`, `story`, `slide`, `a4-poster`, …). Formats: png (default), jpg, webp, svg,
+  pptx, pdf.
+- **A deck of layouts** — `{deck: {theme, footer?, slides: [{layout, …slots, notes}]}}`.
+  The model fills each slide's slots (`title`, `bullets`, `stats`, `chart`, `table`,
+  `image-left`, `quote`, `timeline`, `team`, `closing`, …); the service lays them out
+  so every slide shares margins, title position, footer and page numbers. Eight themes
+  (`editorial`, `minimal-dark`, `tech-dark`, …) or overrides on one; the workspace
+  brand kit is the default theme. Arabic decks are laid out right-to-left.
+- **Several hand-built frames** `{frames:[…]}` — a deck with full control, or, as
+  png, a carousel (`designs/<name>-slide-N.png`).
 
-The render service is a small Bun + OpenPencil app in its own repo (`cycls-design`);
-generation uses the Figma plugin API (high fidelity), not HTML import. Details:
-[docs/notes/design.md](notes/design.md).
+Every render comes back to the model as an image (a deck: every slide) with a layout
+check — overlapping text, text off an edge, too small, low contrast — to fix before it
+presents. A deck's `.pptx` carries each slide's speaker notes and transition; its text
+and shapes stay editable in PowerPoint.
+
+**Decks open in the deck viewer**: a filmstrip with speaker notes or a grid, Download
+(PowerPoint / PDF), Edit (the design editor on the deck's `.fig`), and **Present** —
+fullscreen, with transitions, notes (N), a grid (G) and a presenter window (P). The
+owner can drag slides to reorder them, duplicate or delete them; a shared deck
+presents too.
+
+**Changing a design.** `inspect {name}` lists a design's slides and named nodes;
+`edit {name, ops}` changes it by name (`set_text`, `style`, `move`, `add`, …), checked
+and saved by the service first. A deck's structure changes with `add_slide`,
+`update_slide`, `move_slide`, `duplicate_slide` and `delete_slide` — a new slide takes
+the deck's theme and footer, and page numbers follow. A raw plugin-API `script` stays
+as the escape hatch. With `DESIGN_EDITOR_URL` set, a `.fig` opens as the full
+OpenPencil editor on the canvas, the human edits the same design, and the agent's
+edits replay live there (a "Super" cursor). Exports beside a `.fig` re-export
+whenever it changes.
+
+Unset `DESIGN_URL` and the tool simply isn't offered — no crash, like the office
+fallback. The render service is a small Bun + OpenPencil app in its own repo
+(`cycls-design`). Details: [docs/notes/design.md](notes/design.md).
 
 ### Apple IAP entitlements
 

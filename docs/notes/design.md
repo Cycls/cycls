@@ -211,8 +211,46 @@ not acted on.
 A slide's `id` names its frame; its title, notes and transition ride on the frame
 as plugin data in the `.fig`, so they survive edits, reorders and re-exports, and
 `inspect` lists them. A multi-frame render also writes `designs/<name>.deck.json` —
-`{type: "cycls.deck", version, fig, size, slides, exports}` — the deck document the
-canvas opens to view and present it.
+`{type: "cycls.deck", version, fig, size, slides, exports, settings?}` — the deck
+document the canvas opens to view and present it.
+
+**Decks of layouts** are the normal way to make a presentation. The model fills slots;
+the service (`cycls-design/src/layouts.js`) lays them out:
+
+```jsonc
+{ "deck": { "theme": "editorial", "footer": { "text": "Brewly · Seed 2026" },
+    "slides": [ { "layout": "title", "title": "…", "subtitle": "…", "notes": "…" },
+                { "layout": "stats", "title": "…", "items": [ { "value": "3×", "label": "…" } ] },
+                { "layout": "custom", "nodes": [ … ] } ] } }
+```
+
+Fifteen layouts — title, section, agenda, bullets, two-column, image-left / -right,
+image (full-bleed), quote, stats, timeline, table, chart, team, closing — plus `custom`
+(hand-built nodes). A slide sent without `layout` gets the one its slots name. Every
+content slide shares the title place (titles shrink to fit two lines), margins,
+footer and page numbers; hero slides (title, section, closing) take the theme's hero
+background and the deck logo. Eight themes (`src/themes.js`) or an override object on
+a base; with a brand kit and no theme, the SDK builds a brand theme (`_brand_theme`:
+the primary as the hero, the accent where it reads on white, the brand fonts,
+`brand/logo.*`). An Arabic deck is laid out left-to-right and mirrored whole. The SDK
+(`_prepare_deck`) resolves image slots — a slide's `image`, a team member's `photo`,
+the deck and footer logos — from workspace paths to bytes, and keeps the deck's
+settings (images back to paths) in the deck document so a later slide matches. Each
+frame keeps its layout `source` (image bytes out), which `inspect` shows. A test
+renders a compact deck in every theme and fails on any layout-check finding.
+
+**Slide actions** change a deck's structure on the saved `.fig`, through the
+service's `/apply` like an `edit`: `add_slide {slide, at?}`, `update_slide {number,
+slide}` (or just `notes` / `title` / `transition`), `move_slide {number, to}`,
+`duplicate_slide`, `delete_slide` — slides numbered from 1. A new slide is laid out
+with the deck's settings; after any change the slides are re-placed and their page
+numbers follow (`relayoutDeck`). Only the touched slides are previewed back to the
+model. The result both replays in an open editor (`design_command`) and opens the deck
+viewer (`open_canvas`) — a tool's `_ui` may be a list. Changes to one design are
+serialized (`design/deck.py` `lock`): the model calls tools in parallel, and two slide
+actions in one turn each read the same `.fig` — the later write dropped the other's
+change until they queued. The deck viewer's own drag-to-reorder, duplicate and delete
+go through `POST /deck/<deck>` and the same code.
 
 ## Two channels + the canvas
 

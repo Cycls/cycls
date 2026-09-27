@@ -257,7 +257,8 @@ def test_script_escape_hatch(tmp_path, monkeypatch):
     assert got["script"].startswith("console.log") and out["_ui"]["path"] == "designs/deck.pptx"
 
 
-def _fake_apply(monkeypatch, result=b"EDITED-FIG", error=None, compiled=None, preview=None, lint=()):
+def _fake_apply(monkeypatch, result=b"EDITED-FIG", error=None, compiled=None, preview=None, lint=(),
+                previews=(), touched=(), slides=()):
     """`design.apply` faked: records the call, returns the edited .fig (plus the
     compiled script, preview and lint the service sends) or raises the edit's error.
     `refresh.schedule` is captured instead of run."""
@@ -267,7 +268,8 @@ def _fake_apply(monkeypatch, result=b"EDITED-FIG", error=None, compiled=None, pr
         calls.update(fig=fig, script=script, ops=ops, user_id=user_id, preview=kw.get("preview"))
         if error:
             raise RuntimeError(error)
-        return {"fig": result, "lint": list(lint), "script": compiled, "preview": preview}
+        return {"fig": result, "lint": list(lint), "script": compiled, "preview": preview,
+                "previews": list(previews), "touched": list(touched), "slides": list(slides)}
     monkeypatch.setattr("cycls._agent.design.apply", _apply)
     scheduled = []
     monkeypatch.setattr("cycls._agent.design.refresh.schedule",
@@ -875,7 +877,7 @@ def test_apply_posts_fig_and_script(monkeypatch):
     monkeypatch.setenv("DESIGN_URL", "https://d")
     _mock(monkeypatch, _FakeResp(200, {"ok": True, "fig_base64": base64.b64encode(b"EDITED").decode()}))
     assert asyncio.run(design.apply(b"FIG", "t.characters='x'", user_id="u")) == \
-        {"fig": b"EDITED", "lint": [], "script": None, "preview": None}
+        {"fig": b"EDITED", "lint": [], "script": None, "preview": None, "previews": [], "touched": [], "slides": []}
     assert _FakeClient.last["url"] == "https://d/apply"
     assert _FakeClient.last["json"] == {"fig": base64.b64encode(b"FIG").decode(), "script": "t.characters='x'"}
     _mock(monkeypatch, _FakeResp(422, {"ok": False, "error": "null is not an object"}))
@@ -992,7 +994,7 @@ def test_the_client_inspects_and_applies_ops(monkeypatch):
     _mock(monkeypatch, _FakeResp(200, {"ok": True, "fig_base64": base64.b64encode(b"E").decode(), "script": "S",
                                        "preview_base64": base64.b64encode(b"J").decode(), "lint": []}))
     r = asyncio.run(design.apply(b"FIG", ops=[{"op": "delete", "node": "x"}], preview=True))
-    assert r == {"fig": b"E", "lint": [], "script": "S", "preview": b"J"}
+    assert r == {"fig": b"E", "lint": [], "script": "S", "preview": b"J", "previews": [], "touched": [], "slides": []}
     assert _FakeClient.last["json"] == {"fig": base64.b64encode(b"FIG").decode(), "ops": [{"op": "delete", "node": "x"}], "preview": True}
 
 
@@ -1046,3 +1048,162 @@ def test_photos_up_to_15_mb_go_through(tmp_path, monkeypatch):
         {"type": "image", "src": "attachments/huge.png", "x": 0, "y": 0, "w": 100}]}}, _ws(tmp_path)))
     assert out.startswith("Error") and "over the 15 MB" in out
 
+
+
+# ---- decks of layouts: the SDK resolves images and the brand theme; the service lays out ----
+
+from cycls._agent.tools import _brand_theme, _contrast, _prepare_spec
+
+
+def test_a_deck_of_layouts_resolves_its_images(tmp_path, monkeypatch):
+    (tmp_path / "attachments").mkdir()
+    (tmp_path / "attachments" / "farm.png").write_bytes(_png(1600, 900))
+    (tmp_path / "attachments" / "sara.png").write_bytes(_png(400, 400))
+    (tmp_path / "attachments" / "mark.svg").write_text('<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>')
+    deck = {"deck": {"theme": "editorial", "logo": "attachments/mark.svg", "slides": [
+        {"layout": "image-left", "title": "Farms", "text": "Direct.", "image": {"src": "attachments/farm.png", "focus": [0.3, 0.5]}},
+        {"layout": "team", "title": "Team", "people": [{"name": "Sara", "photo": "attachments/sara.png"}, {"name": "Omar"}]},
+        {"layout": "custom", "nodes": [{"text": "hand-built", "x": 100, "y": 100}]}]}}
+    spec, err, notes = _prepare_spec(deck, None, tmp_path)
+    assert err is None and notes == []
+    d = spec["deck"]
+    assert d["size"] == [1920, 1080] and d["theme"] == "editorial"                  # the size a deck defaults to
+    assert d["slides"][0]["image"]["src"] == "attachments/farm.png" and d["slides"][0]["image"]["focus"] == [0.3, 0.5]
+    assert base64.b64decode(d["slides"][0]["image"]["image"]) == _png(1600, 900)
+    assert base64.b64decode(d["slides"][1]["people"][0]["photo"]["image"]) == _png(400, 400)
+    assert "photo" not in d["slides"][1]["people"][1]
+    assert d["logo"]["svg"].startswith("<svg") and d["logo"]["src"] == "attachments/mark.svg"
+    assert d["slides"][2]["nodes"][0]["type"] == "text"                              # custom nodes: prepared like a design
+    assert deck["deck"]["slides"][0]["image"] == {"src": "attachments/farm.png", "focus": [0.3, 0.5]}   # input untouched
+
+
+def test_deck_errors_name_the_fix(tmp_path):
+    assert _prepare_spec({"deck": {"slides": []}}, None, tmp_path)[1].startswith("Error: a deck needs `slides`")
+    err = _prepare_spec({"deck": {"slides": [{"layout": "image", "image": "attachments/none.jpg"}]}}, None, tmp_path)[1]
+    assert "does not exist in the workspace" in err
+    err = _prepare_spec({"deck": {"theme": "brand", "slides": [{"layout": "title", "title": "x"}]}}, None, tmp_path)[1]
+    assert 'theme "brand" needs a brand kit' in err and "editorial" in err
+    err = _prepare_spec({"deck": {"slides": [{"layout": "image", "image": "https://x.com/a.jpg"}]}}, None, tmp_path)[1]
+    assert "must be a workspace file" in err
+
+
+def test_a_brand_kit_is_the_decks_default_theme(tmp_path):
+    _brand(tmp_path, "primary_color: '#0C2340'\naccent_color: '#c9a227'\nfont_heading: Playfair Display\nfont_body: Inter\n")
+    (tmp_path / "brand" / "logo.png").write_bytes(_png(300, 100))
+    from cycls._agent.tools import _load_brand
+    spec, err, notes = _prepare_spec({"deck": {"slides": [{"layout": "title", "title": "x"}]}}, _load_brand(tmp_path), tmp_path)
+    theme = spec["deck"]["theme"]
+    assert err is None and theme["hero"] == "#0c2340" and theme["heading"] == "Playfair Display Bold"
+    assert spec["deck"]["logo"]["src"] == "brand/logo.png"
+    assert "brand kit as its theme" in notes[0]
+    # An explicit theme is the model's choice — the brand kit doesn't override it.
+    spec, _, notes = _prepare_spec({"deck": {"theme": "mono", "slides": [{"layout": "title", "title": "x"}]}}, _load_brand(tmp_path), tmp_path)
+    assert spec["deck"]["theme"] == "mono" and notes == []
+
+
+def test_the_brand_theme_keeps_text_readable():
+    t = _brand_theme({"primary": "#0c2340", "accent": "#c9a227", "heading": None, "body": None})
+    assert t["heroText"] == "#ffffff" and t["heroAccent"] == "#c9a227"                # gold reads on navy
+    assert _contrast(t["accent"], "#ffffff") >= 4.5 and t["accent"] == "#0c2340"      # gold on white doesn't: navy
+    t = _brand_theme({"primary": "#fde047", "accent": "#fde047", "heading": None, "body": None})
+    assert t["heroText"] == "#111111" and t["accent"] == "#0f172a"                   # a yellow brand: ink on white
+
+
+def test_rendering_a_deck_of_layouts(tmp_path, monkeypatch):
+    calls = _fake_render(monkeypatch, image=b"PPTX", previews=[b"J1", b"J2"])
+    out = asyncio.run(_exec_design({"action": "render", "name": "pitch", "format": "pptx", "spec": {"deck": {
+        "theme": "editorial", "slides": [{"layout": "title", "title": "Brewly"}, {"layout": "closing", "title": "Thanks"}]}}},
+        _ws(tmp_path)))
+    assert calls["spec"]["deck"]["slides"][1]["layout"] == "closing" and calls["every"] is False
+    assert json.loads((tmp_path / "designs" / "pitch.deck.json").read_text())["size"] == [1920, 1080]
+    assert out["_ui"]["path"] == "designs/pitch.deck.json" and "2 slides" in out["_model"][-1]["text"]
+
+
+# ---- slide actions: add / update / move / duplicate / delete, on the saved .fig ----
+
+def _deck(tmp_path, settings=None, slides=3):
+    d = tmp_path / "designs"
+    d.mkdir(exist_ok=True)
+    (d / "pitch.fig").write_bytes(b"DECK-FIG")
+    doc = {"type": "cycls.deck", "version": 1, "fig": "designs/pitch.fig", "size": [1920, 1080], "slides": slides,
+           "exports": ["designs/pitch.pptx"]}
+    if settings:
+        doc["settings"] = settings
+    (d / "pitch.deck.json").write_text(json.dumps(doc))
+    return d
+
+
+def test_add_slide_lays_it_out_with_the_decks_settings(tmp_path, monkeypatch):
+    d = _deck(tmp_path, {"theme": "editorial", "size": [1920, 1080], "footer": {"text": "Brewly"}, "logo": "brand/mark.svg"})
+    (tmp_path / "brand").mkdir()
+    (tmp_path / "brand" / "mark.svg").write_text('<svg viewBox="0 0 4 4"><rect width="4" height="4"/></svg>')
+    (tmp_path / "attachments").mkdir()
+    (tmp_path / "attachments" / "farm.png").write_bytes(_png(1600, 900))
+    calls, scheduled = _fake_apply(monkeypatch, result=b"NEW-FIG", compiled="S", touched=[1], previews=[b"JPEG-two"],
+                                   slides=[{"name": "a"}, {"name": "b"}, {"name": "c"}, {"name": "d"}])
+    out = asyncio.run(_exec_design({"action": "add_slide", "name": "pitch", "at": 2, "slide": {
+        "layout": "image-left", "title": "Farms", "text": "Direct.", "image": "attachments/farm.png"}, "notes": "Slowly"}, _ws(tmp_path)))
+    op = calls["ops"][0]
+    assert op["op"] == "slide_add" and op["at"] == 1
+    assert op["slide"]["image"]["src"] == "attachments/farm.png" and op["slide"]["notes"] == "Slowly"
+    assert op["deck"]["theme"] == "editorial" and op["deck"]["footer"] == {"text": "Brewly"}
+    assert op["deck"]["logo"]["svg"].startswith("<svg")                     # the deck's logo, resolved again
+    assert (d / "pitch.fig").read_bytes() == b"NEW-FIG" and scheduled == ["designs/pitch.fig"]
+    assert json.loads((d / "pitch.deck.json").read_text())["slides"] == 4
+    assert out["_ui"] == [{"type": "ui", "action": "design_command", "path": "designs/pitch.fig", "script": "S"},
+                          {"type": "ui", "action": "open_canvas", "path": "designs/pitch.deck.json", "name": "pitch.deck.json"}]
+    m = out["_model"]
+    assert m[0]["text"] == "Slide 2:" and "Slide added at position 2" in m[-1]["text"] and "now has 4 slides" in m[-1]["text"]
+
+
+def test_update_move_duplicate_delete_map_to_ops(tmp_path, monkeypatch):
+    _deck(tmp_path)
+    calls, _ = _fake_apply(monkeypatch, slides=[{}, {}, {}])
+    ws = _ws(tmp_path)
+    run = lambda **inp: asyncio.run(_exec_design({"name": "pitch", **inp}, ws))
+    run(action="update_slide", number=3, notes="New notes", transition="slide")
+    assert calls["ops"] == [{"op": "slide_meta", "index": 2, "notes": "New notes", "transition": "slide"}]
+    run(action="update_slide", number=1, slide={"layout": "title", "title": "Brewly 2"})
+    assert calls["ops"][0]["op"] == "slide_update" and calls["ops"][0]["index"] == 0
+    assert calls["ops"][0]["deck"]["size"] == [1920, 1080]                  # a hand-built deck: its size
+    run(action="move_slide", number=4, to=2)
+    assert calls["ops"] == [{"op": "slide_move", "index": 3, "to": 1}]
+    run(action="duplicate_slide", number=2)
+    assert calls["ops"] == [{"op": "slide_duplicate", "index": 1}]
+    run(action="delete_slide", number=1)
+    assert calls["ops"] == [{"op": "slide_delete", "index": 0}]
+
+
+def test_slide_action_errors(tmp_path, monkeypatch):
+    calls, _ = _fake_apply(monkeypatch, error="there is no slide 9 — the deck has 3")
+    ws = _ws(tmp_path)
+    run = lambda **inp: asyncio.run(_exec_design({"name": "pitch", **inp}, ws))
+    assert "doesn't exist" in run(action="move_slide", number=1, to=2)
+    _deck(tmp_path)
+    assert "`number` is a slide number from 1" in run(action="delete_slide", number=0)
+    assert "needs `slide`" in run(action="update_slide", number=1)
+    assert "is a layout slide" in run(action="add_slide", slide={"title": "no layout"})
+    out = run(action="move_slide", number=9, to=1)
+    assert "there is no slide 9" in out and "Nothing was changed" in out
+    assert (tmp_path / "designs" / "pitch.fig").read_bytes() == b"DECK-FIG"
+
+
+def test_parallel_slide_actions_on_one_deck_dont_lose_a_change(tmp_path, monkeypatch):
+    # The model calls tools in parallel: a move and an update in one turn each read
+    # the .fig — without a lock the later write dropped the other's change.
+    _deck(tmp_path)
+
+    async def slow_apply(fig, script=None, user_id=None, ops=None, preview=False):
+        await asyncio.sleep(0.05)
+        return {"fig": fig + b"+" + ops[0]["op"].encode(), "lint": [], "script": "S", "preview": None,
+                "previews": [], "touched": [], "slides": [{}] * 3}
+    monkeypatch.setattr("cycls._agent.design.apply", slow_apply)
+    monkeypatch.setattr("cycls._agent.design.refresh.schedule", lambda *a, **k: None)
+    ws = _ws(tmp_path)
+
+    async def both():
+        await asyncio.gather(_exec_design({"action": "move_slide", "name": "pitch", "number": 3, "to": 1}, ws),
+                             _exec_design({"action": "update_slide", "name": "pitch", "number": 2, "notes": "x"}, ws))
+    asyncio.run(both())
+    fig = (tmp_path / "designs" / "pitch.fig").read_bytes()
+    assert fig.count(b"+") == 2 and b"slide_move" in fig and b"slide_meta" in fig    # both changes kept

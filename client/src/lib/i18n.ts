@@ -370,6 +370,9 @@ const translations = {
     pptxFile: "PowerPoint (.pptx)",
     pdfFile: "PDF",
     deckUnavailable: "Couldn't show this deck.",
+    duplicate: "Duplicate",
+    deleteSlideQ: "Delete slide {n}?",
+    slideActions: "Slide actions",
   },
   ar: {
     thinking: "أفكر",
@@ -740,6 +743,9 @@ const translations = {
     pptxFile: "باوربوينت (.pptx)",
     pdfFile: "PDF",
     deckUnavailable: "تعذّر عرض هذا العرض التقديمي.",
+    duplicate: "تكرار",
+    deleteSlideQ: "حذف الشريحة {n}؟",
+    slideActions: "إجراءات الشريحة",
   },
 } as const;
 

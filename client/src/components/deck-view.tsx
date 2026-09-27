@@ -21,6 +21,9 @@ import { cn } from "../lib/utils";
 // event arrives; while the deck (not the editor) is showing, that event just means
 // "the slides changed" — refetch the manifest.
 
+// A deck viewer's own slide change (slides from 1): reorder by drag, duplicate, delete.
+export type DeckOp = { op: "move" | "duplicate" | "delete"; number: number; to?: number };
+
 export interface DeckManifest {
   count: number;
   slides: string[];
@@ -43,13 +46,14 @@ export function parseDeck(data: string): DeckManifest | null {
 
 const baseName = (path: string) => (path.split("/").pop() || path).replace(/\.deck\.json$|\.fig$/i, "");
 
-export function DeckView({ data, path, openFile, writeFile, designEditorUrl, onReload }: {
+export function DeckView({ data, path, openFile, writeFile, designEditorUrl, onReload, onSlideOp }: {
   data: string;
   path: string;                 // the deck document (or .fig) this manifest is of
   openFile?: (path: string, silent?: boolean) => Promise<string>;   // authed blob URL: downloads, the editor's .fig
   writeFile?: (path: string, data: BlobPart, silent?: boolean) => Promise<void>;
   designEditorUrl?: string;     // with writeFile + openFile: Edit opens the design editor
   onReload?: () => void;        // refetch the manifest (the deck was edited)
+  onSlideOp?: (op: DeckOp) => Promise<void>;   // the owner reorders / duplicates / deletes in the grid
 }) {
   const deck = useMemo(() => parseDeck(data), [data]);
   const count = deck?.count ?? 0;
@@ -58,6 +62,11 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, onR
   const [presenting, setPresenting] = useState<number | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);   // the .fig's blob URL while editing
+  const [busy, setBusy] = useState(false);            // a slide change is on its way
+  const [drag, setDrag] = useState<number | null>(null);
+  const [over, setOver] = useState<number | null>(null);
+  const [menuFor, setMenuFor] = useState<number | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const railRef = useRef<HTMLDivElement>(null);
   const fig = deck?.fig;
   const name = baseName(fig || path);
@@ -97,6 +106,18 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, onR
   const edit = async () => {
     if (!canEdit || !fig) return;
     try { setEditing(await openFile!(fig)); } catch { /* the toast already said why */ }
+  };
+  // A slide change runs on the deck's .fig on the server; then the slides are fetched again.
+  const slideOp = async (op: DeckOp) => {
+    if (!onSlideOp || busy) return;
+    setBusy(true);
+    try {
+      await onSlideOp(op);
+      track("deck_slide_changed", { op: op.op });
+      onReload?.();
+    } catch { /* the toast said why */ } finally {
+      setBusy(false);
+    }
   };
   const doneEditing = () => {
     if (editing) URL.revokeObjectURL(editing);
@@ -140,6 +161,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, onR
           ))}
         </div>
         <span className="ml-2 text-xs text-muted-foreground tabular-nums">{count} {t("slidesStage").toLowerCase()}</span>
+        {busy && <span className="ml-2 text-xs text-muted-foreground">{t("saving")}</span>}
         <div className="flex-1" />
         {openFile && (
           <div className="relative">
@@ -168,14 +190,53 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, onR
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
             {deck.slides.map((src, i) => (
-              <button key={i} onClick={() => { nav.go(i); setMode("stage"); }} onDoubleClick={() => present(i)}
-                      className="group overflow-hidden rounded-lg border border-border text-left transition-colors hover:border-muted-foreground cursor-pointer">
-                <img src={src} alt={`Slide ${i + 1}`} className="w-full bg-neutral-200 dark:bg-neutral-800" loading="lazy" />
-                <span className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-muted-foreground">
-                  <span className="tabular-nums">{i + 1}</span>
-                  {deck.titles?.[i] && <span className="min-w-0 truncate" dir="auto">{deck.titles[i]}</span>}
-                </span>
-              </button>
+              // The owner drags a card onto another to move it there.
+              <div key={i} data-testid="grid-slide" draggable={!!onSlideOp && !busy}
+                   onDragStart={(e) => { setDrag(i); e.dataTransfer.effectAllowed = "move"; }}
+                   onDragOver={(e) => { if (drag != null) { e.preventDefault(); setOver(i); } }}
+                   onDragLeave={() => setOver((o) => (o === i ? null : o))}
+                   onDragEnd={() => { setDrag(null); setOver(null); }}
+                   onDrop={(e) => {
+                     e.preventDefault();
+                     if (drag != null && drag !== i) void slideOp({ op: "move", number: drag + 1, to: i + 1 });
+                     setDrag(null); setOver(null);
+                   }}
+                   className={cn("group relative overflow-hidden rounded-lg border text-left transition-colors",
+                                 over === i && drag !== i ? "border-primary ring-2 ring-primary" : "border-border hover:border-muted-foreground",
+                                 drag === i && "opacity-50")}>
+                <button onClick={() => { nav.go(i); setMode("stage"); }} onDoubleClick={() => present(i)} className="block w-full cursor-pointer text-left">
+                  <img src={src} alt={`Slide ${i + 1}`} className="w-full bg-neutral-200 dark:bg-neutral-800" loading="lazy" draggable={false} />
+                  <span className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-muted-foreground">
+                    <span className="tabular-nums">{i + 1}</span>
+                    {deck.titles?.[i] && <span className="min-w-0 truncate" dir="auto">{deck.titles[i]}</span>}
+                  </span>
+                </button>
+                {onSlideOp && (
+                  <div className="absolute right-1.5 top-1.5">
+                    <button onClick={() => setMenuFor((m) => (m === i ? null : i))} aria-label={t("slideActions")} title={t("slideActions")}
+                            className="flex size-6 items-center justify-center rounded-md bg-background/85 text-muted-foreground opacity-0 shadow backdrop-blur transition-opacity hover:text-foreground group-hover:opacity-100 focus:opacity-100 cursor-pointer">
+                      <svg className="size-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
+                    </button>
+                    {menuFor === i && (
+                      <DropdownMenu onClose={() => setMenuFor(null)} items={[
+                        { label: t("duplicate"), onClick: () => void slideOp({ op: "duplicate", number: i + 1 }) },
+                        ...(count > 1 ? [{ label: t("delete"), danger: true, onClick: () => setConfirmDelete(i) }] : []),
+                      ]} />
+                    )}
+                  </div>
+                )}
+                {confirmDelete === i && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-background/90 backdrop-blur-sm">
+                    <span className="text-xs text-foreground">{t("deleteSlideQ").replace("{n}", String(i + 1))}</span>
+                    <div className="flex gap-2">
+                      <button onClick={() => { setConfirmDelete(null); void slideOp({ op: "delete", number: i + 1 }); }}
+                              className="rounded-md bg-red-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-600 cursor-pointer">{t("delete")}</button>
+                      <button onClick={() => setConfirmDelete(null)}
+                              className="rounded-md border border-border px-2.5 py-1 text-xs text-foreground hover:bg-secondary cursor-pointer">{t("cancel")}</button>
+                    </div>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         </div>

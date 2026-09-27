@@ -13,7 +13,7 @@ import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { DesignEditorView } from "./design-editor-view";
-import { DeckView } from "./deck-view";
+import { DeckView, type DeckOp } from "./deck-view";
 import { attachBridge, appScope } from "./app-bridge";
 import { injectShim } from "./app-shim";
 import { SaveDialog } from "./save-dialog";
@@ -220,7 +220,7 @@ function NoPreviewCard({ file, onDownload, onShare }: {
   );
 }
 
-export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, writeFile, listFolders, fetchConnector, appData, designEditorUrl, reloadFile, onReload, onDownload, onShare }: {
+export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, writeFile, deckOp, listFolders, fetchConnector, appData, designEditorUrl, reloadFile, onReload, onDownload, onShare }: {
   file: CanvasFile;
   content: string | null;
   error: boolean;
@@ -228,6 +228,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   readFile?: (path: string, silent?: boolean) => Promise<string>;
   openFile?: (path: string, silent?: boolean) => Promise<string>;   // authed blob URL (a deck's downloads, its .fig)
   writeFile?: (path: string, data: BlobPart, silent?: boolean) => Promise<void>;
+  deckOp?: (path: string, body: DeckOp) => Promise<void>;          // a deck's slide moves / copies / deletes
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
@@ -252,7 +253,8 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   if (isDeck(fileKind(file))) {
     return content ? (
       <DeckView data={content} path={file.path} openFile={openFile} writeFile={shared ? undefined : writeFile}
-                designEditorUrl={shared ? undefined : designEditorUrl} onReload={onReload} />
+                designEditorUrl={shared ? undefined : designEditorUrl} onReload={onReload}
+                onSlideOp={shared || !deckOp ? undefined : (op) => deckOp(file.path, op)} />
     ) : null;
   }
   if (isHtml(fileKind(file))) {
@@ -359,7 +361,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, listFolders, fetchConnector, appData, org, onShareFile, railWidth = 0, reloadKey, working, designEditorUrl }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, deckOp, listFolders, fetchConnector, appData, org, onShareFile, railWidth = 0, reloadKey, working, designEditorUrl }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -379,6 +381,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   readFile: (path: string) => Promise<string>;   // authed text fetch (md/html/code source)
   openFile: (path: string) => Promise<string>;    // authed blob URL (pdf / download)
   writeFile: (path: string, data: BlobPart) => Promise<void>;  // overwrite (editor); binary for the .fig editor
+  deckOp?: (path: string, body: DeckOp) => Promise<void>;        // a deck's slide moves / copies / deletes
   listFolders?: () => Promise<{ name: string; path: string }[]>;  // app save dialog
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;   // an app's live call to a connector API
@@ -456,6 +459,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
           readFile={readFile}
           openFile={openFile}
           writeFile={writeFile}
+          deckOp={deckOp}
           listFolders={listFolders}
           fetchConnector={fetchConnector}
           appData={appData}
@@ -679,11 +683,12 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
 }
 
 // Keyed by path from the parent, so per-file state resets on tab switch.
-function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetchConnector, appData, org, onShareFile, reloadKey, designEditorUrl }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, deckOp, listFolders, fetchConnector, appData, org, onShareFile, reloadKey, designEditorUrl }: {
   file: CanvasFile;
   readFile: (path: string) => Promise<string>;
   openFile: (path: string) => Promise<string>;
   writeFile: (path: string, data: BlobPart) => Promise<void>;
+  deckOp?: (path: string, body: DeckOp) => Promise<void>;
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
@@ -820,7 +825,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetc
             className="h-full w-full resize-none border-0 bg-background px-4 py-4 sm:px-6 font-mono text-[13px] leading-relaxed text-foreground focus:outline-none"
           />
         ) : (
-          <CanvasDoc file={file} content={content} error={error} readFile={readFile} openFile={openFile} writeFile={writeFile} listFolders={listFolders}
+          <CanvasDoc file={file} content={content} error={error} readFile={readFile} openFile={openFile} writeFile={writeFile} deckOp={deckOp} listFolders={listFolders}
                      fetchConnector={fetchConnector}
                      appData={appData}
                      designEditorUrl={designEditorUrl} reloadFile={reloadFile} onReload={onReload}

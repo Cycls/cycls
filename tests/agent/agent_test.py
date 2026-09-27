@@ -1739,3 +1739,15 @@ def test_one_approval_survives_the_model_rewording_its_own_description():
     b = approval_key("bash", {"command": "git clean -fdx", "description": "Check available PDF conversion tools"})
     c = approval_key("bash", {"command": "git clean -fdxn", "description": "Check installed PDF tools"})
     assert a == b and a != c
+
+
+def test_a_tool_can_send_several_ui_events():
+    """`_ui` may be a list: a deck change replays live in the editor AND opens the deck."""
+    from cycls._agent.harness.main import _shape
+    content, evs, waits = _shape({"name": "design", "id": "t1"},
+                                 {"_model": "ok", "_ui": [{"type": "ui", "action": "a"}, {"type": "ui", "action": "b"}]},
+                                 True, {}, set())
+    assert content == "ok" and waits is False
+    assert [e["action"] for e in evs] == ["a", "b"] and all(e["id"] == "t1" for e in evs)
+    assert _shape({"name": "design", "id": "t2"}, {"_model": "ok", "_ui": {"type": "ui", "action": "c"}}, True, {}, set())[1] == \
+        [{"type": "ui", "action": "c", "id": "t2"}]

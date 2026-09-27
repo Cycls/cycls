@@ -130,8 +130,10 @@ def _shape(block, out, ok, handlers, mcp_names):
     the same content without yielding — you cannot yield while unwinding."""
     name = block["name"]
     if ok and isinstance(out, dict) and "_model" in out:
-        # Two channels: `_model` lands in tool_result, `_ui` goes to the client.
-        return out["_model"], ([{**out["_ui"], "id": block["id"]}] if out.get("_ui") else []), False
+        # Two channels: `_model` lands in tool_result, `_ui` goes to the client — one
+        # event, or a list of them (a deck change replays live AND opens the deck).
+        ui = out.get("_ui")
+        return out["_model"], [{**e, "id": block["id"]} for e in (ui if isinstance(ui, list) else [ui] if ui else [])], False
     if ok and isinstance(out, dict) and out.get("type") == "ui":
         # A UI tool drives the client; the model gets a short ack so tool_result
         # stays a valid string. `ack` overrides the wording and never ships.

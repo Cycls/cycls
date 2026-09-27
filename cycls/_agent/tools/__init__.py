@@ -357,7 +357,28 @@ _DESIGN_TOOL = {
         "for left-aligned English (that runs the text off the right edge). Shaping, bidi "
         "(mixed digits / Latin) and diacritics are automatic, so write the text naturally "
         "— but skip `letterSpacing` on Arabic.\n"
-        "- For a multi-slide DECK (or a carousel), pass frames instead of a single design:\n"
+        "- A presentation DECK: pass a deck of LAYOUTS — the normal way. You fill each slide's "
+        "slots; the service lays them out, so every slide shares margins, title position, type "
+        "scale, footer and page numbers, and nothing is placed by hand:\n"
+        "    {\"deck\": {\"theme\": \"editorial\", \"footer\"?: {\"text\": \"Brewly · Seed 2026\"}, \"slides\": [\n"
+        "      {\"layout\": \"title\", \"eyebrow\"?:, \"title\":, \"subtitle\"?:, \"meta\"?:, \"image\"?: \"attachments/hero.jpg\", \"notes\": \"…\"},\n"
+        "      {\"layout\": \"bullets\", \"title\":, \"bullets\": [\"…\"], \"image\"?:, \"notes\": \"…\"}, … ]}}\n"
+        "  Layouts and slots: title {eyebrow?, title, subtitle?, meta?, image? (full-bleed), align?:\"center\"} · "
+        "section {number?, title, subtitle?} · agenda {title, items} · bullets {eyebrow?, title, subtitle?, "
+        "bullets, image?} · two-column {title, left:{heading?, text|bullets}, right:{…}} · image-left / "
+        "image-right {eyebrow?, title, text|bullets, image} · image {image, title?, caption?} (full-bleed "
+        "photo) · quote {quote, author?, role?, image?} · stats {eyebrow?, title?, items:[{value, label}] "
+        "(1–4)} · timeline {title, items:[{date, title, text?}] (2–6)} · table {title, columns, rows, "
+        "caption?} · chart {title, chart:{kind, data, …chart keys}, caption?, takeaway?:{value?, text}} · "
+        "team {title, people:[{name, role?, photo?}] (≤8)} · closing {title, subtitle?, cta?, contact?, "
+        "qr?:\"https://…\"} · custom {nodes, fill?} (a hand-built slide, for what no layout fits). Every "
+        "slide also takes notes, transition, id. Images are workspace paths.\n"
+        "  Themes: minimal-light, minimal-dark, bold-gradient, editorial, corporate, tech-dark, warm, mono, "
+        "\"brand\" (the workspace brand kit — the default when one exists), or overrides on a base: "
+        "{\"base\":\"minimal-dark\",\"accent\":\"#f59e0b\",\"heading\":\"Sora Bold\"}. Arabic slides are laid out "
+        "right-to-left automatically. Keep slide text short — titles shrink to fit their place, "
+        "and the layout check names anything that still doesn't fit.\n"
+        "- A deck of hand-built frames (or a carousel), when you need full control:\n"
         "    {\"frames\": [ {\"size\":\"slide\", \"fill\":…, \"nodes\":[…], \"id\"?:\"cover\", "
         "\"title\"?:\"Cover\", \"notes\"?:\"what the presenter says\", \"transition\"?:\"fade|slide|none\"}, … ]}\n"
         "  one object per slide, every slide the SAME size. format \"pptx\" is one PowerPoint "
@@ -370,6 +391,12 @@ _DESIGN_TOOL = {
         "- script {script, name, format?} — escape hatch: a raw OpenPencil / Figma "
         "plugin-API script for what the spec can't express. It MUST end with "
         "`console.log('__FRAME__'+frame.id)` naming the frame to export.\n"
+        "- Change a DECK's slides (name = the deck): add_slide {name, slide, at?} · update_slide {name, "
+        "number, slide} (rebuild it — take its layout `source` from inspect and change what you need) or "
+        "{name, number, notes?|title?|transition?} · move_slide {name, number, to} · duplicate_slide "
+        "{name, number} · delete_slide {name, number}. Slides are numbered from 1; a new slide takes the "
+        "deck's theme and footer, and page numbers follow any change. Use these — not a re-render — to "
+        "change a deck's structure; `edit` ops still tweak nodes on a slide.\n"
         "- inspect {name} — the design's frames and every node by name (its `id`, else "
         "text-1, rect-2…), with its box, text, font and colour. Do this before an edit you "
         "can't name from the spec you wrote.\n"
@@ -401,11 +428,18 @@ _DESIGN_TOOL = {
         "it gets a numeric suffix (`launch-2`); to CHANGE an existing design use `edit`."
     ),
     "input_schema": {"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["render", "script", "edit", "inspect"],
-                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes), or `edit` it (checked, saved, replayed live in the editor)."},
+        "action": {"type": "string", "enum": ["render", "script", "edit", "inspect", "add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide"],
+                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes), `edit` it (checked, saved, replayed live in the editor), or change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide."},
+        "slide": {"type": "object", "description": "For add_slide / update_slide: the slide — a layout slide {layout, …slots, notes?} laid out with the deck's own theme and footer, or a hand-built one {nodes, fill?}. update_slide replaces the slide whole: start from its `source` in inspect and change what you need."},
+        "number": {"type": "integer", "description": "For update_slide / move_slide / duplicate_slide / delete_slide: the slide's number, from 1."},
+        "to": {"type": "integer", "description": "For move_slide: the position it moves to, from 1."},
+        "at": {"type": "integer", "description": "For add_slide: the position of the new slide, from 1 (default: the end)."},
+        "notes": {"type": "string", "description": "For update_slide without `slide`: the slide's new speaker notes (also `title`, `transition`)."},
+        "title": {"type": "string", "description": "For update_slide without `slide`: the slide's title (its name in the deck viewer)."},
+        "transition": {"type": "string", "enum": ["fade", "slide", "none"], "description": "For update_slide without `slide`: how the slide enters when presented."},
         "ops": {"type": "array", "items": {"type": "object"},
                 "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?}; resize {node, w?, h?}; delete {node}; duplicate {node, dx?, dy?, id?}; replace_image {node, src}; add {node:<spec node>, frame?}. `frame` (slide index from 0) narrows a name to one slide."},
-        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes} or a deck {frames:[...]} (one per slide, all one size, each with optional id/title/notes/transition; export pptx or pdf, or png for a carousel); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
+        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}; a presentation as a deck of layouts {deck:{theme, footer?, slides:[{layout, …slots, notes}]}} (the normal way for decks); or hand-built frames {frames:[...]} (one per slide, all one size, each with optional id/title/notes/transition; export pptx or pdf, or png for a carousel); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s). Scripts may use only `figma` (and `console`): no `this`, globals, network, eval/Function or `.constructor` — anything else is refused before it runs."},
         "intent": {"type": "string",
@@ -1255,13 +1289,23 @@ def _first_color(paint):
     return _norm_hex(paint)
 
 
-def _readable_on(bg):
-    """White or near-black — whichever text reads better on `bg` (WCAG luminance)."""
+def _luminance(hex_):
     def lin(v):
         v /= 255
         return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
-    r, g, b = (int(bg[i:i + 2], 16) for i in (1, 3, 5))
-    return "#ffffff" if 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b) < 0.179 else "#111111"
+    r, g, b = (int(hex_[i:i + 2], 16) for i in (1, 3, 5))
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+
+
+def _contrast(a, b):
+    """The WCAG contrast ratio of two #rrggbb colours."""
+    hi, lo = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _readable_on(bg):
+    """White or near-black — whichever text reads better on `bg` (WCAG luminance)."""
+    return "#ffffff" if _luminance(bg) < 0.179 else "#111111"
 
 
 # An image node's bytes ride to the stateless service as base64 inside the spec —
@@ -1413,6 +1457,8 @@ def _prepare_spec(spec, brand, root=None):
     with no colour gets white or near-black against its frame. Never overrides a
     colour the model set. A copy — the model's input stays as written. Returns
     (spec, error, notes), notes being lines for the model's ack."""
+    if isinstance(spec.get("deck"), dict):
+        return _prepare_deck(spec, brand, root)
     colors = {_norm_hex(m) for m in _HEX.findall(json.dumps(spec))}
     spec = json.loads(json.dumps(spec))
     frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
@@ -1536,6 +1582,126 @@ def _prepare_spec(spec, brand, root=None):
     return spec, None, notes
 
 
+_DECK_THEMES = ("minimal-light", "minimal-dark", "bold-gradient", "editorial", "corporate", "tech-dark", "warm", "mono")
+_BRAND_LOGOS = ("logo.svg", "logo.png", "logo.webp", "logo.jpg", "logo.jpeg")
+
+
+def _image_slot(src, root):
+    """A deck's image slot — a workspace path, or {src, focus} — → what the service
+    draws: {image: base64, src[, focus]} for a PNG / JPEG / WebP / GIF, or {svg, src}.
+    → (slot, bytes read). Raises ValueError with the fix."""
+    focus = None
+    if isinstance(src, dict):
+        focus, src = src.get("focus"), src.get("src")
+    if not isinstance(src, str) or not src.strip():
+        raise ValueError('an image slot is a workspace file path, e.g. "attachments/photo.jpg"')
+    if src.startswith(("http://", "https://", "data:")):
+        raise ValueError(f"image {src[:60]!r} must be a workspace file — save it into the workspace first")
+    path = _resolve_path(src, root)
+    if not path.is_file():
+        raise ValueError(f"image {src!r} does not exist in the workspace")
+    size = path.stat().st_size
+    if path.suffix.lower() == ".svg":
+        if size > _DESIGN_SVG_MAX:
+            raise ValueError(f"{src} is over {_DESIGN_SVG_MAX >> 10} KB — use a simpler SVG (or a PNG)")
+        return {"svg": path.read_text(encoding="utf-8", errors="replace"), "src": src}, size
+    if size > _DESIGN_IMAGE_MAX:
+        raise ValueError(f"image {src!r} is {size / 2**20:.1f} MB, over the {_DESIGN_IMAGE_MAX >> 20} MB a design takes")
+    data = path.read_bytes()
+    if not _image_size(data):
+        raise ValueError(f"image {src!r} isn't a PNG, JPEG, WebP, GIF or SVG")
+    slot = {"image": base64.b64encode(data).decode(), "src": src}
+    if isinstance(focus, list) and len(focus) == 2:
+        slot["focus"] = focus
+    return slot, size
+
+
+def _brand_theme(brand):
+    """The deck theme a brand kit makes, on the minimal-light base: the primary as the
+    hero (title, section and closing slides), the accent for highlights — swapped for
+    the primary where it wouldn't read as text on white — and the brand's fonts."""
+    primary, accent = brand.get("primary"), brand.get("accent") or brand.get("primary")
+    theme = {"base": "minimal-light", "name": "brand"}
+    hero_text = None
+    if primary:
+        hero_text = _readable_on(primary)
+        theme.update(hero=primary, heroText=hero_text, heroMuted=hero_text + "b3")
+    if accent:
+        on_white = (accent if _contrast(accent, "#ffffff") >= 4.5
+                    else primary if primary and _contrast(primary, "#ffffff") >= 4.5 else "#0f172a")
+        theme.update(accent=on_white, accent2=accent, onAccent=_readable_on(on_white),
+                     heroAccent=accent if not primary or _contrast(accent, primary) >= 3 else hero_text)
+    if brand.get("heading"):
+        theme["heading"] = f"{brand['heading']} Bold"
+    if brand.get("body"):
+        theme["body"] = brand["body"]
+    return theme
+
+
+def _prepare_deck(spec, brand, root):
+    """A deck of layouts — {deck: {theme, slides: [{layout, …}]}} — made ready for the
+    service, which lays it out (cycls-design layouts.js): the size resolved; image slots
+    (a slide's `image`, a team member's `photo`, the deck's `logo` and footer logo) read
+    from the workspace; theme "brand" — or no theme, when the workspace has a brand kit —
+    built from the brand kit, with brand/logo.* as the deck logo; a custom slide's
+    `nodes` prepared like a single design's. → (spec, error, notes)."""
+    spec = json.loads(json.dumps(spec))
+    deck = spec["deck"]
+    slides = deck.get("slides")
+    if not isinstance(slides, list) or not slides:
+        return None, "Error: a deck needs `slides` — a list of {layout, …} (the layouts are in the tool description).", []
+    try:
+        deck["size"] = size = _frame_size({"size": deck.get("size") or "slide"})
+    except ValueError as e:
+        return None, f"Error: {e}.", []
+    notes, total = [], 0
+
+    def slot(value):
+        nonlocal total
+        resolved, n = _image_slot(value, root)
+        total += n
+        if total > _DESIGN_IMAGES_MAX:
+            raise ValueError(f"the deck's images total over {_DESIGN_IMAGES_MAX >> 20} MB — use smaller copies "
+                             f"(longest side ~2000px)")
+        return resolved
+
+    theme = deck.get("theme")
+    if theme == "brand" and not brand:
+        return None, (f"Error: theme \"brand\" needs a brand kit (brand/brand.yaml) — or pick a theme: "
+                      f"{', '.join(_DECK_THEMES)}."), []
+    if (theme is None or theme == "brand") and brand:
+        deck["theme"] = theme = _brand_theme(brand)
+        logo = next((f"brand/{n}" for n in _BRAND_LOGOS if root and (pathlib.Path(root) / "brand" / n).is_file()), None)
+        if logo and not deck.get("logo"):
+            deck["logo"] = logo
+        fonts = " / ".join(f for f in (brand.get("heading"), brand.get("body")) if f)
+        notes.append(f"The deck uses the workspace brand kit as its theme (primary {brand['primary']}, accent "
+                     f"{brand['accent']}{', fonts ' + fonts if fonts else ''}{', logo ' + logo if logo else ''}).")
+    try:
+        if deck.get("logo"):
+            deck["logo"] = slot(deck["logo"])
+        if isinstance(deck.get("footer"), dict) and deck["footer"].get("logo"):
+            deck["footer"]["logo"] = slot(deck["footer"]["logo"])
+        if isinstance(theme, dict) and theme.get("logo"):
+            theme["logo"] = slot(theme["logo"])
+        for i, s in enumerate(slides, 1):
+            if not isinstance(s, dict):
+                return None, f"Error: slide {i} must be an object: {{layout, …}}.", []
+            if s.get("image"):
+                s["image"] = slot(s["image"])
+            for person in s.get("people") or []:
+                if isinstance(person, dict) and person.get("photo"):
+                    person["photo"] = slot(person["photo"])
+            if isinstance(s.get("nodes"), list):
+                sub, err, _ = _prepare_spec({"size": size, "fill": s.get("fill"), "nodes": s["nodes"]}, None, root)
+                if err:
+                    return None, err.replace("Error: ", f"Error: slide {i}: ", 1), []
+                s["nodes"] = sub["nodes"]
+    except ValueError as e:
+        return None, f"Error: {e}.", []
+    return spec, None, notes
+
+
 _OP_NUMERIC = ("x", "y", "dx", "dy", "w", "h", "size", "radius", "opacity", "letterSpacing",
                "lineHeight", "strokeWeight", "frame")
 
@@ -1586,6 +1752,10 @@ def _outline_text(rel, frames):
         if f.get("notes"):
             notes = str(f["notes"])
             out.append(f"  notes: {json.dumps(notes[:300] + ('…' if len(notes) > 300 else ''), ensure_ascii=False)}")
+        if f.get("source"):
+            # A layout slide as it was asked for — what update_slide re-sends, changed.
+            source = str(f["source"])
+            out.append(f"  layout source: {source[:1500]}{' …' if len(source) > 1500 else ''}")
         for n in f.get("nodes") or []:
             box = f"({n.get('x')},{n.get('y')} {n.get('w')}×{n.get('h')})"
             bits = [f"  {n.get('name')}", n.get("type", ""), box]
@@ -1626,6 +1796,104 @@ def _dedupe_design_name(designs_dir, name, fmt):
     return f"{name}-{n}"
 
 
+_SLIDE_ACTIONS = ("add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide")
+
+
+def _prepare_slide(slide, settings, root):
+    """A new or rebuilt slide, made ready the way a deck's slides are (_prepare_deck):
+    → (slide, the deck settings with their images resolved, error)."""
+    if not isinstance(slide, dict) or not (slide.get("layout") or isinstance(slide.get("nodes"), list)):
+        return None, None, ('Error: `slide` is a layout slide ({"layout": "bullets", "title": …, "bullets": […]}) '
+                            'or a hand-built one ({"nodes": […], "fill"?}).')
+    spec, err, _ = _prepare_deck({"deck": {**settings, "slides": [slide]}}, None, root)
+    if err:
+        return None, None, err
+    deck = spec["deck"]
+    return deck.pop("slides")[0], deck, None
+
+
+async def _exec_slides(action, inp, workspace, name):
+    """A deck's slide actions — add / update (or its notes, title, transition) / move /
+    duplicate / delete — run on the saved .fig through the service, like `edit`
+    (design/deck.py). Slides are numbered from 1 here, as the user counts them."""
+    from cycls._agent import design
+    from cycls._agent.design import deck as decks
+    root, subject = workspace.root, getattr(workspace, "subject", None)
+    fig_path, fig_rel, deck_path, _ = decks.paths(root, name)
+    if not fig_path.is_file():
+        return f"Error: {fig_rel} doesn't exist — slide actions work on a deck you rendered."
+    doc = await asyncio.to_thread(decks.read_doc, deck_path)
+
+    def number(key):
+        v = _num(inp.get(key))
+        if v is None or v < 1 or int(v) != v:
+            raise ValueError(f"`{key}` is a slide number from 1, not {inp.get(key)!r}")
+        return int(v) - 1
+
+    def slide_op(kind, extra):
+        settings = doc.get("settings") or ({"size": doc["size"]} if doc.get("size") else {})
+        slide = dict(inp.get("slide") or {})
+        for k in ("notes", "title", "transition"):
+            if inp.get(k) is not None and k not in slide:
+                slide[k] = inp[k]
+        slide, resolved, err = _prepare_slide(slide, settings, root)
+        if err:
+            raise ValueError(err.removeprefix("Error: "))
+        return {"op": kind, **extra, "slide": slide, "deck": resolved}
+
+    try:
+        if action == "add_slide":
+            op = slide_op("slide_add", {"at": number("at")} if inp.get("at") is not None else {})
+            what = "Slide added" + (f" at position {op['at'] + 1}" if "at" in op else " at the end")
+        elif action == "update_slide":
+            index = number("number")
+            if inp.get("slide") is not None:
+                op, what = slide_op("slide_update", {"index": index}), f"Slide {index + 1} rebuilt"
+            else:
+                meta = {k: inp[k] for k in ("notes", "title", "transition") if inp.get(k) is not None}
+                if not meta:
+                    return "Error: `update_slide` needs `slide` (the new slide) or `notes` / `title` / `transition`."
+                op, what = {"op": "slide_meta", "index": index, **meta}, f"Slide {index + 1}'s {', '.join(meta)} updated"
+        elif action == "move_slide":
+            op = {"op": "slide_move", "index": number("number"), "to": number("to")}
+            what = f"Slide {op['index'] + 1} moved to position {op['to'] + 1}"
+        elif action == "duplicate_slide":
+            op = {"op": "slide_duplicate", "index": number("number")}
+            what = f"Slide {op['index'] + 1} duplicated (the copy is slide {op['index'] + 2})"
+        else:
+            op = {"op": "slide_delete", "index": number("number")}
+            what = f"Slide {op['index'] + 1} deleted"
+    except ValueError as e:
+        return f"Error: {e}."
+    try:
+        r = await decks.apply_ops(root, name, [op], user_id=subject, preview=True)
+    except design.Unavailable as e:
+        return f"Error: design unavailable — {e}"
+    except Exception as e:
+        return f"Error: {action} failed on {fig_rel} — {e}. Nothing was changed."
+    count = len(r.get("slides") or [])
+    ack = (f"{what}. {fig_rel} now has {count} slide{'s' if count != 1 else ''}; the deck viewer and "
+           f"the exports beside it update in a few seconds." + _layout_check(r.get("lint"), "pptx"))
+    command = {"type": "ui", "action": "design_command", "path": fig_rel, "script": r.get("script")}
+    if intent := inp.get("intent"):
+        command["intent"] = str(intent)[:80]
+    # Replayed live in an open editor, and the deck (re)opened in the viewer so the
+    # user sees the change even when it wasn't showing.
+    ui = [command, {"type": "ui", "action": "open_canvas", "path": f"designs/{name}.deck.json", "name": f"{name}.deck.json"}]
+    blocks, total = [], 0
+    for i, jpg in zip(r.get("touched") or [], r.get("previews") or []):
+        if total + len(jpg) > _DESIGN_QA_MAX:
+            break
+        total += len(jpg)
+        blocks += [{"type": "text", "text": f"Slide {i + 1}:"},
+                   {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                "data": base64.b64encode(jpg).decode()}}]
+    if blocks:
+        ack += " The changed slide is attached — check it matches the rest of the deck; fix it with update_slide if not."
+        return {"_model": [*blocks, {"type": "text", "text": ack}], "_ui": ui}
+    return {"_model": ack, "_ui": ui}
+
+
 async def _exec_design(inp, workspace):
     """Render a design via the shared cycls-design service, save the image + the
     editable `.fig` into the workspace, and open the image on the canvas. Two
@@ -1645,6 +1913,8 @@ async def _exec_design(inp, workspace):
     # error now (it used to fail silently inside the browser), and a success is saved
     # and re-exported whether or not an editor is open. Then a UI event replays the
     # same script in the live editor, where the user watches the Super cursor make it.
+    if action in _SLIDE_ACTIONS:
+        return await _exec_slides(action, inp, workspace, name)
     if action in ("edit", "inspect"):
         rel = f"designs/{name}.fig"
         fig_path = pathlib.Path(workspace.root) / rel
@@ -1675,17 +1945,19 @@ async def _exec_design(inp, workspace):
             ops, err = await asyncio.to_thread(_prepare_ops, ops, workspace.root)
             if err:
                 return err
-        try:
-            r = await design.apply(await asyncio.to_thread(fig_path.read_bytes), script=None if ops else script,
-                                   ops=ops or None, preview=True, user_id=subject)
-        except design.Unavailable as e:
-            return f"Error: design unavailable — {e}"
-        except Exception as e:
-            return (f"Error: the edit failed on {rel} — {e}. Nothing was changed; fix the "
-                    f"{'ops' if ops else 'script'} (Design inspect lists the nodes) and try again.")
-        tmp = fig_path.with_name(f".{fig_path.name}.part")
-        await asyncio.to_thread(tmp.write_bytes, r["fig"])
-        await asyncio.to_thread(tmp.replace, fig_path)
+        from cycls._agent.design.deck import lock
+        async with lock(fig_path):                          # one change at a time per design
+            try:
+                r = await design.apply(await asyncio.to_thread(fig_path.read_bytes), script=None if ops else script,
+                                       ops=ops or None, preview=True, user_id=subject)
+            except design.Unavailable as e:
+                return f"Error: design unavailable — {e}"
+            except Exception as e:
+                return (f"Error: the edit failed on {rel} — {e}. Nothing was changed; fix the "
+                        f"{'ops' if ops else 'script'} (Design inspect lists the nodes) and try again.")
+            tmp = fig_path.with_name(f".{fig_path.name}.part")
+            await asyncio.to_thread(tmp.write_bytes, r["fig"])
+            await asyncio.to_thread(tmp.replace, fig_path)
         from cycls._agent.design import refresh
         refresh.schedule(workspace.root, rel, subject)        # the image beside it follows
         ui = {"type": "ui", "action": "design_command", "path": rel, "script": r.get("script") or script}
@@ -1711,11 +1983,14 @@ async def _exec_design(inp, workspace):
             spec, err, notes = await asyncio.to_thread(lambda: _prepare_spec(inp["spec"], _load_brand(root), root))
             if err:
                 return err
-            frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
-            size = frames[0].get("size")
+            if isinstance(spec.get("deck"), dict):
+                n_frames, size = len(spec["deck"]["slides"]), spec["deck"]["size"]
+            else:
+                frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
+                n_frames, size = len(frames), frames[0].get("size")
             # Several frames in a raster format are a carousel: every slide comes back.
             r = await design.render(spec, fmt=fmt, scale=scale, user_id=subject,
-                                    every=len(frames) > 1 and fmt not in _DECK_EXTS)
+                                    every=n_frames > 1 and fmt not in _DECK_EXTS)
             notes = [*notes, *r.notes]
         elif action == "script":
             if not inp.get("script"):
@@ -1754,6 +2029,9 @@ async def _exec_design(inp, workspace):
         # and present it. The slides' titles, notes and transitions live in the .fig.
         deck = {"type": "cycls.deck", "version": 1, "fig": fig_rel, "size": size,
                 "slides": count, "exports": saved}
+        if action == "render" and isinstance(spec.get("deck"), dict):
+            from cycls._agent.design.deck import settings_of
+            deck["settings"] = settings_of(spec["deck"])      # what a new slide is laid out with
         await asyncio.to_thread((root / f"designs/{name}.deck.json").write_text,
                                 json.dumps(deck, indent=2), "utf-8")
     note = (f" (named '{name}' so it doesn't overwrite the existing '{requested}')"

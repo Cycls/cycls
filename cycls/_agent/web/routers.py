@@ -3,7 +3,7 @@
 Chat metadata + message log and shares live in the workspace DB — see
 `cycls._agent.state`. Files stay on the workspace filesystem (POSIX-shaped).
 """
-import asyncio, base64, hashlib, json, os, secrets, shutil, tempfile, time, unicodedata, uuid, zipfile
+import asyncio, base64, hashlib, json, os, re, secrets, shutil, tempfile, time, unicodedata, uuid, zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -832,6 +832,33 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         if request.query_params.get("download") is not None:
             return FileResponse(file_path, filename=file_path.name, headers=_NO_CACHE)
         return FileResponse(file_path, headers=_NO_CACHE)
+
+    @r.post("/deck/{path:path}")
+    async def deck_op(path: str, request: Request, ws: Workspace = ws_dep):
+        """The deck viewer's own slide changes — {op: "move" | "duplicate" | "delete",
+        number, to?} (slides from 1) on a deck under designs/ (its deck document or .fig),
+        run on the saved .fig through the design service like the agent's slide actions."""
+        from cycls._agent import design
+        from cycls._agent.design import deck as decks
+        m = re.fullmatch(r"designs/([^/]+?)(?:\.deck\.json|\.fig)", path)
+        if not m:
+            raise HTTPException(404, "Not a deck")
+        _safe_path(ws.root, path)
+        body = await request.json()
+        kind, number, to = body.get("op"), body.get("number"), body.get("to")
+        if kind not in ("move", "duplicate", "delete") or not isinstance(number, int) or number < 1 \
+                or (kind == "move" and (not isinstance(to, int) or to < 1)):
+            raise HTTPException(400, "Expected {op: move|duplicate|delete, number, to?} with slides from 1")
+        op = {"op": f"slide_{kind}", "index": number - 1, **({"to": to - 1} if kind == "move" else {})}
+        try:
+            r = await decks.apply_ops(ws.root, m.group(1), [op], user_id=ws.subject)
+        except FileNotFoundError:
+            raise HTTPException(404, "The deck's design file is missing")
+        except design.Unavailable as e:
+            raise HTTPException(415, str(e))
+        except RuntimeError as e:
+            raise HTTPException(422, str(e))
+        return {"ok": True, "slides": len(r.get("slides") or [])}
 
     @r.put("/files/{path:path}")
     async def put_file(path: str, request: Request, ws: Workspace = ws_dep):

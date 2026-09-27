@@ -46,6 +46,7 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
     onOpenFile: f.openFile,
     readFile: f.readFile,
     writeFile: f.writeFile,
+    deckOp: f.deckOp,
     fetchConnector: f.fetchConnector,
     appData: f.appData,
     searchFiles: f.searchFiles,

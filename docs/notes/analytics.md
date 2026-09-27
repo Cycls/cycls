@@ -154,6 +154,7 @@ Identified users also carry **person properties** (via identify): `email`,
 | `deck_opened` | a design deck opens in the deck viewer (a multi-slide Design render, or its `.deck.json` from Files / a share) | `slides` — are decks being made and looked at? |
 | `deck_presented` | Present on a deck (or on an office presentation, `source: office`) | `slides`, `from` (`start` / `current`) — presented ÷ opened says whether decks are for showing or just for files |
 | `deck_exported` | a deck downloaded from the deck viewer | `format` (`pptx` / `pdf`) — which file people take away |
+| `deck_slide_changed` | the owner moved (drag), duplicated or deleted a slide in the deck viewer's grid | `op` (`move` / `duplicate` / `delete`) — do people shape decks by hand, or ask the agent? |
 
 ### Sharing loop (organic acquisition)
 

@@ -28,7 +28,7 @@ import httpx
 
 # A render shells the CanvasKit engine on the service; give it headroom, but
 # well under a page-timeout so a hung service surfaces as an error, not a stall.
-_TIMEOUT = 120  # seconds
+_TIMEOUT = 240  # seconds — a whole deck (PPTX / PDF) may take a few minutes
 
 
 class Unavailable(RuntimeError):
@@ -148,7 +148,12 @@ async def apply(fig, script=None, user_id=None, ops=None, preview=False):
     return {"fig": base64.b64decode(data["fig_base64"]),
             "lint": [dict(i) for i in data.get("lint") or [] if isinstance(i, dict)],
             "script": data.get("script"),
-            "preview": base64.b64decode(data["preview_base64"]) if data.get("preview_base64") else None}
+            "preview": base64.b64decode(data["preview_base64"]) if data.get("preview_base64") else None,
+            # The slides the edit touched (0-based) and their previews; every slide's
+            # metadata after it (its count is the deck's).
+            "previews": _b64s(data.get("previews_base64")),
+            "touched": [int(i) for i in data.get("touched") or [] if isinstance(i, int)],
+            "slides": [dict(s) for s in data.get("slides") or [] if isinstance(s, dict)]}
 
 
 async def inspect(fig, user_id=None):
