@@ -8,11 +8,12 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob } from "./canvas-utils";
+import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, isDeck, is3d, codeLang, extTint, tintTile, tintLabel, tileExt, saveBlob } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { DesignEditorView } from "./design-editor-view";
+import { DeckView } from "./deck-view";
 import { attachBridge, appScope } from "./app-bridge";
 import { injectShim } from "./app-shim";
 import { SaveDialog } from "./save-dialog";
@@ -69,7 +70,10 @@ export function useFileContent(
     // Presentations fetch the slide manifest as text; .docx and spreadsheets
     // fetch their raw bytes (a blob URL) for the native renderer; other office
     // files fetch the server's PDF render.
-    const load = isMd(kind) || isHtml(kind) || codeLang(kind) != null
+    // A design deck fetches its slide manifest (the design service renders it).
+    const load = isDeck(kind)
+      ? readFile(`${file.path}?as=slides`, true)
+      : isMd(kind) || isHtml(kind) || codeLang(kind) != null
       ? readFile(file.path)
       : isPresentation(kind)
       ? readFile(`${file.path}?as=slides`, true)
@@ -194,7 +198,7 @@ function NoPreviewCard({ file, onDownload, onShare }: {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
       <div className="flex size-16 items-center justify-center rounded-2xl bg-secondary text-xs font-bold text-muted-foreground" style={tintTile(fileKind(file))}>
-        <span style={tintLabel(fileKind(file))}>{(ext(fileKind(file)) || "file").slice(0, 4).toUpperCase()}</span>
+        <span style={tintLabel(fileKind(file))}>{(tileExt(fileKind(file)) || "file").slice(0, 4).toUpperCase()}</span>
       </div>
       <p className="text-sm font-medium text-foreground">{file.name}</p>
       <p className="text-xs text-muted-foreground">{t("noPreview")}</p>
@@ -216,18 +220,20 @@ function NoPreviewCard({ file, onDownload, onShare }: {
   );
 }
 
-export function CanvasDoc({ file, content, error, shared = false, readFile, writeFile, listFolders, fetchConnector, appData, designEditorUrl, reloadFile, onDownload, onShare }: {
+export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, writeFile, listFolders, fetchConnector, appData, designEditorUrl, reloadFile, onReload, onDownload, onShare }: {
   file: CanvasFile;
   content: string | null;
   error: boolean;
   shared?: boolean;
   readFile?: (path: string, silent?: boolean) => Promise<string>;
+  openFile?: (path: string, silent?: boolean) => Promise<string>;   // authed blob URL (a deck's downloads, its .fig)
   writeFile?: (path: string, data: BlobPart, silent?: boolean) => Promise<void>;
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   designEditorUrl?: string;   // when set, .fig opens the embedded editor
   reloadFile?: () => Promise<string>;   // fresh blob URL of this file (the .fig editor re-opens on it)
+  onReload?: () => void;      // refetch this document (a deck whose slides changed)
   onDownload?: () => void;
   onShare?: () => void;
 }) {
@@ -237,9 +243,17 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, writ
     // A failed Office conversion / render (service down, unconvertible, parse
     // error) degrades to the download card rather than a dead error — same as an
     // unrenderable file.
-    if (isOffice(fileKind(file)) || isDocx(fileKind(file)) || isPresentation(fileKind(file)))
+    if (isOffice(fileKind(file)) || isDocx(fileKind(file)) || isPresentation(fileKind(file)) || isDeck(fileKind(file)))
       return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Couldn't load this file.</div>;
+  }
+  // A design deck → the deck viewer (slides, notes, Present, downloads; Edit into
+  // the design editor for the owner). `content` is its slide manifest.
+  if (isDeck(fileKind(file))) {
+    return content ? (
+      <DeckView data={content} path={file.path} openFile={openFile} writeFile={shared ? undefined : writeFile}
+                designEditorUrl={shared ? undefined : designEditorUrl} onReload={onReload} />
+    ) : null;
   }
   if (isHtml(fileKind(file))) {
     return <HtmlDoc file={file} content={content ?? ""} shared={shared} readFile={readFile} writeFile={writeFile} listFolders={listFolders} fetchConnector={fetchConnector} appData={appData} />;
@@ -678,7 +692,9 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetc
   reloadKey?: number;
   designEditorUrl?: string;
 }) {
-  const { content, setContent, error } = useFileContent(file, readFile, openFile, reloadKey);
+  const [bump, setBump] = useState(0);   // a document asked to refetch itself (a deck was edited)
+  const { content, setContent, error } = useFileContent(file, readFile, openFile, (reloadKey ?? 0) + bump);
+  const onReload = useCallback(() => setBump((n) => n + 1), []);
   const [menuOpen, setMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -688,7 +704,8 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetc
   const [shareOpen, setShareOpen] = useState(false);
   const md = isMd(fileKind(file));
   const lang = codeLang(fileKind(file));
-  const isText = md || lang != null;   // text-based: editable + copyable
+  const deck = isDeck(fileKind(file));
+  const isText = !deck && (md || lang != null);   // text-based: editable + copyable (a deck's content is its slides)
   const dirs = file.path.split("/").slice(0, -1);
 
   const copy = () => {
@@ -748,7 +765,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetc
           ))}
           <span className="min-w-0 truncate font-medium text-foreground">{file.name}</span>
         </div>
-        {lang && lang !== "text" && (
+        {lang && lang !== "text" && !deck && (
           <span className="shrink-0 rounded-md bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">{lang}</span>
         )}
         <div className="flex-1" />
@@ -803,10 +820,10 @@ function CanvasFileView({ file, readFile, openFile, writeFile, listFolders, fetc
             className="h-full w-full resize-none border-0 bg-background px-4 py-4 sm:px-6 font-mono text-[13px] leading-relaxed text-foreground focus:outline-none"
           />
         ) : (
-          <CanvasDoc file={file} content={content} error={error} readFile={readFile} writeFile={writeFile} listFolders={listFolders}
+          <CanvasDoc file={file} content={content} error={error} readFile={readFile} openFile={openFile} writeFile={writeFile} listFolders={listFolders}
                      fetchConnector={fetchConnector}
                      appData={appData}
-                     designEditorUrl={designEditorUrl} reloadFile={reloadFile}
+                     designEditorUrl={designEditorUrl} reloadFile={reloadFile} onReload={onReload}
                      onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
         )}
       </div>

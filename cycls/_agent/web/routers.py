@@ -376,6 +376,7 @@ _KINDS = (
                   "rb", "go", "rs", "java", "c", "h", "cc", "cpp", "cs", "php", "swift", "kt",
                   "sql", "yaml", "yml", "toml", "css", "scss", "less", "xml", "ipynb"}),
     ("text",     {"txt", "text", "log", "env", "conf", "cfg", "ini"}),
+    ("design",   {"fig"}),                 # an OpenPencil design: the in-canvas editor
 )
 _KIND_BY_EXT = {ext: kind for kind, exts in _KINDS for ext in exts}
 _SORTS = ("name", "size", "modified", "type")
@@ -383,6 +384,8 @@ _PUBLIC = ("name", "path", "type", "size", "modified", "kind")
 
 
 def _kind(name):
+    if name.lower().endswith(".deck.json"):
+        return "deck"                      # a design deck's document: the deck viewer
     return _KIND_BY_EXT.get(name.rpartition(".")[2].lower() if "." in name else "", "opaque")
 
 
@@ -466,6 +469,129 @@ async def _office_slides(root, src, user_id):
     slides = ["data:image/png;base64," + base64.b64encode(p).decode("ascii") for p in pngs]
     payload = json.dumps({"count": len(slides), "slides": slides})
     return await asyncio.to_thread(_write_office_slides, cache_dir, stem, dst, payload)
+
+
+# Designs as decks. A multi-frame render writes `designs/<name>.deck.json` (the deck
+# document) beside its `.fig`; either one previews slide by slide (?as=slides — a
+# manifest the deck viewer shows and presents) and exports the whole deck on demand
+# (?as=pptx / ?as=pdf), through the cycls-design service. Cached like the office
+# renders, keyed by the .fig's path + mtime + size — so an edit (the editor's
+# auto-save, an agent's `edit`) is a fresh render.
+_DESIGN_CACHE = ".cache/design"
+_DESIGN_AS = ("slides", "pptx", "pdf")
+
+
+def _design_doc(name):
+    """A file the deck routes serve: a deck document or a design (.fig)."""
+    n = name.lower()
+    return n.endswith(".deck.json") or n.endswith(".fig")
+
+
+def _deck_fig(root, src):
+    """The .fig behind `src` — itself, or the one its deck document names (a
+    workspace path that must stay inside the workspace) — and the deck's size when
+    the document states it. Raises FileNotFoundError / ValueError."""
+    if src.name.lower().endswith(".fig"):
+        return src, None
+    try:
+        doc = json.loads(src.read_text("utf-8"))
+    except (OSError, ValueError):
+        raise ValueError("not a deck document")
+    fig = doc.get("fig") if isinstance(doc, dict) else None
+    if not isinstance(fig, str) or not fig.lower().endswith(".fig"):
+        raise ValueError("the deck document names no .fig")
+    target = resolve_path(root, fig)
+    if not target.is_file():
+        raise FileNotFoundError(fig)
+    size = doc.get("size")
+    return target, size if isinstance(size, list) and len(size) == 2 else None
+
+
+def _design_cache_key(root, fig):
+    st = fig.stat()
+    stem = hashlib.sha1(fig.relative_to(root).as_posix().encode("utf-8")).hexdigest()[:16]
+    return stem, f"{st.st_mtime_ns}-{st.st_size}"
+
+
+async def _design_slides(root, src, user_id):
+    """A cached slide render of a design — {count, slides: [data-URI JPEGs],
+    sizes, names, titles, notes, transitions, fig}. Raises design.Unavailable
+    (no service), FileNotFoundError / ValueError (not a deck)."""
+    from cycls._agent import design
+    root = Path(root).resolve()
+    fig, size = await asyncio.to_thread(_deck_fig, root, src)
+    stem, key = _design_cache_key(root, fig)
+    cache_dir = root / _DESIGN_CACHE
+    dst = cache_dir / f"{stem}-{key}.slides.json"
+    if dst.exists():
+        return dst
+    # ~1920px on the long side: sharp on the stage and in present mode.
+    scale = min(2, max(1, 1920 / max(size))) if size and all(isinstance(v, (int, float)) and v > 0 for v in size) else 1
+    s = await design.slides(await asyncio.to_thread(fig.read_bytes), scale=scale, user_id=user_id)
+    mime = "image/png" if s["format"] == "png" else "image/jpeg"
+    meta = s["meta"] + [{}] * (len(s["images"]) - len(s["meta"]))
+    payload = json.dumps({
+        "count": len(s["images"]),
+        "slides": [f"data:{mime};base64," + base64.b64encode(i).decode("ascii") for i in s["images"]],
+        "sizes": s["sizes"],
+        "names": [m.get("name") or "" for m in meta],
+        "titles": [m.get("title") or "" for m in meta],
+        "notes": [m.get("notes") or "" for m in meta],
+        "transitions": [m.get("transition") or "" for m in meta],
+        "fig": fig.relative_to(root).as_posix(),
+    })
+    return await asyncio.to_thread(_write_office_slides, cache_dir, stem, dst, payload)
+
+
+def _write_design_export(cache_dir, stem, fmt, dst, data):
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        for old in cache_dir.glob(f"{stem}-*.{fmt}"):
+            try: old.unlink()
+            except OSError: pass
+        tmp = cache_dir / f".{stem}-{uuid.uuid4().hex}.part"
+        tmp.write_bytes(data)
+        tmp.replace(dst)
+        return dst
+    except OSError:
+        tmp = Path(tempfile.gettempdir()) / f"design-{uuid.uuid4().hex}.{fmt}"
+        tmp.write_bytes(data)
+        return tmp
+
+
+async def _design_export(root, src, fmt, user_id):
+    """The whole deck behind `src` as `fmt` (pptx / pdf), cached → (path, the
+    download name). Same errors as _design_slides."""
+    from cycls._agent import design
+    root = Path(root).resolve()
+    fig, _ = await asyncio.to_thread(_deck_fig, root, src)
+    stem, key = _design_cache_key(root, fig)
+    cache_dir = root / _DESIGN_CACHE
+    dst = cache_dir / f"{stem}-{key}.{fmt}"
+    name = f"{fig.stem}.{fmt}"
+    if dst.exists():
+        return dst, name
+    data = await design.export(await asyncio.to_thread(fig.read_bytes), fmt=fmt, user_id=user_id)
+    return await asyncio.to_thread(_write_design_export, cache_dir, stem, fmt, dst, data), name
+
+
+async def _design_response(root, src, as_, user_id):
+    """?as=slides|pptx|pdf on a deck document or a .fig → the response."""
+    from cycls._agent import design
+    try:
+        if as_ == "slides":
+            return FileResponse(await _design_slides(root, src, user_id),
+                                media_type="application/json", headers=_NO_CACHE)
+        path, name = await _design_export(root, src, as_, user_id)
+        return FileResponse(path, filename=name, headers=_NO_CACHE)
+    except design.Unavailable as e:
+        raise HTTPException(415, str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(404, f"The deck's design file is missing: {e}")
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except RuntimeError as e:
+        raise HTTPException(502, f"Couldn't render the deck: {e}")
 
 
 def _walk_catalog(root):
@@ -681,6 +807,10 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             return _zip_dir(file_path)   # folders download as <name>.zip
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
+        # A design deck (its deck document or its .fig): ?as=slides is the deck
+        # viewer's manifest, ?as=pptx / ?as=pdf the whole deck, exported on demand.
+        if request.query_params.get("as") in _DESIGN_AS and _design_doc(file_path.name):
+            return await _design_response(ws.root, file_path, request.query_params["as"], ws.subject)
         # ?as=slides previews a presentation as a slide viewer — a JSON manifest
         # of per-slide PNG data-URIs (office-render /v1/render). The canvas shows
         # the deck slide-by-slide rather than as a flat PDF.
@@ -1187,6 +1317,16 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         # editable). Same convert+cache path as get_file, over the owner's
         # workspace. Presentations get the slide viewer; everything else, PDF.
         as_ = request.query_params.get("as")
+        # A shared deck presents and downloads like the owner's (the share covers
+        # the deck document; the .fig it names stays inside the owner's workspace).
+        if as_ in _DESIGN_AS and _design_doc(file_path):
+            try:
+                target = resolve_path(ws_owner.root, file_path)
+            except ValueError:
+                raise HTTPException(403, "Path traversal denied")
+            if not target.is_file():
+                raise HTTPException(404, "File not found")
+            return await _design_response(ws_owner.root, target, as_, ws_owner.subject)
         if as_ in ("slides", "pdf") and office.convertible(file_path):
             try:
                 target = resolve_path(ws_owner.root, file_path)

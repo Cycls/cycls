@@ -1619,6 +1619,88 @@ def test_office_slides_unavailable_returns_415(tmp_path, monkeypatch):
     assert client.get("/files/deck.pptx", params={"as": "slides"}).status_code == 415
 
 
+# ---- design decks: ?as=slides|pptx|pdf on a deck document or a .fig ----
+
+_DECK_DOC = json.dumps({"type": "cycls.deck", "version": 1, "fig": "designs/pitch.fig",
+                        "size": [1920, 1080], "slides": 2, "exports": ["designs/pitch.pptx"]}).encode()
+
+
+def _fake_design(monkeypatch):
+    from cycls._agent import design
+    calls = []
+
+    async def slides(fig, scale=1, fmt="jpg", user_id=None):
+        calls.append(("slides", fig, scale, user_id))
+        return {"images": [b"\xff\xd8one", b"\xff\xd8two"], "sizes": [[1920, 1080]] * 2, "format": "jpg",
+                "meta": [{"name": "cover", "title": "Cover", "notes": "Hello", "transition": "fade"}, {"name": "slide-2"}]}
+
+    async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False):
+        calls.append((fmt, fig, user_id))
+        return b"%PDF-deck" if fmt == "pdf" else b"PK-deck"
+    monkeypatch.setattr(design, "slides", slides)
+    monkeypatch.setattr(design, "export", export)
+    return calls
+
+
+def test_kinds_for_designs_and_decks(tmp_path):
+    _seed(tmp_path, {"designs/pitch.fig": b"FIG", "designs/pitch.deck.json": _DECK_DOC, "a.json": b"{}"})
+    client = _ws_routers_client(tmp_path)
+    kinds = {e["name"]: e["kind"] for e in client.get("/files", params={"path": "designs"}).json()}
+    assert kinds == {"pitch.fig": "design", "pitch.deck.json": "deck"}   # a .fig no longer downloads on click
+    assert {e["name"]: e["kind"] for e in client.get("/files").json()}["a.json"] == "code"
+
+
+def test_deck_slides_render_once_and_carry_the_notes(tmp_path, monkeypatch):
+    root = _seed(tmp_path, {"designs/pitch.fig": b"FIG", "designs/pitch.deck.json": _DECK_DOC})
+    calls = _fake_design(monkeypatch)
+    client = _ws_routers_client(tmp_path)
+    r = client.get("/files/designs/pitch.deck.json", params={"as": "slides"})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/json")
+    body = r.json()
+    assert body["count"] == 2 and body["fig"] == "designs/pitch.fig"
+    assert base64.b64decode(body["slides"][1].split(",", 1)[1]) == b"\xff\xd8two"
+    assert body["slides"][0].startswith("data:image/jpeg;base64,")
+    assert body["notes"] == ["Hello", ""] and body["titles"] == ["Cover", ""] and body["transitions"] == ["fade", ""]
+    assert calls == [("slides", b"FIG", 1, "org_1:user_1")]                 # 1920 wide → @1x
+    client.get("/files/designs/pitch.deck.json", params={"as": "slides"})
+    client.get("/files/designs/pitch.fig", params={"as": "slides"})          # the .fig itself: same cache
+    assert len(calls) == 1
+    (root / "designs" / "pitch.fig").write_bytes(b"EDITED-FIG")          # an edit → a fresh render
+    client.get("/files/designs/pitch.deck.json", params={"as": "slides"})
+    assert calls[-1][1] == b"EDITED-FIG"
+
+
+def test_deck_downloads_export_on_demand(tmp_path, monkeypatch):
+    _seed(tmp_path, {"designs/pitch.fig": b"FIG", "designs/pitch.deck.json": _DECK_DOC})
+    calls = _fake_design(monkeypatch)
+    client = _ws_routers_client(tmp_path)
+    r = client.get("/files/designs/pitch.deck.json", params={"as": "pdf"})
+    assert r.status_code == 200 and r.content == b"%PDF-deck"
+    assert 'filename="pitch.pdf"' in r.headers["content-disposition"]
+    r = client.get("/files/designs/pitch.deck.json", params={"as": "pptx"})
+    assert r.content == b"PK-deck" and 'filename="pitch.pptx"' in r.headers["content-disposition"]
+    client.get("/files/designs/pitch.deck.json", params={"as": "pdf"})       # cached
+    assert [c[0] for c in calls] == ["pdf", "pptx"]
+    assert client.get("/files/designs/pitch.deck.json").content == _DECK_DOC   # no ?as: the document itself
+
+
+def test_deck_errors(tmp_path, monkeypatch):
+    from cycls._agent import design
+    root = _seed(tmp_path, {"designs/pitch.deck.json": _DECK_DOC,
+                     "designs/evil.deck.json": json.dumps({"fig": "../../outside.fig"}).encode(),
+                     "designs/bare.deck.json": b"{}"})
+    client = _ws_routers_client(tmp_path)
+    assert client.get("/files/designs/pitch.deck.json", params={"as": "slides"}).status_code == 404   # no .fig
+    assert client.get("/files/designs/evil.deck.json", params={"as": "slides"}).status_code == 422    # stays inside
+    assert client.get("/files/designs/bare.deck.json", params={"as": "slides"}).status_code == 422
+    (root / "designs" / "pitch.fig").write_bytes(b"FIG")
+
+    async def down(*a, **k):
+        raise design.Unavailable("design not configured (DESIGN_URL)")
+    monkeypatch.setattr(design, "slides", down)
+    assert client.get("/files/designs/pitch.deck.json", params={"as": "slides"}).status_code == 415   # → download card
+
+
 # ---- office module: the office-render /v1/convert client ----
 
 def test_office_convertible_and_configured(monkeypatch):

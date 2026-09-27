@@ -151,6 +151,9 @@ Identified users also carry **person properties** (via identify): `email`,
 | `trash_restored` | something comes back from the trash | `kind`, `method` (`toast` / `shortcut` / `trash_tab`) — which undo affordance people actually use |
 | `trash_purged` | delete-forever (admin) | `kind`, or `all: true` for empty-trash |
 | `app_updated` | an app renamed or re-iconed from its ⋯ menu (manifest edit) | `field` (`name` / `icon`) |
+| `deck_opened` | a design deck opens in the deck viewer (a multi-slide Design render, or its `.deck.json` from Files / a share) | `slides` — are decks being made and looked at? |
+| `deck_presented` | Present on a deck (or on an office presentation, `source: office`) | `slides`, `from` (`start` / `current`) — presented ÷ opened says whether decks are for showing or just for files |
+| `deck_exported` | a deck downloaded from the deck viewer | `format` (`pptx` / `pdf`) — which file people take away |
 
 ### Sharing loop (organic acquisition)
 

@@ -50,6 +50,14 @@ export const isOffice = (name: string) => OFFICE_EXTS.has(ext(name));
 const DESIGN_EXTS = new Set(["fig"]);
 export const isDesignEditor = (name: string) => DESIGN_EXTS.has(ext(name));
 
+// A design deck's document (designs/<name>.deck.json, written by a multi-slide
+// Design render) opens the deck viewer. Its slides come from ?as=slides — the
+// design service renders them — not from the JSON itself, so it's checked before
+// the code path would claim it as .json.
+export const isDeck = (name: string) => name.toLowerCase().endsWith(".deck.json");
+// The label on a file's extension tile ("deck" for a deck document, not "json").
+export const tileExt = (name: string) => (isDeck(name) ? "deck" : name.includes(".") ? name.split(".").pop() || "" : "");
+
 export const is3d = (name: string) => ["glb", "gltf"].includes(ext(name));
 
 // Per-filetype accent — faint tile wash + label color for extension tiles.
@@ -63,7 +71,7 @@ const TINTS: Record<string, string> = {
   glb: "#af52de", gltf: "#af52de",
   fig: "#af52de",
 };
-export const extTint = (name: string): string | undefined => TINTS[ext(name)];
+export const extTint = (name: string): string | undefined => (isDeck(name) ? TINTS.fig : TINTS[ext(name)]);
 // Wash + label styles for an extension tile; undefined → neutral (bg-secondary).
 export const tintTile = (name: string) => {
   const c = extTint(name);
@@ -98,7 +106,7 @@ export const codeLang = (name: string): string | null => {
 // for servers predating it and for files not yet listed (mid-upload rows).
 export const isRenderable = (name: string, kind?: string) =>
   kind ? kind !== "opaque"
-       : isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || isDocx(name) || isPresentation(name) || isOffice(name) || isDesignEditor(name) || is3d(name) || codeLang(name) != null;
+       : isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || isDocx(name) || isPresentation(name) || isOffice(name) || isDesignEditor(name) || isDeck(name) || is3d(name) || codeLang(name) != null;
 
 // Deliverable target of a live edit step — from the finished label or the
 // streamed partial-JSON args. Helper scripts never open the canvas.

@@ -330,7 +330,7 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
       </div>
       <div className="flex-1 overflow-hidden">
         {renderable ? (
-          <CanvasDoc file={file} content={content} error={error} shared />
+          <CanvasDoc file={file} content={content} error={error} shared openFile={openFile} />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
             <Icon name="folder" className="size-10 text-muted-foreground/40" strokeWidth={1.5} />
@@ -419,7 +419,7 @@ function SharedFile({ share, getToken }: { share: FileShare; getToken?: () => Pr
           </div>
           <div className="flex-1 overflow-hidden">
             {renderable ? (
-              <CanvasDoc file={file} content={content} error={error} shared />
+              <CanvasDoc file={file} content={content} error={error} shared openFile={openFile} />
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
                 <Icon name="folder" className="size-10 text-muted-foreground/40" strokeWidth={1.5} />

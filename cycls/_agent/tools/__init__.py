@@ -1770,7 +1770,16 @@ async def _exec_design(inp, workspace):
     # PNG. The image is still saved (for download/sharing). Fall back to opening the
     # image only where no editor is wired up (DESIGN_EDITOR_URL unset).
     editor = bool(os.environ.get("DESIGN_EDITOR_URL"))
-    if editor:
+    if count > 1:
+        # A deck (or carousel) opens in the deck viewer: its slides, Present, the
+        # downloads, and Edit into the editor.
+        deck_rel = f"designs/{name}.deck.json"
+        ack = (f"{what}. It's OPEN in the deck viewer ({deck_rel}) — the user can page "
+               f"through it, Present it full screen (with the speaker notes), download it "
+               f"as PowerPoint or PDF{', or Edit it in the design editor' if editor else ''}. "
+               f"Editable source: {fig_rel}; change it with Design edit.")
+        ui = {"type": "ui", "action": "open_canvas", "path": deck_rel, "name": f"{name}.deck.json"}
+    elif editor:
         ack = (f"{what}; its editable source {fig_rel} is now OPEN in the in-canvas editor — "
                f"the user can edit it live. Tell them they can tweak it directly there, or ask "
                f"you to change it (colors, copy, layout) and you'll apply it with Design edit.")

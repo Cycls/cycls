@@ -417,6 +417,8 @@ def test_deck_saves_the_file_a_deck_document_and_qas_every_slide(tmp_path, monke
     assert [b["text"] for b in m if b["type"] == "text"][:3] == ["Slide 1:", "Slide 2:", "Slide 3:"]
     assert [base64.b64decode(b["source"]["data"]) for b in m if b["type"] == "image"] == [b"J1", b"J2", b"J3"]
     assert "Deck saved (designs/pitch.pptx, 3 slides" in m[-1]["text"]
+    assert out["_ui"] == {"type": "ui", "action": "open_canvas", "path": "designs/pitch.deck.json", "name": "pitch.deck.json"}
+    assert "deck viewer" in m[-1]["text"] and "Present" in m[-1]["text"]
     assert "All 3 slides are attached" in m[-1]["text"] and "CONSISTENT" in m[-1]["text"]
 
 
@@ -441,7 +443,7 @@ def test_carousel_saves_every_slide(tmp_path, monkeypatch):
     assert json.loads((d / "tips.deck.json").read_text())["exports"] == [
         "designs/tips-slide-1.png", "designs/tips-slide-2.png", "designs/tips-slide-3.png"]
     assert "Carousel saved (3 slides: designs/tips-slide-1.png … designs/tips-slide-3.png" in out["_model"][-1]["text"]
-    assert out["_ui"]["path"] == "designs/tips-slide-1.png"                 # no editor: the first slide opens
+    assert out["_ui"]["path"] == "designs/tips.deck.json"                   # the deck viewer opens
     # The same name again is bumped — a carousel's slide files count as taken.
     _fake_render(monkeypatch, image=b"Q1", images=[b"Q1", b"Q2", b"Q3"])
     asyncio.run(_exec_design({"action": "render", "name": "tips", "spec": spec}, _ws(tmp_path)))

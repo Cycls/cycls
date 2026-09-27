@@ -224,6 +224,30 @@ for self-QA), and the client gets an
 screenshots use). PNGs render inline; a `.pptx` deck shows in the slide viewer when
 office-render is configured, else a download card.
 
+**Decks open in the deck viewer.** A multi-frame render opens its
+`designs/<name>.deck.json` (`DeckView`, `client/src/components/deck-view.tsx`): a
+filmstrip beside the current slide and its speaker notes, or a grid of every slide;
+**Present**; **Download** — the whole deck as PowerPoint or PDF, exported on demand;
+and **Edit**, which swaps in the design editor on the deck's `.fig`. Its content is
+the slide manifest from `GET /files/<deck>?as=slides` — the server resolves the
+deck document to its `.fig` (inside the workspace), asks the service's `/slides`
+for every slide as a JPEG plus its name / title / notes / transition, and caches the
+manifest in `.cache/design/` keyed by the `.fig`'s path + mtime + size, so an edit is
+a fresh render. `?as=pptx` / `?as=pdf` export the same way; a file share of the deck
+document serves all three, so a shared deck presents. An agent `edit` of the deck
+while the viewer (not the editor) is open refetches the manifest. `.fig` files are
+kind `design` and `.deck.json` kind `deck` in the Files panel, so neither downloads
+on click.
+
+**Present mode** (`present-mode.tsx`) is a portal on `document.body` that asks for
+real fullscreen: one slide at a time, each entering with its own transition (fade /
+slide / none), click or ←/→/Space/PageUp/PageDown/Home/End to move, **N** notes,
+**G** grid, **P** a presenter window (current + next slide, notes, a timer — a React
+root rendered into the popup from the presenting page, so its buttons drive the deck).
+It takes every key in the capture phase, so chat's global Escape — which closes the
+whole canvas — never sees the Escape that ends a presentation. Office presentations
+(`SlidesView`) present the same way.
+
 ## Editing — the in-canvas editor
 
 Generation is half of it. When `DESIGN_EDITOR_URL` is set, a `.fig` on the canvas
