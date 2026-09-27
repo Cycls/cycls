@@ -48,6 +48,7 @@ export function useFileContent(
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState(false);
   const shown = useRef<string | null>(null);
+  const loaded = useRef(false);   // this file has shown content — a failed refetch keeps it
 
   useEffect(() => {
     if (!file) { setContent(null); setError(false); shown.current = null; return; }
@@ -59,7 +60,7 @@ export function useFileContent(
     // agent turn destroyed an open app, taking its scroll, its form state and any write
     // still inside the shim's debounce. Unchanged content now re-renders to the same
     // srcDoc and the frame is never touched.
-    if (fresh) { setContent(null); setError(false); }
+    if (fresh) { setContent(null); setError(false); loaded.current = false; }
     // Only formats we render from source fetch as text. Everything else — pdf,
     // media, spreadsheets — fetches bytes, so a binary is never handed to a
     // text renderer. Office docs fetch the server's on-demand PDF render of
@@ -79,8 +80,10 @@ export function useFileContent(
       ? readFile(`${file.path}?as=slides`, true)
       : (isOffice(kind) ? openFile(`${file.path}?as=pdf`, true) : openFile(file.path))
           .then((url) => { blobUrl = url; return url; });
-    load.then((v) => { if (!cancelled) setContent(v); })
-        .catch(() => { if (!cancelled) setError(true); });
+    // A success clears an earlier failure (a one-off 401 mid-turn used to leave the
+    // error card up for good); a failed REFETCH keeps what's already shown.
+    load.then((v) => { if (!cancelled) { setContent(v); setError(false); loaded.current = true; } })
+        .catch(() => { if (!cancelled && !loaded.current) setError(true); });
     return () => { cancelled = true; if (blobUrl) URL.revokeObjectURL(blobUrl); };
   }, [file?.path, file?.name, readFile, openFile, reloadKey]);
 
