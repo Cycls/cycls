@@ -357,10 +357,16 @@ _DESIGN_TOOL = {
         "for left-aligned English (that runs the text off the right edge). Shaping, bidi "
         "(mixed digits / Latin) and diacritics are automatic, so write the text naturally "
         "— but skip `letterSpacing` on Arabic.\n"
-        "- For a multi-slide DECK, pass frames instead of a single design:\n"
-        "    {\"frames\": [ {\"size\":[1920,1080], \"fill\":…, \"nodes\":[…]}, … ]}\n"
-        "  one object per slide, and set format \"pptx\" — each frame becomes a slide "
-        "in one PowerPoint file.\n"
+        "- For a multi-slide DECK (or a carousel), pass frames instead of a single design:\n"
+        "    {\"frames\": [ {\"size\":\"slide\", \"fill\":…, \"nodes\":[…], \"id\"?:\"cover\", "
+        "\"title\"?:\"Cover\", \"notes\"?:\"what the presenter says\", \"transition\"?:\"fade|slide|none\"}, … ]}\n"
+        "  one object per slide, every slide the SAME size. format \"pptx\" is one PowerPoint "
+        "file — each slide's speaker `notes` and `transition` are written into it, and its text, "
+        "rects, ellipses and lines stay editable there (gradients, icons, SVG, chart lines and "
+        "pies, photos and blurs become pictures, one element each; decor bleeding off a slide "
+        "is cropped by the slide in the show). \"pdf\" is one page per slide. png / jpg / webp "
+        "save every slide as its own image, <name>-slide-1, -slide-2 … (an Instagram carousel). "
+        "Write notes for a talk deck. Every slide comes back to you to QA.\n"
         "- script {script, name, format?} — escape hatch: a raw OpenPencil / Figma "
         "plugin-API script for what the spec can't express. It MUST end with "
         "`console.log('__FRAME__'+frame.id)` naming the frame to export.\n"
@@ -386,10 +392,10 @@ _DESIGN_TOOL = {
         "`figma.currentPage.selection` to what you change. Fonts there are "
         "{family:'Poppins',style:'Semi Bold'} (spaced style names); `textAlignHorizontal` "
         "follows the text's direction (on Arabic 'LEFT' is the right side).\n\n"
-        "`format` is png (default), jpg, webp, svg, or pptx (PowerPoint; use it for "
-        "decks). `name` is the file base name, e.g. `launch`. The render opens on the "
+        "`format` is png (default), jpg, webp, svg, pptx (PowerPoint) or pdf — pptx or pdf "
+        "for a deck. `name` is the file base name, e.g. `launch`. The render opens on the "
         "canvas; the editable `.fig` is saved beside it for later edits. Every render "
-        "also comes back to YOU as an image (a deck: its first slide) — look at it and "
+        "also comes back to YOU as an image (a deck: every slide) — look at it and "
         "fix what's off before you present it. A fresh "
         "`render`/`script` NEVER overwrites an earlier design — if the name is taken "
         "it gets a numeric suffix (`launch-2`); to CHANGE an existing design use `edit`."
@@ -399,14 +405,14 @@ _DESIGN_TOOL = {
                    "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes), or `edit` it (checked, saved, replayed live in the editor)."},
         "ops": {"type": "array", "items": {"type": "object"},
                 "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?}; resize {node, w?, h?}; delete {node}; duplicate {node, dx?, dy?, id?}; replace_image {node, src}; add {node:<spec node>, frame?}. `frame` (slide index from 0) narrows a name to one slide."},
-        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes} or a deck {frames:[...]} (one per slide, export pptx); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
+        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes} or a deck {frames:[...]} (one per slide, all one size, each with optional id/title/notes/transition; export pptx or pdf, or png for a carousel); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s). Scripts may use only `figma` (and `console`): no `this`, globals, network, eval/Function or `.constructor` — anything else is refused before it runs."},
         "intent": {"type": "string",
                    "description": "For `edit`: a short label of the change (e.g. 'making the headline gold') shown on the live 'Super' cursor."},
         "name": {"type": "string", "description": "Output file base name, e.g. `launch` (lowercase, no extension)."},
-        "format": {"type": "string", "enum": ["png", "jpg", "webp", "svg", "pptx"],
-                   "description": "Output format (default png). Use pptx for a PowerPoint slide."},
+        "format": {"type": "string", "enum": ["png", "jpg", "webp", "svg", "pptx", "pdf"],
+                   "description": "Output format (default png). A deck: pptx (PowerPoint, with speaker notes) or pdf; png for a carousel (one image per slide)."},
         "scale": {"type": "integer", "description": "Raster scale for png/jpg/webp (default 2 = @2x)."},
     }, "required": ["action"]}
 }
@@ -1181,7 +1187,9 @@ def _browser_step(inp):
     return {"tool_name": "Browser", "step": f"{a} {detail}".strip()}
 
 
-_DESIGN_EXTS = {"png", "jpg", "webp", "svg", "pptx"}
+_DESIGN_EXTS = {"png", "jpg", "webp", "svg", "pptx", "pdf"}
+# Formats that are the whole deck in one file (every other format is per frame).
+_DECK_EXTS = ("pptx", "pdf")
 
 
 # Named sizes a spec may pass as `size` instead of [W, H], so a common format is
@@ -1197,6 +1205,7 @@ _HEX = re.compile(r"#(?:[0-9a-fA-F]{3}){1,2}")
 # A render the model sees, to QA before presenting it — bounded like `read`.
 _DESIGN_QA_TYPES = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}
 _DESIGN_QA_MAX = 3 * 1024 * 1024
+_DESIGN_QA_SLIDES = 12             # a deck's slides the model QAs, in order
 
 
 def _norm_hex(c):
@@ -1408,13 +1417,22 @@ def _prepare_spec(spec, brand, root=None):
     spec = json.loads(json.dumps(spec))
     frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
     filled, branded_fonts, image_bytes = 0, 0, 0
-    for fr in frames:
+    first_size = None
+    for i, fr in enumerate(frames, 1):
         if not isinstance(fr, dict):
             continue
         try:
             fr["size"] = W, H = _frame_size(fr)
         except ValueError as e:
             return None, f"Error: {e}.", []
+        # A deck is one size: PowerPoint takes the first slide's size for the whole
+        # file and letterboxes the rest.
+        if first_size is None:
+            first_size = [W, H]
+        elif [W, H] != first_size:
+            return None, (f"Error: every slide of a deck must be the same size — slide 1 is "
+                          f"{first_size[0]}×{first_size[1]}, slide {i} is {W}×{H}. Give every "
+                          f"frame the same `size`."), []
         if brand and brand["primary"] and fr.get("fill") is None:
             fr["fill"], filled = brand["primary"], filled + 1
         bg = _first_color(fr.get("fill"))
@@ -1562,7 +1580,12 @@ def _outline_text(rel, frames):
     out = [f"{rel} — {len(frames)} frame{'s' if len(frames) != 1 else ''}. Edit with ops that name these nodes."]
     for f in frames:
         w, h = (f.get("size") or [0, 0])[:2]
-        out.append(f"slide {f.get('slide')} ({w}×{h}{', fill ' + f['fill'] if f.get('fill') else ''}):")
+        meta = "".join(f", {k} {json.dumps(f[k], ensure_ascii=False)}" for k in ("title", "transition") if f.get(k))
+        out.append(f"slide {f.get('slide')} \"{f.get('name', '')}\" ({w}×{h}"
+                   f"{', fill ' + f['fill'] if f.get('fill') else ''}{meta}):")
+        if f.get("notes"):
+            notes = str(f["notes"])
+            out.append(f"  notes: {json.dumps(notes[:300] + ('…' if len(notes) > 300 else ''), ensure_ascii=False)}")
         for n in f.get("nodes") or []:
             box = f"({n.get('x')},{n.get('y')} {n.get('w')}×{n.get('h')})"
             bits = [f"  {n.get('name')}", n.get("type", ""), box]
@@ -1593,8 +1616,8 @@ def _dedupe_design_name(designs_dir, name, fmt):
     stay paired under one base. (`edit` targets an existing design — it does not
     dedupe.)"""
     def taken(base):
-        return ((designs_dir / f"{base}.{fmt}").exists()
-                or (designs_dir / f"{base}.fig").exists())
+        return any((designs_dir / f).exists() for f in
+                   (f"{base}.{fmt}", f"{base}.fig", f"{base}-slide-1.{fmt}", f"{base}.deck.json"))
     if not taken(name):
         return name
     n = 2
@@ -1679,7 +1702,7 @@ async def _exec_design(inp, workspace):
                                                         "data": base64.b64encode(r["preview"]).decode()}},
                            {"type": "text", "text": ack}],
                 "_ui": ui}
-    notes = []
+    notes, size = [], None
     try:
         if action == "render":
             if not isinstance(inp.get("spec"), dict):
@@ -1688,61 +1711,104 @@ async def _exec_design(inp, workspace):
             spec, err, notes = await asyncio.to_thread(lambda: _prepare_spec(inp["spec"], _load_brand(root), root))
             if err:
                 return err
-            image, fig, _fid, _fmt, preview, service_notes, lint = await design.render(spec, fmt=fmt, scale=scale, user_id=subject)
-            notes = [*notes, *service_notes]
+            frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
+            size = frames[0].get("size")
+            # Several frames in a raster format are a carousel: every slide comes back.
+            r = await design.render(spec, fmt=fmt, scale=scale, user_id=subject,
+                                    every=len(frames) > 1 and fmt not in _DECK_EXTS)
+            notes = [*notes, *r.notes]
         elif action == "script":
             if not inp.get("script"):
                 return "Error: `script` needs a `script` string ending in console.log('__FRAME__'+id)."
-            image, fig, _fid, _fmt, preview, _notes, lint = await design.evaluate(inp["script"], fmt=fmt, scale=scale, user_id=subject)
+            r = await design.evaluate(inp["script"], fmt=fmt, scale=scale, user_id=subject)
         else:
             return f"Error: unknown design action {action!r} (render or script)."
     except design.Unavailable as e:
         return f"Error: design unavailable — {e}"
     except Exception as e:
         return f"Error: design {action} failed — {type(e).__name__}: {e}"
+    image, fig, preview, lint = r.image, r.fig, r.preview, r.lint
+    count = max(len(r.previews), len(r.slides), 1)
 
     # Never clobber an earlier design: if this base name is taken, bump it
     # (launch → launch-2 → …). To CHANGE an existing design, the model uses `edit`.
     requested = name
     name = _dedupe_design_name(pathlib.Path(workspace.root) / "designs", name, fmt)
-    rel = f"designs/{name}.{fmt}"
-    dst = pathlib.Path(workspace.root) / rel
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    await asyncio.to_thread(dst.write_bytes, image)
+    root = pathlib.Path(workspace.root)
+    (root / "designs").mkdir(parents=True, exist_ok=True)
+    if len(r.images) > 1:
+        # A carousel: one image per slide, <name>-slide-N (what gets posted, in order).
+        saved = [f"designs/{name}-slide-{n}.{fmt}" for n in range(1, len(r.images) + 1)]
+        for rel_n, data in zip(saved, r.images):
+            await asyncio.to_thread((root / rel_n).write_bytes, data)
+        rel = saved[0]
+    else:
+        saved = [rel := f"designs/{name}.{fmt}"]
+        await asyncio.to_thread((root / rel).write_bytes, image)
     # The .fig is the durable, editable source of truth (opened by a drag-editor
     # later); saved beside the render but not itself shown on the canvas.
     fig_rel = f"designs/{name}.fig"
-    await asyncio.to_thread((pathlib.Path(workspace.root) / fig_rel).write_bytes, fig)
+    await asyncio.to_thread((root / fig_rel).write_bytes, fig)
+    if count > 1:
+        # A deck (or carousel) gets its deck document: what the canvas opens to show
+        # and present it. The slides' titles, notes and transitions live in the .fig.
+        deck = {"type": "cycls.deck", "version": 1, "fig": fig_rel, "size": size,
+                "slides": count, "exports": saved}
+        await asyncio.to_thread((root / f"designs/{name}.deck.json").write_text,
+                                json.dumps(deck, indent=2), "utf-8")
     note = (f" (named '{name}' so it doesn't overwrite the existing '{requested}')"
             if name != requested else "")
+    kb = (sum(map(len, r.images)) if len(saved) > 1 else len(image)) // 1024
+    if len(saved) > 1:
+        what = f"Carousel saved ({count} slides: {saved[0]} … {saved[-1]}, {kb} KB{note})"
+    elif count > 1:
+        what = f"Deck saved ({rel}, {count} slides, {kb} KB{note})"
+    else:
+        what = f"Design saved ({rel}, {kb} KB{note})"
     # Open the EDITABLE .fig in the in-canvas editor by default — the user came to
     # DESIGN, so every render lands them in a live editor they can refine, not a flat
     # PNG. The image is still saved (for download/sharing). Fall back to opening the
     # image only where no editor is wired up (DESIGN_EDITOR_URL unset).
     editor = bool(os.environ.get("DESIGN_EDITOR_URL"))
     if editor:
-        ack = (f"Design saved ({rel}, {len(image) // 1024} KB{note}); its editable "
-               f"source {fig_rel} is now OPEN in the in-canvas editor — the user can "
-               f"edit it live. Tell them they can tweak it directly there, or ask you "
-               f"to change it (colors, copy, layout) and you'll apply it with Design edit.")
+        ack = (f"{what}; its editable source {fig_rel} is now OPEN in the in-canvas editor — "
+               f"the user can edit it live. Tell them they can tweak it directly there, or ask "
+               f"you to change it (colors, copy, layout) and you'll apply it with Design edit.")
         ui = {"type": "ui", "action": "open_canvas", "path": fig_rel, "name": f"{name}.fig"}
     else:
-        ack = (f"Design saved to {rel} ({len(image) // 1024} KB){note} and opened on the "
-               f"canvas. Editable source: {fig_rel}.")
-        ui = {"type": "ui", "action": "open_canvas", "path": rel, "name": f"{name}.{fmt}"}
+        ack = f"{what}, opened on the canvas. Editable source: {fig_rel}."
+        ui = {"type": "ui", "action": "open_canvas", "path": saved[0], "name": saved[0].rsplit("/", 1)[-1]}
     for line in notes:
         ack += " " + line
-    ack += _layout_check(lint, fmt)
+    ack += _layout_check(lint, fmt if count == 1 else "pptx")
     # Show the model its own render, so it QAs what it made before the user judges
     # it — a check the spec alone can't give (hierarchy, overlap, legibility, typos).
-    # The service's small @1x JPEG preview when it sent one (a photo-heavy @2x PNG
-    # runs several MB; a deck has no image), else the render itself if it's a raster
-    # within `read`'s bound; otherwise the text ack alone.
+    # The service's small @1x JPEG previews when it sent them — one per slide for a
+    # deck (a photo-heavy @2x PNG runs several MB; a PPTX isn't an image) — else the
+    # render itself if it's a raster within `read`'s bound; otherwise the ack alone.
+    fix = "Design edit (the same design — don't re-render)"
+    if count > 1 and r.previews:
+        blocks, total = [], 0
+        for n, jpg in enumerate(r.previews[:_DESIGN_QA_SLIDES], 1):
+            if blocks and total + len(jpg) > _DESIGN_QA_MAX:
+                break
+            total += len(jpg)
+            blocks += [{"type": "text", "text": f"Slide {n}:"},
+                       {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                    "data": base64.b64encode(jpg).decode()}}]
+        shown = len(blocks) // 2
+        which = (f"All {count} slides are attached" if shown == count else
+                 f"Slides 1–{shown} of {count} are attached (Design inspect lists the rest)")
+        ack += (f" {which} — QA EVERY slide before you present: its headline clearly dominant; "
+                "margins ~8–10%, nothing crammed at an edge; every text legible on what's behind it; "
+                "nothing overlapping or cut off; copy exactly right; and the slides CONSISTENT with "
+                "each other (title position, margins, palette, fonts). If anything is off, fix it "
+                f"now with {fix} (ops take `frame`, the slide index from 0), then present.")
+        return {"_model": [*blocks, {"type": "text", "text": ack}], "_ui": ui}
     look, media = (preview, "image/jpeg") if preview else (image, _DESIGN_QA_TYPES.get(fmt))
     if not media or len(look) > _DESIGN_QA_MAX:
         return {"_model": ack, "_ui": ui}
-    fix = "Design edit (live, same design — don't re-render)" if editor else "a fresh render"
-    shown = "The first slide is attached" if fmt == "pptx" else "The render is attached"
+    shown = "The first slide is attached" if count > 1 or fmt in _DECK_EXTS else "The render is attached"
     ack += (f" {shown} — QA it before you present: headline clearly dominant; "
             "margins ~8–10%, nothing crammed at an edge; every text legible on what's behind it; "
             "aligned, nothing overlapping or cut off; copy exactly right (spelling, names, "

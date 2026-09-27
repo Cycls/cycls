@@ -22,6 +22,7 @@ the calling agent's workspace, so there is nothing to keep in sync here.
 """
 import base64
 import os
+from typing import NamedTuple
 
 import httpx
 
@@ -79,26 +80,53 @@ async def _post(path, body, user_id=None):
     return data
 
 
+class Rendered(NamedTuple):
+    """A render. `image` is the output — a deck's whole file for pptx / pdf, else the
+    first frame; `images` every frame in the format when asked (a carousel). `fig`
+    is the editable source. `preview` / `previews` are small @1x JPEGs of the first /
+    every frame — what the agent looks at to QA it (None / [] from a service that
+    predates them). `notes` are what the service changed to make it render (a font
+    swapped for its open twin, a weight the family lacks, a headline shrunk to fit) —
+    lines for the agent's ack. `lint` is the layout check: [{frame, node, issue, fix}].
+    `slides` is each frame's deck metadata: [{name, title?, notes?, transition?}]."""
+    image: bytes
+    fig: bytes
+    frame_id: object
+    fmt: object
+    preview: object
+    notes: list
+    lint: list
+    previews: list
+    images: list
+    slides: list
+
+
+def _b64s(values):
+    return [base64.b64decode(v) for v in values or [] if isinstance(v, str)]
+
+
 def _decode(data):
-    """Service JSON → (image_bytes, fig_bytes, frame_id, format, preview_bytes, notes, lint).
-    The preview — a small @1x JPEG of the first frame, what the agent looks at to
-    QA its render — is None from a service that predates it. `notes` are what the
-    service changed to make the design render (a font swapped for its open twin, a
-    weight the family lacks, a headline shrunk to fit) — lines for the agent's ack.
-    `lint` is the service's layout check of the result: [{frame, node, issue, fix}]."""
-    return (base64.b64decode(data["image_base64"]),
-            base64.b64decode(data["fig_base64"]),
-            data.get("frameId"), data.get("format"),
-            base64.b64decode(data["preview_base64"]) if data.get("preview_base64") else None,
-            [str(n) for n in data.get("notes") or []],
-            [dict(i) for i in data.get("lint") or [] if isinstance(i, dict)])
+    """Service JSON → a Rendered."""
+    return Rendered(
+        base64.b64decode(data["image_base64"]),
+        base64.b64decode(data["fig_base64"]),
+        data.get("frameId"), data.get("format"),
+        base64.b64decode(data["preview_base64"]) if data.get("preview_base64") else None,
+        [str(n) for n in data.get("notes") or []],
+        [dict(i) for i in data.get("lint") or [] if isinstance(i, dict)],
+        _b64s(data.get("previews_base64")),
+        _b64s(data.get("images_base64")),
+        [dict(i) for i in data.get("slides") or [] if isinstance(i, dict)])
 
 
-async def render(spec, fmt="png", scale=2, user_id=None):
-    """Render a declarative design spec → (image_bytes, fig_bytes, frame_id, fmt,
-    preview_bytes, notes, lint). `spec` is `{size:[w,h], fill, nodes:[...]}` (see the
-    Design tool description)."""
-    return _decode(await _post("/render", {"spec": spec, "format": fmt, "scale": scale, "preview": True}, user_id))
+async def render(spec, fmt="png", scale=2, user_id=None, every=False):
+    """Render a declarative design spec → a Rendered. `spec` is `{size:[w,h], fill,
+    nodes:[...]}` or a deck `{frames:[...]}` (see the Design tool description);
+    `every` asks for every frame in a raster `fmt` (a carousel's slides)."""
+    body = {"spec": spec, "format": fmt, "scale": scale, "preview": True}
+    if every:
+        body["every"] = True
+    return _decode(await _post("/render", body, user_id))
 
 
 async def apply(fig, script=None, user_id=None, ops=None, preview=False):
@@ -131,16 +159,34 @@ async def inspect(fig, user_id=None):
     return data.get("frames") or []
 
 
-async def export(fig, fmt="png", scale=2, width=None, user_id=None):
-    """Re-export an edited `.fig` (bytes) → image bytes. `width`, the old image's
-    pixel width, keeps its resolution (the service derives the scale from it)."""
+async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False):
+    """Re-export an edited `.fig` (bytes) → image bytes (pptx / pdf: the whole deck).
+    `width`, the old image's pixel width, keeps its resolution (the service derives
+    the scale from it). `every` → a list: every frame in `fmt` (a carousel's slides),
+    `width` being the first one's."""
     body = {"fig": base64.b64encode(fig).decode(), "format": fmt, "scale": scale}
     if width:
         body["width"] = width
-    return base64.b64decode((await _post("/export", body, user_id))["image_base64"])
+    if every:
+        body["every"] = True
+    data = await _post("/export", body, user_id)
+    if every:
+        return _b64s(data.get("images_base64"))
+    return base64.b64decode(data["image_base64"])
 
 
 async def evaluate(script, fmt="png", scale=2, user_id=None):
     """Escape hatch: run a raw OpenPencil/Figma-API script (it must log
-    `__FRAME__<id>`) → (image_bytes, fig_bytes, frame_id, fmt, preview_bytes, notes, lint)."""
+    `__FRAME__<id>`) → a Rendered."""
     return _decode(await _post("/eval", {"script": script, "format": fmt, "scale": scale, "preview": True}, user_id))
+
+
+async def slides(fig, scale=1, fmt="jpg", user_id=None):
+    """A saved deck (`.fig` bytes), slide by slide → {"images": [bytes], "sizes":
+    [[w, h]], "meta": [{name, title?, notes?, transition?}]} — what the deck viewer
+    shows and presents."""
+    data = await _post("/slides", {"fig": base64.b64encode(fig).decode(), "scale": scale, "format": fmt}, user_id)
+    return {"images": _b64s(data.get("slides")),
+            "sizes": [list(s) for s in data.get("sizes") or []],
+            "meta": [dict(m) for m in data.get("meta") or [] if isinstance(m, dict)],
+            "format": data.get("format") or fmt}

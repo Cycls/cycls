@@ -177,21 +177,42 @@ text colour only knows the frame's fill).
 **Self-QA.** Every render comes back to the model as an image beside the ack,
 with a short rubric — headline dominant, ~8–10% margins, legible text, nothing
 overlapping or cut off, exact copy, on-brand — and the instruction to fix anything
-off (with `edit` when the editor is wired, else a fresh render) before presenting.
-The image is the service's `preview`: a @1x JPEG of the first frame (~50–150 KB)
-exported beside the render, since a photo-heavy @2x PNG runs several MB and a deck
-has no image of its own — so a deck is QA'd on its first slide. Against a service
-without previews it falls back to the render itself when it is a raster within
-`read`'s 3 MB. The tool does this rather than a prompt rule: a "read your render"
-instruction competing with the tool's own ack gets narrated, not acted on.
+off with `edit` (the same design, checked and saved by the service) before
+presenting. The image is the service's `preview`: a @1x JPEG of the frame (~50–150
+KB) exported beside the render, since a photo-heavy @2x PNG runs several MB and a
+PPTX is no image at all. A deck attaches **every** slide's preview (up to 12, each
+labelled "Slide N:", within 3 MB), with a rubric that adds consistency across
+slides. Against a service without previews it falls back to the render itself when
+it is a raster within `read`'s 3 MB. The tool does this rather than a prompt rule: a
+"read your render" instruction competing with the tool's own ack gets narrated,
+not acted on.
 
-**Decks** are a list of frames — one per slide — exported as PowerPoint:
+**Decks** are a list of frames — one per slide, all one size:
 
 ```jsonc
-{ "frames": [ { "size": [1920,1080], "fill": …, "nodes": […] }, … ] }   // format: "pptx"
+{ "frames": [ { "size": "slide", "fill": …, "nodes": […],
+                "id"?: "cover", "title"?: "Cover", "notes"?: "…", "transition"?: "fade|slide|none" }, … ] }
 ```
 
-Each top-level frame becomes a slide. The `.fig` holds the whole deck, editable.
+- `format: "pptx"` — one PowerPoint file, a slide per frame. Each slide's speaker
+  `notes` and `transition` are written in (OpenPencil's exporter writes neither; the
+  service post-processes the file). Text, rects, ellipses and lines stay native and
+  editable; gradients, vectors (icons, SVG, chart lines, pies), photos and blurs are
+  pictures — one element each, never the whole slide: bleeding plain rects are trimmed
+  to the slide, and the slides export unclipped so other bleed hangs off the slide
+  and PowerPoint crops it in the show.
+- `format: "pdf"` — one page per slide, each the slide's own render (Arabic and web
+  fonts exactly as in the PNG); pages are PowerPoint's size (13.333 in wide).
+- `format: "png" | "jpg" | "webp"` — a **carousel**: every slide saved as its own
+  image, `designs/<name>-slide-1.png`, `-slide-2.png`, …
+- Mixed frame sizes are refused (PowerPoint takes the first slide's size and
+  letterboxes the rest).
+
+A slide's `id` names its frame; its title, notes and transition ride on the frame
+as plugin data in the `.fig`, so they survive edits, reorders and re-exports, and
+`inspect` lists them. A multi-frame render also writes `designs/<name>.deck.json` —
+`{type: "cycls.deck", version, fig, size, slides, exports}` — the deck document the
+canvas opens to view and present it.
 
 ## Two channels + the canvas
 
@@ -247,7 +268,7 @@ chat.tsx ──▶ CustomEvent("cycls:design-command") ──▶ DesignEditorVie
                                          designs/<name>.fig (workspace)
                                                         │  design/refresh (debounced)
                                                         ▼  POST /export {fig, format, width}
-                                         designs/<name>.png|jpg|webp|svg|pptx re-exported
+                                         designs/<name>.png|…|pptx|pdf (+ -slide-N) re-exported
 ```
 
 **The image follows the `.fig`.** A render saves `designs/<name>.<fmt>` beside the
@@ -260,7 +281,9 @@ elsewhere is never touched), re-exports each image **already beside it** through
 the service's `POST /export` once the saves go quiet (2 s debounce; the editor
 saves in bursts while someone drags, and a newer save cancels an export in
 flight). A raster sends its old pixel width, and the service sets the scale to
-width ÷ frame width, so a @1x render stays @1x. Best effort: a failure logs and
+width ÷ frame width, so a @1x render stays @1x. A deck's `.pptx` / `.pdf` re-exports
+whole (notes and transitions come from the `.fig`); a carousel's `-slide-N` images
+re-export together, and a slide deleted since loses its image. Best effort: a failure logs and
 leaves the old image — it never fails the save. Eager rather than on-read,
 because the sandbox reads the file straight off the volume where no hook can
 intercept it. The `edit` ack tells the model the image catches up a few seconds
@@ -333,10 +356,16 @@ Lives in its own repo (`cycls-design`), deployed once — the SDK ships only the
 client. It's a Bun HTTP server wrapping the OpenPencil headless CLI:
 
 - `GET  /health`
-- `POST /render { spec, format?, scale? }` — the primary, safe path (declarative)
+- `POST /render { spec, format?, scale?, preview?, every? }` — the primary, safe path (declarative)
 - `POST /eval   { script, format?, scale? }` — a raw Figma-API escape hatch
+- `POST /apply  { fig, ops | script, preview? }` — an edit, checked and applied headless
+- `POST /inspect { fig }` — the outline: frames (with title / notes / transition) and named nodes
+- `POST /export { fig, format?, scale?, width?, every? }` — re-export an edited `.fig`
+- `POST /slides { fig, scale?, format? }` — every slide's image, size and metadata (the deck viewer)
 
-Both return `{ ok, frameId, frames, format, image_base64, fig_base64 }`. It's
+A render returns `{ ok, frameId, frames, format, image_base64, fig_base64, slides,
+lint, notes? }` plus `preview_base64` / `previews_base64` (a @1x JPEG of the first /
+every frame) when asked and `images_base64` (every frame) with `every`. It's
 stateless (state is the caller's workspace), so it scales horizontally.
 
 It guards itself (`cycls-design/src/guard.ts`): 30 MB per request; 100 frames, 1500

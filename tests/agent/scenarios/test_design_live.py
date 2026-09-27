@@ -41,29 +41,35 @@ _POST = {"size": [1080, 1080], "fill": "#0f172a", "nodes": [
 def test_render_a_post_to_png():
     """A declarative spec → a real PNG at 2× + an editable .fig."""
     async def run():
-        img, fig, frame_id, fmt = await design.render(_POST, fmt="png", scale=2)
-        assert img[:8] == b"\x89PNG\r\n\x1a\n" and len(img) > 5000   # a real raster
-        assert fig[:2] in (b"PK", b"\x8b\x0a") or len(fig) > 1000     # the .fig source
-        assert fmt == "png" and frame_id
+        r = await design.render(_POST, fmt="png", scale=2)
+        assert r.image[:8] == b"\x89PNG\r\n\x1a\n" and len(r.image) > 5000   # a real raster
+        assert r.fig[:2] in (b"PK", b"\x8b\x0a") or len(r.fig) > 1000     # the .fig source
+        assert r.fmt == "png" and r.frame_id and r.preview[:2] == b"\xff\xd8"
     asyncio.run(run())
 
 
 def test_render_a_deck_to_pptx():
-    """A frames[] spec → a real multi-slide PowerPoint (one slide per frame)."""
+    """A frames[] spec → a real multi-slide PowerPoint (one slide per frame) with its
+    speaker notes, a preview of every slide, the same deck as a PDF, and /slides."""
     async def run():
         deck = {"frames": [
-            {"size": [1920, 1080], "fill": "#0f172a", "nodes": [
+            {"size": [1920, 1080], "fill": "#0f172a", "notes": "Open with the story.", "nodes": [
                 {"type": "text", "text": "Slide one", "x": 140, "y": 400,
                  "font": "Inter Bold", "size": 120, "color": "#ffffff"}]},
             {"size": [1920, 1080], "fill": "#1e3a8a", "nodes": [
                 {"type": "text", "text": "Slide two", "x": 140, "y": 400,
                  "font": "Inter Bold", "size": 120, "color": "#ffffff"}]},
         ]}
-        img, fig, _id, fmt = await design.render(deck, fmt="pptx")
-        assert img[:4] == b"PK\x03\x04" and fmt == "pptx"            # a real .pptx (zip)
-        z = zipfile.ZipFile(io.BytesIO(img))
+        r = await design.render(deck, fmt="pptx")
+        assert r.image[:4] == b"PK\x03\x04" and r.fmt == "pptx"        # a real .pptx (zip)
+        z = zipfile.ZipFile(io.BytesIO(r.image))
         slides = [n for n in z.namelist() if n.startswith("ppt/slides/slide") and n.endswith(".xml")]
         assert len(slides) == 2, f"expected 2 slides, got {len(slides)}"
+        assert "Open with the story." in z.read("ppt/notesSlides/notesSlide1.xml").decode()
+        assert len(r.previews) == 2 and r.slides[0]["notes"] == "Open with the story."
+        assert (await design.export(r.fig, fmt="pdf"))[:5] == b"%PDF-"
+        s = await design.slides(r.fig)
+        assert len(s["images"]) == 2 and s["sizes"][0] == [1920, 1080]
     asyncio.run(run())
 
 
@@ -76,6 +82,6 @@ def test_eval_escape_hatch():
             "f.fills=[{type:'SOLID',color:{r:0.2,g:0.5,b:0.9}}];"
             "p.appendChild(f);console.log('__FRAME__'+f.id);"
         )
-        img, _fig, _id, fmt = await design.evaluate(script, fmt="png", scale=1)
-        assert img[:8] == b"\x89PNG\r\n\x1a\n" and fmt == "png"
+        r = await design.evaluate(script, fmt="png", scale=1)
+        assert r.image[:8] == b"\x89PNG\r\n\x1a\n" and r.fmt == "png"
     asyncio.run(run())

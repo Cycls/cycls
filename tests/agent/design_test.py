@@ -74,9 +74,9 @@ def test_render_posts_and_decodes(monkeypatch):
     monkeypatch.setenv("DESIGN_URL", "https://d.cycls.ai/")     # trailing slash trimmed
     monkeypatch.setenv("DESIGN_SECRET", "sek")
     _mock(monkeypatch, _FakeResp(200, _ok(b"\x89PNGdata", b"figdata")))
-    img, fig, fid, fmt, preview, notes, lint = asyncio.run(design.render({"size": [1080, 1080]}, fmt="png", scale=2, user_id="org:u"))
-    assert img == b"\x89PNGdata" and fig == b"figdata" and fid == "0:6" and fmt == "png"
-    assert preview is None and notes == []                     # a service that predates previews / notes
+    r = asyncio.run(design.render({"size": [1080, 1080]}, fmt="png", scale=2, user_id="org:u"))
+    assert r.image == b"\x89PNGdata" and r.fig == b"figdata" and r.frame_id == "0:6" and r.fmt == "png"
+    assert r.preview is None and r.notes == [] and r.previews == [] and r.slides == []   # an older service
     last = _FakeClient.last
     assert last["url"] == "https://d.cycls.ai/render"
     assert last["headers"]["Authorization"] == "Bearer sek"
@@ -87,7 +87,33 @@ def test_render_posts_and_decodes(monkeypatch):
 def test_render_decodes_the_qa_preview(monkeypatch):
     monkeypatch.setenv("DESIGN_URL", "https://d")
     _mock(monkeypatch, _FakeResp(200, {**_ok(), "preview_base64": base64.b64encode(b"JPEGsmall").decode()}))
-    assert asyncio.run(design.render({}))[4] == b"JPEGsmall"
+    assert asyncio.run(design.render({})).preview == b"JPEGsmall"
+
+
+def test_render_decodes_a_decks_slides_and_carousel(monkeypatch):
+    monkeypatch.setenv("DESIGN_URL", "https://d")
+    b64 = lambda b: base64.b64encode(b).decode()
+    _mock(monkeypatch, _FakeResp(200, {**_ok(), "previews_base64": [b64(b"J1"), b64(b"J2")],
+                                       "images_base64": [b64(b"P1"), b64(b"P2")],
+                                       "slides": [{"name": "cover", "notes": "Hi"}, {"name": "slide-2"}]}))
+    r = asyncio.run(design.render({"frames": [{}, {}]}, every=True))
+    assert r.previews == [b"J1", b"J2"] and r.images == [b"P1", b"P2"]
+    assert r.slides[0] == {"name": "cover", "notes": "Hi"}
+    assert _FakeClient.last["json"]["every"] is True
+
+
+def test_slides_and_every_export(monkeypatch):
+    monkeypatch.setenv("DESIGN_URL", "https://d")
+    b64 = lambda b: base64.b64encode(b).decode()
+    _mock(monkeypatch, _FakeResp(200, {"ok": True, "format": "jpg", "count": 2, "slides": [b64(b"S1"), b64(b"S2")],
+                                       "sizes": [[1920, 1080], [1920, 1080]], "meta": [{"name": "a"}, {"name": "b"}]}))
+    s = asyncio.run(design.slides(b"FIG"))
+    assert s["images"] == [b"S1", b"S2"] and s["sizes"][1] == [1920, 1080] and s["meta"][1]["name"] == "b"
+    assert _FakeClient.last["url"] == "https://d/slides"
+    _mock(monkeypatch, _FakeResp(200, {"ok": True, "format": "png", "image_base64": b64(b"P1"),
+                                       "images_base64": [b64(b"P1"), b64(b"P2")]}))
+    assert asyncio.run(design.export(b"FIG", fmt="png", width=1080, every=True)) == [b"P1", b"P2"]
+    assert _FakeClient.last["json"]["every"] is True
 
 
 def test_eval_posts_script(monkeypatch):
@@ -151,12 +177,14 @@ def _text(out):
     return m if isinstance(m, str) else next(b["text"] for b in m if b["type"] == "text")
 
 
-def _fake_render(monkeypatch, image=b"\x89PNGrender", fig=b"FIGZ", preview=None, notes=(), lint=()):
+def _fake_render(monkeypatch, image=b"\x89PNGrender", fig=b"FIGZ", preview=None, notes=(), lint=(),
+                 previews=(), images=(), slides=()):
     calls = {}
 
-    async def _r(spec, fmt="png", scale=2, user_id=None):
-        calls.update(spec=spec, fmt=fmt, scale=scale, user_id=user_id)
-        return image, fig, "0:6", fmt, preview, list(notes), list(lint)
+    async def _r(spec, fmt="png", scale=2, user_id=None, every=False):
+        calls.update(spec=spec, fmt=fmt, scale=scale, user_id=user_id, every=every)
+        return design.Rendered(image, fig, "0:6", fmt, preview, list(notes), list(lint),
+                               list(previews), list(images) if every else [], list(slides))
 
     monkeypatch.setattr("cycls._agent.design.render", _r)
     return calls
@@ -170,7 +198,7 @@ def test_render_saves_and_opens_canvas(tmp_path, monkeypatch):
     assert (tmp_path / "designs" / "launch.png").read_bytes() == b"\x89PNGrender"
     assert (tmp_path / "designs" / "launch.fig").read_bytes() == b"FIGZ"   # editable source beside it
     assert calls["user_id"] == "org_1:user_1" and calls["spec"] == {"size": [1080, 1080]}
-    assert "saved to designs/launch.png" in _text(out) and "canvas" in _text(out)
+    assert "saved (designs/launch.png" in _text(out) and "canvas" in _text(out)
     ui = out["_ui"]
     assert ui["action"] == "open_canvas" and ui["path"] == "designs/launch.png" and ui["name"] == "launch.png"
 
@@ -219,7 +247,7 @@ def test_script_escape_hatch(tmp_path, monkeypatch):
 
     async def _e(script, fmt="png", scale=2, user_id=None):
         got.update(script=script, fmt=fmt)
-        return b"PPTX", b"FIG", "0:1", fmt, None, [], []
+        return design.Rendered(b"PPTX", b"FIG", "0:1", fmt, None, [], [], [], [], [])
 
     monkeypatch.setattr("cycls._agent.design.evaluate", _e)
     out = asyncio.run(_exec_design(
@@ -351,9 +379,9 @@ def test_render_attaches_the_image_for_self_qa(tmp_path, monkeypatch):
     img, txt = out["_model"]
     assert img["type"] == "image" and img["source"]["media_type"] == "image/png"
     assert base64.b64decode(img["source"]["data"]) == b"\x89PNGpixels"      # the model sees its own render
-    assert "QA it before you present" in txt["text"] and "a fresh render" in txt["text"]
-
-    # With the editor wired, a fix goes through the live editor, not a re-render.
+    # A fix is an edit of the same design (checked and saved by the service, with or
+    # without an editor open) — never a re-render.
+    assert "QA it before you present" in txt["text"] and "Design edit" in txt["text"]
     monkeypatch.setenv("DESIGN_EDITOR_URL", "https://cycls-design.cycls.ai")
     out = asyncio.run(_exec_design({"action": "render", "name": "launch", "spec": {}}, _ws(tmp_path)))
     assert "Design edit" in _text(out)
@@ -370,6 +398,56 @@ def test_no_qa_image_for_decks_svg_or_oversized(tmp_path, monkeypatch):
     assert isinstance(out["_model"], str)
 
 
+# ---- decks and carousels: the whole file, a deck document, every slide QA'd ----
+
+def test_deck_saves_the_file_a_deck_document_and_qas_every_slide(tmp_path, monkeypatch):
+    calls = _fake_render(monkeypatch, image=b"PPTXDECK", previews=[b"J1", b"J2", b"J3"],
+                         slides=[{"name": "cover"}, {"name": "slide-2"}, {"name": "slide-3"}])
+    spec = {"frames": [{"size": "slide", "notes": "Open with the story", "transition": "fade"},
+                       {"size": "slide"}, {"size": "slide"}]}
+    out = asyncio.run(_exec_design({"action": "render", "name": "pitch", "format": "pptx", "spec": spec}, _ws(tmp_path)))
+    d = tmp_path / "designs"
+    assert (d / "pitch.pptx").read_bytes() == b"PPTXDECK" and (d / "pitch.fig").read_bytes() == b"FIGZ"
+    assert json.loads((d / "pitch.deck.json").read_text()) == {
+        "type": "cycls.deck", "version": 1, "fig": "designs/pitch.fig", "size": [1920, 1080],
+        "slides": 3, "exports": ["designs/pitch.pptx"]}
+    assert calls["every"] is False                                          # a PPTX is one file
+    assert calls["spec"]["frames"][0]["notes"] == "Open with the story"     # notes reach the service
+    m = out["_model"]
+    assert [b["text"] for b in m if b["type"] == "text"][:3] == ["Slide 1:", "Slide 2:", "Slide 3:"]
+    assert [base64.b64decode(b["source"]["data"]) for b in m if b["type"] == "image"] == [b"J1", b"J2", b"J3"]
+    assert "Deck saved (designs/pitch.pptx, 3 slides" in m[-1]["text"]
+    assert "All 3 slides are attached" in m[-1]["text"] and "CONSISTENT" in m[-1]["text"]
+
+
+def test_a_long_deck_attaches_its_first_twelve_slides(tmp_path, monkeypatch):
+    _fake_render(monkeypatch, image=b"PDF", previews=[b"J%d" % i for i in range(15)])
+    out = asyncio.run(_exec_design({"action": "render", "name": "long", "format": "pdf",
+                                    "spec": {"frames": [{"size": "slide"}] * 15}}, _ws(tmp_path)))
+    assert (tmp_path / "designs" / "long.pdf").read_bytes() == b"PDF"       # a PDF is a deck format too
+    m = out["_model"]
+    assert sum(b["type"] == "image" for b in m) == 12
+    assert "Slides 1–12 of 15 are attached" in m[-1]["text"]
+
+
+def test_carousel_saves_every_slide(tmp_path, monkeypatch):
+    calls = _fake_render(monkeypatch, image=b"P1", images=[b"P1", b"P2", b"P3"], previews=[b"J1", b"J2", b"J3"])
+    spec = {"frames": [{"size": "post-portrait"}] * 3}
+    out = asyncio.run(_exec_design({"action": "render", "name": "tips", "spec": spec}, _ws(tmp_path)))
+    d = tmp_path / "designs"
+    assert calls["every"] is True                                           # several frames as png: a carousel
+    assert [(d / f"tips-slide-{n}.png").read_bytes() for n in (1, 2, 3)] == [b"P1", b"P2", b"P3"]
+    assert not (d / "tips.png").exists()
+    assert json.loads((d / "tips.deck.json").read_text())["exports"] == [
+        "designs/tips-slide-1.png", "designs/tips-slide-2.png", "designs/tips-slide-3.png"]
+    assert "Carousel saved (3 slides: designs/tips-slide-1.png … designs/tips-slide-3.png" in out["_model"][-1]["text"]
+    assert out["_ui"]["path"] == "designs/tips-slide-1.png"                 # no editor: the first slide opens
+    # The same name again is bumped — a carousel's slide files count as taken.
+    _fake_render(monkeypatch, image=b"Q1", images=[b"Q1", b"Q2", b"Q3"])
+    asyncio.run(_exec_design({"action": "render", "name": "tips", "spec": spec}, _ws(tmp_path)))
+    assert (d / "tips-2-slide-1.png").read_bytes() == b"Q1" and (d / "tips-slide-1.png").read_bytes() == b"P1"
+
+
 # ---- size presets ----
 
 def test_size_preset_resolves_to_pixels(tmp_path, monkeypatch):
@@ -379,9 +457,18 @@ def test_size_preset_resolves_to_pixels(tmp_path, monkeypatch):
     assert calls["spec"]["size"] == [1080, 1920]
     assert spec["size"] == "Story"                                          # the model's input is untouched
 
-    asyncio.run(_exec_design({"action": "render", "spec": {"frames": [{"size": "slide"}, {"size": [800, 600]}]},
+    asyncio.run(_exec_design({"action": "render", "spec": {"frames": [{"size": "slide"}, {"size": [1920, 1080]}]},
                               "format": "pptx"}, _ws(tmp_path)))
-    assert [f["size"] for f in calls["spec"]["frames"]] == [[1920, 1080], [800, 600]]   # arrays pass through
+    assert [f["size"] for f in calls["spec"]["frames"]] == [[1920, 1080], [1920, 1080]]   # arrays pass through
+
+
+def test_a_deck_of_mixed_sizes_is_an_error(tmp_path, monkeypatch):
+    # PowerPoint takes one slide size for the whole file and letterboxes the rest.
+    calls = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "format": "pptx",
+                                    "spec": {"frames": [{"size": "slide"}, {"size": [800, 600]}]}}, _ws(tmp_path)))
+    assert out.startswith("Error") and "same size" in out and "slide 2 is 800×600" in out
+    assert calls == {}
 
 
 def test_unknown_size_preset_is_an_error(tmp_path, monkeypatch):
@@ -658,11 +745,11 @@ def _refresh_env(tmp_path, monkeypatch, fail=False):
     monkeypatch.setattr(refresh, "DELAY", 0.05)
     calls = []
 
-    async def _export(fig, fmt="png", scale=2, width=None, user_id=None):
-        calls.append({"fig": fig, "fmt": fmt, "width": width, "user_id": user_id})
+    async def _export(fig, fmt="png", scale=2, width=None, user_id=None, every=False):
+        calls.append({"fig": fig, "fmt": fmt, "width": width, "user_id": user_id, "every": every})
         if fail:
             raise RuntimeError("service down")
-        return f"NEW-{fmt}".encode()
+        return [f"NEW-{fmt}-{n}".encode() for n in (1, 2)] if every else f"NEW-{fmt}".encode()
     monkeypatch.setattr(refresh, "export", _export)
     d = tmp_path / "designs"
     d.mkdir()
@@ -692,6 +779,20 @@ def test_saved_fig_reexports_its_existing_images(tmp_path, monkeypatch):
     assert by["png"]["width"] == 2160 and by["pptx"]["width"] is None       # a raster keeps its resolution
     assert by["png"]["user_id"] == "org:u"
     assert refresh._pending == {}
+
+
+def test_a_decks_pdf_and_a_carousels_slides_reexport(tmp_path, monkeypatch):
+    calls = _refresh_env(tmp_path, monkeypatch)
+    d = tmp_path / "designs"
+    (d / "launch.pdf").write_bytes(b"OLD-PDF")
+    for n in (1, 2, 3):                                                     # 3 slides; one was deleted since
+        (d / f"launch-slide-{n}.png").write_bytes(_png(1080, 1350))
+    _saves(tmp_path, "designs/launch.fig")
+    assert (d / "launch.pdf").read_bytes() == b"NEW-pdf"
+    assert [(d / f"launch-slide-{n}.png").read_bytes() for n in (1, 2)] == [b"NEW-png-1", b"NEW-png-2"]
+    assert not (d / "launch-slide-3.png").exists()                          # its old image goes
+    every = [c for c in calls if c["every"]]
+    assert len(every) == 1 and every[0]["width"] == 1080                    # the slides keep their resolution
 
 
 def test_a_burst_of_saves_exports_once(tmp_path, monkeypatch):
@@ -865,14 +966,16 @@ def test_inspect_lists_frames_and_nodes(tmp_path, monkeypatch):
 
     async def _inspect(fig, user_id=None):
         got.update(fig=fig, user_id=user_id)
-        return [{"slide": 1, "name": "slide", "size": [1080, 1080], "fill": "#0f172a", "nodes": [
+        return [{"slide": 1, "name": "cover", "title": "Cover", "notes": "Open with the story.", "transition": "fade",
+                 "size": [1080, 1080], "fill": "#0f172a", "nodes": [
             {"name": "headline", "type": "text", "x": 90, "y": 120, "w": 900, "h": 220, "text": "Night Roast",
              "font": "Playfair Display Bold", "size": 96, "color": "#ffffff"},
             {"name": "cta", "type": "rect", "x": 90, "y": 900, "w": 240, "h": 72, "fill": "#f5a623", "radius": 36}]}]
     monkeypatch.setattr("cycls._agent.design.inspect", _inspect)
     out = asyncio.run(_exec_design({"action": "inspect", "name": "launch"}, _ws(tmp_path)))
     assert got["fig"] == b"ORIGINAL-FIG"
-    assert "slide 1 (1080×1080, fill #0f172a):" in out
+    assert 'slide 1 "cover" (1080×1080, fill #0f172a, title "Cover", transition "fade"):' in out
+    assert '  notes: "Open with the story."' in out
     assert 'headline  text  (90,120 900×220)  "Night Roast"  Playfair Display Bold 96px #ffffff' in out
     assert "cta  rect  (90,900 240×72)  fill #f5a623  radius 36" in out
     missing = asyncio.run(_exec_design({"action": "inspect", "name": "nope"}, _ws(tmp_path)))
