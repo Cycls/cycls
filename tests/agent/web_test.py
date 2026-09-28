@@ -1753,6 +1753,87 @@ def test_deck_route_moves_duplicates_and_deletes_slides(tmp_path, monkeypatch):
     assert client.post("/deck/notes/pitch.deck.json", json={"op": "delete", "number": 1}).status_code == 404   # outside designs/
 
 
+def test_new_design_route_makes_a_blank_design(tmp_path, monkeypatch):
+    """Cycls's "New design": one blank frame of a size preset (or [w, h]), saved as
+    designs/<name>.fig with its .png like a render, never over another design."""
+    from types import SimpleNamespace
+    from cycls._agent import design
+    root = _seed(tmp_path, {"designs/.keep": b""})
+    seen = []
+
+    async def render(spec, fmt="png", scale=2, user_id=None, every=False):
+        seen.append((spec, fmt, scale))
+        return SimpleNamespace(image=b"PNG", fig=b"FIG")
+    monkeypatch.setattr(design, "configured", lambda: True)
+    monkeypatch.setattr(design, "render", render)
+    client = _ws_routers_client(tmp_path)
+
+    r = client.post("/design/new", json={"name": "Launch", "size": "story"})
+    assert r.status_code == 200 and r.json() == {"path": "designs/Launch.fig", "name": "Launch", "size": [1080, 1920]}
+    assert seen[-1] == ({"size": [1080, 1920], "fill": "#ffffff", "nodes": []}, "png", 1)
+    assert (root / "designs/Launch.fig").read_bytes() == b"FIG" and (root / "designs/Launch.png").read_bytes() == b"PNG"
+    assert client.post("/design/new", json={"name": "Launch"}).json()["path"] == "designs/Launch-2.fig"   # never over one
+    assert client.post("/design/new").json() == {"path": "designs/untitled.fig", "name": "untitled", "size": [1080, 1080]}
+    assert client.post("/design/new", json={"name": "../x/حملة الإطلاق.fig"}).json()["name"] == "حملة الإطلاق"
+    r = client.post("/design/new", json={"size": [800, 600], "background": "#0F172A"})
+    assert r.json()["size"] == [800, 600] and seen[-1][0]["fill"] == "#0f172a"
+    for bad in ({"size": "huge"}, {"size": [5, 5]}, {"size": [800, "600"]}, {"background": "red"}):
+        assert client.post("/design/new", json=bad).status_code == 400, bad
+    monkeypatch.setattr(design, "configured", lambda: False)
+    assert client.post("/design/new").status_code == 503
+
+
+def test_put_dedupe_writes_a_new_file(tmp_path, monkeypatch):
+    """`?dedupe=1` — an export or a copy from the editor — takes the next free name:
+    never an existing file, never an image the design refresh keeps beside a .fig,
+    and a .fig copy keeps clear of another design's images."""
+    from cycls._agent.design import refresh
+    monkeypatch.setattr(refresh, "schedule", lambda *a, **k: None)
+    root = _seed(tmp_path, {"designs/launch.fig": b"FIG", "designs/launch.png": b"PNG", "designs/draft-2.png": b"P"})
+    client = _ws_routers_client(tmp_path)
+    put = lambda path, data=b"X": client.put(f"/files/{path}?dedupe=1", content=data).json()["path"]
+
+    assert put("designs/launch-hero@2x.png") == "designs/launch-hero@2x.png"
+    assert put("designs/launch-hero@2x.png") == "designs/launch-hero@2x-2.png"
+    assert put("designs/launch.svg") == "designs/launch-2.svg"             # the refresh's name for launch.fig's SVG
+    assert put("designs/launch-slide-1.png") == "designs/launch-slide-1-2.png"
+    assert put("designs/launch.fig", b"COPY") == "designs/launch-2.fig"
+    assert put("designs/draft.fig") == "designs/draft.fig"
+    assert put("designs/draft.fig") == "designs/draft-3.fig"                 # draft-2.png is another design's
+    assert (root / "designs/launch.fig").read_bytes() == b"FIG"               # the original stands
+    assert client.put("/files/designs/launch.fig", content=b"NEW").json() == {"ok": True, "path": "designs/launch.fig"}
+    assert client.put("/files/my%20docs/a%23b.txt", content=b"hi").json()["path"] == "my docs/a#b.txt"
+    assert (root / "my docs" / "a#b.txt").read_bytes() == b"hi"
+
+
+def test_refresh_managed_names_the_images_beside_a_design(tmp_path):
+    from cycls._agent.design import refresh
+    root = _seed(tmp_path, {"designs/launch.fig": b"FIG", "designs/sub/deck.fig": b"FIG"})
+    assert refresh.managed(root, "designs/launch.png") and refresh.managed(root, "designs/launch.pdf")
+    assert refresh.managed(root, "designs/launch-slide-2.webp")
+    assert refresh.managed(root, "designs/sub/deck.pptx")
+    assert not refresh.managed(root, "designs/launch-hero.png")
+    assert not refresh.managed(root, "designs/other.png")
+    assert not refresh.managed(root, "designs/launch.txt")
+    assert not refresh.managed(root, "notes/launch.png")
+
+
+def test_brand_route_reads_the_brand_kit(tmp_path):
+    """The design editor's Brand variables and fonts: the brand kit's named colours
+    (only those it names — nothing inferred) and its fonts, or null without a kit."""
+    client = _ws_routers_client(tmp_path)
+    assert client.get("/brand").json() == {"brand": None}
+    root = _seed(tmp_path, {"brand/brand.yaml": (
+        'primary_color: "#0C2340"\nsecondary_color: \'#abc\'\nfont_heading: "Playfair Display"\n').encode()})
+    assert client.get("/brand").json() == {"brand": {
+        "colors": {"primary": "#0c2340", "secondary": "#aabbcc"},
+        "fonts": {"heading": "Playfair Display", "body": None}}}
+    (root / "brand/brand.yaml").write_text(
+        'colors:\n  primary: "#112233"\n  accent: "#445566"\nfonts:\n  body: Inter\n', encoding="utf-8")
+    assert client.get("/brand").json() == {"brand": {
+        "colors": {"primary": "#112233", "accent": "#445566"}, "fonts": {"heading": None, "body": "Inter"}}}
+
+
 # ---- office module: the office-render /v1/convert client ----
 
 def test_office_convertible_and_configured(monkeypatch):
