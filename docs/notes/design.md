@@ -345,7 +345,8 @@ config value to it. Two directions meet at the shared `designs/<name>.fig`:
 - **Human edits** — the canvas fetches the `.fig` bytes, posts them into the editor
   (`load`), and writes the editor's saved bytes back to the workspace
   (`PUT /files`) after each change. Runs entirely in the browser (CanvasKit/WASM) —
-  no service call. The agent picks up the human's edits on its next turn.
+  no service call. The agent picks up the human's edits on its next turn. One editor
+  edits **one design** — see "One design, in the workspace" below.
 - **Agent edits** — the `edit` action first runs the script on the saved
   `designs/<name>.fig` through the service's `POST /apply` (the same OpenPencil
   plugin API, headless). A script that throws — a node it looks up isn't there —
@@ -398,9 +399,62 @@ because the sandbox reads the file straight off the volume where no hook can
 intercept it. The `edit` ack tells the model the image catches up a few seconds
 after the save.
 
-The embedded editor is a **patched** OpenPencil fork (three source patches +
-forcing synchronous `.fig` compression so the in-page save doesn't hang on the
-export web-worker). The patches and build recipe live in
+### One design, in the workspace
+
+The editor is a Cycls surface, not a standalone app: it edits the one design the
+Cycls tab opened, and everything it makes lands in the workspace.
+
+- **One document per editor.** The bridge binds the document it loads (`host.ts`),
+  and every save, export, copy and agent command acts on that one — never on "the
+  active tab". The standalone editor's tab bar and Home screen are gone; a second
+  `load` replaces the document. Before this, the editor's own "+", File › New or
+  Open, or closing its only tab made the next auto-save write *that* document over
+  the workspace file.
+- **Saves are confirmed.** Protocol 2: each `load` carries a `doc` tag; the editor's
+  `saved {doc, id}` is written to the tab's path and answered with `written {id, ok}`,
+  after which the document counts as saved (no dirty dot, no "Leave site?"). A save
+  tagged with an older load, or from a file being deleted, is refused. Ctrl+S /
+  File › Save save at once; otherwise 1.2 s after an edit stops. An editor from
+  before protocol 2 still works: its saves count as done once posted.
+- **New design** — the canvas `+` (with size presets: square, portrait, story,
+  slide, X post, A4 poster), the Files panel's menu, or File › New design in the
+  editor (`newDesign {size}` → the current frame's size). `POST /design/new` renders
+  one blank frame through the service and writes `designs/<name>.fig` + `.png`, like
+  a render — the refresh keeps the image current and the agent edits it by name.
+  It opens in its own Cycls tab. (Ctrl/⌘+N rarely reaches the page: browsers keep it.)
+- **Exports and copies go to the workspace.** The editor's exports (File › Export
+  selection, the Export panel, Ctrl+Shift+E — PNG, JPG, WebP, SVG, PDF) come to
+  Cycls as `export {files}`, one file each, written beside the design as
+  `<design>-<export name>` with `PUT /files?dedupe=1`: never over an existing file,
+  and never on a name the refresh keeps for the design's own images
+  (`refresh.managed`). "Save a copy…" asks for a name and writes a new `.fig` beside
+  it, then opens it. No downloads or file pickers from inside the editor.
+- **Brand kit.** With each `load`, Cycls sends `GET /brand` — the named colours of
+  `brand/brand.yaml` (primary, secondary, accent, background, text, neutral; only
+  those it names) and its heading/body fonts. The editor adds them as a **Brand**
+  variable collection and loads the fonts, so a person editing by hand uses the same
+  brand as the agent. Created when missing, and set only when the brand changed since
+  the last sync (recorded on the first frame: a `.fig` keeps neither a variable's
+  description nor a page's plugin data), so a colour changed by hand stands.
+- **Switching, closing, renaming, deleting.** A design tab switched away from or
+  closed stays mounted, hidden, until its editor has flushed (`flush` → `flushed`, or
+  5 s); hiding the canvas and Close all flush first. A renamed or moved file flushes,
+  then its tabs follow it; a deleted one stops writing first (a late save would bring
+  it back), then its tabs close. Light/dark follows Cycls live (`theme`).
+- **What's gone.** The AI chat and its provider keys (Cycls has its own agent), the
+  settings dialog, the probe of a local MCP server on every load, collaboration and
+  Share, the S3 storage workspace and sync, the library manager, crash-recovery copies
+  in the browser, vectorize, the Display-P3 and File-API banners, the service worker,
+  the theme and language menus (the editor is in English), the profiler and dev
+  tools — at the source, desktop and the narrow (mobile) layout alike. Kept: the Code
+  tab, Variables, Split view.
+
+The embedded editor is a **patched** OpenPencil build: replacements for its app
+shell (`main.ts`, `App.vue`, `WorkspaceView.vue`, `pwa.ts`, `aliases.ts`), the
+bridge (`cycls-bridge.ts` + `host.ts`), stubs aliased over upstream modules (save,
+export, tabs, menus, AI), and exact edits (`edits.json`) — each must match, and the
+upstream files they rely on are pinned by hash, so a new OpenPencil version fails
+the build until it is reviewed. The patches and build recipe live in
 [`design-editor-patch/`](design-editor-patch/) and the handoff note beside it.
 
 ## Implementation notes

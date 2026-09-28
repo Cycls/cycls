@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useApi, reasonOf } from "./use-api";
+import { encPath } from "./use-files";
 import { track } from "../lib/analytics";
 import { webSearchEnabled, autoApprove } from "../lib/utils";
 import { useToast } from "../lib/toast";
@@ -741,7 +742,7 @@ export function useChat(baseUrl: string = "") {
       if (refs.length) {
         await Promise.all(refs.map(async (att) => {
           try {
-            att.url = URL.createObjectURL(await (await api(`/files/${att.path}`)).blob());
+            att.url = URL.createObjectURL(await (await api(`/files/${encPath(att.path ?? "")}`)).blob());
           } catch (e) { console.warn(`attachment fetch failed: ${att.path}`, e); }
         }));
         setMessages([...loaded]);

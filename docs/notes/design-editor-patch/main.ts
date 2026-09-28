@@ -1,16 +1,20 @@
 import { createHead } from '@unhead/vue/client'
 import { createApp } from 'vue'
 
-import { createRetainedScopePlugin } from '@open-pencil/vue'
+import { createRetainedScopePlugin, localeSetting } from '@open-pencil/vue'
 
 import './app.css'
 import cyclsTheme from './cycls-theme.css?raw'
-import { startCyclsEmbedBridge } from '@/app/embed/cycls-bridge'
+import { applyTheme, startCyclsEmbedBridge } from '@/app/embed/cycls-bridge'
+import { setRecoveryRuntimeOverride } from '@/app/document/recovery/preferences'
 import { preloadFonts } from '@/app/editor/fonts'
-import { IS_TAURI } from '@/constants'
 
 import App from './App.vue'
 import router from './router'
+
+// The editor in Cycls (replaces upstream src/main.ts, pinned in
+// editor/patches/upstream.sha256): the Cycls theme, the embed bridge, and none of
+// what a standalone app needs.
 
 // Cycls design system: inject the theme override at the END of <head> (after
 // app.css + component styles) so its CSS-variable redefinitions win regardless of
@@ -24,22 +28,17 @@ function injectCyclsTheme(): void {
   document.head.appendChild(el)
 }
 
-// Sync the editor's light/dark to the mode Cycls passes via ?theme=<dark|light>,
-// BEFORE the app boots (theme.ts reads this localStorage key on first tick).
-try {
-  const t = new URLSearchParams(location.search).get('theme')
-  if (t === 'dark' || t === 'light') {
-    localStorage.setItem('open-pencil:theme', t)
-    // OpenPencil's theme store is a module-level useLocalStorage that already read
-    // this key at import time — a plain setItem won't update its ref. Nudge it with
-    // a storage event so the mode actually applies before the app renders.
-    window.dispatchEvent(new StorageEvent('storage', {
-      key: 'open-pencil:theme', newValue: t, oldValue: 'dark', storageArea: localStorage, url: location.href,
-    }))
-  }
-} catch {
-  /* no location/localStorage */
-}
+// Light/dark from Cycls (?theme=dark|light) before the app boots; the bridge follows
+// later changes.
+applyTheme(new URLSearchParams(location.search).get('theme') ?? '')
+// English: the editor has no Arabic, and Cycls owns the language choice.
+localeSetting.set('en')
+// Every change is saved to the Cycls workspace: no crash-recovery copies in the browser.
+setRecoveryRuntimeOverride(false)
+// No service worker (vite/pwa.ts): remove one an earlier build installed.
+void navigator.serviceWorker?.getRegistrations().then((registrations) => {
+  for (const registration of registrations) void registration.unregister()
+}).catch(() => undefined)
 
 preloadFonts()
 const head = createHead()
@@ -47,10 +46,3 @@ createApp(App).use(router).use(head).use(createRetainedScopePlugin()).mount('#ap
 injectCyclsTheme()
 
 startCyclsEmbedBridge()
-
-if (!IS_TAURI) {
-  void import('virtual:pwa-register').then(({ registerSW }) => {
-    registerSW({ immediate: true })
-    return undefined
-  })
-}

@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useApi } from "./use-api";
+import { encPath } from "./use-files";
 
 // Apps live in `apps/<slug>/` at the workspace root, entry `index.html`.
 // A folder rather than a loose file so an app's data sits beside it — which is
@@ -96,7 +97,7 @@ export function useApps(baseUrl: string = "") {
             const app = parseManifest(slug, r && r.ok ? await r.text() : null);
             if (!app.iconFile) return app;
             try {
-              const img = await api(`/files/${app.iconFile}`);
+              const img = await api(`/files/${encPath(app.iconFile)}`);
               if (!img.ok) return app;
               const url = URL.createObjectURL(await img.blob());
               blobs.current.push(url);

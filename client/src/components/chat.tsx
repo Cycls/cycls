@@ -24,7 +24,8 @@ import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-chat";
-import type { FileEntry } from "../hooks/use-files";
+import type { BrandKit, FileEntry } from "../hooks/use-files";
+import { detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditorsUnder, type DesignHost } from "./design-editor-view";
 import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
@@ -66,6 +67,9 @@ export interface AccountInfo {
   workspaces?: WorkspacesMenu;
 }
 
+// A path or anything inside it (a folder renamed or deleted takes its files along).
+const isUnder = (path: string, prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
+
 export interface FilesPanelProps {
   entries: FileEntry[];
   path: string;
@@ -85,6 +89,10 @@ export interface FilesPanelProps {
   onOpenFile: (path: string) => Promise<string>;
   readFile: (path: string) => Promise<string>;
   writeFile: (path: string, data: BlobPart) => Promise<void>;   // binary too — the .fig editor writes raw bytes
+  writeNew?: (path: string, data: BlobPart) => Promise<string>;  // a NEW file (next free name) → its path: design exports, copies
+  newDesign?: (body: { name?: string; size?: string | [number, number]; background?: string }) => Promise<{ path: string; name: string; size: [number, number] }>;
+  brand?: () => Promise<BrandKit | null>;                        // the brand kit, for the design editor
+  onNewDesign?: () => void;                                      // the Files panel's "New design"
   deckOp?: (path: string, body: DeckOp) => Promise<void>;       // the deck viewer's slide moves / copies / deletes
   pollsFor?: (deck: string) => PollApi;                         // live polls when the owner presents a deck
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
@@ -294,6 +302,12 @@ export function Chat({ chat, onShare, files, account, config }: {
   const closeCanvasTab = useCallback((path: string) => {
     setCanvasTabs((tabs) => tabs.filter((f) => f.path !== path));
     setCanvasActive((a) => (a === path ? null : a));
+  }, []);
+  // Hiding the canvas or closing all its tabs unmounts every design editor: each
+  // saves what's unsaved first (a clean one answers at once).
+  const hideCanvas = useCallback(() => { void flushAllDesignEditors(1500).then(() => setCanvasHidden(true)); }, []);
+  const closeAllCanvas = useCallback(() => {
+    void flushAllDesignEditors(1500).then(() => { setCanvasTabs([]); setCanvasActive(null); setRightExpanded(false); });
   }, []);
   const { apps, loading: appsLoading, refresh: refreshApps } = useApps();
   // The UI handler resolves an app by path without re-subscribing on every load.
@@ -683,6 +697,49 @@ export function Chat({ chat, onShare, files, account, config }: {
     if (r && r.trash_id) trashed(r.trash_id, r.kind, path.split("/").pop() || path);
     return r;
   }, [files, trashed]);
+  // A file (or folder) open in the canvas, deleted: its design editors stop writing
+  // first — a save landing after the delete would bring the file back — then its
+  // tabs close. Renamed or moved: its editors save, then its tabs follow it.
+  const deleteFromFiles = useCallback(async (path: string) => {
+    const reattach = detachDesignEditorsUnder(path);
+    try {
+      const r = await deleteWithUndo(path);
+      setCanvasTabs((tabs) => tabs.filter((f) => !isUnder(f.path, path)));
+      setCanvasActive((a) => (a && isUnder(a, path) ? null : a));
+      return r;
+    } catch (e) {
+      reattach();
+      throw e;
+    }
+  }, [deleteWithUndo]);
+  const renameFromFiles = useCallback(async (from: string, to: string) => {
+    await flushDesignEditorsUnder(from, 3000);
+    await files!.onRename(from, to);
+    const moved = (p: string) => (isUnder(p, from) ? to + p.slice(from.length) : p);
+    setCanvasTabs((tabs) => tabs.map((f) => (isUnder(f.path, from)
+      ? { ...f, path: moved(f.path), name: moved(f.path).split("/").pop() || f.name } : f)));
+    setCanvasActive((a) => (a ? moved(a) : a));
+  }, [files]);
+  // "New design": a blank design in designs/, opened in its own tab — from the
+  // canvas +, the Files panel, or File › New design in the editor.
+  const createDesign = useCallback(async (size: string | [number, number] | undefined, source: "canvas" | "files" | "editor") => {
+    if (!files?.newDesign) return;
+    try {
+      const made = await files.newDesign({ size: size ?? "square" });
+      track("design_created", { source, size: Array.isArray(size) ? `${size[0]}x${size[1]}` : size ?? "square" });
+      files.onReload(files.path);
+      openFileInCanvas(made.path);
+    } catch {
+      toastError(t("newDesignFailed"));
+    }
+  }, [files, openFileInCanvas, toastError]);
+  const designHost = useMemo<DesignHost | undefined>(() => (files?.writeNew && files.newDesign && files.brand ? {
+    newDesign: (size) => createDesign(size, "editor"),
+    writeNew: files.writeNew,
+    brand: files.brand,
+    openInCanvas: (p) => openFileInCanvas(p),
+    refreshFiles: () => files.onReload(files.path),
+  } : undefined), [files, createDesign, openFileInCanvas]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z" || e.shiftKey) return;
@@ -740,7 +797,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   const collapseRail = () => (canvasShowing ? setRailIcons(true) : setFilesOpen(false));
   const closeRight = () => {
     setFilesOpen(false);
-    setCanvasHidden(true);
+    hideCanvas();
     setRightExpanded(false);
     setRailIcons(false);
   };
@@ -1179,11 +1236,11 @@ export function Chat({ chat, onShare, files, account, config }: {
           hidden={canvasHidden}
           expanded={rightExpanded}
           onToggleExpand={() => setRightExpanded((e) => !e)}
-          onCloseAll={() => { setCanvasTabs([]); setCanvasActive(null); setRightExpanded(false); }}
+          onCloseAll={closeAllCanvas}
           onSelectTab={setCanvasActive}
           onCloseTab={closeCanvasTab}
           onReorder={setCanvasTabs}
-          onHide={() => setCanvasHidden(true)}
+          onHide={hideCanvas}
           onAddFile={openFileInCanvas}
           apps={apps}
           onAddApp={openApp}
@@ -1202,6 +1259,8 @@ export function Chat({ chat, onShare, files, account, config }: {
           railWidth={railPx}
           reloadKey={reloadKey}
           designEditorUrl={config?.design_editor_url}
+          designHost={designHost}
+          onNewDesign={(preset) => void createDesign(preset, "canvas")}
         />
       )}
       {/* Chats / Files / Apps / Shares — docked on desktop, overlay on a phone */}
@@ -1305,7 +1364,9 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </div>
               )}
               {!railIconsOnly && (<div className="relative flex min-h-0 flex-1 flex-col">{filesTab === "files" && files ? (
-                <Files {...files} onDelete={deleteWithUndo} onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
+                <Files {...files} onDelete={deleteFromFiles} onRename={renameFromFiles}
+                       onNewDesign={config?.design_editor_url && files.newDesign ? () => void createDesign("square", "files") : undefined}
+                       onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
               ) : filesTab === "apps" ? (
                 <AppsPanel
                   apps={apps}

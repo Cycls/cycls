@@ -1,0 +1,86 @@
+[
+  {
+    "file": "packages/core/src/constants.ts",
+    "why": "Dark workspace backdrop (the default page colour) to match Cycls dark chrome. Editor-only: frame exports render the frame, not the page.",
+    "find": "CANVAS_BG_COLOR = { r: 0.96, g: 0.96, b: 0.96, a: 1 }",
+    "replace": "CANVAS_BG_COLOR = { r: 0.039, g: 0.039, b: 0.039, a: 1 }"
+  },
+  {
+    "file": "packages/core/src/io/formats/fig/export.ts",
+    "why": "Synchronous .fig compression in-page: the export web worker hangs when embedded.",
+    "find": "return typeof Worker !== 'undefined' && IS_BROWSER",
+    "replace": "return false"
+  },
+  {
+    "file": "tools/package-artifacts/src/build.ts",
+    "why": "@open-pencil/vue can exceed the 180 s per-package build timeout on a loaded machine.",
+    "find": "timeoutMs ?? 180_000",
+    "replace": "timeoutMs ?? 900_000"
+  },
+  {
+    "file": "src/components/PropertiesPanel.vue",
+    "why": "No AI tab: Cycls has its own agent (stubs/ai-chat.ts).",
+    "find": "          value=\"ai\"\n          data-test-id=\"properties-tab-ai\"",
+    "replace": "          v-if=\"false\"\n          value=\"ai\"\n          data-test-id=\"properties-tab-ai\""
+  },
+  {
+    "file": "src/components/MobileDrawer.vue",
+    "why": "No AI tab in the narrow (mobile) layout either.",
+    "find": "<TabsTrigger\n            data-test-id=\"mobile-ribbon-ai\"",
+    "replace": "<TabsTrigger\n            v-if=\"false\"\n            data-test-id=\"mobile-ribbon-ai\""
+  },
+  {
+    "file": "src/components/shell/AppMenu.vue",
+    "why": "No settings: Cycls sets theme and language; AI, storage, MCP and media keys are gone.",
+    "find": "        data-test-id=\"app-settings-trigger\"",
+    "replace": "        v-if=\"false\"\n        data-test-id=\"app-settings-trigger\""
+  },
+  {
+    "file": "src/components/shell/AppMenu.vue",
+    "why": "No renaming the document here: the file name belongs to Cycls.",
+    "find": "        @dblclick=\"startRename\"\n",
+    "replace": ""
+  },
+  {
+    "file": "src/components/editor/EditorWorkspace.vue",
+    "why": "No collaboration bar (CollabPanel is aliased to Empty.vue).",
+    "find": "      <div class=\"flex shrink-0 items-center justify-between border-b border-border px-1.5 py-1.5\">\n        <CollabPanel />\n      </div>\n",
+    "replace": ""
+  },
+  {
+    "file": "src/components/assets-panel/AssetsPanel.vue",
+    "why": "No library manager: libraries live in the browser or S3, not the workspace. The document's own components stay.",
+    "find": "      <AppButton\n        v-bind=\"insertButton\"\n        class=\"relative\"\n        :aria-label=\"libraryUpdateCount",
+    "replace": "      <AppButton\n        v-if=\"false\"\n        v-bind=\"insertButton\"\n        class=\"relative\"\n        :aria-label=\"libraryUpdateCount"
+  },
+  {
+    "file": "src/components/MobileHud/context.ts",
+    "why": "The mobile menu: New design (Cycls creates it), no Open.",
+    "find": "      label: 'New',\n",
+    "replace": "      label: 'New design',\n"
+  },
+  {
+    "file": "src/components/MobileHud/context.ts",
+    "why": "No opening files from inside the editor.",
+    "find": "    { icon: IconFolderOpen, label: 'Open…', action: () => void openFileDialog() },\n",
+    "replace": ""
+  },
+  {
+    "file": "src/app/editor/canvas/menu/actions.ts",
+    "why": "No image vectorizing (a paid third-party service with its own key).",
+    "find": "      return canVectorizeImageNode(store)\n",
+    "replace": "      return false\n"
+  },
+  {
+    "file": "packages/vue/src/i18n/messages/menu.ts",
+    "why": "File › New makes a new design in the Cycls workspace.",
+    "find": "  new: 'New',\n",
+    "replace": "  new: 'New design',\n"
+  },
+  {
+    "file": "packages/vue/src/i18n/messages/menu.ts",
+    "why": "Save As writes a copy beside the design; the design stays as it is.",
+    "find": "  saveAs: 'Save as…',\n",
+    "replace": "  saveAs: 'Save a copy…',\n"
+  }
+]

@@ -50,6 +50,17 @@ export const isOffice = (name: string) => OFFICE_EXTS.has(ext(name));
 const DESIGN_EXTS = new Set(["fig"]);
 export const isDesignEditor = (name: string) => DESIGN_EXTS.has(ext(name));
 
+// "New design" sizes — the server's presets (cycls/_agent/tools _DESIGN_SIZES),
+// named for the menu (i18n keys). The server makes the design; this only offers them.
+export const DESIGN_PRESETS = [
+  { key: "square", label: "designSquare", size: [1080, 1080] },
+  { key: "post-portrait", label: "designPortrait", size: [1080, 1350] },
+  { key: "story", label: "designStory", size: [1080, 1920] },
+  { key: "slide", label: "designSlide", size: [1920, 1080] },
+  { key: "x-post", label: "designXPost", size: [1600, 900] },
+  { key: "a4-poster", label: "designA4", size: [1240, 1754] },
+] as const;
+
 // A design deck's document (designs/<name>.deck.json, written by a multi-slide
 // Design render) opens the deck viewer. Its slides come from ?as=slides — the
 // design service renders them — not from the JSON itself, so it's checked before

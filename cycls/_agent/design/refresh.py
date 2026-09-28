@@ -29,6 +29,24 @@ _DECK = ("pptx", "pdf")
 _pending = {}                                 # (root, rel) -> the waiting/running task
 
 
+def managed(root, rel):
+    """Whether `rel` is one of the images this keeps beside a design —
+    `designs/…/<stem>.<fmt>` or `<stem>-slide-<n>.<fmt>` next to an existing
+    `<stem>.fig` — so a file written there would be replaced by the next re-export.
+    (A new file — an export from the editor — takes another name.)"""
+    rel = rel.replace("\\", "/").lstrip("/")
+    if not rel.startswith("designs/"):
+        return False
+    path = Path(rel)
+    stem, dot, fmt = path.name.rpartition(".")
+    if not dot or fmt.lower() not in FORMATS:
+        return False
+    base, sep, n = stem.rpartition("-slide-")
+    if sep and n.isdigit() and (Path(root) / path.parent / f"{base}.fig").is_file():
+        return True
+    return (Path(root) / path.parent / f"{stem}.fig").is_file()
+
+
 def schedule(root, rel, user_id=None):
     """Re-export the images beside `rel` (a `designs/*.fig` just written under
     workspace `root`) once its saves go quiet. A no-op without the service."""

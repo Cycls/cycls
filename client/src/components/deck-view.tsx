@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DropdownMenu } from "./files";
-import { DesignEditorView } from "./design-editor-view";
+import { DesignEditorView, flushDesignEditor, type DesignHost } from "./design-editor-view";
 import { PresentMode } from "./present-mode";
 import type { DeckPoll, PollApi } from "../lib/polls";
 import { saveBlob } from "./canvas-utils";
@@ -48,12 +48,13 @@ export function parseDeck(data: string): DeckManifest | null {
 
 const baseName = (path: string) => (path.split("/").pop() || path).replace(/\.deck\.json$|\.fig$/i, "");
 
-export function DeckView({ data, path, openFile, writeFile, designEditorUrl, onReload, onSlideOp, pollsFor }: {
+export function DeckView({ data, path, openFile, writeFile, designEditorUrl, designHost, onReload, onSlideOp, pollsFor }: {
   data: string;
   path: string;                 // the deck document (or .fig) this manifest is of
   openFile?: (path: string, silent?: boolean) => Promise<string>;   // authed blob URL: downloads, the editor's .fig
   writeFile?: (path: string, data: BlobPart, silent?: boolean) => Promise<void>;
   designEditorUrl?: string;     // with writeFile + openFile: Edit opens the design editor
+  designHost?: DesignHost;      // what the editor asks of Cycls (new designs, copies, exports, brand)
   onReload?: () => void;        // refetch the manifest (the deck was edited)
   onSlideOp?: (op: DeckOp) => Promise<void>;   // the owner reorders / duplicates / deletes in the grid
   pollsFor?: (deck: string) => PollApi;        // the owner's: poll slides run live when presented
@@ -124,7 +125,9 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, onR
       setBusy(false);
     }
   };
-  const doneEditing = () => {
+  // Done: the editor saves what's unsaved first, so the slides reload with it.
+  const doneEditing = async () => {
+    if (fig) await flushDesignEditor(fig, 5000);
     if (editing) URL.revokeObjectURL(editing);
     setEditing(null);
     onReload?.();
@@ -142,7 +145,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, onR
         </div>
         <div className="min-h-0 flex-1">
           <DesignEditorView url={editing} path={fig} name={`${name}.fig`} editorUrl={designEditorUrl!}
-                            writeFile={writeFile!} reload={() => openFile!(fig)} />
+                            writeFile={writeFile!} reload={() => openFile!(fig)} host={designHost} />
         </div>
       </div>
     );

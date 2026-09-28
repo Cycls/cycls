@@ -61,5 +61,7 @@ export function useToast() {
     info: (text: string) => show("info", text),
     // A reversible action: 10s to change your mind, then the Trash tab.
     undo: (text: string, label: string, onUndo: () => void) => show("info", text, { action: { label, onClick: onUndo }, ttl: 10_000 }),
+    // A notice with one thing to do next ("Exported to … · Open").
+    action: (text: string, label: string, onClick: () => void) => show("info", text, { action: { label, onClick }, ttl: 6_000 }),
   }), [show]);
 }

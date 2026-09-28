@@ -228,6 +228,36 @@ def resolve_path(workspace, rel):
     return resolved
 
 
+def _free_rel(root, rel):
+    """A name for a new file at `rel` that overwrites nothing: `rel` itself, else
+    `<stem>-2`, `-3`, … It's free when no file has it and it isn't an image the design
+    refresh keeps beside a .fig (that would be overwritten by the next re-export); a
+    .fig under designs/ also keeps clear of another design's images and deck, as a
+    fresh render does (`_dedupe_design_name`)."""
+    from cycls._agent.tools import _dedupe_design_name
+    path = Path(rel)
+    root = Path(root)
+    if rel.startswith("designs/") and path.suffix.lower() == ".fig":
+        return (path.parent / f"{_dedupe_design_name(root / path.parent, path.stem, 'png')}.fig").as_posix()
+    stem, suffix = (path.name[:-len(path.suffix)], path.suffix) if path.suffix else (path.name, "")
+    taken = lambda cand: (root / cand).exists() or design_refresh.managed(root, cand)
+    if not taken(rel):
+        return rel
+    n = 2
+    while taken(cand := (path.parent / f"{stem}-{n}{suffix}").as_posix()):
+        n += 1
+    return cand
+
+
+def _design_file_name(name):
+    """A new design's file name: NFC, no folders or `.fig`, letters (any script),
+    digits, spaces, `-_.()` — else `untitled`."""
+    name = unicodedata.normalize("NFC", str(name or "")).replace("\\", "/").rsplit("/", 1)[-1]
+    name = re.sub(r"\.fig$", "", name.strip(), flags=re.I)
+    name = re.sub(r"[^\w\-. ()]+", "-", name).strip(" .-")[:60].strip(" .-")
+    return name or "untitled"
+
+
 # ---- Chats ----
 
 def chats_router(ws_dep):
@@ -870,11 +900,72 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             raise HTTPException(422, str(e))
         return {"ok": True, "slides": len(r.get("slides") or [])}
 
+    @r.post("/design/new")
+    async def new_design(request: Request, ws: Workspace = ws_dep):
+        """A blank design in the workspace — Cycls's "New design" (the canvas +, the
+        Files panel, File › New design in the editor). {name?, size?: a preset
+        ("square", "story", …) or [w, h], background?: "#hex"} → one frame, saved as
+        designs/<name>.fig with its .png beside it, like a rendered design: the editor
+        opens it, the refresh keeps the image current, the agent edits it by name."""
+        from cycls._agent import design
+        from cycls._agent.tools import _DESIGN_SIZES, _dedupe_design_name, _norm_hex
+        if not design.configured():
+            raise HTTPException(503, "The design service isn't set up")
+        body = await request.json() if int(request.headers.get("content-length") or 0) else {}
+        if not isinstance(body, dict):
+            raise HTTPException(400, "Expected {name?, size?, background?}")
+        size = body.get("size") or "square"
+        if isinstance(size, str):
+            if size not in _DESIGN_SIZES:
+                raise HTTPException(400, f"size is one of {', '.join(_DESIGN_SIZES)} or [w, h]")
+            wh = list(_DESIGN_SIZES[size])
+        elif (isinstance(size, list) and len(size) == 2
+              and all(isinstance(v, int) and not isinstance(v, bool) and 16 <= v <= 4096 for v in size)):
+            wh = size
+        else:
+            raise HTTPException(400, "size is a preset or [w, h] in pixels, 16–4096")
+        background = _norm_hex(body.get("background") or "#ffffff")
+        if not background:
+            raise HTTPException(400, "background is a hex colour")
+        try:
+            out = await design.render({"size": wh, "fill": background, "nodes": []}, fmt="png", scale=1,
+                                      user_id=ws.subject)
+        except design.Unavailable as e:
+            raise HTTPException(503, str(e))
+        except RuntimeError as e:
+            raise HTTPException(422, str(e))
+        designs = Path(ws.root) / "designs"
+        await asyncio.to_thread(designs.mkdir, parents=True, exist_ok=True)
+        base = _dedupe_design_name(designs, _design_file_name(body.get("name")), "png")
+        for suffix, data in ((".fig", out.fig), (".png", out.image)):
+            tmp = designs / f".{base}{suffix}.part"
+            await asyncio.to_thread(tmp.write_bytes, data)
+            await asyncio.to_thread(tmp.replace, designs / f"{base}{suffix}")
+        _catalog_drop(ws.root)
+        return {"path": f"designs/{base}.fig", "name": base, "size": wh}
+
+    @r.get("/brand")
+    async def brand(ws: Workspace = ws_dep):
+        """The workspace brand kit (brand/brand.yaml) for the design editor: its named
+        colours (the Brand variables) and fonts, or null when there's no kit."""
+        from cycls._agent.tools import _brand_palette, _load_brand
+        colors = await asyncio.to_thread(_brand_palette, ws.root)
+        kit = await asyncio.to_thread(_load_brand, ws.root) or {}
+        fonts = {"heading": kit.get("heading"), "body": kit.get("body")}
+        if not colors and not any(fonts.values()):
+            return {"brand": None}
+        return {"brand": {"colors": colors, "fonts": fonts}}
+
     @r.put("/files/{path:path}")
     async def put_file(path: str, request: Request, ws: Workspace = ws_dep):
         """Streams the raw body to a .part temp, then renames. No File(...)
         param — that reads the whole body before auth runs, so uploads longer
-        than the JWT lifetime 401 at the end. Multipart kept for old clients."""
+        than the JWT lifetime 401 at the end. Multipart kept for old clients.
+        `?dedupe=1` writes a new file instead of replacing one — the name, or the
+        next free one (`_free_rel`); the reply's `path` says which."""
+        if request.query_params.get("dedupe") is not None:
+            _safe_path(ws.root, path)
+            path = _free_rel(ws.root, unicodedata.normalize("NFC", path))
         file_path = _safe_path(ws.root, path)
         limit_msg = f"File exceeds the {max_bytes // (1024 * 1024)} MB limit"
         if int(request.headers.get("content-length") or 0) > max_bytes:
@@ -910,8 +1001,9 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         _catalog_drop(ws.root)
         # The design editor saves an edited designs/<name>.fig here; re-export the
         # image beside it so a download (or the agent) never gets the pre-edit one.
-        design_refresh.schedule(ws.root, file_path.relative_to(Path(ws.root).resolve()).as_posix(), ws.subject)
-        return {"ok": True}
+        rel = file_path.relative_to(Path(ws.root).resolve()).as_posix()
+        design_refresh.schedule(ws.root, rel, ws.subject)
+        return {"ok": True, "path": rel}
 
     @r.post("/files-batch/{path:path}")
     async def upload_batch(path: str, request: Request, ws: Workspace = ws_dep):

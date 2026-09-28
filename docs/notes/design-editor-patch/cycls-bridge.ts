@@ -1,34 +1,52 @@
-// Cycls embed bridge. When the OpenPencil editor runs inside the Cycls canvas as
-// an iframe (URL `?embed=cycls`), it loads a `.fig` posted by the parent window
-// and posts the edited `.fig` back — so the agent (which writes the `.fig` via the
-// headless render service) and the human (who edits it here) share one document.
+// Cycls embed bridge. The OpenPencil editor runs inside the Cycls canvas as an
+// iframe (URL `?embed=cycls`), editing ONE design from the Cycls workspace: Cycls
+// posts the .fig in, and every change goes back to that same file — the agent (which
+// writes the .fig through the render service) and the person (who edits it here)
+// share one document. host.ts holds the binding; the save, export and tabs stubs
+// route everything that would touch the user's disk or open a second document to
+// Cycls instead.
 //
-// It reuses the app's own open + serialize paths, so it stays a thin adapter:
-//   load  → openFileInNewTab(new File([bytes], name))
-//   save  → exportFigFile(getActiveStore().graph)  → bytes
+// Protocol 2 (postMessage, JSON). Cycls → editor, {target:'cycls-editor', type, …}:
+//   load    {protocol:2, doc, name, fig, brand?}  open this document (a second load
+//                                                  replaces it); `doc` tags its saves
+//   written {id, ok}         the workspace has save `id` (or couldn't write it)
+//   save    {}               save now
+//   flush   {id}             save anything unsaved, then → flushed {id, ok}
+//   command {script, intent?} a live agent edit (Figma plugin API) on this document
+//   theme   {theme}          'dark' | 'light'
+//   brand   {brand}          the workspace brand kit: {colors:{primary,…}, fonts:{heading,body}}
+// Editor → Cycls, {source:'cycls-editor', type, …}:
+//   ready {protocol:2} · loaded {doc, name} · saved {doc, id, name, fig} · flushed {id, ok}
+//   error {doc?, message} · applied {doc} · commandError {doc, message}
+//   newDesign {size?} · saveCopy {doc, name, fig} · export {doc, files:[{name, mime, data}]}
+// `commandError` is a live agent edit that failed HERE. The server applied and saved
+// the same edit before sending it (Cycls checks every edit headlessly first), so Cycls
+// re-opens the saved file rather than leave this editor on a stale document.
 //
-// Wire protocol (postMessage, JSON):
-//   parent → editor : { target:'cycls-editor', type:'load', name, fig:<base64> }
-//                     { target:'cycls-editor', type:'save' }
-//   editor → parent : { source:'cycls-editor', type:'ready' | 'loaded' | 'saved' | 'error', ... }
-//                     { source:'cycls-editor', type:'applied' | 'commandError', message? }
-//   `commandError` is a live agent edit that failed HERE — distinct from a save
-//   `error`. The server applied and saved the same edit before sending it (Cycls
-//   checks every edit headlessly first), so the host re-opens the saved file rather
-//   than leave this editor on a stale document it could later auto-save over it.
-import { encodeBase64, decodeBase64 } from '@open-pencil/core/bytes'
-import { exportFigFile } from '@open-pencil/core/io/formats/fig'
+// An older Cycls app sends `load` without `protocol`: its saves count as done once
+// posted, and it gets no new-design, copy or export messages (host.ts).
+import { decodeBase64 } from '@open-pencil/core/bytes'
+import { computeAllLayouts } from '@open-pencil/core/layout'
 import { fontManager } from '@open-pencil/core/text'
 import { wrapEvalCode } from '@open-pencil/core/tools'
 // The same prelude the service runs ahead of every script (src/figma-compat.js), so
 // a live edit and the server-side check behave the same.
 import FIGMA_COMPAT from './figma-compat.js?raw'
-import { releaseFigPopulationWorker } from '#core/kiwi/fig/population/client'
-import { releaseOriginalFigArchive } from '#core/kiwi/fig/session/original-archive'
+import {
+  bind,
+  boundDocument,
+  connect,
+  post,
+  setHostProtocol,
+  written
+} from './host'
 
 import { makeFigmaFromStore } from '@/app/automation/bridge/figma-factory'
+import { readFigDocument } from '@/app/document/io/fig'
+import { applyImportedDocument } from '@/app/document/io/imported-document'
 import { ensureGraphFonts } from '@/app/editor/fonts'
-import { getActiveStore, openFileInNewTab } from '@/app/tabs'
+import type { EditorStore } from '@/app/editor/session'
+import { getActiveStore } from '@/app/tabs'
 
 // --- Cycls "second player": a labeled agent cursor + presence, so the human
 // SEES the agent (Super) glide onto the canvas and make the edit — like a
@@ -128,8 +146,8 @@ const wait = (ms: number): Promise<void> => new Promise((r) => window.setTimeout
 // otherwise fetch Fontsource subset files and register them under one family name,
 // and an Arabic web font (Cairo, Tajawal…) drew blank in the editor while the export
 // was right. Every remote load goes through here (a document's fonts, the agent's
-// live edits, a font picked in the UI); a face the service lacks falls back to the
-// stock loader.
+// live edits, a font picked in the UI, the brand kit's faces); a face the service
+// lacks falls back to the stock loader.
 function useServiceFonts(): void {
   const fm = fontManager as unknown as {
     loadRemoteFont(family: string, style?: string, characters?: string, signal?: AbortSignal): Promise<ArrayBuffer | null>
@@ -162,86 +180,316 @@ function useServiceFonts(): void {
   }
 }
 
+// Open a .fig in the editor's one document store, replacing what's there — the
+// upstream open path (src/app/tabs readFigForTab + showImportedGraph), without the
+// new tab it would open for a second file (docs/quirks.md #30).
+async function loadDocument(store: EditorStore, bytes: Uint8Array, fileName: string): Promise<void> {
+  store.state.documentName = fileName.replace(/\.[^.]+$/i, '')
+  const load = store.preparationController.begin({ kind: 'document-open', subject: fileName })
+  let loaded = false
+  try {
+    load.update({ phase: 'decoding', detail: fileName })
+    const graph = await readFigDocument(new File([bytes], fileName), load.signal)
+    const firstPage = graph.getPages()[0]?.id
+    if (firstPage) computeAllLayouts(graph, firstPage)
+    load.update({ phase: 'materializing', detail: store.state.documentName })
+    await applyImportedDocument(store, graph, load)
+    load.signal.throwIfAborted()
+    store.setDocumentSource(fileName, 'fig')
+    const pageId = store.graph.getPages()[0]?.id ?? store.graph.rootId
+    load.update({ phase: 'populating-page', detail: store.graph.getNode(pageId)?.name ?? null })
+    await store.switchPage(pageId, { preparation: load })
+    load.update({ phase: 'preparing-render', detail: store.state.documentName })
+    await store.fitCurrentPageToViewport()
+    loaded = true
+  } catch (error) {
+    if (!load.signal.aborted) {
+      load.fail({
+        code: 'decode-failed',
+        message: error instanceof Error ? error.message : String(error),
+        retryable: true
+      })
+    }
+    throw error
+  } finally {
+    if (loaded) load.complete()
+  }
+}
+
+// OpenPencil (0.15.1) commits a text edit, and undoes or redoes one, straight into
+// the graph without laying out the text's auto-layout parents — a line typed longer
+// in a stack ran over the line under it (docs/quirks.md #29). So each of those lays
+// the text's parents out again, as the editor's own node updates do.
+function reflowTextEdits(store: EditorStore): void {
+  type Editor = {
+    __cyclsReflow?: boolean
+    state: { editingTextId?: string | null; currentPageId: string }
+    graph: { getNode(id: string): unknown }
+    runLayoutForNode(id: string): void
+    requestRender(): void
+    commitTextEdit?: () => void
+    startTextEditing?: (id: string) => void
+    undoAction?: () => unknown
+    redoAction?: () => unknown
+  }
+  const s = store as unknown as Editor
+  if (s.__cyclsReflow) return
+  s.__cyclsReflow = true
+  const relayout = (id: string | null | undefined) => {
+    try {
+      if (id && s.graph.getNode(id)) s.runLayoutForNode(id)
+      s.requestRender()
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.log('[cycls] relayout failed', error)
+    }
+  }
+  const commit = s.commitTextEdit?.bind(s)
+  if (commit) {
+    s.commitTextEdit = () => {
+      const id = s.state.editingTextId
+      commit()
+      relayout(id)
+    }
+  }
+  const start = s.startTextEditing?.bind(s)
+  if (start) {
+    s.startTextEditing = (id: string) => {
+      const previous = s.state.editingTextId   // starting another commits this one
+      start(id)
+      if (previous && previous !== id) relayout(previous)
+    }
+  }
+  for (const key of ['undoAction', 'redoAction'] as const) {
+    const run = s[key]?.bind(s)
+    if (run) {
+      s[key] = () => {
+        const result = run()
+        relayout(s.state.currentPageId)   // whichever text it was: the page's layouts
+        return result
+      }
+    }
+  }
+}
+
+// --- Theme: Cycls's light/dark, live. The editor's theme is a useLocalStorage ref
+// (src/app/shell/theme.ts), so a storage event switches it without a reload.
+export function applyTheme(theme: string): void {
+  if (theme !== 'dark' && theme !== 'light') return
+  try {
+    const oldValue = localStorage.getItem('open-pencil:theme')
+    localStorage.setItem('open-pencil:theme', theme)
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: 'open-pencil:theme', newValue: theme, oldValue, storageArea: localStorage, url: location.href
+    }))
+  } catch {
+    /* no storage: the editor keeps the theme it booted with */
+  }
+  const store = boundDocument()?.store
+  if (store) paintBackdrop(store, theme)
+}
+
+// The canvas backdrop follows the chrome (dark #0a0a0a / light #f3f4f6), whatever
+// the document has stored.
+function paintBackdrop(store: EditorStore, theme = document.documentElement.dataset.theme): void {
+  const dark = (theme ?? 'dark') !== 'light'
+  try {
+    ;(store.state as { pageColor?: { r: number; g: number; b: number; a: number } }).pageColor =
+      dark ? { r: 0.039, g: 0.039, b: 0.039, a: 1 } : { r: 0.953, g: 0.957, b: 0.965, a: 1 }
+    store.requestRender()
+  } catch { /* ignore */ }
+}
+
+// --- Brand kit: the workspace's brand/brand.yaml, as Cycls reads it. Its colours
+// become variables in a "Brand" collection, so a person editing by hand picks the
+// same colours the agent uses, and its fonts are loaded before they're picked.
+// Idempotent: a variable is created when missing, and set only when brand.yaml
+// changed since the last sync — so a value changed by hand stands until the brand
+// itself changes. What was last synced rides in the design's first frame, as plugin
+// data (`cycls.brand`): a .fig keeps neither a variable's description nor a page's
+// plugin data (quirks #31); a frame's it does (slide notes ride the same way).
+export type Brand = { colors?: Record<string, string>; fonts?: { heading?: string | null; body?: string | null } }
+
+const BRAND_COLORS: Record<string, string> = {
+  primary: 'Primary', secondary: 'Secondary', accent: 'Accent',
+  background: 'Background', text: 'Text', neutral: 'Neutral'
+}
+
+function rgba(hex: string): { r: number; g: number; b: number; a: number } | null {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex.trim())
+  if (!m) return null
+  const n = parseInt(m[1], 16)
+  return { r: ((n >> 16) & 255) / 255, g: ((n >> 8) & 255) / 255, b: (n & 255) / 255, a: 1 }
+}
+
+export function syncBrandVariables(store: EditorStore, brand: Brand | null | undefined): boolean {
+  const colors = Object.entries(brand?.colors ?? {})
+    .map(([key, hex]) => [key, BRAND_COLORS[key], String(hex).toLowerCase(), rgba(String(hex))] as const)
+    .filter(([, name, , value]) => name && value)
+  if (!colors.length) return false
+  type Variable = { name: string; valuesByMode: Record<string, unknown> }
+  type Collection = { id: string; name: string; defaultModeId: string }
+  const graph = store.graph as unknown as {
+    variableCollections: Map<string, Collection>
+    createCollection(name: string): Collection
+    createVariable(name: string, type: 'COLOR', collectionId: string, value: unknown): Variable
+    getVariablesForCollection(id: string): Variable[]
+  }
+  type Holder = { type: string; getPluginData(key: string): string; setPluginData(key: string, value: string): void }
+  const page = (makeFigmaFromStore(store, store.state.currentPageId) as unknown as {
+    currentPage: Holder & { children: Holder[] }
+  }).currentPage
+  const holder = page.children.find((n) => n.type === 'FRAME') ?? page
+  let synced: Record<string, string> = {}
+  try { synced = JSON.parse(holder.getPluginData('cycls.brand') || '{}') } catch { /* none yet */ }
+
+  let changed = false
+  const why: string[] = []
+  let collection = [...graph.variableCollections.values()].find((c) => c.name === 'Brand')
+  if (!collection) {
+    collection = graph.createCollection('Brand')
+    changed = true
+    why.push('collection')
+  }
+  const existing = graph.getVariablesForCollection(collection.id)
+  const now: Record<string, string> = {}
+  for (const [key, name, hex, value] of colors) {
+    now[key] = hex
+    const variable = existing.find((v) => v.name === name)
+    if (!variable) {
+      graph.createVariable(name, 'COLOR', collection.id, value)
+      changed = true
+      why.push(`+${name}`)
+    } else if (synced[key] !== hex) {
+      variable.valuesByMode[collection.defaultModeId] = value
+      changed = true
+      why.push(`${name}=${hex}`)
+    }
+  }
+  if (changed || JSON.stringify(synced) !== JSON.stringify(now)) {
+    holder.setPluginData('cycls.brand', JSON.stringify(now))
+    changed = true
+  }
+  // eslint-disable-next-line no-console
+  if (changed) console.log('[cycls] brand:', why.join(' ') || 'recorded', '| was', JSON.stringify(synced))
+  return changed
+}
+
+// The brand's faces, loaded while the document settles (so the text they re-shape
+// isn't taken for an edit); one already loaded isn't asked for again.
+function loadBrandFonts(brand: Brand | null | undefined): void {
+  const fm = fontManager as unknown as { loadedData(family: string, style: string): ArrayBuffer | null }
+  const families = new Set([brand?.fonts?.heading, brand?.fonts?.body].filter((f): f is string => !!f))
+  for (const family of families) {
+    for (const style of ['Regular', 'Bold']) {
+      if (!fm.loadedData(family, style)) void fontManager.loadFont(family, style).catch(() => null)
+    }
+  }
+}
+
 export function startCyclsEmbedBridge(): void {
   const params = new URLSearchParams(window.location.search)
   if (params.get('embed') !== 'cycls') return
   const parentWindow = window.parent
   if (!parentWindow || parentWindow === window) return
+  connect(parentWindow)
   useServiceFonts()
 
-  let name = 'design.fig'
-  let lastVersion = -1
-  let saving = false
-  // A freshly loaded doc keeps mutating for a beat (fonts re-shape, the first
-  // frame renders) before the human touches anything. We hold auto-save off until
-  // past this timestamp AND the renderer is warm, so we never fire a save against
-  // a cold renderer — that early save fails and surfaces as a spurious editor error.
+  // A freshly loaded document keeps settling for a beat (fonts re-shape, the first
+  // frame renders, layouts compute) before the person touches anything. Until then
+  // nothing auto-saves; at the end, what the settling changed counts as saved — unless
+  // the person already started editing, which saves.
   let settleUntil = 0
-
-  const post = (msg: Record<string, unknown>): void => {
-    parentWindow.postMessage({ source: 'cycls-editor', ...msg }, '*')
+  let settled = false
+  let touched = false
+  let loading: Promise<void> = Promise.resolve()
+  let pendingBrand: Brand | null = null
+  for (const kind of ['pointerdown', 'keydown'] as const) {
+    window.addEventListener(kind, () => { if (!settled) touched = true }, { capture: true })
   }
 
-  async function saveBack(): Promise<void> {
-    if (saving) return
-    const store = getActiveStore()
-    if (!store) {
-      post({ type: 'error', message: 'no active store' })
-      return
-    }
-    saving = true
-    // eslint-disable-next-line no-console
-    console.log('[cycls] save: start page=', store.state?.currentPageId, 'renderer=', !!store.renderer)
+  let saveTimer: number | undefined
+  const cancelScheduledSave = () => {
+    if (saveTimer !== undefined) window.clearTimeout(saveTimer)
+    saveTimer = undefined
+  }
+  async function saveNow(): Promise<boolean> {
+    cancelScheduledSave()
+    const store = boundDocument()?.store
+    if (!store) return false
     try {
-      const renderer = store.renderer
-      // exportFigFile first awaits the "original archive" — a fig-population /
-      // session-worker request that never resolves for an embed-loaded UNEDITED
-      // doc (the worker is gone). Release both so it re-encodes the current graph
-      // (synchronously, via the canUseWorker=false patch) instead of hanging.
-      try {
-        releaseFigPopulationWorker(store.graph)
-      } catch {
-        /* ignore */
+      return await store.saveFigFile()
+    } catch (error) {
+      post({ type: 'error', doc: boundDocument()?.doc, message: String((error as Error)?.message ?? error) })
+      return false
+    }
+  }
+  const scheduleSave = () => {
+    cancelScheduledSave()
+    saveTimer = window.setTimeout(() => {
+      saveTimer = undefined
+      const store = boundDocument()?.store
+      if (store?.hasUnsavedChanges()) void saveNow()
+    }, 1200)
+  }
+
+  function applyBrand(brand: Brand | null): void {
+    const store = boundDocument()?.store
+    if (!store || !brand) return
+    loadBrandFonts(brand)
+    try {
+      if (syncBrandVariables(store, brand)) {
+        store.requestRender()
+        void saveNow()   // graph-level variable edits raise no change events: save them here
       }
-      try {
-        releaseOriginalFigArchive(store.graph)
-      } catch {
-        /* ignore */
-      }
-      // The .fig writer re-emits a loaded node's auto-layout fields as the file had
-      // them — a stack's gap or alignment changed here would be lost on save
-      // (cycls-design docs/quirks.md #28). Write the nodes' own values instead.
-      const nodes = (store.graph as unknown as { nodes: Map<string, { source?: { fig?: { layout?: unknown } } }> }).nodes
-      for (const node of nodes.values()) if (node.source?.fig?.layout) node.source.fig.layout = undefined
-      // Timeout so a stalled export surfaces as an error instead of hanging silently.
-      const data = (await Promise.race([
-        exportFigFile(store.graph, renderer?.ck, renderer ?? undefined, store.state.currentPageId),
-        new Promise((_resolve, reject) =>
-          window.setTimeout(() => reject(new Error('exportFigFile timeout (20s)')), 20000)
-        )
-      ])) as Uint8Array
-      // eslint-disable-next-line no-console
-      console.log('[cycls] save: exported', data.length, 'bytes')
-      lastVersion = store.state.sceneVersion
-      post({ type: 'saved', name, fig: encodeBase64(data) })
     } catch (error) {
       // eslint-disable-next-line no-console
-      console.log('[cycls] save: error', error)
-      post({ type: 'error', message: String((error as Error)?.message ?? error) })
-    } finally {
-      saving = false
+      console.log('[cycls] brand sync failed', error)
     }
+  }
+
+  async function open(msg: { protocol?: number; doc?: string; name?: string; fig: string; brand?: Brand }): Promise<void> {
+    setHostProtocol(typeof msg.protocol === 'number' ? msg.protocol : 0)
+    cancelScheduledSave()
+    await loading   // one load at a time
+    const store = getActiveStore()
+    const name = msg.name || 'design.fig'
+    const doc = typeof msg.doc === 'string' ? msg.doc : ''
+    bind(null)
+    settled = false
+    touched = false
+    pendingBrand = msg.brand ?? null
+    loadBrandFonts(pendingBrand)
+    await loadDocument(store, decodeBase64(msg.fig), name)
+    bind({ store, doc, name })
+    reflowTextEdits(store)
+    // Fonts the document uses (and any fallback pack). A face that's slow to arrive
+    // doesn't fail the load — the document is open and editable, and the late-fonts
+    // refresh below re-shapes its text when the face lands.
+    const page = store.graph.getNode(store.state.currentPageId)
+    if (page) {
+      try {
+        await ensureGraphFonts(store.graph, page.childIds, store.renderer)
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.log('[cycls] load: fonts still arriving', error)
+      }
+    }
+    paintBackdrop(store)
+    settleUntil = performance.now() + 2500
+    post({ type: 'loaded', doc, name })
   }
 
   // Apply an agent "command" — a Figma-plugin-API script — to the LIVE editor
-  // (mirrors the app's automation eval-handler), so the human watches the agent's
+  // (mirrors the app's automation eval-handler), so the person watches the agent's
   // edits appear on the canvas they're using. Auto-save then persists them.
   async function runCommand(script: string, intent?: string): Promise<void> {
-    const store = getActiveStore()
-    if (!store) {
-      post({ type: 'commandError', message: 'no active store' })
+    const bound = boundDocument()
+    if (!bound) {
+      post({ type: 'commandError', message: 'no document is open' })
       return
     }
+    const { store, doc } = bound
     showAgent(intent) // Super glides onto the canvas before it acts
     try {
       const pageId = store.state.currentPageId
@@ -281,123 +529,49 @@ export function startCyclsEmbedBridge(): void {
         /* no bounds → the cursor just stays at center */
       }
       pulseAgent()
-      post({ type: 'applied' }) // the scene changed → auto-save persists it
+      post({ type: 'applied', doc }) // the scene changed → auto-save persists it
     } catch (error) {
-      post({ type: 'commandError', message: String((error as Error)?.message ?? error) })
+      post({ type: 'commandError', doc, message: String((error as Error)?.message ?? error) })
     } finally {
       idleAgent()
     }
   }
 
+  async function flush(id: string): Promise<void> {
+    cancelScheduledSave()
+    await loading
+    const store = boundDocument()?.store
+    const ok = !store || !store.hasUnsavedChanges() ? true : await saveNow()
+    post({ type: 'flushed', id, ok })
+  }
+
   window.addEventListener('message', (event: MessageEvent) => {
     if (event.source !== parentWindow) return
-    const msg = event.data as { target?: string; type?: string; name?: string; fig?: string; script?: string; intent?: string }
+    const msg = event.data as {
+      target?: string; type?: string; protocol?: number; doc?: string; name?: string; fig?: string
+      id?: string; ok?: boolean; script?: string; intent?: string; theme?: string; brand?: Brand
+    }
     if (!msg || msg.target !== 'cycls-editor') return
-    if (msg.type === 'command' && typeof msg.script === 'string') {
-      void runCommand(msg.script, typeof msg.intent === 'string' ? msg.intent : undefined)
-    } else if (msg.type === 'load' && typeof msg.fig === 'string') {
-      name = msg.name || 'design.fig'
+    if (msg.type === 'load' && typeof msg.fig === 'string') {
       const fig = msg.fig
-      void (async () => {
-        try {
-          await openFileInNewTab(new File([decodeBase64(fig)], name))
-          // Ensure the loaded document's fonts (referenced + any fallback packs) so
-          // text re-shapes once fonts are ready. Arabic text is authored with an
-          // explicit Arabic family by the render service, so it renders directly;
-          // this also covers any fallback a document happens to need.
-          const store = getActiveStore()
-          if (store) {
-            reflowTextEdits(store)
-            const page = store.graph.getNode(store.state.currentPageId)
-            // A font that's slow to arrive (a lookup that times out) doesn't fail the
-            // load — the document is open and editable, and the late-fonts refresh
-            // below re-shapes its text when the font lands.
-            if (page) {
-              try {
-                await ensureGraphFonts(store.graph, page.childIds, store.renderer)
-              } catch (error) {
-                // eslint-disable-next-line no-console
-                console.log('[cycls] load: fonts still arriving', error)
-              }
-            }
-            // Backdrop follows the editor's light/dark so it always matches the
-            // chrome (dark #0a0a0a / light #f3f4f6), whatever the doc has stored.
-            const dark = (document.documentElement.dataset.theme ?? 'dark') !== 'light'
-            try {
-              ;(store.state as { pageColor?: { r: number; g: number; b: number; a: number } }).pageColor =
-                dark ? { r: 0.039, g: 0.039, b: 0.039, a: 1 } : { r: 0.953, g: 0.957, b: 0.965, a: 1 }
-            } catch { /* ignore */ }
-            store.requestRender?.()
-            // Open centred/fit to the viewport instead of at an arbitrary zoom.
-            try { (store as { zoomToFit?: () => void }).zoomToFit?.() } catch { /* ignore */ }
-          }
-          lastVersion = getActiveStore()?.state.sceneVersion ?? -1
-          settleUntil = performance.now() + 2500 // absorb the post-load settling
-          post({ type: 'loaded', name })
-        } catch (error) {
-          post({ type: 'error', message: String((error as Error)?.message ?? error) })
-        }
-      })()
+      loading = open({ ...msg, fig }).catch((error) => {
+        post({ type: 'error', doc: msg.doc, message: String((error as Error)?.message ?? error) })
+      })
+    } else if (msg.type === 'written' && typeof msg.id === 'string') {
+      written(msg.id, msg.ok === true)
     } else if (msg.type === 'save') {
-      void saveBack()
+      void saveNow()
+    } else if (msg.type === 'flush' && typeof msg.id === 'string') {
+      void flush(msg.id)
+    } else if (msg.type === 'command' && typeof msg.script === 'string') {
+      void runCommand(msg.script, typeof msg.intent === 'string' ? msg.intent : undefined)
+    } else if (msg.type === 'theme' && typeof msg.theme === 'string') {
+      applyTheme(msg.theme)
+    } else if (msg.type === 'brand') {
+      if (settled) applyBrand(msg.brand ?? null)
+      else pendingBrand = msg.brand ?? null
     }
   })
-
-  // OpenPencil (0.15.1) commits a text edit, and undoes or redoes one, straight into
-  // the graph without laying out the text's auto-layout parents — a line typed longer
-  // in a stack ran over the line under it (cycls-design docs/quirks.md #29). So each
-  // of those lays the text's parents out again, as the editor's own node updates do.
-  function reflowTextEdits(store: NonNullable<ReturnType<typeof getActiveStore>>) {
-    type Editor = {
-      __cyclsReflow?: boolean
-      state: { editingTextId?: string | null; currentPageId: string }
-      graph: { getNode(id: string): unknown }
-      runLayoutForNode(id: string): void
-      requestRender(): void
-      commitTextEdit?: () => void
-      startTextEditing?: (id: string) => void
-      undoAction?: () => unknown
-      redoAction?: () => unknown
-    }
-    const s = store as unknown as Editor
-    if (s.__cyclsReflow) return
-    s.__cyclsReflow = true
-    const relayout = (id: string | null | undefined) => {
-      try {
-        if (id && s.graph.getNode(id)) s.runLayoutForNode(id)
-        s.requestRender()
-      } catch (error) {
-        // eslint-disable-next-line no-console
-        console.log('[cycls] relayout failed', error)
-      }
-    }
-    const commit = s.commitTextEdit?.bind(s)
-    if (commit) {
-      s.commitTextEdit = () => {
-        const id = s.state.editingTextId
-        commit()
-        relayout(id)
-      }
-    }
-    const start = s.startTextEditing?.bind(s)
-    if (start) {
-      s.startTextEditing = (id: string) => {
-        const previous = s.state.editingTextId   // starting another commits this one
-        start(id)
-        if (previous && previous !== id) relayout(previous)
-      }
-    }
-    for (const key of ['undoAction', 'redoAction'] as const) {
-      const run = s[key]?.bind(s)
-      if (run) {
-        s[key] = () => {
-          const result = run()
-          relayout(s.state.currentPageId)   // whichever text it was: the page's layouts
-          return result
-        }
-      }
-    }
-  }
 
   // Late fonts. A web-font subset (the Arabic letters of Cairo, a fallback pack)
   // can register AFTER a text node was first drawn. The renderer only re-shapes the
@@ -406,15 +580,13 @@ export function startCyclsEmbedBridge(): void {
   // build, blank on one load in two). Whenever the font set changes, drop every
   // cached text picture so the next frame shapes with the fonts loaded now — the
   // same reset the renderer's own settleFontDemand applies to the nodes it tracked.
-  // Plain property resets, not graph edits: the scene version doesn't move, so this
-  // never triggers an auto-save.
+  // Plain property resets, not graph edits, so the document stays saved.
   let fontGeneration = fontManager.generation()
   window.setInterval(() => {
     const generation = fontManager.generation()
     if (generation === fontGeneration) return
     fontGeneration = generation
-    let store: ReturnType<typeof getActiveStore>
-    try { store = getActiveStore() } catch { return }
+    const store = boundDocument()?.store
     const renderer = store?.renderer as unknown as {
       fontGeneration?: number
       textPictureGenerations?: Map<string, unknown>
@@ -435,25 +607,31 @@ export function startCyclsEmbedBridge(): void {
     }
   }, 400)
 
-  // Auto-persist: watch the scene version and save the edited .fig back to the
-  // parent shortly after the human stops editing (debounced), so the workspace
-  // .fig stays current and the agent picks up the human's edits on its next turn.
-  let saveTimer: number | undefined
-  const scheduleSave = () => {
-    if (saveTimer !== undefined) window.clearTimeout(saveTimer)
-    saveTimer = window.setTimeout(() => { saveTimer = undefined; void saveBack() }, 1200)
-  }
+  // Auto-save: once the document has settled, a change the person (or the agent)
+  // makes is saved to the workspace 1.2 s after they stop. Only content changes make
+  // it unsaved (store.hasUnsavedChanges — not repaints, not a late font); while it is,
+  // each new frame restarts the wait.
+  let seenVersion = -1
   window.setInterval(() => {
-    const store = getActiveStore()
-    if (!store || lastVersion === -1) return
-    if (store.state.sceneVersion === lastVersion) return
-    lastVersion = store.state.sceneVersion   // mark seen so we don't re-trigger every tick
-    // Only persist a genuine post-settle edit, and only once the renderer is warm
-    // (exportFigFile needs its CanvasKit). Changes during the initial settle are the
-    // doc rendering itself, not the human — re-baseline above and skip the save.
-    const warm = !!(store as { renderer?: { ck?: unknown } }).renderer?.ck
-    if (warm && performance.now() >= settleUntil) scheduleSave()
+    const store = boundDocument()?.store
+    if (!store) return
+    if (!settled) {
+      const warm = !!(store as { renderer?: { ck?: unknown } }).renderer?.ck
+      if (!warm || performance.now() < settleUntil) return
+      settled = true
+      if (touched && store.hasUnsavedChanges()) void saveNow()
+      else store.setDocumentSource(boundDocument()?.name ?? 'design.fig', 'fig')   // what settling changed is the file as saved
+      if (pendingBrand) {
+        const brand = pendingBrand
+        pendingBrand = null
+        applyBrand(brand)
+      }
+      return
+    }
+    if (!store.hasUnsavedChanges() || store.state.sceneVersion === seenVersion) return
+    seenVersion = store.state.sceneVersion
+    scheduleSave()
   }, 700)
 
-  post({ type: 'ready' })
+  post({ type: 'ready', protocol: 2 })
 }

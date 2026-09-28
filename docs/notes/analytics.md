@@ -158,6 +158,9 @@ Identified users also carry **person properties** (via identify): `email`,
 | `poll_voted` | someone in the audience votes, on the deck's public link (`?vote=1`) | `options` — votes ÷ polls opened is how many people answer |
 | `deck_exported` | a deck downloaded from the deck viewer | `format` (`pptx` / `pdf`) — which file people take away |
 | `deck_slide_changed` | the owner moved (drag), duplicated or deleted a slide in the deck viewer's grid | `op` (`move` / `duplicate` / `delete`) — do people shape decks by hand, or ask the agent? |
+| `design_created` | "New design" — the canvas `+`, the Files panel, or File › New design in the editor | `source` (`canvas` / `files` / `editor`), `size` (the preset or `WxH`) — do people start designs by hand, not only by asking? |
+| `design_exported` | an export from the design editor, written into the workspace beside the design | `format`, `files` — which formats leave the editor |
+| `design_copied` | "Save a copy" in the design editor | — do people branch designs? |
 
 ### Sharing loop (organic acquisition)
 

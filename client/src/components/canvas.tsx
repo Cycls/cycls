@@ -8,11 +8,11 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, isDeck, is3d, codeLang, extTint, tintTile, tintLabel, tileExt, saveBlob } from "./canvas-utils";
+import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, isDeck, is3d, codeLang, extTint, tintTile, tintLabel, tileExt, saveBlob, DESIGN_PRESETS } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
-import { DesignEditorView } from "./design-editor-view";
+import { DesignEditorView, flushDesignEditor, type DesignHost } from "./design-editor-view";
 import { DeckView, type DeckOp } from "./deck-view";
 import type { PollApi } from "../lib/polls";
 import { attachBridge, appScope } from "./app-bridge";
@@ -235,7 +235,7 @@ function NoPreviewCard({ file, onDownload, onShare }: {
   );
 }
 
-export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, deckOp, pollsFor, listFolders, fetchConnector, appData, designEditorUrl, reloadFile, onReload, onDownload, onShare }: {
+export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, deckOp, pollsFor, listFolders, fetchConnector, appData, designEditorUrl, designHost, reloadFile, onReload, onDownload, onShare }: {
   file: CanvasFile;
   resolveMedia?: (path: string) => Promise<string>;
   content: string | null;
@@ -250,6 +250,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   designEditorUrl?: string;   // when set, .fig opens the embedded editor
+  designHost?: DesignHost;    // what the editor asks of Cycls: new designs, copies, exports, the brand kit
   reloadFile?: () => Promise<string>;   // fresh blob URL of this file (the .fig editor re-opens on it)
   onReload?: () => void;      // refetch this document (a deck whose slides changed)
   onDownload?: () => void;
@@ -270,7 +271,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   if (isDeck(fileKind(file))) {
     return content ? (
       <DeckView data={content} path={file.path} openFile={openFile} writeFile={shared ? undefined : writeFile}
-                designEditorUrl={shared ? undefined : designEditorUrl} onReload={onReload}
+                designEditorUrl={shared ? undefined : designEditorUrl} designHost={shared ? undefined : designHost} onReload={onReload}
                 onSlideOp={shared || !deckOp ? undefined : (op) => deckOp(file.path, op)}
                 pollsFor={shared ? undefined : pollsFor} />
     ) : null;
@@ -295,7 +296,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
     return content && designEditorUrl ? (
       <DesignEditorView url={content} path={file.path} name={file.name}
                         editorUrl={designEditorUrl} writeFile={writeFile ?? (async () => {})}
-                        reload={reloadFile} />
+                        reload={reloadFile} host={shared ? undefined : designHost} />
     ) : (
       <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />
     );
@@ -379,7 +380,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, railWidth = 0, reloadKey, working, designEditorUrl }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, railWidth = 0, reloadKey, working, designEditorUrl, designHost, onNewDesign }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -410,8 +411,32 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   railWidth?: number;   // pane docked to our right; the drag must account for it
   reloadKey?: number;  // bump to re-fetch the open document
   designEditorUrl?: string;   // embedded .fig editor base URL (config.design_editor_url)
+  designHost?: DesignHost;    // what the design editor asks of Cycls (new designs, copies, exports, brand)
+  onNewDesign?: (preset: string) => void;   // "New design" in the + menu
 }) {
   const file = hidden ? null : tabs.find((f) => f.path === active) ?? tabs[tabs.length - 1] ?? null;
+  // A design editor left behind — its tab switched away from or closed — stays
+  // mounted, hidden, until it has saved what's unsaved (flushDesignEditor), then
+  // goes. Noted while rendering (not in an effect), so it never leaves the tree.
+  const [draining, setDraining] = useState<CanvasFile[]>([]);
+  const [shown, setShown] = useState<CanvasFile | null>(file);
+  if ((file?.path ?? null) !== (shown?.path ?? null)) {
+    setShown(file);
+    if (shown && file && designEditorUrl && isDesignEditor(fileKind(shown))) {
+      setDraining((d) => [...d.filter((x) => x.path !== shown.path), shown]);
+    }
+  }
+  const flushing = useRef(new Set<string>());
+  useEffect(() => {
+    for (const f of draining) {
+      if (flushing.current.has(f.path)) continue;
+      flushing.current.add(f.path);
+      void flushDesignEditor(f.path, 5000).finally(() => {
+        flushing.current.delete(f.path);
+        setDraining((d) => d.filter((x) => x.path !== f.path));
+      });
+    }
+  }, [draining]);
   const { width, startResize, resizing } = usePaneWidth("cycls_canvas_width", 560, 380, 420, railWidth, undefined, 1, 0.25);
 
   const inner = file && (
@@ -448,7 +473,8 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
             );
           })}
           {onAddFile && searchFiles && (
-            <AddTab onAdd={onAddFile} searchFiles={searchFiles} apps={apps} onAddApp={onAddApp} />
+            <AddTab onAdd={onAddFile} searchFiles={searchFiles} apps={apps} onAddApp={onAddApp}
+                    onNewDesign={designEditorUrl ? onNewDesign : undefined} />
           )}
         </Reorder.Group>
         <button
@@ -470,27 +496,37 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
           </button>
         )}
       </div>
-      {working?.includes(file.path) ? (
-        <CanvasWorking key={file.path} name={file.name} />
-      ) : (
-        <CanvasFileView
-          key={file.path}
-          file={file}
-          readFile={readFile}
-          openFile={openFile}
-          writeFile={writeFile}
-          uploadFile={uploadFile}
-          deckOp={deckOp}
-          pollsFor={pollsFor}
-          listFolders={listFolders}
-          fetchConnector={fetchConnector}
-          appData={appData}
-          org={org}
-          onShareFile={onShareFile}
-          reloadKey={reloadKey}
-          designEditorUrl={designEditorUrl}
-        />
-      )}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {[file, ...draining.filter((d) => d.path !== file.path)].map((f) => {
+          const on = f.path === file.path;
+          return (
+            <div key={f.path} inert={!on} aria-hidden={on ? undefined : true}
+                 className={on ? "flex min-h-0 flex-1 flex-col" : "pointer-events-none invisible absolute inset-0 flex flex-col"}>
+              {on && working?.includes(f.path) ? (
+                <CanvasWorking name={f.name} />
+              ) : (
+                <CanvasFileView
+                  file={f}
+                  readFile={readFile}
+                  openFile={openFile}
+                  writeFile={writeFile}
+                  uploadFile={uploadFile}
+                  deckOp={deckOp}
+                  pollsFor={pollsFor}
+                  listFolders={listFolders}
+                  fetchConnector={fetchConnector}
+                  appData={appData}
+                  org={org}
+                  onShareFile={onShareFile}
+                  reloadKey={reloadKey}
+                  designEditorUrl={designEditorUrl}
+                  designHost={designHost}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
     </>
   );
 
@@ -613,11 +649,12 @@ function CanvasWorking({ name }: { name: string }) {
 
 // The menu is position:fixed from the button's rect so the pane's
 // overflow-hidden can't clip it.
-function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
+function AddTab({ onAdd, searchFiles, apps = [], onAddApp, onNewDesign }: {
   onAdd: (path: string) => void;
   searchFiles: (q: string) => Promise<{ name: string; path: string }[]>;
   apps?: AppInfo[];
   onAddApp?: (app: AppInfo) => void;
+  onNewDesign?: (preset: string) => void;
 }) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [q, setQ] = useState("");
@@ -646,8 +683,8 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
       <button
         onClick={toggle}
         className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-        aria-label="Open a file"
-        title="Open a file"
+        aria-label={t("openAFile")}
+        title={t("openAFile")}
       >
         <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -661,9 +698,27 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
               autoFocus
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search files…"
+              placeholder={t("searchFilesPlaceholder")}
               className="w-full border-b border-border bg-transparent px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
             />
+            {onNewDesign && !needle && (
+              <div className="border-b border-border px-3 py-2">
+                <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">{t("newDesign")}</div>
+                <div className="flex flex-wrap gap-1">
+                  {DESIGN_PRESETS.map((p) => (
+                    <button
+                      key={p.key}
+                      data-testid={`new-design-${p.key}`}
+                      onClick={() => { onNewDesign(p.key); setPos(null); }}
+                      title={`${p.size[0]}×${p.size[1]}`}
+                      className="cursor-pointer rounded-md border border-border px-2 py-1 text-[11px] text-foreground transition-colors hover:bg-secondary/80"
+                    >
+                      {t(p.label)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="max-h-64 overflow-y-auto py-1">
               {matchedApps.length > 0 && (
                 <>
@@ -705,7 +760,7 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
 }
 
 // Keyed by path from the parent, so per-file state resets on tab switch.
-function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, reloadKey, designEditorUrl }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, reloadKey, designEditorUrl, designHost }: {
   file: CanvasFile;
   uploadFile?: (dir: string, file: File) => Promise<void>;
   readFile: (path: string) => Promise<string>;
@@ -720,6 +775,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   onShareFile?: (path: string, audience: string) => Promise<string>;
   reloadKey?: number;
   designEditorUrl?: string;
+  designHost?: DesignHost;
 }) {
   const [bump, setBump] = useState(0);   // a document asked to refetch itself (a deck was edited)
   const { content, setContent, error } = useFileContent(file, readFile, openFile, (reloadKey ?? 0) + bump);
@@ -873,7 +929,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
           <CanvasDoc file={file} content={content} error={error} readFile={readFile} openFile={openFile} resolveMedia={resolveMedia} writeFile={writeFile} deckOp={deckOp} pollsFor={pollsFor} listFolders={listFolders}
                      fetchConnector={fetchConnector}
                      appData={appData}
-                     designEditorUrl={designEditorUrl} reloadFile={reloadFile} onReload={onReload}
+                     designEditorUrl={designEditorUrl} designHost={designHost} reloadFile={reloadFile} onReload={onReload}
                      onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
         )}
       </div>

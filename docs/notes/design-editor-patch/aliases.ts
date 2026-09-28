@@ -2,10 +2,24 @@ import { resolve } from 'node:path'
 
 export function createOpenPencilAliases(rootDir: string) {
   const emptyNodeModule = resolve(rootDir, 'vite/empty-node-module.ts')
+  // Cycls: upstream modules and components replaced for the editor in Cycls
+  // (editor/patches/stubs). Before '@', which would otherwise match them first.
+  const stub = (file: string) => resolve(rootDir, 'src/app/embed/stubs', file)
 
   return [
     { find: /^fs$/, replacement: emptyNodeModule },
     { find: /^path$/, replacement: emptyNodeModule },
+    { find: /^@\/app\/tabs$/, replacement: stub('tabs.ts') },
+    { find: /^@\/app\/document\/io\/save$/, replacement: stub('save.ts') },
+    { find: /^@\/app\/document\/export$/, replacement: stub('export.ts') },
+    { find: /^@\/app\/ai\/chat\/use$/, replacement: stub('ai-chat.ts') },
+    { find: /^@\/app\/shell\/menu\/files$/, replacement: stub('menu-files.ts') },
+    { find: /^@\/app\/shell\/menu\/schema$/, replacement: stub('menu-schema.ts') },
+    { find: /^\.\/ChatPanel\.vue$/, replacement: stub('Empty.vue') },
+    { find: /^@\/components\/CollabPanel\/CollabPanel\.vue$/, replacement: stub('Empty.vue') },
+    { find: /^@\/components\/MobileHud\/MobileShareButton\.vue$/, replacement: stub('Empty.vue') },
+    { find: /^@\/components\/MobileHud\/MobilePresencePopover\.vue$/, replacement: stub('Empty.vue') },
+    { find: /^@\/components\/libraries\/LibraryManagerDialog\.vue$/, replacement: stub('Empty.vue') },
     { find: '@', replacement: resolve(rootDir, 'src') },
     { find: '#vue', replacement: resolve(rootDir, 'packages/vue/src') },
     { find: '#core', replacement: resolve(rootDir, 'packages/core/src') },

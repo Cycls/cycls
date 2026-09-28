@@ -96,12 +96,14 @@ Clean. Repo `github.com/Cycls/cycls-design`, one commit
 `66e18bd feat: cycls-design — headless design service for Cycls agents`. Bun server wrapping the
 OpenPencil headless CLI (`/render`, `/eval`, `/health`); Dockerfile `oven/bun:1`.
 
-### Editor (patched OpenPencil fork) — NO repo yet
+### Editor (patched OpenPencil) — now in cycls-design `editor/`
 
-The editor is `open-pencil/open-pencil` + 3 small patches (embedded in §7, durable copies in
-`docs/notes/design-editor-patch/`). The built SPA currently only lives in the scratchpad
-(`op-build-out/dist-fix7`) and is served locally on `:8107`. **This is the main thing to make
-durable tomorrow.**
+*Superseded:* the editor is built from the cycls-design repo (`editor/build.sh`, run by
+`editor/Dockerfile`) and served by the design service (`EDITOR_DIST`). Its patch set — the
+app-shell replacements, the bridge (`cycls-bridge.ts` + `host.ts`), stubs, checked edits
+(`edits.json`) and pinned upstream hashes — is described in `docs/notes/design.md`
+("One design, in the workspace"); `docs/notes/design-editor-patch/` is a copy. The notes
+below are the original handoff, kept for history.
 
 ---
 
@@ -196,7 +198,7 @@ The two numbers that move the total: always-on vs scale-to-zero, and render conc
 
 ## 7. Appendix — editor build recipe + patch files
 
-Durable copies of the three patch files live in `docs/notes/design-editor-patch/`.
+*Historical* — the current build is cycls-design `editor/build.sh`; copies of today's patches live in `docs/notes/design-editor-patch/`.
 
 ### Build recipe (Linux container — Windows monorepo build fails on wasm paths)
 

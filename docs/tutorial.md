@@ -419,7 +419,11 @@ the deck's theme and footer, and page numbers follow. A raw plugin-API `script` 
 as the escape hatch. With `DESIGN_EDITOR_URL` set, a `.fig` opens as the full
 OpenPencil editor on the canvas, the human edits the same design, and the agent's
 edits replay live there (a "Super" cursor). Exports beside a `.fig` re-export
-whenever it changes.
+whenever it changes. The editor edits that one file and saves every change back to
+it; **New design** (the canvas `+`, the Files panel, File › New design) makes a blank
+`designs/<name>.fig` in a chosen size, and the editor's exports and "Save a copy" land
+in the workspace beside the design. The workspace brand kit shows up in the editor as
+a **Brand** variable collection, with its fonts loaded.
 
 Unset `DESIGN_URL` and the tool simply isn't offered — no crash, like the office
 fallback. The render service is a small Bun + OpenPencil app in its own repo

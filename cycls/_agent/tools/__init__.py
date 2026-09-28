@@ -1298,6 +1298,27 @@ def _load_brand(root):
     return brand if primary or brand["heading"] or brand["body"] else None
 
 
+_BRAND_COLOR_KEYS = ("primary", "secondary", "accent", "background", "text", "neutral")
+
+
+def _brand_palette(root):
+    """The brand kit's named colours for the design editor's Brand variables —
+    {primary, secondary, accent, background, text, neutral}, each only when
+    `brand/brand.yaml` gives it a hex, flat (`secondary_color: "#…"`) or nested under
+    `colors:`. Unlike `_load_brand`, nothing is inferred (no accent from primary)."""
+    try:
+        text = (pathlib.Path(root) / "brand" / "brand.yaml").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {}
+    palette = {}
+    for key in _BRAND_COLOR_KEYS:
+        m = (re.search(rf"^{key}_colou?r\s*:\s*['\"]?({_HEX.pattern})\b", text, re.M)
+             or re.search(rf"^\s+{key}\s*:\s*['\"]?({_HEX.pattern})\b", text, re.M))
+        if m and (value := _norm_hex(m.group(1))):
+            palette[key] = value
+    return palette
+
+
 def _first_color(paint):
     """A paint's representative colour: the hex itself, or a gradient's first stop."""
     if isinstance(paint, dict) and isinstance(paint.get("gradient"), list) and paint["gradient"]:

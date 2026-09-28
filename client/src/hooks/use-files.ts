@@ -28,6 +28,17 @@ const APPS_DIR = "apps";
 const hideApps = (dir: string, list: FileEntry[]) =>
   dir === "" ? list.filter((e) => !(e.type === "directory" && e.name === APPS_DIR)) : list;
 
+// A workspace path in a URL: each segment encoded — a name may hold #, ?, % or
+// spaces — and a query the caller adds (`?as=slides`, `?download`) kept as it is.
+export function encPath(path: string): string {
+  const q = path.search(/\?(as|download)(=|&|$)/);
+  const [bare, query] = q >= 0 ? [path.slice(0, q), path.slice(q)] : [path, ""];
+  return bare.split("/").map(encodeURIComponent).join("/") + query;
+}
+
+// The workspace brand kit (brand/brand.yaml) as the design editor takes it.
+export type BrandKit = { colors?: Record<string, string>; fonts?: { heading?: string | null; body?: string | null } };
+
 export function useFiles(baseUrl: string = "") {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [path, setPath] = useState("");
@@ -61,7 +72,7 @@ export function useFiles(baseUrl: string = "") {
     const filePath = dir ? `${dir}/${file.name}` : file.name;
     const meta = { file_name: file.name, file_type: file.type, file_size: file.size, context: "files_panel" };
     try {
-      await api(`/files/${filePath}`, { method: "PUT", body: file });
+      await api(`/files/${encPath(filePath)}`, { method: "PUT", body: file });
     } catch (err) {
       track("file_upload_failed", { ...meta, status: (err as Error & { status?: number }).status });
       throw err;
@@ -77,7 +88,7 @@ export function useFiles(baseUrl: string = "") {
       zip(entries, (err, out) => (err ? reject(err) : resolve(out))));
     const meta = { file_count: files.length, batch_bytes: data.length, context: "files_panel" };
     try {
-      await api(`/files-batch/${dir}`, { method: "POST", body: new Blob([data as BlobPart]) });
+      await api(`/files-batch/${encPath(dir)}`, { method: "POST", body: new Blob([data as BlobPart]) });
     } catch (err) {
       track("file_upload_failed", { ...meta, status: (err as Error & { status?: number }).status });
       throw err;
@@ -87,18 +98,18 @@ export function useFiles(baseUrl: string = "") {
 
   const mkdir = useCallback(async (dir: string, name: string) => {
     const dirPath = dir ? `${dir}/${name}` : name;
-    await api(`/files/${dirPath}`, { method: "POST" });
+    await api(`/files/${encPath(dirPath)}`, { method: "POST" });
     track("folder_created", { path: dirPath });
   }, [api]);
 
   const rename = useCallback(async (from: string, to: string) => {
-    await api(`/files/${from}`, { method: "PATCH", json: { to } });
+    await api(`/files/${encPath(from)}`, { method: "PATCH", json: { to } });
     track("file_renamed", { from, to });
   }, [api]);
 
   // A delete is a move into the workspace trash (docs/notes/trash.md).
   const remove = useCallback(async (filePath: string) => {
-    const r = (await (await api(`/files/${filePath}`, { method: "DELETE" })).json()) as { trash_id: string; kind: string };
+    const r = (await (await api(`/files/${encPath(filePath)}`, { method: "DELETE" })).json()) as { trash_id: string; kind: string };
     track("file_deleted", { path: filePath, kind: r.kind, by: "user", permanent: false });
     return r;
   }, [api]);
@@ -127,7 +138,7 @@ export function useFiles(baseUrl: string = "") {
   // error toast for an expected-and-handled failure — e.g. an Office ?as=pdf
   // conversion when the converter is down, which falls back to the download card.
   const openFile = useCallback(async (filePath: string, silent = false) => {
-    return URL.createObjectURL(await (await api(`/files/${filePath}`, { silent })).blob());
+    return URL.createObjectURL(await (await api(`/files/${encPath(filePath)}`, { silent })).blob());
   }, [api]);
 
   // Authed text fetch — the canvas renders md/html from source, not a blob URL.
@@ -135,7 +146,7 @@ export function useFiles(baseUrl: string = "") {
   // exist yet (its key-value store, an optional data file) is normal, and the
   // failure is already reported back to it over the bridge.
   const readFile = useCallback(async (filePath: string, silent = false) => {
-    return (await api(`/files/${filePath}`, { silent })).text();
+    return (await api(`/files/${encPath(filePath)}`, { silent })).text();
   }, [api]);
 
   // An app's live call to a connector's API. The token stays on the server: it resolves the
@@ -177,14 +188,35 @@ export function useFiles(baseUrl: string = "") {
   // Overwrite a workspace file from the canvas. Accepts text OR binary (a
   // Uint8Array / ArrayBuffer / Blob) — the design editor writes raw .fig bytes.
   const writeFile = useCallback(async (filePath: string, data: BlobPart, silent = false) => {
-    await api(`/files/${filePath}`, { method: "PUT", body: new Blob([data]), silent });
+    await api(`/files/${encPath(filePath)}`, { method: "PUT", body: new Blob([data]), silent });
     track("file_saved", { path: filePath });
+  }, [api]);
+
+  // A NEW file at `filePath`, never over one: the server takes the next free name
+  // (…-2, -3) and says which. What the design editor exports and copies.
+  const writeNew = useCallback(async (filePath: string, data: BlobPart) => {
+    const r = await (await api(`/files/${encPath(filePath)}?dedupe=1`, { method: "PUT", body: new Blob([data]) })).json();
+    return (r as { path?: string }).path ?? filePath;
+  }, [api]);
+
+  // "New design": a blank design of a size preset (or [w, h]) in designs/ → its path.
+  const newDesign = useCallback(async (body: { name?: string; size?: string | [number, number]; background?: string } = {}) => {
+    return (await (await api("/design/new", { method: "POST", json: body })).json()) as { path: string; name: string; size: [number, number] };
+  }, [api]);
+
+  // The brand kit for the design editor (null without one, or on a server without the route).
+  const brand = useCallback(async (): Promise<BrandKit | null> => {
+    try {
+      return ((await (await api("/brand", { silent: true })).json()) as { brand: BrandKit | null }).brand;
+    } catch {
+      return null;
+    }
   }, [api]);
 
   // A deck viewer's own slide change — move / duplicate / delete, slides from 1 — run on
   // the deck's .fig by the server (POST /deck/<deck document or .fig>).
   const deckOp = useCallback(async (deckPath: string, body: { op: "move" | "duplicate" | "delete"; number: number; to?: number }) => {
-    await api(`/deck/${deckPath}`, { method: "POST", json: body });
+    await api(`/deck/${encPath(deckPath)}`, { method: "POST", json: body });
   }, [api]);
 
   // Backs the composer's @-picker. The server matches, ranks and caps, so this
@@ -244,7 +276,7 @@ export function useFiles(baseUrl: string = "") {
     makeLink: async () => voteUrl(await shareFile(deck, "public")),
   }), [api, shareFile]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, deckOp, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, writeNew, newDesign, brand, deckOp, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

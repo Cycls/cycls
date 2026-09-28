@@ -218,7 +218,7 @@ type SortKey = "name" | "size" | "modified" | "type";
 
 const fileExt = (name: string) => (name.includes(".") ? name.split(".").pop()!.toLowerCase() : "");
 
-export function Files({ entries, path, loading, onNavigate, onReload, onUpload, onUploadBatch, onMkdir, onRename, onDelete, onOpenFile, onShareFile, onOpenInCanvas, listFolders, maxUpload, org }: FilesPanelProps) {
+export function Files({ entries, path, loading, onNavigate, onReload, onUpload, onUploadBatch, onMkdir, onRename, onDelete, onOpenFile, onShareFile, onOpenInCanvas, onNewDesign, listFolders, maxUpload, org }: FilesPanelProps) {
   useLang();
   const { error: toastError } = useToast();
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
@@ -482,6 +482,7 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
               <DropdownMenu
                 onClose={() => setMenu(false)}
                 items={[
+                  ...(onNewDesign ? [{ label: t("newDesign"), onClick: onNewDesign }] : []),
                   { label: t("newFolder"),    onClick: () => setCreatingFolder(true) },
                   { label: t("uploadFile"),   onClick: () => fileInputRef.current?.click() },
                   { label: t("uploadFolder"), onClick: () => folderInputRef.current?.click() },
