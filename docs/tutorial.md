@@ -407,7 +407,9 @@ and shapes stay editable in PowerPoint.
 (PowerPoint / PDF), Edit (the design editor on the deck's `.fig`), and **Present** —
 fullscreen, with transitions, notes (N), a grid (G) and a presenter window (P). The
 owner can drag slides to reorder them, duplicate or delete them; a shared deck
-presents too.
+presents too. A `poll` slide (`question`, `options`) runs **live** when its owner
+presents: the audience scans a QR of the deck's public link, votes on their phones,
+and the bars fill as they do.
 
 **Changing a design.** `inspect {name}` lists a design's slides and named nodes;
 `edit {name, ops}` changes it by name (`set_text`, `style`, `move`, `add`, …), checked

@@ -1657,7 +1657,9 @@ def _fake_design(monkeypatch):
     async def slides(fig, scale=1, fmt="jpg", user_id=None):
         calls.append(("slides", fig, scale, user_id))
         return {"images": [b"\xff\xd8one", b"\xff\xd8two"], "sizes": [[1920, 1080]] * 2, "format": "jpg",
-                "meta": [{"name": "cover", "title": "Cover", "notes": "Hello", "transition": "fade"}, {"name": "slide-2"}]}
+                "meta": [{"name": "cover", "title": "Cover", "notes": "Hello", "transition": "fade"},
+                         {"name": "slide-2", "poll": json.dumps({"question": "Tea or coffee?", "options": ["Tea", "Coffee"],
+                                                                "tracks": [], "dir": "ltr"})}]}
 
     async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False):
         calls.append((fmt, fig, user_id))
@@ -1686,6 +1688,7 @@ def test_deck_slides_render_once_and_carry_the_notes(tmp_path, monkeypatch):
     assert base64.b64decode(body["slides"][1].split(",", 1)[1]) == b"\xff\xd8two"
     assert body["slides"][0].startswith("data:image/jpeg;base64,")
     assert body["notes"] == ["Hello", ""] and body["titles"] == ["Cover", ""] and body["transitions"] == ["fade", ""]
+    assert body["polls"][0] is None and body["polls"][1]["question"] == "Tea or coffee?"   # a poll slide's poll
     assert calls == [("slides", b"FIG", 1, "org_1:user_1")]                 # 1920 wide → @1x
     client.get("/files/designs/pitch.deck.json", params={"as": "slides"})
     client.get("/files/designs/pitch.fig", params={"as": "slides"})          # the .fig itself: same cache
@@ -2237,3 +2240,65 @@ def test_regenerate_is_refused_while_a_run_is_live(tmp_path):
 
     live, after = asyncio.run(go())
     assert live == "running" and after == "done"
+
+
+
+# ---- live polls: the presenter opens, the audience votes through the share link ----
+
+def _poll_setup(tmp_path, audience="public", path="file/designs/pitch.deck.json"):
+    svc, user, client = _share_test_app(tmp_path)
+    token = client.post("/share", json={"path": path, "audience": audience}).json()["token"]
+    return client, f"/share/user_test/{token}/poll"
+
+
+def test_a_poll_opens_takes_one_vote_per_voter_and_tallies(tmp_path):
+    client, base = _poll_setup(tmp_path)
+    assert client.get(base).json() == {"open": False}                                   # nothing open yet
+    opened = client.post("/polls", json={"deck": "designs/pitch.deck.json", "slide": 3, "question": "Tea or coffee?",
+                                         "options": ["Tea", "Coffee", "Neither"]}).json()
+    session = opened["session"]
+    seen = client.get(base).json()
+    assert seen == {"open": True, "session": session, "question": "Tea or coffee?", "options": ["Tea", "Coffee", "Neither"], "slide": 3}
+    a, b = "a" * 32, "b" * 32
+    assert client.post(f"{base}/vote", json={"session": session, "option": 1, "voter": a}).json()["counts"] == [0, 1, 0]
+    assert client.post(f"{base}/vote", json={"session": session, "option": 1, "voter": b}).json()["total"] == 2
+    assert client.post(f"{base}/vote", json={"session": session, "option": 0, "voter": a}).status_code == 409   # once
+    assert client.get("/polls/results", params={"deck": "designs/pitch.deck.json", "session": session}).json()["counts"] == [0, 2, 0]
+    assert client.get(f"{base}/results", params={"session": session}).json()["counts"] == [0, 2, 0]
+
+
+def test_a_vote_is_checked(tmp_path):
+    client, base = _poll_setup(tmp_path)
+    session = client.post("/polls", json={"deck": "designs/pitch.deck.json", "question": "Q?", "options": ["A", "B"]}).json()["session"]
+    v = "c" * 32
+    assert client.post(f"{base}/vote", json={"session": "old", "option": 0, "voter": v}).status_code == 409   # another session
+    assert client.post(f"{base}/vote", json={"session": session, "option": 2, "voter": v}).status_code == 400
+    assert client.post(f"{base}/vote", json={"session": session, "option": True, "voter": v}).status_code == 400
+    assert client.post(f"{base}/vote", json={"session": session, "option": 0, "voter": "../x"}).status_code == 400
+    # A restart is a fresh session: earlier votes don't count; a closed poll takes none.
+    client.post(f"{base}/vote", json={"session": session, "option": 0, "voter": v})
+    fresh = client.post("/polls", json={"deck": "designs/pitch.deck.json", "question": "Q?", "options": ["A", "B"]}).json()["session"]
+    assert client.post(f"{base}/vote", json={"session": fresh, "option": 1, "voter": v}).json()["counts"] == [0, 1]
+    client.post("/polls/close", json={"deck": "designs/pitch.deck.json"})
+    assert client.get(base).json() == {"open": False}
+    assert client.post(f"{base}/vote", json={"session": fresh, "option": 0, "voter": "d" * 32}).status_code == 409
+    assert client.post("/polls", json={"deck": "designs/pitch.deck.json", "question": "Q?", "options": ["only"]}).status_code == 400
+    assert client.post("/polls", json={"deck": "../etc/x.deck.json", "question": "Q?", "options": ["A", "B"]}).status_code == 400
+
+
+def test_polls_only_through_a_deck_share_its_audience_can_see(tmp_path):
+    client, base = _poll_setup(tmp_path, path="file/notes.md")
+    assert client.get(base).status_code == 404                                           # not a deck
+    client, base = _poll_setup(tmp_path, audience="org:org_other")
+    assert client.get(base).status_code == 401                                           # an org's link, anonymous
+    assert client.get("/share/user_test/nope/poll").status_code == 404
+
+
+def test_votes_are_throttled_per_address(tmp_path, monkeypatch):
+    from cycls._agent.web import routers
+    monkeypatch.setattr(routers, "POLL_VOTES_PER_MINUTE", 2)
+    monkeypatch.setattr(routers, "_poll_hits", {})
+    client, base = _poll_setup(tmp_path)
+    session = client.post("/polls", json={"deck": "designs/pitch.deck.json", "question": "Q?", "options": ["A", "B"]}).json()["session"]
+    codes = [client.post(f"{base}/vote", json={"session": session, "option": 0, "voter": f"{i:032x}"}).status_code for i in range(3)]
+    assert codes == [200, 200, 429]

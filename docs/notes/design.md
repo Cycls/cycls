@@ -305,6 +305,34 @@ It takes every key in the capture phase, so chat's global Escape — which close
 whole canvas — never sees the Escape that ends a presentation. Office presentations
 (`SlidesView`) present the same way.
 
+**Live polls.** A `poll` slide (`{layout: "poll", question, options}`, 2–6 options)
+draws the question, each option over an empty track and a join card — what every
+export shows. The service keeps the poll on the frame (plugin data `cycls.poll`: the
+question and options, where each track and the join card are — mirrored on an Arabic
+slide, whose bars fill from the right — and the colours), `/slides` returns it, and
+the manifest carries `polls[i]`. When the deck's owner presents it:
+
+- the slide opens its poll (`POST /polls {deck, slide, question, options}` — a fresh
+  session), `poll-overlay.tsx` polls `GET /polls/results` every 1.5 s and fills the
+  slide's own tracks (an SVG over the slide in its coordinates, `object-contain` like
+  the image, so they line up), with each option's share and count and the total; the
+  presenter window lists the counts; **R** restarts it; leaving the slide closes it;
+- the join card shows a QR of the deck's **public share link** with `?vote=1` — an
+  existing public share of the deck, or, the first time, a button that makes one (no
+  link is made without that click);
+- a phone on that link gets `AudienceView` (`audience-view.tsx`, anonymous): it
+  follows whatever poll is open (`GET /share/<user>/<token>/poll`, every 2 s), votes
+  once (`POST …/poll/vote {session, option, voter}` — a random voter id the phone
+  keeps), then shows the room's results.
+
+The server runs on several instances, so nothing is pushed or held in memory: each
+vote is its own record in the owner's store (`polls/<deck key>/<session>/v/<voter>`),
+written create-only — a second vote from the same voter is a 409 — and the tally is
+one listing of a session's votes, cached for a second. Votes are throttled per address
+(`POLL_VOTES_PER_MINUTE`, per instance); the share's audience check applies, and a
+link that isn't a deck has no poll. A shared deck presents its poll slides as drawn
+— only the owner runs polls.
+
 ## Editing — the in-canvas editor
 
 Generation is half of it. When `DESIGN_EDITOR_URL` is set, a `.fig` on the canvas

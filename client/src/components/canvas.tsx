@@ -14,6 +14,7 @@ import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { DesignEditorView } from "./design-editor-view";
 import { DeckView, type DeckOp } from "./deck-view";
+import type { PollApi } from "../lib/polls";
 import { attachBridge, appScope } from "./app-bridge";
 import { injectShim } from "./app-shim";
 import { SaveDialog } from "./save-dialog";
@@ -234,7 +235,7 @@ function NoPreviewCard({ file, onDownload, onShare }: {
   );
 }
 
-export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, deckOp, listFolders, fetchConnector, appData, designEditorUrl, reloadFile, onReload, onDownload, onShare }: {
+export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, deckOp, pollsFor, listFolders, fetchConnector, appData, designEditorUrl, reloadFile, onReload, onDownload, onShare }: {
   file: CanvasFile;
   resolveMedia?: (path: string) => Promise<string>;
   content: string | null;
@@ -244,6 +245,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   openFile?: (path: string, silent?: boolean) => Promise<string>;   // authed blob URL (a deck's downloads, its .fig)
   writeFile?: (path: string, data: BlobPart, silent?: boolean) => Promise<void>;
   deckOp?: (path: string, body: DeckOp) => Promise<void>;          // a deck's slide moves / copies / deletes
+  pollsFor?: (deck: string) => PollApi;   // live polls in a presented deck (the owner's)
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
@@ -269,7 +271,8 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
     return content ? (
       <DeckView data={content} path={file.path} openFile={openFile} writeFile={shared ? undefined : writeFile}
                 designEditorUrl={shared ? undefined : designEditorUrl} onReload={onReload}
-                onSlideOp={shared || !deckOp ? undefined : (op) => deckOp(file.path, op)} />
+                onSlideOp={shared || !deckOp ? undefined : (op) => deckOp(file.path, op)}
+                pollsFor={shared ? undefined : pollsFor} />
     ) : null;
   }
   if (isHtml(fileKind(file))) {
@@ -376,7 +379,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, deckOp, listFolders, fetchConnector, appData, org, onShareFile, railWidth = 0, reloadKey, working, designEditorUrl }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, railWidth = 0, reloadKey, working, designEditorUrl }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -398,6 +401,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   writeFile: (path: string, data: BlobPart) => Promise<void>;  // overwrite (editor); binary for the .fig editor
   uploadFile?: (dir: string, file: File) => Promise<void>;   // images and videos dropped into the editor
   deckOp?: (path: string, body: DeckOp) => Promise<void>;        // a deck's slide moves / copies / deletes
+  pollsFor?: (deck: string) => PollApi;   // live polls in a presented deck (the owner's)
   listFolders?: () => Promise<{ name: string; path: string }[]>;  // app save dialog
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;   // an app's live call to a connector API
@@ -477,6 +481,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
           writeFile={writeFile}
           uploadFile={uploadFile}
           deckOp={deckOp}
+          pollsFor={pollsFor}
           listFolders={listFolders}
           fetchConnector={fetchConnector}
           appData={appData}
@@ -700,13 +705,14 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
 }
 
 // Keyed by path from the parent, so per-file state resets on tab switch.
-function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, listFolders, fetchConnector, appData, org, onShareFile, reloadKey, designEditorUrl }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, reloadKey, designEditorUrl }: {
   file: CanvasFile;
   uploadFile?: (dir: string, file: File) => Promise<void>;
   readFile: (path: string) => Promise<string>;
   openFile: (path: string, silent?: boolean) => Promise<string>;
   writeFile: (path: string, data: BlobPart) => Promise<void>;
   deckOp?: (path: string, body: DeckOp) => Promise<void>;
+  pollsFor?: (deck: string) => PollApi;   // live polls in a presented deck (the owner's)
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
@@ -864,7 +870,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
             </button>
           </div>
         ) : (
-          <CanvasDoc file={file} content={content} error={error} readFile={readFile} openFile={openFile} resolveMedia={resolveMedia} writeFile={writeFile} deckOp={deckOp} listFolders={listFolders}
+          <CanvasDoc file={file} content={content} error={error} readFile={readFile} openFile={openFile} resolveMedia={resolveMedia} writeFile={writeFile} deckOp={deckOp} pollsFor={pollsFor} listFolders={listFolders}
                      fetchConnector={fetchConnector}
                      appData={appData}
                      designEditorUrl={designEditorUrl} reloadFile={reloadFile} onReload={onReload}

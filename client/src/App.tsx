@@ -24,6 +24,7 @@ import { IconButton } from "./components/icon";
 import { Chat, type AccountInfo, type FilesPanelProps } from "./components/chat";
 import { PublicHome } from "./components/public-home";
 import { SharedView } from "./components/shared-view";
+import { AudienceView } from "./components/audience-view";
 import { useChat, AppConfig } from "./hooks/use-chat";
 import { useFiles, useRefreshOnTurnEnd } from "./hooks/use-files";
 import { useWorkspaces } from "./hooks/use-workspaces";
@@ -47,6 +48,7 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
     readFile: f.readFile,
     writeFile: f.writeFile,
     deckOp: f.deckOp,
+    pollsFor: withShare ? f.pollsFor : undefined,   // a poll runs through the deck's public link
     fetchConnector: f.fetchConnector,
     appData: f.appData,
     searchFiles: f.searchFiles,
@@ -650,6 +652,10 @@ export default function App() {
 
   const clerkKey = config?.auth ? (import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || config?.pk) : null;
 
+  // A deck's public link with ?vote=1: the audience's side of a live poll (anonymous).
+  if (window.location.pathname.startsWith("/shared/") && new URLSearchParams(window.location.search).get("vote") === "1") {
+    return <AudienceView />;
+  }
   if (window.location.pathname.startsWith("/shared/")) {
     if (loading) return null;
     // Org-scoped shares need the viewer's bearer (see shared-view.tsx). Wrap

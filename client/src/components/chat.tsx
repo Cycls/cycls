@@ -1,3 +1,4 @@
+import type { PollApi } from "../lib/polls";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { motion, LayoutGroup, AnimatePresence, useMotionValue, useSpring, useTransform, useReducedMotion, type MotionValue } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
@@ -85,6 +86,7 @@ export interface FilesPanelProps {
   readFile: (path: string) => Promise<string>;
   writeFile: (path: string, data: BlobPart) => Promise<void>;   // binary too — the .fig editor writes raw bytes
   deckOp?: (path: string, body: DeckOp) => Promise<void>;       // the deck viewer's slide moves / copies / deletes
+  pollsFor?: (deck: string) => PollApi;                         // live polls when the owner presents a deck
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
@@ -1191,6 +1193,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           writeFile={files.writeFile}
           uploadFile={(dir, f) => files.onUpload(dir, f).catch((e) => { toastError(t("uploadFailed")); throw e; })}
           deckOp={files.deckOp}
+          pollsFor={files.pollsFor}
           fetchConnector={files.fetchConnector}
           appData={files.appData}
           listFolders={files.listFolders}

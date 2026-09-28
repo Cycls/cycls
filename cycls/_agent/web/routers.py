@@ -513,6 +513,15 @@ def _design_cache_key(root, fig):
     return stem, f"{st.st_mtime_ns}-{st.st_size}"
 
 
+def _poll_of(raw):
+    """A slide's poll (the service keeps it as JSON on the frame) → a dict, or None."""
+    try:
+        poll = json.loads(raw) if isinstance(raw, str) and raw else None
+    except ValueError:
+        return None
+    return poll if isinstance(poll, dict) and poll.get("question") and isinstance(poll.get("options"), list) else None
+
+
 async def _design_slides(root, src, user_id):
     """A cached slide render of a design — {count, slides: [data-URI JPEGs],
     sizes, names, titles, notes, transitions, fig}. Raises design.Unavailable
@@ -538,6 +547,7 @@ async def _design_slides(root, src, user_id):
         "titles": [m.get("title") or "" for m in meta],
         "notes": [m.get("notes") or "" for m in meta],
         "transitions": [m.get("transition") or "" for m in meta],
+        "polls": [_poll_of(m.get("poll")) for m in meta],
         "fig": fig.relative_to(root).as_posix(),
     })
     return await asyncio.to_thread(_write_office_slides, cache_dir, stem, dst, payload)
@@ -1203,6 +1213,60 @@ def apps_router(cycls_app, ws_dep, user_dep, volume, base):
     return r
 
 
+# ---- Live polls (a deck's poll slides, run in present mode) ----
+#
+# The presenter opens a slide's poll; the audience votes on their phones through the
+# deck's public share link; the presenter's screen polls the tally. The server runs
+# on several instances, so nothing is pushed or held in memory: each vote is its own
+# record, written create-only (one per voter per session — a second is a 409), and
+# the tally is one listing of a session's votes, cached for a second so a room full
+# of phones doesn't list once each. Polls live beside the deck's share row — the
+# presenter's own store, which the share route reaches as the link's owner.
+
+POLL_VOTES_PER_MINUTE = 20   # per address, per instance — bounds a runaway, not a determined voter
+_poll_hits = {}
+_poll_tallies = {}           # (store, deck, session) → (monotonic time, tally)
+
+
+def _poll_key(deck):
+    return "polls/" + hashlib.sha1(deck.encode()).hexdigest()[:16]
+
+
+def _poll_deck(value):
+    deck = str(value or "")
+    if not deck.endswith((".deck.json", ".fig")) or ".." in deck.split("/") or deck.startswith("/") or len(deck) > 400:
+        raise HTTPException(400, "deck must be a deck document path")
+    return deck
+
+
+def _vote_budget(address):
+    now = int(time.time() // 60)
+    minute, n = _poll_hits.get(address, (now, 0))
+    if minute != now: minute, n = now, 0
+    _poll_hits[address] = (minute, n + 1)
+    if len(_poll_hits) > 10_000: _poll_hits.clear()
+    return n < POLL_VOTES_PER_MINUTE
+
+
+async def _poll_tally(ws, deck, session, n, fresh=False):
+    key = (getattr(ws, "path", ""), deck, session)
+    hit = _poll_tallies.get(key)
+    if hit and not fresh and time.monotonic() - hit[0] < 1:
+        return hit[1]
+    counts = [0] * n
+    async for _, meta in DB(ws).scan(prefix=f"{_poll_key(deck)}/{session}/v/"):
+        try:
+            i = int((meta or {}).get("opt"))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= i < n:
+            counts[i] += 1
+    tally = {"session": session, "counts": counts, "total": sum(counts)}
+    if len(_poll_tallies) > 2_000: _poll_tallies.clear()
+    _poll_tallies[key] = (time.monotonic(), tally)
+    return tally
+
+
 def share_router(cycls_app, ws_dep, user_dep, volume, base):
     r = APIRouter()
     bearer_scheme = HTTPBearer(auto_error=False)
@@ -1480,6 +1544,102 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             except Exception:
                 pass
         return {"id": new_id}
+
+    # ---- Live polls: the presenter ----
+
+    @r.post("/polls")
+    async def open_poll(request: Request, ws: Workspace = ws_dep):
+        """Open (or restart) a deck's poll: a fresh session, so earlier votes don't count."""
+        data = await request.json()
+        deck = _poll_deck(data.get("deck"))
+        question = str(data.get("question") or "").strip()[:300]
+        options = [str(o).strip()[:120] for o in (data.get("options") or []) if str(o).strip()][:6]
+        if not question or len(options) < 2:
+            raise HTTPException(400, "a poll needs a question and 2–6 options")
+        current = {"deck": deck, "slide": int(data.get("slide") or 0), "question": question, "options": options,
+                   "session": secrets.token_hex(8), "open": True, "opened_at": datetime.now(timezone.utc).isoformat()}
+        await DB(ws).put(f"{_poll_key(deck)}/current", current)
+        return current
+
+    @r.post("/polls/close")
+    async def close_poll(request: Request, ws: Workspace = ws_dep):
+        deck = _poll_deck((await request.json()).get("deck"))
+        current = await DB(ws).get(f"{_poll_key(deck)}/current")
+        if current and current.get("open"):
+            await DB(ws).put(f"{_poll_key(deck)}/current", {**current, "open": False})
+        return {"ok": True}
+
+    @r.get("/polls/results")
+    async def poll_results(deck: str, session: str, ws: Workspace = ws_dep):
+        deck = _poll_deck(deck)
+        current = await DB(ws).get(f"{_poll_key(deck)}/current") or {}
+        if current.get("session") != session:
+            raise HTTPException(404, "no such poll")
+        return await _poll_tally(ws, deck, session, len(current.get("options") or []))
+
+    # ---- Live polls: the audience, through the deck's share link ----
+
+    def _shared_deck(row):
+        path = (row or {}).get("path", "")
+        if not (path.startswith("file/") and path.endswith((".deck.json", ".fig"))):
+            raise HTTPException(404, "This link isn't a deck")
+        return path[5:]
+
+    @r.get("/share/{user}/{token}/poll")
+    async def shared_poll(
+        user: str, token: str, ws: Optional[str] = None,
+        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        """The poll the presenter has open on this deck, if any."""
+        ws_owner, row = await _resolve_or_403(user, token, bearer, ws)
+        current = await DB(ws_owner).get(f"{_poll_key(_shared_deck(row))}/current")
+        if not current or not current.get("open"):
+            return {"open": False}
+        return {k: current[k] for k in ("open", "session", "question", "options", "slide")}
+
+    @r.post("/share/{user}/{token}/poll/vote")
+    async def shared_vote(
+        request: Request, user: str, token: str, ws: Optional[str] = None,
+        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        """One vote per voter per session — create-only, so a second is a 409."""
+        if not _vote_budget(request.client.host if request.client else "?"):
+            raise HTTPException(429, "Too many votes from here — wait a minute")
+        raw = await request.body()
+        if len(raw) > 2048:
+            raise HTTPException(413, "vote too large")
+        try:
+            data = json.loads(raw or b"{}")
+        except ValueError:
+            raise HTTPException(400, "not JSON")
+        ws_owner, row = await _resolve_or_403(user, token, bearer, ws)
+        deck = _shared_deck(row)
+        current = await DB(ws_owner).get(f"{_poll_key(deck)}/current")
+        if not current or not current.get("open") or data.get("session") != current.get("session"):
+            raise HTTPException(409, "This poll has closed")
+        option, voter = data.get("option"), str(data.get("voter") or "")
+        if not isinstance(option, int) or isinstance(option, bool) or not 0 <= option < len(current["options"]):
+            raise HTTPException(400, "pick one of the options")
+        if not re.fullmatch(r"[0-9a-f]{32}", voter):
+            raise HTTPException(400, "bad voter")
+        try:
+            await DB(ws_owner).put(f"{_poll_key(deck)}/{current['session']}/v/{voter}", {"opt": option},
+                                   meta={"opt": str(option)}, create=True)
+        except Conflict:
+            raise HTTPException(409, "You've already voted")
+        return await _poll_tally(ws_owner, deck, current["session"], len(current["options"]), fresh=True)
+
+    @r.get("/share/{user}/{token}/poll/results")
+    async def shared_poll_results(
+        user: str, token: str, session: str, ws: Optional[str] = None,
+        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        ws_owner, row = await _resolve_or_403(user, token, bearer, ws)
+        deck = _shared_deck(row)
+        current = await DB(ws_owner).get(f"{_poll_key(deck)}/current") or {}
+        if current.get("session") != session:
+            raise HTTPException(404, "no such poll")
+        return await _poll_tally(ws_owner, deck, session, len(current.get("options") or []))
 
     return r
 

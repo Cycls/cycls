@@ -4,6 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { AnimatePresence, motion } from "framer-motion";
 import { slideKeyTarget } from "../hooks/use-slide-nav";
 import { t } from "../lib/i18n";
+import type { DeckPoll, PollApi, PollTally } from "../lib/polls";
+import { PollOverlay, useLivePoll } from "./poll-overlay";
 
 // Presents a deck full screen: one slide at a time, each entering with its own
 // transition (fade / slide / none), click or the keyboard to move on.
@@ -18,13 +20,18 @@ import { t } from "../lib/i18n";
 //   → ↓ Space PageDown Enter   next          ← ↑ PageUp Backspace   previous
 //   Home / End                 first / last  N   speaker notes       G   grid
 //   P                          presenter view (current + next slide, notes, timer)
+//   R                          restart a poll slide's poll
 //   Esc                        leave (or close the grid)
+//
+// A poll slide runs live when the deck's owner presents (`polls`): its poll opens,
+// the audience votes through the deck's public link, and the bars fill (poll-overlay).
 
 export interface PresentDeck {
   slides: string[];          // image URLs (data: URIs from the slide manifest)
   notes?: string[];
   titles?: string[];
   transitions?: string[];    // per slide: "fade" | "slide" | "none" (default fade)
+  polls?: (DeckPoll | null)[];   // per slide: its live poll, if it's a poll slide
 }
 
 type Kind = "fade" | "slide" | "none";
@@ -44,7 +51,12 @@ const variants = {
 const timing = (kind: Kind) => ({ duration: kind === "none" ? 0 : kind === "slide" ? 0.45 : 0.35, ease: "easeOut" as const });
 
 // `onClose` gets the slide it ended on, so the viewer underneath can land there.
-export function PresentMode({ deck, start = 0, onClose }: { deck: PresentDeck; start?: number; onClose: (last: number) => void }) {
+export function PresentMode({ deck, start = 0, onClose, polls }: {
+  deck: PresentDeck;
+  start?: number;
+  onClose: (last: number) => void;
+  polls?: PollApi;              // the owner's: poll slides run live (a shared deck presents them as drawn)
+}) {
   const count = deck.slides.length;
   const [index, setIndex] = useState(() => Math.max(0, Math.min(count - 1, start)));
   const [dir, setDir] = useState(1);
@@ -63,6 +75,21 @@ export function PresentMode({ deck, start = 0, onClose }: { deck: PresentDeck; s
   const startedAt = useRef(Date.now());
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+
+  // A poll slide, live: open while it shows; its join link is the deck's public one.
+  const [restart, setRestart] = useState(0);
+  const livePoll = polls && !ended ? deck.polls?.[index] ?? null : null;
+  const tally = useLivePoll(polls, livePoll, index, restart);
+  const hasPolls = !!deck.polls?.some(Boolean);
+  const [joinUrl, setJoinUrl] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!polls || !hasPolls) return;
+    polls.joinUrl().then(setJoinUrl, () => setJoinUrl(null));
+  }, [polls, hasPolls]);
+  const makeLink = useCallback(async () => {
+    if (!polls) return;
+    try { setJoinUrl(await polls.makeLink()); } catch { /* the toast said why */ }
+  }, [polls]);
 
   const close = useCallback(() => {
     if (closed.current) return;
@@ -131,6 +158,7 @@ export function PresentMode({ deck, start = 0, onClose }: { deck: PresentDeck; s
     if (k === "n" || k === "N") { e.preventDefault(); setNotesOpen((o) => !o); return; }
     if (k === "g" || k === "G") { e.preventDefault(); setGridOpen((o) => !o); return; }
     if (k === "p" || k === "P") { e.preventDefault(); openPresenter(); return; }
+    if ((k === "r" || k === "R") && pollRef.current) { e.preventDefault(); setRestart((n) => n + 1); return; }
     if (state.current.gridOpen) return;
     if (k === "ArrowRight" || k === "ArrowDown" || k === "PageDown" || k === " " || k === "Spacebar" || k === "Enter") {
       e.preventDefault();
@@ -143,6 +171,8 @@ export function PresentMode({ deck, start = 0, onClose }: { deck: PresentDeck; s
   }, [close, forward, back, go, count, openPresenter, regainFullscreen]);
   const onKeyRef = useRef(onKey);
   onKeyRef.current = onKey;
+  const pollRef = useRef(false);
+  pollRef.current = !!livePoll;
 
   useEffect(() => {
     const listener = (e: KeyboardEvent) => onKeyRef.current(e);
@@ -180,8 +210,8 @@ export function PresentMode({ deck, start = 0, onClose }: { deck: PresentDeck; s
     const p = presenter.current;
     if (!p || p.win.closed) return;
     p.root.render(<PresenterView deck={deck} index={index} ended={ended} startedAt={startedAt.current}
-                                 onPrev={back} onNext={forward} />);
-  }, [deck, index, ended, presenterTick, back, forward]);
+                                 onPrev={back} onNext={forward} poll={livePoll} tally={tally} />);
+  }, [deck, index, ended, presenterTick, back, forward, livePoll, tally]);
   useEffect(() => () => {
     const p = presenter.current;
     if (p) { p.root.unmount(); if (!p.win.closed) p.win.close(); }
@@ -214,7 +244,8 @@ export function PresentMode({ deck, start = 0, onClose }: { deck: PresentDeck; s
               className="absolute inset-0 flex items-center justify-center"
             >
               <img src={deck.slides[index]} alt={deck.titles?.[index] || `Slide ${index + 1}`}
-                   draggable={false} className="max-h-full max-w-full object-contain" />
+                   draggable={false} className="h-full w-full object-contain" />
+              {livePoll && <PollOverlay poll={livePoll} tally={tally} joinUrl={joinUrl} onMakeLink={makeLink} />}
             </motion.div>
           )}
         </AnimatePresence>
@@ -246,7 +277,7 @@ export function PresentMode({ deck, start = 0, onClose }: { deck: PresentDeck; s
       )}
 
       <div className={`pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 px-5 pb-4 transition-opacity duration-300 ${chrome ? "opacity-100" : "opacity-0"}`}>
-        <span className="text-xs text-white/50">{t("presentHint")}</span>
+        <span className="text-xs text-white/50">{t("presentHint")}{livePoll ? ` · ${t("pollHint")}` : ""}</span>
         <div className="pointer-events-auto flex items-center gap-1 rounded-full bg-black/60 px-2 py-1 text-xs text-white/80 backdrop-blur">
           <button onClick={back} className="rounded-full px-2 py-1 hover:bg-white/10" aria-label="Previous">‹</button>
           <span data-testid="present-counter" className="tabular-nums">{index + 1} / {count}</span>
@@ -266,8 +297,9 @@ export function PresentMode({ deck, start = 0, onClose }: { deck: PresentDeck; s
 // The presenter's own window: the slide now showing, the next one, the notes, and
 // a timer. Rendered from the presenting page into the popup (a React root of its
 // own, so its clicks work) — plain inline styles, since the popup has none of ours.
-function PresenterView({ deck, index, ended, startedAt, onPrev, onNext }: {
+function PresenterView({ deck, index, ended, startedAt, onPrev, onNext, poll, tally }: {
   deck: PresentDeck; index: number; ended: boolean; startedAt: number; onPrev: () => void; onNext: () => void;
+  poll?: DeckPoll | null; tally?: PollTally | null;
 }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -306,6 +338,16 @@ function PresenterView({ deck, index, ended, startedAt, onPrev, onNext }: {
         <div dir="auto" style={{ flex: 1, overflowY: "auto", fontSize: 20, lineHeight: 1.5, whiteSpace: "pre-wrap", color: note ? "#eee" : "#666" }}>
           {note || t("noNotes")}
         </div>
+        {poll && (
+          <div data-testid="presenter-poll" dir="auto" style={{ borderTop: "1px solid #333", paddingTop: 10, fontSize: 16, lineHeight: 1.7 }}>
+            {poll.options.map((option, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                <span>{option}</span><span style={{ fontVariantNumeric: "tabular-nums", color: "#aaa" }}>{tally?.counts[i] ?? 0}</span>
+              </div>
+            ))}
+            <div style={{ color: "#888", fontSize: 13 }}>{tally?.total ?? 0} {t("pollVotes")}</div>
+          </div>
+        )}
       </div>
     </div>
   );

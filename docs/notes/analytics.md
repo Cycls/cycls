@@ -154,6 +154,8 @@ Identified users also carry **person properties** (via identify): `email`,
 | `app_updated` | an app renamed or re-iconed from its ⋯ menu (manifest edit) | `field` (`name` / `icon`) |
 | `deck_opened` | a design deck opens in the deck viewer (a multi-slide Design render, or its `.deck.json` from Files / a share) | `slides` — are decks being made and looked at? |
 | `deck_presented` | Present on a deck (or on an office presentation, `source: office`) | `slides`, `from` (`start` / `current`) — presented ÷ opened says whether decks are for showing or just for files |
+| `poll_opened` | a poll slide comes up while its owner presents — its live poll opens | `options` — are decks used to ask the room, not just to show it? |
+| `poll_voted` | someone in the audience votes, on the deck's public link (`?vote=1`) | `options` — votes ÷ polls opened is how many people answer |
 | `deck_exported` | a deck downloaded from the deck viewer | `format` (`pptx` / `pdf`) — which file people take away |
 | `deck_slide_changed` | the owner moved (drag), duplicated or deleted a slide in the deck viewer's grid | `op` (`move` / `duplicate` / `delete`) — do people shape decks by hand, or ask the agent? |
 

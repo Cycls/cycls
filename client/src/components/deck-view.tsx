@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { DropdownMenu } from "./files";
 import { DesignEditorView } from "./design-editor-view";
 import { PresentMode } from "./present-mode";
+import type { DeckPoll, PollApi } from "../lib/polls";
 import { saveBlob } from "./canvas-utils";
 import { useSlideNav } from "../hooks/use-slide-nav";
 import { track } from "../lib/analytics";
@@ -32,6 +33,7 @@ export interface DeckManifest {
   titles?: string[];
   notes?: string[];
   transitions?: string[];
+  polls?: (DeckPoll | null)[];   // a poll slide's live poll
   fig?: string;
 }
 
@@ -46,7 +48,7 @@ export function parseDeck(data: string): DeckManifest | null {
 
 const baseName = (path: string) => (path.split("/").pop() || path).replace(/\.deck\.json$|\.fig$/i, "");
 
-export function DeckView({ data, path, openFile, writeFile, designEditorUrl, onReload, onSlideOp }: {
+export function DeckView({ data, path, openFile, writeFile, designEditorUrl, onReload, onSlideOp, pollsFor }: {
   data: string;
   path: string;                 // the deck document (or .fig) this manifest is of
   openFile?: (path: string, silent?: boolean) => Promise<string>;   // authed blob URL: downloads, the editor's .fig
@@ -54,10 +56,13 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, onR
   designEditorUrl?: string;     // with writeFile + openFile: Edit opens the design editor
   onReload?: () => void;        // refetch the manifest (the deck was edited)
   onSlideOp?: (op: DeckOp) => Promise<void>;   // the owner reorders / duplicates / deletes in the grid
+  pollsFor?: (deck: string) => PollApi;        // the owner's: poll slides run live when presented
 }) {
   const deck = useMemo(() => parseDeck(data), [data]);
   const count = deck?.count ?? 0;
   const nav = useSlideNav(count);
+  // One object per deck — present mode's live poll reopens when this changes.
+  const polls = useMemo(() => pollsFor?.(path), [pollsFor, path]);
   const [mode, setMode] = useState<"stage" | "grid">("stage");
   const [presenting, setPresenting] = useState<number | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -282,7 +287,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, onR
       )}
 
       {presenting != null && (
-        <PresentMode deck={deck} start={presenting} onClose={(last) => { setPresenting(null); nav.go(last); }} />
+        <PresentMode deck={deck} start={presenting} onClose={(last) => { setPresenting(null); nav.go(last); }} polls={polls} />
       )}
     </div>
   );

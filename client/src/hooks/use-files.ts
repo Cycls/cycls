@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { zip } from "fflate";
+import { voteUrl, type PollApi } from "../lib/polls";
 import { useApi } from "./use-api";
 import { track } from "../lib/analytics";
 import type { TrashRow } from "../components/trash-view";
@@ -227,7 +228,23 @@ export function useFiles(baseUrl: string = "") {
     return `${window.location.origin}${url}`;
   }, [api]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, deckOp, fetchConnector, appData, searchFiles, listFolders, shareFile, setGetToken };
+  // A presented deck's live polls (POST /polls …) and the link its audience votes
+  // through: the deck's public share (an existing one, or one the presenter makes).
+  const pollsFor = useCallback((deck: string): PollApi => ({
+    open: async (slide, poll) =>
+      (await api("/polls", { method: "POST", json: { deck, slide, question: poll.question, options: poll.options } })).json(),
+    close: async () => { await api("/polls/close", { method: "POST", json: { deck }, silent: true }); },
+    results: async (session) =>
+      (await api(`/polls/results?deck=${encodeURIComponent(deck)}&session=${encodeURIComponent(session)}`, { silent: true })).json(),
+    joinUrl: async () => {
+      const shares = (await (await api("/share", { silent: true })).json()) as { path?: string; audience?: string; url?: string }[];
+      const hit = shares.find((s) => s.path === `file/${deck}` && (s.audience ?? "public") === "public" && s.url);
+      return hit ? voteUrl(`${window.location.origin}${hit.url}`) : null;
+    },
+    makeLink: async () => voteUrl(await shareFile(deck, "public")),
+  }), [api, shareFile]);
+
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, deckOp, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates
