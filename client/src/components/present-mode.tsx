@@ -57,6 +57,8 @@ export function PresentMode({ deck, start = 0, onClose }: { deck: PresentDeck; s
   state.current = { index, ended, gridOpen };
   const closed = useRef(false);
   const wasFull = useRef(false);
+  const presenterOpenedAt = useRef(0);   // opening it takes the browser out of fullscreen
+  const refull = useRef(false);          // …so the next key or click here asks for it again
   const presenter = useRef<{ win: Window; root: Root } | null>(null);
   const startedAt = useRef(Date.now());
   const onCloseRef = useRef(onClose);
@@ -92,6 +94,7 @@ export function PresentMode({ deck, start = 0, onClose }: { deck: PresentDeck; s
   const openPresenter = useCallback(() => {
     const open = presenter.current;
     if (open && !open.win.closed) { open.win.focus(); return; }
+    presenterOpenedAt.current = performance.now();
     const win = window.open("", "cycls-presenter", "width=1180,height=720");
     if (!win) return;                                   // a popup blocker said no
     win.document.title = t("presenterView");
@@ -104,12 +107,21 @@ export function PresentMode({ deck, start = 0, onClose }: { deck: PresentDeck; s
     setPresenterTick((n) => n + 1);
   }, []);
 
+  // Back to fullscreen after the presenter window took it away — only from a key or a
+  // click on this page (a browser grants fullscreen to a gesture, not to a timer).
+  const regainFullscreen = useCallback(() => {
+    if (!refull.current || document.fullscreenElement) return;
+    refull.current = false;
+    ref.current?.requestFullscreen?.().catch(() => {});
+  }, []);
+
   const onKey = useCallback((e: KeyboardEvent) => {
     // Present mode is modal: nothing underneath gets the key (chat's Escape
     // closes the canvas; the slide viewer's own keys would page it twice).
     e.stopPropagation();
     e.stopImmediatePropagation();
     const k = e.key;
+    if (k !== "Escape" && e.view === window) regainFullscreen();
     if (k === "Escape") {
       e.preventDefault();
       if (state.current.gridOpen) setGridOpen(false);
@@ -128,7 +140,7 @@ export function PresentMode({ deck, start = 0, onClose }: { deck: PresentDeck; s
     if (k === "Backspace") { e.preventDefault(); back(); return; }
     const to = slideKeyTarget(k, state.current.index, count);
     if (to != null) { e.preventDefault(); go(to); }
-  }, [close, forward, back, go, count, openPresenter]);
+  }, [close, forward, back, go, count, openPresenter, regainFullscreen]);
   const onKeyRef = useRef(onKey);
   onKeyRef.current = onKey;
 
@@ -139,11 +151,17 @@ export function PresentMode({ deck, start = 0, onClose }: { deck: PresentDeck; s
   }, []);
 
   // Real fullscreen when the browser allows it; leaving it (the browser's own Esc)
-  // leaves present mode too.
+  // leaves present mode too — except when opening the presenter window is what took
+  // it away (Chrome drops fullscreen for a new window): the show goes on, windowed,
+  // until the next key or click here.
   useEffect(() => {
     const onChange = () => {
       if (document.fullscreenElement) wasFull.current = true;
-      else if (wasFull.current) close();
+      else if (wasFull.current) {
+        wasFull.current = false;
+        if (performance.now() - presenterOpenedAt.current < 2000) refull.current = true;
+        else close();
+      }
     };
     document.addEventListener("fullscreenchange", onChange);
     ref.current?.requestFullscreen?.().catch(() => {});
@@ -182,7 +200,7 @@ export function PresentMode({ deck, start = 0, onClose }: { deck: PresentDeck; s
       className="fixed inset-0 z-[200] select-none overflow-hidden bg-black"
       onMouseMove={() => setChrome(true)}
     >
-      <div className="absolute inset-0" onClick={forward}>
+      <div className="absolute inset-0" onClick={() => (refull.current && !document.fullscreenElement ? regainFullscreen() : forward())}>
         <AnimatePresence initial={false} custom={{ kind, dir }}>
           {!ended && (
             <motion.div

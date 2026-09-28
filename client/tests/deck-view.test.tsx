@@ -187,6 +187,34 @@ describe("PresentMode", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it("opening the presenter window doesn't end the show, though the browser drops fullscreen for it", () => {
+    let full: Element | null = null;
+    Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => full });
+    const fullscreen = (el: Element | null) => act(() => { full = el; document.dispatchEvent(new Event("fullscreenchange")); });
+    const popup = { document: document.implementation.createHTMLDocument("presenter"), closed: false,
+                    focus: vi.fn(), close: vi.fn(), addEventListener: vi.fn() };
+    const open = vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+    const onClose = vi.fn();
+    try {
+      render(<PresentMode deck={deck} onClose={onClose} />);
+      fullscreen(screen.getByTestId("present-mode"));
+      key("p");
+      expect(open).toHaveBeenCalledOnce();
+      fullscreen(null);                                   // Chrome leaves fullscreen for the new window
+      expect(onClose).not.toHaveBeenCalled();
+      expect(popup.close).not.toHaveBeenCalled();
+      key("ArrowRight");
+      expect(screen.getByTestId("present-counter").textContent).toBe("2 / 3");
+      fullscreen(screen.getByTestId("present-mode"));
+      now.mockReturnValue(60_000);
+      fullscreen(null);                                   // later, the browser's own Esc still leaves
+      expect(onClose).toHaveBeenCalledOnce();
+    } finally {
+      delete (document as unknown as Record<string, unknown>).fullscreenElement;
+    }
+  });
+
   it("clicking past the last slide ends, then leaves", () => {
     const onClose = vi.fn();
     render(<PresentMode deck={deck} start={2} onClose={onClose} />);
