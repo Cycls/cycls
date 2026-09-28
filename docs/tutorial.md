@@ -384,7 +384,8 @@ The model calls one `design` tool:
 
 - **`render {spec}`** — a single design `{size, fill, nodes:[…]}`: text (any Google
   Font, rich runs, fit-to-box), shapes, gradients and glows, photos from the workspace
-  (cover / contain, crop, focus), stacks that lay text out from its measured size,
+  (cover / contain, crop, focus) or stock photos found by a query (`"stock": "coffee
+  beans"`, with `PEXELS_API_KEY`), stacks that lay text out from its measured size,
   icons, SVG logos, QR codes, arrows, lists, charts and tables. `size` takes presets
   (`square`, `story`, `slide`, `a4-poster`, …). Formats: png (default), jpg, webp, svg,
   pptx, pdf.

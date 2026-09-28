@@ -1220,3 +1220,94 @@ def test_parallel_slide_actions_on_one_deck_dont_lose_a_change(tmp_path, monkeyp
     asyncio.run(both())
     fig = (tmp_path / "designs" / "pitch.fig").read_bytes()
     assert fig.count(b"+") == 2 and b"slide_move" in fig and b"slide_meta" in fig    # both changes kept
+
+
+# ---- stock photos: {"stock": "…"} is found (Pexels), saved to the workspace, credited ----
+
+def _fake_stock(monkeypatch, photos=None):
+    """The Pexels search and download faked; records the calls."""
+    monkeypatch.setenv("PEXELS_API_KEY", "test-key")
+    calls = {"search": [], "download": []}
+    photos = photos if photos is not None else [
+        {"id": 101, "photographer": "Ana", "url": "https://www.pexels.com/photo/101/",
+         "src": {"large2x": "https://images.pexels.com/101-large2x.jpg", "original": "https://images.pexels.com/101.jpg"}},
+        {"id": 102, "photographer": "Omar", "url": "https://www.pexels.com/photo/102/",
+         "src": {"large2x": "https://images.pexels.com/102-large2x.jpg"}}]
+
+    async def _search(query, orientation, per_page):
+        calls["search"].append((query, orientation))
+        return {"photos": photos}
+
+    async def _download(url):
+        calls["download"].append(url)
+        return _jpeg(1880, 1253)
+    monkeypatch.setattr("cycls._agent.design.stock._search", _search)
+    monkeypatch.setattr("cycls._agent.design.stock._download", _download)
+    return calls
+
+
+def test_a_stock_photo_is_found_saved_and_credited(tmp_path, monkeypatch):
+    calls = _fake_stock(monkeypatch)
+    render = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "name": "cafe", "spec": {"size": [1080, 1080], "nodes": [
+        {"type": "image", "stock": "coffee beans on wood", "x": 0, "y": 0, "w": 1080, "h": 720}]}}, _ws(tmp_path)))
+    saved = tmp_path / "attachments" / "stock" / "coffee-beans-on-wood-101.jpg"
+    assert saved.is_file() and calls["download"] == ["https://images.pexels.com/101-large2x.jpg"]
+    assert calls["search"] == [("coffee beans on wood", "landscape")]       # the box is wide
+    node = render["spec"]["nodes"][0]
+    assert "stock" not in node and node["image"]                            # an ordinary workspace photo now
+    assert "Photo by Ana on Pexels (https://www.pexels.com/photo/101/)." in _text(out)
+
+
+def test_the_same_stock_query_is_found_once(tmp_path, monkeypatch):
+    calls = _fake_stock(monkeypatch)
+    _fake_render(monkeypatch)
+    spec = lambda: {"size": [1080, 1080], "nodes": [{"type": "image", "stock": "Coffee beans on wood", "x": 0, "y": 0, "w": 1080, "h": 720}]}
+    asyncio.run(_exec_design({"action": "render", "name": "a", "spec": spec()}, _ws(tmp_path)))
+    asyncio.run(_exec_design({"action": "render", "name": "b", "spec": spec()}, _ws(tmp_path)))
+    assert len(calls["search"]) == 1 and len(calls["download"]) == 1
+
+
+def test_pick_takes_another_stock_photo(tmp_path, monkeypatch):
+    calls = _fake_stock(monkeypatch)
+    _fake_render(monkeypatch)
+    asyncio.run(_exec_design({"action": "render", "name": "a", "spec": {"size": [1080, 1080], "nodes": [
+        {"type": "image", "stock": "latte art", "pick": 1, "x": 0, "y": 0, "w": 600, "h": 600}]}}, _ws(tmp_path)))
+    assert calls["download"] == ["https://images.pexels.com/102-large2x.jpg"] and calls["search"][0][1] == "square"
+
+
+def test_a_deck_slot_takes_a_stock_photo(tmp_path, monkeypatch):
+    _fake_stock(monkeypatch)
+    render = _fake_render(monkeypatch, image=b"PPTX", previews=[b"J1", b"J2"])
+    asyncio.run(_exec_design({"action": "render", "name": "pitch", "format": "pptx", "spec": {"deck": {"slides": [
+        {"layout": "title", "title": "Brewly", "image": {"stock": "coffee shop interior"}},
+        {"layout": "closing", "title": "Thanks"}]}}}, _ws(tmp_path)))
+    slot = render["spec"]["deck"]["slides"][0]["image"]
+    assert slot["src"].startswith("attachments/stock/coffee-shop-interior-") and slot["image"]
+
+
+def test_stock_without_a_key_says_what_to_do(tmp_path, monkeypatch):
+    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
+    _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "name": "a", "spec": {"size": [1080, 1080], "nodes": [
+        {"type": "image", "stock": "coffee", "x": 0, "y": 0, "w": 500, "h": 500}]}}, _ws(tmp_path)))
+    assert out.startswith("Error: stock photos aren't set up here") and "`src`" in out
+
+
+def test_no_stock_result_is_an_error(tmp_path, monkeypatch):
+    _fake_stock(monkeypatch, photos=[])
+    _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "name": "a", "spec": {"size": [1080, 1080], "nodes": [
+        {"type": "image", "stock": "zxqv", "x": 0, "y": 0, "w": 500, "h": 500}]}}, _ws(tmp_path)))
+    assert "no stock photo found for 'zxqv'" in out
+
+
+def test_an_edit_replaces_an_image_with_a_stock_photo(tmp_path, monkeypatch):
+    _fake_stock(monkeypatch)
+    calls, _ = _fake_apply(monkeypatch)
+    _design(tmp_path)
+    out = asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": [
+        {"op": "replace_image", "node": "hero", "stock": "espresso"}]}, _ws(tmp_path)))
+    op = calls["ops"][0]
+    assert "stock" not in op and op.get("image")
+    assert "Photo by Ana on Pexels" in _text(out)

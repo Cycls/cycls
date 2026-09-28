@@ -317,7 +317,9 @@ _DESIGN_TOOL = {
         "— it's the node's name in the file, for edits and the layout check.\n"
         "  An image is a PNG / JPEG / WebP / GIF already IN the workspace (an upload, a stock "
         "photo you saved, brand/logo.png) — `src` is its path; save a web image to the workspace "
-        "first. `cover` (default) fills the w×h box and crops the overflow; `contain` fits the "
+        "first. Or NAME a photo to find: \"stock\":\"coffee beans on wood\" in place of `src` "
+        "(a deck slide's image: {\"stock\":\"…\"}) — a stock photo is found, saved to "
+        "attachments/stock/ and credited in the result; `pick`:1 takes the next one. `cover` (default) fills the w×h box and crops the overflow; `contain` fits the "
         "whole image inside it (logos). Give w, h or both — a missing one follows the image's "
         "aspect. A full-bleed photo background = an image at 0,0 the frame's size FIRST in "
         "`nodes`, then a SCRIM behind where the text sits — a rect whose gradient fades from "
@@ -390,7 +392,7 @@ _DESIGN_TOOL = {
         "rects, ellipses and lines stay editable there, charts and tables are PowerPoint's own "
         "(their data edits there), Arabic keeps its side (gradients, icons, SVG, photos and "
         "blurs become pictures, one element each; decor bleeding off a slide "
-        "is cropped by the slide in the show). \"pdf\" is one page per slide. png / jpg / webp "
+        "is cropped by the slide in the show). \"pdf\" is one page per slide, its words searchable. png / jpg / webp "
         "save every slide as its own image, <name>-slide-1, -slide-2 … (an Instagram carousel). "
         "Write notes for a talk deck. Every slide comes back to you to QA.\n"
         "- script {script, name, format?} — escape hatch: a raw OpenPencil / Figma "
@@ -1391,7 +1393,8 @@ def _place_image(n, root):
     with the fix."""
     src = n.get("src")
     if not isinstance(src, str) or not src.strip():
-        raise ValueError("an image node needs `src` — a workspace file, e.g. attachments/photo.jpg")
+        raise ValueError("an image node needs `src` — a workspace file, e.g. attachments/photo.jpg — "
+                         "or `stock`: a photo to find, e.g. \"stock\": \"coffee beans on wood\"")
     if src.startswith(("http://", "https://", "data:")):
         raise ValueError(f"image src {src[:60]!r} must be a workspace file — save it into the workspace first")
     path = _resolve_path(src, root)
@@ -1833,6 +1836,13 @@ async def _exec_slides(action, inp, workspace, name):
     if not fig_path.is_file():
         return f"Error: {fig_rel} doesn't exist — slide actions work on a deck you rendered."
     doc = await asyncio.to_thread(decks.read_doc, deck_path)
+    # A slide's photos may be named, not saved yet: {"stock": "…"} → a workspace file.
+    credits = []
+    if isinstance(inp.get("slide"), dict):
+        from cycls._agent.design import stock
+        credits, err = await stock.resolve(inp["slide"], root)
+        if err:
+            return err
 
     def number(key):
         v = _num(inp.get(key))
@@ -1884,6 +1894,8 @@ async def _exec_slides(action, inp, workspace, name):
     count = len(r.get("slides") or [])
     ack = (f"{what}. {fig_rel} now has {count} slide{'s' if count != 1 else ''}; the deck viewer and "
            f"the exports beside it update in a few seconds." + _layout_check(r.get("lint"), "pptx"))
+    for credit in credits:
+        ack += f" {credit}."
     command = {"type": "ui", "action": "design_command", "path": fig_rel, "script": r.get("script")}
     if intent := inp.get("intent"):
         command["intent"] = str(intent)[:80]
@@ -1951,7 +1963,12 @@ async def _exec_design(inp, workspace):
         if not ops and not script:
             return ("Error: `edit` needs `ops` — e.g. [{\"op\":\"set_text\",\"node\":\"headline\",\"text\":\"…\"}] "
                     "(Design inspect lists the node names) — or a raw `script`.")
+        credits = []
         if ops:
+            from cycls._agent.design import stock
+            credits, err = await stock.resolve(ops, workspace.root)   # {"stock": "…"} → a saved photo
+            if err:
+                return err
             ops, err = await asyncio.to_thread(_prepare_ops, ops, workspace.root)
             if err:
                 return err
@@ -1976,6 +1993,8 @@ async def _exec_design(inp, workspace):
         ack = (f"Edit applied and saved to {rel}; the image beside it (designs/{name}.png etc.) "
                f"re-exports in a few seconds. If the design is open in the editor, the Super "
                f"cursor replays the change live there." + _layout_check(r.get("lint"), "png"))
+        for credit in credits:
+            ack += f" {credit}."
         if not r.get("preview") or len(r["preview"]) > _DESIGN_QA_MAX:
             return {"_model": ack, "_ui": ui}
         ack += (" The edited design is attached — check the change landed as intended and "
@@ -1990,9 +2009,16 @@ async def _exec_design(inp, workspace):
             if not isinstance(inp.get("spec"), dict):
                 return "Error: `render` needs a `spec` object, e.g. {size:[1080,1080], fill:'#0f172a', nodes:[...]}."
             root = workspace.root   # reads the brand kit + any image files: off the loop
+            # Photos named rather than saved — {"stock": "coffee beans"} — are found and
+            # saved to the workspace first, so the spec below sees ordinary files.
+            from cycls._agent.design import stock
+            credits, err = await stock.resolve(inp["spec"], root)
+            if err:
+                return err
             spec, err, notes = await asyncio.to_thread(lambda: _prepare_spec(inp["spec"], _load_brand(root), root))
             if err:
                 return err
+            notes = [*notes, *(f"{c}." for c in credits)]
             if isinstance(spec.get("deck"), dict):
                 n_frames, size = len(spec["deck"]["slides"]), spec["deck"]["size"]
             else:

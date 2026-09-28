@@ -157,7 +157,14 @@ never black-on-navy.
 
 **Images.** `{ "type": "image", "src": "attachments/photo.jpg", x, y, w?, h?,
 "fit"?: "cover" | "contain", radius?, opacity?, shadow?, stroke? }` places a PNG /
-JPEG / WebP / GIF that is already in the workspace. `_exec_design` resolves `src`
+JPEG / WebP / GIF that is already in the workspace. Or the model names a photo to
+find — `"stock": "coffee beans on wood"` (and `pick` for another result) in place of
+`src`, on a node, a deck slide's `image`, a team `photo` or a `replace_image` op:
+`design/stock.py` searches Pexels (`PEXELS_API_KEY`), saves the photo to
+`attachments/stock/<query>-<id>.jpg`, remembers the query in
+`attachments/stock/.index.json` so it's found once, puts the path in as `src` and
+credits the photographer in the ack — everything after sees an ordinary workspace
+file. Without the key, `stock` is an error asking for a saved photo. `_exec_design` resolves `src`
 with `_resolve_path` (no traversal, no reserved dirs; URLs and SVG are errors
 naming the fix), reads the pixel size from the file header, and ships the bytes
 as base64 inside the spec — the service stays stateless and the `.fig` archives
@@ -207,7 +214,9 @@ not acted on.
   to the slide, and the slides export unclipped so other bleed hangs off the slide
   and PowerPoint crops it in the show.
 - `format: "pdf"` — one page per slide, each the slide's own render (Arabic and web
-  fonts exactly as in the PNG); pages are PowerPoint's size (13.333 in wide).
+  fonts exactly as in the PNG), with the slide's words laid over it invisibly — every
+  line as the renderer laid it out, in its own embedded font — so they search,
+  select and copy; pages are PowerPoint's size (13.333 in wide).
 - `format: "png" | "jpg" | "webp"` — a **carousel**: every slide saved as its own
   image, `designs/<name>-slide-1.png`, `-slide-2.png`, …
 - Mixed frame sizes are refused (PowerPoint takes the first slide's size and
