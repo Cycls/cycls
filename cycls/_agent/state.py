@@ -13,7 +13,7 @@ every turn in one operation.
 Keys:
     chat/{id}/index           — chat metadata (sidebar target)
     chat/{id}/{turn:06d}      — turns (append-only; the full transcript)
-    chat/{id}/compaction      — compaction marker (summary + first_kept)
+    chat/{id}/compaction      — compaction marker (summary, first_kept, cleared)
     share/{token}             — opaque share tokens (RFC003)
     <.database/ slot>         — agent-controlled KV exposed to the LLM
     <.org/ slot>              — workspaces registry + ACL (docs/workspaces.md)
@@ -332,7 +332,7 @@ async def replace_messages(workspace, chat_id, messages):
 
 
 async def get_compaction(workspace, chat_id):
-    """The chat's compaction marker `{summary, first_kept}`, or None. Raw turns
+    """The chat's compaction marker `{summary, first_kept, cleared}`, or None. Raw turns
     stay on disk; this marker projects the model's context over them."""
     _validate(chat_id)
     return await DB(workspace).get(f"chat/{chat_id}/compaction")
@@ -374,13 +374,14 @@ async def truncate_last_exchange(workspace, chat_id):
         return None
     removed = messages[cut].get("content")
     await replace_messages(workspace, chat_id, messages[:cut])
-    # `first_kept` is an index into the message list. Session clamps on load,
+    # `first_kept` and `cleared` index the message list. Session clamps on load,
     # but the marker on disk must shrink too: a stale value larger than the
     # new length would re-clamp past the turns appended after this one and
     # silently hide them from the model's context on the following run.
     marker = await get_compaction(workspace, chat_id)
-    if marker and int(marker.get("first_kept", 0)) > cut:
-        await put_compaction(workspace, chat_id, {**marker, "first_kept": cut})
+    keys = ("first_kept", "cleared")
+    if marker and any(int(marker.get(k, 0)) > cut for k in keys):
+        await put_compaction(workspace, chat_id, {**marker, **{k: min(int(marker.get(k, 0)), cut) for k in keys}})
     return removed
 
 
@@ -429,11 +430,13 @@ class Session:
         marker = await get_compaction(context.workspace, context.chat_id) or {}
         return cls(context.workspace, context.chat_id, messages,
                    summary=marker.get("summary"), first_kept=int(marker.get("first_kept", 0)),
+                   cleared=int(marker.get("cleared", 0)),
                    next_idx=await turn_end(context.workspace, context.chat_id))
 
-    def __init__(self, workspace, chat_id, messages, summary=None, first_kept=0, next_idx=None):
+    def __init__(self, workspace, chat_id, messages, summary=None, first_kept=0, next_idx=None, cleared=0):
         self.workspace, self.chat_id, self.messages = workspace, chat_id, messages
         self.summary, self.first_kept = summary, min(first_kept, len(messages))
+        self.cleared = min(cleared, len(messages))
         # Two counters, deliberately: `_saved` indexes `.messages`, `_next_idx`
         # names the next turn file. They diverge whenever normalization dropped a
         # turn the files still hold, so never re-derive either from the other —
@@ -442,23 +445,36 @@ class Session:
         self._next_idx = len(messages) if next_idx is None else next_idx
 
     def context(self):
-        """The model's view: raw turns whole, or (once compacted) the summary
-        standing in for the folded prefix + the recent raw turns verbatim."""
-        if self.summary is None:
-            return self.messages
-        from .harness.compact import prefix
-        return [*prefix(self.summary), *self.messages[self.first_kept:]]
+        """The model's view: the summary (once compacted) standing in for the folded
+        prefix, tool results before `cleared` stubbed, the rest verbatim."""
+        from .harness.compact import prefix, clear
+        k = max(self.first_kept, self.cleared)
+        return [*(prefix(self.summary) if self.summary is not None else []),
+                *clear(self.messages[self.first_kept:k]), *self.messages[k:]]
 
-    async def compact(self, provider):
+    async def clear(self, keep, enough):
+        """Stub tool results older than the recent `keep` tokens — the cheap tier.
+        False when that frees under `enough`, so the caller summarizes instead."""
+        from .harness.compact import clear_to
+        cut, freed = clear_to(self.messages[self.first_kept:], max(self.cleared - self.first_kept, 0), keep)
+        if freed < enough: return False
+        self.cleared = self.first_kept + cut
+        await self._mark()
+        return True
+
+    async def compact(self, provider, keep=20_000, max_tokens=8_192, request=None):
         """Fold the projected context into a summary marker — raw turns on disk
         are never touched, so the full transcript survives for the UI."""
         from .harness.compact import compact
-        result = await compact(provider, self.context())
+        result = await compact(provider, self.context(), keep, max_tokens, request)
         self.summary = result[0]["content"]
         self.first_kept = len(self.messages) - (len(result) - 2)
+        await self._mark()
+
+    async def _mark(self):
         if self.chat_id:
             await put_compaction(self.workspace, self.chat_id,
-                                 {"summary": self.summary, "first_kept": self.first_kept})
+                                 {"summary": self.summary, "first_kept": self.first_kept, "cleared": self.cleared})
 
     async def add_user(self, content, *, attachments=None, internal=False):
         """`internal` marks a turn the person did not type — an approval carried back from a confirm
@@ -689,6 +705,16 @@ def _validate_db_key(key):
         raise ValueError(f"invalid key: {key!r}")
 
 
+def memory_db(ws):
+    """The person's own `database` store in this workspace — no teammate or app reads it."""
+    return DB(workspace(ws.subject, ws.volume, base=ws.base, slot=".database", ws=ws.ws))
+
+
+def settings_db(ws):
+    """The person's own settings, the same in every workspace. Preferences, not secrets: plain, no key needed."""
+    return DB(workspace(ws.subject, ws.volume, base=ws.base, slot=".settings"))
+
+
 def _route(ws, key, *, prefix=False):
     """(db, store key). `apps/<slug>/…` is the workspace's app shelf; anything else the agent's own."""
     if key.startswith(APPS_ROOT):
@@ -697,7 +723,7 @@ def _route(ws, key, *, prefix=False):
             raise ValueError(f"app key needs apps/<slug>/<key>: {key!r}")
         return apps_db(ws), app_shelf(slug, rest)
     if not prefix: _validate_db_key(key)
-    return DB(workspace(ws.subject, ws.volume, base=ws.base, slot=".database", ws=ws.ws)), key
+    return memory_db(ws), key
 
 
 async def _exec_database(inp, ws):

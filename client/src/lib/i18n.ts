@@ -19,6 +19,7 @@ const translations = {
     verbSkill: "used a skill",
     sendMessage: "Ask anything",
     workingInBackground: "Still working — you can close this tab",
+    compacting: "Summarizing earlier messages to keep this chat going…",
     working: "Working",
     stopRun: "Stop",
     runElapsed: "running for",
@@ -224,6 +225,18 @@ const translations = {
     watch: "Watch",
     continueConversation: "Continue this conversation",
     trash: "Trash",
+    instructions: "Instructions",
+    instructionsPlaceholder: "Tell the agent how to work with you. For example:\n- I'm an accountant at a firm in Riyadh\n- Reply in formal Arabic\n- Keep answers short",
+    memory: "Memory",
+    memorySub: "What the agent remembers about you in this workspace. Only you can see it.",
+    memoryEmpty: "Nothing remembered yet.",
+    memoryDeleted: "Memory deleted",
+    md_undo: "Undo", md_redo: "Redo", md_block: "Text style", md_paragraph: "Text",
+    md_h1: "Heading 1", md_h2: "Heading 2", md_h3: "Heading 3", md_quote: "Quote", md_code: "Code", md_codeBlock: "Code block",
+    md_bold: "Bold", md_italic: "Italic", md_strikethrough: "Strikethrough", md_link: "Link",
+    md_bullet: "Bulleted list", md_number: "Numbered list", md_check: "Checklist", md_hr: "Divider",
+    md_table: "Table", md_media: "Image or video", md_rowAdd: "Add row", md_colAdd: "Add column", md_rowDel: "Delete row", md_colDel: "Delete column",
+    md_slashHint: "Type / for blocks",
     restore: "Restore",
     changeIcon: "Change icon",
     uploadIcon: "Upload image",
@@ -392,6 +405,7 @@ const translations = {
     verbSkill: "استخدمت مهارة",
     sendMessage: "اسأل أي شيء",
     workingInBackground: "لا زلت أشتغل — تقدر تسكّر الصفحة",
+    compacting: "ألخّص الرسائل السابقة عشان نكمّل المحادثة…",
     working: "أشتغل",
     stopRun: "إيقاف",
     runElapsed: "يشتغل من",
@@ -597,6 +611,18 @@ const translations = {
     watch: "شاهد",
     continueConversation: "أكمل هذه المحادثة",
     trash: "سلة المحذوفات",
+    instructions: "التعليمات",
+    instructionsPlaceholder: "قل للوكيل كيف يشتغل معك. مثلاً:\n- أنا محاسب في شركة بالرياض\n- رد بالعربية الفصحى\n- خل الإجابات مختصرة",
+    memory: "الذاكرة",
+    memorySub: "اللي يتذكره الوكيل عنك في هذه المساحة. ما يشوفه أحد غيرك.",
+    memoryEmpty: "ما فيه شي محفوظ للحين.",
+    memoryDeleted: "تم حذف الذكرى",
+    md_undo: "تراجع", md_redo: "إعادة", md_block: "نمط النص", md_paragraph: "نص",
+    md_h1: "عنوان 1", md_h2: "عنوان 2", md_h3: "عنوان 3", md_quote: "اقتباس", md_code: "كود", md_codeBlock: "كتلة كود",
+    md_bold: "عريض", md_italic: "مائل", md_strikethrough: "يتوسطه خط", md_link: "رابط",
+    md_bullet: "قائمة نقطية", md_number: "قائمة مرقمة", md_check: "قائمة مهام", md_hr: "فاصل",
+    md_table: "جدول", md_media: "صورة أو فيديو", md_rowAdd: "إضافة صف", md_colAdd: "إضافة عمود", md_rowDel: "حذف الصف", md_colDel: "حذف العمود",
+    md_slashHint: "اكتب / لإضافة عناصر",
     restore: "استعادة",
     changeIcon: "تغيير الأيقونة",
     uploadIcon: "رفع صورة",
@@ -771,6 +797,12 @@ export function t(key: keyof typeof translations.en): string {
 export function tIn(lang: Lang, key: keyof typeof translations.en): string {
   return translations[lang][key];
 }
+
+// The server's own step lines, in the UI's language.
+const SERVER_STEPS: Record<string, keyof typeof translations.en> = {
+  "Summarizing earlier messages to keep this chat going...": "compacting",
+};
+export const stepText = (s: string) => (SERVER_STEPS[s] ? t(SERVER_STEPS[s]) : s);
 
 const _ARABIC = /[\u0600-\u06FF]/;
 

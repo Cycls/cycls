@@ -1177,8 +1177,19 @@ def test_only_what_has_no_way_back_asks_for_approval():
                 "dd if=/dev/zero of=/dev/sda", "dd if=/dev/zero of=important.db",
                 "cat evil > /dev/nvme0n1", "echo x >/dev/vda", "cat i > /dev/rdisk2",
                 "git reset --hard", "git clean -fdx", "git push --force",
-                "killall node", "psql -c 'drop table users'"):
+                "killall node", "psql -c 'drop table users'", "find . -name '*.log' -delete"):
         assert risk("bash", {"command": cmd}) == "destructive", cmd
+
+
+def test_a_read_is_every_command_in_the_line():
+    """Only the first word used to count, so under Manual `ls; touch x` ran without asking."""
+    from cycls._agent.tools import risk
+    for cmd in ('ls attachments/ 2>/dev/null; echo "---"; ls', "grep -E 'a|b' notes.md", "grep -r x . 2>&1 | head -5",
+                "ls x 2>/dev/null || true", "find . -name '*.pdf' -print", "echo 'a > b'"):
+        assert risk("bash", {"command": cmd}) is None, cmd
+    for cmd in ("ls; touch notes.txt", "ls && rm -rf data", "echo hi > notes.txt", "cat a | tee b",
+                "find . -type f | xargs rm", "echo $(rm -rf x)", "find . -exec rm {} \\;", "ls\ntouch x"):
+        assert risk("bash", {"command": cmd}) == "write", cmd
 
 
 def test_a_redirect_to_dev_null_is_not_destructive():

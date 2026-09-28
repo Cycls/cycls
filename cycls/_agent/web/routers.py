@@ -221,7 +221,7 @@ def resolve_path(workspace, rel):
     ws = workspace.resolve()
     if not resolved.is_relative_to(ws):
         raise ValueError("Path traversal denied")
-    for name in (".db", ".database", ".trash", ".secrets", ".connectors"):
+    for name in (".db", ".database", ".trash", ".secrets", ".connectors", ".settings"):
         reserved = ws / name
         if resolved == reserved or resolved.is_relative_to(reserved):
             raise ValueError(f"Reserved path: {name}/ is managed by cycls")
@@ -612,7 +612,7 @@ def _walk_catalog(root):
                             "type": "directory", "size": 0, "modified": "",
                             "kind": "folder", "_dir": rel_dir})
         for fn in sorted(names):
-            if fn.startswith("."):
+            if fn.startswith(".") or (p == root and fn.lower() == "agent.md"):   # AGENT.md has its own row
                 continue
             try:
                 st = (p / fn).stat()
@@ -750,7 +750,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         """Only reached above _CATALOG_MAX."""
         out = []
         for entry in os.scandir(target):
-            if entry.name.startswith("."):
+            if entry.name.startswith(".") or Path(entry.path).relative_to(root).as_posix().lower() == "agent.md":
                 continue
             st = entry.stat()
             is_dir = entry.is_dir()
@@ -1940,19 +1940,37 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
 
 
 def tools_router(ws_dep, user_dep):
-    """The builtins' own allow / ask, per person — what the card's *Always allow* writes. Stored beside
-    the connector choices, under a name no connector can take."""
+    """The builtins' own allow / ask / never, per person — what the card's *Always allow* and Settings write.
+    Plain rows in the person's `.settings`, so they work on a deployment with no CYCLS_SECRET_KEY."""
     r = APIRouter()
 
     @r.get("/tools")
     async def builtin_modes(ws: Workspace = ws_dep):
         """Only what the person chose — a tool they never touched follows the composer switch."""
-        return await oauth.permissions(ws, "_builtin")
+        return await state.settings_db(ws).get("tools", {})
 
     @r.delete("/tools/{tool}")
     async def clear_builtin(tool: str, ws: Workspace = ws_dep, user: Any = user_dep):
-        await oauth.set_permissions(ws, "_builtin", {k: v for k, v in (await oauth.permissions(ws, "_builtin")).items() if k != tool})
+        db = state.settings_db(ws)
+        await db.put("tools", {k: v for k, v in (await db.get("tools", {})).items() if k != tool})
         log("connector", user=user, action="permissions", connector="_builtin", tools={tool: None})
+        return {"ok": True}
+
+    @r.get("/memory")
+    async def memory(ws: Workspace = ws_dep):
+        """The person's memory: the `database` tool's own store, never the apps' shelf."""
+        return [{"key": k, "value": v} async for k, v in state.memory_db(ws).items(limit=500)]
+
+    @r.put("/memory/{key:path}")
+    async def put_memory(key: str, request: Request, ws: Workspace = ws_dep):
+        try: state._validate_db_key(key)
+        except ValueError as e: raise HTTPException(status_code=400, detail=str(e))
+        await state.memory_db(ws).put(key, (await request.json()).get("value"))
+        return {"ok": True}
+
+    @r.delete("/memory/{key:path}")
+    async def delete_memory(key: str, ws: Workspace = ws_dep):
+        await state.memory_db(ws).delete(key)
         return {"ok": True}
 
     @r.put("/tools/{tool}")
@@ -1960,7 +1978,8 @@ def tools_router(ws_dep, user_dep):
         mode = (await request.json()).get("mode")
         if mode not in oauth.MODES:
             raise HTTPException(status_code=400, detail="mode is allow, ask or never")
-        await oauth.set_permissions(ws, "_builtin", {**await oauth.permissions(ws, "_builtin"), tool: mode})
+        db = state.settings_db(ws)
+        await db.put("tools", {**await db.get("tools", {}), tool: mode})
         log("connector", user=user, action="permissions", connector="_builtin", tools={tool: mode})
         return {"ok": True}
 

@@ -1,4 +1,5 @@
 import ReactMarkdown from "react-markdown";
+import { Media } from "./media";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -89,13 +90,15 @@ const remarkPaths = () => (tree: Node) => { linkifyPaths(tree); };
 const remarkPlugins = [[remarkGfm, { singleTilde: false }], remarkMath, remarkPaths] as const;
 
 const MemoizedMarkdownBlock = memo(
-  function MarkdownBlock({ content, onOpenFile, sources }: {
+  function MarkdownBlock({ content, onOpenFile, sources, resolveMedia }: {
     content: string;
     onOpenFile?: (path: string) => void;
     sources?: Map<string, Source>;
+    resolveMedia?: (path: string) => Promise<string>;
   }) {
     const components = {
       ...markdownComponents,
+      img: ({ src, alt }: { src?: string; alt?: string }) => <Media src={src ?? ""} alt={alt} resolve={resolveMedia} />,
       a({ href, children }: { href?: string; children?: React.ReactNode }) {
         const path = href && onOpenFile ? workspacePath(href) : null;
         if (path) {
@@ -132,12 +135,13 @@ const MemoizedMarkdownBlock = memo(
     );
   },
   (prev, next) => prev.content === next.content && prev.onOpenFile === next.onOpenFile
-    && prev.sources === next.sources,
+    && prev.sources === next.sources && prev.resolveMedia === next.resolveMedia,
 );
 
-export const TextPart = memo(function TextPart({ text, onOpenFile, sources }: {
+export const TextPart = memo(function TextPart({ text, onOpenFile, sources, resolveMedia }: {
   text: string;
   onOpenFile?: (path: string) => void;
+  resolveMedia?: (path: string) => Promise<string>;   // workspace images and videos, fetched with credentials
   // Results the turn's searches returned, keyed by `urlKey`. Built once per
   // message so the identity stays stable across streamed tokens.
   sources?: Map<string, Source>;
@@ -148,7 +152,7 @@ export const TextPart = memo(function TextPart({ text, onOpenFile, sources }: {
   return (
     <div dir="auto" className="prose dark:prose-invert min-w-full">
       {blocks.map((block, index) => (
-        <MemoizedMarkdownBlock key={index} content={block} onOpenFile={onOpenFile} sources={sources} />
+        <MemoizedMarkdownBlock key={index} content={block} onOpenFile={onOpenFile} sources={sources} resolveMedia={resolveMedia} />
       ))}
     </div>
   );

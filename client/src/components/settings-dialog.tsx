@@ -463,7 +463,6 @@ type ToolMode = "auto" | "allow" | "ask" | "never";
 const GATED = [
   { name: "bash", label: "toolBash", sub: "toolBashSub" },
   { name: "edit", label: "toolEditor", sub: "toolEditorSub" },
-  { name: "database", label: "toolDatabase", sub: "toolDatabaseSub" },
   { name: "build_app", label: "toolApps", sub: "toolAppsSub" },
 ] as const;
 
@@ -509,6 +508,106 @@ function ToolsSection() {
           />
         ))}
       </ListCard>
+    </>
+  );
+}
+
+// People read and edit each memory as plain text — never the key it's stored under, never JSON.
+const human = (s: string) => s.replace(/[-_]+/g, " ").replace(/^\p{Ll}/u, (c) => c.toUpperCase());
+const asText = (v: unknown): string =>
+  typeof v === "string" ? (/^\s*[{[]/.test(v) ? parsedText(v) : v)   // agents sometimes save JSON as text
+  : Array.isArray(v) ? v.map((x) => `• ${asText(x)}`).join("\n")
+  : v !== null && typeof v === "object"
+    ? Object.entries(v).map(([k, x]) => `${human(k)}: ${x !== null && typeof x === "object" ? `\n${asText(x)}` : asText(x)}`).join("\n")
+    : String(v ?? "");
+
+function parsedText(s: string) {
+  try { return asText(JSON.parse(s)); } catch { return s; }
+}
+
+function MemoryNote({ value, onSave, onDelete }: { value: unknown; onSave: (text: string) => void; onDelete: () => void }) {
+  const text = asText(value);
+  const [v, setV] = useState(text);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => setV(text), [text]);
+  const save = () => {
+    if (v === text) return;
+    onSave(v);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  };
+  return (
+    <div className="relative rounded-xl border border-border bg-background/40 transition-colors focus-within:border-foreground/25">
+      <textarea
+        value={v}
+        rows={Math.max(3, v.split("\n").length)}
+        dir="auto"
+        onChange={(e) => setV(e.target.value)}
+        onBlur={save}
+        className="block w-full resize-none rounded-xl bg-transparent py-3 pl-3.5 pr-11 text-sm leading-relaxed text-foreground focus:outline-none"
+      />
+      <button
+        onClick={onDelete}
+        className="absolute right-2 top-2 flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-secondary hover:text-foreground"
+        aria-label={t("delete")}
+        title={t("delete")}
+      >
+        <Icon name="trash" className="size-3.5" />
+      </button>
+      {saved && <span className="pointer-events-none absolute bottom-2 right-3 text-[11px] text-muted-foreground">{t("saved")}</span>}
+    </div>
+  );
+}
+
+// The person's own memory: the agent's `database` store. Off is that tool's "never".
+function MemorySection() {
+  const { api } = useApi();
+  const toast = useToast();
+  const [on, setOn] = useState(true);
+  const [items, setItems] = useState<{ key: string; value: unknown }[]>([]);
+  useEffect(() => {
+    api("/tools", { silent: true }).then((r) => r.json()).then((m) => setOn(m.database !== "never")).catch(() => {});
+    api("/memory", { silent: true }).then((r) => r.json()).then(setItems).catch(() => {});
+  }, [api]);
+  const path = (key: string) => `/memory/${key.split("/").map(encodeURIComponent).join("/")}`;
+  const toggle = (v: boolean) => {
+    setOn(v);
+    (v ? api("/tools/database", { method: "DELETE" }) : api("/tools/database", { method: "PUT", json: { mode: "never" } })).catch(() => {});
+  };
+  const put = (key: string, value: unknown) => {
+    setItems((xs) => xs.some((x) => x.key === key)
+      ? xs.map((x) => (x.key === key ? { key, value } : x))
+      : [...xs, { key, value }].sort((a, b) => a.key.localeCompare(b.key)));
+    api(path(key), { method: "PUT", json: { value } }).catch(() => {});
+  };
+  const remove = (x: { key: string; value: unknown }) => {
+    setItems((xs) => xs.filter((y) => y.key !== x.key));
+    api(path(x.key), { method: "DELETE" }).catch(() => {});
+    toast.undo(t("memoryDeleted"), t("undo"), () => put(x.key, x.value));
+  };
+  return (
+    <>
+      <SectionLabel>{t("memory")}</SectionLabel>
+      <ListCard>
+        <Row
+          label={t("memory")}
+          sub={t("memorySub")}
+          control={
+            <Segmented
+              value={on ? "on" : "off"}
+              options={[{ value: "on" as const, label: t("on") }, { value: "off" as const, label: t("off") }]}
+              onChange={(v) => toggle(v === "on")}
+            />
+          }
+        />
+      </ListCard>
+      {items.length ? (
+        <div className="mt-2 grid gap-2">
+          {items.map((x) => <MemoryNote key={x.key} value={x.value} onSave={(text) => put(x.key, text)} onDelete={() => remove(x)} />)}
+        </div>
+      ) : (
+        <p className="mt-2 px-1 text-xs text-muted-foreground">{t("memoryEmpty")}</p>
+      )}
     </>
   );
 }
@@ -603,6 +702,7 @@ function GeneralTab({ onOpenConnectors }: { onOpenConnectors?: () => void }) {
       )}
     </ListCard>
     <ToolsSection />
+    <MemorySection />
     </>
   );
 }

@@ -516,7 +516,7 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
       )}
 
       {/* Content */}
-      <div className="flex-1 min-h-0 overflow-y-auto relative">
+      <div className="flex-1 min-h-0 overflow-y-auto relative pb-20">
         {/* OS-file drag overlay */}
         <AnimatePresence>
           {dragging && (

@@ -368,10 +368,11 @@ workspace, and under the user's own segment so no other user's request can reach
 account's root *is* its user id, so both resolve there too.
 
 A record is `{access_token, refresh_token, expires_at}`, Fernet-encrypted under a key derived
-from `CYCLS_SECRET_KEY`; one the current key cannot decrypt reads as absent, so rotation
-means re-auth, never a crash. Resolution is user → workspace; env is not consulted for grants.
+from `CYCLS_SECRET_KEY`; one that cannot be decrypted, because the key rotated or is missing,
+reads as absent (a missing key also logs a warning), so it means re-auth, never a crash.
+Resolution is user → workspace; env is not consulted for grants.
 
-`.secrets` and `.connectors` get **both** guards `.db` has — the bwrap `--tmpfs` mask *and*
+`.secrets`, `.connectors` and `.settings` get **both** guards `.db` has — the bwrap `--tmpfs` mask *and*
 the `_resolve_path` rejection, in the tool and file-route path checks alike. `.tmp` gets
 neither: bash must read it and `read` must reach it. It is hidden from listings, deleted for
 real by the `rm` shim, refused by `canvas`, and removed on chat purge.
@@ -493,7 +494,7 @@ Three layers. We have the third; the gaps are the first generically and the seco
 | layer | when | LLM? | today |
 |---|---|---|---|
 | cap at ingest | as each result returns | no | builtins only (`bash` 30k, `web_fetch` 20k) |
-| prune old results | mid-conversation | no | only inside `compact()` |
+| prune old results | past 70% of the window | no | ✅ `Session.clear()` |
 | summarize | near the window | yes | ✅ `compact()` |
 
 **Cap → spill.** Above ~20–30 KB, write the full result to `.tmp/{chat_id}/<name>.json`
@@ -510,8 +511,8 @@ chats; a total-size cap with LRU bounds a chat that pulls a hundred dumps. The T
 outlive a working session because the path lives in the durable transcript; a missing file
 degrades to a re-fetch.
 
-**Prune.** `microcompact` already blanks tool results model-free — it just fires too late.
-Run it on results older than K turns against a token budget, before the window is near.
+**Prune.** Past 70% of the window, `Session.clear()` stubs tool results and long arguments
+older than the recent 30%, model-free; the summary runs only when that frees under 10%.
 
 **Guards.** `canvas` refuses a `.tmp` path, and deliverables are written outside it: opening
 a file the sweeper may delete tonight is a bug generator.
@@ -760,19 +761,21 @@ and its destructive test reads the command itself, so `call flag-update` runs un
 workspace targets into the trash (30 days, restorable), and `edit`'s overwrite trashes the old content
 first — so Auto lets those run and the card would have been asking about a move. What stays destructive
 is what has no trash behind it: `database delete` (keys go, a trailing slash takes a namespace),
-`git reset --hard`, `git clean -fdx`, `git push --force`, and `shred` / `dd` / `truncate` / `mkfs`.
+`git reset --hard`, `git clean -fdx`, `git push --force`, `shred` / `dd` / `truncate` / `mkfs`, and
+`find -delete`, which unlinks by itself so the shim never sees it.
 
 | tool | class | Auto | Manual |
 |---|---|---|---|
 | `read`, `web_search`, `web_fetch`, `skill` | read | runs | runs |
 | `edit`, `database` (write), `build_app` | write | runs | asks |
-| `bash` | per call, like a one-tool server | runs; a command with no trash behind it asks | asks unless the command is a plain read (`ls`, `cat`, `grep`, `find`, …) |
+| `bash` | per call, like a one-tool server | runs; a command with no trash behind it asks | asks unless every command in the line is a plain read (`ls`, `cat`, `grep`, `find`, …) with no redirect into a file |
 | `canvas`, `ask`, `suggest` | how the agent talks to the person | never asks | never asks |
 
-The builtins have no connector page, so layer 2 reaches them through the card: *Always allow* writes
-`PUT /tools/{tool}` into the same per-user store under the reserved name `_builtin`, and the loop reads
-those choices once a turn onto `ToolContext.modes`. A Settings list that shows and unsets them is the
-remaining half.
+The builtins have no connector page, so layer 2 reaches them through the card and Settings: *Always
+allow* writes `PUT /tools/{tool}` as a plain row in the person's `.settings`, the same in every workspace,
+and the loop reads those choices once a turn onto `ToolContext.modes`. They are preferences, not secrets,
+so no `CYCLS_SECRET_KEY` is involved. They used to sit encrypted beside the connector choices, and a
+deployment that lost the key then failed every message of anyone who had clicked *Always allow*.
 
 **A card ends the turn.** The ack tells the model to stop, and a model that ignores it used to call the
 same tool again and get a second card, and a third — a loop the person could not answer out of. The loop

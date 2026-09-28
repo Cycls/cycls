@@ -179,9 +179,8 @@ cycls logs super-stage --query 'jsonPayload.chat_id="abc-123"'
 ```
 
 `-f` works with `-q`, the filter is reapplied on every poll. Errors the
-harness catches and shows as callouts (rate-limit retries, compaction
-failures, tool timeouts) are *not* structured-logged. They're handled, not
-QA signals.
+harness catches and shows as callouts (rate-limit retries, tool timeouts)
+are *not* structured-logged. They're handled, not QA signals.
 
 ### Cost logging
 

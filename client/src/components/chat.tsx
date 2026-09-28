@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
+import { motion, LayoutGroup, AnimatePresence, useMotionValue, useSpring, useTransform, useReducedMotion, type MotionValue } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
@@ -9,7 +9,7 @@ import { AppsPanel } from "./apps-panel";
 import { TrashView, type TrashRow } from "./trash-view";
 import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
-import { Icon, IconButton } from "./icon";
+import { Icon, IconButton, type IconName } from "./icon";
 import { ConnectCard } from "./connect-card";
 import { ConfirmCard } from "./confirm-card";
 import { ConnectorsContext } from "./parts/tool-call";
@@ -24,7 +24,7 @@ import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-chat";
 import type { FileEntry } from "../hooks/use-files";
-import { t, getLang, setLang, useLang } from "../lib/i18n";
+import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
 import { useToast } from "../lib/toast";
@@ -392,6 +392,8 @@ export function Chat({ chat, onShare, files, account, config }: {
         setConfirm({ tool: ev.tool, key: ev.key, connector: typeof ev.connector === "string" ? ev.connector : undefined,
                      label: typeof ev.label === "string" ? ev.label : ev.tool, args: ev.args });
         track("ui_action", { action: "confirm", tool: ev.tool });
+      } else if (ev.action === "compacted") {
+        track("context_compacted", { tier: ev.tier, reason: ev.reason, tokens: ev.tokens, ok: ev.ok });
       } else {
         track("ui_action", { action: ev.action, handled: false });
       }
@@ -718,6 +720,16 @@ export function Chat({ chat, onShare, files, account, config }: {
 
   const canvasShowing = canvasTabs.length > 0 && !canvasHidden;
   const rightOpen = filesOpen || canvasShowing;
+  const dock = (
+    <PanelDock items={[
+      { icon: "doc", label: t("instructions"), onClick: () => {
+        openFileInCanvas("AGENT.md", t("instructions"), { writable: true });
+        if (isDesktop) setRightExpanded(true); else setFilesOpen(false);   // writing wants the room
+      } },
+      { icon: "trash", label: t("trash"), count: trashRows.length,
+        onClick: () => { setTrashFilter(filesTab === "chats" ? "chat" : undefined); selectTab("trash"); } },
+    ]} />
+  );
   const [railIcons, setRailIcons] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   useEffect(() => { if (!isStreaming) setReloadKey((k) => k + 1); }, [isStreaming]);
@@ -1177,6 +1189,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           readFile={files.readFile}
           openFile={files.onOpenFile}
           writeFile={files.writeFile}
+          uploadFile={(dir, f) => files.onUpload(dir, f).catch((e) => { toastError(t("uploadFailed")); throw e; })}
           deckOp={files.deckOp}
           fetchConnector={files.fetchConnector}
           appData={files.appData}
@@ -1288,11 +1301,8 @@ export function Chat({ chat, onShare, files, account, config }: {
                   </button>
                 </div>
               )}
-              {!railIconsOnly && (filesTab === "files" && files ? (
-                <>
-                  <Files {...files} onDelete={deleteWithUndo} onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
-                  <TrashLink label={t("trash")} count={trashRows.length} onClick={() => { setTrashFilter(undefined); selectTab("trash"); }} />
-                </>
+              {!railIconsOnly && (<div className="relative flex min-h-0 flex-1 flex-col">{filesTab === "files" && files ? (
+                <Files {...files} onDelete={deleteWithUndo} onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
               ) : filesTab === "apps" ? (
                 <AppsPanel
                   apps={apps}
@@ -1305,7 +1315,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                 />
               ) : filesTab === "shares" ? (
                 <div className="flex flex-1 min-h-0 flex-col">
-                  <div className="flex-1 overflow-y-auto">
+                  <div className="flex-1 overflow-y-auto pb-20">
                     {sharesLoading ? (
                       <LoadingBar />
                     ) : shares.length === 0 ? (
@@ -1369,7 +1379,6 @@ export function Chat({ chat, onShare, files, account, config }: {
                   </div>
                 </div>
               ) : filesTab === "chats" ? (
-                <>
                 <ChatsPanel
                   chats={chats}
                   loading={chatsLoading}
@@ -1391,8 +1400,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                     setChats((prev) => prev.map((x) => x.id === id ? { ...x, favoritedAt: on ? new Date().toISOString() : "" } : x));
                   }}
                 />
-                {files && <TrashLink label={t("recentlyDeleted")} onClick={() => { setTrashFilter("chat"); selectTab("trash"); }} />}
-                </>
+
               ) : filesTab === "trash" && files ? (
                 <TrashView
                   rows={trashRows}
@@ -1409,7 +1417,9 @@ export function Chat({ chat, onShare, files, account, config }: {
                   onPurge={(r) => { files.onPurgeTrash?.(r.id, r.kind).then(loadTrash).catch(() => {}); }}
                   onEmpty={() => { files.onEmptyTrash?.().then(loadTrash).catch(() => {}); }}
                 />
-              ) : null)}
+              ) : null}
+              {files && filesTab !== "trash" && dock}
+              </div>)}
             </motion.div>
           </>
         )}
@@ -1477,7 +1487,7 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
           {t("favorites")}
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto divide-y divide-border">
+      <div className="flex-1 overflow-y-auto divide-y divide-border pb-20">
         {visible.map((s) => {
           const isFav = !!s.favoritedAt;
           return (
@@ -1584,7 +1594,7 @@ function RunIndicator({ step, startedAt, onStop }: {
       <div className="flex items-center gap-2 rounded-2xl border border-border bg-secondary/40 py-1.5 ps-3 pe-1.5">
         <span className="inline-block size-1.5 shrink-0 rounded-full bg-emerald-500 animate-pulse" />
         <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground" dir="auto">
-          {step || t("working")}
+          {(step && stepText(step)) || t("working")}
           {elapsed && <span className="ms-2 tabular-nums text-muted-foreground/60">{elapsed}</span>}
         </span>
         <button
@@ -1682,17 +1692,63 @@ function FollowUpChip({ text, onAccept, onDismiss }: {
 }
 
 // Footer link into the trash — Finder/Drive style, from where the loss happened.
-function TrashLink({ label, count, onClick }: { label: string; count?: number; onClick: () => void }) {
+type DockEntry = { icon: IconName; label: string; count?: number; onClick: () => void };
+
+// The panel's dock: one row of shortcuts at its foot. Tiles grow as the pointer nears them.
+function PanelDock({ items }: { items: DockEntry[] }) {
+  const pointer = useMotionValue(Infinity);
   return (
-    <button
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex h-24 items-end justify-center bg-gradient-to-t from-background via-background/70 to-transparent pb-3">
+      <div
+        onMouseMove={(e) => pointer.set(e.clientX)}
+        onMouseLeave={() => pointer.set(Infinity)}
+        className="pointer-events-auto flex items-end gap-1 rounded-[18px] border border-black/[0.06] bg-white/70 p-1.5 shadow-[0_12px_32px_-12px_rgb(0_0_0/0.3)] backdrop-blur-2xl backdrop-saturate-150 dark:border-white/[0.09] dark:bg-white/[0.07] dark:shadow-[0_12px_32px_-12px_rgb(0_0_0/0.9)]"
+      >
+        {items.map((it) => <DockTile key={it.label} {...it} pointer={pointer} />)}
+      </div>
+    </div>
+  );
+}
+
+function DockTile({ icon, label, count, onClick, pointer }: DockEntry & { pointer: MotionValue<number> }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const still = useReducedMotion();
+  const [tip, setTip] = useState(false);
+  const size = useSpring(useTransform(pointer, (x) => {
+    const r = ref.current?.getBoundingClientRect();
+    const d = r ? Math.abs(x - r.left - r.width / 2) : Infinity;
+    return still ? 32 : 32 + 12 * Math.max(0, 1 - d / 80);
+  }), { mass: 0.1, stiffness: 200, damping: 14 });
+  return (
+    <motion.button
+      ref={ref}
       onClick={onClick}
-      className="flex shrink-0 items-center gap-2 border-t border-border px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/40 transition-colors cursor-pointer"
+      aria-label={label}
+      style={{ width: size, height: size }}
+      onHoverStart={() => setTip(true)}
+      onHoverEnd={() => setTip(false)}
+      onFocus={(e) => { if (e.currentTarget.matches(":focus-visible")) setTip(true); }}
+      onBlur={() => setTip(false)}
+      className="relative flex cursor-pointer items-center justify-center rounded-[13px] text-muted-foreground transition-colors hover:bg-foreground/[0.07] hover:text-foreground"
     >
-      <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l.7 12a1 1 0 001 .95h6.6a1 1 0 001-.95L17 7" />
-      </svg>
-      <span>{label}{count ? ` · ${count}` : ""}</span>
-    </button>
+      <AnimatePresence>
+        {tip && (
+          <motion.span
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 4 }}
+            transition={{ duration: 0.12 }}
+            className="pointer-events-none absolute bottom-full z-10 mb-2 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-[11px] font-medium text-background"
+          >
+            {label}
+          </motion.span>
+        )}
+      </AnimatePresence>
+      <Icon name={icon} className="size-[45%]" strokeWidth={1.8} />
+      {!!count && (
+        <span className="absolute -end-1 -top-1 min-w-4 rounded-full bg-foreground px-1 text-center text-[10px] font-medium leading-4 text-background">{count}</span>
+      )}
+    </motion.button>
   );
 }
 

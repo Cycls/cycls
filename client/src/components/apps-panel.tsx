@@ -33,7 +33,7 @@ export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUpload
           if (f && app && onUploadIcon) onUploadIcon(app, f);
         }}
       />
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+      <div className="flex-1 overflow-y-auto p-4 pb-20 sm:p-6 sm:pb-20">
         {apps.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 py-16 text-center">
             <Icon name="folder" className="size-8 text-muted-foreground" strokeWidth={1.5} />

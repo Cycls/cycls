@@ -1,12 +1,13 @@
 """Credentials, encrypted at rest. A user's own live at {org}/.secrets/{user}
 and follow the user into every workspace; a workspace's shared ones live at
 {workspace.root}/.connectors. Both are masked in the bash sandbox and rejected
-by the path guards, like .db. A record the current CYCLS_SECRET_KEY cannot
-decrypt reads as absent — rotation means re-auth, never a crash.
+by the path guards, like .db. A record that cannot be decrypted, because
+CYCLS_SECRET_KEY rotated or is missing, reads as absent: re-auth, never a crash.
 """
 import base64, hashlib, json, os
 from cryptography.fernet import Fernet, InvalidToken
 from cycls._app.db import DB, workspace
+from .logs import log
 
 USER, SHARED = ".secrets", ".connectors"
 
@@ -32,6 +33,9 @@ async def find(ws, name):
     """(record, shared): the user's own first, else the workspace's, else (None, False)."""
     for shared in (False, True):
         if (row := await _db(ws, shared).get(name)) is not None:
+            if not os.environ.get("CYCLS_SECRET_KEY"):
+                log("warn", message=f"CYCLS_SECRET_KEY is not set, so the stored {name} reads as absent")
+                return None, False
             try:
                 return json.loads(_fernet().decrypt(row["v"].encode())), shared
             except InvalidToken:

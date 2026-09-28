@@ -16,6 +16,7 @@ from .. import credentials, spill, trash
 TRASH_MOUNT, SHIMS_MOUNT = "/workspace-trash", "/opt/cycls-bin"   # created by the image (Agent._base_run)
 
 MAX_OUTPUT = 2_000_000   # memory ceiling; the loop spills anything large to .tmp/
+READ_MAX = 50_000        # chars per read (~25k tokens) — attachments inline through read
 
 _IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
 _DOC_EXTS = {"pdf"}
@@ -58,6 +59,7 @@ _READ_TOOL = {
         "- For LARGE PDFs (over 3MB): you MUST provide the `pages` parameter, e.g. pages='1-5'. "
         "The tool will render those pages as images. Maximum 20 pages per read. "
         "If you don't know how many pages the PDF has, the error message will tell you.\n"
+        "- Returns up to 50,000 characters per call; a longer file ends with the offset to continue from.\n"
         "- When you already know which part of the file you need, use offset and limit to read only that part.\n"
         "- Only reads files, not directories. Use `ls` via bash for directories.\n"
         "- If you need to read a file the user mentioned, always use this tool — assume the path is valid.\n"
@@ -66,7 +68,7 @@ _READ_TOOL = {
     "input_schema": {"type": "object", "properties": {
         "path": {"type": "string", "description": "Relative path to read (e.g. src/main.py)"},
         "offset": {"type": "integer", "description": "Start line, 1-indexed (default: 1)"},
-        "limit": {"type": "integer", "description": "Max lines to read. Omit to read entire file."},
+        "limit": {"type": "integer", "description": "Max lines to read. Omit to read as much as fits."},
         "pages": {"type": "string", "description": "Page range for large PDFs, e.g. '1-5' or '3'. Required for PDFs over 3MB. Max 20 pages."},
     }, "required": ["path"]}
 }
@@ -606,7 +608,7 @@ def _resolve_path(raw_path, workspace):
     rel = raw_path.removeprefix("~/").removeprefix("/workspace/").lstrip("/")
     path = (ws / rel).resolve()
     if not path.is_relative_to(ws): raise ValueError("path escapes workspace")
-    for name in (".db", ".database", ".trash", credentials.USER, credentials.SHARED):
+    for name in (".db", ".database", ".trash", ".settings", credentials.USER, credentials.SHARED):
         reserved = ws / name
         if path == reserved or path.is_relative_to(reserved):
             raise ValueError(f"{name}/ is managed by cycls")
@@ -633,6 +635,7 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
           .tmpfs("/workspace/.trash")
           .tmpfs(f"/workspace/{credentials.USER}")
           .tmpfs(f"/workspace/{credentials.SHARED}")
+          .tmpfs("/workspace/.settings")  # the person's tool settings: bash must not grant itself "allow"
           .bind(trash_dir, TRASH_MOUNT)
           .ro_bind(shims, SHIMS_MOUNT)
           .tmpfs("/app")
@@ -797,7 +800,11 @@ async def _exec_read(inp, workspace):
     except UnicodeDecodeError: return f"Error: {inp['path']} is a binary file"
     start = max(1, inp.get("offset", 1))
     sliced = lines[start-1 : start-1 + inp["limit"]] if inp.get("limit") else lines[start-1:]
-    return "\n".join(f"{i+start:6}\t{l}" for i, l in enumerate(sliced))
+    text = "\n".join(f"{i:6}\t{l[:2000]}" for i, l in enumerate(sliced, start))
+    if len(text) <= READ_MAX: return text
+    text = text[:text.rfind("\n", 0, READ_MAX)]
+    nxt = start + text.count("\n") + 1
+    return f"{text}\n\n[Stopped at line {nxt - 1} of {len(lines)}. Continue with offset={nxt}.]"
 
 async def _exec_canvas(inp, workspace):
     """Resolve + validate the path, then return a UI event the loop forwards to
@@ -2243,20 +2250,31 @@ _DESTRUCTIVE_CMD = re.compile(
     r"|\bdrop\s+(table|database)\b"
     r"|\bgit\s+(push\s+(-f|--force)|reset\s+--hard|clean\s+-\w*[fdx])"
     r"|\bkillall\s"
+    r"|\bfind\s[^\n]*\s-delete\b"   # unlinks by itself, so the rm shim never moves it to the trash
     # A redirect into a block device overwrites a disk. Outside the groups above on
     # purpose: a word boundary cannot sit between a space and `>`, so `> /dev/sda`
     # never matched while `2>/dev/null` did — the rule was inverted.
     r"|>\s*/dev/r?(sd|hd|vd|nvme|mmcblk|loop|disk)", re.I)
 
 
-_READ_CMD = re.compile(r"^\s*(ls|cat|head|tail|wc|grep|rg|find|stat|file|du|df|pwd|echo|which|type|tree|sort|uniq|diff|awk|sed\s+-n)\b", re.I)
+_READ_CMD = re.compile(r"^\s*(ls|cat|head|tail|wc|grep|rg|find|stat|file|du|df|pwd|echo|which|type|tree|sort|uniq|diff|awk|true|sed\s+-n)\b", re.I)
+
+
+def _reads(cmd):
+    """Every command in the line only reads, not just the first. Quoted text is data; a redirect into a file,
+    a substitution or a `find` action is not a read."""
+    if re.search(r"\$\(|`|[<>]\(", cmd):
+        return False
+    bare = re.sub(r"\d*>>?\s*/dev/null\b|&>>?\s*/dev/null\b|\d*>&[\d-]", " ", re.sub(r"'[^']*'|\"(?:\\.|[^\"\\])*\"", "''", cmd))
+    return ">" not in bare and all(_READ_CMD.match(s) and not re.search(r"\s-(delete|exec|execdir|ok|okdir|fprint0?|fprintf|fls)\b", s)
+                                   for s in re.split(r"\|\||&&|[;|&\n]", bare) if s.strip())
 
 
 def risk(name, inp):
     """None (a read — always runs), "write" (follows the composer switch) or "destructive" (asks in both modes)."""
     if name == "bash":
         cmd = str(inp.get("command") or "")
-        return "destructive" if _DESTRUCTIVE_CMD.search(cmd) else None if _READ_CMD.match(cmd) else "write"
+        return "destructive" if _DESTRUCTIVE_CMD.search(cmd) else None if _reads(cmd) else "write"
     if name == "database":
         return {"delete": "destructive", "put": "write"}.get(inp.get("command"))
     return "write" if name in ("edit", "build_app") else None

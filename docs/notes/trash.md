@@ -46,8 +46,9 @@ An `edit create` over an existing file snapshots the old content into the
 trash (`reason: overwrite`) before writing — light version history for free.
 
 **Limits, honestly**: `find -delete`, `shred`, `/bin/rm` by full path, or
-`>` truncation bypass the shim. The prompt already steers the model away from
-bash for file content; these are rare and documented, not covered.
+`>` truncation bypass the shim. `find -delete` and `shred` ask for approval
+instead, in both modes. The prompt already steers the model away from bash for
+file content; the rest are rare and documented, not covered.
 
 ## UI
 

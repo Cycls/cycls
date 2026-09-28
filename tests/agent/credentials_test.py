@@ -51,10 +51,12 @@ def test_isolation(tmp_path):
     assert _get(u1_other, "salla") is None
 
 
-def test_rotated_key_reads_as_absent(tmp_path, monkeypatch):
+def test_a_rotated_or_missing_key_reads_as_absent(tmp_path, monkeypatch):
     ws = _ws(tmp_path)
     _put(ws, "salla", "v")
     monkeypatch.setenv("CYCLS_SECRET_KEY", "k2")
+    assert _get(ws, "salla") is None
+    monkeypatch.delenv("CYCLS_SECRET_KEY")
     assert _get(ws, "salla") is None
 
 
@@ -64,10 +66,10 @@ def test_missing_key_refuses_to_store(tmp_path, monkeypatch):
         _put(_ws(tmp_path), "salla", "v")
 
 
-def test_both_slots_are_path_guarded(tmp_path):
+def test_private_slots_are_path_guarded(tmp_path):
     from cycls._agent.tools import _resolve_path
     from cycls._agent.web.routers import resolve_path
-    for name in (".secrets", ".connectors"):
+    for name in (".secrets", ".connectors", ".settings"):
         with pytest.raises(ValueError, match="managed by cycls"):
             _resolve_path(f"{name}/x", str(tmp_path))
         with pytest.raises(ValueError, match="managed by cycls"):
