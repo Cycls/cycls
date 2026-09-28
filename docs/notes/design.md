@@ -232,9 +232,12 @@ footer and page numbers; hero slides (title, section, closing) take the theme's 
 background and the deck logo. Eight themes (`src/themes.js`) or an override object on
 a base; with a brand kit and no theme, the SDK builds a brand theme (`_brand_theme`:
 the primary as the hero, the accent where it reads on white, the brand fonts,
-`brand/logo.*`). Each slide is laid out left-to-right and mirrored whole when the
-words it shows are Arabic, so a bilingual deck turns per slide (`deck.dir` sets every
-slide; a slide of only numbers follows the deck). The SDK
+`brand/logo.*`). Layouts are drawn left-to-right and mirrored whole for a right-to-left
+slide: a slide whose words are two-thirds Arabic is right-to-left, two-thirds Latin
+left-to-right, and a bilingual slide (an Arabic headline over English bullets) or one of
+only numbers follows the deck's `dir` — the model's, else what most of the deck's words
+are. The service returns that `dir` and the deck document keeps it in its settings, so a
+slide added or rebuilt later turns the same way as the rest. The SDK
 (`_prepare_deck`) resolves image slots — a slide's `image`, a team member's `photo`,
 the deck and footer logos — from workspace paths to bytes, and keeps the deck's
 settings (images back to paths) in the deck document so a later slide matches. Each

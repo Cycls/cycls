@@ -88,7 +88,9 @@ class Rendered(NamedTuple):
     predates them). `notes` are what the service changed to make it render (a font
     swapped for its open twin, a weight the family lacks, a headline shrunk to fit) —
     lines for the agent's ack. `lint` is the layout check: [{frame, node, issue, fix}].
-    `slides` is each frame's deck metadata: [{name, title?, notes?, transition?}]."""
+    `slides` is each frame's deck metadata: [{name, title?, notes?, transition?}].
+    `dir` is a deck of layouts' direction ("ltr" / "rtl"), which its bilingual slides
+    follow — kept so a later slide op lays out the same way (None for anything else)."""
     image: bytes
     fig: bytes
     frame_id: object
@@ -99,6 +101,7 @@ class Rendered(NamedTuple):
     previews: list
     images: list
     slides: list
+    dir: object = None
 
 
 def _b64s(values):
@@ -116,7 +119,8 @@ def _decode(data):
         [dict(i) for i in data.get("lint") or [] if isinstance(i, dict)],
         _b64s(data.get("previews_base64")),
         _b64s(data.get("images_base64")),
-        [dict(i) for i in data.get("slides") or [] if isinstance(i, dict)])
+        [dict(i) for i in data.get("slides") or [] if isinstance(i, dict)],
+        data.get("dir") if data.get("dir") in ("ltr", "rtl") else None)
 
 
 async def render(spec, fmt="png", scale=2, user_id=None, every=False):

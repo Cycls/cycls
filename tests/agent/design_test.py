@@ -95,10 +95,10 @@ def test_render_decodes_a_decks_slides_and_carousel(monkeypatch):
     b64 = lambda b: base64.b64encode(b).decode()
     _mock(monkeypatch, _FakeResp(200, {**_ok(), "previews_base64": [b64(b"J1"), b64(b"J2")],
                                        "images_base64": [b64(b"P1"), b64(b"P2")],
-                                       "slides": [{"name": "cover", "notes": "Hi"}, {"name": "slide-2"}]}))
+                                       "slides": [{"name": "cover", "notes": "Hi"}, {"name": "slide-2"}], "dir": "rtl"}))
     r = asyncio.run(design.render({"frames": [{}, {}]}, every=True))
     assert r.previews == [b"J1", b"J2"] and r.images == [b"P1", b"P2"]
-    assert r.slides[0] == {"name": "cover", "notes": "Hi"}
+    assert r.slides[0] == {"name": "cover", "notes": "Hi"} and r.dir == "rtl"
     assert _FakeClient.last["json"]["every"] is True
 
 
@@ -178,13 +178,13 @@ def _text(out):
 
 
 def _fake_render(monkeypatch, image=b"\x89PNGrender", fig=b"FIGZ", preview=None, notes=(), lint=(),
-                 previews=(), images=(), slides=()):
+                 previews=(), images=(), slides=(), dir=None):
     calls = {}
 
     async def _r(spec, fmt="png", scale=2, user_id=None, every=False):
         calls.update(spec=spec, fmt=fmt, scale=scale, user_id=user_id, every=every)
         return design.Rendered(image, fig, "0:6", fmt, preview, list(notes), list(lint),
-                               list(previews), list(images) if every else [], list(slides))
+                               list(previews), list(images) if every else [], list(slides), dir)
 
     monkeypatch.setattr("cycls._agent.design.render", _r)
     return calls
@@ -1117,6 +1117,19 @@ def test_rendering_a_deck_of_layouts(tmp_path, monkeypatch):
     assert calls["spec"]["deck"]["slides"][1]["layout"] == "closing" and calls["every"] is False
     assert json.loads((tmp_path / "designs" / "pitch.deck.json").read_text())["size"] == [1920, 1080]
     assert out["_ui"]["path"] == "designs/pitch.deck.json" and "2 slides" in out["_model"][-1]["text"]
+
+
+def test_a_deck_keeps_its_direction_for_later_slides(tmp_path, monkeypatch):
+    """The service decides a deck's direction from its words; the deck document keeps it, so
+    a bilingual slide added or rebuilt later is laid out the same way round as the rest."""
+    _fake_render(monkeypatch, image=b"PPTX", previews=[b"J1", b"J2"], dir="rtl")
+    asyncio.run(_exec_design({"action": "render", "name": "pitch", "format": "pptx", "spec": {"deck": {
+        "theme": "editorial", "slides": [{"layout": "title", "title": "Brewly"}, {"layout": "closing", "title": "Thanks"}]}}},
+        _ws(tmp_path)))
+    assert json.loads((tmp_path / "designs" / "pitch.deck.json").read_text())["settings"]["dir"] == "rtl"
+    asyncio.run(_exec_design({"action": "render", "name": "own", "format": "pptx", "spec": {"deck": {
+        "dir": "ltr", "slides": [{"layout": "title", "title": "x"}, {"layout": "closing", "title": "y"}]}}}, _ws(tmp_path)))
+    assert json.loads((tmp_path / "designs" / "own.deck.json").read_text())["settings"]["dir"] == "ltr"   # the model's own wins
 
 
 # ---- slide actions: add / update / move / duplicate / delete, on the saved .fig ----

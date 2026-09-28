@@ -393,7 +393,7 @@ The model calls one `design` tool:
   `image-left`, `quote`, `timeline`, `team`, `closing`, …); the service lays them out
   so every slide shares margins, title position, footer and page numbers. Eight themes
   (`editorial`, `minimal-dark`, `tech-dark`, …) or overrides on one; the workspace
-  brand kit is the default theme. Arabic slides are laid out right-to-left, per slide in a bilingual deck.
+  brand kit is the default theme. Arabic slides are laid out right-to-left; a slide mixing Arabic and English follows the deck's `dir`.
 - **Several hand-built frames** `{frames:[…]}` — a deck with full control, or, as
   png, a carousel (`designs/<name>-slide-N.png`).
 

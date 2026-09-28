@@ -377,8 +377,10 @@ _DESIGN_TOOL = {
         "slide also takes notes, transition, id. Images are workspace paths.\n"
         "  Themes: minimal-light, minimal-dark, bold-gradient, editorial, corporate, tech-dark, warm, mono, "
         "\"brand\" (the workspace brand kit — the default when one exists), or overrides on a base: "
-        "{\"base\":\"minimal-dark\",\"accent\":\"#f59e0b\",\"heading\":\"Sora Bold\"}. Arabic slides are laid out "
-        "right-to-left automatically. Keep slide text short — titles shrink to fit their place, "
+        "{\"base\":\"minimal-dark\",\"accent\":\"#f59e0b\",\"heading\":\"Sora Bold\"}. An Arabic slide is laid out "
+        "right-to-left and an English one left-to-right, automatically; a slide mixing both (an Arabic "
+        "headline over English bullets) follows the deck's `dir` — set \"dir\":\"rtl\" on an "
+        "Arabic-first bilingual deck (else the language with more words decides). Keep slide text short — titles shrink to fit their place, "
         "and the layout check names anything that still doesn't fit.\n"
         "- A deck of hand-built frames (or a carousel), when you need full control:\n"
         "    {\"frames\": [ {\"size\":\"slide\", \"fill\":…, \"nodes\":[…], \"id\"?:\"cover\", "
@@ -2039,6 +2041,8 @@ async def _exec_design(inp, workspace):
         if action == "render" and isinstance(spec.get("deck"), dict):
             from cycls._agent.design.deck import settings_of
             deck["settings"] = settings_of(spec["deck"])      # what a new slide is laid out with
+            if r.dir and "dir" not in deck["settings"]:
+                deck["settings"]["dir"] = r.dir                  # its bilingual slides' direction
         await asyncio.to_thread((root / f"designs/{name}.deck.json").write_text,
                                 json.dumps(deck, indent=2), "utf-8")
     note = (f" (named '{name}' so it doesn't overwrite the existing '{requested}')"
