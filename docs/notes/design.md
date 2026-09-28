@@ -197,7 +197,12 @@ not acted on.
 - `format: "pptx"` — one PowerPoint file, a slide per frame. Each slide's speaker
   `notes` and `transition` are written in (OpenPencil's exporter writes neither; the
   service post-processes the file). Text, rects, ellipses and lines stay native and
-  editable; gradients, vectors (icons, SVG, chart lines, pies), photos and blurs are
+  editable; **charts and tables are PowerPoint's own** — the builder keeps each one's
+  data on its frame, and the export swaps the drawn shapes for a native chart (its
+  own chart part and embedded workbook: the data edits in PowerPoint) or a native
+  table in the same box (cycls-design `src/native.ts`); right-to-left text keeps its
+  side (the exporter's logical alignment is swapped back to PowerPoint's absolute
+  one, and the paragraph marked rtl). Gradients, icons, SVG, photos and blurs are
   pictures — one element each, never the whole slide: bleeding plain rects are trimmed
   to the slide, and the slides export unclipped so other bleed hangs off the slide
   and PowerPoint crops it in the show.
