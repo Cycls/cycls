@@ -313,7 +313,9 @@ _DESIGN_TOOL = {
         "Use one for every block of text (eyebrow → headline → subtitle → button): no y to "
         "guess, nothing overlaps. In a vertical stack a text child without `w` wraps to the "
         "stack's width and takes its `align`; `anchor`:\"bottom\" makes `y` the stack's "
-        "bottom edge (a caption block over a photo). Give any node an `id` (\"headline\") "
+        "bottom edge (a caption block over a photo). A stack of text, shapes and photos stays "
+        "ONE block named by its `id`: `move` or `duplicate` it by that name, and a line edited "
+        "longer pushes the rest down, in the editor too. Give any node an `id` (\"headline\") "
         "— it's the node's name in the file, for edits and the layout check.\n"
         "  An image is a PNG / JPEG / WebP / GIF already IN the workspace (an upload, a stock "
         "photo you saved, brand/logo.png) — `src` is its path; save a web image to the workspace "
@@ -451,7 +453,7 @@ _DESIGN_TOOL = {
         "title": {"type": "string", "description": "For update_slide without `slide`: the slide's title (its name in the deck viewer)."},
         "transition": {"type": "string", "enum": ["fade", "slide", "none"], "description": "For update_slide without `slide`: how the slide enters when presented."},
         "ops": {"type": "array", "items": {"type": "object"},
-                "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?}; resize {node, w?, h?}; delete {node}; duplicate {node, dx?, dy?, id?}; replace_image {node, src}; add {node:<spec node>, frame?}. `frame` (slide index from 0) narrows a name to one slide."},
+                "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?} (a stack's id moves the whole block; a node in a stack moved on its own leaves it); resize {node, w?, h?}; delete {node}; duplicate {node, dx?, dy?, id?} (in a stack, the copy is its next item); replace_image {node, src}; add {node:<spec node>, frame?}. `frame` (slide index from 0) narrows a name to one slide."},
         "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}; a presentation as a deck of layouts {deck:{theme, footer?, slides:[{layout, …slots, notes}]}} (the normal way for decks); or hand-built frames {frames:[...]} (one per slide, all one size, each with optional id/title/notes/transition; export pptx or pdf, or png for a carousel); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s). Scripts may use only `figma` (and `console`): no `this`, globals, network, eval/Function or `.constructor` — anything else is refused before it runs."},

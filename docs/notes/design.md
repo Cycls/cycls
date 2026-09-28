@@ -428,7 +428,16 @@ export web-worker). The patches and build recipe live in
   pins it: `cycls-design/docs/quirks.md`. Goldens (Linux renders) cover each one.
 - **Stacks and the layout check.** The service measures text while the builder runs
   (one `job.ts` process per render), so a `stack` node lays its children out from
-  their real sizes — the model no longer guesses y for wrapped text. Every render
+  their real sizes — the model no longer guesses y for wrapped text. A stack of text,
+  shapes and photos is an auto-layout frame named after its `id` (the builder still
+  places each child itself, and the layout lands them on the same pixels): it moves
+  as one in the editor, a line typed longer pushes the rest down, `move`/`duplicate`
+  take the stack's id, and a child moved on its own leaves it. A stack holding a
+  frame — a list, icon, chart, table, QR or another stack — is laid out as separate
+  nodes, because after a load OpenPencil keeps a frame child where it was saved while
+  the text around it reflows (quirks #27); and every save drops the loaded file's copy
+  of the auto-layout fields, which the .fig writer would otherwise write back over an
+  edit (#28 — the service before a save, the editor bridge on `save`). Every render
   returns `lint` (overlapping text, off/crowded edges, too-small text, low contrast on
   what's behind it); `_exec_design` turns it into the ack's "Layout check" line, next
   to the QA image. Nodes carry names from the spec's `id`.

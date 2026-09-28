@@ -208,6 +208,11 @@ export function startCyclsEmbedBridge(): void {
       } catch {
         /* ignore */
       }
+      // The .fig writer re-emits a loaded node's auto-layout fields as the file had
+      // them — a stack's gap or alignment changed here would be lost on save
+      // (cycls-design docs/quirks.md #28). Write the nodes' own values instead.
+      const nodes = (store.graph as unknown as { nodes: Map<string, { source?: { fig?: { layout?: unknown } } }> }).nodes
+      for (const node of nodes.values()) if (node.source?.fig?.layout) node.source.fig.layout = undefined
       // Timeout so a stalled export surfaces as an error instead of hanging silently.
       const data = (await Promise.race([
         exportFigFile(store.graph, renderer?.ck, renderer ?? undefined, store.state.currentPageId),
