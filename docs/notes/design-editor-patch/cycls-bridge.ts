@@ -307,8 +307,19 @@ export function startCyclsEmbedBridge(): void {
           // this also covers any fallback a document happens to need.
           const store = getActiveStore()
           if (store) {
+            reflowTextEdits(store)
             const page = store.graph.getNode(store.state.currentPageId)
-            if (page) await ensureGraphFonts(store.graph, page.childIds, store.renderer)
+            // A font that's slow to arrive (a lookup that times out) doesn't fail the
+            // load — the document is open and editable, and the late-fonts refresh
+            // below re-shapes its text when the font lands.
+            if (page) {
+              try {
+                await ensureGraphFonts(store.graph, page.childIds, store.renderer)
+              } catch (error) {
+                // eslint-disable-next-line no-console
+                console.log('[cycls] load: fonts still arriving', error)
+              }
+            }
             // Backdrop follows the editor's light/dark so it always matches the
             // chrome (dark #0a0a0a / light #f3f4f6), whatever the doc has stored.
             const dark = (document.documentElement.dataset.theme ?? 'dark') !== 'light'
@@ -331,6 +342,62 @@ export function startCyclsEmbedBridge(): void {
       void saveBack()
     }
   })
+
+  // OpenPencil (0.15.1) commits a text edit, and undoes or redoes one, straight into
+  // the graph without laying out the text's auto-layout parents — a line typed longer
+  // in a stack ran over the line under it (cycls-design docs/quirks.md #29). So each
+  // of those lays the text's parents out again, as the editor's own node updates do.
+  function reflowTextEdits(store: NonNullable<ReturnType<typeof getActiveStore>>) {
+    type Editor = {
+      __cyclsReflow?: boolean
+      state: { editingTextId?: string | null; currentPageId: string }
+      graph: { getNode(id: string): unknown }
+      runLayoutForNode(id: string): void
+      requestRender(): void
+      commitTextEdit?: () => void
+      startTextEditing?: (id: string) => void
+      undoAction?: () => unknown
+      redoAction?: () => unknown
+    }
+    const s = store as unknown as Editor
+    if (s.__cyclsReflow) return
+    s.__cyclsReflow = true
+    const relayout = (id: string | null | undefined) => {
+      try {
+        if (id && s.graph.getNode(id)) s.runLayoutForNode(id)
+        s.requestRender()
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.log('[cycls] relayout failed', error)
+      }
+    }
+    const commit = s.commitTextEdit?.bind(s)
+    if (commit) {
+      s.commitTextEdit = () => {
+        const id = s.state.editingTextId
+        commit()
+        relayout(id)
+      }
+    }
+    const start = s.startTextEditing?.bind(s)
+    if (start) {
+      s.startTextEditing = (id: string) => {
+        const previous = s.state.editingTextId   // starting another commits this one
+        start(id)
+        if (previous && previous !== id) relayout(previous)
+      }
+    }
+    for (const key of ['undoAction', 'redoAction'] as const) {
+      const run = s[key]?.bind(s)
+      if (run) {
+        s[key] = () => {
+          const result = run()
+          relayout(s.state.currentPageId)   // whichever text it was: the page's layouts
+          return result
+        }
+      }
+    }
+  }
 
   // Late fonts. A web-font subset (the Arabic letters of Cairo, a fallback pack)
   // can register AFTER a text node was first drawn. The renderer only re-shapes the
