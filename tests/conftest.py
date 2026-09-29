@@ -19,13 +19,22 @@ def _reset_provisioned():
 def pytest_addoption(parser):
     parser.addoption("--live", action="store_true", default=False,
                      help="run live tests against real Anthropic API")
+    parser.addoption("--e2e", action="store_true", default=False,
+                     help="run the real-browser tests (a local server + Chromium + the design editor)")
 
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "live: real LLM API call (opt in with --live)")
+    config.addinivalue_line("markers", "e2e: real server and browser (opt in with --e2e)")
 
 
 def pytest_collection_modifyitems(config, items):
+    # ---- Real-browser tests (tests/e2e): off by default; opt in with --e2e. ----
+    if not config.getoption("--e2e"):
+        skip = pytest.mark.skip(reason="real-browser test (run with --e2e)")
+        for item in items:
+            if "e2e" in item.keywords:
+                item.add_marker(skip)
     if not config.getoption("--live"):
         skip = pytest.mark.skip(reason="live test (run with --live)")
         for item in items:
