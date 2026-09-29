@@ -1,6 +1,6 @@
 // Top-center toast for transient notifications (API errors are the main user).
 // Provider lives at the App root; `useToast()` fires from anywhere in the tree.
-import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -15,6 +15,17 @@ const ToastContext = createContext<{ show: (kind: Kind, text: string, opts?: { a
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const counter = useRef(0);
+  // Full screen shows only the full-screen element, so a toast goes inside one that
+  // asks for them (`data-toasts`, the design editor) — else it wouldn't be seen.
+  const [into, setInto] = useState<Element | null>(null);
+  useEffect(() => {
+    const onChange = () => {
+      const el = document.fullscreenElement;
+      setInto(el?.hasAttribute("data-toasts") ? el : null);
+    };
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
   const show = useCallback((kind: Kind, text: string, opts?: { action?: Action; ttl?: number }) => {
     const id = ++counter.current;
     setToasts((prev) => [...prev, { id, kind, text, action: opts?.action }]);
@@ -47,7 +58,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             ))}
           </AnimatePresence>
         </div>,
-        document.body,
+        into ?? document.body,
       )}
     </ToastContext.Provider>
   );

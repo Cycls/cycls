@@ -73,6 +73,23 @@ describe("designs in the canvas", () => {
     expect(onCloseTab).toHaveBeenCalledWith("designs/a.fig");
   });
 
+  it("a design's header opens its editor full screen", async () => {
+    const asked: Element[] = [];
+    Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
+    Object.defineProperty(Element.prototype, "requestFullscreen", {
+      configurable: true, value: async function (this: Element) { asked.push(this); },
+    });
+    try {
+      const { container } = render(canvas("designs/a.fig"));
+      await flush();
+      fireEvent.click(screen.getByLabelText("Full screen"));
+      expect(asked).toEqual([container.querySelector("iframe")!.parentElement]);
+    } finally {
+      delete (document as unknown as Record<string, unknown>).fullscreenEnabled;
+      delete (Element.prototype as unknown as Record<string, unknown>).requestFullscreen;
+    }
+  });
+
   it("offers New design in the + menu, with the server's sizes", async () => {
     const onNewDesign = vi.fn();
     render(canvas("notes.md", { onAddFile: () => {}, searchFiles: async () => [], onNewDesign }));

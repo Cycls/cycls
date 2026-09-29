@@ -12,7 +12,7 @@ import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, 
 import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
-import { DesignEditorView, flushDesignEditor, type DesignHost } from "./design-editor-view";
+import { DesignEditorView, canFullscreen, flushDesignEditor, fullscreenDesignEditor, type DesignHost } from "./design-editor-view";
 import { DeckView, type DeckOp } from "./deck-view";
 import type { PollApi } from "../lib/polls";
 import { attachBridge, appScope } from "./app-bridge";
@@ -877,6 +877,14 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
             {isText && content != null && (
               <button onClick={startEdit} className="text-xs font-medium text-foreground bg-secondary hover:bg-secondary/80 rounded-md px-3 py-1.5 transition-colors cursor-pointer">
                 {t("edit")}
+              </button>
+            )}
+            {isDesignEditor(fileKind(file)) && designEditorUrl && canFullscreen() && (
+              <button onClick={() => fullscreenDesignEditor(file.path)} className={headerBtn}
+                      aria-label={t("fullScreen")} title={t("fullScreen")}>
+                <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 8.25v-4.5h4.5m7.5 0h4.5v4.5m0 7.5v4.5h-4.5m-7.5 0h-4.5v-4.5" />
+                </svg>
               </button>
             )}
             {(() => {

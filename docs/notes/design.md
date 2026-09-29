@@ -436,6 +436,12 @@ Cycls tab opened, and everything it makes lands in the workspace.
   brand as the agent. Created when missing, and set only when the brand changed since
   the last sync (recorded on the first frame: a `.fig` keeps neither a variable's
   description nor a page's plugin data), so a colour changed by hand stands.
+- **Full screen.** The button beside a design's ⋮ puts the editor's own box full
+  screen: the same iframe, so nothing reloads and saves go on. Chrome and Edge keep
+  Esc for the editor (hold it to leave); "Exit full screen" shows at the top middle
+  on entry and under the pointer there. Toasts show inside it (`data-toasts`), and a
+  new design, a copy or an export's Open leaves full screen first, since each opens
+  another canvas tab.
 - **Switching, closing, renaming, deleting.** A design tab switched away from or
   closed stays mounted, hidden, until its editor has flushed (`flush` → `flushed`, or
   5 s); closing the last tab, hiding the canvas and Close all flush first (up to
