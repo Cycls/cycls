@@ -180,6 +180,30 @@ function useServiceFonts(): void {
   }
 }
 
+// A hidden page (the Cycls tab in the background) draws no frames, so nothing that
+// waits on one finishes until the page is shown (docs/quirks.md #37).
+function untilVisible(signal: AbortSignal): Promise<void> {
+  if (document.visibilityState === 'visible') return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const check = () => {
+      if (document.visibilityState !== 'visible' && !signal.aborted) return
+      document.removeEventListener('visibilitychange', check)
+      signal.removeEventListener('abort', check)
+      if (signal.aborted) reject(signal.reason)
+      else resolve()
+    }
+    document.addEventListener('visibilitychange', check)
+    signal.addEventListener('abort', check)
+  })
+}
+
+// The editor's wait for the first frame of a page (PRESENTATION_TIMEOUT_MS, 10 s)
+// ran out: es-toolkit's TimeoutError, a DOMException known by its message (as
+// upstream's own check in src/app/editor/session/create.ts).
+function isPresentationTimeout(error: unknown): boolean {
+  return (error as { message?: unknown } | null)?.message === 'The operation was timed out'
+}
+
 // Open a .fig in the editor's one document store, replacing what's there — the
 // upstream open path (src/app/tabs readFigForTab + showImportedGraph), without the
 // new tab it would open for a second file (docs/quirks.md #30).
@@ -198,7 +222,17 @@ async function loadDocument(store: EditorStore, bytes: Uint8Array, fileName: str
     store.setDocumentSource(fileName, 'fig')
     const pageId = store.graph.getPages()[0]?.id ?? store.graph.rootId
     load.update({ phase: 'populating-page', detail: store.graph.getNode(pageId)?.name ?? null })
-    await store.switchPage(pageId, { preparation: load })
+    // Showing the page waits for its first frame (10 s, then it throws) and fitting
+    // it for an animation frame (none, ever, in a hidden page): opened in a
+    // background tab, the load failed and the design was never bound, so nothing
+    // saved. Wait until it can be seen; and a first frame slower than that wait is
+    // no failure, since the page is switched by then (quirks #37).
+    await untilVisible(load.signal)
+    try {
+      await store.switchPage(pageId, { preparation: load })
+    } catch (error) {
+      if (load.signal.aborted || !isPresentationTimeout(error)) throw error
+    }
     load.update({ phase: 'preparing-render', detail: store.state.documentName })
     await store.fitCurrentPageToViewport()
     loaded = true
