@@ -309,6 +309,22 @@ class TestImages:
 # ─── engine actions ─────────────────────────────────────────────────────────
 
 class TestEngine:
+    def test_big_files_go_up_gzipped_and_come_back_unpacked(self, engine, monkeypatch):
+        import gzip
+        from cycls._agent.studio import engine as E
+        mesh = '{"format": "cycls.mesh", "co": "' + "AAAA" * 200_000 + '"}'          # repetitive: shrinks
+        photo = bytes(range(256)) * 1500                                             # a render coming back packed
+        noise = __import__("os").urandom(400_000)
+        sent = E.pack({"meshes/m-0123456789ab.json": mesh, "texture_in.png": noise, "small.json": "{}"})
+        assert set(sent) == {"meshes/m-0123456789ab.json.gz", "texture_in.png", "small.json"}
+        assert gzip.decompress(sent["meshes/m-0123456789ab.json.gz"]) == mesh.encode()
+        assert len(sent["meshes/m-0123456789ab.json.gz"]) < len(mesh) / 10
+        assert E.unpack({"render.png.gz": gzip.compress(photo), "preview.jpg": b"j"}) == {"render.png": photo,
+                                                                                          "preview.jpg": b"j"}
+        monkeypatch.setenv("CYCLS_STUDIO_ENGINE", "cycls-render")
+        asyncio.run(E.call("snapshot", S.new_scene(), blobs={"meshes/m-0123456789ab.json": mesh}))
+        assert engine.calls[-1]["gzip"] is True and list(engine.calls[-1]["blobs"]) == ["meshes/m-0123456789ab.json.gz"]
+
     def test_snapshot_sends_the_scene_and_returns_the_image(self, root, engine):
         out = run({"action": "snapshot"}, root)
         call = engine.calls[-1]

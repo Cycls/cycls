@@ -138,7 +138,11 @@ engine refuses those two ops rather than run them bare.
 **Limits.** 100 MB of meshes and images per scene (the engine takes 110 MB in, 160 MB out — an
 import's meshes come back base64), 100 MB per imported file, per-op timeouts, `max_instances=4` (a cost ceiling, shared by
 everyone). Busy (429/503) reaches the person as "the Studio engine is busy". A call's timeout grows
-with what it uploads (~4 s a megabyte), for an agent on a slow uplink.
+with what it uploads (~4 s a megabyte), for an agent on a slow uplink. Files of 256 KB or more go up
+gzip'd when that saves 10% (`engine.pack`; the engine unpacks, capped at its 110 MB) and big
+outputs come back the same way (`gzip=True`): lossless — a .blend saved uncompressed is ~27%
+of itself, mesh files well under half; images and a compressed .blend go as they are. The
+engine deploys first: an older one refuses `.gz` names.
 
 **Big scenes.** Up to 10,000 objects — a kitbashed venue is thousands of objects sharing a few
 hundred meshes. What scales with them: the model's summary lists the selection and the top level
