@@ -135,7 +135,8 @@ scripts. A `script` or `import` gets a fresh
 worker that can see only its own job directory and is killed after. With no sandbox available the
 engine refuses those two ops rather than run them bare.
 
-**Limits.** 25 MB in, 30 MB out, per-op timeouts, `max_instances=4` (a cost ceiling, shared by
+**Limits.** 100 MB of meshes and images per scene (the engine takes 110 MB in, 160 MB out — an
+import's meshes come back base64), 100 MB per imported file, per-op timeouts, `max_instances=4` (a cost ceiling, shared by
 everyone). Busy (429/503) reaches the person as "the Studio engine is busy".
 
 ## The app's route

@@ -16,7 +16,7 @@ from . import APP_DIR, SLUG, engine, install, store
 from . import scene as S
 
 APP_ENTRY = f"{APP_DIR}/index.html"
-MAX_IMPORT = 24_000_000
+MAX_IMPORT = 100_000_000          # a model or image file from the workspace
 IMPORT_EXTS = ("glb", "gltf", "obj", "fbx", "stl", "ply", "blend")
 EXPORT_EXTS = {"glb": "glb", "blend": "blend", "fbx": "fbx", "obj": "obj", "stl": "stl"}
 
@@ -231,7 +231,7 @@ async def _image_texture(ws, rel):
     if not path.is_file():
         raise S.SceneError(f"{rel} does not exist")
     if path.stat().st_size > MAX_IMPORT:
-        raise S.SceneError(f"{rel} is over 24 MB")
+        raise S.SceneError(f"{rel} is over {MAX_IMPORT // 1_000_000} MB")
     data = await asyncio.to_thread(path.read_bytes)
     media = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext)
     size = None
@@ -443,7 +443,7 @@ async def _import(ws, inp):
     if not path.is_file():
         return f"Error: {inp.get('path')} does not exist."
     if path.stat().st_size > MAX_IMPORT:
-        return "Error: that file is over 24 MB."
+        return f"Error: that file is over {MAX_IMPORT // 1_000_000} MB."
     data = await asyncio.to_thread(path.read_bytes)
     r = await engine.call("import", {}, blobs={f"import.{ext}": data}, params={"ext": ext})
     res = r["result"]
