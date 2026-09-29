@@ -10,6 +10,7 @@ import { estimateSeconds } from "./eta.js";
 
 const SESSION = Math.random().toString(36).slice(2, 8);
 const UNDO_LIMIT = 128;
+const EVAL_BATCH = 40;                 // objects per Blender evaluate call
 // Every undo step is a whole document; a scene of thousands of objects keeps fewer of them.
 const undoLimit = (doc) => (Object.keys(doc?.objects || {}).length > 1000 ? 16 : UNDO_LIMIT);
 const VIEW_ITEMS = 2000;               // element selections past this go to the agent as a count only
@@ -574,29 +575,37 @@ export function createApp(viewportFactory) {
   async function evaluate() {
     if (!s.doc || !bridge.canEngine()) return;
     const want = [];
+    let cleared = false;
     for (const [id, o] of Object.entries(s.doc.objects)) {
       if (s.mode === "edit" && s.edit?.id === id) continue;          // Edit mode shows the cage, not the result
-      if (!needsBlender(o)) { if (evalKeys.has(id)) { evalKeys.delete(id); vp?.clearEvaluated(id); vp?.sync(s.doc, s.selection, s.shading); } continue; }
+      if (!needsBlender(o)) { if (evalKeys.has(id)) { evalKeys.delete(id); vp?.clearEvaluated(id); cleared = true; } continue; }
       const key = evalKey(id);
       if (evalKeys.get(id) !== key) want.push([id, key]);
     }
+    if (cleared) vp?.sync(s.doc, s.selection, s.shading);
     if (!want.length) return;
     for (const [id, key] of want) evalKeys.set(id, key);
     diag.evaluations++;
+    // In batches: a venue of hundreds of bevelled parts is too much for one reply. What fails
+    // stays unshaped (its plain mesh shows) until it changes — no retry loop.
+    const doc = s.doc;
     try {
-      set({ busy: "Blender is shaping the geometry…" });
-      const r = await engine("evaluate", { scene: s.doc, params: { ids: want.map(([id]) => id) } });
-      for (const [id, key] of want) {
-        const m = r.meshes?.[id];
-        if (!m || evalKeys.get(id) !== key) continue;
-        vp?.setEvaluated(id, key, { positions: new Float32Array(b64Floats(m.positions)),
-                                    normals: new Float32Array(b64Floats(m.normals)),
-                                    uv: m.uv ? new Float32Array(b64Floats(m.uv)) : null,
-                                    index: new Uint32Array(b64Floats(m.index)),
-                                    triMat: m.material_index ? new Uint16Array(b64Floats(m.material_index)) : null });
+      for (let i = 0; i < want.length; i += EVAL_BATCH) {
+        const batch = want.slice(i, i + EVAL_BATCH);
+        set({ busy: want.length > EVAL_BATCH ? `Blender is shaping the geometry… ${i}/${want.length}` : "Blender is shaping the geometry…" });
+        const r = await engine("evaluate", { scene: doc, params: { ids: batch.map(([id]) => id) } });
+        for (const [id, key] of batch) {
+          const m = r.meshes?.[id];
+          if (!m || evalKeys.get(id) !== key) continue;
+          vp?.setEvaluated(id, key, { positions: new Float32Array(b64Floats(m.positions)),
+                                      normals: new Float32Array(b64Floats(m.normals)),
+                                      uv: m.uv ? new Float32Array(b64Floats(m.uv)) : null,
+                                      index: new Uint32Array(b64Floats(m.index)),
+                                      triMat: m.material_index ? new Uint16Array(b64Floats(m.material_index)) : null });
+        }
+        vp?.sync(s.doc, s.selection, s.shading);                      // once a batch, not once an object
       }
     } catch (e) {
-      for (const [id] of want) evalKeys.delete(id);
       recordError("evaluate", e);
       toast(`Blender couldn't shape it: ${e.message}`, "error");
     } finally {

@@ -1442,6 +1442,35 @@ def out_of_frame(doc, slack=0.02):
     return cut
 
 
+def subset(doc, ids):
+    """Just what `ids` need to be built: them, their parents, what their modifiers point at
+    (and those objects' parents), and the meshes, materials and images those use. An
+    evaluate of a few objects in a scene of thousands then carries a few mesh files, not all."""
+    objs = doc["objects"]
+    keep, todo = set(), [i for i in ids if i in objs]
+    while todo:
+        oid = todo.pop()
+        if oid in keep:
+            continue
+        keep.add(oid)
+        o = objs[oid]
+        todo += [r for r in [o["parent"], *(m.get("object") or m.get("mirror_object") for m in o.get("modifiers", []))]
+                 if r and r in objs]
+    out = {**doc, "objects": {k: copy.deepcopy(v) for k, v in objs.items() if k in keep}}
+    for o in out["objects"].values():
+        if o.get("dof_focus") and o["dof_focus"] not in keep:
+            o["dof_focus"] = None
+    used_meshes = {o.get("mesh") for o in out["objects"].values()}
+    used_mats = {m for o in out["objects"].values() for m in o.get("materials", []) if m}
+    out["meshes"] = {k: v for k, v in doc["meshes"].items() if k in used_meshes}
+    out["materials"] = {k: v for k, v in doc["materials"].items() if k in used_mats}
+    used_tex = {m[f] for m in out["materials"].values() for f in TEXTURE_FIELDS if m.get(f)}
+    out["textures"] = {k: v for k, v in doc.get("textures", {}).items() if k in used_tex}
+    if out["render"]["camera"] not in keep:
+        out["render"] = {**out["render"], "camera": None}
+    return normalize(out)
+
+
 def prune_meshes(doc):
     """Drop mesh entries no object uses (a replaced primitive, a joined object's)."""
     used = {o.get("mesh") for o in doc["objects"].values()}

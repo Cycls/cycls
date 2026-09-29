@@ -693,13 +693,14 @@ export class Viewport {
   }
 
   // Blender-built display geometry for an object (after modifiers, or text).
+  // Blender's shape for an object; the caller syncs once for the whole batch (a sync per
+  // object is a sync per object of every object).
   setEvaluated(id, key, data) {
     const prev = this.evaluated.get(id);
     if (prev?.key === key) return;
     prev?.geometry.dispose();
     this.evaluated.set(id, { key, geometry: bufferGeometry(data) });
     this.shadowsDirty = true;
-    if (this.doc) this.sync(this.doc, this.selection, this.shading);
   }
 
   clearEvaluated(id) {

@@ -566,6 +566,15 @@ class TestBigScenes:
         assert "… and 5063 more objects (5063 mesh) not listed" in text
         assert "; … and 21 more" in text                              # 61 materials (the default too), 40 named
 
+    def test_an_evaluate_carries_only_what_its_objects_need(self):
+        doc = _venue()
+        doc["objects"]["o3"]["modifiers"] = [{"type": "boolean", "object": "o4"}]
+        doc = S.normalize(doc)
+        sub = S.subset(doc, ["o3", "o1"])
+        assert set(sub["objects"]) == {"o3", "o4", "o1", "root1", "root3"}   # its cutter, and their parents
+        assert set(sub["meshes"]) == {"m1", "m3", "m4"} and set(sub["materials"]) == {"mat1", "mat3", "mat4"}
+        assert sub["render"]["camera"] is None and S.normalize(sub) == sub
+
     def test_layout_checks_step_aside_for_thousands_of_parts(self):
         doc = _venue()
         doc["objects"]["o0"]["location"] = [0, 0, 50]                 # floating — but not worth 25M comparisons

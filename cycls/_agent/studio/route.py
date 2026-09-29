@@ -128,6 +128,8 @@ def studio_router(ws_dep, user_dep):
             raise HTTPException(400, "params must be an object")
         try:
             doc = S.normalize(body["scene"]) if body.get("scene") is not None else await store.load(ws)
+            if op == "evaluate" and isinstance(params.get("ids"), list):
+                doc = S.subset(doc, [i for i in params["ids"] if isinstance(i, str)])    # only their meshes go up
             blobs = await asyncio.to_thread(store.blobs, ws, doc, op)
         except S.SceneError as e:
             raise HTTPException(400, str(e))
