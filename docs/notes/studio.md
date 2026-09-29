@@ -325,8 +325,14 @@ excludes or its collections hide stays hidden (often the prototypes of instances
 instancer Blender doesn't draw itself — a particle emitter, a duplicator — comes in hidden
 (`show_instancer_for_render/viewport`). The file's world replaces the Studio's default one (a
 plain colour as it is; a sky or an HDRI as the nearest preset, noted), and its active camera is
-named for the model. Node-driven material inputs keep their plain values (noted); particle and
-geometry-nodes instances don't come across yet.
+named for the model. A node-driven Base Color, Roughness or Metallic comes in as its average: the
+engine bakes the network as emission onto a 16×16 plane in a scene of its own (so a file of
+thousands of objects isn't prepared for each bake) and averages it — up to 80 inputs a job.
+Instances Blender draws — particle scatter, collection instances, geometry-nodes instances of
+objects — become objects sharing their source's mesh (the viewport instances them again), one
+instancer's set whole or not at all: up to 2,000 come in; a million-pebble scatter is left out,
+named, rather than carried as a misleading sliver. Instanced geometry that isn't an object isn't
+carried. The tool counts material notes for the model rather than listing dozens.
 
 ## Known limitations
 

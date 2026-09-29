@@ -298,8 +298,19 @@ def _layout(doc):
 
 
 def _notes(notes):
-    return ("\nNOT carried into the scene (a limit of the document — don't retry it): " + "; ".join(notes[:8])
-            ) if notes else ""
+    """What didn't come across, for the model: the material inputs counted (an import can have
+    dozens), the rest listed first."""
+    if not notes:
+        return ""
+    baked = [n for n in notes if n.endswith("used its baked average")]
+    plain = [n for n in notes if "kept its plain value" in n]
+    rest = [n for n in notes if n not in baked and n not in plain]
+    lines = rest[:8]
+    if baked:
+        lines.append(f"{len(baked)} node-driven material inputs became their baked average colour/value")
+    if plain:
+        lines.append(f"{len(plain)} node-driven material inputs kept their plain values (e.g. {plain[0]})")
+    return "\nNOT carried into the scene exactly (a limit of the document — don't retry it): " + "; ".join(lines)
 
 
 # ─────────────────────────────── actions ──────────────────────────────────────

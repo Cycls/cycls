@@ -9,7 +9,7 @@ import pathlib
 from . import engine_name, renderer_name
 
 TIMEOUTS = {"evaluate": 90, "apply": 150, "snapshot": 150, "render": 660, "export": 210,
-            "script": 150, "import": 210, "selftest": 150, "ping": 60, "texture": 90}
+            "script": 150, "import": 330, "selftest": 150, "ping": 60, "texture": 90}
 APP_OPS = {"evaluate", "apply", "snapshot", "render", "export"}      # what the Studio app may ask for
 AGENT_OPS = APP_OPS | {"script", "import", "texture"}
 
