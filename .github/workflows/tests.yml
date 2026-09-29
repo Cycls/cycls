@@ -31,6 +31,31 @@ jobs:
       - name: Run tests
         run: uv run pytest tests/ -v
 
+  e2e:
+    # Cycls and the design editor in a real browser (tests/e2e): a local server with
+    # the built client, the deployed editor, Chromium — where the bugs found by hand
+    # lived, between the two.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --group test
+
+      - name: Install Chromium
+        run: uv run playwright install --with-deps chromium
+
+      - name: Run the real-browser tests
+        run: uv run pytest tests/e2e --e2e -v
+
   client:
     # The web client (vitest): useChat, auth headers, the editor bridge view, …
     runs-on: ubuntu-latest
