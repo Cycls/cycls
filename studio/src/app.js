@@ -285,7 +285,7 @@ export function createApp(viewportFactory) {
       if (sc.written && sc.mesh !== s.editMesh) sidecars.delete(path);
     }
     for (const key of meshCache.keys()) {
-      if (meshCache.size <= 64) break;
+      if (meshCache.size <= 4096) break;          // objects sharing a mesh share its geometry — and its batch
       meshCache.delete(key);
     }
   }
@@ -564,7 +564,7 @@ export function createApp(viewportFactory) {
     const refs = (o.modifiers || []).map((m) => m.object || m.mirror_object).filter(Boolean)
       .map((r) => [s.doc.objects[r], s.doc.objects[r] && s.doc.meshes[s.doc.objects[r].mesh]]);
     return JSON.stringify([o.type, o.text, o.modifiers, o.mesh && s.doc.meshes[o.mesh], refs,
-                           (o.modifiers || []).length ? [o.location, o.rotation, o.scale] : 0, textured(o)]);
+                           refs.length ? [o.location, o.rotation, o.scale] : 0, textured(o)]);
   }
 
   function scheduleEvaluate() {
@@ -589,19 +589,25 @@ export function createApp(viewportFactory) {
     // In batches: a venue of hundreds of bevelled parts is too much for one reply. What fails
     // stays unshaped (its plain mesh shows) until it changes — no retry loop.
     const doc = s.doc;
+    // Objects of the same shape (mesh, modifiers) come out the same: Blender shapes one of each.
+    const sameShape = new Map();
+    for (const [id, key] of want) {
+      if (!sameShape.has(key)) sameShape.set(key, []);
+      sameShape.get(key).push(id);
+    }
+    const reps = [...sameShape].map(([key, ids]) => [ids[0], key]);
     try {
-      for (let i = 0; i < want.length; i += EVAL_BATCH) {
-        const batch = want.slice(i, i + EVAL_BATCH);
-        set({ busy: want.length > EVAL_BATCH ? `Blender is shaping the geometry… ${i}/${want.length}` : "Blender is shaping the geometry…" });
+      for (let i = 0; i < reps.length; i += EVAL_BATCH) {
+        const batch = reps.slice(i, i + EVAL_BATCH);
+        set({ busy: reps.length > EVAL_BATCH ? `Blender is shaping the geometry… ${i}/${reps.length}` : "Blender is shaping the geometry…" });
         const r = await engine("evaluate", { scene: doc, params: { ids: batch.map(([id]) => id) } });
-        for (const [id, key] of batch) {
-          const m = r.meshes?.[id];
-          if (!m || evalKeys.get(id) !== key) continue;
-          vp?.setEvaluated(id, key, { positions: new Float32Array(b64Floats(m.positions)),
-                                      normals: new Float32Array(b64Floats(m.normals)),
-                                      uv: m.uv ? new Float32Array(b64Floats(m.uv)) : null,
-                                      index: new Uint32Array(b64Floats(m.index)),
-                                      triMat: m.material_index ? new Uint16Array(b64Floats(m.material_index)) : null });
+        for (const [rep, key] of batch) {
+          const m = r.meshes?.[rep];
+          if (!m) continue;
+          const data = { positions: new Float32Array(b64Floats(m.positions)), normals: new Float32Array(b64Floats(m.normals)),
+                         uv: m.uv ? new Float32Array(b64Floats(m.uv)) : null, index: new Uint32Array(b64Floats(m.index)),
+                         triMat: m.material_index ? new Uint16Array(b64Floats(m.material_index)) : null };
+          for (const id of sameShape.get(key)) if (evalKeys.get(id) === key) vp?.setEvaluated(id, key, data);
         }
         vp?.sync(s.doc, s.selection, s.shading);                      // once a batch, not once an object
       }

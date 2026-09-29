@@ -15,6 +15,7 @@ import { WORLDS } from "./worlds.js";
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 const DEG = Math.PI / 180;
 const SNAP = 0.1;                                  // snapping's step for a move, in metres
+const BATCH_MIN = 300;         // meshes in the scene before repeated ones draw instanced
 let PLACEHOLDER = null;                              // one stand-in for every mesh still loading
 const placeholder = () => {
   if (!PLACEHOLDER) { PLACEHOLDER = new THREE.BoxGeometry(0.4, 0.4, 0.4); PLACEHOLDER.userData.shared = true; }
@@ -123,6 +124,10 @@ export class Viewport {
     this.nodes = new Map();          // object id -> THREE.Object3D (the object's own transform)
     this.sigs = new Map();           // object id -> signature of what built it
     this.evaluated = new Map();      // object id -> { key, geometry }
+    this.evalGeoms = new Map();      // evaluate key -> { geometry, users }: identical results share one
+    this.matCache = new Map();       // material signature -> material, shared by every object using it
+    this.primCache = new Map();      // primitive parameters -> geometry
+    this.batches = new Map();        // geometry+materials -> { mesh: InstancedMesh }
     this.selection = [];
     this.shading = "material";
     this.dirty = true;
@@ -168,6 +173,8 @@ export class Viewport {
     scene.add(axis(new THREE.Vector3(0, -20, 0.001), new THREE.Vector3(0, 20, 0.001), 0x6a9a2c));
     this.root = new THREE.Group();
     scene.add(this.root);
+    this.batchRoot = new THREE.Group();          // instanced draws of repeated objects (world-space matrices)
+    scene.add(this.batchRoot);
 
     const cam = (this.camera = new THREE.PerspectiveCamera(39.6, 1, 0.05, 2000));
     cam.position.set(7.36, -6.93, 4.96);
@@ -239,7 +246,7 @@ export class Viewport {
                           y: -((e.clientY - rect.top) / rect.height) * 2 + 1 }, cam);
       // Looking through a camera puts its own gizmo at the eye; it must not win every click.
       const hit = ray.intersectObjects(this.root.children, true)
-        .find((h) => this.idOf(h.object) && h.object.visible && this.idOf(h.object) !== this.through);
+        .find((h) => this.idOf(h.object) && this.pickable(h.object) && this.idOf(h.object) !== this.through);
       this.hooks.onPick?.(hit ? this.idOf(hit.object) : null, e.shiftKey);
     });
 
@@ -319,6 +326,7 @@ export class Viewport {
       if (node.parent !== parent) parent.add(node);
     }
     if (this.edit) this.attachEdit();
+    this.rebatch(doc);
     if (this.through && !this.throughCamera(doc)) this.leaveCamera();      // camera view follows the camera
     this.scene.environment = shading === "material" ? this.probe(doc) : null;
     this.scene.background = shading === "material" ? this.worldBackground : GREY;      // the world, as it renders
@@ -532,6 +540,16 @@ export class Viewport {
     }
     const m = mid ? doc.materials[mid] : null;
     if (!m) return (this._default ||= new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5 }));
+    // One per material (and per image that has arrived for it), shared by every object using
+    // it — a venue of 5,000 objects has a hundred materials, not 11,000 copies of them.
+    const ready = TEXTURE_KEYS.map((f, i) => {
+      const t = doc.textures?.[m[f]];
+      return t ? (this.images?.get(`${t.data}|${["color", "rough", "normal"][i]}`)?.texture ? 2 : 1) : 0;
+    }).join("");
+    const sig = `${mid}|${ready}|${JSON.stringify(m)}`;
+    const hit = this.matCache.get(sig);
+    if (hit) return hit;
+    if (this.matCache.size > 2000) this.matCache.clear();      // edits leave old ones; the objects holding them keep them
     const color = new THREE.Color(m.base_color);
     const maps = this.maps(doc, m);
     const cutout = !!(maps.map && doc.textures[m.base_color_texture]?.alpha);
@@ -543,7 +561,7 @@ export class Viewport {
       opacity: m.alpha, transparent: m.alpha < 1 || cutout, side: THREE.DoubleSide, ...maps,
     });
     if (maps.normalMap) mat.normalScale.set(m.normal_strength, m.normal_strength);
-    mat.userData.owned = true;
+    this.matCache.set(sig, mat);
     return mat;
   }
 
@@ -624,7 +642,7 @@ export class Viewport {
       let geom = ev ? ev.geometry : null;
       if (!geom && o.type === "mesh") {
         const m = doc.meshes[o.mesh];
-        geom = m?.primitive ? primitiveGeometry(m) : this.hooks.explicitGeometry?.(o.mesh, m, o.shading) || null;
+        geom = m?.primitive ? this.primitive(m) : this.hooks.explicitGeometry?.(o.mesh, m, o.shading) || null;
       }
       if (!geom) geom = placeholder();                       // until its mesh file arrives
       if (ev) geom.userData.shared = true;
@@ -698,16 +716,91 @@ export class Viewport {
   setEvaluated(id, key, data) {
     const prev = this.evaluated.get(id);
     if (prev?.key === key) return;
-    prev?.geometry.dispose();
-    this.evaluated.set(id, { key, geometry: bufferGeometry(data) });
+    if (prev) this.releaseEvaluated(id, prev.key);
+    let g = this.evalGeoms.get(key);                 // the same object shape, evaluated for another id
+    if (!g) this.evalGeoms.set(key, g = { geometry: bufferGeometry(data), users: new Set() });
+    g.users.add(id);
+    this.evaluated.set(id, { key, geometry: g.geometry });
     this.shadowsDirty = true;
+  }
+
+  releaseEvaluated(id, key) {
+    const g = this.evalGeoms.get(key);
+    if (!g) return;
+    g.users.delete(id);
+    if (!g.users.size) { g.geometry.dispose(); this.evalGeoms.delete(key); }
   }
 
   clearEvaluated(id) {
     const prev = this.evaluated.get(id);
     if (!prev) return;
-    prev.geometry.dispose();
+    this.releaseEvaluated(id, prev.key);
     this.evaluated.delete(id);
+  }
+
+  primitive(m) {
+    const key = JSON.stringify(m);
+    let g = this.primCache.get(key);
+    if (!g) {
+      if (this.primCache.size > 500) this.primCache.clear();     // old ones stay with the objects holding them
+      this.primCache.set(key, g = primitiveGeometry(m));
+      g.userData.shared = true;
+    }
+    return g;
+  }
+
+  // Drawn — or drawn by its batch — and not inside something hidden.
+  pickable(obj) {
+    if (!obj.visible && !obj.userData.batched) return false;
+    for (let n = obj.parent; n && n !== this.root; n = n.parent) if (!n.visible) return false;
+    return true;
+  }
+
+  // A big scene repeats itself: a venue's 1,079 seats are one mesh and one material. Objects
+  // sharing geometry and materials draw as one InstancedMesh — one draw call, not one per
+  // object (the browser's cost is per call, not per triangle). What's selected, edited, hidden
+  // or see-through draws on its own; picking still hits each object's own (hidden) mesh.
+  rebatch(doc) {
+    const surfaces = [];
+    for (const [id, node] of this.nodes) {
+      const s = node.userData.surface;
+      if (s?.isMesh) surfaces.push([id, node, s]);
+    }
+    const on = surfaces.length >= BATCH_MIN;
+    const sel = new Set(this.selection), groups = new Map();
+    if (on) this.root.updateMatrixWorld(true);
+    for (const [id, node, s] of surfaces) {
+      if (this.edit?.id === id) continue;                      // Edit mode shows the cage instead
+      s.userData.batched = false;
+      const mats = [].concat(s.material);
+      if (!on || sel.has(id) || !doc.objects[id] || isBackdrop(doc, id) || !this.pickable(node)
+          || mats.some((m) => m.transparent || m.transmission > 0)) { s.visible = true; continue; }
+      const key = `${s.geometry.uuid}|${mats.map((m) => m.uuid).join(",")}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(s);
+    }
+    const next = new Map();
+    for (const [key, members] of groups) {
+      if (members.length < 2) { members[0].visible = true; continue; }
+      let b = this.batches.get(key);
+      this.batches.delete(key);
+      if (b && b.mesh.instanceMatrix.count < members.length) { this.batchRoot.remove(b.mesh); b.mesh.dispose(); b = null; }
+      if (!b) {
+        const mesh = new THREE.InstancedMesh(members[0].geometry, members[0].material, members.length);
+        mesh.castShadow = true;
+        mesh.raycast = () => {};                                  // clicks go to the objects themselves
+        this.batchRoot.add(mesh);
+        b = { mesh };
+      }
+      b.mesh.count = members.length;
+      members.forEach((s, i) => { b.mesh.setMatrixAt(i, s.matrixWorld); s.visible = false; s.userData.batched = true; });
+      b.mesh.instanceMatrix.needsUpdate = true;
+      b.mesh.computeBoundingSphere();
+      next.set(key, b);
+    }
+    for (const b of this.batches.values()) { this.batchRoot.remove(b.mesh); b.mesh.dispose(); }   // geometry, materials: shared
+    this.batches = next;
+    diag.batches = next.size;
   }
 
   highlight() {

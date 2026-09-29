@@ -144,7 +144,11 @@ with what it uploads (~4 s a megabyte), for an agent on a slow uplink.
 hundred meshes. What scales with them: the model's summary lists the selection and the top level
 (80 rows) and counts the rest; the floating-object check skips scenes of over 300 parts; the
 outliner draws only the rows in view; mesh files arriving in a burst reach the viewport in one
-sync; undo keeps 16 steps past 1,000 objects; and flat, wide objects (a site's terrain) count as
+sync; past 300 meshes, objects sharing geometry and materials draw as one InstancedMesh (the
+browser's cost is per draw call — the venue went from 4,456 calls a frame to 636), with what's
+selected, edited, hidden or see-through drawn on its own and clicks still hitting each object;
+materials are one per material, not per object; identical modified objects are shaped by Blender
+once (40 a call, carrying only their meshes) and share the result; undo keeps 16 steps past 1,000 objects; and flat, wide objects (a site's terrain) count as
 ground — not framed or lit for. An import hides volume-only objects (haze, fog), which as a
 surface would box everything in.
 
