@@ -279,8 +279,8 @@ CMD ["python", "entrypoint.py"]
         with tempfile.TemporaryDirectory() as tmpdir:
             workdir = Path(tmpdir)
             self._copy_user_files(workdir)
-            (workdir / "Dockerfile").write_text(self._dockerfile_local())
-            (workdir / "runner.py").write_text(RUNNER_PY)
+            (workdir / "Dockerfile").write_text(self._dockerfile_local(), encoding="utf-8")
+            (workdir / "runner.py").write_text(RUNNER_PY, encoding="utf-8")
             return self._build_image(tag, workdir)
 
     def _cleanup_container(self):
@@ -416,14 +416,15 @@ CMD ["python", "entrypoint.py"]
         kwargs = kwargs or {}
         kwargs['port'] = port
         self._copy_user_files(workdir)
+        # UTF-8 always: the container's Python reads it so, and Windows would write cp1252.
         (workdir / "Dockerfile").write_text(
-            self._dockerfile_deploy(port, extra_pip=("hypercorn",) if remote else ()))
+            self._dockerfile_deploy(port, extra_pip=("hypercorn",) if remote else ()), encoding="utf-8")
         if remote:
             from .remote import REMOTE_PY, token_for
-            (workdir / "entrypoint.py").write_text(REMOTE_PY if remote is True else remote)
+            (workdir / "entrypoint.py").write_text(REMOTE_PY if remote is True else remote, encoding="utf-8")
             payload = (self.func, token_for(self.api_key or "dev", self.name))
         else:
-            (workdir / "entrypoint.py").write_text(ENTRYPOINT_PY)
+            (workdir / "entrypoint.py").write_text(ENTRYPOINT_PY, encoding="utf-8")
             payload = (self.func, args, kwargs)
         with open(workdir / "function.pkl", "wb") as f:
             cloudpickle.dump(payload, f)
