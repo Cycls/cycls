@@ -411,7 +411,9 @@ _DESIGN_TOOL = {
         "change a deck's structure; `edit` ops still tweak nodes on a slide.\n"
         "- inspect {name} — the design's frames and every node by name (its `id`, else "
         "text-1, rect-2…), with its box, text, font and colour. Do this before an edit you "
-        "can't name from the spec you wrote.\n"
+        "can't name from the spec you wrote. A message that carries "
+        "\"[Selected in designs/<name>.fig › <frame>: <node> (<type>), …]\" is the person "
+        "pointing: \"this\" / \"the selection\" means those nodes — edit them by those names.\n"
         "- edit {ops, name, intent?} — change a design you rendered (designs/<name>.fig) with "
         "named operations, applied in order: "
         "[{\"op\":\"set_text\",\"node\":\"headline\",\"text\":\"New\"}, "
@@ -621,7 +623,7 @@ def _resolve_path(raw_path, workspace):
     rel = raw_path.removeprefix("~/").removeprefix("/workspace/").lstrip("/")
     path = (ws / rel).resolve()
     if not path.is_relative_to(ws): raise ValueError("path escapes workspace")
-    for name in (".db", ".database", ".trash", ".settings", credentials.USER, credentials.SHARED):
+    for name in (".db", ".database", ".trash", ".versions", ".settings", credentials.USER, credentials.SHARED):
         reserved = ws / name
         if path == reserved or path.is_relative_to(reserved):
             raise ValueError(f"{name}/ is managed by cycls")
@@ -646,6 +648,7 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
           .tmpfs("/workspace/.db")        # cycls state (chat, shares); editor blocks via _resolve_path
           .tmpfs("/workspace/.database")  # agent KV store; same blocking
           .tmpfs("/workspace/.trash")
+          .tmpfs("/workspace/.versions")   # a design's earlier versions (cycls/_agent/versions.py)
           .tmpfs(f"/workspace/{credentials.USER}")
           .tmpfs(f"/workspace/{credentials.SHARED}")
           .tmpfs("/workspace/.settings")  # the person's tool settings: bash must not grant itself "allow"
@@ -1925,7 +1928,8 @@ async def _exec_slides(action, inp, workspace, name):
            f"the exports beside it update in a few seconds." + _layout_check(r.get("lint"), "pptx"))
     for credit in credits:
         ack += f" {credit}."
-    command = {"type": "ui", "action": "design_command", "path": fig_rel, "script": r.get("script")}
+    command = {"type": "ui", "action": "design_command", "path": fig_rel, "script": r.get("script"),
+               "version": r.get("version")}   # what the file is now — an open editor's saves go on from it
     if intent := inp.get("intent"):
         command["intent"] = str(intent)[:80]
     # Replayed live in an open editor, and the deck (re)opened in the viewer so the
@@ -2002,21 +2006,30 @@ async def _exec_design(inp, workspace):
             if err:
                 return err
         from cycls._agent.design.deck import lock
+        from cycls._agent.design.store import Stale, read_fig, write_fig
         async with lock(fig_path):                          # one change at a time per design
-            try:
-                r = await design.apply(await asyncio.to_thread(fig_path.read_bytes), script=None if ops else script,
-                                       ops=ops or None, preview=True, user_id=subject)
-            except design.Unavailable as e:
-                return f"Error: design unavailable — {e}"
-            except Exception as e:
-                return (f"Error: the edit failed on {rel} — {e}. Nothing was changed; fix the "
-                        f"{'ops' if ops else 'script'} (Design inspect lists the nodes) and try again.")
-            tmp = fig_path.with_name(f".{fig_path.name}.part")
-            await asyncio.to_thread(tmp.write_bytes, r["fig"])
-            await asyncio.to_thread(tmp.replace, fig_path)
+            for attempt in (1, 2):
+                data, base = await asyncio.to_thread(read_fig, workspace.root, rel)
+                try:
+                    r = await design.apply(data, script=None if ops else script,
+                                           ops=ops or None, preview=True, user_id=subject)
+                except design.Unavailable as e:
+                    return f"Error: design unavailable — {e}"
+                except Exception as e:
+                    return (f"Error: the edit failed on {rel} — {e}. Nothing was changed; fix the "
+                            f"{'ops' if ops else 'script'} (Design inspect lists the nodes) and try again.")
+                try:   # the person may have saved in the editor meanwhile: apply to that, once
+                    version = await write_fig(workspace.root, rel, r["fig"], base=base, by="agent", reason="agent",
+                                              intent=inp.get("intent"))
+                    break
+                except Stale:
+                    if attempt == 2:
+                        return (f"Error: {rel} changed while the edit was being made (it's being edited "
+                                f"by hand). Nothing was changed; inspect it again, then edit.")
         from cycls._agent.design import refresh
         refresh.schedule(workspace.root, rel, subject)        # the image beside it follows
-        ui = {"type": "ui", "action": "design_command", "path": rel, "script": r.get("script") or script}
+        ui = {"type": "ui", "action": "design_command", "path": rel, "script": r.get("script") or script,
+              "version": version}   # what the file is now — an open editor's saves go on from it
         if intent := inp.get("intent"):
             ui["intent"] = str(intent)[:80]   # shown on the live "Super" cursor
         ack = (f"Edit applied and saved to {rel}; the image beside it (designs/{name}.png etc.) "

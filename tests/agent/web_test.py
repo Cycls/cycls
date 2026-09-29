@@ -887,6 +887,38 @@ def test_context_carries_the_persons_tool_switches():
     assert captured["off"] == ["WebSearch"]
 
 
+def test_context_carries_an_attached_design_selection_capped():
+    """"Add selection" rides the request: a .fig in the workspace and its nodes by
+    name, capped; anything else is no selection."""
+    from fastapi.testclient import TestClient
+
+    captured = {}
+    async def handler(context):
+        captured["sel"] = context.selection
+        yield "ok"
+
+    client = TestClient(web(handler, Config(public_path=THEME_PATH, auth=False)))
+    send = lambda sel: client.post("/", json={"messages": [{"role": "user", "content": "hi"}], "selection": sel})
+    send({"path": "designs/a.fig", "frame": "slide-1",
+          "nodes": [{"name": "headline", "type": "TEXT", "text": "x" * 200}, {"type": "RECT"}] + [{"name": "n", "type": "RECT"}] * 30})
+    sel = captured["sel"]
+    assert sel["path"] == "designs/a.fig" and sel["frame"] == "slide-1"
+    assert len(sel["nodes"]) == 19 and len(sel["nodes"][0]["text"]) == 80   # the first 20, less the nameless one; text capped
+    for bad in ({"path": "../x.fig", "nodes": [{"name": "a", "type": "T"}]}, {"path": "notes.md", "nodes": [{"name": "a", "type": "T"}]},
+                {"path": "designs/a.fig", "nodes": []}, "designs/a.fig", None):
+        send(bad)
+        assert captured["sel"] is None, bad
+
+
+def test_an_attached_selection_shows_as_a_chip_not_a_line():
+    from cycls._agent.web.routers import to_ui_messages
+    sel = {"path": "designs/a.fig", "frame": None, "nodes": [{"name": "headline", "type": "TEXT"}]}
+    raw = [{"role": "user", "selection": sel, "content": [
+        {"type": "text", "text": "make this bigger"}, {"type": "text", "text": "[Selected in designs/a.fig: headline (TEXT)]"}]}]
+    [ui] = to_ui_messages(raw)
+    assert ui["content"] == "make this bigger" and ui["selection"] == sel
+
+
 def test_context_workspace_uses_config_volume():
     """Config.volume threads into Context.workspace() at per-request construction."""
     from fastapi.testclient import TestClient
@@ -1801,7 +1833,9 @@ def test_put_dedupe_writes_a_new_file(tmp_path, monkeypatch):
     assert put("designs/draft.fig") == "designs/draft.fig"
     assert put("designs/draft.fig") == "designs/draft-3.fig"                 # draft-2.png is another design's
     assert (root / "designs/launch.fig").read_bytes() == b"FIG"               # the original stands
-    assert client.put("/files/designs/launch.fig", content=b"NEW").json() == {"ok": True, "path": "designs/launch.fig"}
+    from cycls._agent.design.store import version_of
+    assert client.put("/files/designs/launch.fig", content=b"NEW").json() == {
+        "ok": True, "path": "designs/launch.fig", "version": version_of(b"NEW")}
     assert client.put("/files/my%20docs/a%23b.txt", content=b"hi").json()["path"] == "my docs/a#b.txt"
     assert (root / "my docs" / "a#b.txt").read_bytes() == b"hi"
 

@@ -476,7 +476,7 @@ class Session:
             await put_compaction(self.workspace, self.chat_id,
                                  {"summary": self.summary, "first_kept": self.first_kept, "cleared": self.cleared})
 
-    async def add_user(self, content, *, attachments=None, internal=False):
+    async def add_user(self, content, *, attachments=None, internal=False, selection=None):
         """`internal` marks a turn the person did not type — an approval carried back from a confirm
         card. The model reads it, the chat never shows it, and it never becomes the chat's title.
 
@@ -489,6 +489,8 @@ class Session:
             msg["internal"] = True
         if attachments:
             msg["attachments"] = attachments
+        if selection:   # the design selection the person attached — the chat shows it as a chip
+            msg["selection"] = selection
         self.messages.append(msg)
         # Before the meta touch: a turn with no index is recoverable (the next
         # touch_meta fills the title, add_cost and the chat-list self-heal both
