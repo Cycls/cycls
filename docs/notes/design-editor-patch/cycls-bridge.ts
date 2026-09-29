@@ -14,11 +14,15 @@
 //   flush   {id}             save anything unsaved, then → flushed {id, ok}
 //   command {script, intent?} a live agent edit (Figma plugin API) on this document
 //   theme   {theme}          'dark' | 'light'
+//   locale  {lang}           'ar' | 'en' — the editor's own menus and panels
 //   brand   {brand}          the workspace brand kit: {colors:{primary,…}, fonts:{heading,body}}
 // Editor → Cycls, {source:'cycls-editor', type, …}:
-//   ready {protocol:2} · loaded {doc, name} · saved {doc, id, name, fig} · flushed {id, ok}
+//   ready {protocol:2, features} · loaded {doc, name} · saved {doc, id, name, fig} · flushed {id, ok}
 //   error {doc?, message} · applied {doc} · commandError {doc, message}
 //   newDesign {size?} · saveCopy {doc, name, fig} · export {doc, files:[{name, mime, data}]}
+//   selection {doc, frame, nodes:[{name, type, text?}]}  what the person has selected
+// `features` says what this editor does beyond protocol 2 ("selection", "lang"), so a
+// Cycls app offers only what the editor it loaded supports.
 // `commandError` is a live agent edit that failed HERE. The server applied and saved
 // the same edit before sending it (Cycls checks every edit headlessly first), so Cycls
 // re-opens the saved file rather than leave this editor on a stale document.
@@ -40,6 +44,8 @@ import {
   setHostProtocol,
   written
 } from './host'
+
+import { localeSetting } from '@open-pencil/vue'
 
 import { makeFigmaFromStore } from '@/app/automation/bridge/figma-factory'
 import { readFigDocument } from '@/app/document/io/fig'
@@ -334,6 +340,66 @@ function paintBackdrop(store: EditorStore, theme = document.documentElement.data
   } catch { /* ignore */ }
 }
 
+// --- Language: Cycls's, for the editor's own menus and panels. Arabic words, the
+// layout left to right as ever (cycls-theme.css keeps each Arabic label reading
+// right to left inside it).
+export function applyLocale(lang: string): void {
+  localeSetting.set(lang === 'ar' ? 'ar' : 'en')
+}
+
+// --- Selection: what the person has selected, for Cycls's "Add selection" — by
+// name, with the top-level frame (the slide) it sits in: a .fig's node ids change
+// when it's saved and reopened (docs/notes/design.md), and edits go by name.
+type SelectedNode = { name: string; type: string; text?: string }
+const MAX_SELECTED = 20
+
+function selectionOf(store: EditorStore): { frame: string | null; nodes: SelectedNode[] } {
+  type Node = { name: string; type: string; parentId: string | null; text?: string }
+  const graph = store.graph as unknown as { getNode(id: string): Node | undefined }
+  const pageId = store.state.currentPageId
+  let frame: string | null = null
+  const nodes: SelectedNode[] = []
+  for (const id of [...(store.state as { selectedIds: Set<string> }).selectedIds].slice(0, MAX_SELECTED)) {
+    const node = graph.getNode(id)
+    if (!node) continue
+    let top = node
+    while (top.parentId && top.parentId !== pageId) {
+      const parent = graph.getNode(top.parentId)
+      if (!parent) break
+      top = parent
+    }
+    if (frame === null && top.type === 'FRAME') frame = top.name
+    nodes.push({
+      name: node.name,
+      type: node.type,
+      ...(node.type === 'TEXT' && typeof node.text === 'string' ? { text: node.text.slice(0, 80) } : {})
+    })
+  }
+  return { frame, nodes }
+}
+
+// One subscription per store (it outlives a re-load), reporting 300 ms after the
+// selection settles — and again when a load replaces the document.
+function watchSelection(store: EditorStore): void {
+  const s = store as unknown as {
+    __cyclsSelection?: boolean
+    onEditorEvent(event: 'selection:changed' | 'graph:replaced', handler: () => void): () => void
+  }
+  if (s.__cyclsSelection) return
+  s.__cyclsSelection = true
+  let timer: number | undefined
+  const report = () => {
+    window.clearTimeout(timer)
+    timer = window.setTimeout(() => {
+      const bound = boundDocument()
+      if (!bound || bound.store !== store) return
+      post({ type: 'selection', doc: bound.doc, ...selectionOf(store) })
+    }, 300)
+  }
+  s.onEditorEvent('selection:changed', report)
+  s.onEditorEvent('graph:replaced', report)
+}
+
 // --- Brand kit: the workspace's brand/brand.yaml, as Cycls reads it. Its colours
 // become variables in a "Brand" collection, so a person editing by hand picks the
 // same colours the agent uses, and its fonts are loaded before they're picked.
@@ -497,6 +563,7 @@ export function startCyclsEmbedBridge(): void {
     await loadDocument(store, decodeBase64(msg.fig), name)
     bind({ store, doc, name })
     reflowTextEdits(store)
+    watchSelection(store)
     // Fonts the document uses (and any fallback pack). A face that's slow to arrive
     // doesn't fail the load — the document is open and editable, and the late-fonts
     // refresh below re-shapes its text when the face lands.
@@ -583,7 +650,7 @@ export function startCyclsEmbedBridge(): void {
     if (event.source !== parentWindow) return
     const msg = event.data as {
       target?: string; type?: string; protocol?: number; doc?: string; name?: string; fig?: string
-      id?: string; ok?: boolean; script?: string; intent?: string; theme?: string; brand?: Brand
+      id?: string; ok?: boolean; script?: string; intent?: string; theme?: string; lang?: string; brand?: Brand
     }
     if (!msg || msg.target !== 'cycls-editor') return
     if (msg.type === 'load' && typeof msg.fig === 'string') {
@@ -601,6 +668,8 @@ export function startCyclsEmbedBridge(): void {
       void runCommand(msg.script, typeof msg.intent === 'string' ? msg.intent : undefined)
     } else if (msg.type === 'theme' && typeof msg.theme === 'string') {
       applyTheme(msg.theme)
+    } else if (msg.type === 'locale' && typeof msg.lang === 'string') {
+      applyLocale(msg.lang)
     } else if (msg.type === 'brand') {
       if (settled) applyBrand(msg.brand ?? null)
       else pendingBrand = msg.brand ?? null
@@ -667,5 +736,5 @@ export function startCyclsEmbedBridge(): void {
     scheduleSave()
   }, 700)
 
-  post({ type: 'ready', protocol: 2 })
+  post({ type: 'ready', protocol: 2, features: ['selection', 'lang'] })
 }

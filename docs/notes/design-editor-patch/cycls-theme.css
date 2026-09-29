@@ -57,6 +57,13 @@ body, button, input, select, textarea {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
+/* Arabic (?lang=ar): the panels stay where they are, left to right, but each label
+   takes its direction from its own words, so "حفظ نسخة…" keeps its ellipsis at its
+   end and a layer named in Arabic reads right to left. */
+html[lang="ar"] :where(button, label, span, p, li, a, h1, h2, h3, h4, [role="menuitem"], [role="option"], [role="tab"], input, textarea) {
+  unicode-bidi: plaintext;
+}
+
 /* Chrome logo is the Cycls white mark (crisp on the dark chrome) — invert it in
    light mode so it stays visible on light panels. */
 html[data-theme="light"] img[data-test-id="app-logo"] {

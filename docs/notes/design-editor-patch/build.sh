@@ -52,6 +52,8 @@ cp "${HERE}/patches/cycls-bridge.ts"    src/app/embed/cycls-bridge.ts
 cp "${HERE}/patches/host.ts"            src/app/embed/host.ts
 cp "${HERE}/patches/figma-compat.js"    src/app/embed/figma-compat.js  # the service's script prelude (src/figma-compat.js)
 cp "${HERE}/patches/stubs/"*            src/app/embed/stubs/
+mkdir -p packages/vue/src/i18n/locales/ar                             # Arabic (edits.json registers it)
+cp "${HERE}/patches/locales/ar/"*       packages/vue/src/i18n/locales/ar/
 bun "${HERE}/apply-edits.ts" "${HERE}/patches/edits.json"
 
 echo "== build =="

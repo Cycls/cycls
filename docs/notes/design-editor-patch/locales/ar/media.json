@@ -1,0 +1,11 @@
+{
+  "vectorization": "تحويل الصور إلى متّجهات",
+  "vectorizationDescription": "إرسال طبقات الصور إلى Recraft أو fal.ai واستلام متّجهات قابلة للتعديل. قد يفرض الموفّر رسومًا.",
+  "vectorizeProvider": "خدمة التحويل إلى متّجهات",
+  "pexelsAPIKey": "مفتاح API لـ Pexels (صور جاهزة)",
+  "unsplashAccessKey": "مفتاح الوصول إلى Unsplash",
+  "stockPhotoToolOptional": "اختياري — لأداة stock_photo",
+  "pexelsAlternativeOptional": "اختياري — بديل لـ Pexels",
+  "getPexelsAPIKey": "احصل على مفتاح API مجاني لـ Pexels ←",
+  "getUnsplashAccessKey": "احصل على مفتاح وصول مجاني لـ Unsplash ←"
+}

@@ -364,5 +364,8 @@ def test_the_editor_follows_cycls_into_arabic(session):
     session.open_design()
     if "lang" not in session.features():
         pytest.skip("this editor has no Arabic yet")
-    first = session.editor.get_by_role("menuitem").first.inner_text().strip()
-    assert any("؀" <= c <= "ۿ" for c in first), first
+    # The docked canvas is narrow: the editor's compact layout, no menubar — its labels
+    # are Arabic all the same.
+    assert session.editor.evaluate("document.documentElement.lang") == "ar"
+    text = session.editor.evaluate("document.body.innerText")
+    assert sum("؀" <= c <= "ۿ" for c in text) > 10, text[:200]

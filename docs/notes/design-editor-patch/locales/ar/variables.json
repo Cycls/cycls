@@ -1,0 +1,13 @@
+{
+  "createCollection": "إنشاء مجموعة",
+  "renameCollection": "إعادة تسمية المجموعة",
+  "deleteCollection": "حذف المجموعة",
+  "localVariables": "المتغيرات المحلية",
+  "noVariableCollections": "لا توجد مجموعات متغيرات",
+  "modes": "الأوضاع",
+  "addMode": "إضافة وضع",
+  "renameMode": "إعادة تسمية الوضع",
+  "duplicateMode": "تكرار الوضع",
+  "deleteMode": "حذف الوضع",
+  "setDefaultMode": "تعيين كافتراضي"
+}

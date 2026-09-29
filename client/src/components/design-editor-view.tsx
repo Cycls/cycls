@@ -14,10 +14,13 @@ import { cn } from "../lib/utils";
 //
 // postMessage protocol 2 (the editor's embed bridge, cycls-design editor/patches):
 //   host → editor : load {protocol:2, doc, name, fig, brand?} · written {doc, id, ok}
-//                   save · flush {id} · command {script, intent?} · theme {theme}
-//   editor → host : ready {protocol} · loaded {doc} · saved {doc, id, name, fig}
-//                   flushed {id, ok} · error · applied · commandError
+//                   save · flush {id} · command {script, intent?} · theme {theme} · locale {lang}
+//   editor → host : ready {protocol, features?} · loaded {doc} · saved {doc, id, name, fig}
+//                   flushed {id, ok} · error · applied · commandError · selection {doc, frame, nodes}
 //                   newDesign {size?} · saveCopy {doc, name, fig} · export {doc, files}
+// Every load reads the design with its version, and its saves name it as their
+// base: a save over a newer file is refused (docs/notes/design.md, "No save
+// overwrites what it didn't see").
 // `doc` tags one load: a save carrying an older tag (the document was replaced) is
 // refused, not written over the file. An editor from before protocol 2 sends none
 // of the new messages and never waits for `written`.
