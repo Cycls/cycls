@@ -16,7 +16,20 @@ export const MSG = {
   loadError: "cycls:loaderror",
   data: "cycls:data",
   dataResult: "cycls:data:result",
+  engine: "cycls:engine",
+  engineResult: "cycls:engine:result",
+  ask: "cycls:ask",
+  askResult: "cycls:ask:result",
+  command: "cycls:command",
 } as const;
+
+// The window event the chat raises for a tool's `app_command`; the bridge that
+// holds the matching app's port forwards it. `path: "*"` reaches every open app.
+export const APP_COMMAND_EVENT = "cycls:app-command";
+
+export const MAX_ENGINE_BYTES = 2_000_000;
+export const MAX_ASK_CHARS = 1000;
+const ASK_EVERY_MS = 2000;
 
 export const RELAY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 // The app may set these; Authorization is the server's alone.
@@ -97,17 +110,28 @@ export interface BridgeOptions {
   // The app's rows in the object store. `who` picks the audience; the server
   // resolves the viewer and the role, so the frame cannot name someone else.
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
+  // A deployed service relayed as the signed-in user (Studio's Blender engine).
+  // The server decides which apps get one and which ops they may run.
+  callEngine?: (slug: string, op: string, payload: Record<string, unknown>) => Promise<unknown>;
+  // Puts text in the composer for the person to send; never sends it.
+  onAsk?: (text: string) => void;
 }
 
 export function attachBridge({
   frame, appPath, readFile, writeFile, requestSave, context, onResize, onError, fetchConnector, appData,
+  callEngine, onAsk,
 }: BridgeOptions) {
   const folder = appScope(appPath);
   if (folder === null) return () => {};
   const scope: string = folder;
+  // Every `ready` mints a channel, and a busy frame sends several before the first `init`
+  // lands — the shim keeps only the first port it is handed. So a reply goes back on the
+  // channel its request came in on, and `port` is whichever channel the app last spoke on.
   let port: MessagePort | null = null;
+  const ports = new Set<MessagePort>();
+  let lastAsk = 0;
 
-  async function handle(raw: unknown) {
+  async function handle(raw: unknown, via?: MessagePort) {
     const msg = raw as {
       type?: string; id?: unknown; path?: unknown; content?: unknown; height?: unknown;
     };
@@ -115,7 +139,8 @@ export function attachBridge({
     // Once the channel is up everything goes down it. A window post needs targetOrigin
     // "*" — an opaque origin has none to name — and a frame that navigated itself away
     // would still receive it.
-    const post = (p: unknown) => (port ? port.postMessage(p) : frame.contentWindow?.postMessage(p, "*"));
+    const channel = via ?? port;
+    const post = (p: unknown) => (channel ? channel.postMessage(p) : frame.contentWindow?.postMessage(p, "*"));
 
     if (msg.type === MSG.loadError) {
       onError?.(String((msg as { message?: unknown }).message ?? "").slice(0, 500));
@@ -197,6 +222,38 @@ export function attachBridge({
       return;
     }
 
+    if (msg.type === MSG.engine) {
+      const reply = (p: object) => post({ type: MSG.engineResult, id: msg.id, ...p });
+      const { op, payload } = msg as { op?: unknown; payload?: unknown };
+      if (!callEngine) return reply({ ok: false, error: "this view can't run the engine" });
+      if (typeof op !== "string" || !/^[a-z_]{1,32}$/.test(op)) return reply({ ok: false, error: "bad op" });
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        return reply({ ok: false, error: "payload must be an object" });
+      }
+      let size = 0;
+      try { size = JSON.stringify(payload).length; } catch { return reply({ ok: false, error: "payload must be JSON" }); }
+      if (size > MAX_ENGINE_BYTES) return reply({ ok: false, error: "payload too large" });
+      try {
+        reply({ ok: true, result: await callEngine(scope.split("/")[1], op, payload as Record<string, unknown>) });
+      } catch (e) {
+        reply({ ok: false, error: String((e as Error)?.message ?? e).slice(0, 500),
+                status: (e as { status?: number })?.status });
+      }
+      return;
+    }
+
+    if (msg.type === MSG.ask) {
+      const reply = (p: object) => post({ type: MSG.askResult, id: msg.id, ...p });
+      const text = (msg as { text?: unknown }).text;
+      if (!onAsk) return reply({ ok: false, error: "this view has no chat" });
+      if (typeof text !== "string" || !text.trim()) return reply({ ok: false, error: "text required" });
+      const now = Date.now();
+      if (now - lastAsk < ASK_EVERY_MS) return reply({ ok: false, error: "too soon — one ask every 2 s" });
+      lastAsk = now;
+      onAsk(text.slice(0, MAX_ASK_CHARS));
+      return reply({ ok: true });
+    }
+
     if (msg.type === MSG.resize && typeof msg.height === "number") {
       onResize?.(Math.min(Math.max(msg.height, 120), 4000));
     }
@@ -207,8 +264,10 @@ export function attachBridge({
     if (!frame.contentWindow || e.source !== frame.contentWindow) return;
     if ((e.data as { type?: string })?.type === MSG.ready) {
       const ch = new MessageChannel();
-      port = ch.port1;
-      port.onmessage = (ev) => void handle(ev.data);
+      const mine = ch.port1;
+      ports.add(mine);
+      port = mine;
+      mine.onmessage = (ev) => { port = mine; void handle(ev.data, mine); };
       frame.contentWindow.postMessage(
         { type: MSG.init, path: appPath, scope, canWrite: !!writeFile, ...context }, "*", [ch.port2]);
       return;
@@ -216,10 +275,21 @@ export function attachBridge({
     void handle(e.data);   // a shim that ignored the port still works
   }
 
+  // A tool's push for this app (or for every app). Only a port carries it: with no
+  // channel yet the app reads its data fresh when it starts, so nothing is lost.
+  function onCommand(e: Event) {
+    const d = (e as CustomEvent<{ path?: unknown; command?: unknown }>).detail;
+    if (!d || (d.path !== "*" && d.path !== appPath) || !port) return;
+    port.postMessage({ type: MSG.command, command: d.command });
+  }
+
   window.addEventListener("message", onWindow);
+  window.addEventListener(APP_COMMAND_EVENT, onCommand);
   return () => {
     window.removeEventListener("message", onWindow);
-    port?.close();
+    window.removeEventListener(APP_COMMAND_EVENT, onCommand);
+    ports.forEach((p) => p.close());
+    ports.clear();
     port = null;
   };
 }

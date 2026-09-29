@@ -204,8 +204,9 @@ that cannot be traded away.
 `window.localStorage` throws `SecurityError`, and most libraries touch storage during render — so an
 app without the shim is a blank white frame with no message. `app-shim.ts` installs an in-memory
 `localStorage`/`sessionStorage` replacement (it forgets on reload, which beats not rendering) and a
-typed API — `read`, `write`, `save`, `get`/`set`, `me`, `users`, `connector`, `resize` — so an app
-calls a function instead of hand-rolling the postMessage protocol.
+typed API — `read`, `write`, `save`, `get`/`set`, `me`, `users`, `connector`, `resize`, and
+`engine`, `onCommand`, `ask` (below) — so an app calls a function instead of hand-rolling the
+postMessage protocol.
 
 **An app that throws says so.** The shim posts `cycls:loaderror` from `error` and
 `unhandledrejection`, and the canvas shows it. A crashed app used to be a white rectangle.
@@ -260,6 +261,26 @@ switch, the budget, and the `{name}_request` tool a REST-only connector contribu
 mechanism shared with the model's tool path, and lives in
 [plugins-connectors.md](plugins-connectors.md) under **The API relay**. Note that the *connect*
 relay in that note is a different component: it brokers an OAuth code once, at connect time.
+
+## Pushed into, and asking back
+
+Three verbs came with the Studio ([studio.md](studio.md)); none is Studio-specific in the bridge.
+
+- **`cycls.onCommand(fn)`** — the agent can reach an app that's already open. A tool returns
+  `_ui: {type: "ui", action: "app_command", path: "apps/<slug>/index.html", command}`; `chat.tsx`
+  turns it into a `cycls:app-command` window event; `attachBridge` — the only holder of the port —
+  forwards it as `cycls:command` when the path is its app's (or `"*"`). At every turn's end the chat
+  broadcasts `{path: "*", command: {type: "turn_end"}}`, so any app can re-read what `edit` or
+  `bash` changed under it. The shim buffers up to 50 commands until a handler registers; the
+  function returns an unsubscribe.
+- **`cycls.engine(op, payload)`** — a host relay to `POST /apps/<slug>/engine` with the viewer's
+  JWT, for an app that needs a service. The bridge checks `op` against `/^[a-z_]{1,32}$/`, wants a
+  plain object and caps it at 2 MB; the route decides everything else (today only the Studio has
+  one). A shared view gets no relay.
+- **`cycls.ask(text)`** — pre-fills the composer and focuses it; never sends. One per 2 s, 1,000
+  characters. Tracked as `app_ask`.
+
+Every callback these ride is a stable `useCallback`: the port dies if the bridge re-attaches.
 
 ## Where app data lives — the `.apps` slot
 

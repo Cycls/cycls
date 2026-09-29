@@ -26,6 +26,7 @@ import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-cha
 import type { FileEntry } from "../hooks/use-files";
 import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
 import { track } from "../lib/analytics";
+import { APP_COMMAND_EVENT } from "./app-bridge";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
 import { useToast } from "../lib/toast";
 import { useSpeechRecognition } from "../hooks/use-speech";
@@ -85,6 +86,7 @@ export interface FilesPanelProps {
   writeFile: (path: string, text: string) => Promise<void>;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
+  appEngine?: (slug: string, op: string, payload: Record<string, unknown>) => Promise<unknown>;
   searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
   listFolders: () => Promise<{ name: string; path: string }[]>;
   onShareFile?: (path: string, audience: string) => Promise<string>;
@@ -385,6 +387,10 @@ export function Chat({ chat, onShare, files, account, config }: {
         setConfirm({ tool: ev.tool, key: ev.key, connector: typeof ev.connector === "string" ? ev.connector : undefined,
                      label: typeof ev.label === "string" ? ev.label : ev.tool, args: ev.args });
         track("ui_action", { action: "confirm", tool: ev.tool });
+      } else if (ev.action === "app_command" && typeof ev.path === "string") {
+        // A tool changed an app's data: tell that app, if it's open (the bridge holding
+        // its port forwards this; a closed app reads fresh when it next opens).
+        window.dispatchEvent(new CustomEvent(APP_COMMAND_EVENT, { detail: { path: ev.path, command: ev.command } }));
       } else if (ev.action === "compacted") {
         track("context_compacted", { tier: ev.tier, reason: ev.reason, tokens: ev.tokens, ok: ev.ok });
       } else {
@@ -725,7 +731,19 @@ export function Chat({ chat, onShare, files, account, config }: {
   );
   const [railIcons, setRailIcons] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
-  useEffect(() => { if (!isStreaming) setReloadKey((k) => k + 1); }, [isStreaming]);
+  useEffect(() => {
+    if (isStreaming) return;
+    setReloadKey((k) => k + 1);
+    // Every open app hears that a turn ended, so it can re-read data the agent
+    // changed with edit or bash — changes no tool pushed.
+    window.dispatchEvent(new CustomEvent(APP_COMMAND_EVENT, { detail: { path: "*", command: { type: "turn_end" } } }));
+  }, [isStreaming]);
+  // An app pre-fills the composer; the person decides whether to send it.
+  const askFromApp = useCallback((text: string) => {
+    setInput(text);
+    textareaRef.current?.focus();
+    track("app_ask", { chars: text.length });
+  }, []);
   const railIconsOnly = isDesktop && railIcons && canvasShowing;
   const railPx = !isDesktop || !filesOpen ? 0 : railIconsOnly ? RAIL_ICON_W : panelWidth;
   const collapseRail = () => (canvasShowing ? setRailIcons(true) : setFilesOpen(false));
@@ -1185,6 +1203,8 @@ export function Chat({ chat, onShare, files, account, config }: {
           uploadFile={(dir, f) => files.onUpload(dir, f).catch((e) => { toastError(t("uploadFailed")); throw e; })}
           fetchConnector={files.fetchConnector}
           appData={files.appData}
+          callEngine={files.appEngine}
+          onAsk={askFromApp}
           listFolders={files.listFolders}
           org={files.org}
           onShareFile={files.onShareFile}

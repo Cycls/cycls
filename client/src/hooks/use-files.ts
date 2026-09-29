@@ -150,6 +150,22 @@ export function useFiles(baseUrl: string = "") {
     return { status: res.status, body: await res.text(), contentType: res.headers.get("content-type") || "" };
   }, [baseUrl, authHeaders]);
 
+  // An app's relayed engine call (Studio → the Blender deployment). Raw fetch: a
+  // refusal is the app's to show, never a toast over its viewport.
+  const appEngine = useCallback(async (slug: string, op: string, payload: Record<string, unknown>) => {
+    const res = await fetch(`${baseUrl}/apps/${slug}/engine`, {
+      method: "POST",
+      headers: { ...(await authHeaders()), "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, op }),
+    });
+    if (!res.ok) {
+      let detail = "";
+      try { detail = (await res.json()).detail ?? ""; } catch { /* not JSON */ }
+      throw Object.assign(new Error(detail || `HTTP ${res.status}`), { status: res.status });
+    }
+    return res.json();
+  }, [baseUrl, authHeaders]);
+
   // An app's rows. Raw fetch, like the connector relay: a 403 from the role gate
   // is an answer the app renders, not a toast over someone's dashboard.
   const appData = useCallback(async (slug: string, op: Record<string, unknown>) => {
@@ -220,7 +236,7 @@ export function useFiles(baseUrl: string = "") {
     return `${window.location.origin}${url}`;
   }, [api]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchConnector, appData, searchFiles, listFolders, shareFile, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchConnector, appData, appEngine, searchFiles, listFolders, shareFile, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

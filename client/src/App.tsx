@@ -48,6 +48,7 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
     writeFile: f.writeFile,
     fetchConnector: f.fetchConnector,
     appData: f.appData,
+    appEngine: f.appEngine,
     searchFiles: f.searchFiles,
     listFolders: f.listFolders,
     onShareFile: withShare ? f.shareFile : undefined,
