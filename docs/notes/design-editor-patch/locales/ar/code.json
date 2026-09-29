@@ -1,0 +1,15 @@
+{
+  "source": "مصدر الكود",
+  "sourceDesignJSX": "Design JSX",
+  "sourceTailwindJSX": "Tailwind JSX",
+  "sourceHTMLCSS": "HTML/CSS",
+  "editorDesignLabel": "Design JSX",
+  "editorHTMLCSSLabel": "HTML وCSS",
+  "updating": "جارٍ التحديث…",
+  "updatedLive": "تم التحديث مباشرة",
+  "previewFailed": "فشلت المعاينة",
+  "generatedReadOnly": "منشأ تلقائيًا، للقراءة فقط",
+  "reset": "إعادة تعيين",
+  "copyJSXReference": "نسخ مرجع خصائص JSX إلى الحافظة",
+  "jsxUpToDate": "محدّث"
+}

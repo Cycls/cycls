@@ -28,11 +28,12 @@ function injectCyclsTheme(): void {
   document.head.appendChild(el)
 }
 
-// Light/dark from Cycls (?theme=dark|light) before the app boots; the bridge follows
-// later changes.
-applyTheme(new URLSearchParams(location.search).get('theme') ?? '')
-// English: the editor has no Arabic, and Cycls owns the language choice.
-localeSetting.set('en')
+// Light/dark (?theme=dark|light) and the language (?lang=ar|en) from Cycls before
+// the app boots; the bridge follows later changes. Cycls owns the language: English
+// unless it says Arabic.
+const query = new URLSearchParams(location.search)
+applyTheme(query.get('theme') ?? '')
+localeSetting.set(query.get('lang') === 'ar' ? 'ar' : 'en')
 // Every change is saved to the Cycls workspace: no crash-recovery copies in the browser.
 setRecoveryRuntimeOverride(false)
 // No service worker (vite/pwa.ts): remove one an earlier build installed.

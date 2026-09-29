@@ -82,5 +82,35 @@
     "why": "Save As writes a copy beside the design; the design stays as it is.",
     "find": "  saveAs: 'Save as…',\n",
     "replace": "  saveAs: 'Save a copy…',\n"
+  },
+  {
+    "file": "packages/vue/src/i18n/locale.ts",
+    "why": "Arabic, for a Cycls person working in Arabic (patches/locales/ar, copied in by build.sh).",
+    "find": "export const AVAILABLE_LOCALES = ['en', 'de',",
+    "replace": "export const AVAILABLE_LOCALES = ['en', 'ar', 'de',"
+  },
+  {
+    "file": "packages/vue/src/i18n/locale.ts",
+    "why": "Arabic is a translated locale.",
+    "find": "export const TRANSLATED_LOCALES = [\n  'de',\n",
+    "replace": "export const TRANSLATED_LOCALES = [\n  'ar',\n  'de',\n"
+  },
+  {
+    "file": "packages/vue/src/i18n/locale.ts",
+    "why": "Arabic's folder under locales/.",
+    "find": "export const LOCALE_DIR_NAMES = {\n  de: 'de',\n",
+    "replace": "export const LOCALE_DIR_NAMES = {\n  ar: 'ar',\n  de: 'de',\n"
+  },
+  {
+    "file": "packages/vue/src/i18n/locale.ts",
+    "why": "Arabic's own name.",
+    "find": "  en: 'English',\n  de: 'Deutsch',\n",
+    "replace": "  en: 'English',\n  ar: 'العربية',\n  de: 'Deutsch',\n"
+  },
+  {
+    "file": "packages/vue/src/i18n/create.ts",
+    "why": "Load Arabic like the other translations.",
+    "find": "const localeLoaders = {\n  de: () => import('#vue/i18n/locales/de'),\n",
+    "replace": "const localeLoaders = {\n  ar: () => import('#vue/i18n/locales/ar'),\n  de: () => import('#vue/i18n/locales/de'),\n"
   }
 ]

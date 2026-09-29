@@ -448,13 +448,57 @@ Cycls tab opened, and everything it makes lands in the workspace.
   1.5 s), since the canvas goes with them. A renamed or moved file flushes,
   then its tabs follow it; a deleted one stops writing first (a late save would bring
   it back), then its tabs close. Light/dark follows Cycls live (`theme`).
+- **No save overwrites what it didn't see** (`cycls/_agent/design/store.py`). A
+  design's version is the first 16 hex of the sha256 of its bytes; `GET /files`
+  serves a `.fig` with it (`X-Version`, from the bytes served), and every load reads
+  it (`host.fetchVersioned`). A save names it (`PUT ?base=`) and gets the new one
+  back; a save over a newer file is refused — 412 with the version now, nothing
+  written. Every `.fig` write goes through `write_fig` — the editor's saves, the
+  agent's `edit` and slide actions (which compare too: a save made while the service
+  worked means the edit is applied again, to that save, once), a restore — under a
+  short per-file lock, never `deck.lock` (held across the service call, minutes).
+  - **An agent edit** is saved on the server first, so a save the editor posted before
+    replaying it is expected to be refused: `design_command` carries the edit's
+    version, the edits replay one at a time (the next after `applied`; one this load
+    already read is skipped), and on `applied` the base moves to the edit's version
+    and the refused work is flushed again.
+  - **Anything else** — another tab, another person, a script — after 3 s (the
+    agent's event travels apart from the save's answer) asks: **Load the latest**,
+    **Keep mine** (`?force=1`: written over, the other kept as a version), or **Save
+    mine as a copy**. Nothing is written while the dialog is open.
+  - Known limit: each instance's gcsfuse metadata cache is a window between
+    instances no file-level check closes; session affinity keeps a person on one.
+- **Version history** (`cycls/_agent/versions.py`). What a write replaces is kept:
+  `.versions/<path>/<id>` and one `index.json` (`{id, at, by, reason, intent?, size}`).
+  Autosaves keep one per five minutes per file (an editing session's start, then its
+  progress); an agent edit, a restore and a keep-mine always keep one; 50 per file,
+  30 days. ⋮ › **Version history** lists them by what replaced each ("Before an agent
+  edit: move slide 4"); **Restore** saves an open editor first, restores (keeping
+  what it replaces — a restore is undone by restoring) and reopens it; **Open as
+  copy** makes it a new design. Routes: `GET /versions/<path>` (`?id=` one's bytes),
+  `POST /versions/<path>?restore=<id>`. `.versions` is managed by cycls: refused by
+  the files routes and the agent's tools, masked in the bash sandbox; a rename
+  carries a file's history, a purged trash entry ends it. A bash `cp` over a `.fig`
+  bypasses it.
+- **Add selection.** The editor reports what's selected (`selection {doc, frame,
+  nodes:[{name, type, text?}]}`, by name — ids change on save), and the composer
+  offers **Add selection** while that design is the visible canvas tab. The chip goes
+  with the message (its editor saving first, so the agent reads what the person
+  sees): the request's `selection` becomes one "[Selected in designs/x.fig › slide:
+  headline (TEXT) "…", …]" block the model reads, stored on the message, which the
+  chat shows as a chip instead. Nothing is sent without the button.
+- **Arabic.** With Cycls in Arabic the editor's menus and panels are in Arabic
+  (`?lang=ar`, then `locale` on every load and on a change; the translation is
+  `editor/patches/locales/ar`). The layout stays left to right — the canvas, rulers
+  and panels where a designer expects them — and each Arabic label reads right to
+  left inside it (`unicode-bidi: plaintext`).
 - **What's gone.** The AI chat and its provider keys (Cycls has its own agent), the
   settings dialog, the probe of a local MCP server on every load, collaboration and
   Share, the S3 storage workspace and sync, the library manager, crash-recovery copies
   in the browser, vectorize, the Display-P3 and File-API banners, the service worker,
-  the theme and language menus (the editor is in English), the profiler and dev
-  tools — at the source, desktop and the narrow (mobile) layout alike. Kept: the Code
-  tab, Variables, Split view.
+  the theme and language menus (Cycls sets both), the profiler and dev tools — at the
+  source, desktop and the narrow (mobile) layout alike. Kept: the Code tab,
+  Variables, Split view.
 
 The embedded editor is a **patched** OpenPencil build: replacements for its app
 shell (`main.ts`, `App.vue`, `WorkspaceView.vue`, `pwa.ts`, `aliases.ts`), the

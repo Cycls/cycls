@@ -1,0 +1,10 @@
+{
+  "settingsTitle": "التصيير",
+  "settingsDescription": "اختر طريقة عرض OpenPencil للوحات الرسم الكبيرة.",
+  "progressiveTiled": "التصيير التدريجي",
+  "progressiveTiledDescription": "يحدّث لوحات الرسم الكبيرة على شكل مربعات أصغر أثناء التنقل.",
+  "experimental": "تجريبي",
+  "reloadRequired": "أعد تحميل OpenPencil لتطبيق هذا التغيير.",
+  "wideGamutUnavailable": "لا يمكن لهذه الشاشة أو هذا المتصفح عرض ألوان Display-P3، لذا تعرضها لوحة الرسم بنطاق sRGB. يحتفظ المستند بمساحة ألوانه.",
+  "urlOverride": "محرك التصيير في الجلسة الحالية محدد عبر تجاوز في عنوان URL. سيتم تطبيق تفضيلك المحفوظ عند إزالة هذا التجاوز."
+}
