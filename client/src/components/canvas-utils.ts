@@ -111,3 +111,16 @@ export function saveBlob(url: string, name: string) {
   a.download = name;
   a.click();
 }
+
+// The app tabs to keep mounted behind the one in front: the last `max` apps shown, most
+// recent last. An app is a running program — a 3D scene takes seconds to load, and its
+// selection and undo are its own — so switching tabs shouldn't restart it. Returns `prev`
+// itself when nothing changed.
+export function liveApps(prev: string[], active: string | null, isApp: (path: string) => boolean,
+                         open: string[], max = 3): string[] {
+  let next = prev.filter((p) => open.includes(p));
+  if (active && isApp(active) && next[next.length - 1] !== active) {
+    next = [...next.filter((p) => p !== active), active].slice(-max);
+  }
+  return next.length === prev.length && next.every((p, i) => p === prev[i]) ? prev : next;
+}

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { fileKind } from "../src/components/canvas";
-import { isHtml, isMd, isPdf, codeLang, ext, editWorkingPath } from "../src/components/canvas-utils";
+import { isHtml, isMd, isPdf, codeLang, ext, editWorkingPath, liveApps } from "../src/components/canvas-utils";
 
 // An app's canvas tab is titled by its manifest, so the display name has no
 // extension. Every renderer check must therefore key off the path — keyed off
@@ -55,5 +55,29 @@ describe("editWorkingPath", () => {
     expect(editWorkingPath("", '{"path": "run.sh", "command"')).toBeNull();
     expect(editWorkingPath("", '{"command": "create"')).toBeNull();
     expect(editWorkingPath(undefined, undefined)).toBeNull();
+  });
+});
+
+// Switching tabs mustn't restart an app: the canvas keeps the last few mounted, hidden.
+describe("liveApps", () => {
+  const isApp = (p: string) => p.startsWith("apps/");
+  const open = ["apps/studio/index.html", "renders/a.png", "apps/sales/index.html", "apps/x/index.html", "apps/y/index.html"];
+
+  it("keeps apps once shown, most recent last, and leaves files out", () => {
+    let live: string[] = [];
+    live = liveApps(live, "apps/studio/index.html", isApp, open);
+    live = liveApps(live, "renders/a.png", isApp, open);
+    expect(live).toEqual(["apps/studio/index.html"]);           // still alive behind the render
+    live = liveApps(live, "apps/sales/index.html", isApp, open);
+    expect(live).toEqual(["apps/studio/index.html", "apps/sales/index.html"]);
+  });
+
+  it("drops closed tabs and the least recent past the limit, and is stable when nothing changes", () => {
+    let live = ["apps/studio/index.html", "apps/sales/index.html", "apps/x/index.html"];
+    expect(liveApps(live, "apps/x/index.html", isApp, open)).toBe(live);
+    live = liveApps(live, "apps/y/index.html", isApp, open);
+    expect(live).toEqual(["apps/sales/index.html", "apps/x/index.html", "apps/y/index.html"]);
+    expect(liveApps(live, "renders/a.png", isApp, open.filter((p) => p !== "apps/x/index.html")))
+      .toEqual(["apps/sales/index.html", "apps/y/index.html"]);
   });
 });

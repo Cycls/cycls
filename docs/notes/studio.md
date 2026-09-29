@@ -315,6 +315,14 @@ plus `CYCLS_API_KEY`. `CYCLS_STUDIO_RENDERER` optionally sends `render` to a sep
 long renders don't queue in front of interactive ops. `cycls.remote` needs matching Python and
 cloudpickle on both sides.
 
+**Importing a .blend.** The file's first scene comes in as it shows it: what its view layer
+excludes or its collections hide stays hidden (often the prototypes of instances), and an
+instancer Blender doesn't draw itself — a particle emitter, a duplicator — comes in hidden
+(`show_instancer_for_render/viewport`). The file's world replaces the Studio's default one (a
+plain colour as it is; a sky or an HDRI as the nearest preset, noted), and its active camera is
+named for the model. Node-driven material inputs keep their plain values (noted); particle and
+geometry-nodes instances don't come across yet.
+
 ## Known limitations
 
 - One editor at a time; two editing the same entry keep the local copy.

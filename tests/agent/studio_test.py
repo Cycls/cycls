@@ -89,7 +89,7 @@ class FakeEngine:
             if op == "import":
                 frag = S.normalize({"objects": {"cube": {"type": "mesh", "mesh": "m-aaaaaaaaaaaa"}},
                                     "meshes": {"m-aaaaaaaaaaaa": {"data": "meshes/m-aaaaaaaaaaaa.json"}}})
-                return {"ok": True, "result": {"scene": frag, "notes": []},
+                return {"ok": True, "result": {"scene": frag, "notes": [], **getattr(self, "import_extra", {})},
                         "files": {"meshes_out/m-aaaaaaaaaaaa.json": b'{"format": "cycls.mesh"}'}}
             if op == "texture":
                 return {"ok": True, "result": {"file": "texture.png", "width": 64, "height": 32, "alpha": True},
@@ -417,6 +417,16 @@ class TestEngine:
         assert "cube_2" in _text(out)
         assert (root / "apps/studio/data/meshes/m-aaaaaaaaaaaa.json").exists()
         assert run({"action": "import", "path": "notes.txt"}, root).startswith("Error:")
+
+    def test_a_blend_brings_its_world_and_names_its_camera(self, root, engine):
+        (root / "venue.blend").write_bytes(b"BLENDER")
+        engine.import_extra = {"world": {"kind": "hdri", "hdri": "courtyard", "strength": 1.0}, "camera": "cube"}
+        out = run({"action": "import", "path": "venue.blend"}, root)
+        assert scene(root)["world"]["hdri"] == "courtyard"                   # the Studio's default world gave way
+        assert "took the file's world" in _text(out) and "the file's camera is 'cube_2'" in _text(out)
+        run({"action": "edit", "ops": [{"op": "world", "hdri": "night"}]}, root)
+        run({"action": "import", "path": "venue.blend"}, root)
+        assert scene(root)["world"]["hdri"] == "night"                       # a world someone chose stays
 
     def test_export(self, root, engine):
         out = run({"action": "export", "format": "glb", "name": "scene"}, root)

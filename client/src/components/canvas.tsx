@@ -8,7 +8,7 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob } from "./canvas-utils";
+import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob, liveApps } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
@@ -388,6 +388,9 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   reloadKey?: number;  // bump to re-fetch the open document
 }) {
   const file = hidden ? null : tabs.find((f) => f.path === active) ?? tabs[tabs.length - 1] ?? null;
+  const [live, setLive] = useState<string[]>([]);
+  const alive = liveApps(live, file?.path ?? null, (p) => appScope(p) !== null, tabs.map((f) => f.path));
+  useEffect(() => { if (alive !== live) setLive(alive); }, [alive, live]);
   const { width, startResize, resizing } = usePaneWidth("cycls_canvas_width", 560, 380, 420, railWidth, undefined, 1, 0.25);
 
   const inner = file && (
@@ -446,27 +449,38 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
           </button>
         )}
       </div>
-      {working?.includes(file.path) ? (
-        <CanvasWorking key={file.path} name={file.name} />
-      ) : (
-        <CanvasFileView
-          key={file.path}
-          file={file}
-          readFile={readFile}
-          openFile={openFile}
-          writeFile={writeFile}
-          uploadFile={uploadFile}
-          listFolders={listFolders}
-          fetchConnector={fetchConnector}
-          appData={appData}
-          callEngine={callEngine}
-          onAsk={onAsk}
-          onOpen={onOpen}
-          org={org}
-          onShareFile={onShareFile}
-          reloadKey={reloadKey}
-        />
-      )}
+      {/* Apps stay mounted behind the tab in front (liveApps); anything else mounts when shown.
+          The order is stable (by path, the non-app last): moving an iframe in the page reloads it. */}
+      <div className="relative min-h-0 flex-1">
+        {[...[...alive].sort(), ...(alive.includes(file.path) ? [] : [file.path])]
+          .map((p) => tabs.find((f) => f.path === p))
+          .filter((f): f is CanvasFile => !!f)
+          .map((f) => (
+            <div key={f.path} aria-hidden={f.path !== file.path}
+                 className={cn("absolute inset-0 flex flex-col", f.path !== file.path && "invisible pointer-events-none")}>
+              {working?.includes(f.path) ? (
+                <CanvasWorking name={f.name} />
+              ) : (
+                <CanvasFileView
+                  file={f}
+                  readFile={readFile}
+                  openFile={openFile}
+                  writeFile={writeFile}
+                  uploadFile={uploadFile}
+                  listFolders={listFolders}
+                  fetchConnector={fetchConnector}
+                  appData={appData}
+                  callEngine={callEngine}
+                  onAsk={onAsk}
+                  onOpen={onOpen}
+                  org={org}
+                  onShareFile={onShareFile}
+                  reloadKey={reloadKey}
+                />
+              )}
+            </div>
+          ))}
+      </div>
     </>
   );
 

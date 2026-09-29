@@ -453,9 +453,17 @@ async def _import(ws, inp):
         frag = res["scene"]
         frag["render"] = {**frag["render"], "camera": None}
         after, added = S.merge_fragment(before, frag)
+        said = []
+        # The file's world, when this scene's is still the Studio's default; its camera, named.
+        if res.get("world") and before["world"] == S.new_scene()["world"]:
+            after = S.normalize({**after, "world": {**after["world"], **res["world"]}})
+            said.append("took the file's world")
+        cam = dict(zip(frag["objects"], added)).get(res.get("camera"))
+        if cam:
+            said.append(f"the file's camera is {cam!r} — `render {{camera: \"{cam}\"}}` looks through it")
         saved, event = await _save(ws, before, after, f"import {path.name}")
     return {"_model": f"Imported {inp.get('path')}: added {len(added)} object(s) — {', '.join(added[:15])} "
-                      f"(rev {saved['rev']})." + _notes(res.get("notes")),
+                      f"(rev {saved['rev']})." + (" " + "; ".join(said) + "." if said else "") + _notes(res.get("notes")),
             "_ui": event}
 
 

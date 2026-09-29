@@ -141,6 +141,8 @@ asks for everything. Six of these steps are unchanged from the file era — only
  4  GET /files/apps/<slug>/index.html                         Authorization: Bearer <JWT>
  5  injectShim(html)                 prepend window.cycls      canvas.tsx, HtmlDoc
  6  <iframe sandbox="allow-scripts allow-popups" srcDoc={html}>
+    (an app tab stays mounted, hidden, while another tab is in front — the last three apps shown,
+     `liveApps` in canvas-utils.ts; its frame never moves in the page, which would reload it)
 
  7  frame → host    cycls:ready                               on the window, retried 40× / 50 ms
  8  host checks     e.source === frame.contentWindow           (opaque origin has no e.origin)
