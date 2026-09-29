@@ -43,6 +43,7 @@ export function createApp(viewportFactory) {
     doc: null, base: null, selection: [], shading: "material", gizmo: "translate", status: "loading",
     busy: null, preview: null, toast: null, undo: [], redo: [], error: null, engine: bridge.canEngine(),
     mode: "object", edit: null, editMesh: null, tools: { ...TOOL_DEFAULTS },
+    tool: null, proportional: { on: false, radius: 1, falloff: "smooth" }, snap: false, lastCut: null,
   };
   const emit = () => { diag.status = s.status; diag.selection = s.selection; diag.mode = s.mode; listeners.forEach((f) => f(s)); };
   const set = (p) => { Object.assign(s, p); emit(); };
@@ -316,6 +317,8 @@ export function createApp(viewportFactory) {
 
   function leaveEdit() {
     if (s.mode !== "edit") return;
+    s.tool = null;
+    s.lastCut = null;
     s.mode = "object";
     s.edit = null;
     s.editMesh = null;
@@ -463,6 +466,68 @@ export function createApp(viewportFactory) {
         }
       }
     },
+    // Loop cut (Ctrl+R): hover a ring, wheel for more cuts, click to cut. The last one stays
+    // adjustable (cuts, slide) until something else happens, like Blender's last-op panel.
+    startTool(kind) {
+      if (!s.edit) return;
+      s.tool = kind === "loopcut" ? { kind, cuts: 1 } : { kind, points: [] };
+      vp.setTool(s.tool);
+      emit();
+      toast(kind === "loopcut" ? "Loop cut: point at an edge, wheel for more cuts, click to cut — Esc to stop"
+        : "Knife: click along the cut, Enter to cut — Esc to stop");
+    },
+    cancelTool() { s.tool = null; vp.setTool(null); emit(); },
+    loopCut(edge, cuts, slide = 0) {
+      const base = s.editMesh;
+      guard(() => {
+        const r = M.loopCut(base, M.edgeRing(base, edge), cuts, slide);
+        editCommit(r.mesh, r.selection, "loop cut");
+        s.lastCut = { base, edge, cuts, slide, rev: s.undo.length };
+        s.tool = null;
+        vp.setTool(null);
+        emit();
+      });
+    },
+    adjustLoopCut(p) {
+      const c = s.lastCut;
+      if (!c || s.undo.length !== c.rev || s.undo.at(-1)?.label !== "loop cut") { s.lastCut = null; emit(); return; }
+      undo();
+      const cuts = p.cuts ?? c.cuts, slide = p.slide ?? c.slide;
+      guard(() => {
+        const r = M.loopCut(c.base, M.edgeRing(c.base, c.edge), cuts, slide);
+        editCommit(r.mesh, r.selection, "loop cut");
+        s.lastCut = { ...c, cuts, slide, rev: s.undo.length };
+        emit();
+      });
+    },
+    knife() {
+      const t = s.tool;
+      if (t?.kind !== "knife") return;
+      const points = vp.knifeCrossings(t.points);
+      s.tool = null;
+      vp.setTool(null);
+      if (points.length < 2) { toast("The knife's path must cross at least two edges"); emit(); return; }
+      guard(() => { const r = M.splitAlong(s.editMesh, points); editCommit(r.mesh, r.selection, "knife"); });
+    },
+    // J: an edge between two vertices — here when they share a face, Blender's otherwise.
+    async connect() {
+      const e = s.edit;
+      if (!e) return;
+      const verts = M.selectedVerts(s.editMesh, e);
+      if (verts.length !== 2) { toast("Select two vertices to connect"); return; }
+      try {
+        const r = M.connectVerts(s.editMesh, verts[0], verts[1]);
+        editCommit(r.mesh, r.selection, "connect");
+      } catch {
+        await edit.blender("connect", "connect", { verts });
+      }
+    },
+    setProportional(p) {
+      s.proportional = { ...s.proportional, ...p };
+      vp.setProportional(s.proportional);
+      emit();
+    },
+    toggleSnap() { s.snap = !s.snap; vp.setSnap(s.snap); emit(); toast(s.snap ? "Snapping on (Shift+Tab)" : "Snapping off"); },
     // Blender's "Assign": the selected faces use slot `slot`.
     assignSlot(slot) {
       const e = s.edit;
@@ -776,6 +841,8 @@ export function createApp(viewportFactory) {
         onEditPick: editPick,
         onEditTransformEnd: edit.onTransformEnd,
         onEditLost: () => { if (s.mode === "edit") leaveEdit(); },
+        onToolCommit: (t) => { if (t.kind === "loopcut") edit.loopCut(t.edge, t.cuts); },
+        onToolChange: (t) => { if (t.kind === "proportional") { s.proportional = { ...s.proportional, radius: t.radius }; emit(); } },
         explicitGeometry,
         loadTexture,
       });

@@ -470,3 +470,246 @@ export function mergeAtCenter(m, verts) {
   const { mesh, map } = compact(out);
   return { mesh, selection: { mode: "vert", items: map[keep] >= 0 ? [map[keep]] : [] } };
 }
+
+// ─── rings and loop cuts ─────────────────────────────────────────────────────
+
+// Which faces use each edge: ekey → [face index, …].
+export function edgeFaces(m) {
+  const out = new Map();
+  m.faces.forEach((f, fi) => f.forEach((v, i) => {
+    const k = ekey(v, f[(i + 1) % f.length]);
+    if (!out.has(k)) out.set(k, []);
+    out.get(k).push(fi);
+  }));
+  return out;
+}
+
+// The ring an edge starts (Blender's loop cut): across each quad to its opposite edge,
+// both ways, until a face that isn't a quad, a border, or back to the start. Edges come
+// oriented so each one's first vertex is on the same side; `ends` are the n-gons the ring
+// runs into (they get the new vertices too, so the mesh stays closed).
+export function edgeRing(m, [a0, b0]) {
+  const ef = edgeFaces(m);
+  const walk = (a, b, from) => {
+    const edges = [], faces = [];
+    let cur = [a, b], prev = from, end = null, closed = false;
+    for (let guard = 0; guard <= m.faces.length; guard++) {
+      const next = (ef.get(ekey(cur[0], cur[1])) || []).filter((fi) => fi !== prev);
+      if (next.length !== 1) break;                      // a border, or more than two faces
+      const fi = next[0], f = m.faces[fi];
+      if (f.length !== 4) { end = fi; break; }
+      const other = (v, not) => { const i = f.indexOf(v); const n = f[(i + 1) % 4]; return n === not ? f[(i + 3) % 4] : n; };
+      const nxt = [other(cur[0], cur[1]), other(cur[1], cur[0])];
+      faces.push(fi);
+      if (ekey(nxt[0], nxt[1]) === ekey(a0, b0)) { closed = true; break; }
+      edges.push(nxt);
+      prev = fi;
+      cur = nxt;
+    }
+    return { edges, faces, end, closed };
+  };
+  const around = ef.get(ekey(a0, b0)) || [];
+  const fwd = walk(a0, b0, around[1] ?? -1);
+  if (fwd.closed) return { edges: [[a0, b0], ...fwd.edges], faces: fwd.faces, closed: true, ends: [] };
+  const back = walk(a0, b0, fwd.faces[0] ?? around[0] ?? -1);
+  return { edges: [...[...back.edges].reverse(), [a0, b0], ...fwd.edges],
+           faces: [...[...back.faces].reverse(), ...fwd.faces], closed: false,
+           ends: [back.end, fwd.end].filter((x) => x != null) };
+}
+
+// Loop cut: `cuts` new edge loops across the ring's quads, evenly spaced, all slid toward
+// one side by `slide` (−1…1). UVs follow; each new face keeps its slot. Selects the new loops.
+export function loopCut(m, ring, cuts = 1, slide = 0) {
+  if (!ring.faces.length) throw new Error("Loop cut needs quads on at least one side of the edge");
+  const out = copy(m);
+  const base = Array.from({ length: cuts }, (_, i) => (i + 1) / (cuts + 1));
+  const shift = Math.max(-1, Math.min(1, slide)) * Math.min(base[0], 1 - base[cuts - 1]) * 0.98;
+  const ts = base.map((t) => t + shift);
+  const made = new Map();                                // ekey → {a, b, verts, ts}
+  for (const [a, b] of ring.edges) {
+    const verts = ts.map((t) => {
+      out.co.push(...[0, 1, 2].map((k) => m.co[a * 3 + k] + (m.co[b * 3 + k] - m.co[a * 3 + k]) * t));
+      return out.co.length / 3 - 1;
+    });
+    made.set(ekey(a, b), { a, b, verts, ts });
+  }
+  // The new vertices along u→w, with their distance along it (0…1).
+  const along = (u, w) => {
+    const e = made.get(ekey(u, w));
+    if (!e) return [];
+    return e.a === u ? e.verts.map((v, i) => [v, e.ts[i]]) : e.verts.map((v, i) => [v, 1 - e.ts[i]]).reverse();
+  };
+  const uvAt = (fi, v) => { const f = m.faces[fi], u = m.uv?.[fi], c = f.indexOf(v); return u ? [u[c * 2], u[c * 2 + 1]] : null; };
+  const lerp2 = (p, q, t) => (p && q ? [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t] : null);
+  const replaced = new Set(ring.faces);
+  const added = [], loops = [];
+  ring.faces.forEach((fi, k) => {
+    const [p0, p1] = ring.edges[k], [q0, q1] = ring.edges[(k + 1) % ring.edges.length];
+    const f = m.faces[fi];
+    // winding: does the face run p0 → p1 (then q1, q0)?
+    const fwd = f[(f.indexOf(p0) + 1) % 4] === p1;
+    const L = [[p0, 0], ...along(p0, p1), [p1, 1]], R = [[q0, 0], ...along(q0, q1), [q1, 1]];
+    for (let j = 0; j + 1 < L.length; j++) {
+      const quad = [L[j][0], L[j + 1][0], R[j + 1][0], R[j][0]];
+      const uvp0 = uvAt(fi, p0), uvp1 = uvAt(fi, p1), uvq0 = uvAt(fi, q0), uvq1 = uvAt(fi, q1);
+      const uv = uvp0 && [lerp2(uvp0, uvp1, L[j][1]), lerp2(uvp0, uvp1, L[j + 1][1]),
+                          lerp2(uvq0, uvq1, R[j + 1][1]), lerp2(uvq0, uvq1, R[j][1])];
+      added.push({ face: fwd ? quad : [...quad].reverse(), uv: uv && (fwd ? uv : [...uv].reverse()).flat(),
+                   smooth: m.smooth[fi], mi: m.mi ? m.mi[fi] : 0 });
+      if (j + 1 < L.length - 1) loops.push([L[j + 1][0], R[j + 1][0]].sort((x, y) => x - y));
+    }
+  });
+  // The n-gons the ring ran into take the new vertices on the edge they share with it.
+  for (const gi of ring.ends || []) {
+    const g = m.faces[gi], guv = m.uv?.[gi];
+    const face = [], uv = guv ? [] : null;
+    g.forEach((v, c) => {
+      face.push(v);
+      if (uv) uv.push(guv[c * 2], guv[c * 2 + 1]);
+      const w = g[(c + 1) % g.length];
+      for (const [nv, t] of along(v, w)) {
+        face.push(nv);
+        if (uv) uv.push(...lerp2([guv[c * 2], guv[c * 2 + 1]], [guv[((c + 1) % g.length) * 2], guv[((c + 1) % g.length) * 2 + 1]], t));
+      }
+    });
+    out.faces[gi] = face;
+    if (out.uv) out.uv[gi] = uv;
+  }
+  const keep = m.faces.map((_, i) => !replaced.has(i));
+  const result = {
+    co: out.co, loose: out.loose,
+    faces: [...out.faces.filter((_, i) => keep[i]), ...added.map((a) => a.face)],
+    smooth: [...out.smooth.filter((_, i) => keep[i]), ...added.map((a) => a.smooth)],
+    uv: out.uv ? [...out.uv.filter((_, i) => keep[i]), ...added.map((a) => a.uv)] : null,
+    mi: out.mi ? [...out.mi.filter((_, i) => keep[i]), ...added.map((a) => a.mi)] : null,
+  };
+  return { mesh: result, selection: { mode: "edge", items: loops } };
+}
+
+// ─── proportional editing ────────────────────────────────────────────────────
+
+// Blender's falloffs: weight at distance d of radius r, 1 at the selection, 0 at r.
+export const FALLOFFS = ["smooth", "sphere", "root", "sharp", "linear", "constant"];
+export function falloff(kind, d, r) {
+  if (d >= r) return 0;
+  const f = 1 - d / r;
+  switch (kind) {
+    case "sphere": return Math.sqrt(2 * f - f * f);
+    case "root": return Math.sqrt(f);
+    case "sharp": return f * f;
+    case "linear": return f;
+    case "constant": return 1;
+    default: return 3 * f * f - 2 * f * f * f;          // smooth
+  }
+}
+
+// How much each vertex follows a transform of `selected`: 1 for them, the falloff of the
+// distance to the nearest one for the rest within `radius`. `pos` is flat xyz — in the
+// space the radius is measured in (world, so an object's scale doesn't change it).
+export function proportionalWeights(pos, selected, radius, kind = "smooth") {
+  const w = new Map(selected.map((v) => [v, 1]));
+  if (!(radius > 0)) return w;
+  const sel = [...new Set(selected)];
+  const n = pos.length / 3;
+  for (let v = 0; v < n; v++) {
+    if (w.has(v)) continue;
+    let best = Infinity;
+    for (const s of sel) {
+      const dx = pos[v * 3] - pos[s * 3], dy = pos[v * 3 + 1] - pos[s * 3 + 1], dz = pos[v * 3 + 2] - pos[s * 3 + 2];
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d < best) best = d;
+    }
+    const k = falloff(kind, Math.sqrt(best), radius);
+    if (k > 0) w.set(v, k);
+  }
+  return w;
+}
+
+// Move each vertex part of the way: fn gives where it would go at full weight.
+export function moveVertsWeighted(m, weights, fn) {
+  const out = { ...m, co: [...m.co] };
+  for (const [v, k] of weights) {
+    const x = m.co[v * 3], y = m.co[v * 3 + 1], z = m.co[v * 3 + 2];
+    const p = fn(x, y, z);
+    out.co[v * 3] = x + (p[0] - x) * k; out.co[v * 3 + 1] = y + (p[1] - y) * k; out.co[v * 3 + 2] = z + (p[2] - z) * k;
+  }
+  return out;
+}
+
+// ─── knife and connect ───────────────────────────────────────────────────────
+
+// Split face `fi` of `out` between two of its corners (vertex ids), in place. Returns
+// the two faces' indices, or null when they're neighbours (nothing to cut).
+function splitFace(out, fi, a, b) {
+  const f = out.faces[fi], i = f.indexOf(a), j = f.indexOf(b);
+  if (i < 0 || j < 0 || i === j || (i + 1) % f.length === j || (j + 1) % f.length === i) return null;
+  const run = (from, to) => { const r = []; for (let k = from; ; k = (k + 1) % f.length) { r.push(k); if (k === to) break; } return r; };
+  const A = run(i, j), B = run(j, i);
+  const u = out.uv?.[fi];
+  const pick = (idx) => (u ? idx.flatMap((k) => [u[k * 2], u[k * 2 + 1]]) : null);
+  out.faces[fi] = A.map((k) => f[k]);
+  if (out.uv) out.uv[fi] = pick(A);
+  out.faces.push(B.map((k) => f[k]));
+  out.smooth.push(out.smooth[fi]);
+  if (out.uv) out.uv.push(pick(B));
+  if (out.mi) out.mi.push(out.mi[fi]);
+  return [fi, out.faces.length - 1];
+}
+
+// J: connect two vertices with an edge across the face they share. Throws when none does
+// (the engine's connect handles that case).
+export function connectVerts(m, a, b) {
+  const out = copy(m);
+  const fi = m.faces.findIndex((f) => f.includes(a) && f.includes(b));
+  if (fi < 0 || !splitFace(out, fi, a, b)) throw new Error("Those two vertices don't share a face — or they're already joined");
+  return { mesh: out, selection: { mode: "edge", items: [[Math.min(a, b), Math.max(a, b)]] } };
+}
+
+// Knife: `points` are where a cut crosses edges, in order along it — {edge: [a, b], t}
+// (t along a→b). Each becomes a vertex (every face using that edge gets it, so the mesh
+// stays closed) and each face two consecutive points share is split between them.
+export function splitAlong(m, points) {
+  const out = copy(m);
+  const made = new Map();                                   // "a,b|t" → vertex
+  const ids = points.map(({ edge: [a, b], t }) => {
+    if (t <= 1e-6) return a;
+    if (t >= 1 - 1e-6) return b;
+    const key = `${ekey(a, b)}|${(a < b ? t : 1 - t).toFixed(6)}`;
+    if (!made.has(key)) {
+      out.co.push(...[0, 1, 2].map((k) => m.co[a * 3 + k] + (m.co[b * 3 + k] - m.co[a * 3 + k]) * t));
+      made.set(key, { v: out.co.length / 3 - 1, a, b, t });
+    }
+    return made.get(key).v;
+  });
+  // Insert the new vertices into every face using their edge, in order along it.
+  const onEdge = new Map();                                 // ekey → [{v, t from the lower id}]
+  for (const { v, a, b, t } of made.values()) {
+    const k = ekey(a, b);
+    if (!onEdge.has(k)) onEdge.set(k, []);
+    onEdge.get(k).push({ v, t: a < b ? t : 1 - t });
+  }
+  out.faces = out.faces.map((f, fi) => {
+    const u = out.uv?.[fi], face = [], uv = u ? [] : null;
+    f.forEach((v, c) => {
+      face.push(v);
+      if (uv) uv.push(u[c * 2], u[c * 2 + 1]);
+      const w = f[(c + 1) % f.length], list = onEdge.get(ekey(v, w));
+      if (!list) return;
+      const seq = [...list].sort((p, q) => p.t - q.t).map((x) => ({ v: x.v, t: v < w ? x.t : 1 - x.t }));
+      if (v > w) seq.reverse();
+      for (const x of seq) {
+        face.push(x.v);
+        if (uv) { const n = (c + 1) % f.length; uv.push(u[c * 2] + (u[n * 2] - u[c * 2]) * x.t, u[c * 2 + 1] + (u[n * 2 + 1] - u[c * 2 + 1]) * x.t); }
+      }
+    });
+    if (out.uv) out.uv[fi] = uv;
+    return face;
+  });
+  const cut = [];
+  for (let i = 0; i + 1 < ids.length; i++) {
+    const a = ids[i], b = ids[i + 1];
+    const fi = out.faces.findIndex((f) => f.includes(a) && f.includes(b));
+    if (fi >= 0 && splitFace(out, fi, a, b)) cut.push([Math.min(a, b), Math.max(a, b)]);
+  }
+  return { mesh: out, selection: { mode: "edge", items: cut } };
+}

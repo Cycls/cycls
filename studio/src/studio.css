@@ -108,3 +108,9 @@ label.btn:hover { background: #3c3c3c; }
 .bar > i { display: block; height: 100%; background: #6aa0ff; transition: width 0.5s linear; }
 .render-row { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; font-size: 11px; }
 .render-row > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; overflow: visible; }
+.tool-overlay .cut-preview { fill: none; stroke: #ffd24a; stroke-width: 2; stroke-dasharray: 6 4; }
+.tool-overlay .knife { fill: none; stroke: #ff5a5a; stroke-width: 2; }
+.tool-overlay .knife-dot { fill: #ff5a5a; }
+.tool-overlay .prop { fill: none; stroke: #fff; stroke-opacity: 0.7; stroke-width: 1.5; stroke-dasharray: 4 3; }
+.toggle.on { background: #3a5a8c; }

@@ -7,12 +7,14 @@ import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { RectAreaLightUniformsLib } from "three/addons/lights/RectAreaLightUniformsLib.js";
 import { primitiveGeometry, bufferGeometry } from "./primitives.js";
 import { deepEqual, isBackdrop, TEXTURE_FIELDS as TEXTURE_KEYS } from "./doc.js";
-import { displayBuffers, edges, selectedVerts, centroid, moveVerts } from "./mesh.js";
+import { displayBuffers, edges, selectedVerts, centroid, moveVerts, edgeRing, proportionalWeights,
+         moveVertsWeighted } from "./mesh.js";
 import { diag } from "./diag.js";
 import { WORLDS } from "./worlds.js";
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 const DEG = Math.PI / 180;
+const SNAP = 0.1;                                  // snapping's step for a move, in metres
 const ORANGE = 0xffa028, ORANGE_DIM = 0xe56d1c;
 const GREY = new THREE.Color("#3d3d3d");            // Solid shading's backdrop, as Blender's
 // Blender watts → three's physical units, tuned by eye against Cycles renders.
@@ -131,6 +133,16 @@ export class Viewport {
     r.domElement.tabIndex = 0;
     r.domElement.className = "viewport-canvas";
     host.appendChild(r.domElement);
+    // Edit tools draw on top: the knife's path, the proportional circle.
+    this.overlay = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    this.overlay.setAttribute("class", "tool-overlay");
+    host.appendChild(this.overlay);
+    this.tool = null;                          // { kind: "loopcut", cuts, edge } | { kind: "knife", points: [[x, y]] }
+    this.proportional = { on: false, radius: 1, falloff: "smooth" };
+    this.snap = { on: false };
+    this.ctrl = false;
+    addEventListener("keydown", (e) => { if (e.key === "Control") { this.ctrl = true; this.applySnap(); } });
+    addEventListener("keyup", (e) => { if (e.key === "Control") { this.ctrl = false; this.applySnap(); } });
     // Camera view's render frame; outside it is dimmed, as Blender's passepartout.
     this.frameEl = Object.assign(document.createElement("div"), { className: "cam-frame", hidden: true });
     host.appendChild(this.frameEl);
@@ -173,11 +185,14 @@ export class Viewport {
     scene.add(this.pivot);
     gizmo.addEventListener("dragging-changed", (e) => {
       this.orbit.enabled = !e.value;
+      const o = gizmo.object;
+      this.moveStart = e.value && o ? { position: o.position.clone(), quaternion: o.quaternion.clone() } : null;
       if (gizmo.object === this.pivot) { e.value ? this.editDragStart() : this.editDragEnd(); return; }
       if (!e.value && gizmo.object) this.hooks.onTransformEnd?.(gizmo.object.userData.id, trsOf(gizmo.object));
     });
     gizmo.addEventListener("objectChange", () => {
       this.shadowsDirty = true;
+      if (gizmo.object) this.snapMove(gizmo.object);
       if (gizmo.object === this.pivot) { this.editDragMove(); return; }
       if (gizmo.object) this.hooks.onTransform?.(gizmo.object.userData.id, trsOf(gizmo.object));
     });
@@ -187,8 +202,32 @@ export class Viewport {
     ray.params.Line.threshold = 0.05;
     let down = null;
     r.domElement.addEventListener("pointerdown", (e) => { down = [e.clientX, e.clientY]; r.domElement.focus(); });
+    // Hover, for the loop cut's preview — once a frame at most.
+    let hoverAt = null;
+    r.domElement.addEventListener("pointermove", (e) => {
+      if (!this.tool || this.tool.kind !== "loopcut" || gizmo.dragging) return;
+      if (!hoverAt) requestAnimationFrame(() => { const [x, y] = hoverAt; hoverAt = null; this.hoverLoopCut(x, y); });
+      hoverAt = [e.clientX, e.clientY];
+    });
+    // The wheel: more/fewer cuts while a loop cut hovers; a bigger/smaller proportional
+    // radius while a drag is on (orbit is off then, so it doesn't zoom).
+    r.domElement.addEventListener("wheel", (e) => {
+      if (this.tool?.kind === "loopcut") {
+        e.preventDefault(); e.stopImmediatePropagation();
+        this.tool.cuts = Math.max(1, Math.min(32, this.tool.cuts + (e.deltaY < 0 ? 1 : -1)));
+        this.drawLoopCut();
+        this.hooks.onToolChange?.(this.tool);
+      } else if (this.drag?.weights && this.proportional.on) {
+        e.preventDefault(); e.stopImmediatePropagation();
+        this.proportional.radius = Math.max(0.01, this.proportional.radius * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+        this.drag.weights = proportionalWeights(this.drag.world, this.drag.verts, this.proportional.radius, this.proportional.falloff);
+        this.editDragMove();
+        this.hooks.onToolChange?.({ kind: "proportional", radius: this.proportional.radius });
+      }
+    }, { capture: true, passive: false });
     r.domElement.addEventListener("pointerup", (e) => {
       if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4 || gizmo.dragging || e.button !== 0) return;
+      if (this.edit && this.tool) { this.toolClick(e.clientX, e.clientY); return; }
       if (this.edit) { this.hooks.onEditPick?.(this.pickElement(e.clientX, e.clientY), e.shiftKey); return; }
       const rect = r.domElement.getBoundingClientRect();
       ray.setFromCamera({ x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
@@ -702,6 +741,7 @@ export class Viewport {
   leaveEdit() {
     const e = this.edit;
     if (!e) return;
+    this.setTool(null);
     this.disposeEdit();
     const node = this.nodes.get(e.id);
     if (node?.userData.surface) node.userData.surface.visible = true;
@@ -812,6 +852,13 @@ export class Viewport {
     if (!e) return;
     this.pivot.updateMatrixWorld(true);
     this.drag = { start: this.pivot.matrixWorld.clone().invert(), mesh: e.mesh, verts: e.selVerts };
+    if (this.proportional.on) {
+      const node = this.nodes.get(e.id), W = node.matrixWorld, v = new THREE.Vector3(), co = e.mesh.co;
+      const world = new Float32Array(co.length);
+      for (let i = 0; i < co.length; i += 3) v.set(co[i], co[i + 1], co[i + 2]).applyMatrix4(W).toArray(world, i);
+      this.drag.world = world;
+      this.drag.weights = proportionalWeights(world, e.selVerts, this.proportional.radius, this.proportional.falloff);
+    }
   }
 
   editDragMove() {
@@ -823,13 +870,17 @@ export class Viewport {
     const W = node.matrixWorld;
     const L = W.clone().invert().multiply(this.pivot.matrixWorld.clone().multiply(this.drag.start)).multiply(W);
     const v = new THREE.Vector3();
-    e.mesh = moveVerts(this.drag.mesh, this.drag.verts, (x, y, z) => v.set(x, y, z).applyMatrix4(L).toArray());
+    const fn = (x, y, z) => v.set(x, y, z).applyMatrix4(L).toArray();
+    e.mesh = this.drag.weights ? moveVertsWeighted(this.drag.mesh, this.drag.weights, fn)
+      : moveVerts(this.drag.mesh, this.drag.verts, fn);
     this.buildEdit({ keepPivot: true });
+    this.drawProportional();
   }
 
   editDragEnd() {
     const e = this.edit, d = this.drag;
     this.drag = null;
+    this.drawProportional();
     if (!e || !d || e.mesh === d.mesh) return;
     this.hooks.onEditTransformEnd?.(e.mesh);
   }
@@ -879,6 +930,144 @@ export class Viewport {
     for (const n of near.slice(0, 12)) if (seen(n.p)) return n.item;
     return null;
   }
+
+  // ─── edit tools ───────────────────────────────────────────────────────────
+
+  toScreen(p) {
+    const rect = this.renderer.domElement.getBoundingClientRect(), s = p.clone().project(this.camera);
+    return [(s.x + 1) / 2 * rect.width, (1 - s.y) / 2 * rect.height, s.z];
+  }
+
+  setTool(tool) {
+    this.tool = tool;
+    this.drawTool();
+  }
+
+  drawTool() {
+    if (this.tool?.kind === "loopcut") this.drawLoopCut();
+    else if (this.tool?.kind === "knife") this.drawKnife();
+    else this.overlay.innerHTML = "";
+    this.drawProportional();
+  }
+
+  hoverLoopCut(cx, cy) {
+    if (this.tool?.kind !== "loopcut" || !this.edit) return;
+    const mode = this.edit.sel.mode;
+    this.edit.sel.mode = "edge";                         // pick an edge whatever the element mode
+    const edge = this.pickElement(cx, cy);
+    this.edit.sel.mode = mode;
+    const key = edge && `${edge[0]},${edge[1]}`;
+    if (key === this.tool.key) return;
+    this.tool.edge = edge;
+    this.tool.key = key;
+    this.drawLoopCut();
+  }
+
+  // The cut-to-be: across each quad of the ring, at each cut's spacing.
+  drawLoopCut() {
+    const e = this.edit, node = e && this.nodes.get(e.id), t = this.tool;
+    this.overlay.innerHTML = "";
+    if (!node || !t?.edge) return;
+    const ring = edgeRing(e.mesh, t.edge), m = e.mesh, W = node.matrixWorld;
+    const at = (a, b, k) => new THREE.Vector3(...[0, 1, 2].map((i) => m.co[a * 3 + i] + (m.co[b * 3 + i] - m.co[a * 3 + i]) * k)).applyMatrix4(W);
+    let d = "";
+    for (let c = 1; c <= t.cuts; c++) {
+      const k = c / (t.cuts + 1);
+      const pts = ring.edges.map(([a, b]) => this.toScreen(at(a, b, k)));
+      if (ring.closed) pts.push(pts[0]);
+      d += "M" + pts.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("L");
+    }
+    this.overlay.innerHTML = `<path d="${d}" class="cut-preview"/>`;
+  }
+
+  drawKnife() {
+    const pts = this.tool?.points || [];
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.overlay.innerHTML = pts.length ? `<polyline class="knife" points="${pts.map(([x, y]) => `${x - rect.left},${y - rect.top}`).join(" ")}"/>`
+      + pts.map(([x, y]) => `<circle class="knife-dot" cx="${x - rect.left}" cy="${y - rect.top}" r="3.5"/>`).join("") : "";
+  }
+
+  drawProportional() {
+    this.overlay.querySelectorAll(".prop").forEach((n) => n.remove());
+    if (!this.proportional.on || !this.drag?.weights) return;
+    const c = this.pivot.getWorldPosition(new THREE.Vector3());
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+    const a = this.toScreen(c), b = this.toScreen(c.clone().addScaledVector(right, this.proportional.radius));
+    const r = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    this.overlay.insertAdjacentHTML("beforeend", `<circle class="prop" cx="${a[0]}" cy="${a[1]}" r="${r}"/>`);
+  }
+
+  toolClick(cx, cy) {
+    const t = this.tool;
+    if (t.kind === "loopcut") {
+      this.hoverLoopCut(cx, cy);
+      if (t.edge) this.hooks.onToolCommit?.({ kind: "loopcut", edge: t.edge, cuts: t.cuts });
+    } else if (t.kind === "knife") {
+      t.points.push([cx, cy]);
+      this.drawKnife();
+    }
+  }
+
+  // Where the knife's path crosses the edited mesh's visible edges, in order along it:
+  // [{edge: [a, b], t}] — each crossing found exactly, on the plane through the eye and
+  // the path's segment.
+  knifeCrossings(points) {
+    const e = this.edit, node = e && this.nodes.get(e.id);
+    if (!node || points.length < 2) return [];
+    const rect = this.renderer.domElement.getBoundingClientRect(), cam = this.camera, m = e.mesh, W = node.matrixWorld;
+    const ray = (x, y) => new THREE.Vector3((x - rect.left) / rect.width * 2 - 1, -((y - rect.top) / rect.height) * 2 + 1, 0.5)
+      .unproject(cam).sub(cam.position).normalize();
+    const world = (i) => new THREE.Vector3(m.co[i * 3], m.co[i * 3 + 1], m.co[i * 3 + 2]).applyMatrix4(W);
+    const seen = (p) => {
+      const dir = p.clone().sub(cam.position), dist = dir.length();
+      const hit = new THREE.Raycaster(cam.position.clone(), dir.normalize()).intersectObject(e.surface, false)[0];
+      return !hit || hit.distance > dist - Math.max(1e-4, dist * 1e-3);
+    };
+    const out = [];
+    for (let s = 0; s + 1 < points.length; s++) {
+      const [x0, y0] = points[s], [x1, y1] = points[s + 1];
+      const r0 = ray(x0, y0), r1 = ray(x1, y1), n = new THREE.Vector3().crossVectors(r0, r1).normalize();
+      const found = [];
+      for (const [a, b] of e.edges) {
+        const pa = world(a), pb = world(b);
+        const da = n.dot(pa.clone().sub(cam.position)), db = n.dot(pb.clone().sub(cam.position));
+        if (da * db > 0 || da === db) continue;            // both on one side of the cut's plane
+        const k = da / (da - db), p = pa.clone().lerp(pb, k);
+        const [sx, sy] = this.toScreen(p);
+        const ex = x1 - x0, ey = y1 - y0, len2 = ex * ex + ey * ey || 1;
+        const u = ((sx + rect.left - x0) * ex + (sy + rect.top - y0) * ey) / len2;
+        if (u < 0 || u > 1 || !seen(p)) continue;          // outside the segment, or behind the surface
+        found.push({ edge: [a, b], t: k, u: s + u });
+      }
+      found.sort((p, q) => p.u - q.u);
+      out.push(...found);
+    }
+    return out;
+  }
+
+  // Moves snap by increments of the move itself, as Blender does by default: what's moved
+  // keeps its offset from the grid. (TransformControls' translationSnap rounds the position,
+  // which in Edit mode would jump the selection's centre onto the grid first.)
+  snapMove(o) {
+    const st = this.moveStart;
+    if (!st || this.gizmo.mode !== "translate" || this.snap.on === this.ctrl) return;
+    const d = o.position.clone().sub(st.position), local = this.gizmo.space === "local";
+    const q = st.quaternion.clone();
+    if (local) d.applyQuaternion(q.clone().invert());
+    d.set(Math.round(d.x / SNAP) * SNAP, Math.round(d.y / SNAP) * SNAP, Math.round(d.z / SNAP) * SNAP);
+    if (local) d.applyQuaternion(q);
+    o.position.copy(st.position).add(d);
+    o.updateMatrixWorld(true);
+  }
+
+  applySnap() {
+    const on = this.snap.on !== this.ctrl;                 // Ctrl held flips it, as in Blender
+    this.gizmo.setRotationSnap(on ? 15 * DEG : null);
+    this.gizmo.setScaleSnap(on ? 0.1 : null);
+  }
+
+  setSnap(on) { this.snap.on = on; this.applySnap(); }
+  setProportional(p) { Object.assign(this.proportional, p); this.drawProportional(); }
 
   setGizmoMode(mode) { this.gizmo.setMode(mode); this.touch(); }
   setGizmoAxes(axes) {

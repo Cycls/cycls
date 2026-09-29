@@ -102,7 +102,7 @@ both come out right.
 | op | who | what |
 |---|---|---|
 | `evaluate` | app, agent | display meshes after modifiers (per-loop positions/normals, triangles) |
-| `apply` | app, agent | `modifier_apply {index}`, `convert`, `join {others}`, `remesh`, `decimate`, `boolean`, and on a selection: `bevel`, `inset`, `subdivide`, `triangulate`, `merge_by_distance`, `recalc_normals`, `uv {method: cube\|cylinder\|sphere\|reset}`, `assign {slot}` (faces → a material slot); a join answers with the merged slots |
+| `apply` | app, agent | `modifier_apply {index}`, `convert`, `join {others}`, `remesh`, `decimate`, `boolean`, and on a selection: `bevel`, `inset`, `subdivide`, `triangulate`, `merge_by_distance`, `recalc_normals`, `uv {method: cube\|cylinder\|sphere\|reset}`, `assign {slot}` (faces → a material slot), `connect {verts}` (an edge between two vertices, splitting the faces between them); a join answers with the merged slots |
 | `snapshot` | app, agent | ~640×360, few samples, ~5 s — for checking work |
 | `render` | app, agent | the Cycles render, PBR Neutral, denoised |
 | `export` | app, agent | glb, blend, fbx, obj, stl |
@@ -219,6 +219,28 @@ in Blender. The Material panel lists the slots; in Edit mode **Assign** puts the
 the picked one (a local op, like extrude). Every edit is a new mesh file and one undo step; the viewport shows the cage
 (surface, wire, vertices, selected faces) instead of the modifier result while editing.
 
+**Edit-mode tools**, local like extrude, with an SVG overlay on the viewport for their previews:
+
+- **Loop cut (Ctrl+R).** Hovering an edge draws the ring of quads it runs through (`edgeRing`:
+  it stops at an n-gon or a boundary and knows when it closes). The wheel adds cuts, and a
+  click cuts. Until the next edit, the Loop cut panel's Cuts and Slide re-run the cut on the
+  mesh from before it, like Blender's last-op panel.
+- **Knife (K).** Clicks on the surface, then Enter or Space; Esc stops. The path is projected
+  onto the mesh's edges (perspective-correct crossings, occluded ones skipped), the crossed
+  edges are split, and each face is split between consecutive crossings. Cutting all the way
+  through, as a bisect, isn't there.
+- **Connect (J).** Two selected vertices on one face split it here; otherwise Blender's
+  `connect_vert_pair` does it.
+- **Proportional editing (O).** Smooth, sphere, linear, sharp or constant falloff over a
+  radius, measured in world space. The wheel resizes it mid-drag, and a circle shows it.
+- **Snapping (Shift+Tab, or the Snap button in the header).** Holding Ctrl flips it during a
+  drag. A move snaps by 0.1 m steps of the move itself, not the grid, so an off-grid vertex
+  stays off it (TransformControls' own translation snap rounds the position). Rotation snaps
+  by 15°, scale by 0.1. There's no vertex or surface snapping yet.
+
+`studio/dev/checks/tools.js` drives each tool with real input and then round-trips the result
+through Blender (recalculate normals on all of it has to bring back the same mesh).
+
 **Keeping the agent in the picture.** The app publishes `{selection, mode, edit?}` to its
 per-person shelf (`cycls.me.set("view")`). The tool resolves the id `"selected"` against it, and
 in Edit mode `inspect` says what's selected and `apply` takes `selection: "selected"` — but only
@@ -278,8 +300,8 @@ cloudpickle on both sides.
 ## Known limitations
 
 - One editor at a time; two editing the same entry keep the local copy.
-- No UV editing beyond projections, animation, geometry nodes, sculpting, loop cut, knife or
-  proportional editing.
+- No UV editing beyond projections, animation, geometry nodes, sculpting, knife bisect, or
+  vertex/surface snapping.
 - Engine capacity is shared: four instances, one job each.
 - The phone client has no `cycls.engine`; the app degrades to viewing and local edits.
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { SCHEMA, childrenOf, make, TEXTURE_FIELDS } from "./doc.js";
+import { FALLOFFS } from "./mesh.js";
 
 const PRIMS = ["cube", "uv_sphere", "ico_sphere", "cylinder", "cone", "torus", "plane", "grid", "circle", "monkey"];
 const LIGHTS = ["point", "sun", "spot", "area"];
@@ -99,6 +100,7 @@ const OBJECT_OPS = [["convert", "Convert to mesh"], ["join", "Join selected", "C
                     ["recalc_normals", "Recalculate normals"], "-", ["remesh", "Remesh (voxel)"], ["decimate", "Decimate"],
                     "-", ...UV_OPS];
 const EDIT_OPS = [["extrude", "Extrude", "E"], ["fill", "Fill", "F"], ["merge", "Merge at center", "M"], ["delete", "Delete", "X"], "-",
+                  ["loopcut", "Loop cut", "Ctrl R"], ["knife", "Knife", "K"], ["connect", "Connect vertices", "J"], "-",
                   { head: "With Blender" }, ["bevel", "Bevel", "Ctrl B"], ["inset", "Inset faces", "I"], ["subdivide", "Subdivide"],
                   ["triangulate", "Triangulate"], ["merge_by_distance", "Merge by distance"], ["recalc_normals", "Recalculate normals"],
                   "-", ...UV_OPS];
@@ -108,6 +110,8 @@ const items = (ops) => ops.map((o) => (o === "-" || o.head ? o : { id: o[0], lab
 
 export function runEditOp(a, op) {
   if (op.startsWith("uv:")) { a.uv(op.slice(3)); return; }
+  if (op === "loopcut" || op === "knife") { a.edit.startTool(op); return; }
+  if (op === "connect") { a.edit.connect(); return; }
   const e = a.edit;
   const local = { extrude: e.extrude, fill: e.fill, merge: e.merge, delete: e.remove }[op];
   if (local) local();
@@ -145,6 +149,8 @@ function Header({ s, a }) {
           <Menu label="Object" items={items(OBJECT_OPS)} onPick={(op) => runObjectOp(a, op)} /></>}
     <Menu label="View" items={views} onPick={(v) => v === "shadows" ? a.setShadows(!s.shadows) : v === "frame-all" ? a.frame(true) : v === "frame-sel" ? a.frame(false)
       : v === "cam-to-view" ? a.cameraToView() : a.view(v)} />
+    <button class={`toggle ${s.snap ? "on" : ""}`} title="Snap to 0.1 m / 15° / 0.1 (Shift Tab; Ctrl while dragging flips it)"
+      onClick={() => a.edit.toggleSnap()}>Snap</button>
     <div class="seg">{[["translate", "Move", "G"], ["rotate", "Rotate", "R"], ["scale", "Scale", "S"]].map(([m, t, k]) =>
       <button key={m} class={s.gizmo === m ? "on" : ""} title={`${t} (${k})`} onClick={() => a.setGizmo(m)}>{t}</button>)}</div>
     <div class="seg">{[["solid", "Solid"], ["material", "Material"]].map(([m, t]) =>
@@ -374,6 +380,8 @@ function EditPanel({ s, a }) {
     + m.loose.length;
   const total = { vert: m.co.length / 3, edge: nEdges, face: m.faces.length }[e.mode];
   const t = s.tools;
+  // the last loop cut stays adjustable only while it is still the last thing done
+  const cut = s.lastCut && s.lastCut.rev === s.undo.length && s.undo.at(-1)?.label === "loop cut" ? s.lastCut : null;
   const num = (k, name, opts = {}) => <label class="row"><span>{name}</span>
     <Num value={t[k]} step={opts.step ?? 0.01} min={opts.min ?? 0} max={opts.max} digits={opts.digits ?? 4}
       onChange={(v) => a.setTool(k, opts.int ? Math.max(1, Math.round(v)) : v)} /></label>;
@@ -381,7 +389,26 @@ function EditPanel({ s, a }) {
     <Section title="Edit Mode">
       <div class="muted">{e.items.length} of {total} {e.mode === "vert" ? "vertices" : e.mode === "edge" ? "edges" : "faces"} selected
         · {m.co.length / 3} verts · {m.faces.length} faces</div>
-      <div class="muted">Click to select, Shift-click to add. G/R/S or the gizmo to move. E extrude, F fill, M merge, X delete.</div>
+      <div class="muted">Click to select, Shift-click to add. G/R/S or the gizmo to move. E extrude, F fill, M merge, X delete,
+        Ctrl R loop cut, K knife, J connect, O proportional.</div>
+    </Section>
+    {cut && <Section title="Loop cut">
+      <label class="row"><span>Cuts</span><Num value={cut.cuts} step={1} min={1} max={32} digits={0}
+        onChange={(v) => a.edit.adjustLoopCut({ cuts: Math.max(1, Math.round(v)) })} /></label>
+      <label class="row"><span>Slide</span><Num value={cut.slide} step={0.1} min={-1} max={1} digits={2}
+        onChange={(v) => a.edit.adjustLoopCut({ slide: v })} /></label>
+    </Section>}
+    <Section title="Proportional editing">
+      <label class="row"><span>On (O)</span><input type="checkbox" checked={s.proportional.on}
+        onChange={(ev) => a.edit.setProportional({ on: ev.currentTarget.checked })} /></label>
+      {s.proportional.on && <>
+        <label class="row"><span>Falloff</span><select value={s.proportional.falloff}
+          onChange={(ev) => a.edit.setProportional({ falloff: ev.currentTarget.value })}>
+          {FALLOFFS.map((f) => <option key={f} value={f}>{label(f)}</option>)}</select></label>
+        <label class="row"><span>Radius</span><Num value={s.proportional.radius} step={0.1} min={0.01} max={100}
+          onChange={(v) => a.edit.setProportional({ radius: v })} /></label>
+        <div class="muted">The wheel sizes it while you drag.</div>
+      </>}
     </Section>
     <Section title="Tool settings">
       {num("width", "Bevel width")}{num("segments", "Bevel segments", { step: 1, int: true, digits: 0, max: 32 })}

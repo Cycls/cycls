@@ -18,8 +18,14 @@ addEventListener("keydown", (e) => {
   const handled = () => { e.preventDefault(); e.stopPropagation(); };
   if (ctrl && k === "KeyZ") { e.shiftKey ? a.redo() : a.undo(); return handled(); }
   if (ctrl && k === "KeyY") { a.redo(); return handled(); }
+  if (k === "Tab" && e.shiftKey && !ctrl) { a.edit.toggleSnap(); return handled(); }
   if (k === "Tab" && !ctrl && !e.altKey && !e.shiftKey) { if (!s.busy) a.edit.toggle(); return handled(); }
   if (s.mode === "edit") {
+    if (s.tool) {
+      if (k === "Escape") { a.edit.cancelTool(); return handled(); }
+      if (s.tool.kind === "knife" && (k === "Enter" || k === "NumpadEnter" || k === "Space")) { a.edit.knife(); return handled(); }
+    }
+    if (ctrl && k === "KeyR") { a.edit.startTool("loopcut"); return handled(); }
     if (ctrl && k === "KeyB") { runEditOp(a, "bevel"); return handled(); }
     if (ctrl && k === "KeyI") { a.edit.invert(); return handled(); }
     if (ctrl) return;
@@ -27,6 +33,9 @@ addEventListener("keydown", (e) => {
     if (mode) { a.edit.setMode(mode); return handled(); }
     if (k === "KeyA") { a.edit.selectAll(!e.altKey); return handled(); }
     if (k === "Escape") { a.edit.selectAll(false); return handled(); }
+    if (k === "KeyK") { a.edit.startTool("knife"); return handled(); }
+    if (k === "KeyJ") { a.edit.connect(); return handled(); }
+    if (k === "KeyO") { a.edit.setProportional({ on: !s.proportional.on }); return handled(); }
     const op = { KeyE: "extrude", KeyF: "fill", KeyM: "merge", KeyX: "delete", Delete: "delete", KeyI: "inset" }[k];
     if (op) { runEditOp(a, op); return handled(); }
   } else {

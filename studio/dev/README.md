@@ -11,6 +11,7 @@ python dev/server.py --env <agent>/.providers.env    # :8094, workspace in dev/w
 node dev/driver.mjs                             # headless Chrome on the host page, control on :9400
 dev/drive.sh - < dev/checks/drag.js             # select, drag the gizmo, check the autosave
 dev/drive.sh - < dev/checks/edit.js             # Edit mode: Tab, pick the top face, inset, extrude
+dev/drive.sh - < dev/checks/tools.js            # loop cut, knife, proportional, snapping, Blender round trip
 uv run --with pillow python dev/compare.py dev/shots/probe.png <cycles.png> dev/shots/cmp.png
 ```
 

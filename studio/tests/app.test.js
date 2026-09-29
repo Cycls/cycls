@@ -44,6 +44,8 @@ function fakeViewport() {
     enterEdit(id, mesh, sel) { vp.edit = { id, mesh, sel }; vp.calls.push("enter"); },
     setEdit(mesh, sel, opts) { vp.edit = { ...vp.edit, mesh, sel, normal: opts?.normal ?? null }; },
     leaveEdit() { vp.edit = null; vp.calls.push("leave"); },
+    setTool(t) { vp.tool = t; }, setSnap() {}, setProportional() {},
+    knifeCrossings: () => vp.crossings || [],
   };
   return vp;
 }
@@ -300,6 +302,42 @@ describe("edit mode", () => {
     expect(s.editMesh.mi[TOP]).toBe(1);
     expect(s.doc.objects.cube.mesh).not.toBe("cube");
     expect(s.undo.at(-1).label).toBe("assign material");
+  });
+
+  it("loop cut: a ring cut as one step, then adjusted in place", async () => {
+    const { doc, files } = explicit();
+    const { a, s } = await started(doc, files);
+    a.select(["cube"]);
+    a.edit.toggle();
+    await vi.advanceTimersByTimeAsync(0);
+    const steps = s.undo.length;
+    a.edit.loopCut([0, 1], 1);
+    expect(s.editMesh.faces.length).toBe(10);
+    expect(s.undo.length).toBe(steps + 1);
+    expect(s.undo.at(-1).label).toBe("loop cut");
+    a.edit.adjustLoopCut({ cuts: 3 });
+    expect(s.editMesh.faces.length).toBe(18);
+    expect(s.undo.length).toBe(steps + 1);                   // replaced, not stacked
+    expect(s.lastCut.cuts).toBe(3);
+  });
+
+  it("knife cuts where the viewport says the path crosses; J joins two vertices", async () => {
+    const { doc, files } = explicit();
+    const { a, s, vp, pick } = await started(doc, files);
+    a.select(["cube"]);
+    a.edit.toggle();
+    await vi.advanceTimersByTimeAsync(0);
+    a.edit.startTool("knife");
+    expect(vp.tool.kind).toBe("knife");
+    vp.crossings = [{ edge: [7, 3], t: 0.5 }, { edge: [1, 5], t: 0.5 }];
+    a.edit.knife();
+    expect(s.editMesh.faces.length).toBe(7);
+    expect(s.undo.at(-1).label).toBe("knife");
+    a.edit.setMode("vert");
+    pick(0); pick(3, true);                                  // two corners of the x = −1 face
+    await a.edit.connect();
+    expect(s.editMesh.faces.length).toBe(8);
+    expect(s.undo.at(-1).label).toBe("connect");
   });
 
   it("a primitive becomes an explicit mesh (with Blender) before editing", async () => {
