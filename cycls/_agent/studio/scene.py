@@ -17,7 +17,7 @@ import math
 import re
 
 FORMAT = "cycls.studio.scene"
-VERSION = 2                 # 2: an object's material slots (`materials`); 1 had one `material`
+VERSION = 3                 # 3: animation (`animation`, an object's `keys`); 2: material slots; 1: one `material`
 MAX_SLOTS = 32
 
 MAX_PIXELS = 1920 * 1080
@@ -26,6 +26,10 @@ MAX_OBJECTS = 10_000        # a kitbashed city block is thousands of objects sha
 SUMMARY_OBJECTS = 80        # the model's table lists this many; the rest by count
 LAYOUT_SUBJECTS = 300       # the floating check compares every pair; past this it's skipped
 MAX_TEXTURES = 64
+MAX_FRAME = 100_000
+MAX_KEYS = 1000             # per channel
+CHANNELS = ("location", "rotation", "scale")
+INTERPOLATIONS = ("bezier", "linear", "constant")
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _HEX = re.compile(r"^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
@@ -108,6 +112,7 @@ HDRIS = ("studio", "city", "courtyard", "forest", "interior", "night", "sunrise"
 WORLD = {"kind": ("s:hdri|color", "hdri"), "hdri": ("s:" + "|".join(HDRIS), "studio"),
          "strength": ("f", 0.35, 0, 100), "color": ("c", "#303030"), "rotation": ("f", 0.0, -360, 360)}
 
+ANIMATION = {"fps": ("i", 24, 1, 120), "frame_start": ("i", 1, 0, MAX_FRAME), "frame_end": ("i", 120, 0, MAX_FRAME)}
 RENDER = {"camera": ("id", None), "resolution": ("res", [1280, 720]), "samples": ("i", 32, 1, MAX_SAMPLES),
           "transparent": ("b", False), "denoise": ("b", True)}
 
@@ -359,7 +364,44 @@ def _vec3(value, where, default):
 # ─────────────────────────────── normalize ────────────────────────────────────
 
 _OBJECT_KEYS = {"name", "type", "parent", "location", "rotation", "scale", "visible", "renderable",
-                "mesh", "material", "materials", "shading", "modifiers", "light", "camera", "text", "dof_focus"}
+                "mesh", "material", "materials", "shading", "modifiers", "light", "camera", "text", "dof_focus",
+                "keys"}
+
+
+def _keys(where, keys):
+    """An object's keyframes: {channel: [[frame, [x, y, z], interpolation], …]}, sorted, one
+    key per frame (a later one replaces an earlier). The interpolation is Blender's, for the
+    segment that starts at that key. Empty → None, so a still object carries no `keys`."""
+    if not keys:
+        return None
+    if not isinstance(keys, dict):
+        raise SceneError(f"{where}.keys: {{location|rotation|scale: [[frame, [x, y, z], interpolation], …]}}")
+    unknown = sorted(set(keys) - set(CHANNELS))
+    if unknown:
+        raise SceneError(f"{where}.keys: unknown {', '.join(unknown)} — allowed: {', '.join(CHANNELS)}")
+    out = {}
+    for ch in CHANNELS:
+        ks = keys.get(ch)
+        if not ks:
+            continue
+        if not isinstance(ks, list) or len(ks) > MAX_KEYS:
+            raise SceneError(f"{where}.keys.{ch}: a list of up to {MAX_KEYS} keys")
+        by_frame = {}
+        for i, k in enumerate(ks):
+            w = f"{where}.keys.{ch}[{i}]"
+            if isinstance(k, dict):
+                frame, value, interp = k.get("frame"), k.get("value"), k.get("interpolation", "bezier")
+            elif isinstance(k, (list, tuple)) and len(k) in (2, 3):
+                frame, value, interp = k[0], k[1], (k[2] if len(k) == 3 else "bezier")
+            else:
+                raise SceneError(f"{w}: [frame, [x, y, z], interpolation]")
+            if value is None:
+                raise SceneError(f"{w}: needs a value [x, y, z]")
+            f = _field(("i", 0, 0, MAX_FRAME), frame, f"{w}.frame")
+            by_frame[f] = [f, _vec3(value, f"{w}.value", None),
+                           _field(("s:" + "|".join(INTERPOLATIONS), "bezier"), interp, f"{w}.interpolation")]
+        out[ch] = [by_frame[f] for f in sorted(by_frame)]
+    return out or None
 
 
 def _mesh(mid, m):
@@ -484,6 +526,9 @@ def _object(oid, o):
         out["dof_focus"] = _field(("id", None), o.get("dof_focus"), f"{where}.dof_focus")
     elif t == "text":
         out["text"] = _fill(TEXT, o.get("text"), f"{where}.text")
+    keys = _keys(where, o.get("keys"))
+    if keys:
+        out["keys"] = keys
     for k in ("mesh", "light", "camera", "text", "dof_focus", "material", "materials", "shading", "modifiers"):
         if k in o and k not in out and not (k in ("material", "materials", "modifiers") and not o[k]) \
                 and not (k == "material" and "materials" in out):
@@ -547,6 +592,7 @@ def _check_refs(doc):
 
 
 SECTIONS = ("objects", "meshes", "materials", "textures")     # the maps of id → entry
+SINGLETONS = ("world", "render", "animation")                 # one entry each
 
 
 def normalize(doc):
@@ -555,7 +601,7 @@ def normalize(doc):
         raise SceneError("scene: must be a JSON object")
     doc = migrate(doc)
     unknown = sorted(set(doc) - {"format", "version", "rev", "by", "saved_at", "units", "up",
-                                 "objects", "meshes", "materials", "textures", "world", "render"})
+                                 "objects", "meshes", "materials", "textures", "world", "render", "animation"})
     if unknown:
         raise SceneError(f"scene: unknown {', '.join(unknown)}")
     out = {"format": FORMAT, "version": VERSION,
@@ -579,15 +625,24 @@ def normalize(doc):
     out["textures"] = {k: _texture(k, v) for k, v in (doc.get("textures") or {}).items()}
     out["world"] = _fill(WORLD, doc.get("world"), "world")
     out["render"] = _fill(RENDER, doc.get("render"), "render")
+    out["animation"] = a = _fill(ANIMATION, doc.get("animation"), "animation")
+    if a["frame_end"] < a["frame_start"]:
+        raise SceneError(f"animation: frame_end {a['frame_end']} is before frame_start {a['frame_start']}")
+    # An animated channel's stored value is where it is at the first frame — what framing,
+    # layout checks and a still render see.
+    for o in out["objects"].values():
+        for ch, ks in (o.get("keys") or {}).items():
+            o[ch] = sample(ks, a["frame_start"])
     _check_refs(out)
     return out
 
 
 def migrate(doc):
     """Older documents read as the current one. Version 1 → 2 is `_slots` taking an
-    object's single `material` as slot 0, so nothing else needs doing here."""
+    object's single `material` as slot 0; 2 → 3 is `animation` filling its defaults. So
+    nothing needs doing here."""
     v = doc.get("version", VERSION)
-    if v not in (1, VERSION):
+    if v not in (1, 2, VERSION):
         if isinstance(v, int) and v > VERSION:
             raise SceneError(f"scene version {v} is newer than this Studio ({VERSION}) — update Studio")
         raise SceneError(f"scene version {v!r} is not supported")
@@ -612,6 +667,142 @@ def new_scene():
         "materials": {"material": {"name": "Material", "base_color": "#cccccc", "roughness": 0.5}},
         "render": {"camera": "camera"},
     })
+
+
+# ─────────────────────────────── animation ────────────────────────────────────
+# Keys are Blender F-curves as the engine builds them: BEZIER, LINEAR or CONSTANT per key
+# (for the segment to the next), AUTO_CLAMPED handles with auto-smoothing off, constant
+# extrapolation. `sample` evaluates that curve. studio/src/anim.js is its twin, and both
+# are held to samples Blender itself took (studio/tests/fixtures/anim_golden.json).
+
+_FLT_EPSILON = 1.1920929e-07
+
+
+def _handle(ks, i, c):
+    """Key i's handles for component c, ((lx, ly), (rx, ry)): Blender's auto-clamped ones
+    (curve.cc calchandleNurb_intern, the F-curve branch with no smoothing, then the first
+    and last keys eased flat as BKE_fcurve_handles_recalc does)."""
+    x, y = ks[i][0], ks[i][1][c]
+    prev = (ks[i - 1][0], ks[i - 1][1][c]) if i > 0 else None
+    nxt = (ks[i + 1][0], ks[i + 1][1][c]) if i + 1 < len(ks) else None
+    if prev is None and nxt is None:
+        return (x - 1.0, y), (x + 1.0, y)
+    p1 = prev if prev else (2 * x - nxt[0], 2 * y - nxt[1])
+    p3 = nxt if nxt else (2 * x - p1[0], 2 * y - p1[1])
+    dax, day, dbx, dby = x - p1[0], y - p1[1], p3[0] - x, p3[1] - y
+    la, lb = dax or 1.0, dbx or 1.0
+    tx, ty = dbx / lb + dax / la, dby / lb + day / la
+    ln = tx * 2.5614
+    if la > 5 * lb:
+        la = 5 * lb
+    if lb > 5 * la:
+        lb = 5 * la
+    la, lb = la / ln, lb / ln
+    lx, ly, rx, ry = x - tx * la, y - ty * la, x + tx * lb, y + ty * lb
+    if prev is None or nxt is None:
+        return (lx, y), (rx, y)
+    yd1, yd2 = prev[1] - y, nxt[1] - y
+    if (yd1 <= 0 and yd2 <= 0) or (yd1 >= 0 and yd2 >= 0):
+        return (lx, y), (rx, y)                              # a peak or a trough stays flat
+    left = (yd1 <= 0 and prev[1] > ly) or (yd1 > 0 and prev[1] < ly)
+    right = (yd1 <= 0 and nxt[1] < ry) or (yd1 > 0 and nxt[1] > ry)
+    if left:
+        ly = prev[1]
+    if right:
+        ry = nxt[1]
+    if left:                                                 # overshoot clamped: keep the handle straight
+        ry = y + (y - ly) / (lx - x) * (x - rx)
+    elif right:
+        ly = y + (y - ry) / (x - rx) * (lx - x)
+    return (lx, ly), (rx, ry)
+
+
+def _bezier(v1, v2, v3, v4, frame):
+    """y at x = frame on one Bézier segment, handles first kept within the segment
+    (BKE_fcurve_correct_bezpart); x(t) is monotonic, so bisection finds t."""
+    span = v4[0] - v1[0]
+    h1x, h1y, h2x, h2y = v1[0] - v2[0], v1[1] - v2[1], v4[0] - v3[0], v4[1] - v3[1]
+    if abs(h1x) + abs(h2x) != 0:
+        if abs(h1x) > span:
+            f = span / abs(h1x)
+            v2 = (v1[0] - f * h1x, v1[1] - f * h1y)
+        if abs(h2x) > span:
+            f = span / abs(h2x)
+            v3 = (v4[0] - f * h2x, v4[1] - f * h2y)
+
+    def at(p0, p1, p2, p3, t):
+        u = 1 - t
+        return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3
+
+    lo, hi = 0.0, 1.0
+    for _ in range(64):
+        mid = (lo + hi) / 2
+        if at(v1[0], v2[0], v3[0], v4[0], mid) < frame:
+            lo = mid
+        else:
+            hi = mid
+    return at(v1[1], v2[1], v3[1], v4[1], (lo + hi) / 2)
+
+
+def sample(ks, frame):
+    """A channel's value at `frame` (a number; fractions are fine)."""
+    if frame <= ks[0][0]:
+        return list(ks[0][1])
+    if frame >= ks[-1][0]:
+        return list(ks[-1][1])
+    i = 0
+    while ks[i + 1][0] <= frame:
+        i += 1
+    k0, k1 = ks[i], ks[i + 1]
+    if k0[0] == frame:
+        return list(k0[1])
+    out = []
+    for c in range(3):
+        y0, y1 = k0[1][c], k1[1][c]
+        if k0[2] == "constant":
+            out.append(y0)
+        elif k0[2] == "linear":
+            out.append(y0 + (frame - k0[0]) / (k1[0] - k0[0]) * (y1 - y0))
+        else:
+            r, l = _handle(ks, i, c)[1], _handle(ks, i + 1, c)[0]
+            if abs(y0 - y1) < _FLT_EPSILON and abs(r[1] - l[1]) < _FLT_EPSILON and abs(l[1] - y1) < _FLT_EPSILON:
+                out.append(y0)
+            else:
+                out.append(_bezier((k0[0], y0), r, l, (k1[0], y1), frame))
+    return out
+
+
+def channel_at(o, ch, frame):
+    ks = (o.get("keys") or {}).get(ch)
+    return sample(ks, frame) if ks else list(o[ch])
+
+
+def pose(doc, oid, frame):
+    """An object's local transform at `frame`."""
+    o = doc["objects"][oid]
+    return {ch: channel_at(o, ch, frame) for ch in CHANNELS}
+
+
+def animated(doc):
+    return [k for k, o in doc["objects"].items() if o.get("keys")]
+
+
+def _still(doc, oid, chans, where):
+    """Refuse an op that would set an animated channel outright: its keys decide it."""
+    keys = doc["objects"][oid].get("keys") or {}
+    for ch in chans:
+        if ch in keys:
+            frames = ", ".join(str(k[0]) for k in keys[ch][:6]) + (" …" if len(keys[ch]) > 6 else "")
+            raise SceneError(f"{where}: {oid}.{ch} is animated (keys at {frames}) — change it at a frame with "
+                             f"`keyframe {{id, frame, {ch}}}`, or `unkey {{id, channel: \"{ch}\"}}` first")
+
+
+def _nudge(o, delta):
+    """Move an object by `delta` in its parent's space — its location keys too, if it has them."""
+    ks = (o.get("keys") or {}).get("location")
+    for k in ks or []:
+        k[1] = _add(k[1], delta)
+    o["location"] = _add(o["location"], delta)
 
 
 # ─────────────────────────────── bounds + transforms ──────────────────────────
@@ -739,10 +930,10 @@ def _deep_merge(base, patch):
 
 
 def _on_floor(doc, oid):
-    """Drop a root object so its lowest point sits on z = 0."""
+    """Drop a root object so its lowest point sits on z = 0 (at the first frame; its keys move with it)."""
     o = doc["objects"][oid]
     if o["parent"] is None:
-        o["location"][2] -= world_bounds(doc, oid)[0][2]
+        _nudge(o, [0, 0, -world_bounds(doc, oid)[0][2]])
 
 
 def _op_add(doc, op, where, selection):
@@ -752,7 +943,7 @@ def _op_add(doc, op, where, selection):
     if oid in doc["objects"]:
         raise SceneError(f"{where}.id: {oid!r} already exists — use `set` to change it")
     obj = {k: op[k] for k in ("name", "parent", "location", "rotation", "scale", "visible", "renderable",
-                              "shading", "modifiers", "light", "camera", "text", "dof_focus") if k in op}
+                              "shading", "modifiers", "light", "camera", "text", "dof_focus", "keys") if k in op}
     obj["type"] = t
     obj.setdefault("name", str(op.get("name") or oid).replace("_", " ").title())
     if t == "mesh" and op.get("image") is None:
@@ -806,6 +997,7 @@ def _op_set(doc, op, where, selection):
     patch = {k: v for k, v in op.items() if k not in ("op", "id", "on_floor", "params")}
     touched = []
     for oid in ids:
+        _still(doc, oid, [ch for ch in CHANNELS if ch in patch and "keys" not in patch], where)
         doc["objects"][oid] = _deep_merge(doc["objects"][oid], patch)
         if op.get("params"):
             mid = doc["objects"][oid].get("mesh")
@@ -869,7 +1061,7 @@ def _op_duplicate(doc, op, where, selection):
             doc["meshes"][mid] = copy.deepcopy(doc["meshes"][o["mesh"]])
             o["mesh"] = mid
             touched.append(f"meshes.{mid}")
-        o["location"] = _add(o["location"], _vec3(op.get("offset"), f"{where}.offset", [0, 0, 0]))
+        _nudge(o, _vec3(op.get("offset"), f"{where}.offset", [0, 0, 0]))
         doc["objects"][nid] = o
         touched.append(f"objects.{nid}")
     doc.update(normalize(doc))
@@ -964,6 +1156,7 @@ def _look_at(doc, oid, target, where, selection):
     else:
         point = _vec3(target, f"{where}.target", [0, 0, 0])
     o = doc["objects"][oid]
+    _still(doc, oid, ["rotation"], where)
     eye = world_matrix(doc, oid)
     o["rotation"] = look_rotation([eye[0][3], eye[1][3], eye[2][3]], point)
     if o["parent"]:
@@ -993,6 +1186,7 @@ def _op_frame(doc, op, where, selection):
     margin = _field(("f", 1.1, 0.5, 5), op.get("margin", 1.1), f"{where}.margin")
     angle = op.get("angle")
     o = doc["objects"][cam]
+    _still(doc, cam, ["location", "rotation"], where)
     if angle is not None:
         a = str(angle).lower()
         if a not in CAMERA_ANGLES:
@@ -1067,10 +1261,110 @@ def _op_preset(doc, op, where, selection):
     return touched
 
 
+def _op_keyframe(doc, op, where, selection):
+    """Key channels at `frame`: the values given, or — none given — where the object is
+    then. A key already there is replaced."""
+    ids = _targets(doc, op.get("id"), selection, f"{where}.id")
+    frame = _field(("i", 0, 0, MAX_FRAME), op.get("frame", doc["animation"]["frame_start"]), f"{where}.frame")
+    interp = _field(("s:" + "|".join(INTERPOLATIONS), "bezier"), op.get("interpolation", "bezier"),
+                    f"{where}.interpolation")
+    given = [ch for ch in CHANNELS if ch in op]
+    for oid in ids:
+        o = doc["objects"][oid]
+        keys = o.get("keys") or {}
+        for ch in given or CHANNELS:
+            v = op.get(ch, True)
+            val = channel_at(o, ch, frame) if v is True else _vec3(v, f"{where}.{ch}", None)
+            keys[ch] = sorted([k for k in keys.get(ch, []) if k[0] != frame] + [[frame, val, interp]],
+                              key=lambda k: k[0])
+        o["keys"] = keys
+    doc.update(normalize(doc))
+    return [f"objects.{i}" for i in ids]
+
+
+def _op_unkey(doc, op, where, selection):
+    """Remove keys: at `frame`, or all of them; on `channel`(s), or every channel. The object
+    stays where it was at the first frame."""
+    ids = _targets(doc, op.get("id"), selection, f"{where}.id")
+    chans = op.get("channel") or op.get("channels") or list(CHANNELS)
+    chans = [chans] if isinstance(chans, str) else chans
+    bad = [c for c in chans if c not in CHANNELS]
+    if bad:
+        raise SceneError(f"{where}.channel: {bad[0]!r} — choose from {', '.join(CHANNELS)}")
+    frame = op.get("frame")
+    if frame is not None:
+        frame = _field(("i", 0, 0, MAX_FRAME), frame, f"{where}.frame")
+    for oid in ids:
+        o = doc["objects"][oid]
+        keys = o.get("keys") or {}
+        for ch in chans:
+            if ch in keys:
+                keys[ch] = [k for k in keys[ch] if frame is not None and k[0] != frame]
+        o["keys"] = {ch: ks for ch, ks in keys.items() if ks}
+        if not o["keys"]:
+            o.pop("keys")
+    doc.update(normalize(doc))
+    return [f"objects.{i}" for i in ids]
+
+
+def _op_animation(doc, op, where, selection):
+    """The timeline: fps, frame_start, frame_end — or `seconds` for frame_end."""
+    a = {**doc["animation"], **{k: op[k] for k in ANIMATION if k in op}}
+    if op.get("seconds") is not None:
+        secs = _field(("f", 5, 0.05, 3600), op["seconds"], f"{where}.seconds")
+        a = _fill(ANIMATION, a, where)
+        a["frame_end"] = a["frame_start"] + max(1, round(secs * a["fps"])) - 1
+    doc["animation"] = a
+    doc.update(normalize(doc))
+    return ["animation"]
+
+
+def _op_turntable(doc, op, where, selection):
+    """Spin objects on the spot, a loop: they go under a new empty at their base centre,
+    keyed linearly from 0° at the first frame to `turns` × 360° one frame past the last —
+    so the last frame runs straight back into the first."""
+    ref = op.get("target", op.get("id"))
+    ids = _targets(doc, ref, selection, f"{where}.target") if ref else \
+        [k for k in subject_ids(doc) if doc["objects"][k]["parent"] is None]
+    if not ids:
+        raise SceneError(f"{where}.target: nothing to turn — add an object first")
+    for oid in ids:
+        o = doc["objects"][oid]
+        if o["parent"] is not None:
+            raise SceneError(f"{where}.target: {oid!r} is parented to {o['parent']!r} — turn {o['parent']!r} instead")
+        if o["type"] == "camera" or oid == doc["render"]["camera"]:
+            raise SceneError(f"{where}.target: {oid!r} is the camera — turn what it looks at")
+    turns = _field(("f", 1, -100, 100), op.get("turns", 1), f"{where}.turns")
+    if op.get("direction") is not None:
+        d = _field(("s:ccw|cw", "ccw"), op["direction"], f"{where}.direction")
+        turns = abs(turns) * (1 if d == "ccw" else -1)
+    timeline = {k: op[k] for k in ("seconds", "fps") if op.get(k) is not None}
+    if "seconds" not in timeline and not animated(doc):
+        timeline["seconds"] = 5                              # a new animation: five seconds
+    if timeline:
+        _op_animation(doc, timeline, where, selection)
+    a = doc["animation"]
+    (x0, y0, z0), (x1, y1, _) = _bounds_of(doc, ids)
+    base = [(x0 + x1) / 2, (y0 + y1) / 2, z0]
+    pid = op.get("pivot") or _new_id(doc, "objects", "turntable")
+    if pid in doc["objects"]:
+        raise SceneError(f"{where}.pivot: {pid!r} already exists")
+    doc["objects"][pid] = {"name": "Turntable", "type": "empty", "location": base,
+                           "keys": {"rotation": [[a["frame_start"], [0, 0, 0], "linear"],
+                                                 [a["frame_end"] + 1, [0, 0, 360 * turns], "linear"]]}}
+    for oid in ids:
+        o = doc["objects"][oid]
+        _nudge(o, _mul(base, -1))
+        o["parent"] = pid
+    doc.update(normalize(doc))
+    return [f"objects.{pid}", "animation"] + [f"objects.{i}" for i in ids]
+
+
 OPS = {"add": _op_add, "set": _op_set, "delete": _op_delete, "duplicate": _op_duplicate,
        "material": _op_material, "modifier": _op_modifier, "world": _op_section("world"),
        "render": _op_section("render"), "look_at": _op_look_at, "frame": _op_frame, "preset": _op_preset,
-       "texture": _op_texture}
+       "texture": _op_texture, "keyframe": _op_keyframe, "unkey": _op_unkey, "animation": _op_animation,
+       "turntable": _op_turntable}
 
 
 def apply_ops(doc, ops, selection=None):
@@ -1214,7 +1508,7 @@ def _entries(doc):
     for sec in SECTIONS:
         for k, v in doc.get(sec, {}).items():
             out[f"{sec}.{k}"] = v
-    for sec in ("world", "render"):
+    for sec in SINGLETONS:
         if sec in doc:
             out[sec] = doc[sec]
     return out
@@ -1260,7 +1554,7 @@ def merge3(base, local, remote):
             conflicts.append(key)
         if val is not None:
             merged[key] = val
-    out = {k: v for k, v in local.items() if k not in (*SECTIONS, "world", "render")}
+    out = {k: v for k, v in local.items() if k not in (*SECTIONS, *SINGLETONS)}
     out["rev"] = max(local.get("rev", 0), remote.get("rev", 0))
     for sec in SECTIONS:
         out[sec] = {}
@@ -1322,6 +1616,10 @@ def summary(doc, selection=None):
             bits.append("materials [" + ", ".join(m or "-" for m in slots) + "] (slot per face)")
         if o.get("modifiers"):
             bits.append("mods " + ",".join(m["type"] for m in o["modifiers"]))
+        for ch, ks in (o.get("keys") or {}).items():
+            frames = [k[0] for k in ks]
+            bits.append(f"{ch} keyed at " + (",".join(map(str, frames)) if len(frames) <= 6
+                                              else f"{len(frames)} frames {frames[0]}–{frames[-1]}"))
         if not o["visible"]:
             bits.append("hidden")
         if oid in sel:
@@ -1348,6 +1646,11 @@ def summary(doc, selection=None):
     w, r = doc["world"], doc["render"]
     lines.append(f"World: {w['kind']} {w['hdri'] if w['kind'] == 'hdri' else w['color']} strength {w['strength']:g}. "
                  f"Render: camera {r['camera']}, {r['resolution'][0]}x{r['resolution'][1]}, {r['samples']} samples.")
+    if animated(doc):
+        a = doc["animation"]
+        n = a["frame_end"] - a["frame_start"] + 1
+        lines.append(f"Animation: frames {a['frame_start']}–{a['frame_end']} at {a['fps']} fps ({n / a['fps']:.1f} s). "
+                     "Transforms above are at the first frame.")
     return "\n".join(lines)
 
 
@@ -1390,6 +1693,7 @@ def json_schema():
             "modifiers": {k: _spec_schema(v) for k, v in MODIFIERS.items()},
             "lights": {k: _spec_schema(v) for k, v in LIGHTS.items()},
             "camera": _spec_schema(CAMERA), "text": _spec_schema(TEXT), "material": _spec_schema(MATERIAL),
-            "world": _spec_schema(WORLD), "render": _spec_schema(RENDER),
+            "world": _spec_schema(WORLD), "render": _spec_schema(RENDER), "animation": _spec_schema(ANIMATION),
+            "channels": list(CHANNELS), "interpolations": list(INTERPOLATIONS),
             "material_presets": sorted(MATERIAL_PRESETS), "light_rigs": sorted(LIGHT_RIGS),
             "camera_angles": sorted(CAMERA_ANGLES), "ops": sorted(OPS)}

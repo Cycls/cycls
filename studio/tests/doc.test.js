@@ -120,16 +120,27 @@ describe("textures", () => {
   });
 });
 
-describe("version 2", () => {
-  it("a version 1 scene reads with slots, and a current one is left alone", () => {
+describe("older versions", () => {
+  it("a version 1 scene reads with slots and a timeline, and a current one is left alone", () => {
     const v1 = { version: 1, objects: { cube: { type: "mesh", mesh: "cube", material: "m" },
                                         bare: { type: "mesh", mesh: "cube", material: null } } };
     const v2 = migrate(v1);
-    expect(v2.version).toBe(2);
+    expect(v2.version).toBe(3);
+    expect(v2.animation).toEqual({ fps: 24, frame_start: 1, frame_end: 120 });
     expect(v2.objects.cube.materials).toEqual(["m"]);
     expect(v2.objects.bare.materials).toEqual([]);
     expect("material" in v2.objects.cube).toBe(false);
     const now = scene();
     expect(migrate(now)).toBe(now);
+  });
+
+  it("a version 2 scene gets a still timeline and keeps everything else", () => {
+    const v2 = clone(scene());
+    v2.version = 2;
+    delete v2.animation;
+    const v3 = migrate(v2);
+    expect(v3.version).toBe(3);
+    expect(v3.animation).toEqual(scene().animation);
+    expect(v3.objects).toEqual(v2.objects);
   });
 });

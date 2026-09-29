@@ -177,7 +177,7 @@ describe("material slots", () => {
     v1.version = 1;
     for (const o of Object.values(v1.objects)) if (o.materials) { o.material = o.materials[0] || null; delete o.materials; }
     const { s } = await started(v1);
-    expect(s.doc.version).toBe(2);
+    expect(s.doc.version).toBe(3);
     expect(s.doc.objects.cube.materials).toEqual(["material"]);
   });
 });

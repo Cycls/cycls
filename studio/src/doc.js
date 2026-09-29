@@ -24,8 +24,9 @@ export function defaultsOf(spec) {
 }
 
 const SINGULAR = { objects: "object", meshes: "mesh", materials: "material", textures: "texture" };
-// The maps of id → entry (scene.py SECTIONS).
+// The maps of id → entry (scene.py SECTIONS), and the one-entry sections (SINGLETONS).
 export const SECTIONS = ["objects", "meshes", "materials", "textures"];
+export const SINGLETONS = ["world", "render", "animation"];
 export function newId(taken, base, section = "objects") {
   const fallback = SINGULAR[section] || "item";
   const b = String(base || fallback).toLowerCase().replace(/[^a-z0-9_.-]+/g, "_").replace(/^[_.-]+|[_.-]+$/g, "")
@@ -121,7 +122,7 @@ export function entries(doc) {
   for (const sec of SECTIONS) {
     for (const [k, v] of Object.entries(doc[sec] || {})) out[`${sec}.${k}`] = v;
   }
-  for (const sec of ["world", "render"]) if (doc[sec]) out[sec] = doc[sec];
+  for (const sec of SINGLETONS) if (doc[sec]) out[sec] = doc[sec];
   return out;
 }
 
@@ -184,16 +185,20 @@ export function decodeSidecar(side) {
 }
 
 // An older document as the current one (scene.py migrate): version 1 had one `material`
-// per object; version 2 has slots (`materials`), a face's material_index picking one.
+// per object; version 2 has slots (`materials`), a face's material_index picking one;
+// version 3 has a timeline (`animation`) and an object's `keys`.
 export function migrate(doc) {
-  if (!doc || (doc.version ?? 2) >= 2) return doc;
+  if (!doc || (doc.version ?? schema.version) >= schema.version) return doc;
   const out = clone(doc);
-  for (const o of Object.values(out.objects || {})) {
-    if ("material" in o) { o.materials = o.material ? [o.material] : []; delete o.material; }
-    else if ((o.type === "mesh" || o.type === "text") && !o.materials) o.materials = [];
+  if ((out.version ?? 1) < 2) {
+    for (const o of Object.values(out.objects || {})) {
+      if ("material" in o) { o.materials = o.material ? [o.material] : []; delete o.material; }
+      else if ((o.type === "mesh" || o.type === "text") && !o.materials) o.materials = [];
+    }
+    out.textures ||= {};
   }
-  out.textures ||= {};
-  out.version = 2;
+  out.animation ||= clone(schema.new_scene.animation);
+  out.version = schema.version;
   return out;
 }
 

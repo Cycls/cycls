@@ -386,12 +386,12 @@ class TestTextures:
 # ─── material slots (version 2) ─────────────────────────────────────────────
 
 class TestSlots:
-    def test_a_version_1_scene_reads_as_version_2(self):
+    def test_a_version_1_scene_reads_as_the_current_one(self):
         v1 = {"version": 1, "objects": {"cube": {"type": "mesh", "mesh": "cube", "material": "m"},
                                         "bare": {"type": "mesh", "mesh": "cube", "material": None}},
               "meshes": {"cube": {"primitive": "cube"}}, "materials": {"m": {}}}
         doc = S.normalize(v1)
-        assert doc["version"] == 2
+        assert doc["version"] == S.VERSION
         assert doc["objects"]["cube"]["materials"] == ["m"] and doc["objects"]["bare"]["materials"] == []
         assert "material" not in doc["objects"]["cube"]
         assert S.normalize(copy.deepcopy(doc)) == doc
@@ -426,6 +426,112 @@ def test_add_infers_light_camera_and_text_types():
     assert [doc["objects"][k]["type"] for k in "lct"] == ["light", "camera", "text"]
     with pytest.raises(S.SceneError, match=r'not valid on an empty object — set "type": "light"'):
         S.normalize({"objects": {"x": {"type": "empty", "light": {}}}})
+
+# ─── animation (version 3) ──────────────────────────────────────────────────
+
+class TestAnimation:
+    def test_a_version_2_scene_reads_with_a_still_timeline(self):
+        v2 = {**S.new_scene(), "version": 2}
+        v2.pop("animation")
+        doc = S.normalize(v2)
+        assert doc["version"] == 3 and doc["animation"] == {"fps": 24, "frame_start": 1, "frame_end": 120}
+        assert not S.animated(doc) and all("keys" not in o for o in doc["objects"].values())
+
+    def test_keys_normalize_sorted_one_per_frame(self):
+        doc = S.new_scene()
+        doc["objects"]["cube"]["keys"] = {"location": [[30, [0, 0, 3]], {"frame": 1, "value": [0, 0, 1]},
+                                                       [30, [0, 0, 2], "linear"]], "scale": []}
+        out = S.normalize(doc)
+        assert out["objects"]["cube"]["keys"] == {"location": [[1, [0, 0, 1], "bezier"], [30, [0, 0, 2], "linear"]]}
+        bad = copy.deepcopy(doc)
+        bad["objects"]["cube"]["keys"] = {"color": [[1, [0, 0, 0]]]}
+        with pytest.raises(S.SceneError, match=r"keys: unknown color"):
+            S.normalize(bad)
+        bad["objects"]["cube"]["keys"] = {"location": [[1, [0, 0, 1], "ease"]]}
+        with pytest.raises(S.SceneError, match=r"interpolation: 'ease'"):
+            S.normalize(bad)
+
+    def test_a_channel_rests_where_its_keys_put_the_first_frame(self):
+        doc, _ = S.apply_ops(S.new_scene(), [{"op": "animation", "frame_start": 10},
+                                            {"op": "keyframe", "id": "cube", "frame": 20, "location": [0, 0, 5]},
+                                            {"op": "keyframe", "id": "cube", "frame": 40, "location": [4, 0, 5]}])
+        assert doc["objects"]["cube"]["location"] == [0, 0, 5]          # before the first key: its value
+        assert S.normalize(copy.deepcopy(doc)) == doc
+
+    def test_linear_constant_and_the_ends(self):
+        ks = [[1, [0, 0, 0], "linear"], [11, [10, -10, 5], "constant"], [21, [0, 0, 0], "linear"]]
+        assert S.sample(ks, -5) == [0, 0, 0] and S.sample(ks, 99) == [0, 0, 0]
+        assert S.sample(ks, 6) == [5, -5, 2.5]
+        assert S.sample(ks, 11) == [10, -10, 5] and S.sample(ks, 20.9) == [10, -10, 5]
+
+    def test_bezier_eases_and_holds_its_extremes(self):
+        ks = [[1, [0, 0, 0], "bezier"], [31, [0, 0, 2], "bezier"], [61, [0, 0, 1], "bezier"]]
+        z = [S.sample(ks, f)[2] for f in range(1, 62)]
+        assert z[0] == 0 and z[30] == 2 and z[60] == 1
+        assert max(z) == 2                                    # auto-clamped: no overshoot past a key
+        assert z[1] - z[0] < z[15] - z[14]                    # eases out of the first key
+        assert all(b >= a for a, b in zip(z[:31], z[1:31]))   # rises monotonically to the peak
+
+    def test_keyframe_keys_the_pose_there_and_unkey_leaves_it(self):
+        doc, touched = S.apply_ops(S.new_scene(), [{"op": "keyframe", "id": "cube", "frame": 1},
+                                                  {"op": "keyframe", "id": "cube", "frame": 50,
+                                                   "rotation": [0, 0, 90], "interpolation": "linear"}])
+        keys = doc["objects"]["cube"]["keys"]
+        assert set(keys) == {"location", "rotation", "scale"} and len(keys["rotation"]) == 2
+        assert touched == ["objects.cube"]
+        doc, _ = S.apply_ops(doc, [{"op": "keyframe", "id": "cube", "frame": 1, "rotation": [0, 0, 0],
+                                    "interpolation": "linear"}])
+        assert S.pose(doc, "cube", 25.5)["rotation"] == [0, 0, 45]
+        doc, _ = S.apply_ops(doc, [{"op": "unkey", "id": "cube", "frame": 50}])
+        assert all(len(ks) == 1 for ks in doc["objects"]["cube"]["keys"].values())
+        doc, _ = S.apply_ops(doc, [{"op": "unkey", "id": "cube"}])
+        assert "keys" not in doc["objects"]["cube"] and doc["objects"]["cube"]["location"] == [0, 0, 1]
+
+    def test_set_refuses_an_animated_channel_but_moves_a_still_one(self):
+        doc, _ = S.apply_ops(S.new_scene(), [{"op": "keyframe", "id": "cube", "frame": 1, "location": [0, 0, 1]}])
+        with pytest.raises(S.SceneError, match=r"cube.location is animated .*`keyframe"):
+            S.apply_ops(doc, [{"op": "set", "id": "cube", "location": [1, 1, 1]}])
+        doc, _ = S.apply_ops(doc, [{"op": "set", "id": "cube", "rotation": [0, 0, 45]}])
+        assert doc["objects"]["cube"]["rotation"] == [0, 0, 45]
+
+    def test_duplicate_and_on_floor_carry_the_keys(self):
+        doc, _ = S.apply_ops(S.new_scene(), [
+            {"op": "keyframe", "id": "cube", "frame": 1, "location": [0, 0, 3]},
+            {"op": "keyframe", "id": "cube", "frame": 20, "location": [2, 0, 3]},
+            {"op": "set", "id": "cube", "on_floor": True},
+            {"op": "duplicate", "id": "cube", "new_id": "twin", "offset": [0, 5, 0]}])
+        assert doc["objects"]["cube"]["keys"]["location"] == [[1, [0, 0, 1], "bezier"], [20, [2, 0, 1], "bezier"]]
+        assert doc["objects"]["twin"]["keys"]["location"] == [[1, [0, 5, 1], "bezier"], [20, [2, 5, 1], "bezier"]]
+
+    def test_turntable_loops_seamlessly_round_the_subjects_base(self):
+        doc, touched = S.apply_ops(_ring_scene(), [{"op": "turntable", "seconds": 4, "turns": 1}])
+        a, t = doc["animation"], doc["objects"]["turntable"]
+        assert a["frame_end"] - a["frame_start"] + 1 == 96
+        assert t["location"][2] == pytest.approx(0) and t["keys"]["rotation"] == [
+            [1, [0, 0, 0], "linear"], [97, [0, 0, 360], "linear"]]
+        assert doc["objects"]["ring"]["parent"] == "turntable" and doc["objects"]["pedestal"]["parent"] == "turntable"
+        step = S.pose(doc, "turntable", 2)["rotation"][2]
+        assert S.pose(doc, "turntable", 96)["rotation"][2] + step == pytest.approx(360)   # frame 96 → 1 is one step
+        # nothing moved in the world at the first frame
+        flat = lambda b: [v for corner in b for v in corner]      # noqa: E731
+        assert flat(S.world_bounds(doc, "ring")) == pytest.approx(flat(S.world_bounds(_ring_scene(), "ring")))
+        assert "Animation: frames 1–96 at 24 fps (4.0 s)" in S.summary(doc)
+        assert S.layout_check(doc) == S.layout_check(_ring_scene())
+        with pytest.raises(S.SceneError, match="parented to 'turntable'"):
+            S.apply_ops(doc, [{"op": "turntable", "target": "ring"}])
+
+    def test_an_animated_camera_is_not_reframed_behind_its_keys(self):
+        doc, _ = S.apply_ops(S.new_scene(), [{"op": "keyframe", "id": "camera", "frame": 1}])
+        with pytest.raises(S.SceneError, match="camera.location is animated"):
+            S.apply_ops(doc, [{"op": "frame"}])
+
+    def test_the_timeline_merges_like_any_entry(self):
+        base = S.new_scene()
+        local, _ = S.apply_ops(base, [{"op": "animation", "fps": 30}])
+        remote, _ = S.apply_ops(base, [{"op": "keyframe", "id": "cube", "frame": 1}])
+        merged, conflicts = S.merge3(base, local, remote)
+        assert conflicts == [] and merged["animation"]["fps"] == 30 and "keys" in merged["objects"]["cube"]
+        assert S.diff(base, local) == {"set": {"animation": local["animation"]}, "delete": []}
 
 
 # ─── big scenes ─────────────────────────────────────────────────────────────

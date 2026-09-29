@@ -1,4 +1,28 @@
 {
+ "animation": {
+  "additionalProperties": false,
+  "properties": {
+   "fps": {
+    "default": 24,
+    "maximum": 120,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "frame_end": {
+    "default": 120,
+    "maximum": 100000,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "frame_start": {
+    "default": 1,
+    "maximum": 100000,
+    "minimum": 0,
+    "type": "integer"
+   }
+  },
+  "type": "object"
+ },
  "camera": {
   "additionalProperties": false,
   "properties": {
@@ -56,7 +80,17 @@
   "side",
   "top"
  ],
+ "channels": [
+  "location",
+  "rotation",
+  "scale"
+ ],
  "format": "cycls.studio.scene",
+ "interpolations": [
+  "bezier",
+  "linear",
+  "constant"
+ ],
  "light_rigs": [
   "dramatic",
   "rim",
@@ -532,6 +566,11 @@
   }
  },
  "new_scene": {
+  "animation": {
+   "fps": 24,
+   "frame_end": 120,
+   "frame_start": 1
+  },
   "by": "",
   "format": "cycls.studio.scene",
   "materials": {
@@ -672,7 +711,7 @@
   "textures": {},
   "units": "m",
   "up": "Z",
-  "version": 2,
+  "version": 3,
   "world": {
    "color": "#303030",
    "hdri": "studio",
@@ -683,9 +722,11 @@
  },
  "ops": [
   "add",
+  "animation",
   "delete",
   "duplicate",
   "frame",
+  "keyframe",
   "look_at",
   "material",
   "modifier",
@@ -693,6 +734,8 @@
   "render",
   "set",
   "texture",
+  "turntable",
+  "unkey",
   "world"
  ],
  "primitives": {
@@ -1024,7 +1067,7 @@
   },
   "type": "object"
  },
- "version": 2,
+ "version": 3,
  "world": {
   "additionalProperties": false,
   "properties": {
