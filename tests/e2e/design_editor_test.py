@@ -88,12 +88,15 @@ class Scripted:
         content = context.messages[-1].get("content", "") if context.messages else ""
         text = content if isinstance(content, str) else " ".join(
             p.get("text", "") for p in content if isinstance(p, dict))
-        if "edit" in text:   # as the Design tool does: saved first (compared, kept), then replayed
+        edit = ("e2e-after.fig", "e2e-edit.js", "Day Roast") if "edit" in text else \
+            ("e2e-paint.fig", "e2e-paint.js", "Panel") if "paint" in text else None
+        if edit:   # as the Design tool does: saved first (compared, kept), then replayed
+            fig, script, intent = edit
             _, base = read_fig(self.root, DESIGN)
-            version = await write_fig(self.root, DESIGN, (DATA / "e2e-after.fig").read_bytes(), base=base,
-                                      by="agent", reason="agent", intent="Day Roast")
+            version = await write_fig(self.root, DESIGN, (DATA / fig).read_bytes(), base=base,
+                                      by="agent", reason="agent", intent=intent)
             yield {"type": "ui", "action": "design_command", "path": DESIGN, "version": version,
-                   "script": (DATA / "e2e-edit.js").read_text(encoding="utf-8"), "intent": "Day Roast"}
+                   "script": (DATA / script).read_text(encoding="utf-8"), "intent": intent}
             yield "Edited."
         elif "note" in text:
             yield "Noted."
@@ -227,6 +230,22 @@ class Session:
     def versions(self):
         return self.page.evaluate("fetch('/versions/designs/e2e.fig').then((r) => r.json())")["versions"]
 
+    def panel_pixels(self):
+        """How much of the editor shows the blue of the panel e2e-paint.js adds (#3366e6)."""
+        shot = base64.b64encode(self.page.locator("iframe").first.screenshot()).decode()
+        return self.page.evaluate("""async (b64) => {
+          const bin = atob(b64), bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+          const g = new OffscreenCanvas(bmp.width, bmp.height).getContext('2d');
+          g.drawImage(bmp, 0, 0);
+          const d = g.getImageData(0, 0, bmp.width, bmp.height).data;
+          let n = 0;
+          for (let i = 0; i < d.length; i += 4)
+            if (Math.abs(d[i] - 51) < 8 && Math.abs(d[i + 1] - 102) < 8 && Math.abs(d[i + 2] - 230) < 8) n++;
+          return n;
+        }""", shot)
+
 
 @pytest.fixture
 def session(browser, server):
@@ -255,6 +274,19 @@ def test_an_agent_edit_replays_and_is_saved(session):
     session.page.wait_for_timeout(1000)   # the host's write lands
     assert session.on_disk() == base64.b64decode(saved["fig"])
     session.no_editor_error()
+
+
+def test_an_agent_edit_is_drawn_as_it_lands(session):
+    """A fill written the way Figma's API takes one — no `visible`, no `opacity` — was
+    stored as given, and the editor's renderer skips a fill that isn't visible: the
+    edit was saved, and the canvas stayed blank until the design was reopened."""
+    session.open_design()
+    assert session.panel_pixels() == 0
+    n = session.mark()
+    session.say("paint a panel")
+    session.wait_for("applied", after=n)
+    session.page.wait_for_timeout(1500)
+    assert session.panel_pixels() > 1000
 
 
 # ---- 3. Closing the last tab right after an edit keeps the edit ----------------------
