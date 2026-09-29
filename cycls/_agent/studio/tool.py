@@ -1,0 +1,430 @@
+"""The `studio` tool: the agent's hands on the Studio scene.
+
+Pure-document actions (inspect, edit, revert, open) run here in milliseconds;
+the rest (snapshot, render, apply, script, import, export) go to the Blender
+engine. Every change is saved through store.edit's lock and pushed to an open
+Studio app as an `app_command` patch, so what the user sees is what was saved.
+"""
+import asyncio
+import base64
+import json
+import pathlib
+import re
+
+
+from . import APP_DIR, SLUG, engine, install, store
+from . import scene as S
+
+APP_ENTRY = f"{APP_DIR}/index.html"
+MAX_IMPORT = 24_000_000
+IMPORT_EXTS = ("glb", "gltf", "obj", "fbx", "stl", "ply", "blend")
+EXPORT_EXTS = {"glb": "glb", "blend": "blend", "fbx": "fbx", "obj": "obj", "stl": "stl"}
+
+STUDIO_TOOL = {
+    "type": "custom",
+    "name": "studio",
+    "description": (
+        "Build and render 3D scenes in the Studio — a Blender-style app the user can also edit by hand, "
+        "rendered by real Blender (Cycles). The scene is a document: Z is up, units are metres, angles "
+        "are degrees, colours are hex.\n\n"
+        "Actions:\n"
+        "- inspect: the scene as a table, with what the user has selected in the Studio.\n"
+        "- edit {ops, intent, snapshot?}: change the scene with a list of ops, applied atomically "
+        "(all or none). Batch a whole scene into ONE edit. `snapshot: true` also returns a quick preview.\n"
+        "- snapshot: a fast low-quality Cycles preview (~5 s) of the current scene, for checking your work.\n"
+        "- render {name, resolution?, samples?}: the final image (~25-60 s), saved to renders/ and opened.\n"
+        "- apply {id, operation, params?}: a destructive mesh operation by real Blender: modifier_apply "
+        "{index}, convert, bevel {selection, width, segments}, subdivide {selection, cuts}, inset "
+        "{selection, thickness}, triangulate, merge_by_distance, recalc_normals, remesh {voxel_size}, "
+        "decimate {ratio}, boolean {object, operation}, join {others}. selection: \"all\", {faces:[i]}, "
+        "{edges:[[a,b]]}, {verts:[i]} — or \"selected\": what the user has selected in Edit mode (inspect "
+        "says when there is something).\n"
+        "- script {code}: run Blender Python (bpy) against the scene when no op can express it — e.g. a "
+        "procedural arrangement. Objects it adds come back into the scene; anything the document can't "
+        "represent is baked to a mesh (you're told).\n"
+        "- import {path}: add a model file from the workspace (glb, gltf, obj, fbx, stl, ply, blend).\n"
+        "- export {format, name}: glb, blend, fbx, obj or stl, into exports/.\n"
+        "- revert {rev}: restore the scene as it was at an earlier rev.\n"
+        "- open: show the Studio app on the canvas.\n\n"
+        "Edit ops (each an object with \"op\"):\n"
+        "- add {id?, name?, primitive (plane|grid|circle|cube|uv_sphere|ico_sphere|cylinder|cone|torus|monkey), "
+        "params?, material?, location?, rotation?, scale?, parent?, on_floor?, look_at?} — or type "
+        "\"light\" {light:{kind: point|sun|spot|area, energy (W), color, size...}}, \"camera\" "
+        "{camera:{lens (mm), dof_fstop}}, \"text\" {text:{body, size, extrude, bevel_depth}}, \"empty\". "
+        "material: a preset (gold, brushed-gold, chrome, brushed-steel, copper, plastic, matte, ceramic, "
+        "glass, rubber, neon), an existing material id, or {name, base_color, metallic, roughness, ...}.\n"
+        "- set {id, ...fields to change, params?: primitive parameters, on_floor?}\n"
+        "- delete {id} · duplicate {id, offset?}\n"
+        "- material {id?, name?, preset?, base_color?, metallic?, roughness?, coat?, transmission?, ior?, "
+        "emission?, assign?: object id(s)}\n"
+        "- modifier {object, action: add|set|remove|move, type (subsurf|bevel|mirror|array|solidify|boolean|"
+        "remesh|decimate|weld|triangulate|wireframe), params?, index?, to?}\n"
+        "- look_at {id, target: object id or [x,y,z]} · frame {camera?, targets?, angle?, margin?}\n"
+        "- world {kind: hdri|color, hdri, strength, color, rotation} · render {resolution, samples, camera, transparent}\n"
+        "- preset {studio: {lighting: studio-3point|softbox|dramatic|rim, backdrop: hex, camera: "
+        "front|front-3/4|side|top|low|hero}} — a photo-studio sweep, light rig, framed camera and world.\n"
+        "Use id \"selected\" for whatever the user has selected in the Studio.\n\n"
+        "Limits: materials are uniform Principled surfaces (colour, metal, roughness, coat, glass, "
+        "emission) — no textures, image maps or node networks yet. A script's node materials come back "
+        "flattened to their plain values and procedural geometry baked to meshes; the result says so, "
+        "and more scripts won't change that."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["inspect", "edit", "snapshot", "render", "apply", "script",
+                                                  "import", "export", "revert", "open"]},
+            "ops": {"type": "array", "items": {"type": "object"},
+                    "description": "edit: the ops, applied in order, all or none"},
+            "intent": {"type": "string", "description": "edit: a few words on what this change does"},
+            "snapshot": {"type": "boolean", "description": "edit: also return a quick preview"},
+            "name": {"type": "string", "description": "render/export: file name"},
+            "resolution": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2},
+            "samples": {"type": "integer", "minimum": 1, "maximum": 256},
+            "id": {"type": "string", "description": "apply: the object"},
+            "operation": {"type": "string", "description": "apply: which operation"},
+            "params": {"type": "object", "description": "apply: the operation's parameters"},
+            "code": {"type": "string", "description": "script: Blender Python; bpy, bmesh, Vector, Matrix, math, np are imported"},
+            "path": {"type": "string", "description": "import: a model file in the workspace"},
+            "format": {"type": "string", "enum": list(EXPORT_EXTS)},
+            "rev": {"type": "integer", "description": "revert: the rev to restore"},
+        },
+        "required": ["action"],
+    },
+}
+
+STUDIO_GUIDANCE = """## Studio (3D)
+Build scenes with the `studio` tool; the user watches them appear in the Studio app and can move things by hand.
+- Open the Studio once per conversation (`open`) when you start building, so the user can watch.
+- Make a whole scene in ONE `edit`: start from a `preset` (studio lighting + backdrop + framed camera) after adding the objects, since the preset frames what exists.
+- Z is up, metres, degrees. Stand things on the ground with `on_floor: true`; aim cameras and lights with `look_at`, and re-frame with `frame` — don't compute Euler angles by hand.
+- "this"/"that"/"it" usually means what the user selected: use id "selected". `inspect` shows the selection.
+- Check your work with `snapshot` (5 s) before a final `render` (25-60 s). Look at the preview: framing, overlaps, floating objects, materials.
+- Use `script` only for what ops can't express; never edit apps/studio/data/ files directly.
+- After a render, describe what you made in a sentence and offer one concrete variation."""
+
+
+# ─────────────────────────────── helpers ──────────────────────────────────────
+
+def _slug(s, default):
+    return re.sub(r"[^a-z0-9-]+", "-", str(s or "").lower()).strip("-")[:48] or default
+
+
+def _free(root, folder, name, ext):
+    d = pathlib.Path(root) / folder
+    d.mkdir(parents=True, exist_ok=True)
+    base, n = name, 1
+    while (d / f"{name}.{ext}").exists():
+        n += 1
+        name = f"{base}-{n}"
+    return f"{folder}/{name}.{ext}"
+
+
+def _image(jpg, text):
+    return [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                         "data": base64.b64encode(jpg).decode()}},
+            {"type": "text", "text": text}]
+
+
+def _command(command):
+    return {"type": "ui", "action": "app_command", "path": APP_ENTRY, "command": command}
+
+
+def _patch_event(before, after, label):
+    d = S.diff(before, after)
+    return _command({"type": "patch", "base": before["rev"], "rev": after["rev"], "by": "agent",
+                     "label": (label or "")[:80], "set": d["set"], "delete": d["delete"]})
+
+
+async def _view(ws):
+    """What the person chatting has open in their Studio: {selection, mode, edit?} (the app keeps it current)."""
+    from ..state import actor_of, app_shelf, apps_db
+    try:
+        view = await apps_db(ws).get(app_shelf(SLUG, "view", user=actor_of(ws.subject)))
+    except Exception:
+        return {}
+    return view if isinstance(view, dict) else {}
+
+
+def _picked(view):
+    sel = view.get("selection")
+    return [s for s in sel if isinstance(s, str)] if isinstance(sel, list) else []
+
+
+async def _selection(ws):
+    return _picked(await _view(ws))
+
+
+_ELEMENTS = {"vert": ("verts", "vertices"), "edge": ("edges", "edges"), "face": ("faces", "faces")}
+
+
+def _edit_view(view, doc):
+    """The viewer's Edit-mode selection, if it's about the mesh the scene has now:
+    (object id, mode, items or None when too many to pass on, count)."""
+    e = view.get("edit") if view.get("mode") == "edit" else None
+    if not isinstance(e, dict) or e.get("mode") not in _ELEMENTS:
+        return None
+    o = doc["objects"].get(e.get("object"))
+    if not o or o.get("mesh") != e.get("mesh"):
+        return None                          # not saved by the app yet, or changed since
+    items = e.get("items")
+    return e["object"], e["mode"], items if isinstance(items, list) else None, int(e.get("count") or 0)
+
+
+def _edit_note(view, doc):
+    ev = _edit_view(view, doc)
+    if not ev:
+        return ""
+    oid, mode, items, count = ev
+    if not count:
+        return f"\nThe user is in Edit mode on {oid}, nothing selected."
+    tail = (' — `apply` with params.selection "selected" works on them' if items is not None
+            else ' (too many to pass on: use "all" or explicit indices)')
+    return f"\nThe user is in Edit mode on {oid}: {count} {_ELEMENTS[mode][1]} selected{tail}."
+
+
+async def _save(ws, before, after, label):
+    saved = await store.save(ws, after, before)
+    return saved, _patch_event(before, saved, label)
+
+
+def _write_meshes(ws, files):
+    for rel, data in files.items():
+        m = re.match(r"^meshes_out/(m-[0-9a-f]{12})\.json$", rel)
+        if m:
+            store.write_mesh(ws, m.group(1), data)
+
+
+def _layout(doc):
+    issues = S.layout_check(doc)
+    return (" Layout check: " + "; ".join(issues[:6]) + ". Fix these before rendering.") if issues else ""
+
+
+def _notes(notes):
+    return ("\nNOT carried into the scene (a limit of the document — don't retry it): " + "; ".join(notes[:8])
+            ) if notes else ""
+
+
+# ─────────────────────────────── actions ──────────────────────────────────────
+
+async def _edit(ws, inp):
+    ops = inp.get("ops")
+    sel = await _selection(ws)
+    async with store.lock(ws):
+        before = await store.load(ws)
+        after, touched = S.apply_ops(before, ops, selection=sel)
+        if not touched or S.diff(before, after) == {"set": {}, "delete": []}:
+            return "No change — the scene already looked like that."
+        saved, event = await _save(ws, before, after, inp.get("intent") or f"{len(ops)} op(s)")
+    shown = ", ".join(touched[:12]) + ("…" if len(touched) > 12 else "")
+    ack = f"Saved rev {saved['rev']}: changed {shown}." + _layout(saved)
+    if inp.get("snapshot"):
+        r = await engine.call("snapshot", saved, blobs=store.blobs(ws, saved), params={"samples": 12})
+        jpg = r["files"]["preview.jpg"]
+        snap = _command({"type": "snapshot", "rev": saved["rev"],
+                         "preview": "data:image/jpeg;base64," + base64.b64encode(jpg).decode()})
+        return {"_model": _image(jpg, ack + " Snapshot attached — check framing, overlaps, floating objects "
+                                       "and materials before you render."),
+                "_ui": [event, snap]}
+    return {"_model": ack, "_ui": event}
+
+
+async def _snapshot(ws, inp):
+    doc = await store.load(ws)
+    r = await engine.call("snapshot", doc, blobs=store.blobs(ws, doc), params={"samples": inp.get("samples") or 12})
+    jpg = r["files"]["preview.jpg"]
+    ui = _command({"type": "snapshot", "rev": doc["rev"],
+                   "preview": "data:image/jpeg;base64," + base64.b64encode(jpg).decode()})
+    return {"_model": _image(jpg, f"Snapshot of rev {doc['rev']} ({r['result']['resolution'][0]}x"
+                                  f"{r['result']['resolution'][1]}, preview quality) — check framing, overlaps, "
+                                  "floating objects and materials." + _layout(doc)),
+            "_ui": ui}
+
+
+async def _render(ws, inp):
+    doc = await store.load(ws)
+    params = {k: inp[k] for k in ("resolution", "samples") if inp.get(k)}
+    r = await engine.call("render", doc, blobs=store.blobs(ws, doc), params=params)
+    res = r["result"]
+    png, jpg = r["files"]["render.png"], r["files"]["preview.jpg"]
+    rel = _free(ws.root, "renders", _slug(inp.get("name"), "studio"), "png")
+    await asyncio.to_thread((pathlib.Path(ws.root) / rel).write_bytes, png)
+    await asyncio.to_thread(store.log_render, ws, {"path": rel, "rev": doc["rev"], "resolution": res["resolution"],
+                                                   "samples": res["samples"], "seconds": res["render_seconds"],
+                                                   "by": "agent"})
+    w, h = res["resolution"]
+    ack = (f"Rendered {rel} ({w}x{h}, {res['samples']} samples, {res['render_seconds']:.0f}s in Blender) "
+           "and opened it on the canvas. The render is attached: check it before you describe it.")
+    return {"_model": _image(jpg, ack),
+            "_ui": [{"type": "ui", "action": "open_canvas", "path": rel, "name": rel.rsplit("/", 1)[-1]},
+                    _command({"type": "render_done", "path": rel, "rev": doc["rev"],
+                              "preview": "data:image/jpeg;base64," + base64.b64encode(jpg).decode()})]}
+
+
+async def _apply(ws, inp):
+    oid, op = inp.get("id"), inp.get("operation")
+    if not oid or not op:
+        return "Error: apply needs `id` (the object) and `operation`."
+    view = await _view(ws)
+    sel = _picked(view)
+    params = dict(inp.get("params") or {})
+    async with store.lock(ws):
+        before = await store.load(ws)
+        if oid == "selected":
+            if len(sel) != 1:
+                return "Error: select exactly one object in the Studio (or name it by id)."
+            oid = sel[0]
+        if oid not in before["objects"]:
+            return f"Error: no object {oid!r}."
+        if params.get("selection") == "selected":
+            ev = _edit_view(view, before)
+            if not ev or ev[0] != oid or not ev[3]:
+                return (f"Error: nothing is selected in Edit mode on {oid} (or the Studio hasn't saved it yet) — "
+                        'pass explicit indices or "all".')
+            if ev[2] is None:
+                return 'Error: too many elements selected to pass on — use "all" or explicit indices.'
+            params["selection"] = {_ELEMENTS[ev[1]][0]: ev[2]}
+        r = await engine.call("apply", before, blobs=store.blobs(ws, before),
+                              params={"id": oid, "op": op, **params})
+        res = r["result"]
+        rel = store.write_mesh(ws, res["mesh_id"], r["files"]["mesh.json"])
+        after = json.loads(json.dumps(before))
+        o = after["objects"][oid]
+        keep = {k: o[k] for k in ("name", "parent", "location", "rotation", "scale", "visible", "renderable",
+                                  "material", "shading", "modifiers") if k in o}
+        after["objects"][oid] = {**keep, "type": "mesh", "mesh": res["mesh_id"]}
+        after["meshes"][res["mesh_id"]] = {"data": rel, "verts": res["verts"], "faces": res["faces"],
+                                           "bbox": res["bbox"]}
+        if res.get("modifiers") is not None:
+            after["objects"][oid]["modifiers"] = res["modifiers"]
+        if op == "convert" or o["type"] == "text":
+            after["objects"][oid].setdefault("modifiers", [])
+        if res.get("removed"):
+            after, _ = S.apply_ops(S.prune_meshes(after), [{"op": "delete", "id": rid} for rid in res["removed"]
+                                                           if rid in after["objects"]])
+        after = S.normalize(S.prune_meshes(after))
+        saved, event = await _save(ws, before, after, f"{op} {oid}")
+    return {"_model": f"Applied {op} to {oid}: now {res['verts']} vertices, {res['faces']} faces (rev {saved['rev']})."
+                      + (f" Merged in and removed: {', '.join(res['removed'])}." if res.get("removed") else ""),
+            "_ui": event}
+
+
+async def _script(ws, inp):
+    code = inp.get("code")
+    if not isinstance(code, str) or not code.strip():
+        return "Error: script needs `code` (Blender Python)."
+    async with store.lock(ws):
+        before = await store.load(ws)
+        r = await engine.call("script", before, blobs=store.blobs(ws, before), params={"code": code})
+        res = r["result"]
+        _write_meshes(ws, r["files"])
+        after = S.prune_meshes(S.normalize(res["scene"]))
+        if S.diff(before, after) == {"set": {}, "delete": []}:
+            return "The script ran but changed nothing in the scene." + _notes(res.get("notes")) + (
+                f"\nOutput:\n{res['stdout'][-1500:]}" if res.get("stdout") else "")
+        saved, event = await _save(ws, before, after, "script")
+    d = S.diff(before, saved)
+    ack = (f"Script applied (rev {saved['rev']}): {len(d['set'])} entries changed, {len(d['delete'])} removed."
+           + _notes(res.get("notes")) + _layout(saved)
+           + (f"\nOutput:\n{res['stdout'][-1500:]}" if res.get("stdout") else ""))
+    return {"_model": ack, "_ui": event}
+
+
+async def _import(ws, inp):
+    from ..tools import _resolve_path
+    try:
+        path = _resolve_path(inp.get("path", ""), ws.root)
+    except ValueError as e:
+        return f"Error: {e}"
+    ext = path.suffix.lower().lstrip(".")
+    if ext not in IMPORT_EXTS:
+        return f"Error: import takes {', '.join(IMPORT_EXTS)} files."
+    if not path.is_file():
+        return f"Error: {inp.get('path')} does not exist."
+    if path.stat().st_size > MAX_IMPORT:
+        return "Error: that file is over 24 MB."
+    data = await asyncio.to_thread(path.read_bytes)
+    r = await engine.call("import", {}, blobs={f"import.{ext}": data}, params={"ext": ext})
+    res = r["result"]
+    _write_meshes(ws, r["files"])
+    async with store.lock(ws):
+        before = await store.load(ws)
+        frag = res["scene"]
+        frag["render"] = {**frag["render"], "camera": None}
+        after, added = S.merge_fragment(before, frag)
+        saved, event = await _save(ws, before, after, f"import {path.name}")
+    return {"_model": f"Imported {inp.get('path')}: added {len(added)} object(s) — {', '.join(added[:15])} "
+                      f"(rev {saved['rev']})." + _notes(res.get("notes")),
+            "_ui": event}
+
+
+async def _export(ws, inp):
+    fmt = str(inp.get("format") or "glb").lower()
+    if fmt not in EXPORT_EXTS:
+        return f"Error: format is one of {', '.join(EXPORT_EXTS)}."
+    doc = await store.load(ws)
+    r = await engine.call("export", doc, blobs=store.blobs(ws, doc), params={"format": fmt})
+    data = r["files"][r["result"]["file"]]
+    rel = _free(ws.root, "exports", _slug(inp.get("name"), "scene"), EXPORT_EXTS[fmt])
+    await asyncio.to_thread((pathlib.Path(ws.root) / rel).write_bytes, data)
+    ack = f"Exported the scene to {rel} ({len(data) // 1024} KB)."
+    if fmt == "glb":
+        return {"_model": ack + " Opened it on the canvas.",
+                "_ui": {"type": "ui", "action": "open_canvas", "path": rel, "name": rel.rsplit("/", 1)[-1]}}
+    return ack
+
+
+async def _revert(ws, inp):
+    rev = inp.get("rev")
+    if not isinstance(rev, int):
+        return "Error: revert needs `rev` (see data/history/)."
+    async with store.lock(ws):
+        before = await store.load(ws)
+        old = await asyncio.to_thread(store.history, ws, rev)
+        saved, event = await _save(ws, before, old, f"revert to rev {rev}")
+    return {"_model": f"Restored the scene as it was at rev {rev} (now rev {saved['rev']}).", "_ui": event}
+
+
+async def _inspect(ws, inp):
+    doc = await store.load(ws)
+    view = await _view(ws)
+    return S.summary(doc, _picked(view)) + _edit_note(view, doc)
+
+
+async def _open(ws, inp):
+    # What's already there, so the model doesn't greet a finished scene as an empty one.
+    return {"type": "ui", "action": "open_canvas", "path": APP_ENTRY, "name": "Studio", "icon": install.ICON,
+            "ack": "Opened the Studio on the canvas; your edits appear there as you go. It holds:\n"
+                   + await _inspect(ws, inp)}
+
+
+_ACTIONS = {"edit": _edit, "snapshot": _snapshot, "render": _render, "apply": _apply, "script": _script,
+            "import": _import, "export": _export, "revert": _revert, "inspect": _inspect}
+
+
+async def run(inp, ws):
+    action = str(inp.get("action") or "").lower()
+    if action not in (*_ACTIONS, "open"):
+        return f"Error: action is one of {', '.join([*_ACTIONS, 'open'])}."
+    try:
+        installed = await install.ensure_installed(ws)
+        if action == "open":
+            return await _open(ws, inp)
+        out = await _ACTIONS[action](ws, inp)
+    except install.InstallError as e:
+        return f"Error: {e}"
+    except S.SceneError as e:
+        return f"Error: {e}"
+    except engine.EngineError as e:
+        return f"Error: {e}"
+    if installed == "installed" and isinstance(out, str):
+        out += " (The Studio app was just added to the Apps tab.)"
+    return out
+
+
+def step(inp):
+    a = str(inp.get("action") or "")
+    detail = inp.get("intent") or inp.get("name") or inp.get("operation") or inp.get("path") or inp.get("format") or ""
+    if a == "edit" and not inp.get("intent") and isinstance(inp.get("ops"), list):
+        detail = f"{len(inp['ops'])} op(s)"
+    return {"tool_name": "Studio", "step": f"{a} {detail}".strip()}

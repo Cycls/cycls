@@ -55,12 +55,14 @@ cycls/
 ├── _app/
 │   ├── main.py             # App class + @cycls.app + _make_decorator
 │   ├── auth.py             # cycls.Clerk, cycls.JWT, GCP, User, AppleIAP, validator
-│   └── web.py              # cycls.Web fluent builder
+│   ├── db.py               # Workspace + DB — per-tenant JSON KV over object storage
+│   └── sandbox/            # Sandbox — bwrap fluent builder, secure by default
 └── _agent/
     ├── main.py             # Agent class + @cycls.agent decorator
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
     ├── browser/            # cycls Browser tool — thin CDP client to a shared real-Chrome service (Steel); docs/notes/browser.md
+    ├── studio/             # cycls Studio tool — a Blender-style mini-app (app/index.html, built from /studio) + real Blender via cycls-render; scene.py is the document; docs/notes/studio.md
     ├── tools/              # tool schemas + execution + `Tool` rows: run/step/once/terminal/prompt (docs/notes/tool-rows.md)
     ├── harness/            # the managed LLM loop and the kit a custom loop needs
     │   ├── llm.py          # cycls.LLM fluent builder (.loop(fn) swaps the loop; .price()/.context() set cost rates + window)
@@ -71,7 +73,8 @@ cycls/
     │   ├── events.py       # typed loop events + to_ui (FE projection)
     │   ├── compact.py      # compaction — tool-result clearing, then a summary; append-only marker, file ledger (docs/notes/compaction.md)
     │   └── prompts.py      # system + compaction prompts + workspace instructions (AGENT.md)
-    └── web/                # FastAPI chat server, state routers, OG images, themes
+    └── web/                # FastAPI chat server, state routers, OG images, themes; builder.py is cycls.Web
+studio/                     # the Studio app's source (Preact + three.js); `npm run build` writes cycls/_agent/studio/app/index.html
 ```
 
 ## Core Architecture
@@ -140,6 +143,8 @@ tests/
 │   ├── chat_test.py             # to_ui_messages (FE projection) + _valid_prefix repair
 │   ├── harness_test.py          # build_tools, web search/fetch, cost math, _resolve_path, LLM builder
 │   ├── browser_test.py          # Browser tool: client config/providers, steel session parse, executor dispatch, gating
+│   ├── studio_scene_test.py     # Studio document: normalize, ops, diff/merge3, layout checks, schema.json drift
+│   ├── studio_test.py           # Studio tool, installer, engine route, mesh sweep — engine faked
 │   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
 │   ├── events_test.py           # to_ui wire shapes for the typed events
 │   ├── pdf_test.py              # PDF page parsing
@@ -150,8 +155,10 @@ tests/
 │       ├── test_load_repair.py  # store roundtrip + repair invariants
 │       ├── test_build_contract.py # @pytest.mark.live, the real app-build service
 │       ├── test_database.py     # the `database` tool over the agent KV
+│       ├── test_studio_live.py  # @pytest.mark.live, the Studio tool against the deployed Blender engine
 │       └── test_live.py         # @pytest.mark.live, real Anthropic
-└── client/tests/                # vitest — useChat, auth headers, mentions, apps, the app bridge
+├── client/tests/                # vitest — useChat, auth headers, mentions, apps, the app bridge
+└── studio/tests/                # vitest (`cd studio && npm test`) — Studio doc/merge, mesh codec + edits, the app controller
 ```
 
 **Mocked tier** (default): no API calls, no docker. Runs in ~2min.

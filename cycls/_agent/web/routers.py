@@ -1833,3 +1833,7 @@ def install_routers(cycls_app, app, required_auth, volume, base):
         app.include_router(workspaces_router(cycls_app, required_auth, volume, base))
     if getattr(cycls_app, "connectors", None):
         app.include_router(connectors_router(cycls_app, ws_dep, required_auth, volume, base))
+    from .. import studio
+    if studio.configured():
+        from ..studio.route import studio_router
+        app.include_router(studio_router(ws_dep, required_auth))

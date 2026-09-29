@@ -1,0 +1,1000 @@
+{
+ "camera": {
+  "additionalProperties": false,
+  "properties": {
+   "clip_end": {
+    "default": 1000.0,
+    "maximum": 1000000.0,
+    "minimum": 0.01,
+    "type": "number"
+   },
+   "clip_start": {
+    "default": 0.1,
+    "maximum": 1000.0,
+    "minimum": 0.0001,
+    "type": "number"
+   },
+   "dof_fstop": {
+    "default": 0.0,
+    "maximum": 128,
+    "minimum": 0,
+    "type": "number"
+   },
+   "lens": {
+    "default": 50.0,
+    "maximum": 5000,
+    "minimum": 1,
+    "type": "number"
+   },
+   "ortho_scale": {
+    "default": 7.0,
+    "maximum": 100000.0,
+    "minimum": 0.001,
+    "type": "number"
+   },
+   "projection": {
+    "default": "persp",
+    "enum": [
+     "persp",
+     "ortho"
+    ]
+   },
+   "sensor_width": {
+    "default": 36.0,
+    "maximum": 200,
+    "minimum": 1,
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "camera_angles": [
+  "front",
+  "front-3/4",
+  "hero",
+  "low",
+  "side",
+  "top"
+ ],
+ "format": "cycls.studio.scene",
+ "light_rigs": [
+  "dramatic",
+  "rim",
+  "softbox",
+  "studio-3point"
+ ],
+ "lights": {
+  "area": {
+   "additionalProperties": false,
+   "properties": {
+    "energy": {
+     "default": 500.0,
+     "maximum": 10000000.0,
+     "minimum": 0,
+     "type": "number"
+    },
+    "shape": {
+     "default": "square",
+     "enum": [
+      "square",
+      "rectangle",
+      "disk",
+      "ellipse"
+     ]
+    },
+    "size": {
+     "default": 1.0,
+     "maximum": 1000.0,
+     "minimum": 0.001,
+     "type": "number"
+    },
+    "size_y": {
+     "default": 1.0,
+     "maximum": 1000.0,
+     "minimum": 0.001,
+     "type": "number"
+    }
+   },
+   "type": "object"
+  },
+  "point": {
+   "additionalProperties": false,
+   "properties": {
+    "energy": {
+     "default": 1000.0,
+     "maximum": 10000000.0,
+     "minimum": 0,
+     "type": "number"
+    },
+    "radius": {
+     "default": 0.1,
+     "maximum": 1000.0,
+     "minimum": 0,
+     "type": "number"
+    }
+   },
+   "type": "object"
+  },
+  "spot": {
+   "additionalProperties": false,
+   "properties": {
+    "energy": {
+     "default": 1000.0,
+     "maximum": 10000000.0,
+     "minimum": 0,
+     "type": "number"
+    },
+    "radius": {
+     "default": 0.1,
+     "maximum": 1000.0,
+     "minimum": 0,
+     "type": "number"
+    },
+    "spot_blend": {
+     "default": 0.15,
+     "maximum": 1,
+     "minimum": 0,
+     "type": "number"
+    },
+    "spot_size": {
+     "default": 45.0,
+     "maximum": 180,
+     "minimum": 1,
+     "type": "number"
+    }
+   },
+   "type": "object"
+  },
+  "sun": {
+   "additionalProperties": false,
+   "properties": {
+    "angle": {
+     "default": 0.5,
+     "maximum": 180,
+     "minimum": 0,
+     "type": "number"
+    },
+    "energy": {
+     "default": 3.0,
+     "maximum": 10000.0,
+     "minimum": 0,
+     "type": "number"
+    }
+   },
+   "type": "object"
+  }
+ },
+ "material": {
+  "additionalProperties": false,
+  "properties": {
+   "alpha": {
+    "default": 1.0,
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "base_color": {
+    "default": "#cccccc",
+    "pattern": "^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$",
+    "type": "string"
+   },
+   "coat": {
+    "default": 0.0,
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "emission": {
+    "default": 0.0,
+    "maximum": 100,
+    "minimum": 0,
+    "type": "number"
+   },
+   "ior": {
+    "default": 1.45,
+    "maximum": 3,
+    "minimum": 1,
+    "type": "number"
+   },
+   "metallic": {
+    "default": 0.0,
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "roughness": {
+    "default": 0.5,
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "transmission": {
+    "default": 0.0,
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "material_presets": {
+  "brushed-gold": {
+   "base_color": "#ffe39d",
+   "metallic": 1.0,
+   "roughness": 0.38
+  },
+  "brushed-steel": {
+   "base_color": "#e5e5e7",
+   "metallic": 1.0,
+   "roughness": 0.35
+  },
+  "ceramic": {
+   "base_color": "#ededea",
+   "coat": 0.8,
+   "metallic": 0.0,
+   "roughness": 0.25
+  },
+  "chrome": {
+   "base_color": "#f9f9f9",
+   "metallic": 1.0,
+   "roughness": 0.04
+  },
+  "copper": {
+   "base_color": "#fad1c2",
+   "metallic": 1.0,
+   "roughness": 0.22
+  },
+  "glass": {
+   "base_color": "#ffffff",
+   "ior": 1.45,
+   "metallic": 0.0,
+   "roughness": 0.0,
+   "transmission": 1.0
+  },
+  "gold": {
+   "base_color": "#ffe39d",
+   "metallic": 1.0,
+   "roughness": 0.15
+  },
+  "matte": {
+   "base_color": "#cbcbcb",
+   "metallic": 0.0,
+   "roughness": 0.9
+  },
+  "neon": {
+   "base_color": "#27a0ff",
+   "emission": 2.0,
+   "metallic": 0.0,
+   "roughness": 0.4
+  },
+  "plastic": {
+   "base_color": "#cb2727",
+   "metallic": 0.0,
+   "roughness": 0.32
+  },
+  "rubber": {
+   "base_color": "#272727",
+   "metallic": 0.0,
+   "roughness": 0.75
+  }
+ },
+ "modifiers": {
+  "array": {
+   "additionalProperties": false,
+   "properties": {
+    "count": {
+     "default": 2,
+     "maximum": 1000,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "relative_offset": {
+     "default": [
+      1.0,
+      0.0,
+      0.0
+     ],
+     "maxItems": 3,
+     "minItems": 3,
+     "type": "array"
+    }
+   },
+   "type": "object"
+  },
+  "bevel": {
+   "additionalProperties": false,
+   "properties": {
+    "angle_limit": {
+     "default": 30.0,
+     "maximum": 180,
+     "minimum": 0,
+     "type": "number"
+    },
+    "limit_method": {
+     "default": "angle",
+     "enum": [
+      "angle",
+      "none"
+     ]
+    },
+    "segments": {
+     "default": 3,
+     "maximum": 64,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "width": {
+     "default": 0.02,
+     "maximum": 100,
+     "minimum": 0,
+     "type": "number"
+    }
+   },
+   "type": "object"
+  },
+  "boolean": {
+   "additionalProperties": false,
+   "properties": {
+    "object": {
+     "default": null,
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "operation": {
+     "default": "difference",
+     "enum": [
+      "difference",
+      "union",
+      "intersect"
+     ]
+    },
+    "solver": {
+     "default": "exact",
+     "enum": [
+      "exact",
+      "fast"
+     ]
+    }
+   },
+   "type": "object"
+  },
+  "decimate": {
+   "additionalProperties": false,
+   "properties": {
+    "ratio": {
+     "default": 0.5,
+     "maximum": 1,
+     "minimum": 0,
+     "type": "number"
+    }
+   },
+   "type": "object"
+  },
+  "mirror": {
+   "additionalProperties": false,
+   "properties": {
+    "axis": {
+     "default": [
+      true,
+      false,
+      false
+     ],
+     "maxItems": 3,
+     "minItems": 3,
+     "type": "array"
+    },
+    "mirror_object": {
+     "default": null,
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "use_clip": {
+     "default": false,
+     "type": "boolean"
+    }
+   },
+   "type": "object"
+  },
+  "remesh": {
+   "additionalProperties": false,
+   "properties": {
+    "voxel_size": {
+     "default": 0.05,
+     "maximum": 100,
+     "minimum": 0.001,
+     "type": "number"
+    }
+   },
+   "type": "object"
+  },
+  "solidify": {
+   "additionalProperties": false,
+   "properties": {
+    "offset": {
+     "default": -1.0,
+     "maximum": 1,
+     "minimum": -1,
+     "type": "number"
+    },
+    "thickness": {
+     "default": 0.01,
+     "maximum": 100,
+     "minimum": -100,
+     "type": "number"
+    }
+   },
+   "type": "object"
+  },
+  "subsurf": {
+   "additionalProperties": false,
+   "properties": {
+    "levels": {
+     "default": 1,
+     "maximum": 6,
+     "minimum": 0,
+     "type": "integer"
+    },
+    "render_levels": {
+     "default": 2,
+     "maximum": 6,
+     "minimum": 0,
+     "type": "integer"
+    }
+   },
+   "type": "object"
+  },
+  "triangulate": {
+   "additionalProperties": false,
+   "properties": {},
+   "type": "object"
+  },
+  "weld": {
+   "additionalProperties": false,
+   "properties": {
+    "merge_threshold": {
+     "default": 0.001,
+     "maximum": 10,
+     "minimum": 0,
+     "type": "number"
+    }
+   },
+   "type": "object"
+  },
+  "wireframe": {
+   "additionalProperties": false,
+   "properties": {
+    "thickness": {
+     "default": 0.02,
+     "maximum": 100,
+     "minimum": 0.0001,
+     "type": "number"
+    }
+   },
+   "type": "object"
+  }
+ },
+ "new_scene": {
+  "by": "",
+  "format": "cycls.studio.scene",
+  "materials": {
+   "material": {
+    "alpha": 1.0,
+    "base_color": "#cccccc",
+    "coat": 0.0,
+    "emission": 0.0,
+    "ior": 1.45,
+    "metallic": 0.0,
+    "name": "Material",
+    "preset": null,
+    "roughness": 0.5,
+    "transmission": 0.0
+   }
+  },
+  "meshes": {
+   "cube": {
+    "primitive": "cube",
+    "size": 2.0
+   }
+  },
+  "objects": {
+   "camera": {
+    "camera": {
+     "clip_end": 1000.0,
+     "clip_start": 0.1,
+     "dof_fstop": 0.0,
+     "lens": 50.0,
+     "ortho_scale": 7.0,
+     "projection": "persp",
+     "sensor_width": 36.0
+    },
+    "dof_focus": null,
+    "location": [
+     7.36,
+     -6.93,
+     4.96
+    ],
+    "name": "Camera",
+    "parent": null,
+    "renderable": true,
+    "rotation": [
+     68.6085,
+     0.0,
+     46.7236
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "type": "camera",
+    "visible": true
+   },
+   "cube": {
+    "location": [
+     0.0,
+     0.0,
+     1.0
+    ],
+    "material": "material",
+    "mesh": "cube",
+    "modifiers": [],
+    "name": "Cube",
+    "parent": null,
+    "renderable": true,
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "shading": "auto",
+    "type": "mesh",
+    "visible": true
+   },
+   "light": {
+    "light": {
+     "color": "#ffffff",
+     "energy": 1000.0,
+     "kind": "point",
+     "radius": 0.1
+    },
+    "location": [
+     4.08,
+     1.01,
+     5.9
+    ],
+    "name": "Light",
+    "parent": null,
+    "renderable": true,
+    "rotation": [
+     37.3,
+     3.2,
+     106.9
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "type": "light",
+    "visible": true
+   }
+  },
+  "render": {
+   "camera": "camera",
+   "denoise": true,
+   "resolution": [
+    1280,
+    720
+   ],
+   "samples": 32,
+   "transparent": false
+  },
+  "rev": 0,
+  "saved_at": "",
+  "units": "m",
+  "up": "Z",
+  "version": 1,
+  "world": {
+   "color": "#303030",
+   "hdri": "studio",
+   "kind": "hdri",
+   "rotation": 0.0,
+   "strength": 0.35
+  }
+ },
+ "ops": [
+  "add",
+  "delete",
+  "duplicate",
+  "frame",
+  "look_at",
+  "material",
+  "modifier",
+  "preset",
+  "render",
+  "set",
+  "world"
+ ],
+ "primitives": {
+  "circle": {
+   "additionalProperties": false,
+   "properties": {
+    "fill": {
+     "default": "ngon",
+     "enum": [
+      "ngon",
+      "none",
+      "trifan"
+     ]
+    },
+    "radius": {
+     "default": 1.0,
+     "maximum": 10000.0,
+     "minimum": 0.0001,
+     "type": "number"
+    },
+    "vertices": {
+     "default": 32,
+     "maximum": 1024,
+     "minimum": 3,
+     "type": "integer"
+    }
+   },
+   "type": "object"
+  },
+  "cone": {
+   "additionalProperties": false,
+   "properties": {
+    "depth": {
+     "default": 2.0,
+     "maximum": 10000.0,
+     "minimum": 0.0001,
+     "type": "number"
+    },
+    "radius1": {
+     "default": 1.0,
+     "maximum": 10000.0,
+     "minimum": 0,
+     "type": "number"
+    },
+    "radius2": {
+     "default": 0.0,
+     "maximum": 10000.0,
+     "minimum": 0,
+     "type": "number"
+    },
+    "vertices": {
+     "default": 32,
+     "maximum": 1024,
+     "minimum": 3,
+     "type": "integer"
+    }
+   },
+   "type": "object"
+  },
+  "cube": {
+   "additionalProperties": false,
+   "properties": {
+    "size": {
+     "default": 2.0,
+     "maximum": 10000.0,
+     "minimum": 0.0001,
+     "type": "number"
+    }
+   },
+   "type": "object"
+  },
+  "cyclorama": {
+   "additionalProperties": false,
+   "properties": {
+    "depth": {
+     "default": 32.0,
+     "maximum": 10000.0,
+     "minimum": 1,
+     "type": "number"
+    },
+    "height": {
+     "default": 30.0,
+     "maximum": 10000.0,
+     "minimum": 1,
+     "type": "number"
+    },
+    "radius": {
+     "default": 5.0,
+     "maximum": 1000.0,
+     "minimum": 0.1,
+     "type": "number"
+    },
+    "segments": {
+     "default": 24,
+     "maximum": 128,
+     "minimum": 2,
+     "type": "integer"
+    },
+    "width": {
+     "default": 80.0,
+     "maximum": 10000.0,
+     "minimum": 1,
+     "type": "number"
+    }
+   },
+   "type": "object"
+  },
+  "cylinder": {
+   "additionalProperties": false,
+   "properties": {
+    "depth": {
+     "default": 2.0,
+     "maximum": 10000.0,
+     "minimum": 0.0001,
+     "type": "number"
+    },
+    "radius": {
+     "default": 1.0,
+     "maximum": 10000.0,
+     "minimum": 0.0001,
+     "type": "number"
+    },
+    "vertices": {
+     "default": 32,
+     "maximum": 1024,
+     "minimum": 3,
+     "type": "integer"
+    }
+   },
+   "type": "object"
+  },
+  "grid": {
+   "additionalProperties": false,
+   "properties": {
+    "size": {
+     "default": 2.0,
+     "maximum": 10000.0,
+     "minimum": 0.0001,
+     "type": "number"
+    },
+    "x_segments": {
+     "default": 10,
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "y_segments": {
+     "default": 10,
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "type": "object"
+  },
+  "ico_sphere": {
+   "additionalProperties": false,
+   "properties": {
+    "radius": {
+     "default": 1.0,
+     "maximum": 10000.0,
+     "minimum": 0.0001,
+     "type": "number"
+    },
+    "subdivisions": {
+     "default": 2,
+     "maximum": 7,
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "type": "object"
+  },
+  "monkey": {
+   "additionalProperties": false,
+   "properties": {
+    "size": {
+     "default": 2.0,
+     "maximum": 10000.0,
+     "minimum": 0.0001,
+     "type": "number"
+    }
+   },
+   "type": "object"
+  },
+  "plane": {
+   "additionalProperties": false,
+   "properties": {
+    "size": {
+     "default": 2.0,
+     "maximum": 10000.0,
+     "minimum": 0.0001,
+     "type": "number"
+    }
+   },
+   "type": "object"
+  },
+  "torus": {
+   "additionalProperties": false,
+   "properties": {
+    "major_radius": {
+     "default": 1.0,
+     "maximum": 10000.0,
+     "minimum": 0.0001,
+     "type": "number"
+    },
+    "major_segments": {
+     "default": 48,
+     "maximum": 1024,
+     "minimum": 3,
+     "type": "integer"
+    },
+    "minor_radius": {
+     "default": 0.25,
+     "maximum": 10000.0,
+     "minimum": 0.0001,
+     "type": "number"
+    },
+    "minor_segments": {
+     "default": 12,
+     "maximum": 512,
+     "minimum": 3,
+     "type": "integer"
+    }
+   },
+   "type": "object"
+  },
+  "uv_sphere": {
+   "additionalProperties": false,
+   "properties": {
+    "radius": {
+     "default": 1.0,
+     "maximum": 10000.0,
+     "minimum": 0.0001,
+     "type": "number"
+    },
+    "ring_count": {
+     "default": 16,
+     "maximum": 256,
+     "minimum": 3,
+     "type": "integer"
+    },
+    "segments": {
+     "default": 32,
+     "maximum": 512,
+     "minimum": 3,
+     "type": "integer"
+    }
+   },
+   "type": "object"
+  }
+ },
+ "render": {
+  "additionalProperties": false,
+  "properties": {
+   "camera": {
+    "default": null,
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "denoise": {
+    "default": true,
+    "type": "boolean"
+   },
+   "resolution": {
+    "default": [
+     1280,
+     720
+    ],
+    "maxItems": 2,
+    "minItems": 2,
+    "type": "array"
+   },
+   "samples": {
+    "default": 32,
+    "maximum": 256,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "transparent": {
+    "default": false,
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "text": {
+  "additionalProperties": false,
+  "properties": {
+   "align": {
+    "default": "center",
+    "enum": [
+     "left",
+     "center",
+     "right"
+    ]
+   },
+   "bevel_depth": {
+    "default": 0.0,
+    "maximum": 10,
+    "minimum": 0,
+    "type": "number"
+   },
+   "bevel_resolution": {
+    "default": 4,
+    "maximum": 32,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "body": {
+    "default": "Text",
+    "maxLength": 200,
+    "type": "string"
+   },
+   "extrude": {
+    "default": 0.0,
+    "maximum": 100,
+    "minimum": 0,
+    "type": "number"
+   },
+   "size": {
+    "default": 1.0,
+    "maximum": 1000.0,
+    "minimum": 0.001,
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "version": 1,
+ "world": {
+  "additionalProperties": false,
+  "properties": {
+   "color": {
+    "default": "#303030",
+    "pattern": "^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$",
+    "type": "string"
+   },
+   "hdri": {
+    "default": "studio",
+    "enum": [
+     "studio",
+     "city",
+     "courtyard",
+     "forest",
+     "interior",
+     "night",
+     "sunrise",
+     "sunset"
+    ]
+   },
+   "kind": {
+    "default": "hdri",
+    "enum": [
+     "hdri",
+     "color"
+    ]
+   },
+   "rotation": {
+    "default": 0.0,
+    "maximum": 360,
+    "minimum": -360,
+    "type": "number"
+   },
+   "strength": {
+    "default": 0.35,
+    "maximum": 100,
+    "minimum": 0,
+    "type": "number"
+   }
+  },
+  "type": "object"
+ }
+}

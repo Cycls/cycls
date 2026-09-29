@@ -361,6 +361,30 @@ python browser_service.py        # → https://cycls-browser.cycls.ai
 (Self-hosted **Steel Browser** over CDP is an alternative backing: set
 `BROWSER_PROVIDER=steel`.) Details: [docs/notes/browser.md](notes/browser.md).
 
+### 3D: the Studio
+
+Give an agent a **Blender-style 3D studio**. The agent builds a scene from a sentence
+("a gold ring on a marble pedestal, dramatic light"), checks it with a quick preview and
+renders it with real Blender (Cycles). The person opens the same scene as an app on the
+canvas: an outliner, a viewport, properties, Object and Edit modes, modifiers, materials
+and a Render button. What either side changes, the other sees.
+
+```python
+llm = cycls.LLM().model(...).allowed_tools(["Studio", "Canvas"])
+```
+```
+CYCLS_STUDIO_ENGINE=cycls-render      # the deployed Blender engine
+CYCLS_API_KEY=...                     # already set for deploys
+```
+
+The browser draws the scene on the person's own GPU and does the quick things: moving
+objects, extrude, fill, merge. Blender does what only Blender does right: modifiers,
+booleans, bevel and inset, bpy scripts, import and export, and the render. The scene is one
+document in the workspace (`apps/studio/data/scene.json`, Z up, degrees, bpy field names),
+so the agent edits it with ops rather than coordinates it has to guess. It sees what the
+person selected, too, so "make this gold" just works. Unset the env and the tool isn't
+offered. Details: [docs/notes/studio.md](notes/studio.md).
+
 ### Apple IAP entitlements
 
 For agents that sell subscriptions through Apple In-App Purchase, `.iap(...)`
@@ -409,7 +433,7 @@ async for ev in llm.run(context=context):
 | `.system(str)` | System prompt |
 | `.tools(list)` | Custom tool JSON schemas |
 | `.on(name, fn, label=)` | Register async handler for a custom tool; `label` (input → str) renders the step line in the UI, like `Bash(command)`; the default is the input's first string value |
-| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `Browser`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user. `Browser` is offered only when a browser service is configured (see below) |
+| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `Browser`, `Studio`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user. `Browser` is offered only when a browser service is configured (see below), `Studio` only when `CYCLS_STUDIO_ENGINE` is set |
 | `.instructions(path)` | Workspace instructions file auto-loaded into the system prompt (default `AGENT.md`; `None` disables) |
 | `.skills(*dirs)` | Ship skills with the agent (dirs of `<name>/SKILL.md` folders; `None` disables skills) |
 | `.context(n)` | Model context window in tokens; sets when compaction kicks in (default 1M; set it for smaller models) |

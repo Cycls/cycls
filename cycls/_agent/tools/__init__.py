@@ -12,6 +12,7 @@ from ..connectors import approval_key
 from ..logs import log
 from ..state import _exec_database, app_shelf, apps_db
 from .. import credentials, spill, trash
+from ..studio import tool as studio_tool
 
 TRASH_MOUNT, SHIMS_MOUNT = "/workspace-trash", "/opt/cycls-bin"   # created by the image (Agent._base_run)
 
@@ -378,6 +379,11 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
             from cycls._agent import browser as _browser
             if _browser.configured():
                 tools.append(_BROWSER_TOOL)
+        elif name == "Studio":
+            # The same rule: only with a Blender engine deployment to call.
+            from cycls._agent import studio as _studio
+            if _studio.configured():
+                tools.append(studio_tool.STUDIO_TOOL)
         else:
             tools += _BUILTINS.get(name, [])
     tools += [_normalize_tool(t) for t in (custom or [])]
@@ -795,6 +801,13 @@ async def _exec_build_app(inp, ws):
         return "Build failed: the build service reported success but returned no html."
 
     app_dir = pathlib.Path(workspace) / "apps" / slug
+    try:
+        stamped = "studio" in json.loads((app_dir / "app.json").read_text(encoding="utf-8"))
+    except Exception:
+        stamped = False
+    if stamped:
+        return (f"Error: apps/{slug} is the built-in Studio — change its scene with the `studio` tool, "
+                "or build your app under another slug.")
     fresh = not app_dir.exists()
     app_dir.mkdir(parents=True, exist_ok=True)
     if fresh:   # a reused slug must not inherit the rows of the app that had it
@@ -1040,6 +1053,9 @@ _TOOLS = {
                        once=True, terminal=True, prompt=ASK_GUIDANCE),
     "build_app":  Tool(lambda inp, ws, **_: _exec_build_app(inp, ws),
                        lambda inp: {"tool_name": "Building app", "step": inp.get("slug", "")}),
+    "studio":     Tool(lambda inp, ws, **_: studio_tool.run(inp, ws), studio_tool.step,
+                       prompt=studio_tool.STUDIO_GUIDANCE,
+                       interrupted="The scene may or may not have saved — `inspect` before repeating the change."),
     "skill":      Tool(lambda inp, ws, **_: skills._exec_skill(inp, ws.root),
                        lambda inp: {"tool_name": "Skill", "step": inp.get("name", "")}),
     "web_search": Tool(lambda inp, ws, **_: _exec_web_search(inp),

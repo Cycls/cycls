@@ -1,0 +1,12 @@
+{
+  "name": "cycls-studio",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "schema": "python scripts/schema.py",
+    "build": "vite build && node scripts/install.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": { "preact": "10.29.8", "three": "0.186.1" },
+  "devDependencies": { "@preact/preset-vite": "2.10.6", "vite": "8.3.1", "vite-plugin-singlefile": "2.3.3", "vitest": "5.0.2" }
+}
