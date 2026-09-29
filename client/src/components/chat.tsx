@@ -739,6 +739,11 @@ export function Chat({ chat, onShare, files, account, config }: {
     window.dispatchEvent(new CustomEvent(APP_COMMAND_EVENT, { detail: { path: "*", command: { type: "turn_end" } } }));
   }, [isStreaming]);
   // An app pre-fills the composer; the person decides whether to send it.
+  // An app asking to open a file it made (Studio's render history) — stable, as every
+  // bridge callback must be (a changed one re-attaches the bridge and kills the port).
+  const openRef = useRef(openFileInCanvas);
+  openRef.current = openFileInCanvas;
+  const openFromApp = useCallback((path: string) => { openRef.current(path); }, []);
   const askFromApp = useCallback((text: string) => {
     setInput(text);
     textareaRef.current?.focus();
@@ -1205,6 +1210,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           appData={files.appData}
           callEngine={files.appEngine}
           onAsk={askFromApp}
+          onOpen={openFromApp}
           listFolders={files.listFolders}
           org={files.org}
           onShareFile={files.onShareFile}

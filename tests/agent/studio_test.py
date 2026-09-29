@@ -463,6 +463,16 @@ class TestRoute:
         assert (root / "apps/studio/data/meshes/m-0123456789ab.json").exists()
         assert r["selection"] == {"faces": [2, 3]}                  # what Blender left selected, for Edit mode
 
+    def test_open_is_only_for_what_the_studio_made(self, client, root):
+        r = client.post("/apps/studio/engine", json={"op": "render", "name": "Hero"}).json()
+        assert client.post("/apps/studio/engine", json={"op": "open", "params": {"path": r["path"]}}).json() ==             {"ok": True, "open": "renders/hero.png"}
+        (root / "renders/other.png").write_bytes(PNG)                     # there, but not a Studio render
+        (root / "exports").mkdir(exist_ok=True)
+        (root / "exports/scene.glb").write_bytes(b"glb")
+        for path, code in (("renders/other.png", 404), ("exports/scene.glb", 200), ("../x", 404),
+                           ("apps/studio/index.html", 404), ("renders/../apps/x.png", 404)):
+            assert client.post("/apps/studio/engine", json={"op": "open", "params": {"path": path}}).status_code == code
+
     def test_bad_scene_or_missing_mesh_is_a_400(self, client):
         r = client.post("/apps/studio/engine", json={"op": "snapshot", "scene": {"objects": {"x": {"type": "teapot"}}}})
         assert r.status_code == 400 and "objects.x.type" in r.json()["detail"]

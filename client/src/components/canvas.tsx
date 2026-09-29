@@ -105,7 +105,7 @@ interface PendingSave {
 }
 
 // Without readFile (shared pages have no workspace) this is a plain sandboxed doc.
-function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetchConnector, appData, callEngine, onAsk }: {
+function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetchConnector, appData, callEngine, onAsk, onOpen }: {
   file: CanvasFile;
   content: string;
   shared: boolean;
@@ -116,6 +116,7 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   callEngine?: EngineCall;
   onAsk?: (text: string) => void;
+  onOpen?: (path: string) => void;
 }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const [pending, setPending] = useState<PendingSave | null>(null);
@@ -151,6 +152,7 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
       appData: shared ? undefined : appData,
       callEngine: shared ? undefined : callEngine,
       onAsk: shared ? undefined : onAsk,
+      onOpen: shared ? undefined : onOpen,
       context: {
         theme: document.documentElement.classList.contains("dark") ? "dark" : "light",
         locale: document.documentElement.lang || "en",
@@ -158,7 +160,7 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
     });
     // Every dep must be stable: re-attaching closes the app's port, and a running app
     // never announces again, so its calls would hang.
-  }, [file.path, readForApp, writeFile, shared, canSave, isApp, appData, callEngine, onAsk]);
+  }, [file.path, readForApp, writeFile, shared, canSave, isApp, appData, callEngine, onAsk, onOpen]);
 
   const doc = useMemo(() => (readForApp && isApp ? injectShim(content) : content), [content, readForApp, isApp]);
 
@@ -234,7 +236,7 @@ function NoPreviewCard({ file, onDownload, onShare }: {
   );
 }
 
-export function CanvasDoc({ file, content, error, shared = false, readFile, resolveMedia, writeFile, listFolders, fetchConnector, appData, callEngine, onAsk, onDownload, onShare }: {
+export function CanvasDoc({ file, content, error, shared = false, readFile, resolveMedia, writeFile, listFolders, fetchConnector, appData, callEngine, onAsk, onOpen, onDownload, onShare }: {
   file: CanvasFile;
   resolveMedia?: (path: string) => Promise<string>;
   content: string | null;
@@ -247,6 +249,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, reso
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   callEngine?: EngineCall;
   onAsk?: (text: string) => void;
+  onOpen?: (path: string) => void;
   onDownload?: () => void;
   onShare?: () => void;
 }) {
@@ -261,7 +264,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, reso
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Couldn't load this file.</div>;
   }
   if (isHtml(fileKind(file))) {
-    return <HtmlDoc file={file} content={content ?? ""} shared={shared} readFile={readFile} writeFile={writeFile} listFolders={listFolders} fetchConnector={fetchConnector} appData={appData} callEngine={callEngine} onAsk={onAsk} />;
+    return <HtmlDoc file={file} content={content ?? ""} shared={shared} readFile={readFile} writeFile={writeFile} listFolders={listFolders} fetchConnector={fetchConnector} appData={appData} callEngine={callEngine} onAsk={onAsk} onOpen={onOpen} />;
   }
   // Word .docx renders natively as formatted HTML (docx-preview) from its raw
   // bytes — a document view, not a flat PDF.
@@ -352,7 +355,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, listFolders, fetchConnector, appData, callEngine, onAsk, org, onShareFile, railWidth = 0, reloadKey, working }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, listFolders, fetchConnector, appData, callEngine, onAsk, onOpen, org, onShareFile, railWidth = 0, reloadKey, working }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -378,6 +381,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;   // an app's live call to a connector API
   callEngine?: EngineCall;                       // an app's relayed engine call (Studio → Blender)
   onAsk?: (text: string) => void;                // an app pre-filling the composer
+  onOpen?: (path: string) => void;               // an app opening a file it made (Studio's renders)
   org?: { id: string; name: string } | null;   // lets the share dialog offer the org audience
   onShareFile?: (path: string, audience: string) => Promise<string>;
   railWidth?: number;   // pane docked to our right; the drag must account for it
@@ -457,6 +461,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
           appData={appData}
           callEngine={callEngine}
           onAsk={onAsk}
+          onOpen={onOpen}
           org={org}
           onShareFile={onShareFile}
           reloadKey={reloadKey}
@@ -676,7 +681,7 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
 }
 
 // Keyed by path from the parent, so per-file state resets on tab switch.
-function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, listFolders, fetchConnector, appData, callEngine, onAsk, org, onShareFile, reloadKey }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, listFolders, fetchConnector, appData, callEngine, onAsk, onOpen, org, onShareFile, reloadKey }: {
   file: CanvasFile;
   uploadFile?: (dir: string, file: File) => Promise<void>;
   readFile: (path: string) => Promise<string>;
@@ -687,6 +692,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, listF
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   callEngine?: EngineCall;
   onAsk?: (text: string) => void;
+  onOpen?: (path: string) => void;
   org?: { id: string; name: string } | null;
   onShareFile?: (path: string, audience: string) => Promise<string>;
   reloadKey?: number;
@@ -841,6 +847,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, listF
                      appData={appData}
                      callEngine={callEngine}
                      onAsk={onAsk}
+                     onOpen={onOpen}
                      onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
         )}
       </div>

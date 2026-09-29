@@ -103,3 +103,8 @@ label.btn:hover { background: #3c3c3c; }
 .slot.on { background: #3a5a8c; }
 .swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #0006; flex: none; }
 .slot-tools > div { display: flex; gap: 4px; flex-wrap: wrap; }
+.progress { display: inline-flex; align-items: center; gap: 6px; }
+.bar { width: 90px; height: 5px; border-radius: 3px; background: #fff3; overflow: hidden; display: inline-block; }
+.bar > i { display: block; height: 100%; background: #6aa0ff; transition: width 0.5s linear; }
+.render-row { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; font-size: 11px; }
+.render-row > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

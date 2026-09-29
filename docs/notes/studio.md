@@ -146,6 +146,9 @@ nothing. It allows the app ops only (never `script` or `import`), normalizes the
 and resolves mesh files only from the app's own `data/meshes/`. Budgets per subject: 60 calls a
 minute, 30 renders an hour, one render at a time. It saves what the engine made — `renders/*.png`
 plus the log, mesh files, `exports/*` — before answering, so a tab closed mid-render loses nothing.
+One op never reaches the engine: `open {path}` answers `{open: path}` for a render the log lists or
+a file under `exports/`, and the host bridge opens it on the canvas (the Renders list, the preview's
+Open).
 
 ## The app
 
@@ -170,7 +173,7 @@ its strength — or the flat world colour. Reflections and ambient come from a p
 subjects' centre: the world, past the backdrop, which the lamps light — so chrome on a dark sweep
 reads dark, as in Cycles, not lit by a stand-in room. It re-bakes only when the world, the lamps,
 the set or the subjects' centre change. Against a Cycles render of the same scene the regions
-land within ~10% of each other; what's missing is shadows. The world shows behind the scene too
+land within ~10% of each other. The world shows behind the scene too
 (a colour world is a dome as well — three's own solid-colour background is a unit box at the origin,
 which a probe baked anywhere else sees from outside). Images load once per file: flipped as they
 decode (Blender's v = 0 is the bottom row; an ImageBitmap ignores `flipY`), roughness repacked as
@@ -179,6 +182,24 @@ mapping as `texture.matrix`. A textured primitive is drawn from Blender's evalua
 are Blender's; the Material panel uploads an image (≤ 2048 px, PNG if transparent else JPEG, written
 before the scene names it). Checked against Cycles with a UV checker on five primitives and a
 normal-mapped card — they match.
+
+**Shadows.** three can't shadow the area lamps the studio rigs use, so every lamp gets a proxy that
+only casts (intensity 0: a spot aimed at the subjects, or a fitted directional for a sun), with
+`shadow.intensity` = that lamp's share of the light reaching the subjects — the world's share and the
+set's bounce (its albedo × the lamps) counted in, so a white sweep fills shadows and a black one
+doesn't. The floor/sweep catches them on a `ShadowMaterial` copy that only darkens (the lamps' light
+on it is untouched); subjects cast, and don't self-shadow. Variance shadow maps blurred by the
+penumbra the lamp's size throws (big softboxes cast very soft shadows), plus one straight-down
+contact shadow for the dark patch right under things. Maps re-render only when the scene changes;
+off on touch devices, a View-menu toggle. Against Cycles on the four rigs, the regions under and
+around the subjects land mostly within ±15% (worst ≈25%: VSM blurs evenly, where a real penumbra
+hardens toward contact). They cost ~4 ms a frame on an Intel UHD 630.
+
+**Render feedback.** The Render button's bar is an estimate from this workspace's own log
+(`renders.json`: resolution, samples, Blender's seconds) — `seconds ≈ a + b·(pixels·samples)`,
+least squares over the recent ones (a prior before there are any) plus the round trip, in
+`studio/src/eta.js`; it lands within ~5% here. The Scene panel lists the renders; each opens full
+size on the canvas.
 
 **Object mode.** Click, Shift-click, A; the gizmo and G/R/S; Shift+A add, Shift+D duplicate, X
 delete, H hide; numpad views, frame, camera to view; Solid or Material shading; F12 render and a

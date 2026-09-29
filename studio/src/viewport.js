@@ -39,6 +39,26 @@ function worldMap(name) {
   return worldMaps.get(name);
 }
 
+// The mean radiance (luminance) of a world HDRI, solid-angle weighted — how much light
+// the sky sends, for weighing lamp shadows against it.
+const worldMeans = new Map();
+function worldMean(name) {
+  if (!worldMeans.has(name)) {
+    const bytes = Uint8Array.from(atob(WORLDS[name] || WORLDS.studio), (c) => c.charCodeAt(0));
+    let sum = 0, wsum = 0;
+    for (let y = 0; y < 32; y++) {
+      const w = Math.cos(((y + 0.5) / 32 - 0.5) * Math.PI);
+      for (let x = 0; x < 64; x++) {
+        const i = (y * 64 + x) * 4, f = bytes[i + 3] ? 2 ** (bytes[i + 3] - 136) : 0;
+        sum += w * f * (0.2126 * (bytes[i] + 0.5) + 0.7152 * (bytes[i + 1] + 0.5) + 0.0722 * (bytes[i + 2] + 0.5));
+        wsum += w;
+      }
+    }
+    worldMeans.set(name, sum / wsum);
+  }
+  return worldMeans.get(name);
+}
+
 // The world as Cycles sees it: the HDRI in Blender's equirectangular mapping, in
 // Blender's (Z-up) space, turned by the world's rotation, times its strength.
 function skyDome(w) {
@@ -103,6 +123,11 @@ export class Viewport {
     const r = (this.renderer = new THREE.WebGLRenderer({ antialias: true }));
     r.setPixelRatio(Math.min(devicePixelRatio, 2));
     r.toneMapping = THREE.NeutralToneMapping;        // Khronos PBR Neutral, as the engine renders
+    // Shadows: re-rendered only when the scene changes (they don't depend on the view).
+    this.shadows = !matchMedia?.("(pointer: coarse)")?.matches;
+    r.shadowMap.enabled = true;
+    r.shadowMap.type = THREE.VSMShadowMap;           // blurs wide: studio softboxes cast very soft shadows
+    r.shadowMap.autoUpdate = false;
     r.domElement.tabIndex = 0;
     r.domElement.className = "viewport-canvas";
     host.appendChild(r.domElement);
@@ -152,6 +177,7 @@ export class Viewport {
       if (!e.value && gizmo.object) this.hooks.onTransformEnd?.(gizmo.object.userData.id, trsOf(gizmo.object));
     });
     gizmo.addEventListener("objectChange", () => {
+      this.shadowsDirty = true;
       if (gizmo.object === this.pivot) { this.editDragMove(); return; }
       if (gizmo.object) this.hooks.onTransform?.(gizmo.object.userData.id, trsOf(gizmo.object));
     });
@@ -181,6 +207,7 @@ export class Viewport {
       this.fallback = null;
       if (!this.dirty) return;
       this.dirty = false;
+      if (this.shadowsDirty) { r.shadowMap.needsUpdate = true; this.shadowsDirty = false; }
       r.render(scene, cam);
       diag.frames++;
     };
@@ -251,6 +278,7 @@ export class Viewport {
     if (this.through && !this.throughCamera(doc)) this.leaveCamera();      // camera view follows the camera
     this.scene.environment = shading === "material" ? this.probe(doc) : null;
     this.scene.background = shading === "material" ? this.worldBackground : GREY;      // the world, as it renders
+    this.shadowRig(doc);
     this.highlight();
     this.touch();
   }
@@ -310,6 +338,114 @@ export class Viewport {
     this.probeTarget?.dispose();
     this.probeTarget = target;
     return target.texture;
+  }
+
+  // Shadows that match the render: each lamp gets a proxy that only casts (no light —
+  // three can't shadow the area lamps the studio rigs use), aimed at the subjects, whose
+  // shadow strength is that lamp's share of the light reaching them (the world's share
+  // counted too). The floor/sweep's catcher darkens by all of them together.
+  shadowRig(doc) {
+    const on = this.shadows && this.shading === "material";
+    this.scene.updateMatrixWorld();
+    const box = new THREE.Box3();
+    for (const [id, node] of this.nodes) {
+      const o = doc.objects[id];
+      if ((o.type === "mesh" || o.type === "text") && o.visible && !isBackdrop(doc, id) && node.userData.surface) {
+        box.expandByObject(node.userData.surface);
+      }
+    }
+    const lamps = on && !box.isEmpty() ? Object.entries(doc.objects).filter(([, o]) => o.type === "light" && o.visible) : [];
+    const sphere = box.isEmpty() ? new THREE.Sphere(new THREE.Vector3(0, 0, 1), 1) : box.getBoundingSphere(new THREE.Sphere());
+    const key = JSON.stringify([on, lamps.map(([id, o]) => [id, o.light, ...this.nodes.get(id).matrixWorld.elements.map((v) => +v.toFixed(3))]),
+                                sphere.center.toArray().map((v) => +v.toFixed(2)), +sphere.radius.toFixed(2), doc.world]);
+    this.shadowsDirty = true;
+    if (key === this.rigKey) return;
+    this.rigKey = key;
+    if (this.rig) { this.scene.remove(this.rig); this.rig.traverse((n) => n.shadow?.dispose?.()); }
+    this.rig = new THREE.Group();
+    this.scene.add(this.rig);
+    if (!lamps.length) return;
+
+    const c = sphere.center, R = Math.max(sphere.radius, 0.05);
+    const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
+    const reach = lamps.map(([id, o]) => {                     // irradiance at the subjects, in viewport units
+      this.nodes.get(id).matrixWorld.decompose(pos, quat, scl);
+      const l = o.light, d = Math.max(pos.distanceTo(c), 1e-3);
+      const facing = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
+      const toward = c.clone().sub(pos).normalize();
+      const cos = Math.max(0, facing.dot(toward));
+      const e = l.kind === "sun" ? l.energy * LIGHT.sun
+        : l.kind === "area" ? l.energy * LIGHT.area * cos / (d * d)
+        : l.kind === "spot" ? l.energy * LIGHT.spot / (d * d) * (Math.acos(cos) <= (l.spot_size / 2) * DEG ? 1 : 0)
+        : l.energy * LIGHT.point / (d * d);
+      return { id, l, pos: pos.clone(), dir: l.kind === "sun" ? facing.clone() : toward, d, e };
+    });
+    const w = doc.world || {};
+    const lum = (hex) => { const k = new THREE.Color(hex); return 0.2126 * k.r + 0.7152 * k.g + 0.0722 * k.b; };
+    const sky = (w.strength ?? 0.35) * Math.PI * (w.kind === "color" ? lum(w.color) : worldMean(w.hdri) * 0.5);
+    // Light the set bounces back into the shadows (Cycles has it; a white sweep fills them,
+    // a black one doesn't): the lamps' light times the set's reflectance.
+    const direct = reach.reduce((a, r) => a + r.e, 0);
+    const setAlbedo = Math.max(0, ...Object.entries(doc.objects).filter(([id, o]) => isBackdrop(doc, id) && o.type === "mesh")
+      .map(([, o]) => { const m = doc.materials[(o.materials || [])[0]]; return m ? lum(m.base_color) : 0.6; }));
+    const total = direct * (1 + 1.4 * setAlbedo) + sky;
+    for (const r of reach) {
+      const share = total > 0 ? r.e / total : 0;
+      if (share < 0.02) continue;
+      // Softness: the penumbra the lamp's size throws at the floor (an occluder ~R up),
+      // as a share of what the shadow map covers, in texels.
+      let light, spread, frustum;
+      if (r.l.kind === "sun") {
+        light = new THREE.DirectionalLight(0xffffff, 0);
+        light.position.copy(c).addScaledVector(r.dir, -R * 4);
+        const cam = light.shadow.camera;
+        cam.left = cam.bottom = -R * 1.6; cam.right = cam.top = R * 1.6;
+        cam.near = R * 0.5; cam.far = R * 8 + 50;
+        spread = Math.tan(((r.l.angle ?? 0.5) * DEG) / 2) * 2 * R;
+        frustum = R * 3.2;
+      } else {
+        light = new THREE.SpotLight(0xffffff, 0);
+        light.position.copy(r.pos);
+        light.angle = Math.min(Math.PI / 2.2, Math.atan((R * 1.5) / r.d) * 1.3 + 0.05);
+        light.penumbra = 0;
+        light.shadow.camera.near = Math.max(0.02, r.d - R * 2);
+        light.shadow.camera.far = r.d + R * 30 + 20;
+        const size = r.l.kind === "area" ? Math.max(r.l.size, r.l.size_y || 0) : (r.l.radius ?? 0.1) * 2;
+        spread = size * R / Math.max(r.d - R, R * 0.5);
+        frustum = 2 * r.d * Math.tan(light.angle);
+      }
+      const soft = 0.6 * spread / frustum;                    // penumbra as a share of the map (VSM blurs wide)
+      const res = soft > 0.04 ? 256 : soft > 0.012 ? 512 : 1024;
+      light.shadow.mapSize.set(res, res);
+      light.shadow.radius = Math.max(1.5, Math.min(24, soft * res));
+      light.shadow.blurSamples = 16;
+      light.target.position.copy(c);
+      light.castShadow = true;
+      light.shadow.intensity = Math.min(1, share * 0.75);     // a blurred map over-darkens beside things
+      light.shadow.bias = -0.0005;
+      this.rig.add(light, light.target);
+    }
+    // Contact: right under a thing the floor sees less of the sky and of every big
+    // softbox — the dark, tight patch a uniform blur loses. A soft shadow cast straight down.
+    const contact = new THREE.DirectionalLight(0xffffff, 0);
+    contact.position.set(c.x, c.y, c.z + R * 4);
+    contact.target.position.copy(c);
+    const cam = contact.shadow.camera;
+    cam.left = cam.bottom = -R * 1.6; cam.right = cam.top = R * 1.6;
+    cam.near = R * 0.5; cam.far = R * 8 + 50;
+    contact.castShadow = true;
+    contact.shadow.mapSize.set(256, 256);
+    contact.shadow.radius = 10;
+    contact.shadow.blurSamples = 16;
+    contact.shadow.intensity = Math.min(0.8, 0.2 + sky / Math.max(total, 1e-6) + 0.55 * (1 - setAlbedo));
+    contact.shadow.bias = -0.0005;
+    this.rig.add(contact, contact.target);
+  }
+
+  setShadows(on) {
+    this.shadows = on;
+    this.rigKey = null;
+    if (this.doc) this.sync(this.doc, this.selection, this.shading);
   }
 
   // Rebuild these on the next sync even if the document says nothing changed.
@@ -442,6 +578,21 @@ export class Viewport {
       if (ev) mesh.userData.shared = true;
       node.add(mesh);
       node.userData.surface = mesh;
+      if (!mesh.isLine) {
+        if (isBackdrop(doc, id)) {
+          // The floor/sweep catches shadows on a copy that only darkens (ShadowMaterial):
+          // the lamps' light on it stays what it is.
+          const catcher = new THREE.Mesh(geom, new THREE.ShadowMaterial({ transparent: true, depthWrite: false,
+            polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+          catcher.receiveShadow = true;
+          catcher.renderOrder = 1;
+          catcher.userData = { shared: true, catcher: true };
+          catcher.raycast = () => {};
+          node.add(catcher);
+        } else {
+          mesh.castShadow = true;
+        }
+      }
     } else if (o.type === "light") {
       node.add(this.buildLight(o.light));
     } else if (o.type === "camera") {
@@ -491,6 +642,7 @@ export class Viewport {
     if (prev?.key === key) return;
     prev?.geometry.dispose();
     this.evaluated.set(id, { key, geometry: bufferGeometry(data) });
+    this.shadowsDirty = true;
     if (this.doc) this.sync(this.doc, this.selection, this.shading);
   }
 

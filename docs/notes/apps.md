@@ -276,7 +276,9 @@ Three verbs came with the Studio ([studio.md](studio.md)); none is Studio-specif
 - **`cycls.engine(op, payload)`** — a host relay to `POST /apps/<slug>/engine` with the viewer's
   JWT, for an app that needs a service. The bridge checks `op` against `/^[a-z_]{1,32}$/`, wants a
   plain object and caps it at 2 MB; the route decides everything else (today only the Studio has
-  one). A shared view gets no relay.
+  one). A shared view gets no relay. A reply carrying `open: "renders/…"` or `"exports/…"` (one
+  path segment) makes the host open that file on the canvas (`BridgeOptions.onOpen`) — how the
+  Studio's render history opens a render full size; the route decides what may be named.
 - **`cycls.ask(text)`** — pre-fills the composer and focuses it; never sends. One per 2 s, 1,000
   characters. Tracked as `app_ask`.
 

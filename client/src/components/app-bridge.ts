@@ -115,11 +115,17 @@ export interface BridgeOptions {
   callEngine?: (slug: string, op: string, payload: Record<string, unknown>) => Promise<unknown>;
   // Puts text in the composer for the person to send; never sends it.
   onAsk?: (text: string) => void;
+  // Opens a workspace file on the canvas: an engine reply naming one it made (a render
+  // from the app's history). Only renders/ and exports/ — what an engine route writes.
+  onOpen?: (path: string) => void;
 }
+
+// What an engine reply may ask the host to open.
+export const OPENABLE = /^(renders|exports)\/[^/\\]+$/;
 
 export function attachBridge({
   frame, appPath, readFile, writeFile, requestSave, context, onResize, onError, fetchConnector, appData,
-  callEngine, onAsk,
+  callEngine, onAsk, onOpen,
 }: BridgeOptions) {
   const folder = appScope(appPath);
   if (folder === null) return () => {};
@@ -234,7 +240,10 @@ export function attachBridge({
       try { size = JSON.stringify(payload).length; } catch { return reply({ ok: false, error: "payload must be JSON" }); }
       if (size > MAX_ENGINE_BYTES) return reply({ ok: false, error: "payload too large" });
       try {
-        reply({ ok: true, result: await callEngine(scope.split("/")[1], op, payload as Record<string, unknown>) });
+        const result = await callEngine(scope.split("/")[1], op, payload as Record<string, unknown>);
+        const open = (result as { open?: unknown } | null)?.open;
+        if (onOpen && typeof open === "string" && OPENABLE.test(open)) onOpen(open);
+        reply({ ok: true, result });
       } catch (e) {
         reply({ ok: false, error: String((e as Error)?.message ?? e).slice(0, 500),
                 status: (e as { status?: number })?.status });

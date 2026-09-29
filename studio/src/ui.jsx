@@ -127,7 +127,8 @@ function Header({ s, a }) {
                     { id: "camera", label: "Camera" }, { id: "text", label: "Text" }, { id: "empty", label: "Empty" }];
   const views = [{ id: "front", label: "Front  (1)" }, { id: "right", label: "Right  (3)" }, { id: "top", label: "Top  (7)" },
                  { id: "camera", label: "Camera  (0)" }, "-", { id: "frame-all", label: "Frame all  (Home)" },
-                 { id: "frame-sel", label: "Frame selected  (.)" }, { id: "cam-to-view", label: "Camera to view" }];
+                 { id: "frame-sel", label: "Frame selected  (.)" }, { id: "cam-to-view", label: "Camera to view" }, "-",
+                 { id: "shadows", label: s.shadows ? "✓ Shadows" : "Shadows" }];
   const status = { saved: "Saved", saving: "Saving…", unsaved: "Unsaved", error: "Not saved", loading: "Loading…" }[s.status];
   const editing = s.mode === "edit";
   const sel = [{ id: "all", label: "All  (A)" }, { id: "none", label: "None  (Alt A)" }, { id: "invert", label: "Invert  (Ctrl I)" }];
@@ -142,7 +143,7 @@ function Header({ s, a }) {
           <Menu label="Mesh" items={items(EDIT_OPS)} onPick={(op) => runEditOp(a, op)} /></>
       : <><Menu label="Add" items={addItems} onPick={a.add} />
           <Menu label="Object" items={items(OBJECT_OPS)} onPick={(op) => runObjectOp(a, op)} /></>}
-    <Menu label="View" items={views} onPick={(v) => v === "frame-all" ? a.frame(true) : v === "frame-sel" ? a.frame(false)
+    <Menu label="View" items={views} onPick={(v) => v === "shadows" ? a.setShadows(!s.shadows) : v === "frame-all" ? a.frame(true) : v === "frame-sel" ? a.frame(false)
       : v === "cam-to-view" ? a.cameraToView() : a.view(v)} />
     <div class="seg">{[["translate", "Move", "G"], ["rotate", "Rotate", "R"], ["scale", "Scale", "S"]].map(([m, t, k]) =>
       <button key={m} class={s.gizmo === m ? "on" : ""} title={`${t} (${k})`} onClick={() => a.setGizmo(m)}>{t}</button>)}</div>
@@ -336,7 +337,33 @@ function ScenePanel({ s, a }) {
       <Fields spec={SCHEMA.render} values={s.doc.render} skip={["camera"]}
         onChange={(k, v) => a.update((d) => { d.render[k] = v; }, `render ${k}`)} />
     </Section>
+    <RendersPanel s={s} a={a} />
   </>;
+}
+
+// Elapsed against the estimate; past it, it just keeps honest time.
+function Progress({ p }) {
+  const [, tick] = useState(0);
+  useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 500); return () => clearInterval(t); }, []);
+  const secs = (Date.now() - p.start) / 1000;
+  const pct = Math.min(96, (secs / Math.max(p.eta, 1)) * 100);
+  return <span class="progress"><span class="bar"><i style={{ width: `${pct}%` }} /></span>
+    <span class="muted">{Math.round(secs)}s{secs < p.eta ? ` / ~${p.eta}s` : ""}</span></span>;
+}
+
+// The workspace's renders, newest first — opened full size on the chat's canvas.
+function RendersPanel({ s, a }) {
+  const [list, setList] = useState(null);
+  const count = s.preview?.path;                 // a new render refreshes the list
+  useEffect(() => { let live = true; a.renders().then((r) => live && setList(r)); return () => { live = false; }; }, [count]);
+  if (!list?.length) return null;
+  return <Section title="Renders">
+    {list.slice(-8).reverse().map((r) => <div class="row render-row" key={r.path + r.at}>
+      <span title={r.at}>{r.path.replace(/^renders\//, "")}</span>
+      <span class="muted">{r.resolution?.join("×")} · {Math.round(r.seconds)}s</span>
+      {s.engine && <button onClick={() => a.openFile(r.path)}>Open</button>}
+    </div>)}
+  </Section>;
 }
 
 // Edit mode: what's selected, and the settings the Mesh menu's ops use.
@@ -412,12 +439,13 @@ export function Studio({ app }) {
     <div class="body">
       {panels && s.doc && <Outliner s={s} a={a} />}
       <div class="viewport" ref={host}>
-        {s.busy && <div class="busy"><span class="spin" />{s.busy}</div>}
+        {s.busy && <div class="busy"><span class="spin" /><span>{s.busy}</span>{s.progress && <Progress p={s.progress} />}</div>}
         {!s.engine && s.doc && <div class="hint">Open the Studio from the chat to render and use Blender's tools.</div>}
         <button class="panels-toggle" onClick={() => setPanels(!panels)}>{panels ? "⤢" : "☰"}</button>
         {s.preview && <div class="preview">
           <div class="preview-h"><b>{s.preview.kind}</b>{s.preview.path && <span>{s.preview.path}</span>}
             {s.preview.seconds && <span class="muted">{s.preview.seconds}s</span>}<span class="grow" />
+            {s.preview.path && s.engine && <button title="Open it full size on the canvas" onClick={() => a.openFile(s.preview.path)}>Open</button>}
             <button onClick={a.closePreview}>✕</button></div>
           <img src={s.preview.src} alt={s.preview.kind} />
         </div>}

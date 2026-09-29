@@ -11,6 +11,7 @@ import asyncio
 import base64
 import json
 import pathlib
+import re
 import time
 
 from fastapi import APIRouter, HTTPException, Request
@@ -90,6 +91,18 @@ async def _answer(ws, op, r, body, doc):
     raise AssertionError(op)
 
 
+async def _open(ws, body):
+    """Ask the host to open a render or export on the canvas — one the Studio made (in its
+    render log, or under exports/). No engine call; the bridge does the opening."""
+    path = (body.get("params") or {}).get("path")
+    ok = isinstance(path, str) and re.match(r"^(renders|exports)/[^/\\]+$", path or "") is not None
+    if ok and path.startswith("renders/"):
+        ok = path in await asyncio.to_thread(store.render_paths, ws)
+    if not ok or not (pathlib.Path(ws.root) / path).is_file():
+        raise HTTPException(404, "no such render")
+    return {"ok": True, "open": path}
+
+
 def studio_router(ws_dep, user_dep):
     r = APIRouter()
 
@@ -106,6 +119,8 @@ def studio_router(ws_dep, user_dep):
         except Exception:
             raise HTTPException(400, "body must be a JSON object")
         op = body.get("op")
+        if op == "open":
+            return await _open(ws, body)
         if op not in engine.APP_OPS:
             raise HTTPException(400, f"op: one of {', '.join(sorted(engine.APP_OPS))}")
         params = body.get("params") or {}

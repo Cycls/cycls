@@ -192,6 +192,15 @@ def log_render(ws, entry):
     path.write_text(json.dumps(items[-200:], indent=1), encoding="utf-8")
 
 
+def render_paths(ws):
+    """The renders data/renders.json logs."""
+    try:
+        items = json.loads((_root(ws) / APP_DIR / "data" / "renders.json").read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    return {r.get("path") for r in items if isinstance(r, dict)} if isinstance(items, list) else set()
+
+
 def blobs(ws, doc, op=None):
     """What the engine needs with a scene: its explicit mesh files, and — for the ops that
     draw or read materials back — its images as PNG/JPEG bytes (textures/t-<hash>.<ext>)."""

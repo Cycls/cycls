@@ -6,6 +6,7 @@ import * as bridge from "./bridge.js";
 import * as M from "./mesh.js";
 import { b64Floats, bufferGeometry } from "./primitives.js";
 import { diag, recordError } from "./diag.js";
+import { estimateSeconds } from "./eta.js";
 
 const SESSION = Math.random().toString(36).slice(2, 8);
 const UNDO_LIMIT = 128;
@@ -650,6 +651,7 @@ export function createApp(viewportFactory) {
       if (on) select([]);
     },
     setShading(shading) { set({ shading }); vp?.sync(s.doc, s.selection, shading); },
+    setShadows(on) { set({ shadows: on }); vp?.setShadows(on); },
     setGizmo(mode) { set({ gizmo: mode }); vp?.setGizmoMode(mode); },
     setTool(k, v) { set({ tools: { ...s.tools, [k]: v } }); },
     view(name) { if (name === "camera") { if (!vp.throughCamera(s.doc)) toast("No render camera yet"); } else vp.view(name); },
@@ -711,7 +713,11 @@ export function createApp(viewportFactory) {
     },
     async render(kind = "render") {
       if (!bridge.canEngine()) { toast("Rendering needs the Blender engine — open the Studio from the chat", "error"); return; }
-      set({ busy: kind === "render" ? "Rendering with Blender (Cycles)…" : "Taking a quick look with Blender…" });
+      // An honest bar: how long this workspace's renders have taken for this much work.
+      const [w, h] = s.doc.render.resolution;
+      const eta = kind === "render" ? estimateSeconds(await actions.renders(), w, h, s.doc.render.samples) : 6;
+      set({ busy: kind === "render" ? "Rendering with Blender (Cycles)…" : "Taking a quick look with Blender…",
+            progress: { start: Date.now(), eta } });
       const t0 = performance.now();
       try {
         const r = await engine(kind, { scene: s.doc, name: "studio" });
@@ -721,8 +727,16 @@ export function createApp(viewportFactory) {
       } catch (e) {
         toast(e.message, "error");
       } finally {
-        set({ busy: null });
+        set({ busy: null, progress: null });
       }
+    },
+    // This workspace's render log (data/renders.json), oldest first.
+    async renders() {
+      try { const r = await bridge.readJSON("renders.json"); return Array.isArray(r) ? r : []; } catch { return []; }
+    },
+    // A render (or export) on the chat's canvas — the host opens it; the route checks it's ours.
+    async openFile(path) {
+      try { await bridge.engine("open", { params: { path } }); } catch (e) { toast(e.message, "error"); }
     },
     // The whole scene as a file in exports/ (the route names and saves it).
     async exportAs(format) {
@@ -767,6 +781,7 @@ export function createApp(viewportFactory) {
       });
       await bridge.ready();
       diag.engine = bridge.canEngine();
+      s.shadows = vp.shadows;                  // off on touch devices by default
       try {
         const doc = await bridge.readScene();
         s.doc = doc;

@@ -427,6 +427,18 @@ describe("cycls:engine / cycls:ask / pushed commands (Studio)", () => {
                                     result: { ok: true, preview: "data:image/jpeg;base64,x" } });
   });
 
+  it("opens a render or export the reply names, and nothing else", async () => {
+    const onOpen = vi.fn();
+    const replies = [{ ok: true, open: "renders/hero.png" }, { ok: true, open: "exports/scene.glb" },
+                     { ok: true, open: "../secrets.env" }, { ok: true, open: "apps/other/index.html" },
+                     { ok: true, open: "renders/a/b.png" }, { ok: true }];
+    const callEngine = vi.fn(async () => replies.shift());
+    const { contentWindow } = wiredApp({ callEngine, onOpen });
+    for (let i = 0; i < 6; i++) send(contentWindow, { type: MSG.engine, id: i, op: "open", payload: {} });
+    await settle();
+    expect(onOpen.mock.calls).toEqual([["renders/hero.png"], ["exports/scene.glb"]]);
+  });
+
   it("refuses a bad op, a non-object payload, an oversized one, and a view with no engine", async () => {
     const callEngine = vi.fn(async () => ({}));
     const { posted, contentWindow } = wiredApp({ callEngine });
