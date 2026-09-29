@@ -90,19 +90,22 @@ export function sidecarId(text) {
 // object's: "flat"/"smooth" override the faces' own flags, as the engine does.
 export function displayBuffers(m, shading = "auto") {
   const vn = smoothNormals(m);
-  const pos = [], nor = [], index = [], triFace = [];
+  const pos = [], nor = [], uv = m.uv ? [] : null, index = [], triFace = [];
   m.faces.forEach((f, fi) => {
     const fnorm = faceNormal(m, f);
     const base = pos.length / 3;
     const smooth = shading === "smooth" || (shading !== "flat" && m.smooth[fi]);
-    for (const v of f) {
+    const fuv = m.uv?.[fi];
+    f.forEach((v, c) => {
       pos.push(m.co[v * 3], m.co[v * 3 + 1], m.co[v * 3 + 2]);
       const n = smooth ? vn.slice(v * 3, v * 3 + 3) : fnorm;
       nor.push(n[0], n[1], n[2]);
-    }
+      if (uv) uv.push(fuv ? fuv[c * 2] : 0, fuv ? fuv[c * 2 + 1] : 0);
+    });
     for (let i = 1; i + 1 < f.length; i++) { index.push(base, base + i, base + i + 1); triFace.push(fi); }
   });
-  return { positions: new Float32Array(pos), normals: new Float32Array(nor), index: new Uint32Array(index), triFace };
+  return { positions: new Float32Array(pos), normals: new Float32Array(nor), uv: uv && new Float32Array(uv),
+           index: new Uint32Array(index), triFace };
 }
 
 // ─── geometry helpers ────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 // A long-lived headless-Chrome driver for the Studio dev host (server.py). POST a JS
 // function body to http://127.0.0.1:9400 (drive.sh does) — it runs with helpers in scope
-// (goto, evalApp, evalHost, shot, click, drag, key, send, sleep) and its return value
+// (goto, evalApp, evalHost, shot, click, drag, key, send, sleep, appContext) and its return value
 // comes back as JSON. The app frame is sandboxed, so it is its own process (OOPIF);
 // evalApp finds its context through auto-attach.
 //   node studio/dev/driver.mjs [url]      CHROME=<path to chrome> to override
@@ -125,8 +125,8 @@ createServer(async (req, res) => {
   for await (const chunk of req) body += chunk;
   let out;
   try {
-    const fn = new Function("h", `return (async () => { const {send,page,goto,evalApp,evalHost,shot,mouse,click,drag,key,sleep,contexts,console_} = h; ${body} })()`);
-    out = { ok: true, value: await fn({ send, page, goto, evalApp, evalHost, shot, mouse, click, drag, key, sleep, contexts, console_ }) };
+    const fn = new Function("h", `return (async () => { const {send,page,goto,evalApp,evalHost,shot,mouse,click,drag,key,sleep,contexts,console_,appContext} = h; ${body} })()`);
+    out = { ok: true, value: await fn({ send, page, goto, evalApp, evalHost, shot, mouse, click, drag, key, sleep, contexts, console_, appContext }) };
   } catch (e) {
     out = { ok: false, error: String(e && e.stack || e) };
   }

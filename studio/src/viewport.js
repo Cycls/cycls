@@ -6,7 +6,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { RectAreaLightUniformsLib } from "three/addons/lights/RectAreaLightUniformsLib.js";
 import { primitiveGeometry, bufferGeometry } from "./primitives.js";
-import { deepEqual, isBackdrop } from "./doc.js";
+import { deepEqual, isBackdrop, TEXTURE_FIELDS as TEXTURE_KEYS } from "./doc.js";
 import { displayBuffers, edges, selectedVerts, centroid, moveVerts } from "./mesh.js";
 import { diag } from "./diag.js";
 import { WORLDS } from "./worlds.js";
@@ -16,7 +16,7 @@ const DEG = Math.PI / 180;
 const ORANGE = 0xffa028, ORANGE_DIM = 0xe56d1c;
 const GREY = new THREE.Color("#3d3d3d");            // Solid shading's backdrop, as Blender's
 // Blender watts → three's physical units, tuned by eye against Cycles renders.
-const LIGHT = { point: 0.08, spot: 0.08, area: 0.35, sun: 2.0 };
+const LIGHT = { point: 0.08, spot: 0.08, area: 0.35, sun: 1.0 };   // sun: both are irradiance (W/m²)
 
 // A Blender world HDRI (a 64×32 copy, see scripts/worlds.py) as a texture.
 const worldMaps = new Map();
@@ -42,6 +42,16 @@ function worldMap(name) {
 // The world as Cycles sees it: the HDRI in Blender's equirectangular mapping, in
 // Blender's (Z-up) space, turned by the world's rotation, times its strength.
 function skyDome(w) {
+  // A flat colour world is a dome too: three's own solid-colour background is a unit box at
+  // the origin, which a probe baked anywhere else sees from outside.
+  if (w.kind === "color") {
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(500, 16, 8), new THREE.MeshBasicMaterial({
+      color: new THREE.Color(w.color).multiplyScalar(w.strength ?? 1), side: THREE.BackSide,
+      depthWrite: false, toneMapped: false }));
+    dome.frustumCulled = false;
+    dome.renderOrder = -1;
+    return dome;
+  }
   const mesh = new THREE.Mesh(new THREE.SphereGeometry(500, 32, 16), new THREE.ShaderMaterial({
     uniforms: { map: { value: worldMap(w.hdri) }, strength: { value: w.strength ?? 0.35 },
                 turn: { value: (w.rotation || 0) * DEG } },
@@ -270,10 +280,9 @@ export class Viewport {
     this.probeKey = key;
 
     // The world alone first: it lights the set, then the set and the world light the subjects.
-    const sky = new THREE.Scene(), dome = w.kind === "color" ? null : skyDome(w);
+    const sky = new THREE.Scene(), dome = skyDome(w);
     sky.background = new THREE.Color(0);
-    if (dome) sky.add(dome);
-    else sky.background = new THREE.Color(w.color).multiplyScalar(w.strength ?? 1);
+    sky.add(dome);
     const world = this.pmrem.fromScene(sky, 0, 0.1, 1000);
 
     const s = this.scene, saved = [];
@@ -288,14 +297,16 @@ export class Viewport {
     const [bg, env] = [s.background, s.environment];
     s.background = sky.background;
     s.environment = world.texture;
-    if (dome) s.add(dome);
+    s.add(dome);
     const target = this.pmrem.fromScene(s, 0, 0.1, 1000, { position: at });
-    if (dome) { s.remove(dome); dome.geometry.dispose(); dome.material.dispose(); }
+    s.remove(dome);
+    dome.geometry.dispose();
+    dome.material.dispose();
     [s.background, s.environment] = [bg, env];
     saved.reverse().forEach(([n, v]) => { n.visible = v; });
     this.worldTarget?.dispose();
     this.worldTarget = world;
-    this.worldBackground = dome ? world.texture : sky.background;
+    this.worldBackground = w.kind === "color" ? new THREE.Color(w.color).multiplyScalar(w.strength ?? 1) : world.texture;
     this.probeTarget?.dispose();
     this.probeTarget = target;
     return target.texture;
@@ -309,6 +320,11 @@ export class Viewport {
   drop(id) {
     const node = this.nodes.get(id);
     if (!node) return;
+    const mat = node.userData.surface?.material;
+    if (mat?.userData.owned) {                     // its own placement of any images, and itself
+      for (const k of ["map", "roughnessMap", "normalMap"]) mat[k]?.dispose();
+      mat.dispose();
+    }
     if (this.gizmo.object === node) this.gizmo.detach();
     if (this.edit?.group && this.edit.group.parent === node) node.remove(this.edit.group);   // the cage outlives its node
     for (const child of [...node.children]) if (child.userData.id && child.userData.pick) this.root.add(child);
@@ -324,12 +340,78 @@ export class Viewport {
     const m = mid ? doc.materials[mid] : null;
     if (!m) return (this._default ||= new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5 }));
     const color = new THREE.Color(m.base_color);
-    return new THREE.MeshPhysicalMaterial({
-      color, metalness: m.metallic, roughness: m.roughness, clearcoat: m.coat, ior: m.ior,
+    const maps = this.maps(doc, m);
+    const cutout = !!(maps.map && doc.textures[m.base_color_texture]?.alpha);
+    const mat = new THREE.MeshPhysicalMaterial({
+      color: maps.map ? new THREE.Color(1, 1, 1) : color,       // a linked Base Color replaces the value, as in Blender
+      metalness: m.metallic, roughness: maps.roughnessMap ? 1 : m.roughness, clearcoat: m.coat, ior: m.ior,
       transmission: m.transmission, thickness: m.transmission ? 1 : 0,
       emissive: m.emission ? color : new THREE.Color(0), emissiveIntensity: m.emission,
-      opacity: m.alpha, transparent: m.alpha < 1, side: THREE.DoubleSide,
+      opacity: m.alpha, transparent: m.alpha < 1 || cutout, side: THREE.DoubleSide, ...maps,
     });
+    if (maps.normalMap) mat.normalScale.set(m.normal_strength, m.normal_strength);
+    mat.userData.owned = true;
+    return mat;
+  }
+
+  // A material's images as three textures, placed as Blender's Mapping node places them
+  // (uv' = offset + rotate · (scale · uv)). Images load once per file; each material gets
+  // its own view of one (its placement), sharing the pixels. Until an image arrives the
+  // material draws without it, then the objects using it rebuild.
+  maps(doc, m) {
+    const out = {};
+    const place = (tex) => {
+      const t = tex.clone();
+      const [sx, sy] = m.texture_scale, [tx, ty] = m.texture_offset, a = m.texture_rotation * DEG;
+      const c = Math.cos(a), s = Math.sin(a);
+      t.matrixAutoUpdate = false;
+      t.matrix.set(c * sx, -s * sy, tx, s * sx, c * sy, ty, 0, 0, 1);
+      t.needsUpdate = true;
+      return t;
+    };
+    for (const [field, slot, role] of [["base_color_texture", "map", "color"], ["roughness_texture", "roughnessMap", "rough"],
+                                       ["normal_texture", "normalMap", "normal"]]) {
+      const tex = doc.textures?.[m[field]];
+      if (!tex) continue;
+      const base = this.image(m[field], tex.data, role);
+      if (base) out[slot] = place(base);
+    }
+    return out;
+  }
+
+  image(tid, rel, role) {
+    this.images ||= new Map();
+    const key = `${rel}|${role}`;
+    const hit = this.images.get(key);
+    if (hit) return hit.texture;
+    const entry = { texture: null };
+    this.images.set(key, entry);
+    this.hooks.loadTexture?.(rel).then(async (side) => {
+      const bytes = Uint8Array.from(atob(side.data), (ch) => ch.charCodeAt(0));
+      // Blender's UV v=0 is the image's bottom row; an ImageBitmap ignores flipY, so flip here.
+      const bmp = await createImageBitmap(new Blob([bytes], { type: side.media_type }),
+                                          { imageOrientation: "flipY", premultiplyAlpha: "none", colorSpaceConversion: "none" });
+      let t;
+      if (role === "rough") {
+        // three reads roughness from green; Blender reads a colour image as its luminance.
+        const cv = new OffscreenCanvas(bmp.width, bmp.height), cx = cv.getContext("2d");
+        cx.drawImage(bmp, 0, 0);
+        const img = cx.getImageData(0, 0, bmp.width, bmp.height), d = img.data;
+        for (let i = 0; i < d.length; i += 4) { const l = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]; d[i] = d[i + 1] = d[i + 2] = l; }
+        t = new THREE.DataTexture(d, bmp.width, bmp.height);
+        t.flipY = false;
+      } else {
+        t = new THREE.Texture(bmp);
+      }
+      t.colorSpace = role === "color" ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.anisotropy = 4;
+      t.needsUpdate = true;
+      entry.texture = t;
+      this.invalidate((id, o) => o.material && TEXTURE_KEYS.some((f) => this.doc.materials[o.material]?.[f] === tid));
+      if (this.doc) this.sync(this.doc, this.selection, this.shading);
+    }).catch((e) => { this.images.delete(key); console.warn("texture", rel, e); });
+    return null;
   }
 
   build(id, o, doc) {

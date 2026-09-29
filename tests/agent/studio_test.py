@@ -16,6 +16,18 @@ PNG = b"\x89PNG\r\n\x1a\nfake"
 JPG = b"\xff\xd8\xff\xe0fake-jpeg"
 
 
+def _png(w, h, alpha=False):
+    """A real (tiny) PNG, for header parsing."""
+    import struct
+    import zlib
+    px = (b"\x00" + b"\x80" * (w * (4 if alpha else 3))) * h
+
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6 if alpha else 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(px)) + chunk(b"IEND", b""))
+
+
 def _ws(root):
     return workspace(root.name, root.parent, base=f"file://{root}")
 
@@ -79,6 +91,9 @@ class FakeEngine:
                                     "meshes": {"m-aaaaaaaaaaaa": {"data": "meshes/m-aaaaaaaaaaaa.json"}}})
                 return {"ok": True, "result": {"scene": frag, "notes": []},
                         "files": {"meshes_out/m-aaaaaaaaaaaa.json": b'{"format": "cycls.mesh"}'}}
+            if op == "texture":
+                return {"ok": True, "result": {"file": "texture.png", "width": 64, "height": 32, "alpha": True},
+                        "files": {"texture.png": _png(64, 32, alpha=True)}}
             if op == "export":
                 ext = kw["params"]["format"]
                 return {"ok": True, "result": {"file": f"export.{ext}", "format": ext},
@@ -235,6 +250,60 @@ class TestEdit:
         out = run({"action": "open"}, root)
         assert out["action"] == "open_canvas" and out["path"] == "apps/studio/index.html"
         assert "Scene rev 1" in out["ack"] and "- ring (mesh torus" in out["ack"]     # not "empty"
+
+
+# ─── images ─────────────────────────────────────────────────────────────────
+
+class TestImages:
+    @pytest.fixture
+    def logo(self, root):
+        (root / "uploads").mkdir()
+        (root / "uploads/logo.png").write_bytes(_png(400, 100, alpha=True))
+        return "uploads/logo.png"
+
+    def test_an_image_plane_from_a_workspace_file(self, root, logo):
+        run({"action": "edit", "ops": [{"op": "add", "id": "sign", "image": {"path": logo}, "height": 0.5}]}, root)
+        doc = scene(root)
+        tex = doc["textures"]["logo"]
+        assert (tex["width"], tex["height"], tex["alpha"]) == (400, 100, True)
+        side = json.loads((root / "apps/studio/data" / tex["data"]).read_text())
+        assert side["format"] == "cycls.texture" and side["media_type"] == "image/png"
+        assert base64.b64decode(side["data"]) == (root / logo).read_bytes()
+        sign = doc["objects"]["sign"]
+        assert sign["scale"] == [4.0, 1, 1] and doc["materials"][sign["material"]]["base_color_texture"] == "logo"
+
+    def test_one_image_used_twice_is_one_texture_and_an_unused_one_is_dropped(self, root, logo):
+        run({"action": "edit", "ops": [
+            {"op": "texture", "path": logo, "name": "spare"},
+            {"op": "material", "id": "material", "base_color_texture": {"path": logo},
+             "roughness_texture": {"path": logo}}]}, root)
+        doc = scene(root)
+        assert list(doc["textures"]) == ["logo"]
+        assert doc["materials"]["material"]["roughness_texture"] == "logo"
+
+    def test_other_formats_go_through_blender(self, root, engine):
+        (root / "photo.webp").write_bytes(b"RIFF....WEBP")
+        run({"action": "edit", "ops": [{"op": "material", "id": "material",
+                                        "base_color_texture": {"path": "photo.webp"}}]}, root)
+        call = engine.calls[-1]
+        assert call["op"] == "texture" and list(call["blobs"]) == ["texture_in.webp"]
+        tex = scene(root)["textures"]["photo"]
+        assert (tex["width"], tex["height"], tex["alpha"]) == (64, 32, True)
+
+    def test_drawing_ops_get_the_image_bytes_geometry_ops_dont(self, root, logo, engine):
+        run({"action": "edit", "ops": [{"op": "material", "id": "material", "base_color_texture": {"path": logo}}]},
+            root)
+        rel = scene(root)["textures"]["logo"]["data"]
+        run({"action": "snapshot"}, root)
+        assert engine.calls[-1]["blobs"] == {rel[:-5] + ".png": (root / logo).read_bytes()}
+        run({"action": "apply", "id": "cube", "operation": "convert"}, root)
+        assert engine.calls[-1]["blobs"] == {}
+
+    def test_a_bad_path_names_it(self, root):
+        out = run({"action": "edit", "ops": [{"op": "add", "image": {"path": "nope.png"}}]}, root)
+        assert out.startswith("Error: nope.png does not exist")
+        out = run({"action": "edit", "ops": [{"op": "add", "image": {"path": "../../etc/passwd.png"}}]}, root)
+        assert out.startswith("Error:")
 
 
 # ─── engine actions ─────────────────────────────────────────────────────────

@@ -9,8 +9,8 @@ The document lives at apps/studio/data/scene.json. Conventions:
   three.js reads the same rotation as order 'ZYX').
 - Colours are sRGB hex; the engine converts to linear.
 - Field names follow bpy (energy, lens, levels, width, segments…).
-- objects / meshes / materials are maps keyed by stable ids, so an entry can be
-  diffed, patched and merged on its own. The document on disk is always normalized.
+- objects / meshes / materials / textures are maps keyed by stable ids, so an entry
+  can be diffed, patched and merged on its own. The document on disk is always normalized.
 """
 import copy
 import math
@@ -22,6 +22,7 @@ VERSION = 1
 MAX_PIXELS = 1920 * 1080
 MAX_SAMPLES = 256
 MAX_OBJECTS = 500
+MAX_TEXTURES = 64
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _HEX = re.compile(r"^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
@@ -88,7 +89,17 @@ TEXT = {"body": ("t", "Text"), "size": ("f", 1.0, 1e-3, 1e3), "extrude": ("f", 0
 
 MATERIAL = {"base_color": ("c", "#cccccc"), "metallic": ("f", 0.0, 0, 1), "roughness": ("f", 0.5, 0, 1),
             "coat": ("f", 0.0, 0, 1), "transmission": ("f", 0.0, 0, 1), "ior": ("f", 1.45, 1, 3),
-            "emission": ("f", 0.0, 0, 100), "alpha": ("f", 1.0, 0, 1)}
+            "emission": ("f", 0.0, 0, 100), "alpha": ("f", 1.0, 0, 1),
+            # Image maps (texture ids) and how they sit on the UVs — Blender's Mapping node:
+            # uv' = offset + rotate(rotation) · (scale · uv). A base-colour image with
+            # transparency also drives alpha, as Blender's "Images as Planes" does.
+            "base_color_texture": ("tex", None), "roughness_texture": ("tex", None),
+            "normal_texture": ("tex", None), "normal_strength": ("f", 1.0, 0, 10),
+            "texture_scale": ("v2", [1.0, 1.0]), "texture_offset": ("v2", [0.0, 0.0]),
+            "texture_rotation": ("f", 0.0, -360, 360)}
+TEXTURE_FIELDS = ("base_color_texture", "roughness_texture", "normal_texture")
+# What a preset leaves alone: the name, and the images with their placement.
+_KEPT_BY_PRESET = ("name", *TEXTURE_FIELDS, "normal_strength", "texture_scale", "texture_offset", "texture_rotation")
 
 HDRIS = ("studio", "city", "courtyard", "forest", "interior", "night", "sunrise", "sunset")
 WORLD = {"kind": ("s:hdri|color", "hdri"), "hdri": ("s:" + "|".join(HDRIS), "studio"),
@@ -299,12 +310,16 @@ def _field(spec, value, where):
                 raise SceneError(f"{where}: three true/false values")
             return list(value)
         return [_field(("f", 0, -1e6, 1e6), v, f"{where}[{i}]") for i, v in enumerate(value)]
-    if kind == "id":
+    if kind in ("id", "tex"):
         if value is None:
             return None
         if not isinstance(value, str) or not _ID.match(value):
-            raise SceneError(f"{where}: {value!r} is not an object id")
+            raise SceneError(f"{where}: {value!r} is not {'a texture' if kind == 'tex' else 'an object'} id")
         return value
+    if kind == "v2":
+        if not (isinstance(value, (list, tuple)) and len(value) == 2):
+            raise SceneError(f"{where}: needs 2 values, like {spec[1]}")
+        return [_field(("f", 0, -1e4, 1e4), v, f"{where}[{i}]") for i, v in enumerate(value)]
     if kind == "res":
         if not (isinstance(value, (list, tuple)) and len(value) == 2):
             raise SceneError(f"{where}: [width, height]")
@@ -368,6 +383,24 @@ def _mesh(mid, m):
                 "faces": _field(("i", 0, 0, 10_000_000), m.get("faces", 0), f"{where}.faces"),
                 "bbox": [_vec3(bbox[0], f"{where}.bbox[0]", [0, 0, 0]), _vec3(bbox[1], f"{where}.bbox[1]", [0, 0, 0])]}
     raise SceneError(f"{where}: needs `primitive` (e.g. \"cube\") or `data` (an explicit mesh file)")
+
+
+def _texture(tid, t):
+    """An image the materials use: a `cycls.texture` file under data/textures (named by its
+    content), its size, and whether it has transparency."""
+    where = f"textures.{tid}"
+    if not isinstance(t, dict):
+        raise SceneError(f"{where}: must be an object")
+    unknown = sorted(set(t) - {"name", "data", "width", "height", "alpha"})
+    if unknown:
+        raise SceneError(f"{where}: unknown {', '.join(unknown)}")
+    data = t.get("data")
+    if not (isinstance(data, str) and re.match(r"^textures/t-[0-9a-f]{12}\.json$", data)):
+        raise SceneError(f"{where}.data: must be textures/t-<12 hex>.json")
+    return {"name": str(t.get("name") or tid)[:64], "data": data,
+            "width": _field(("i", 0, 1, 8192), t.get("width", 1), f"{where}.width"),
+            "height": _field(("i", 0, 1, 8192), t.get("height", 1), f"{where}.height"),
+            "alpha": _field(("b", False), bool(t.get("alpha", False)), f"{where}.alpha")}
 
 
 def _material(mid, m):
@@ -479,9 +512,16 @@ def _check_refs(doc):
                 raise SceneError(f"objects.{oid}.modifiers[{i}]: no other object {ref!r}")
         if o.get("dof_focus") is not None and o["dof_focus"] not in objs:
             raise SceneError(f"objects.{oid}.dof_focus: no object {o['dof_focus']!r}")
+    for mid, m in mats.items():
+        for f in TEXTURE_FIELDS:
+            if m[f] is not None and m[f] not in doc["textures"]:
+                raise SceneError(f"materials.{mid}.{f}: no texture {m[f]!r}")
     cam = doc["render"]["camera"]
     if cam is not None and (cam not in objs or objs[cam]["type"] != "camera"):
         raise SceneError(f"render.camera: {cam!r} is not a camera object")
+
+
+SECTIONS = ("objects", "meshes", "materials", "textures")     # the maps of id → entry
 
 
 def normalize(doc):
@@ -490,14 +530,14 @@ def normalize(doc):
         raise SceneError("scene: must be a JSON object")
     doc = migrate(doc)
     unknown = sorted(set(doc) - {"format", "version", "rev", "by", "saved_at", "units", "up",
-                                 "objects", "meshes", "materials", "world", "render"})
+                                 "objects", "meshes", "materials", "textures", "world", "render"})
     if unknown:
         raise SceneError(f"scene: unknown {', '.join(unknown)}")
     out = {"format": FORMAT, "version": VERSION,
            "rev": _field(("i", 0, 0, 10 ** 12), doc.get("rev", 0), "rev"),
            "by": str(doc.get("by") or "")[:64], "saved_at": str(doc.get("saved_at") or "")[:40],
            "units": "m", "up": "Z"}
-    for section in ("objects", "meshes", "materials"):
+    for section in SECTIONS:
         val = doc.get(section) or {}
         if not isinstance(val, dict):
             raise SceneError(f"{section}: must be a map of id → entry")
@@ -506,9 +546,12 @@ def normalize(doc):
                 raise SceneError(f"{section}: {k!r} is not a valid id (letters, digits, _ . -)")
     if len(doc.get("objects") or {}) > MAX_OBJECTS:
         raise SceneError(f"objects: at most {MAX_OBJECTS}")
+    if len(doc.get("textures") or {}) > MAX_TEXTURES:
+        raise SceneError(f"textures: at most {MAX_TEXTURES}")
     out["objects"] = {k: _object(k, v) for k, v in (doc.get("objects") or {}).items()}
     out["meshes"] = {k: _mesh(k, v) for k, v in (doc.get("meshes") or {}).items()}
     out["materials"] = {k: _material(k, v) for k, v in (doc.get("materials") or {}).items()}
+    out["textures"] = {k: _texture(k, v) for k, v in (doc.get("textures") or {}).items()}
     out["world"] = _fill(WORLD, doc.get("world"), "world")
     out["render"] = _fill(RENDER, doc.get("render"), "render")
     _check_refs(out)
@@ -634,7 +677,7 @@ def _fov_short(doc, cam):
 
 # ─────────────────────────────── ops ──────────────────────────────────────────
 
-_SINGULAR = {"objects": "object", "meshes": "mesh", "materials": "material"}
+_SINGULAR = {"objects": "object", "meshes": "mesh", "materials": "material", "textures": "texture"}
 
 
 def _new_id(doc, section, base):
@@ -676,7 +719,7 @@ def _on_floor(doc, oid):
 
 
 def _op_add(doc, op, where, selection):
-    t = str(op.get("type") or ("mesh" if op.get("primitive") or op.get("mesh") else
+    t = str(op.get("type") or ("mesh" if op.get("primitive") or op.get("mesh") or op.get("image") else
                                next((k for k in ("light", "camera", "text") if k in op), "empty"))).lower()
     oid = op.get("id") or _new_id(doc, "objects", op.get("name") or op.get("primitive") or t)
     if oid in doc["objects"]:
@@ -685,7 +728,7 @@ def _op_add(doc, op, where, selection):
                               "shading", "modifiers", "light", "camera", "text", "dof_focus") if k in op}
     obj["type"] = t
     obj.setdefault("name", str(op.get("name") or oid).replace("_", " ").title())
-    if t == "mesh":
+    if t == "mesh" and op.get("image") is None:
         if op.get("primitive"):
             mid = _new_id(doc, "meshes", oid)
             doc["meshes"][mid] = {"primitive": op["primitive"], **(op.get("params") or {})}
@@ -694,6 +737,24 @@ def _op_add(doc, op, where, selection):
             obj["mesh"] = op["mesh"]
         else:
             raise SceneError(f"{where}: a mesh needs `primitive` (e.g. \"torus\") or an existing `mesh` id")
+    if op.get("image") is not None:
+        if t != "mesh" or op.get("primitive") not in (None, "plane"):
+            raise SceneError(f"{where}.image: an image goes on a plane — drop `primitive`, or use \"plane\"")
+        tex = doc["textures"].get(op["image"]) if isinstance(op["image"], str) else None
+        if tex is None:
+            raise SceneError(f"{where}.image: no texture {op['image']!r} — add it first with the `texture` op")
+        h = _field(("f", 1.0, 1e-3, 1e3), op.get("height", 1.0), f"{where}.height")
+        mid = _new_id(doc, "meshes", oid)
+        doc["meshes"][mid] = {"primitive": "plane", "size": h}
+        obj["mesh"] = mid
+        obj.setdefault("rotation", [90, 0, 0])             # standing up, facing −Y (the front)
+        sx, sy, sz = _vec3(op.get("scale"), f"{where}.scale", [1, 1, 1])
+        obj["scale"] = [sx * tex["width"] / tex["height"], sy, sz]   # a given scale sizes it, never squashes it
+        if op.get("material") is None:
+            mat_id = _new_id(doc, "materials", f"{oid}_image")
+            doc["materials"][mat_id] = {"name": tex["name"], "base_color": "#ffffff", "roughness": 0.5,
+                                        "base_color_texture": op["image"]}
+            op = {**op, "material": mat_id}
     if t in ("mesh", "text"):
         mat = op.get("material")
         if isinstance(mat, (dict, str)) and not (isinstance(mat, str) and mat in doc["materials"]):
@@ -790,8 +851,8 @@ def _op_material(doc, op, where, selection):
     spec = {k: v for k, v in op.items() if k not in ("op", "id", "assign")}
     mid = op.get("id") or _new_id(doc, "materials", spec.get("name") or spec.get("preset") or "material")
     current = doc["materials"].get(mid, {})
-    if spec.get("preset"):                          # a preset resets what it defines
-        current = {k: v for k, v in current.items() if k in ("name",)}
+    if spec.get("preset"):                          # a preset resets what it defines — not the images
+        current = {k: v for k, v in current.items() if k in _KEPT_BY_PRESET}
     doc["materials"][mid] = {**current, **spec}
     touched = [f"materials.{mid}"]
     if op.get("assign") is not None:
@@ -802,6 +863,16 @@ def _op_material(doc, op, where, selection):
             touched.append(f"objects.{oid}")
     doc.update(normalize(doc))
     return touched
+
+
+def _op_texture(doc, op, where, selection):
+    """Register an image file the caller already stored (the tool resolves a workspace
+    `path` into `data`/`width`/`height`/`alpha` first). Unused textures are dropped at the
+    end of the batch, so add one and use it in the same edit."""
+    tid = op.get("id") or _new_id(doc, "textures", op.get("name") or "texture")
+    doc["textures"][tid] = {k: op[k] for k in ("name", "data", "width", "height", "alpha") if k in op}
+    doc.update(normalize(doc))
+    return [f"textures.{tid}"]
 
 
 def _op_modifier(doc, op, where, selection):
@@ -962,7 +1033,8 @@ def _op_preset(doc, op, where, selection):
 
 OPS = {"add": _op_add, "set": _op_set, "delete": _op_delete, "duplicate": _op_duplicate,
        "material": _op_material, "modifier": _op_modifier, "world": _op_section("world"),
-       "render": _op_section("render"), "look_at": _op_look_at, "frame": _op_frame, "preset": _op_preset}
+       "render": _op_section("render"), "look_at": _op_look_at, "frame": _op_frame, "preset": _op_preset,
+       "texture": _op_texture}
 
 
 def apply_ops(doc, ops, selection=None):
@@ -983,7 +1055,8 @@ def apply_ops(doc, ops, selection=None):
         except SceneError as e:
             msg = str(e)
             raise SceneError(msg if msg.startswith(where) else f"{where} ({op['op']}): {msg}") from None
-    return work, list(dict.fromkeys(touched))
+    gone = {f"textures.{t}" for t in prune_textures(work)}
+    return work, [k for k in dict.fromkeys(touched) if k not in gone]
 
 
 def layout_check(doc, tol=0.02):
@@ -1045,12 +1118,21 @@ def prune_meshes(doc):
     return doc
 
 
+def prune_textures(doc):
+    """Drop texture entries no material uses; returns their ids."""
+    used = {m[f] for m in doc["materials"].values() for f in TEXTURE_FIELDS if m.get(f)}
+    gone = [t for t in doc.get("textures", {}) if t not in used]
+    for t in gone:
+        del doc["textures"][t]
+    return gone
+
+
 def merge_fragment(doc, frag):
     """Add another scene's objects/meshes/materials (an import) to `doc`,
     renaming ids that collide and rewriting every reference to match."""
     doc, frag = copy.deepcopy(doc), normalize(frag)
     renames = {}
-    for sec in ("meshes", "materials", "objects"):
+    for sec in ("textures", "meshes", "materials", "objects"):
         renames[sec] = {}
         taken = set(doc[sec]) | set(frag[sec])
         for k in frag[sec]:
@@ -1077,9 +1159,14 @@ def merge_fragment(doc, frag):
                 if mod.get(ref):
                     mod[ref] = renames["objects"][mod[ref]]
         doc["objects"][renames["objects"][k]] = o
-    for sec in ("meshes", "materials"):
+    for sec in ("textures", "meshes", "materials"):
         for k, v in frag[sec].items():
-            doc[sec][renames[sec][k]] = copy.deepcopy(v)
+            v = copy.deepcopy(v)
+            if sec == "materials":
+                for f in TEXTURE_FIELDS:
+                    if v.get(f):
+                        v[f] = renames["textures"][v[f]]
+            doc[sec][renames[sec][k]] = v
     return normalize(doc), [renames["objects"][k] for k in frag["objects"]]
 
 
@@ -1087,7 +1174,7 @@ def merge_fragment(doc, frag):
 
 def _entries(doc):
     out = {}
-    for sec in ("objects", "meshes", "materials"):
+    for sec in SECTIONS:
         for k, v in doc.get(sec, {}).items():
             out[f"{sec}.{k}"] = v
     for sec in ("world", "render"):
@@ -1136,9 +1223,9 @@ def merge3(base, local, remote):
             conflicts.append(key)
         if val is not None:
             merged[key] = val
-    out = {k: v for k, v in local.items() if k not in ("objects", "meshes", "materials", "world", "render")}
+    out = {k: v for k, v in local.items() if k not in (*SECTIONS, "world", "render")}
     out["rev"] = max(local.get("rev", 0), remote.get("rev", 0))
-    for sec in ("objects", "meshes", "materials"):
+    for sec in SECTIONS:
         out[sec] = {}
     for key, val in merged.items():
         if "." in key:
@@ -1176,6 +1263,9 @@ def summary(doc, selection=None):
         if o["name"] != oid:
             bits.append(f"\"{o['name']}\"")
         bits.append(f"at {_fmt(o['location'])}")
+        if o["type"] in ("mesh", "text"):
+            (x0, y0, z0), (x1, y1, z1) = world_bounds(doc, oid)
+            bits.append(f"size {_fmt([x1 - x0, y1 - y0, z1 - z0])}")
         if any(o["rotation"]):
             bits.append(f"rot {_fmt(o['rotation'])}")
         if o["scale"] != [1, 1, 1]:
@@ -1195,7 +1285,11 @@ def summary(doc, selection=None):
         lines.append("Materials: " + "; ".join(
             f"{k} {m['base_color']} metal {m['metallic']:g} rough {m['roughness']:g}"
             + (f" glass" if m["transmission"] > 0.5 else "") + (f" emit {m['emission']:g}" if m["emission"] else "")
+            + "".join(f" {f[:-8].replace('_', ' ')} image {m[f]}" for f in TEXTURE_FIELDS if m.get(f))
             for k, m in doc["materials"].items()))
+    if doc.get("textures"):
+        lines.append("Textures: " + "; ".join(f"{k} {t['width']}x{t['height']}" + (" with alpha" if t["alpha"] else "")
+                                              for k, t in doc["textures"].items()))
     w, r = doc["world"], doc["render"]
     lines.append(f"World: {w['kind']} {w['hdri'] if w['kind'] == 'hdri' else w['color']} strength {w['strength']:g}. "
                  f"Render: camera {r['camera']}, {r['resolution'][0]}x{r['resolution'][1]}, {r['samples']} samples.")
@@ -1222,8 +1316,14 @@ def _spec_schema(specs):
             props[k] = {"type": "array", "minItems": 3, "maxItems": 3, "default": default}
         elif kind == "id":
             props[k] = {"type": ["string", "null"], "default": default}
+        elif kind == "tex":
+            props[k] = {"type": ["string", "null"], "default": default, "x-ref": "textures"}
+        elif kind == "v2":
+            props[k] = {"type": "array", "minItems": 2, "maxItems": 2, "default": default}
         elif kind == "res":
             props[k] = {"type": "array", "minItems": 2, "maxItems": 2, "default": default}
+        else:
+            raise AssertionError(f"no schema for field kind {kind!r}")
     return {"type": "object", "properties": props, "additionalProperties": False}
 
 

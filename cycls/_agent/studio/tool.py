@@ -36,7 +36,8 @@ STUDIO_TOOL = {
         "- apply {id, operation, params?}: a destructive mesh operation by real Blender: modifier_apply "
         "{index}, convert, bevel {selection, width, segments}, subdivide {selection, cuts}, inset "
         "{selection, thickness}, triangulate, merge_by_distance, recalc_normals, remesh {voxel_size}, "
-        "decimate {ratio}, boolean {object, operation}, join {others}. selection: \"all\", {faces:[i]}, "
+        "decimate {ratio}, boolean {object, operation}, join {others}, uv {method: cube|cylinder|sphere|reset, "
+        "scale?} (re-project UVs; primitives already have Blender's). selection: \"all\", {faces:[i]}, "
         "{edges:[[a,b]]}, {verts:[i]} — or \"selected\": what the user has selected in Edit mode (inspect "
         "says when there is something).\n"
         "- script {code}: run Blender Python (bpy) against the scene when no op can express it — e.g. a "
@@ -48,7 +49,8 @@ STUDIO_TOOL = {
         "- open: show the Studio app on the canvas.\n\n"
         "Edit ops (each an object with \"op\"):\n"
         "- add {id?, name?, primitive (plane|grid|circle|cube|uv_sphere|ico_sphere|cylinder|cone|torus|monkey), "
-        "params?, material?, location?, rotation?, scale?, parent?, on_floor?, look_at?} — or type "
+        "params?, material?, location?, rotation?, scale?, parent?, on_floor?, look_at?} — or {image, height?}: "
+        "an upright plane at the image's aspect showing it (logos, posters, labels) — or type "
         "\"light\" {light:{kind: point|sun|spot|area, energy (W), color, size...}}, \"camera\" "
         "{camera:{lens (mm), dof_fstop}}, \"text\" {text:{body, size, extrude, bevel_depth}}, \"empty\". "
         "material: a preset (gold, brushed-gold, chrome, brushed-steel, copper, plastic, matte, ceramic, "
@@ -56,7 +58,12 @@ STUDIO_TOOL = {
         "- set {id, ...fields to change, params?: primitive parameters, on_floor?}\n"
         "- delete {id} · duplicate {id, offset?}\n"
         "- material {id?, name?, preset?, base_color?, metallic?, roughness?, coat?, transmission?, ior?, "
-        "emission?, assign?: object id(s)}\n"
+        "emission?, alpha?, base_color_texture?, roughness_texture?, normal_texture?, normal_strength?, "
+        "texture_scale? [u,v], texture_offset? [u,v], texture_rotation?, assign?: object id(s)}. A *_texture is a "
+        "texture id or {path} of an image in the workspace (png, jpg, webp…) — e.g. what the user attached; "
+        "texture_scale tiles it (wood, fabric). A preset keeps the images.\n"
+        "- texture {path, id?, name?}: add an image as a texture id to use in the same edit (unused ones are dropped). "
+        "Anywhere an image goes, {path} works too.\n"
         "- modifier {object, action: add|set|remove|move, type (subsurf|bevel|mirror|array|solidify|boolean|"
         "remesh|decimate|weld|triangulate|wireframe), params?, index?, to?}\n"
         "- look_at {id, target: object id or [x,y,z]} · frame {camera?, targets?, angle?, margin?}\n"
@@ -64,10 +71,9 @@ STUDIO_TOOL = {
         "- preset {studio: {lighting: studio-3point|softbox|dramatic|rim, backdrop: hex, camera: "
         "front|front-3/4|side|top|low|hero}} — a photo-studio sweep, light rig, framed camera and world.\n"
         "Use id \"selected\" for whatever the user has selected in the Studio.\n\n"
-        "Limits: materials are uniform Principled surfaces (colour, metal, roughness, coat, glass, "
-        "emission) — no textures, image maps or node networks yet. A script's node materials come back "
-        "flattened to their plain values and procedural geometry baked to meshes; the result says so, "
-        "and more scripts won't change that."
+        "Limits: materials are Principled surfaces with optional image maps (base colour — its transparency "
+        "too — roughness, normal) on the object's UVs. Other node networks come back flattened to their plain "
+        "values and procedural geometry baked to meshes; the result says so, and more scripts won't change that."
     ),
     "input_schema": {
         "type": "object",
@@ -100,6 +106,7 @@ Build scenes with the `studio` tool; the user watches them appear in the Studio 
 - Z is up, metres, degrees. Stand things on the ground with `on_floor: true`; aim cameras and lights with `look_at`, and re-frame with `frame` — don't compute Euler angles by hand.
 - "this"/"that"/"it" usually means what the user selected: use id "selected". `inspect` shows the selection.
 - Check your work with `snapshot` (5 s) before a final `render` (25-60 s). Look at the preview: framing, overlaps, floating objects, materials.
+- An image the user gives you (a logo, a label, a photo): `add {image: {path}}` for a flat sign or label in front of a surface, or a material's `base_color_texture: {path}` to wrap it round an object. Tile patterns with `texture_scale`.
 - Use `script` only for what ops can't express; never edit apps/studio/data/ files directly.
 - After a render, describe what you made in a sentence and offer one concrete variation."""
 
@@ -188,11 +195,101 @@ async def _save(ws, before, after, label):
     return saved, _patch_event(before, saved, label)
 
 
-def _write_meshes(ws, files):
+def _write_outputs(ws, files):
+    """Mesh and image files a script or import made, into data/ (content-named)."""
     for rel, data in files.items():
         m = re.match(r"^meshes_out/(m-[0-9a-f]{12})\.json$", rel)
         if m:
             store.write_mesh(ws, m.group(1), data)
+        t = re.match(r"^textures_out/t-[0-9a-f]{12}\.(png|jpg)$", rel)
+        if t:
+            store.write_texture(ws, data, "image/png" if t.group(1) == "png" else "image/jpeg")
+
+
+IMAGE_EXTS = ("png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "tga", "exr", "hdr")
+
+
+def _png_alpha(data):
+    """Could this PNG be transparent? RGBA / grey+alpha colour types, or a tRNS chunk."""
+    if data[25:26] in (b"\x04", b"\x06"):
+        return True
+    idat = data.find(b"IDAT")
+    return b"tRNS" in data[:idat if idat > 0 else 4096]
+
+
+async def _image_texture(ws, rel):
+    """A workspace image as a stored texture: PNG/JPEG up to 2048 px go in as they are,
+    anything else (bigger, webp, tiff…) through Blender first."""
+    from ..tools import _resolve_path
+    try:
+        path = _resolve_path(rel, ws.root)
+    except ValueError as e:
+        raise S.SceneError(f"{rel}: {e}") from None
+    ext = path.suffix.lower().lstrip(".")
+    if ext not in IMAGE_EXTS:
+        raise S.SceneError(f"{rel}: images are {', '.join(IMAGE_EXTS)}")
+    if not path.is_file():
+        raise S.SceneError(f"{rel} does not exist")
+    if path.stat().st_size > MAX_IMPORT:
+        raise S.SceneError(f"{rel} is over 24 MB")
+    data = await asyncio.to_thread(path.read_bytes)
+    media = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext)
+    size = None
+    if media:
+        try:
+            size = store.image_size(data)
+        except S.SceneError:
+            media = None
+    if media and max(size) <= 2048 and len(data) <= store.MAX_TEXTURE_BYTES:
+        w, h = size
+        alpha = media == "image/png" and _png_alpha(data)
+    else:
+        r = await engine.call("texture", {}, blobs={f"texture_in.{ext}": data}, params={"ext": ext})
+        res = r["result"]
+        data, media = r["files"][res["file"]], "image/png" if res["file"].endswith(".png") else "image/jpeg"
+        w, h, alpha = res["width"], res["height"], res["alpha"]
+    stored = await asyncio.to_thread(store.write_texture, ws, data, media)
+    name = re.sub(r"^[0-9a-f]{8}-", "", path.stem)[:64] or "image"      # a chat upload's hash prefix
+    return {"name": name, "data": stored, "width": w, "height": h, "alpha": bool(alpha)}
+
+
+async def _resolve_images(ws, ops, doc):
+    """`{path}` wherever an image goes → a `texture` op ahead of it and the new id in its place."""
+    if not isinstance(ops, list):
+        return ops
+    out, made, taken = [], {}, set(doc["textures"])
+
+    async def texture_id(ref, name=None):
+        rel = ref["path"]
+        if rel not in made:
+            spec = await _image_texture(ws, rel)
+            tid = S._new_id({"textures": dict.fromkeys(taken)}, "textures", name or spec["name"])
+            taken.add(tid)
+            made[rel] = tid
+            out.append({"op": "texture", "id": tid, **spec})
+        return made[rel]
+
+    for op in ops:
+        if not isinstance(op, dict):
+            out.append(op)
+            continue
+        op = dict(op)
+        if op.get("op") == "texture" and isinstance(op.get("path"), str):
+            spec = await _image_texture(ws, op.pop("path"))
+            tid = op.get("id") or S._new_id({"textures": dict.fromkeys(taken)}, "textures", op.get("name") or spec["name"])
+            taken.add(tid)
+            out.append({**spec, **{k: v for k, v in op.items() if k in ("name",)}, "op": "texture", "id": tid})
+            continue
+        for holder in (op, op.get("material") if isinstance(op.get("material"), dict) else None):
+            if holder is None:
+                continue
+            for f in (*S.TEXTURE_FIELDS, "image"):
+                if isinstance(holder.get(f), dict) and isinstance(holder[f].get("path"), str):
+                    holder[f] = await texture_id(holder[f])
+        if isinstance(op.get("material"), dict):
+            op["material"] = dict(op["material"])
+        out.append(op)
+    return out
 
 
 def _layout(doc):
@@ -212,6 +309,7 @@ async def _edit(ws, inp):
     sel = await _selection(ws)
     async with store.lock(ws):
         before = await store.load(ws)
+        ops = await _resolve_images(ws, ops, before)
         after, touched = S.apply_ops(before, ops, selection=sel)
         if not touched or S.diff(before, after) == {"set": {}, "delete": []}:
             return "No change — the scene already looked like that."
@@ -219,7 +317,7 @@ async def _edit(ws, inp):
     shown = ", ".join(touched[:12]) + ("…" if len(touched) > 12 else "")
     ack = f"Saved rev {saved['rev']}: changed {shown}." + _layout(saved)
     if inp.get("snapshot"):
-        r = await engine.call("snapshot", saved, blobs=store.blobs(ws, saved), params={"samples": 12})
+        r = await engine.call("snapshot", saved, blobs=store.blobs(ws, saved, "snapshot"), params={"samples": 12})
         jpg = r["files"]["preview.jpg"]
         snap = _command({"type": "snapshot", "rev": saved["rev"],
                          "preview": "data:image/jpeg;base64," + base64.b64encode(jpg).decode()})
@@ -231,7 +329,8 @@ async def _edit(ws, inp):
 
 async def _snapshot(ws, inp):
     doc = await store.load(ws)
-    r = await engine.call("snapshot", doc, blobs=store.blobs(ws, doc), params={"samples": inp.get("samples") or 12})
+    r = await engine.call("snapshot", doc, blobs=store.blobs(ws, doc, "snapshot"),
+                          params={"samples": inp.get("samples") or 12})
     jpg = r["files"]["preview.jpg"]
     ui = _command({"type": "snapshot", "rev": doc["rev"],
                    "preview": "data:image/jpeg;base64," + base64.b64encode(jpg).decode()})
@@ -244,7 +343,7 @@ async def _snapshot(ws, inp):
 async def _render(ws, inp):
     doc = await store.load(ws)
     params = {k: inp[k] for k in ("resolution", "samples") if inp.get(k)}
-    r = await engine.call("render", doc, blobs=store.blobs(ws, doc), params=params)
+    r = await engine.call("render", doc, blobs=store.blobs(ws, doc, "render"), params=params)
     res = r["result"]
     png, jpg = r["files"]["render.png"], r["files"]["preview.jpg"]
     rel = _free(ws.root, "renders", _slug(inp.get("name"), "studio"), "png")
@@ -284,7 +383,7 @@ async def _apply(ws, inp):
             if ev[2] is None:
                 return 'Error: too many elements selected to pass on — use "all" or explicit indices.'
             params["selection"] = {_ELEMENTS[ev[1]][0]: ev[2]}
-        r = await engine.call("apply", before, blobs=store.blobs(ws, before),
+        r = await engine.call("apply", before, blobs=store.blobs(ws, before, "apply"),
                               params={"id": oid, "op": op, **params})
         res = r["result"]
         rel = store.write_mesh(ws, res["mesh_id"], r["files"]["mesh.json"])
@@ -315,9 +414,9 @@ async def _script(ws, inp):
         return "Error: script needs `code` (Blender Python)."
     async with store.lock(ws):
         before = await store.load(ws)
-        r = await engine.call("script", before, blobs=store.blobs(ws, before), params={"code": code})
+        r = await engine.call("script", before, blobs=store.blobs(ws, before, "script"), params={"code": code})
         res = r["result"]
-        _write_meshes(ws, r["files"])
+        _write_outputs(ws, r["files"])
         after = S.prune_meshes(S.normalize(res["scene"]))
         if S.diff(before, after) == {"set": {}, "delete": []}:
             return "The script ran but changed nothing in the scene." + _notes(res.get("notes")) + (
@@ -346,7 +445,7 @@ async def _import(ws, inp):
     data = await asyncio.to_thread(path.read_bytes)
     r = await engine.call("import", {}, blobs={f"import.{ext}": data}, params={"ext": ext})
     res = r["result"]
-    _write_meshes(ws, r["files"])
+    _write_outputs(ws, r["files"])
     async with store.lock(ws):
         before = await store.load(ws)
         frag = res["scene"]
@@ -363,7 +462,7 @@ async def _export(ws, inp):
     if fmt not in EXPORT_EXTS:
         return f"Error: format is one of {', '.join(EXPORT_EXTS)}."
     doc = await store.load(ws)
-    r = await engine.call("export", doc, blobs=store.blobs(ws, doc), params={"format": fmt})
+    r = await engine.call("export", doc, blobs=store.blobs(ws, doc, "export"), params={"format": fmt})
     data = r["files"][r["result"]["file"]]
     rel = _free(ws.root, "exports", _slug(inp.get("name"), "scene"), EXPORT_EXTS[fmt])
     await asyncio.to_thread((pathlib.Path(ws.root) / rel).write_bytes, data)

@@ -1,6 +1,7 @@
 // The controller: the document, its history, and keeping it in step with disk,
 // the agent, the viewport and Blender.
-import { SCHEMA, clone, deepEqual, merge3, patch, addObject, duplicate, remove, make, newId, isBackdrop } from "./doc.js";
+import { SCHEMA, clone, deepEqual, merge3, patch, addObject, duplicate, remove, make, newId, isBackdrop,
+         hasTexture, pruneTextures } from "./doc.js";
 import * as bridge from "./bridge.js";
 import * as M from "./mesh.js";
 import { b64Floats, bufferGeometry } from "./primitives.js";
@@ -13,11 +14,27 @@ const VIEW_ITEMS = 2000;               // element selections past this go to the
 const KEEP = ["name", "parent", "location", "rotation", "scale", "visible", "renderable", "material", "shading", "modifiers"];
 // Edit-mode Blender ops that work on the selection (the rest take the whole mesh);
 // the first three need one, the others take "nothing selected" as everything.
-const ON_SELECTION = new Set(["bevel", "inset", "subdivide", "triangulate", "merge_by_distance", "recalc_normals"]);
+const ON_SELECTION = new Set(["bevel", "inset", "subdivide", "triangulate", "merge_by_distance", "recalc_normals", "uv"]);
 const NEEDS_SELECTION = new Set(["bevel", "inset", "subdivide"]);
 
 export const TOOL_DEFAULTS = { width: 0.05, segments: 2, thickness: 0.05, depth: 0, cuts: 1, distance: 0.0001,
                                voxel_size: 0.05, ratio: 0.5 };
+
+async function digest(bytes) {
+  if (globalThis.crypto?.subtle) {
+    const h = await crypto.subtle.digest("SHA-256", bytes);
+    return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  let a = 0x811c9dc5, b = 0x01000193;                       // no WebCrypto here: FNV-1a twice
+  for (const x of bytes) { a = Math.imul(a ^ x, 0x01000193) >>> 0; b = Math.imul(b ^ x ^ 0x5a, 0x01000193) >>> 0; }
+  return (a.toString(16).padStart(8, "0") + b.toString(16).padStart(8, "0"));
+}
+
+function toBase64(bytes) {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
 
 export function createApp(viewportFactory) {
   const listeners = new Set();
@@ -417,7 +434,7 @@ export function createApp(viewportFactory) {
     },
     // Bevel, inset, subdivide…: Blender does them on the saved mesh, then Edit mode
     // picks up the result.
-    async blender(op, label) {
+    async blender(op, label, extra = {}) {
       const e = s.edit;
       if (!e) return;
       if (!bridge.canEngine()) { toast("That needs the Blender engine — open the Studio from the chat", "error"); return; }
@@ -429,7 +446,7 @@ export function createApp(viewportFactory) {
       const t = s.tools;
       const params = { bevel: { width: t.width, segments: t.segments }, inset: { thickness: t.thickness, depth: t.depth },
                        subdivide: { cuts: t.cuts }, merge_by_distance: { distance: t.distance },
-                       remesh: { voxel_size: t.voxel_size }, decimate: { ratio: t.ratio } }[op] || {};
+                       remesh: { voxel_size: t.voxel_size }, decimate: { ratio: t.ratio } }[op] || { ...extra };
       if (ON_SELECTION.has(op)) params.selection = M.engineSelection(sel);
       const r = await runApply(e.id, op, params, `Blender: ${label}…`, label);
       if (r && s.edit) {
@@ -453,11 +470,15 @@ export function createApp(viewportFactory) {
 
   // ─── Blender-shaped geometry ───────────────────────────────────────────────
 
+  const textured = (o) => hasTexture(o.material && s.doc.materials[o.material]);
+
+  // What only Blender can draw right: text, Suzanne, modifiers — and a textured primitive,
+  // whose UVs must be Blender's own (an explicit mesh carries its UVs in its file).
   function needsBlender(o) {
     if (o.type === "text") return true;
     if (o.type !== "mesh") return false;
     const m = s.doc.meshes[o.mesh];
-    return m?.primitive === "monkey" || (o.modifiers || []).some((md) => md.show);
+    return m?.primitive === "monkey" || (o.modifiers || []).some((md) => md.show) || (!!m?.primitive && textured(o));
   }
 
   function evalKey(id) {
@@ -465,7 +486,7 @@ export function createApp(viewportFactory) {
     const refs = (o.modifiers || []).map((m) => m.object || m.mirror_object).filter(Boolean)
       .map((r) => [s.doc.objects[r], s.doc.objects[r] && s.doc.meshes[s.doc.objects[r].mesh]]);
     return JSON.stringify([o.type, o.text, o.modifiers, o.mesh && s.doc.meshes[o.mesh], refs,
-                           (o.modifiers || []).length ? [o.location, o.rotation, o.scale] : 0]);
+                           (o.modifiers || []).length ? [o.location, o.rotation, o.scale] : 0, textured(o)]);
   }
 
   function scheduleEvaluate() {
@@ -493,6 +514,7 @@ export function createApp(viewportFactory) {
         if (!m || evalKeys.get(id) !== key) continue;
         vp?.setEvaluated(id, key, { positions: new Float32Array(b64Floats(m.positions)),
                                     normals: new Float32Array(b64Floats(m.normals)),
+                                    uv: m.uv ? new Float32Array(b64Floats(m.uv)) : null,
                                     index: new Uint32Array(b64Floats(m.index)) });
       }
     } catch (e) {
@@ -522,6 +544,60 @@ export function createApp(viewportFactory) {
       }).catch(() => toast(`Couldn't load mesh ${path}`, "error"));
     }
     return null;
+  }
+
+  // ─── images ────────────────────────────────────────────────────────────────
+
+  // A texture file's contents (cycls.texture: media type, size, base64), cached.
+  const textureFiles = new Map();
+  function loadTexture(rel) {
+    if (!textureFiles.has(rel)) {
+      textureFiles.set(rel, bridge.readJSON(rel).catch((e) => { textureFiles.delete(rel); throw e; }));
+    }
+    return textureFiles.get(rel);
+  }
+
+  async function textureURL(tid) {
+    const t = s.doc.textures?.[tid];
+    if (!t) return null;
+    const side = await loadTexture(t.data);
+    return `data:${side.media_type};base64,${side.data}`;
+  }
+
+  // A picked or dropped image → at most 2048 px, PNG when it has transparency (else
+  // JPEG), a content-named file under data/textures — written before the scene names it.
+  async function uploadTexture(mid, field, file) {
+    set({ busy: "Preparing the image…" });
+    try {
+      const bmp = await createImageBitmap(file);
+      const k = Math.min(1, 2048 / Math.max(bmp.width, bmp.height));
+      const w = Math.max(1, Math.round(bmp.width * k)), h = Math.max(1, Math.round(bmp.height * k));
+      const canvas = new OffscreenCanvas(w, h);
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(bmp, 0, 0, w, h);
+      const px = ctx.getImageData(0, 0, w, h).data;
+      let alpha = false;
+      for (let i = 3; i < px.length; i += 4) if (px[i] < 250) { alpha = true; break; }
+      const blob = await canvas.convertToBlob({ type: alpha ? "image/png" : "image/jpeg", quality: 0.9 });
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const rel = `textures/t-${(await digest(bytes)).slice(0, 12)}.json`;
+      const side = { format: "cycls.texture", version: 1, media_type: blob.type, width: w, height: h, data: toBase64(bytes) };
+      await bridge.writeData(rel, JSON.stringify(side));
+      textureFiles.set(rel, Promise.resolve(side));
+      const name = String(file.name || "image").replace(/\.[a-z0-9]+$/i, "").slice(0, 64) || "image";
+      update((d) => {
+        d.textures ||= {};
+        const tid = newId(d.textures, name, "textures");
+        d.textures[tid] = { name, data: rel, width: w, height: h, alpha: field === "base_color_texture" && alpha };
+        d.materials[mid][field] = tid;
+        pruneTextures(d);
+      }, "image");
+    } catch (e) {
+      recordError("upload", e);
+      toast(`Couldn't use that image: ${e.message}`, "error");
+    } finally {
+      set({ busy: null });
+    }
   }
 
   // ─── actions ───────────────────────────────────────────────────────────────
@@ -635,6 +711,16 @@ export function createApp(viewportFactory) {
       }
     },
     closePreview() { set({ preview: null }); },
+    uploadTexture, textureURL,
+    clearTexture(mid, field) {
+      update((d) => { d.materials[mid][field] = null; pruneTextures(d); }, "remove image");
+    },
+    uv(method) {
+      const id = active();
+      if (!id) { toast("Select a mesh first"); return; }
+      if (s.mode === "edit") { edit.blender("uv", `UV ${method}`, { method }); return; }
+      runApply(id, "uv", { method }, `Blender: ${method} UVs…`, `${method} UVs`);
+    },
     ask(text) { bridge.ask(text).catch((e) => toast(e.message, "error")); },
   };
 
@@ -650,6 +736,7 @@ export function createApp(viewportFactory) {
         onEditTransformEnd: edit.onTransformEnd,
         onEditLost: () => { if (s.mode === "edit") leaveEdit(); },
         explicitGeometry,
+        loadTexture,
       });
       await bridge.ready();
       diag.engine = bridge.canEngine();

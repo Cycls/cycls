@@ -38,7 +38,8 @@ function host(scene, extra = {}) {
 function fakeViewport() {
   const vp = {
     edit: null, calls: [],
-    sync() {}, frame() {}, throughCamera: () => false, invalidate() {}, clearEvaluated() {}, setEvaluated() {},
+    sync() {}, frame() {}, throughCamera: () => false, invalidate() {}, clearEvaluated() {},
+    setEvaluated(id, key, data) { vp.evaluated = { ...(vp.evaluated || {}), [id]: data }; },
     setGizmoMode() {}, worldTRS: () => ({ location: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] }),
     enterEdit(id, mesh, sel) { vp.edit = { id, mesh, sel }; vp.calls.push("enter"); },
     setEdit(mesh, sel, opts) { vp.edit = { ...vp.edit, mesh, sel, normal: opts?.normal ?? null }; },
@@ -139,6 +140,31 @@ describe("agent patches merge into local edits", () => {
     h.send({ type: "turn_end" });
     await vi.advanceTimersByTimeAsync(0);
     expect(s.doc.world.color).toBe("#112233");
+  });
+});
+
+describe("images", () => {
+  it("a textured primitive is drawn from Blender's mesh, UVs and all", async () => {
+    const doc = scene();
+    doc.textures = { wood: { name: "wood", data: "textures/t-0123456789ab.json", width: 4, height: 4, alpha: false } };
+    doc.materials.material = { ...doc.materials.material, base_color_texture: "wood" };
+    const { h, vp } = await started(doc);
+    const f32 = (a) => btoa(String.fromCharCode(...new Uint8Array(new Float32Array(a).buffer)));
+    const u32 = (a) => btoa(String.fromCharCode(...new Uint8Array(new Uint32Array(a).buffer)));
+    h.onEngine((op, payload) => {
+      expect(op).toBe("evaluate");
+      expect(payload.params.ids).toEqual(["cube"]);
+      return { ok: true, meshes: { cube: { positions: f32([0, 0, 0, 1, 0, 0, 0, 1, 0]), normals: f32([0, 0, 1, 0, 0, 1, 0, 0, 1]),
+                                           uv: f32([0, 0, 1, 0, 0, 1]), index: u32([0, 1, 2]) } } };
+    });
+    await vi.advanceTimersByTimeAsync(400);
+    expect([...vp.evaluated.cube.uv]).toEqual([0, 0, 1, 0, 0, 1]);
+  });
+
+  it("an untextured primitive stays on the fast path", async () => {
+    const { h } = await started(scene());
+    await vi.advanceTimersByTimeAsync(400);
+    expect(h.engineCalls).toEqual([]);
   });
 });
 

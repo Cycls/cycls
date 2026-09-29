@@ -147,3 +147,15 @@ describe("selection and display", () => {
     expect(d.triFace).toEqual([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5]);
   });
 });
+
+describe("display buffers", () => {
+  it("carry each corner's UV, zeros where a face has none", () => {
+    const m = cube();
+    m.uv = m.faces.map((f, i) => (i === 0 ? null : f.flatMap((_, c) => [c / 4, i / 6])));
+    const b = displayBuffers(m);
+    expect(b.uv.length).toBe((b.positions.length / 3) * 2);
+    expect([...b.uv.slice(0, 8)]).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);          // face 0: none
+    expect(b.uv[9]).toBeCloseTo(1 / 6);                                           // face 1, corner 0: v
+    expect(displayBuffers(cube()).uv).toBe(null);
+  });
+});

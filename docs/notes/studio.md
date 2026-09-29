@@ -49,8 +49,18 @@ A mesh is either a **primitive** (Blender's operator parameters: `cube {size}`, 
 {major_radius, minor_radius, …}`, …, plus `cyclorama` for photo sweeps) or **explicit**:
 `{data: "meshes/m-<12 hex>.json", verts, faces, bbox}`. The sidecar is `cycls.mesh` v1 — base64
 `co` (f32), `loop_start` and `loops` (u32, so n-gons survive), `smooth` (u8 per face), optional
-`uv` and `loose_edges`. It is named by its content and never rewritten, which makes it its own cache
-key and makes undo a pointer swap. The bridge carries text only, hence base64.
+`uv` (per corner), `material_index` (u16 per face) and `loose_edges`. It is named by its content —
+everything it holds, UVs included — and never rewritten, which makes it its own cache key and makes
+undo a pointer swap. The bridge carries text only, hence base64. Primitives get Blender's own UVs
+(the Add operators' `calc_uvs`; hand-made grids for the torus and the cyclorama).
+
+**Images.** `textures` is a map too: `{name, data: "textures/t-<12 hex>.json", width, height,
+alpha}`. The file is a `cycls.texture` — `{media_type (PNG or JPEG), width, height, data: base64}`,
+named by the image's sha256, at most 2048 px a side. A material names images by id in
+`base_color_texture` (its transparency drives alpha when it has any), `roughness_texture` and
+`normal_texture` (+ `normal_strength`), placed on the UVs as Blender's Mapping node places them:
+`uv' = texture_offset + rotate(texture_rotation) · (texture_scale · uv)`. An image no material uses is
+dropped at the end of an edit; a preset keeps a material's images.
 
 Next to it: `data/history/<rev>.json` (the last 20 scenes an agent edit replaced — `revert` reads
 them), `data/renders.json` (every render, newest last), `data/errors.json` (what the app caught;
@@ -87,12 +97,19 @@ both come out right.
 | op | who | what |
 |---|---|---|
 | `evaluate` | app, agent | display meshes after modifiers (per-loop positions/normals, triangles) |
-| `apply` | app, agent | `modifier_apply {index}`, `convert`, `join {others}`, `remesh`, `decimate`, `boolean`, and on a selection: `bevel`, `inset`, `subdivide`, `triangulate`, `merge_by_distance`, `recalc_normals` |
+| `apply` | app, agent | `modifier_apply {index}`, `convert`, `join {others}`, `remesh`, `decimate`, `boolean`, and on a selection: `bevel`, `inset`, `subdivide`, `triangulate`, `merge_by_distance`, `recalc_normals`, `uv {method: cube\|cylinder\|sphere\|reset}` |
 | `snapshot` | app, agent | ~640×360, few samples, ~5 s — for checking work |
 | `render` | app, agent | the Cycles render, PBR Neutral, denoised |
 | `export` | app, agent | glb, blend, fbx, obj, stl |
 | `script` | agent | bpy against the scene; what comes back is read, not trusted |
-| `import` | agent | glb, gltf, obj, fbx, stl, ply, blend |
+| `import` | agent | glb, gltf, obj, fbx, stl, ply, blend — packed images come along as textures |
+| `texture` | agent | an uploaded image Blender can read → PNG/JPEG ≤ 2048 px (a fresh sandboxed worker, like import) |
+
+Images go up only with the ops that draw or read materials back (snapshot, render, export, script),
+as the bytes of `textures/t-<hash>.png|jpg`; `build` wires Image → Mapping → UV into the Principled
+inputs (roughness and normal images Non-Color), and `to_doc` reads such wiring back instead of
+flattening it — a glb's packed images pass through as their own bytes, never through the view
+transform.
 
 A selection is `"all"`, `{faces: [i]}`, `{edges: [[a, b]]}` or `{verts: [i]}` — indices into the
 object's explicit mesh. `bevel`, `inset` and `subdivide` answer with a `selection` too — what
@@ -148,7 +165,15 @@ its strength — or the flat world colour. Reflections and ambient come from a p
 subjects' centre: the world, past the backdrop, which the lamps light — so chrome on a dark sweep
 reads dark, as in Cycles, not lit by a stand-in room. It re-bakes only when the world, the lamps,
 the set or the subjects' centre change. Against a Cycles render of the same scene the regions
-land within ~10% of each other; what's missing is shadows. The world shows behind the scene too.
+land within ~10% of each other; what's missing is shadows. The world shows behind the scene too
+(a colour world is a dome as well — three's own solid-colour background is a unit box at the origin,
+which a probe baked anywhere else sees from outside). Images load once per file: flipped as they
+decode (Blender's v = 0 is the bottom row; an ImageBitmap ignores `flipY`), roughness repacked as
+luminance (three reads green), each material placing its own view of the pixels with Blender's
+mapping as `texture.matrix`. A textured primitive is drawn from Blender's evaluated mesh, so its UVs
+are Blender's; the Material panel uploads an image (≤ 2048 px, PNG if transparent else JPEG, written
+before the scene names it). Checked against Cycles with a UV checker on five primitives and a
+normal-mapped card — they match.
 
 **Object mode.** Click, Shift-click, A; the gizmo and G/R/S; Shift+A add, Shift+D duplicate, X
 delete, H hide; numpad views, frame, camera to view; Solid or Material shading; F12 render and a
@@ -185,15 +210,20 @@ app is installed and current.
 |---|---|
 | `open` | shows the app on the canvas, and tells the model what's already in the scene |
 | `inspect` | the scene as a table, the person's selection, layout warnings |
-| `edit {ops, intent, snapshot?}` | atomic ops (add, set, delete, duplicate, material, modifier, world, render, look_at, frame, preset) — all or none, one rev, one patch |
+| `edit {ops, intent, snapshot?}` | atomic ops (add, set, delete, duplicate, material, texture, modifier, world, render, look_at, frame, preset) — all or none, one rev, one patch |
 | `snapshot` · `render` | preview to the model; a render also lands in `renders/` and opens |
 | `apply` · `script` · `import` · `export` | engine ops, results merged under the lock and pushed |
 | `revert {rev}` | a scene from history |
 
+Wherever an image goes — a material's `*_texture`, `add {image}` (an upright plane at the image's
+aspect: logos, posters, labels), a `texture` op — `{path}` of a workspace file works too: the tool
+stores PNG/JPEG up to 2048 px as they are and sends anything else through the engine's `texture` op
+first, all under the scene's lock.
+
 Every edit answer carries a layout check (floating, sunk, off the floor, out of frame) because
-models don't see those in numbers. Limits the model is told plainly: materials are uniform
-Principled surfaces — no textures or node networks — and a script's node materials come back
-flattened; the answer says so and says retrying won't help.
+models don't see those in numbers. Limits the model is told plainly: materials are Principled
+surfaces with optional images; other node networks from a script come back flattened; the answer
+says so and says retrying won't help.
 
 ## Installing
 
@@ -221,8 +251,8 @@ cloudpickle on both sides.
 ## Known limitations
 
 - One editor at a time; two editing the same entry keep the local copy.
-- No textures, UV editing, animation, geometry nodes, sculpting, loop cut, knife or proportional
-  editing; one material per object.
+- No UV editing beyond projections, animation, geometry nodes, sculpting, loop cut, knife or
+  proportional editing; one material per object.
 - Engine capacity is shared: four instances, one job each.
 - The phone client has no `cycls.engine`; the app degrades to viewing and local edits.
 

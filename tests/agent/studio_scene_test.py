@@ -322,6 +322,67 @@ class TestLayout:
         assert any("studio floor is at z = -1.00" in i for i in S.layout_check(doc))
 
 
+# ─── textures ───────────────────────────────────────────────────────────────
+
+LOGO = {"op": "texture", "id": "logo", "name": "Logo", "data": "textures/t-0123456789ab.json",
+        "width": 800, "height": 400, "alpha": True}
+
+
+class TestTextures:
+    def test_a_material_uses_an_image_and_the_scene_keeps_it(self):
+        doc, touched = S.apply_ops(S.new_scene(), [LOGO, {"op": "material", "id": "material",
+                                                           "base_color_texture": "logo", "texture_scale": [2, 2]}])
+        assert doc["textures"]["logo"] == {"name": "Logo", "data": "textures/t-0123456789ab.json",
+                                           "width": 800, "height": 400, "alpha": True}
+        assert doc["materials"]["material"]["base_color_texture"] == "logo"
+        assert doc["materials"]["material"]["texture_scale"] == [2.0, 2.0]
+        assert "textures.logo" in touched and S.normalize(copy.deepcopy(doc)) == doc
+
+    def test_an_image_no_material_uses_is_dropped_at_the_end_of_the_batch(self):
+        doc, touched = S.apply_ops(S.new_scene(), [LOGO])
+        assert doc["textures"] == {} and "textures.logo" not in touched
+
+    def test_bad_references_and_files_name_the_field(self):
+        with pytest.raises(S.SceneError, match=r"materials.material.base_color_texture: no texture 'nope'"):
+            S.apply_ops(S.new_scene(), [{"op": "material", "id": "material", "base_color_texture": "nope"}])
+        with pytest.raises(S.SceneError, match=r"textures.logo.data"):
+            S.apply_ops(S.new_scene(), [{**LOGO, "data": "../secrets.json"}])
+        with pytest.raises(S.SceneError, match=r"texture_scale: needs 2 values"):
+            S.apply_ops(S.new_scene(), [{"op": "material", "id": "material", "texture_scale": 2}])
+
+    def test_an_image_plane_stands_up_at_the_images_aspect(self):
+        doc, _ = S.apply_ops(S.new_scene(), [LOGO, {"op": "add", "id": "sign", "image": "logo", "height": 0.5}])
+        o = doc["objects"]["sign"]
+        assert o["type"] == "mesh" and doc["meshes"][o["mesh"]] == {"primitive": "plane", "size": 0.5}
+        assert o["rotation"] == [90, 0, 0] and o["scale"] == [2.0, 1, 1]
+        assert doc["materials"][o["material"]]["base_color_texture"] == "logo"
+        with pytest.raises(S.SceneError, match=r"image: no texture"):
+            S.apply_ops(S.new_scene(), [{"op": "add", "image": "logo"}])
+
+    def test_a_preset_keeps_the_image_and_its_placement(self):
+        doc, _ = S.apply_ops(S.new_scene(), [LOGO, {"op": "material", "id": "material", "base_color_texture": "logo",
+                                                   "texture_rotation": 30, "roughness": 0.9}])
+        doc, _ = S.apply_ops(doc, [{"op": "material", "id": "material", "preset": "plastic"}])
+        m = doc["materials"]["material"]
+        assert m["base_color_texture"] == "logo" and m["texture_rotation"] == 30
+        assert m["roughness"] == S.MATERIAL_PRESETS["plastic"]["roughness"]
+
+    def test_an_import_brings_its_images_along_renamed(self):
+        doc, _ = S.apply_ops(S.new_scene(), [LOGO, {"op": "material", "id": "material", "base_color_texture": "logo"}])
+        frag = copy.deepcopy(doc)
+        merged, _ = S.merge_fragment(doc, frag)
+        assert set(merged["textures"]) == {"logo", "logo_2"}
+        assert merged["materials"]["material_2"]["base_color_texture"] == "logo_2"
+
+    def test_merge_and_summary_see_textures(self):
+        base = S.new_scene()
+        local, _ = S.apply_ops(base, [LOGO, {"op": "material", "id": "material", "base_color_texture": "logo"}])
+        merged, conflicts = S.merge3(base, local, base)
+        assert merged["textures"]["logo"]["width"] == 800 and not conflicts
+        text = S.summary(local)
+        assert "base color image logo" in text and "Textures: logo 800x400 with alpha" in text
+
+
 def test_add_infers_light_camera_and_text_types():
     doc, _ = S.apply_ops(S.new_scene(), [
         {"op": "add", "id": "l", "light": {"kind": "area", "energy": 50}},

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { SCHEMA, childrenOf, make } from "./doc.js";
+import { SCHEMA, childrenOf, make, TEXTURE_FIELDS } from "./doc.js";
 
 const PRIMS = ["cube", "uv_sphere", "ico_sphere", "cylinder", "cone", "torus", "plane", "grid", "circle", "monkey"];
 const LIGHTS = ["point", "sun", "spot", "area"];
@@ -91,17 +91,23 @@ function Menu({ label: text, items, onPick, align }) {
 }
 
 // Blender's destructive mesh ops, by where they run: [id, label, key hint].
+// UVs by projection, done by Blender (on the selection in Edit mode).
+const UV_OPS = [{ head: "UVs" }, ["uv:cube", "Cube projection"], ["uv:cylinder", "Cylinder projection"],
+                ["uv:sphere", "Sphere projection"], ["uv:reset", "Reset (one square a face)"]];
 const OBJECT_OPS = [["convert", "Convert to mesh"], ["join", "Join selected", "Ctrl J"], "-",
                     ["triangulate", "Triangulate"], ["merge_by_distance", "Merge by distance"],
-                    ["recalc_normals", "Recalculate normals"], "-", ["remesh", "Remesh (voxel)"], ["decimate", "Decimate"]];
+                    ["recalc_normals", "Recalculate normals"], "-", ["remesh", "Remesh (voxel)"], ["decimate", "Decimate"],
+                    "-", ...UV_OPS];
 const EDIT_OPS = [["extrude", "Extrude", "E"], ["fill", "Fill", "F"], ["merge", "Merge at center", "M"], ["delete", "Delete", "X"], "-",
                   { head: "With Blender" }, ["bevel", "Bevel", "Ctrl B"], ["inset", "Inset faces", "I"], ["subdivide", "Subdivide"],
-                  ["triangulate", "Triangulate"], ["merge_by_distance", "Merge by distance"], ["recalc_normals", "Recalculate normals"]];
+                  ["triangulate", "Triangulate"], ["merge_by_distance", "Merge by distance"], ["recalc_normals", "Recalculate normals"],
+                  "-", ...UV_OPS];
 const EXPORTS = [{ head: "Into exports/" }, { id: "glb", label: "glTF binary (.glb)" }, { id: "blend", label: "Blender (.blend)" },
                  { id: "fbx", label: "FBX (.fbx)" }, { id: "obj", label: "Wavefront (.obj)" }, { id: "stl", label: "STL (.stl)" }];
 const items = (ops) => ops.map((o) => (o === "-" || o.head ? o : { id: o[0], label: o[2] ? `${o[1]}  (${o[2]})` : o[1] }));
 
 export function runEditOp(a, op) {
+  if (op.startsWith("uv:")) { a.uv(op.slice(3)); return; }
   const e = a.edit;
   const local = { extrude: e.extrude, fill: e.fill, merge: e.merge, delete: e.remove }[op];
   if (local) local();
@@ -109,7 +115,8 @@ export function runEditOp(a, op) {
 }
 
 export function runObjectOp(a, op) {
-  if (op === "convert") a.convert();
+  if (op.startsWith("uv:")) a.uv(op.slice(3));
+  else if (op === "convert") a.convert();
   else if (op === "join") a.join();
   else a.meshOp(op, label(op).toLowerCase());
 }
@@ -235,9 +242,43 @@ function MaterialPanel({ s, a, id }) {
         const p = e.currentTarget.value;
         a.update((d) => { d.materials[o.material] = make.material(m.name, p || null); }, "material preset");
       }}><option value="">custom</option>{Object.keys(SCHEMA.material_presets).map((p) => <option key={p} value={p}>{label(p)}</option>)}</select></label>
-      <Fields spec={SCHEMA.material} values={m} onChange={setM} />
+      <Fields spec={SCHEMA.material} values={m} onChange={setM}
+        skip={[...TEXTURE_FIELDS, ...MAPPING, ...(m.base_color_texture ? ["base_color"] : [])]} />
+      <ImagesPanel s={s} a={a} mid={o.material} m={m} setM={setM} />
     </>}
   </Section>;
+}
+
+const MAPPING = ["texture_scale", "texture_offset", "texture_rotation", "normal_strength"];
+const IMAGE_LABEL = { base_color_texture: "Color image", roughness_texture: "Roughness image", normal_texture: "Normal map" };
+
+function Thumb({ a, tid }) {
+  const [src, setSrc] = useState(null);
+  useEffect(() => { let live = true; a.textureURL(tid).then((u) => live && setSrc(u)).catch(() => {}); return () => { live = false; }; }, [tid]);
+  return src ? <img class="thumb" src={src} alt="" /> : <span class="thumb" />;
+}
+
+function ImagesPanel({ s, a, mid, m, setM }) {
+  const any = TEXTURE_FIELDS.some((f) => m[f]);
+  return <>
+    {TEXTURE_FIELDS.map((f) => <div class="row" key={f}><span>{IMAGE_LABEL[f]}</span>
+      <div class="image-slot">
+        {m[f] && <><Thumb a={a} tid={m[f]} /><span class="muted">{s.doc.textures?.[m[f]]?.name}</span></>}
+        <label class="btn">{m[f] ? "Replace" : "Upload…"}
+          <input type="file" accept="image/*" hidden onChange={(e) => {
+            const file = e.currentTarget.files?.[0];
+            e.currentTarget.value = "";
+            if (file) a.uploadTexture(mid, f, file);
+          }} /></label>
+        {m[f] && <button title="Remove the image" onClick={() => a.clearTexture(mid, f)}>✕</button>}
+      </div></div>)}
+    {any && <>
+      <div class="row col"><span>Image scale</span><Vec value={m.texture_scale} labels={["U", "V"]} onChange={(v) => setM("texture_scale", v)} /></div>
+      <div class="row col"><span>Image offset</span><Vec value={m.texture_offset} labels={["U", "V"]} onChange={(v) => setM("texture_offset", v)} /></div>
+      <label class="row"><span>Image rotation</span><Num value={m.texture_rotation} step={5} min={-360} max={360} onChange={(v) => setM("texture_rotation", v)} /></label>
+      {m.normal_texture && <label class="row"><span>Normal strength</span><Num value={m.normal_strength} min={0} max={10} onChange={(v) => setM("normal_strength", v)} /></label>}
+    </>}
+  </>;
 }
 
 function ModifiersPanel({ s, a, id }) {

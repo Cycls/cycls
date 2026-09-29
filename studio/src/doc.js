@@ -23,7 +23,9 @@ export function defaultsOf(spec) {
   return out;
 }
 
-const SINGULAR = { objects: "object", meshes: "mesh", materials: "material" };
+const SINGULAR = { objects: "object", meshes: "mesh", materials: "material", textures: "texture" };
+// The maps of id → entry (scene.py SECTIONS).
+export const SECTIONS = ["objects", "meshes", "materials", "textures"];
 export function newId(taken, base, section = "objects") {
   const fallback = SINGULAR[section] || "item";
   const b = String(base || fallback).toLowerCase().replace(/[^a-z0-9_.-]+/g, "_").replace(/^[_.-]+|[_.-]+$/g, "")
@@ -116,7 +118,7 @@ export function remove(doc, ids, worldOf) {
 
 export function entries(doc) {
   const out = {};
-  for (const sec of ["objects", "meshes", "materials"]) {
+  for (const sec of SECTIONS) {
     for (const [k, v] of Object.entries(doc[sec] || {})) out[`${sec}.${k}`] = v;
   }
   for (const sec of ["world", "render"]) if (doc[sec]) out[sec] = doc[sec];
@@ -157,7 +159,7 @@ export function merge3(baseDoc, local, remote) {
     else { v = l; conflicts.push(k); }
     if (v !== undefined) merged[k] = v;
   }
-  const out = { ...clone(local), objects: {}, meshes: {}, materials: {} };
+  const out = { ...clone(local), ...Object.fromEntries(SECTIONS.map((sec) => [sec, {}])) };
   out.rev = Math.max(local.rev || 0, remote.rev || 0);
   for (const [k, v] of Object.entries(merged)) {
     const dot = k.indexOf(".");
@@ -179,6 +181,17 @@ export function decodeSidecar(side) {
     for (let i = s + 1; i + 1 < e; i++) tris.push(loops[s], loops[i], loops[i + 1]);
   }
   return { positions: co, index: new Uint32Array(tris) };
+}
+
+// Material fields that name an image (scene.py TEXTURE_FIELDS).
+export const TEXTURE_FIELDS = ["base_color_texture", "roughness_texture", "normal_texture"];
+export const hasTexture = (m) => !!m && TEXTURE_FIELDS.some((f) => m[f]);
+
+// Drop texture entries no material uses (scene.py prune_textures).
+export function pruneTextures(doc) {
+  const used = new Set(Object.values(doc.materials).flatMap((m) => TEXTURE_FIELDS.map((f) => m[f]).filter(Boolean)));
+  for (const t of Object.keys(doc.textures || {})) if (!used.has(t)) delete doc.textures[t];
+  return doc;
 }
 
 export function childrenOf(doc, id) {

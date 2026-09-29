@@ -61,11 +61,12 @@ function monkeyStandIn(size) {
   return g;
 }
 
-// Evaluated / explicit meshes: per-corner positions + normals + triangle index.
-export function bufferGeometry({ positions, normals, index }) {
+// Evaluated / explicit meshes: per-corner positions + normals (+ UVs) + triangle index.
+export function bufferGeometry({ positions, normals, uv, index }) {
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   if (normals) g.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+  if (uv) g.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
   g.setIndex(new THREE.BufferAttribute(index, 1));
   if (!normals) g.computeVertexNormals();
   g.computeBoundingSphere();

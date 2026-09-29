@@ -60,10 +60,11 @@ def _data_url(jpg):
 async def _answer(ws, op, r, body, doc):
     res, files = r["result"], r["files"]
     if op == "evaluate":
+        b64 = lambda k: base64.b64encode(files[k]).decode()      # noqa: E731
         return {"ok": True, "tris": res.get("tris", 0), "meshes": {
-            oid: {"positions": base64.b64encode(files[m["positions"]]).decode(),
-                  "normals": base64.b64encode(files[m["normals"]]).decode(),
-                  "index": base64.b64encode(files[m["index"]]).decode(),
+            oid: {"positions": b64(m["positions"]), "normals": b64(m["normals"]), "index": b64(m["index"]),
+                  **({"uv": b64(m["uv"])} if m.get("uv") else {}),
+                  **({"material_index": b64(m["material_index"])} if m.get("material_index") else {}),
                   "loops": m["loops"], "tris": m["tris"]}
             for oid, m in res.get("meshes", {}).items()}}
     if op == "snapshot":
@@ -112,7 +113,7 @@ def studio_router(ws_dep, user_dep):
             raise HTTPException(400, "params must be an object")
         try:
             doc = S.normalize(body["scene"]) if body.get("scene") is not None else await store.load(ws)
-            blobs = await asyncio.to_thread(store.blobs, ws, doc)
+            blobs = await asyncio.to_thread(store.blobs, ws, doc, op)
         except S.SceneError as e:
             raise HTTPException(400, str(e))
         refusal = _budget(ws.subject, op)

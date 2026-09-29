@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { SCHEMA, clone, deepEqual, diff, patch, merge3, make, addObject, duplicate, remove, decodeSidecar, newId, isBackdrop } from "../src/doc.js";
+import { SCHEMA, clone, deepEqual, diff, patch, merge3, make, addObject, duplicate, remove, decodeSidecar, newId, isBackdrop, pruneTextures, hasTexture } from "../src/doc.js";
 
 const scene = () => clone(SCHEMA.new_scene);
 
@@ -100,5 +100,22 @@ describe("mesh sidecars", () => {
     const { positions, index } = decodeSidecar(side);
     expect(positions.length).toBe(15);
     expect([...index]).toEqual([0, 1, 4, 0, 4, 2, 0, 2, 3]);
+  });
+});
+
+describe("textures", () => {
+  it("an image no material uses is dropped, one in use stays", () => {
+    const doc = { ...scene(), textures: { a: { name: "a", data: "textures/t-000000000000.json", width: 1, height: 1, alpha: false },
+                                          b: { name: "b", data: "textures/t-111111111111.json", width: 1, height: 1, alpha: false } } };
+    doc.materials.material = { ...doc.materials.material, base_color_texture: "a" };
+    pruneTextures(doc);
+    expect(Object.keys(doc.textures)).toEqual(["a"]);
+    expect(hasTexture(doc.materials.material)).toBe(true);
+  });
+
+  it("materials made here carry the image fields scene.py fills", () => {
+    const m = make.material("Wood");
+    expect(m).toMatchObject({ base_color_texture: null, roughness_texture: null, normal_texture: null,
+                              texture_scale: [1, 1], texture_offset: [0, 0], texture_rotation: 0, normal_strength: 1 });
   });
 });

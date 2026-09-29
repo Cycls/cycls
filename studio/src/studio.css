@@ -93,3 +93,8 @@ input[type=checkbox] { accent-color: var(--blue); }
   padding: 7px 14px; border-radius: 6px; z-index: 40; max-width: 80%; box-shadow: 0 6px 20px #000a; }
 .toast.error { border-color: #a4473d; background: #3a2220; } .toast.warn { border-color: #a38a3d; }
 @media (max-width: 760px) { .header .mode, .header .status { display: none; } }
+.image-slot { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.image-slot .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 90px; font-size: 11px; }
+.thumb { width: 28px; height: 28px; border-radius: 3px; object-fit: cover; background: #222; border: 1px solid var(--line); flex: none; }
+label.btn { cursor: pointer; padding: 2px 8px; border: 1px solid var(--line); border-radius: 4px; background: #333; white-space: nowrap; }
+label.btn:hover { background: #3c3c3c; }
