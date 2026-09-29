@@ -16,6 +16,7 @@ THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 const DEG = Math.PI / 180;
 const SNAP = 0.1;                                  // snapping's step for a move, in metres
 const BATCH_MIN = 300;         // meshes in the scene before repeated ones draw instanced
+const BIG_SCENE = 1000;        // objects past which glass draws as transparency (no transmission pass)
 let PLACEHOLDER = null;                              // one stand-in for every mesh still loading
 const placeholder = () => {
   if (!PLACEHOLDER) { PLACEHOLDER = new THREE.BoxGeometry(0.4, 0.4, 0.4); PLACEHOLDER.userData.shared = true; }
@@ -309,11 +310,16 @@ export class Viewport {
     for (const [id, o] of Object.entries(doc.objects)) {
       const sig = { o: { ...o, location: 0, rotation: 0, scale: 0, parent: 0 },
                     m: o.mesh ? doc.meshes[o.mesh] : null, mat: (o.materials || []).map((mid) => mid && doc.materials[mid]),
-                    ev: this.evaluated.get(id)?.key ?? null, shading };
-      if (!this.nodes.has(id) || shadingChanged || !deepEqual(this.sigs.get(id), sig)) {
+                    ev: this.evaluated.get(id)?.key ?? null };
+      if (!this.nodes.has(id) || !deepEqual(this.sigs.get(id), sig)) {
         this.drop(id);
         this.nodes.set(id, this.build(id, o, doc));
         this.sigs.set(id, sig);
+      } else if (shadingChanged) {
+        // Solid ↔ Material is a change of materials (shared, cached), not of objects: a scene
+        // of thousands rebuilt every node on each switch.
+        const surface = this.nodes.get(id).userData.surface;
+        if (surface?.isMesh) surface.material = this.slotMaterials(doc, o, surface.geometry);
       }
       const node = this.nodes.get(id);
       if (!(this.gizmo.dragging && this.gizmo.object === node)) applyTRS(node, o);
@@ -546,7 +552,10 @@ export class Viewport {
       const t = doc.textures?.[m[f]];
       return t ? (this.images?.get(`${t.data}|${["color", "rough", "normal"][i]}`)?.texture ? 2 : 1) : 0;
     }).join("");
-    const sig = `${mid}|${ready}|${JSON.stringify(m)}`;
+    // Glass (transmission) makes three draw the whole scene again for what's behind it, every
+    // frame; past BIG_SCENE objects it draws as plain transparency instead.
+    const cheapGlass = m.transmission > 0 && Object.keys(doc.objects).length > BIG_SCENE;
+    const sig = `${mid}|${ready}|${cheapGlass}|${JSON.stringify(m)}`;
     const hit = this.matCache.get(sig);
     if (hit) return hit;
     if (this.matCache.size > 2000) this.matCache.clear();      // edits leave old ones; the objects holding them keep them
@@ -556,9 +565,10 @@ export class Viewport {
     const mat = new THREE.MeshPhysicalMaterial({
       color: maps.map ? new THREE.Color(1, 1, 1) : color,       // a linked Base Color replaces the value, as in Blender
       metalness: m.metallic, roughness: maps.roughnessMap ? 1 : m.roughness, clearcoat: m.coat, ior: m.ior,
-      transmission: m.transmission, thickness: m.transmission ? 1 : 0,
+      transmission: cheapGlass ? 0 : m.transmission, thickness: m.transmission && !cheapGlass ? 1 : 0,
       emissive: m.emission ? color : new THREE.Color(0), emissiveIntensity: m.emission,
-      opacity: m.alpha, transparent: m.alpha < 1 || cutout, side: THREE.DoubleSide, ...maps,
+      opacity: cheapGlass ? m.alpha * (1 - 0.7 * m.transmission) : m.alpha,
+      transparent: m.alpha < 1 || cutout || cheapGlass, depthWrite: !cheapGlass, side: THREE.DoubleSide, ...maps,
     });
     if (maps.normalMap) mat.normalScale.set(m.normal_strength, m.normal_strength);
     this.matCache.set(sig, mat);

@@ -61,12 +61,19 @@ class FakeEngine:
     def __init__(self):
         self.calls = []
         self.fail = None
+        self.cached = {}          # workspace key → file names, as cycls-render keeps them
 
-    def __call__(self, name, timeout=None):
+    def __call__(self, name, timeout=None, **_):
         def fn(**kw):
             self.calls.append({"name": name, **kw})
             if self.fail:
                 return {"ok": False, "error": self.fail}
+            if kw.get("cache"):
+                have = self.cached.setdefault(kw["cache"], set())
+                have |= {n.removesuffix(".gz") for n in kw["blobs"] if n.startswith(("meshes/", "textures/"))}
+                missing = [n for n in kw.get("refs", []) if n not in have]
+                if missing:
+                    return {"ok": False, "missing": missing, "error": "not cached"}
             op = kw["op"]
             if op == "snapshot":
                 return {"ok": True, "result": {"preview": "preview.jpg", "resolution": [640, 360]},
@@ -325,6 +332,26 @@ class TestEngine:
         asyncio.run(E.call("snapshot", S.new_scene(), blobs={"meshes/m-0123456789ab.json": mesh}))
         assert engine.calls[-1]["gzip"] is True and list(engine.calls[-1]["blobs"]) == ["meshes/m-0123456789ab.json.gz"]
 
+    def test_meshes_go_once_then_by_name(self, root, engine):
+        run({"action": "apply", "id": "cube", "operation": "convert"}, root)        # an explicit mesh file
+        n = len(engine.calls)
+        run({"action": "snapshot"}, root)
+        first = engine.calls[n:]
+        assert [list(c["blobs"]) for c in first] == [[], ["meshes/m-0123456789ab.json"]]   # asked, then sent
+        assert first[0]["refs"] == ["meshes/m-0123456789ab.json"] and len(first[0]["cache"]) == 32
+        n = len(engine.calls)
+        run({"action": "edit", "ops": [{"op": "world", "strength": 2}], "snapshot": True}, root)
+        assert [list(c["blobs"]) for c in engine.calls[n:]] == [[]]                         # kept: nothing goes up
+
+    def test_the_cache_is_per_workspace(self, root, monkeypatch):
+        import types as t
+        from cycls._agent.studio import engine as E
+        monkeypatch.setattr("cycls._function.main._get_api_key", lambda: "k1")
+        a, b = E.cache_key(t.SimpleNamespace(root=str(root))), E.cache_key(t.SimpleNamespace(root=str(root / "x")))
+        assert a != b and len(a) == 32
+        monkeypatch.setattr("cycls._function.main._get_api_key", lambda: "k2")
+        assert E.cache_key(t.SimpleNamespace(root=str(root))) != a                          # another key, another shelf
+
     def test_snapshot_sends_the_scene_and_returns_the_image(self, root, engine):
         out = run({"action": "snapshot"}, root)
         call = engine.calls[-1]
@@ -439,7 +466,7 @@ class TestEngine:
         assert run({"action": "render"}, root) == "Error: the scene has no render camera — add one (render.camera)"
 
     def test_engine_unreachable(self, root, monkeypatch):
-        def boom(name, timeout=None):
+        def boom(name, timeout=None, **_):
             def fn(**kw):
                 raise ConnectionError("down")
             return fn

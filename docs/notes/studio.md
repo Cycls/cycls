@@ -142,7 +142,12 @@ with what it uploads (~4 s a megabyte), for an agent on a slow uplink. Files of 
 gzip'd when that saves 10% (`engine.pack`; the engine unpacks, capped at its 110 MB) and big
 outputs come back the same way (`gzip=True`): lossless — a .blend saved uncompressed is ~27%
 of itself, mesh files well under half; images and a compressed .blend go as they are. The
-engine deploys first: an older one refuses `.gz` names.
+engine deploys first: an older one refuses `.gz` names. Mesh and image files go by name first (`refs`,
+`cache` = a per-workspace key from the API key and the workspace path): the engine keeps what
+it's been sent, per workspace and outside the jobs tree (a sandboxed worker never sees it),
+answers `missing`, and only those follow; least recently used go past 1.2 GB. The calls are
+`sticky` (Cloud Run's affinity cookie), so they tend to reach the instance that has them —
+the venue's snapshot went from 39 s to 16 s, 13.6 of it Blender's.
 
 **Big scenes.** Up to 10,000 objects — a kitbashed venue is thousands of objects sharing a few
 hundred meshes. What scales with them: the model's summary lists the selection and the top level

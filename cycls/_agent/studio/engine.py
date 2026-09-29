@@ -3,6 +3,8 @@ the scene document and the mesh files it references go up with every call, and
 bytes come back in the reply (never a pickle built from Blender's output)."""
 import asyncio
 import gzip
+import hashlib
+import pathlib
 
 from . import engine_name, renderer_name
 
@@ -13,6 +15,7 @@ AGENT_OPS = APP_OPS | {"script", "import", "texture"}
 
 
 PACK_MIN = 256_000           # smaller files aren't worth compressing
+CACHEABLE = ("meshes/", "textures/")     # named by their content: the engine may already have them
 
 
 class EngineError(Exception):
@@ -40,19 +43,46 @@ def unpack(files):
             for n, v in (files or {}).items()}
 
 
-async def call(op, scene, *, blobs=None, params=None):
-    import cycls
-    from cycls._function.remote import RemoteError
+def cache_key(ws):
+    """This workspace's shelf in the engine's file cache: private to whoever holds the API key."""
+    from cycls._function.main import _get_api_key
+    return hashlib.sha256(f"{_get_api_key()}|{pathlib.Path(ws.root).resolve()}".encode()).hexdigest()[:32]
+
+
+async def call(op, scene, *, blobs=None, params=None, ws=None):
+    """One engine op. With `ws`, the mesh and image files go by name first: the engine keeps
+    what it has been sent (per workspace), answers with what it's missing, and only those
+    follow — a snapshot after a lighting change sends none of a big scene's meshes."""
     name = renderer_name() if op == "render" else engine_name()
     if not name:
         raise EngineError("Studio isn't configured (CYCLS_STUDIO_ENGINE)")
+    blobs = blobs or {}
+    if ws is None:
+        return await _send(name, op, scene, blobs, params)
+    ns = cache_key(ws)
+    held = {n: v for n, v in blobs.items() if n.startswith(CACHEABLE)}
+    inline = {n: v for n, v in blobs.items() if n not in held}
+    extra = {"cache": ns, "refs": sorted(held)}
+    r = await _send(name, op, scene, inline, params, extra)
+    for attempt in (1, 2):                 # the missing ones; then everything, if another instance answered
+        if r.get("ok") or not r.get("missing"):
+            break
+        send = {n: held[n] for n in r["missing"] if n in held} if attempt == 1 else held
+        r = await _send(name, op, scene, {**inline, **send}, params, extra)
+    return _result(r)
+
+
+async def _send(name, op, scene, blobs, params, extra=None):
+    import cycls
+    from cycls._function.remote import RemoteError
     packed = await asyncio.to_thread(pack, blobs)
     # A 100 MB scene takes minutes just to go up from a slow uplink (a laptop running the
     # agent): the timeout grows with what's sent, ~4 s a megabyte.
     up = sum(len(v) for v in packed.values())
-    fn = cycls.remote(name, timeout=TIMEOUTS.get(op, 120) + up // 250_000)
+    fn = cycls.remote(name, timeout=TIMEOUTS.get(op, 120) + up // 250_000, sticky=True)
     try:
-        r = await asyncio.to_thread(fn, op=op, scene=scene, blobs=packed, params=params or {}, gzip=True)
+        r = await asyncio.to_thread(fn, op=op, scene=scene, blobs=packed, params=params or {}, gzip=True,
+                                    **(extra or {}))
     except RemoteError as e:
         if getattr(e, "status", None) in (429, 503):
             raise EngineError("the Studio engine is busy — try again in a minute") from None
@@ -61,8 +91,12 @@ async def call(op, scene, *, blobs=None, params=None):
         raise EngineError(f"the Studio engine is unavailable ({type(e).__name__}: {str(e)[:300]})") from None
     if not isinstance(r, dict):
         raise EngineError(f"the Studio engine returned {type(r).__name__}, not a result")
+    if r.get("ok") and any(n.endswith(".gz") for n in r.get("files") or {}):
+        r["files"] = await asyncio.to_thread(unpack, r["files"])
+    return r if extra else _result(r)
+
+
+def _result(r):
     if not r.get("ok"):
         raise EngineError(str(r.get("error") or "the engine failed")[:2000])
-    if any(n.endswith(".gz") for n in r.get("files") or {}):
-        r["files"] = await asyncio.to_thread(unpack, r["files"])
     return r

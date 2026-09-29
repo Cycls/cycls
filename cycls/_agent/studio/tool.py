@@ -317,7 +317,7 @@ async def _edit(ws, inp):
     shown = ", ".join(touched[:12]) + ("…" if len(touched) > 12 else "")
     ack = f"Saved rev {saved['rev']}: changed {shown}." + _layout(saved)
     if inp.get("snapshot"):
-        r = await engine.call("snapshot", saved, blobs=store.blobs(ws, saved, "snapshot"), params={"samples": 12})
+        r = await engine.call("snapshot", saved, blobs=store.blobs(ws, saved, "snapshot"), params={"samples": 12}, ws=ws)
         jpg = r["files"]["preview.jpg"]
         snap = _command({"type": "snapshot", "rev": saved["rev"],
                          "preview": "data:image/jpeg;base64," + base64.b64encode(jpg).decode()})
@@ -330,7 +330,7 @@ async def _edit(ws, inp):
 async def _snapshot(ws, inp):
     doc = await store.load(ws)
     r = await engine.call("snapshot", doc, blobs=store.blobs(ws, doc, "snapshot"),
-                          params={"samples": inp.get("samples") or 12})
+                          params={"samples": inp.get("samples") or 12}, ws=ws)
     jpg = r["files"]["preview.jpg"]
     ui = _command({"type": "snapshot", "rev": doc["rev"],
                    "preview": "data:image/jpeg;base64," + base64.b64encode(jpg).decode()})
@@ -343,7 +343,7 @@ async def _snapshot(ws, inp):
 async def _render(ws, inp):
     doc = await store.load(ws)
     params = {k: inp[k] for k in ("resolution", "samples") if inp.get(k)}
-    r = await engine.call("render", doc, blobs=store.blobs(ws, doc, "render"), params=params)
+    r = await engine.call("render", doc, blobs=store.blobs(ws, doc, "render"), params=params, ws=ws)
     res = r["result"]
     png, jpg = r["files"]["render.png"], r["files"]["preview.jpg"]
     rel = _free(ws.root, "renders", _slug(inp.get("name"), "studio"), "png")
@@ -384,7 +384,7 @@ async def _apply(ws, inp):
                 return 'Error: too many elements selected to pass on — use "all" or explicit indices.'
             params["selection"] = {_ELEMENTS[ev[1]][0]: ev[2]}
         r = await engine.call("apply", before, blobs=store.blobs(ws, before, "apply"),
-                              params={"id": oid, "op": op, **params})
+                              params={"id": oid, "op": op, **params}, ws=ws)
         res = r["result"]
         rel = store.write_mesh(ws, res["mesh_id"], r["files"]["mesh.json"])
         after = json.loads(json.dumps(before))
@@ -416,7 +416,7 @@ async def _script(ws, inp):
         return "Error: script needs `code` (Blender Python)."
     async with store.lock(ws):
         before = await store.load(ws)
-        r = await engine.call("script", before, blobs=store.blobs(ws, before, "script"), params={"code": code})
+        r = await engine.call("script", before, blobs=store.blobs(ws, before, "script"), params={"code": code}, ws=ws)
         res = r["result"]
         _write_outputs(ws, r["files"])
         after = S.prune_meshes(S.normalize(res["scene"]))
@@ -472,7 +472,7 @@ async def _export(ws, inp):
     if fmt not in EXPORT_EXTS:
         return f"Error: format is one of {', '.join(EXPORT_EXTS)}."
     doc = await store.load(ws)
-    r = await engine.call("export", doc, blobs=store.blobs(ws, doc, "export"), params={"format": fmt})
+    r = await engine.call("export", doc, blobs=store.blobs(ws, doc, "export"), params={"format": fmt}, ws=ws)
     data = r["files"][r["result"]["file"]]
     rel = _free(ws.root, "exports", _slug(inp.get("name"), "scene"), EXPORT_EXTS[fmt])
     await asyncio.to_thread((pathlib.Path(ws.root) / rel).write_bytes, data)

@@ -139,7 +139,7 @@ def studio_router(ws_dep, user_dep):
         if op == "render":
             _rendering.add(ws.subject)
         try:
-            result = await engine.call(op, doc, blobs=blobs, params=params)
+            result = await engine.call(op, doc, blobs=blobs, params=params, ws=ws)
         except engine.EngineError as e:
             return {"ok": False, "error": str(e)}
         finally:
