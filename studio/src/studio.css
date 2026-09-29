@@ -45,7 +45,9 @@ input[type=checkbox] { accent-color: var(--blue); }
 .props { border-right: 0; border-left: 1px solid var(--line); }
 .panel-h { padding: 6px 10px; font-weight: 600; background: var(--panel2); border-bottom: 1px solid var(--line);
   position: sticky; top: 0; z-index: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.orow { display: flex; align-items: center; gap: 6px; padding: 3px 6px; cursor: pointer; white-space: nowrap; }
+.orows { position: relative; }
+.orow { position: absolute; left: 0; right: 0; height: 22px; box-sizing: border-box; display: flex; align-items: center; gap: 6px;
+  padding: 0 6px; cursor: pointer; white-space: nowrap; }
 .orow:hover { background: #333; }
 .orow.sel { background: var(--blue-dim); }
 .orow.active { background: var(--blue); color: #fff; }

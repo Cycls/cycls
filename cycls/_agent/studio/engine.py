@@ -21,7 +21,10 @@ async def call(op, scene, *, blobs=None, params=None):
     name = renderer_name() if op == "render" else engine_name()
     if not name:
         raise EngineError("Studio isn't configured (CYCLS_STUDIO_ENGINE)")
-    fn = cycls.remote(name, timeout=TIMEOUTS.get(op, 120))
+    # A 100 MB scene takes minutes just to go up from a slow uplink (a laptop running the
+    # agent): the timeout grows with what's sent, ~4 s a megabyte.
+    up = sum(len(v) for v in (blobs or {}).values())
+    fn = cycls.remote(name, timeout=TIMEOUTS.get(op, 120) + up // 250_000)
     try:
         r = await asyncio.to_thread(fn, op=op, scene=scene, blobs=blobs or {}, params=params or {})
     except RemoteError as e:

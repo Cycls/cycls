@@ -10,6 +10,8 @@ import { estimateSeconds } from "./eta.js";
 
 const SESSION = Math.random().toString(36).slice(2, 8);
 const UNDO_LIMIT = 128;
+// Every undo step is a whole document; a scene of thousands of objects keeps fewer of them.
+const undoLimit = (doc) => (Object.keys(doc?.objects || {}).length > 1000 ? 16 : UNDO_LIMIT);
 const VIEW_ITEMS = 2000;               // element selections past this go to the agent as a count only
 // What an object keeps when Blender hands back its mesh (the Studio tool keeps the same).
 const KEEP = ["name", "parent", "location", "rotation", "scale", "visible", "renderable", "materials", "shading", "modifiers"];
@@ -70,7 +72,7 @@ export function createApp(viewportFactory) {
 
   function commit(next, label = "edit") {
     if (deepEqual(next, s.doc)) return;
-    s.undo = [...s.undo.slice(-UNDO_LIMIT + 1), { doc: s.doc, label }];
+    s.undo = [...s.undo.slice(-undoLimit(s.doc) + 1), { doc: s.doc, label }];
     s.redo = [];
     s.doc = next;
     s.selection = s.selection.filter((id) => id in next.objects);
@@ -169,7 +171,7 @@ export function createApp(viewportFactory) {
       if (s.base && cmd.base === s.base.rev) {
         const remote = patch(s.base, cmd);
         remote.rev = cmd.rev;
-        s.undo = [...s.undo.slice(-UNDO_LIMIT + 1), { doc: s.doc, label: `Agent: ${cmd.label || "edit"}` }];
+        s.undo = [...s.undo.slice(-undoLimit(s.doc) + 1), { doc: s.doc, label: `Agent: ${cmd.label || "edit"}` }];
         const conflicts = absorb(remote, "by the agent");
         if (cmd.label && !conflicts.length) toast(`Agent: ${cmd.label}`);
       } else {
@@ -602,6 +604,22 @@ export function createApp(viewportFactory) {
     }
   }
 
+  // Mesh files arrive one at a time; the viewport takes them in batches. A big scene has
+  // hundreds of files and thousands of objects — a sync per file would be a sync per file
+  // of every object.
+  const arrived = new Set();
+  let arrivedTimer = null;
+  function meshArrived(path) {
+    arrived.add(path);
+    arrivedTimer ||= setTimeout(() => {
+      const paths = new Set(arrived);
+      arrived.clear();
+      arrivedTimer = null;
+      vp?.invalidate((id, o) => paths.has(s.doc.meshes[o.mesh]?.data));
+      vp?.sync(s.doc, s.selection, s.shading);
+    }, 150);
+  }
+
   function explicitGeometry(mid, m, shading = "auto") {
     const key = `${m?.data}|${shading}`;
     if (meshCache.has(key)) return meshCache.get(key);
@@ -613,11 +631,8 @@ export function createApp(viewportFactory) {
     }
     if (m?.data && !meshLoading.has(m.data)) {
       const path = m.data;
-      loadMesh(path).then(() => {
-        // Whatever stood in for it until now gets rebuilt with the real thing.
-        vp?.invalidate((id, o) => s.doc.meshes[o.mesh]?.data === path);
-        vp?.sync(s.doc, s.selection, s.shading);
-      }).catch(() => toast(`Couldn't load mesh ${path}`, "error"));
+      // Whatever stands in for it until then gets rebuilt with the real thing.
+      loadMesh(path).then(() => meshArrived(path)).catch(() => toast(`Couldn't load mesh ${path}`, "error"));
     }
     return null;
   }
@@ -681,7 +696,7 @@ export function createApp(viewportFactory) {
   // What "frame all" means: the subjects, not the studio sweep or a ground plane.
   function subjects() {
     return Object.entries(s.doc.objects)
-      .filter(([id, o]) => (o.type === "mesh" || o.type === "text") && o.visible && !isBackdrop(s.doc, id))
+      .filter(([id, o]) => (o.type === "mesh" || o.type === "text") && o.visible && !isBackdrop(s.doc, id) && !vp?.isGround(id))
       .map(([id]) => id);
   }
 

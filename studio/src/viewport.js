@@ -15,6 +15,11 @@ import { WORLDS } from "./worlds.js";
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 const DEG = Math.PI / 180;
 const SNAP = 0.1;                                  // snapping's step for a move, in metres
+let PLACEHOLDER = null;                              // one stand-in for every mesh still loading
+const placeholder = () => {
+  if (!PLACEHOLDER) { PLACEHOLDER = new THREE.BoxGeometry(0.4, 0.4, 0.4); PLACEHOLDER.userData.shared = true; }
+  return PLACEHOLDER;
+};
 const ORANGE = 0xffa028, ORANGE_DIM = 0xe56d1c;
 const GREY = new THREE.Color("#3d3d3d");            // Solid shading's backdrop, as Blender's
 // Blender watts → three's physical units, tuned by eye against Cycles renders.
@@ -322,6 +327,30 @@ export class Viewport {
     this.touch();
   }
 
+  // Flat and wide — a floor, a site's terrain, a backdrop sheet: set dressing to stand
+  // things on, not a subject to frame or light for (scene.py _is_ground).
+  isGround(id) {
+    const s = this.nodes.get(id)?.userData.surface;
+    if (!s?.geometry) return false;
+    if (!s.geometry.boundingBox) s.geometry.computeBoundingBox();
+    s.updateWorldMatrix(true, false);
+    const size = s.geometry.boundingBox.clone().applyMatrix4(s.matrixWorld).getSize(new THREE.Vector3());
+    return size.z < 0.03 * Math.max(size.x, size.y, 1e-9);
+  }
+
+  // Where the subjects are: visible meshes and text that aren't the set or the ground.
+  subjectBox(doc) {
+    const box = new THREE.Box3();
+    for (const [id, node] of this.nodes) {
+      const o = doc.objects[id];
+      if ((o.type === "mesh" || o.type === "text") && o.visible && !isBackdrop(doc, id) && node.userData.surface
+          && !this.isGround(id)) {
+        box.expandByObject(node.userData.surface);
+      }
+    }
+    return box;
+  }
+
   // What Material Preview lights with: what the subjects would see in Blender — the
   // world (its colour or its HDRI) past the backdrop, which the scene's lamps light.
   // Baked at the subjects' centre, again only when that changes.
@@ -334,13 +363,7 @@ export class Viewport {
       else if (isBackdrop(doc, id)) set.push([id, at, doc.meshes[o.mesh], (o.materials || []).map((mid) => mid && doc.materials[mid])]);
     }
     this.scene.updateMatrixWorld();
-    const box = new THREE.Box3();
-    for (const [id, node] of this.nodes) {
-      const o = doc.objects[id];
-      if ((o.type === "mesh" || o.type === "text") && o.visible && !isBackdrop(doc, id) && node.userData.surface) {
-        box.expandByObject(node.userData.surface);
-      }
-    }
+    const box = this.subjectBox(doc);
     const at = box.isEmpty() ? new THREE.Vector3(0, 0, 1) : box.getCenter(new THREE.Vector3());
     const key = JSON.stringify([w, set, lamps, at.toArray().map((v) => v.toFixed(1))]);
     if (key === this.probeKey) return this.probeTarget.texture;
@@ -386,13 +409,7 @@ export class Viewport {
   shadowRig(doc) {
     const on = this.shadows && this.shading === "material";
     this.scene.updateMatrixWorld();
-    const box = new THREE.Box3();
-    for (const [id, node] of this.nodes) {
-      const o = doc.objects[id];
-      if ((o.type === "mesh" || o.type === "text") && o.visible && !isBackdrop(doc, id) && node.userData.surface) {
-        box.expandByObject(node.userData.surface);
-      }
-    }
+    const box = this.subjectBox(doc);
     const lamps = on && !box.isEmpty() ? Object.entries(doc.objects).filter(([, o]) => o.type === "light" && o.visible) : [];
     const sphere = box.isEmpty() ? new THREE.Sphere(new THREE.Vector3(0, 0, 1), 1) : box.getBoundingSphere(new THREE.Sphere());
     const key = JSON.stringify([on, lamps.map(([id, o]) => [id, o.light, ...this.nodes.get(id).matrixWorld.elements.map((v) => +v.toFixed(3))]),
@@ -505,7 +522,7 @@ export class Viewport {
     if (this.edit?.group && this.edit.group.parent === node) node.remove(this.edit.group);   // the cage outlives its node
     for (const child of [...node.children]) if (child.userData.id && child.userData.pick) this.root.add(child);
     node.parent?.remove(node);
-    node.traverse((n) => { if (n.geometry && !n.userData.shared) n.geometry.dispose(); });
+    node.traverse((n) => { if (n.geometry && !n.userData.shared && !n.geometry.userData.shared) n.geometry.dispose(); });
     this.nodes.delete(id);
   }
 
@@ -609,7 +626,7 @@ export class Viewport {
         const m = doc.meshes[o.mesh];
         geom = m?.primitive ? primitiveGeometry(m) : this.hooks.explicitGeometry?.(o.mesh, m, o.shading) || null;
       }
-      if (!geom) geom = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+      if (!geom) geom = placeholder();                       // until its mesh file arrives
       if (ev) geom.userData.shared = true;
       const mesh = geom.userData.line
         ? new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0xdddddd }))

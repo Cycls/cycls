@@ -137,7 +137,16 @@ engine refuses those two ops rather than run them bare.
 
 **Limits.** 100 MB of meshes and images per scene (the engine takes 110 MB in, 160 MB out — an
 import's meshes come back base64), 100 MB per imported file, per-op timeouts, `max_instances=4` (a cost ceiling, shared by
-everyone). Busy (429/503) reaches the person as "the Studio engine is busy".
+everyone). Busy (429/503) reaches the person as "the Studio engine is busy". A call's timeout grows
+with what it uploads (~4 s a megabyte), for an agent on a slow uplink.
+
+**Big scenes.** Up to 10,000 objects — a kitbashed venue is thousands of objects sharing a few
+hundred meshes. What scales with them: the model's summary lists the selection and the top level
+(80 rows) and counts the rest; the floating-object check skips scenes of over 300 parts; the
+outliner draws only the rows in view; mesh files arriving in a burst reach the viewport in one
+sync; undo keeps 16 steps past 1,000 objects; and flat, wide objects (a site's terrain) count as
+ground — not framed or lit for. An import hides volume-only objects (haze, fog), which as a
+surface would box everything in.
 
 ## The app's route
 

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "preact/hooks";
-import { SCHEMA, childrenOf, make, TEXTURE_FIELDS } from "./doc.js";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { SCHEMA, make, TEXTURE_FIELDS } from "./doc.js";
 import { FALLOFFS } from "./mesh.js";
 
 const PRIMS = ["cube", "uv_sphere", "ico_sphere", "cylinder", "cone", "torus", "plane", "grid", "circle", "monkey"];
@@ -167,13 +167,50 @@ function Header({ s, a }) {
 
 // ─── outliner ────────────────────────────────────────────────────────────────
 
+// The tree as rows, [id, depth] — once per change of the objects, not per render.
+function outlineRows(objects) {
+  const kids = new Map(), roots = [];
+  for (const [id, o] of Object.entries(objects)) {
+    if (o.parent && o.parent in objects) {
+      if (!kids.has(o.parent)) kids.set(o.parent, []);
+      kids.get(o.parent).push(id);
+    } else roots.push(id);
+  }
+  const byName = (x, y) => objects[x].name.localeCompare(objects[y].name);
+  const out = [];
+  const walk = (id, depth) => {
+    out.push([id, depth]);
+    for (const c of (kids.get(id) || []).sort(byName)) walk(c, depth + 1);
+  };
+  roots.sort(byName).forEach((id) => walk(id, 0));
+  return out;
+}
+
+const ROW_H = 22;
+// A windowed list: a scene of thousands of objects draws only the rows in view.
 function Outliner({ s, a }) {
   const [editing, setEditing] = useState(null);
-  const row = (id, depth) => {
+  const [view, setView] = useState({ top: 0, height: 900 });
+  const box = useRef(null), list = useRef(null);
+  const rows = useMemo(() => outlineRows(s.doc.objects), [s.doc.objects]);
+  const selected = useMemo(() => new Set(s.selection), [s.selection]);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return undefined;
+    const on = () => setView({ top: el.scrollTop - (list.current?.offsetTop || 0), height: el.clientHeight });
+    on();
+    el.addEventListener("scroll", on, { passive: true });
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(on) : null;
+    ro?.observe(el);
+    return () => { el.removeEventListener("scroll", on); ro?.disconnect(); };
+  }, []);
+  const first = Math.max(0, Math.floor(view.top / ROW_H) - 15);
+  const last = Math.min(rows.length, Math.ceil((view.top + view.height) / ROW_H) + 15);
+  const row = (id, depth, top) => {
     const o = s.doc.objects[id];
-    const sel = s.selection.includes(id);
+    const sel = selected.has(id);
     const active = s.selection.at(-1) === id;
-    return [<div key={id} class={`orow ${sel ? "sel" : ""} ${active ? "active" : ""}`} style={{ paddingLeft: 6 + depth * 14 }}
+    return <div key={id} class={`orow ${sel ? "sel" : ""} ${active ? "active" : ""}`} style={{ top, paddingLeft: 6 + depth * 14 }}
       onClick={(e) => a.select([id], e.shiftKey)} onDblClick={() => setEditing(id)}>
       <span class={`ticon t-${o.type}`}>{TYPE_ICON[o.type]}</span>
       {editing === id
@@ -183,11 +220,28 @@ function Outliner({ s, a }) {
       {s.doc.render.camera === id && <span class="badge">render</span>}
       <button class={`eye ${o.visible ? "" : "off"}`} title="Hide in viewport and render"
         onClick={(e) => { e.stopPropagation(); a.update((d) => { d.objects[id].visible = !o.visible; }, "visibility"); }}>{o.visible ? "◉" : "◯"}</button>
-    </div>, ...childrenOf(s.doc, id).sort((x, y) => s.doc.objects[x].name.localeCompare(s.doc.objects[y].name)).flatMap((c) => row(c, depth + 1))];
+    </div>;
   };
-  const roots = Object.keys(s.doc.objects).filter((id) => !s.doc.objects[id].parent || !(s.doc.objects[id].parent in s.doc.objects))
-    .sort((x, y) => s.doc.objects[x].name.localeCompare(s.doc.objects[y].name));
-  return <div class="outliner"><div class="panel-h">Scene</div>{roots.flatMap((id) => row(id, 0))}</div>;
+  return <div class="outliner" ref={box}>
+    <div class="panel-h">Scene{rows.length > 50 ? ` · ${rows.length} objects` : ""}</div>
+    <div class="orows" ref={list} style={{ height: rows.length * ROW_H }}>
+      {rows.slice(first, last).map(([id, depth], i) => row(id, depth, (first + i) * ROW_H))}
+    </div>
+  </div>;
+}
+
+// An object picker: a list for a scene of dozens, an id to type for one of thousands.
+const PICK_MAX = 300;
+function ObjectPick({ s, value, onChange, filter }) {
+  const ids = Object.keys(s.doc.objects);
+  if (ids.length > PICK_MAX) {
+    return <input value={value || ""} placeholder="object id" title="An object's id (the outliner shows names)"
+      onChange={(e) => { const v = e.currentTarget.value.trim(); if (!v || (v in s.doc.objects && filter(v, s.doc.objects[v]))) onChange(v || null); }} />;
+  }
+  return <select value={value || ""} onChange={(e) => onChange(e.currentTarget.value || null)}>
+    <option value="">—</option>
+    {ids.filter((k) => filter(k, s.doc.objects[k])).map((k) => <option key={k} value={k}>{s.doc.objects[k].name}</option>)}
+  </select>;
 }
 
 // ─── properties ──────────────────────────────────────────────────────────────
@@ -200,8 +254,8 @@ function ObjectPanel({ s, a, id }) {
     <div class="row col"><span>Location</span><Vec value={o.location} onChange={(v) => set("location", v)} /></div>
     <div class="row col"><span>Rotation °</span><Vec value={o.rotation} step={5} onChange={(v) => set("rotation", v)} /></div>
     <div class="row col"><span>Scale</span><Vec value={o.scale} onChange={(v) => set("scale", v)} /></div>
-    <label class="row"><span>Parent</span><select value={o.parent || ""} onChange={(e) => set("parent", e.currentTarget.value || null)}>
-      <option value="">—</option>{Object.entries(s.doc.objects).filter(([k]) => k !== id).map(([k, x]) => <option key={k} value={k}>{x.name}</option>)}</select></label>
+    <label class="row"><span>Parent</span><ObjectPick s={s} value={o.parent} onChange={(v) => set("parent", v)}
+      filter={(k) => k !== id} /></label>
     <label class="row"><span>Renders</span><input type="checkbox" checked={o.renderable} onChange={(e) => set("renderable", e.currentTarget.checked)} /></label>
   </Section>;
 }
@@ -318,10 +372,8 @@ function ModifiersPanel({ s, a, id }) {
       <Fields spec={SCHEMA.modifiers[m.type]} values={m} skip={["object", "mirror_object"]}
         onChange={(k, v) => setMods((ms) => { ms[i][k] = v; }, `modifier ${k}`)} />
       {(m.type === "boolean" || m.type === "mirror") && <label class="row"><span>{m.type === "boolean" ? "Cutter" : "Mirror by"}</span>
-        <select value={(m.type === "boolean" ? m.object : m.mirror_object) || ""} onChange={(e) => setMods((ms) => {
-          ms[i][m.type === "boolean" ? "object" : "mirror_object"] = e.currentTarget.value || null;
-        }, "modifier object")}><option value="">—</option>{Object.entries(s.doc.objects).filter(([k, x]) => k !== id && x.type === "mesh")
-          .map(([k, x]) => <option key={k} value={k}>{x.name}</option>)}</select></label>}
+        <ObjectPick s={s} value={m.type === "boolean" ? m.object : m.mirror_object} filter={(k, x) => k !== id && x.type === "mesh"}
+          onChange={(v) => setMods((ms) => { ms[i][m.type === "boolean" ? "object" : "mirror_object"] = v; }, "modifier object")} /></label>}
     </div>)}
     <label class="row"><span>Add</span><select value="" onChange={(e) => {
       const t = e.currentTarget.value;

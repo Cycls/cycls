@@ -46,6 +46,7 @@ function fakeViewport() {
     leaveEdit() { vp.edit = null; vp.calls.push("leave"); },
     setTool(t) { vp.tool = t; }, setSnap() {}, setProportional() {},
     knifeCrossings: () => vp.crossings || [],
+    isGround: () => false,
   };
   return vp;
 }

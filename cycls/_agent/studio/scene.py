@@ -22,7 +22,9 @@ MAX_SLOTS = 32
 
 MAX_PIXELS = 1920 * 1080
 MAX_SAMPLES = 256
-MAX_OBJECTS = 500
+MAX_OBJECTS = 10_000        # a kitbashed city block is thousands of objects sharing a few hundred meshes
+SUMMARY_OBJECTS = 80        # the model's table lists this many; the rest by count
+LAYOUT_SUBJECTS = 300       # the floating check compares every pair; past this it's skipped
 MAX_TEXTURES = 64
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _HEX = re.compile(r"^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
@@ -1097,6 +1099,8 @@ def layout_check(doc, tol=0.02):
     """Mechanical QA for the model's own look: things floating above whatever is
     under them, sunk through the floor, or a studio floor that isn't at z = 0."""
     issues = []
+    if sum(o["type"] in ("mesh", "text") for o in doc["objects"].values()) > LAYOUT_SUBJECTS:
+        return issues                      # thousands of parts: pairwise checks would take seconds per edit
     subjects = [k for k in subject_ids(doc) if doc["objects"][k]["parent"] is None]
     bounds = {k: world_bounds(doc, k) for k in subjects}
     for k in subjects:
@@ -1280,8 +1284,14 @@ def summary(doc, selection=None):
     lines = [f"Scene rev {doc.get('rev', 0)} — {len(doc['objects'])} objects, Z up, metres, angles in degrees."]
     sel = set(selection or [])
     if sel:
-        lines.append(f"Selected in the Studio: {', '.join(sorted(sel))} (refer to them as id \"selected\").")
-    for oid, o in doc["objects"].items():
+        lines.append(f"Selected in the Studio: {', '.join(sorted(sel)[:20])}{' …' if len(sel) > 20 else ''} "
+                     "(refer to them as id \"selected\").")
+    listed = list(doc["objects"])
+    if len(listed) > SUMMARY_OBJECTS:          # a big scene: the selection and the top level, the rest counted
+        top = [k for k in listed if k in sel] + [k for k in listed if k not in sel and doc["objects"][k]["parent"] is None]
+        listed = top[:SUMMARY_OBJECTS]
+    for oid in listed:
+        o = doc["objects"][oid]
         bits = [f"- {oid} ({o['type']}"]
         if o["type"] == "mesh":
             m = doc["meshes"][o["mesh"]]
@@ -1317,12 +1327,21 @@ def summary(doc, selection=None):
         if oid in sel:
             bits.append("[selected]")
         lines.append(" ".join(bits))
+    if len(listed) < len(doc["objects"]):
+        shown = set(listed)
+        rest = [o for k, o in doc["objects"].items() if k not in shown]
+        kinds = {}
+        for o in rest:
+            kinds[o["type"]] = kinds.get(o["type"], 0) + 1
+        lines.append(f"… and {len(rest)} more objects ({', '.join(f'{n} {t}' for t, n in sorted(kinds.items(), key=lambda kv: -kv[1]))}) "
+                     "not listed — mostly children of the ones above; address them by id or \"selected\".")
     if doc["materials"]:
+        mats = list(doc["materials"].items())
         lines.append("Materials: " + "; ".join(
             f"{k} {m['base_color']} metal {m['metallic']:g} rough {m['roughness']:g}"
             + (f" glass" if m["transmission"] > 0.5 else "") + (f" emit {m['emission']:g}" if m["emission"] else "")
             + "".join(f" {f[:-8].replace('_', ' ')} image {m[f]}" for f in TEXTURE_FIELDS if m.get(f))
-            for k, m in doc["materials"].items()))
+            for k, m in mats[:40]) + (f"; … and {len(mats) - 40} more" if len(mats) > 40 else ""))
     if doc.get("textures"):
         lines.append("Textures: " + "; ".join(f"{k} {t['width']}x{t['height']}" + (" with alpha" if t["alpha"] else "")
                                               for k, t in doc["textures"].items()))

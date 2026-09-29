@@ -428,6 +428,44 @@ def test_add_infers_light_camera_and_text_types():
         S.normalize({"objects": {"x": {"type": "empty", "light": {}}}})
 
 
+# ─── big scenes ─────────────────────────────────────────────────────────────
+
+def _venue(n=5100, roots=40):
+    """A kitbashed site: thousands of objects sharing a few hundred meshes, mostly top-level."""
+    doc = S.new_scene()
+    doc["meshes"].update({f"m{j}": {"primitive": "cube"} for j in range(300)})
+    doc["materials"].update({f"mat{j}": {"name": f"M{j}"} for j in range(60)})
+    for i in range(roots):
+        doc["objects"][f"root{i}"] = {"type": "empty", "location": [i * 3, 0, 0]}
+    for i in range(n):
+        doc["objects"][f"o{i}"] = {"type": "mesh", "mesh": f"m{i % 300}", "materials": [f"mat{i % 60}"],
+                                   "parent": f"root{i % roots}" if i % 2 else None, "location": [i * 0.1, 0, 0.5]}
+    return S.normalize(doc)
+
+
+class TestBigScenes:
+    def test_thousands_of_objects_are_a_scene(self):
+        doc = _venue()
+        assert len(doc["objects"]) == 5143
+        with pytest.raises(S.SceneError, match="at most 10000"):
+            S.normalize({**doc, "objects": {**doc["objects"],
+                                            **{f"x{i}": {"type": "empty"} for i in range(S.MAX_OBJECTS)}}})
+
+    def test_the_summary_lists_the_top_level_and_counts_the_rest(self):
+        doc = _venue()
+        text = S.summary(doc, selection=["o1"])
+        lines = text.splitlines()
+        assert len(text) < 12_000 and sum(ln.startswith("- ") for ln in lines) == S.SUMMARY_OBJECTS
+        assert "- o1 (mesh cube)" in text                            # the selection first, parented or not
+        assert "… and 5063 more objects (5063 mesh) not listed" in text
+        assert "; … and 21 more" in text                              # 61 materials (the default too), 40 named
+
+    def test_layout_checks_step_aside_for_thousands_of_parts(self):
+        doc = _venue()
+        doc["objects"]["o0"]["location"] = [0, 0, 50]                 # floating — but not worth 25M comparisons
+        assert S.layout_check(doc) == []
+
+
 # ─── diff / merge ───────────────────────────────────────────────────────────
 
 class TestMerge:

@@ -27,7 +27,7 @@ export const MSG = {
 // holds the matching app's port forwards it. `path: "*"` reaches every open app.
 export const APP_COMMAND_EVENT = "cycls:app-command";
 
-export const MAX_ENGINE_BYTES = 2_000_000;
+export const MAX_ENGINE_BYTES = 16_000_000;     // a Studio scene of thousands of objects is a few MB
 export const MAX_ASK_CHARS = 1000;
 const ASK_EVERY_MS = 2000;
 

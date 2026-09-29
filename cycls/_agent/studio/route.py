@@ -20,7 +20,7 @@ from . import APP_DIR, SLUG, engine, store
 from . import scene as S
 from .tool import EXPORT_EXTS, _free, _slug
 
-MAX_BODY = 2_500_000
+MAX_BODY = 16_000_000                 # the scene document rides along (~2 MB at 5,000 objects)
 CALLS_PER_MINUTE = 60
 RENDERS_PER_HOUR = 30
 _calls, _renders, _rendering = {}, {}, set()
