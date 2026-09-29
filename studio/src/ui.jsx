@@ -230,21 +230,34 @@ function DataPanel({ s, a, id }) {
 
 function MaterialPanel({ s, a, id }) {
   const o = s.doc.objects[id];
+  const [picked, setPicked] = useState(0);
   if (o.type !== "mesh" && o.type !== "text") return null;
-  const m = o.material && s.doc.materials[o.material];
-  const setM = (k, v) => a.update((d) => { d.materials[o.material][k] = v; }, `material ${k}`);
+  const slots = o.materials || [];
+  const slot = Math.min(picked, Math.max(0, slots.length - 1));
+  const mid = slots[slot] || null;
+  const m = mid && s.doc.materials[mid];
+  const setM = (k, v) => a.update((d) => { d.materials[mid][k] = v; }, `material ${k}`);
   return <Section title="Material">
-    <label class="row"><span>Uses</span><select value={o.material || ""} onChange={(e) => a.update((d) => { d.objects[id].material = e.currentTarget.value || null; }, "material")}>
-      <option value="">—</option>{Object.entries(s.doc.materials).map(([k, x]) => <option key={k} value={k}>{x.name}</option>)}</select>
-      <button title="New material" onClick={() => a.addMaterial(id)}>＋</button></label>
+    {slots.length > 1 && <div class="slots">{slots.map((x, i) => (
+      <button key={i} class={`slot ${i === slot ? "on" : ""}`} onClick={() => setPicked(i)} title={`Slot ${i + 1}`}>
+        <span class="swatch" style={{ background: x && s.doc.materials[x] ? s.doc.materials[x].base_color : "transparent" }} />
+        {x ? s.doc.materials[x]?.name : "—"}</button>))}</div>}
+    <label class="row"><span>{slots.length > 1 ? `Slot ${slot + 1}` : "Uses"}</span>
+      <select value={mid || ""} onChange={(e) => a.setSlot(id, slot, e.currentTarget.value || null)}>
+        <option value="">—</option>{Object.entries(s.doc.materials).map(([k, x]) => <option key={k} value={k}>{x.name}</option>)}</select>
+      <button title="New material" onClick={() => a.addMaterial(id, slot)}>＋</button></label>
+    <div class="row slot-tools"><span />
+      <div><button title="Add a material slot" onClick={() => { a.addSlot(id); setPicked(slots.length); }}>＋ Slot</button>
+        {slots.length > 1 && <button title="Remove this slot" onClick={() => { a.removeSlot(id, slot); setPicked(Math.max(0, slot - 1)); }}>− Slot</button>}
+        {s.mode === "edit" && s.edit?.id === id && <button title="The selected faces use this slot" onClick={() => a.edit.assignSlot(slot)}>Assign</button>}</div></div>
     {m && <>
       <label class="row"><span>Preset</span><select value={m.preset || ""} onChange={(e) => {
         const p = e.currentTarget.value;
-        a.update((d) => { d.materials[o.material] = make.material(m.name, p || null); }, "material preset");
+        a.update((d) => { d.materials[mid] = make.material(m.name, p || null); }, "material preset");
       }}><option value="">custom</option>{Object.keys(SCHEMA.material_presets).map((p) => <option key={p} value={p}>{label(p)}</option>)}</select></label>
       <Fields spec={SCHEMA.material} values={m} onChange={setM}
         skip={[...TEXTURE_FIELDS, ...MAPPING, ...(m.base_color_texture ? ["base_color"] : [])]} />
-      <ImagesPanel s={s} a={a} mid={o.material} m={m} setM={setM} />
+      <ImagesPanel s={s} a={a} mid={mid} m={m} setM={setM} />
     </>}
   </Section>;
 }

@@ -168,6 +168,17 @@ describe("images", () => {
   });
 });
 
+describe("material slots", () => {
+  it("an app that opens a version 1 scene works on slots", async () => {
+    const v1 = clone(scene());
+    v1.version = 1;
+    for (const o of Object.values(v1.objects)) if (o.materials) { o.material = o.materials[0] || null; delete o.materials; }
+    const { s } = await started(v1);
+    expect(s.doc.version).toBe(2);
+    expect(s.doc.objects.cube.materials).toEqual(["material"]);
+  });
+});
+
 describe("edit mode", () => {
   const explicit = () => {
     const side = M.toSidecar(cubeMesh());
@@ -275,6 +286,20 @@ describe("edit mode", () => {
     a.edit.setMode("vert");
     await a.edit.blender("inset", "inset");
     expect(s.edit.items).toEqual(M.selectedVerts(M.fromSidecar(inset), { mode: "face", items: [TOP] }).sort((x, y) => x - y));
+  });
+
+  it("Assign puts the selected faces in a slot, as a new mesh file", async () => {
+    const { doc, files } = explicit();
+    const { a, s, pick } = await started(doc, files);
+    a.select(["cube"]);
+    a.edit.toggle();
+    await vi.advanceTimersByTimeAsync(0);
+    a.edit.setMode("face");
+    pick(TOP);
+    a.edit.assignSlot(1);
+    expect(s.editMesh.mi[TOP]).toBe(1);
+    expect(s.doc.objects.cube.mesh).not.toBe("cube");
+    expect(s.undo.at(-1).label).toBe("assign material");
   });
 
   it("a primitive becomes an explicit mesh (with Blender) before editing", async () => {

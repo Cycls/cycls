@@ -150,7 +150,7 @@ class TestOps:
             {"op": "add", "primitive": "torus", "name": "Ring", "material": "gold", "on_floor": True}])
         assert touched == ["objects.ring", "meshes.ring"]
         ring = doc["objects"]["ring"]
-        assert ring["material"] == "gold" and doc["materials"]["gold"]["metallic"] == 1.0
+        assert ring["materials"] == ["gold"] and doc["materials"]["gold"]["metallic"] == 1.0
         assert S.world_bounds(doc, "ring")[0][2] == pytest.approx(0, abs=1e-9)
 
     def test_add_existing_id_is_refused(self):
@@ -203,7 +203,7 @@ class TestOps:
     def test_selected_resolves_to_the_viewers_selection(self):
         doc, touched = S.apply_ops(_ring_scene(), [{"op": "material", "preset": "chrome", "assign": "selected"}],
                                    selection=["ring", "pedestal"])
-        assert doc["objects"]["ring"]["material"] == doc["objects"]["pedestal"]["material"] == "chrome"
+        assert doc["objects"]["ring"]["materials"] == doc["objects"]["pedestal"]["materials"] == ["chrome"]
         with pytest.raises(S.SceneError, match="nothing is selected"):
             S.apply_ops(_ring_scene(), [{"op": "delete", "id": "selected"}], selection=[])
 
@@ -355,7 +355,7 @@ class TestTextures:
         o = doc["objects"]["sign"]
         assert o["type"] == "mesh" and doc["meshes"][o["mesh"]] == {"primitive": "plane", "size": 0.5}
         assert o["rotation"] == [90, 0, 0] and o["scale"] == [2.0, 1, 1]
-        assert doc["materials"][o["material"]]["base_color_texture"] == "logo"
+        assert doc["materials"][o["materials"][0]]["base_color_texture"] == "logo"
         with pytest.raises(S.SceneError, match=r"image: no texture"):
             S.apply_ops(S.new_scene(), [{"op": "add", "image": "logo"}])
 
@@ -381,6 +381,41 @@ class TestTextures:
         assert merged["textures"]["logo"]["width"] == 800 and not conflicts
         text = S.summary(local)
         assert "base color image logo" in text and "Textures: logo 800x400 with alpha" in text
+
+
+# ─── material slots (version 2) ─────────────────────────────────────────────
+
+class TestSlots:
+    def test_a_version_1_scene_reads_as_version_2(self):
+        v1 = {"version": 1, "objects": {"cube": {"type": "mesh", "mesh": "cube", "material": "m"},
+                                        "bare": {"type": "mesh", "mesh": "cube", "material": None}},
+              "meshes": {"cube": {"primitive": "cube"}}, "materials": {"m": {}}}
+        doc = S.normalize(v1)
+        assert doc["version"] == 2
+        assert doc["objects"]["cube"]["materials"] == ["m"] and doc["objects"]["bare"]["materials"] == []
+        assert "material" not in doc["objects"]["cube"]
+        assert S.normalize(copy.deepcopy(doc)) == doc
+
+    def test_material_still_means_slot_0(self):
+        doc, _ = S.apply_ops(S.new_scene(), [{"op": "material", "id": "red", "base_color": "#ff0000"},
+                                            {"op": "material", "id": "blue", "base_color": "#0000ff",
+                                             "assign": "cube", "slot": 1},
+                                            {"op": "set", "id": "cube", "material": "red"}])
+        assert doc["objects"]["cube"]["materials"] == ["red", "blue"]
+        assert "materials [red, blue] (slot per face)" in S.summary(doc)
+
+    def test_a_slot_past_the_end_is_named(self):
+        with pytest.raises(S.SceneError, match=r"slot: 'cube' has 1 slot\(s\) — use 1 to add one"):
+            S.apply_ops(S.new_scene(), [{"op": "material", "id": "x", "assign": "cube", "slot": 3}])
+        with pytest.raises(S.SceneError, match=r"materials\[1\]: no material 'nope'"):
+            S.normalize({**S.new_scene(), "objects": {**S.new_scene()["objects"],
+                                                      "cube": {**S.new_scene()["objects"]["cube"],
+                                                               "materials": ["material", "nope"]}}})
+
+    def test_an_import_renames_every_slot(self):
+        doc, _ = S.apply_ops(S.new_scene(), [{"op": "material", "id": "blue", "assign": "cube", "slot": 1}])
+        merged, _ = S.merge_fragment(doc, copy.deepcopy(doc))
+        assert merged["objects"]["cube_2"]["materials"] == ["material_2", "blue_2"]
 
 
 def test_add_infers_light_camera_and_text_types():

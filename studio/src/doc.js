@@ -40,11 +40,11 @@ const base = () => ({ parent: null, location: [0, 0, 0], rotation: [0, 0, 0], sc
 const title = (s) => String(s).replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 export const make = {
-  mesh: (name, mesh, extra = {}) => ({ name, type: "mesh", ...base(), material: null, shading: "auto", modifiers: [], mesh, ...extra }),
+  mesh: (name, mesh, extra = {}) => ({ name, type: "mesh", ...base(), materials: [], shading: "auto", modifiers: [], mesh, ...extra }),
   light: (name, kind = "point", extra = {}) => ({ name, type: "light", ...base(),
     light: { kind, color: "#ffffff", ...defaultsOf(schema.lights[kind]) }, ...extra }),
   camera: (name, extra = {}) => ({ name, type: "camera", ...base(), camera: defaultsOf(schema.camera), dof_focus: null, ...extra }),
-  text: (name, body = "Text", extra = {}) => ({ name, type: "text", ...base(), material: null, shading: "auto", modifiers: [],
+  text: (name, body = "Text", extra = {}) => ({ name, type: "text", ...base(), materials: [], shading: "auto", modifiers: [],
     text: { ...defaultsOf(schema.text), body }, ...extra }),
   empty: (name, extra = {}) => ({ name, type: "empty", ...base(), ...extra }),
   primitive: (p, params = {}) => ({ primitive: p, ...defaultsOf(schema.primitives[p]), ...params }),
@@ -181,6 +181,20 @@ export function decodeSidecar(side) {
     for (let i = s + 1; i + 1 < e; i++) tris.push(loops[s], loops[i], loops[i + 1]);
   }
   return { positions: co, index: new Uint32Array(tris) };
+}
+
+// An older document as the current one (scene.py migrate): version 1 had one `material`
+// per object; version 2 has slots (`materials`), a face's material_index picking one.
+export function migrate(doc) {
+  if (!doc || (doc.version ?? 2) >= 2) return doc;
+  const out = clone(doc);
+  for (const o of Object.values(out.objects || {})) {
+    if ("material" in o) { o.materials = o.material ? [o.material] : []; delete o.material; }
+    else if ((o.type === "mesh" || o.type === "text") && !o.materials) o.materials = [];
+  }
+  out.textures ||= {};
+  out.version = 2;
+  return out;
 }
 
 // Material fields that name an image (scene.py TEXTURE_FIELDS).

@@ -11,7 +11,7 @@ const SESSION = Math.random().toString(36).slice(2, 8);
 const UNDO_LIMIT = 128;
 const VIEW_ITEMS = 2000;               // element selections past this go to the agent as a count only
 // What an object keeps when Blender hands back its mesh (the Studio tool keeps the same).
-const KEEP = ["name", "parent", "location", "rotation", "scale", "visible", "renderable", "material", "shading", "modifiers"];
+const KEEP = ["name", "parent", "location", "rotation", "scale", "visible", "renderable", "materials", "shading", "modifiers"];
 // Edit-mode Blender ops that work on the selection (the rest take the whole mesh);
 // the first three need one, the others take "nothing selected" as everything.
 const ON_SELECTION = new Set(["bevel", "inset", "subdivide", "triangulate", "merge_by_distance", "recalc_normals", "uv"]);
@@ -203,6 +203,7 @@ export function createApp(viewportFactory) {
     const keep = Object.fromEntries(KEEP.filter((k) => k in o).map((k) => [k, clone(o[k])]));
     next.objects[id] = make.mesh(o.name, r.mesh_id, keep);
     if (r.modifiers != null) next.objects[id].modifiers = r.modifiers;
+    if (r.materials != null) next.objects[id].materials = r.materials;          // a join merges slots
     next.meshes[r.mesh_id] = { data: r.data, verts: r.verts, faces: r.faces, bbox: r.bbox };
     const gone = (r.removed || []).filter((rid) => rid !== id && rid in next.objects);
     if (gone.length) next = remove(next, gone, (cid) => vp.worldTRS(cid));
@@ -461,6 +462,14 @@ export function createApp(viewportFactory) {
         }
       }
     },
+    // Blender's "Assign": the selected faces use slot `slot`.
+    assignSlot(slot) {
+      const e = s.edit;
+      if (!e) return;
+      const faces = M.convertSelection(s.editMesh, e, "face").items;
+      if (!faces.length) { toast("Select the faces to assign"); return; }
+      guard(() => editCommit(M.assignSlot(s.editMesh, faces, slot), { mode: e.mode, items: e.items }, "assign material"));
+    },
     onTransformEnd(mesh) {
       if (!s.edit) return;
       editCommit(mesh, { mode: s.edit.mode, items: s.edit.items }, { translate: "move", rotate: "rotate", scale: "scale" }[s.gizmo],
@@ -470,7 +479,7 @@ export function createApp(viewportFactory) {
 
   // ─── Blender-shaped geometry ───────────────────────────────────────────────
 
-  const textured = (o) => hasTexture(o.material && s.doc.materials[o.material]);
+  const textured = (o) => (o.materials || []).some((mid) => hasTexture(mid && s.doc.materials[mid]));
 
   // What only Blender can draw right: text, Suzanne, modifiers — and a textured primitive,
   // whose UVs must be Blender's own (an explicit mesh carries its UVs in its file).
@@ -515,7 +524,8 @@ export function createApp(viewportFactory) {
         vp?.setEvaluated(id, key, { positions: new Float32Array(b64Floats(m.positions)),
                                     normals: new Float32Array(b64Floats(m.normals)),
                                     uv: m.uv ? new Float32Array(b64Floats(m.uv)) : null,
-                                    index: new Uint32Array(b64Floats(m.index)) });
+                                    index: new Uint32Array(b64Floats(m.index)),
+                                    triMat: m.material_index ? new Uint16Array(b64Floats(m.material_index)) : null });
       }
     } catch (e) {
       for (const [id] of want) evalKeys.delete(id);
@@ -653,12 +663,29 @@ export function createApp(viewportFactory) {
       update((d) => Object.assign(d.objects[cam], vp.viewAsCamera(), { parent: null }), "camera to view");
     },
     setRenderCamera(id) { update((d) => { d.render.camera = id; }, "render camera"); },
-    addMaterial(id) {
+    // A new material in slot `slot` (one past the end adds a slot).
+    addMaterial(id, slot = 0) {
       update((d) => {
         const mid = newId(d.materials, `${id}_material`, "materials");
         d.materials[mid] = make.material(d.objects[id].name + " Material");
-        d.objects[id].material = mid;
+        const slots = d.objects[id].materials;
+        slots[slot] = mid;
       }, "new material");
+    },
+    setSlot(id, slot, mid) {
+      update((d) => {
+        const slots = d.objects[id].materials;
+        slots[slot] = mid || null;
+        while (slots.length && slots[slots.length - 1] == null) slots.pop();
+      }, "material");
+    },
+    addSlot(id) { update((d) => { d.objects[id].materials.push(null); }, "add material slot"); },
+    removeSlot(id, slot) {
+      update((d) => {
+        d.objects[id].materials.splice(slot, 1);
+        const mesh = d.meshes[d.objects[id].mesh];
+        if (mesh?.data && slot > 0) { /* faces on the removed slot fall back to the last one, as in Blender */ }
+      }, "remove material slot");
     },
     // Object mode: Blender's destructive ops on the active object.
     applyModifier(i) {

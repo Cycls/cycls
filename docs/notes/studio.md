@@ -35,11 +35,16 @@ the schema has one source and the engine can't drift from it.
 
 ## The document
 
-`apps/studio/data/scene.json`, format `cycls.studio.scene` v1. Blender's conventions, so an agent
+`apps/studio/data/scene.json`, format `cycls.studio.scene` v2. Blender's conventions, so an agent
 that knows bpy reads it on sight: Z up, metres, angles in degrees (Euler XYZ — three.js's `'ZYX'`),
 colours sRGB hex (linear only at the edges), bpy field names (`energy`, `lens`, `levels`,
 `segments`). `objects`, `meshes` and `materials` are maps keyed by stable id; `world` and `render`
 are single entries; `rev` counts saves and `by` says whose (`agent` or `app:<session>`).
+A mesh or text object has material **slots**, `materials: [id|null, …]`, and a face's
+`material_index` (in its mesh file) picks one — Blender's model; a face past the last slot uses the
+last. Version 1 had one `material`; a v1 document reads as v2 (it becomes slot 0) in `scene.py`'s
+`migrate` and in the app's `bridge.readScene`, so an older scene or an open older tab merge cleanly.
+Ops still take `material` as slot 0; `material {assign, slot}` sets another.
 
 The file on disk is always normalized — every key present, defaults filled — and the app's
 `make.*` builds entries in exactly that shape from `schema.json` (generated from `scene.py`; a
@@ -97,7 +102,7 @@ both come out right.
 | op | who | what |
 |---|---|---|
 | `evaluate` | app, agent | display meshes after modifiers (per-loop positions/normals, triangles) |
-| `apply` | app, agent | `modifier_apply {index}`, `convert`, `join {others}`, `remesh`, `decimate`, `boolean`, and on a selection: `bevel`, `inset`, `subdivide`, `triangulate`, `merge_by_distance`, `recalc_normals`, `uv {method: cube\|cylinder\|sphere\|reset}` |
+| `apply` | app, agent | `modifier_apply {index}`, `convert`, `join {others}`, `remesh`, `decimate`, `boolean`, and on a selection: `bevel`, `inset`, `subdivide`, `triangulate`, `merge_by_distance`, `recalc_normals`, `uv {method: cube\|cylinder\|sphere\|reset}`, `assign {slot}` (faces → a material slot); a join answers with the merged slots |
 | `snapshot` | app, agent | ~640×360, few samples, ~5 s — for checking work |
 | `render` | app, agent | the Cycles render, PBR Neutral, denoised |
 | `export` | app, agent | glb, blend, fbx, obj, stl |
@@ -189,7 +194,8 @@ extrude (E: the gizmo then points along the faces' normal), fill (F), merge at c
 in `studio/src/mesh.js`, the sidecar codec's twin in JS. Bevel (Ctrl+B), inset (I), subdivide,
 triangulate, merge by distance and recalculate normals go to Blender on the saved mesh and come
 back as a new one, with what Blender left selected — so inset (I) then extrude (E) works as it does
-in Blender. Every edit is a new mesh file and one undo step; the viewport shows the cage
+in Blender. The Material panel lists the slots; in Edit mode **Assign** puts the selected faces in
+the picked one (a local op, like extrude). Every edit is a new mesh file and one undo step; the viewport shows the cage
 (surface, wire, vertices, selected faces) instead of the modifier result while editing.
 
 **Keeping the agent in the picture.** The app publishes `{selection, mode, edit?}` to its
@@ -252,7 +258,7 @@ cloudpickle on both sides.
 
 - One editor at a time; two editing the same entry keep the local copy.
 - No UV editing beyond projections, animation, geometry nodes, sculpting, loop cut, knife or
-  proportional editing; one material per object.
+  proportional editing.
 - Engine capacity is shared: four instances, one job each.
 - The phone client has no `cycls.engine`; the app degrades to viewing and local edits.
 

@@ -40,7 +40,8 @@ export function fromSidecar(side) {
   const le = side.loose_edges ? Array.from(unb64(side.loose_edges, Uint32Array)) : [];
   const loose = [];
   for (let i = 0; i + 1 < le.length; i += 2) loose.push([le[i], le[i + 1]]);
-  return { co, faces, smooth, uv: fuv, loose };
+  const mi = side.material_index ? Array.from(unb64(side.material_index, Uint16Array)) : null;
+  return { co, faces, smooth, uv: fuv, mi, loose };
 }
 
 const r6 = (v) => Math.round(v * 1e6) / 1e6;
@@ -58,6 +59,7 @@ export function toSidecar(m) {
     m.faces.forEach((f, i) => { const u = m.uv[i]; if (u && u.length === f.length * 2) uv.set(u, loopStart[i] * 2); });
     out.uv = b64(uv);
   }
+  if (m.mi && m.mi.some((x) => x)) out.material_index = b64(Uint16Array.from(m.mi));
   out.bbox = bbox(m).map((p) => p.map(r6));
   return out;
 }
@@ -90,7 +92,7 @@ export function sidecarId(text) {
 // object's: "flat"/"smooth" override the faces' own flags, as the engine does.
 export function displayBuffers(m, shading = "auto") {
   const vn = smoothNormals(m);
-  const pos = [], nor = [], uv = m.uv ? [] : null, index = [], triFace = [];
+  const pos = [], nor = [], uv = m.uv ? [] : null, index = [], triFace = [], triMat = m.mi ? [] : null;
   m.faces.forEach((f, fi) => {
     const fnorm = faceNormal(m, f);
     const base = pos.length / 3;
@@ -102,10 +104,13 @@ export function displayBuffers(m, shading = "auto") {
       nor.push(n[0], n[1], n[2]);
       if (uv) uv.push(fuv ? fuv[c * 2] : 0, fuv ? fuv[c * 2 + 1] : 0);
     });
-    for (let i = 1; i + 1 < f.length; i++) { index.push(base, base + i, base + i + 1); triFace.push(fi); }
+    for (let i = 1; i + 1 < f.length; i++) {
+      index.push(base, base + i, base + i + 1); triFace.push(fi);
+      if (triMat) triMat.push(m.mi[fi] || 0);
+    }
   });
   return { positions: new Float32Array(pos), normals: new Float32Array(nor), uv: uv && new Float32Array(uv),
-           index: new Uint32Array(index), triFace };
+           index: new Uint32Array(index), triFace, triMat };
 }
 
 // ─── geometry helpers ────────────────────────────────────────────────────────
@@ -204,7 +209,23 @@ export function engineSelection(sel) {
 // ─── edits ───────────────────────────────────────────────────────────────────
 
 const copy = (m) => ({ co: [...m.co], faces: m.faces.map((f) => [...f]), smooth: [...m.smooth],
-                       uv: m.uv ? m.uv.map((u) => (u ? [...u] : null)) : null, loose: m.loose.map((e) => [...e]) });
+                       uv: m.uv ? m.uv.map((u) => (u ? [...u] : null)) : null, mi: m.mi ? [...m.mi] : null,
+                       loose: m.loose.map((e) => [...e]) });
+
+// A new face's material slot: that of the face it grew from (0 when there's none).
+const slotOf = (m, fi) => (m.mi && fi != null ? m.mi[fi] || 0 : 0);
+function faceWithEdge(m, a, b) {
+  const i = m.faces.findIndex((f) => f.some((v, k) => { const w = f[(k + 1) % f.length]; return (v === a && w === b) || (v === b && w === a); }));
+  return i < 0 ? null : i;
+}
+
+// Put the given faces in material slot `slot` (Blender's "Assign").
+export function assignSlot(m, faceIds, slot) {
+  const out = copy(m);
+  out.mi = out.mi || new Array(m.faces.length).fill(0);
+  for (const f of faceIds) out.mi[f] = slot;
+  return out;
+}
 
 // Move vertices: fn(x, y, z) → [x, y, z], in the mesh's own space.
 export function moveVerts(m, verts, fn) {
@@ -225,13 +246,14 @@ export function compact(m) {
   const co = [];
   for (let i = 0; i < used.length; i++) if (used[i]) { map[i] = co.length / 3; co.push(m.co[i * 3], m.co[i * 3 + 1], m.co[i * 3 + 2]); }
   return { mesh: { co, faces: m.faces.map((f) => f.map((v) => map[v])), smooth: [...m.smooth],
-                   uv: m.uv ? m.uv.map((u) => (u ? [...u] : null)) : null, loose: m.loose.map(([a, b]) => [map[a], map[b]]) },
+                   uv: m.uv ? m.uv.map((u) => (u ? [...u] : null)) : null, mi: m.mi ? [...m.mi] : null,
+                   loose: m.loose.map(([a, b]) => [map[a], map[b]]) },
            map };
 }
 
 function keepFaces(m, keep) {
   return { ...m, faces: m.faces.filter((_, i) => keep(i)), smooth: m.smooth.filter((_, i) => keep(i)),
-           uv: m.uv ? m.uv.filter((_, i) => keep(i)) : null };
+           uv: m.uv ? m.uv.filter((_, i) => keep(i)) : null, mi: m.mi ? m.mi.filter((_, i) => keep(i)) : null };
 }
 
 // X: vertices take their faces and edges with them; edges their faces; faces only
@@ -266,7 +288,7 @@ export function extrudeFaces(m, faceIds) {
     const f = m.faces[fi];
     for (let i = 0; i < f.length; i++) {
       const a = f[i], b = f[(i + 1) % f.length], k = ekey(a, b);
-      const e = count.get(k) || { n: 0, a, b };
+      const e = count.get(k) || { n: 0, a, b, fi };
       e.n++;
       count.set(k, e);
     }
@@ -277,11 +299,12 @@ export function extrudeFaces(m, faceIds) {
     return dup.get(v);
   };
   for (const fi of region) out.faces[fi] = m.faces[fi].map(twin);
-  for (const { n, a, b } of count.values()) {
+  for (const { n, a, b, fi } of count.values()) {
     if (n !== 1) continue;                         // interior edge of the region
     out.faces.push([a, b, twin(b), twin(a)]);      // follows the region face's winding: outward
     out.smooth.push(false);
     if (out.uv) out.uv.push(null);
+    if (out.mi) out.mi.push(slotOf(m, fi));
   }
   return { mesh: out, selection: { mode: "face", items: [...region] } };
 }
@@ -299,6 +322,7 @@ export function extrudeEdges(m, edgeList) {
     out.faces.push([a, b, twin(b), twin(a)]);
     out.smooth.push(false);
     if (out.uv) out.uv.push(null);
+    if (out.mi) out.mi.push(slotOf(m, faceWithEdge(m, a, b)));
     made.push([twin(a), twin(b)].sort((x, y) => x - y));
   }
   return { mesh: out, selection: { mode: "edge", items: made } };
@@ -356,6 +380,7 @@ export function fill(m, verts) {
   out.faces.push(ring);
   out.smooth.push(false);
   if (out.uv) out.uv.push(null);
+  if (out.mi) out.mi.push(slotOf(m, faceWithEdge(m, ring[0], ring[1])));
   // Loose edges the new face now covers are its edges, not loose ones.
   const fe = new Set(ring.map((v, i) => ekey(v, ring[(i + 1) % ring.length])));
   out.loose = out.loose.filter(([a, b]) => !fe.has(ekey(a, b)));
@@ -420,7 +445,7 @@ export function mergeAtCenter(m, verts) {
   const out = copy(m);
   out.co[keep * 3] = c[0]; out.co[keep * 3 + 1] = c[1]; out.co[keep * 3 + 2] = c[2];
   const to = (v) => (gone.has(v) ? keep : v);
-  const faces = [], smooth = [], uv = out.uv ? [] : null;
+  const faces = [], smooth = [], uv = out.uv ? [] : null, mi = out.mi ? [] : null;
   m.faces.forEach((f, i) => {
     const g = [], gu = [];
     f.forEach((v, k) => {
@@ -431,9 +456,10 @@ export function mergeAtCenter(m, verts) {
     if (new Set(g).size >= 3 && new Set(g).size === g.length) {
       faces.push(g); smooth.push(m.smooth[i]);
       if (uv) uv.push(m.uv[i] ? gu : null);
+      if (mi) mi.push(m.mi[i]);
     }
   });
-  out.faces = faces; out.smooth = smooth; out.uv = uv;
+  out.faces = faces; out.smooth = smooth; out.uv = uv; out.mi = mi;
   const le = new Set();
   out.loose = m.loose.map(([a, b]) => [to(a), to(b)]).filter(([a, b]) => {
     const k = ekey(a, b);

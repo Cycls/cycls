@@ -230,7 +230,7 @@ export class Viewport {
     for (const id of [...this.nodes.keys()]) if (!(id in doc.objects)) this.drop(id);
     for (const [id, o] of Object.entries(doc.objects)) {
       const sig = { o: { ...o, location: 0, rotation: 0, scale: 0, parent: 0 },
-                    m: o.mesh ? doc.meshes[o.mesh] : null, mat: o.material ? doc.materials[o.material] : null,
+                    m: o.mesh ? doc.meshes[o.mesh] : null, mat: (o.materials || []).map((mid) => mid && doc.materials[mid]),
                     ev: this.evaluated.get(id)?.key ?? null, shading };
       if (!this.nodes.has(id) || shadingChanged || !deepEqual(this.sigs.get(id), sig)) {
         this.drop(id);
@@ -264,7 +264,7 @@ export class Viewport {
     for (const [id, o] of Object.entries(doc.objects)) {
       const at = [o.location, o.rotation, o.scale, o.parent, o.visible];
       if (o.type === "light") lamps.push([at, o.light]);
-      else if (isBackdrop(doc, id)) set.push([id, at, doc.meshes[o.mesh], o.material && doc.materials[o.material]]);
+      else if (isBackdrop(doc, id)) set.push([id, at, doc.meshes[o.mesh], (o.materials || []).map((mid) => mid && doc.materials[mid])]);
     }
     this.scene.updateMatrixWorld();
     const box = new THREE.Box3();
@@ -320,8 +320,9 @@ export class Viewport {
   drop(id) {
     const node = this.nodes.get(id);
     if (!node) return;
-    const mat = node.userData.surface?.material;
-    if (mat?.userData.owned) {                     // its own placement of any images, and itself
+    const mats = node.userData.surface?.material;
+    for (const mat of Array.isArray(mats) ? mats : [mats]) {
+      if (!mat?.userData.owned) continue;          // its own placement of any images, and itself
       for (const k of ["map", "roughnessMap", "normalMap"]) mat[k]?.dispose();
       mat.dispose();
     }
@@ -352,6 +353,15 @@ export class Viewport {
     if (maps.normalMap) mat.normalScale.set(m.normal_strength, m.normal_strength);
     mat.userData.owned = true;
     return mat;
+  }
+
+  // An object's material for its geometry: one, or one per slot when the geometry is in
+  // slot groups (a face past the last slot uses the last, as in Blender).
+  slotMaterials(doc, o, geom) {
+    const slots = o.materials || [];
+    const n = geom.userData.slots || 1;
+    if (this.shading === "solid" || n <= 1 || slots.length <= 1) return this.material(doc, slots[0] || null);
+    return Array.from({ length: n }, (_, i) => this.material(doc, slots[Math.min(i, slots.length - 1)] || null));
   }
 
   // A material's images as three textures, placed as Blender's Mapping node places them
@@ -408,7 +418,7 @@ export class Viewport {
       t.anisotropy = 4;
       t.needsUpdate = true;
       entry.texture = t;
-      this.invalidate((id, o) => o.material && TEXTURE_KEYS.some((f) => this.doc.materials[o.material]?.[f] === tid));
+      this.invalidate((id, o) => (o.materials || []).some((mid) => mid && TEXTURE_KEYS.some((f) => this.doc.materials[mid]?.[f] === tid)));
       if (this.doc) this.sync(this.doc, this.selection, this.shading);
     }).catch((e) => { this.images.delete(key); console.warn("texture", rel, e); });
     return null;
@@ -428,7 +438,7 @@ export class Viewport {
       if (ev) geom.userData.shared = true;
       const mesh = geom.userData.line
         ? new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0xdddddd }))
-        : new THREE.Mesh(geom, this.material(doc, o.material));
+        : new THREE.Mesh(geom, this.slotMaterials(doc, o, geom));
       if (ev) mesh.userData.shared = true;
       node.add(mesh);
       node.userData.surface = mesh;

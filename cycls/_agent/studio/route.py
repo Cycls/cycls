@@ -81,7 +81,7 @@ async def _answer(ws, op, r, body, doc):
         rel = await asyncio.to_thread(store.write_mesh, ws, res["mesh_id"], files["mesh.json"])
         return {"ok": True, "mesh_id": res["mesh_id"], "data": rel, "verts": res["verts"], "faces": res["faces"],
                 "bbox": res["bbox"], "modifiers": res.get("modifiers"), "removed": res.get("removed", []),
-                "selection": res.get("selection")}
+                "selection": res.get("selection"), "materials": res.get("materials")}
     if op == "export":
         fmt = res["format"]
         rel = _free(ws.root, "exports", _slug(body.get("name"), "scene"), EXPORT_EXTS[fmt])

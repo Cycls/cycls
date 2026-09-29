@@ -225,7 +225,7 @@ class TestEdit:
     def test_selected_is_the_viewers_selection(self, root, monkeypatch):
         _viewing(monkeypatch, {"selection": ["cube"], "mode": "object"})
         run({"action": "edit", "ops": [{"op": "material", "preset": "chrome", "assign": "selected"}]}, root)
-        assert scene(root)["objects"]["cube"]["material"] == "chrome"
+        assert scene(root)["objects"]["cube"]["materials"] == ["chrome"]
         assert "[selected]" in run({"action": "inspect"}, root)
 
     def test_parallel_edits_serialize(self, root):
@@ -270,7 +270,7 @@ class TestImages:
         assert side["format"] == "cycls.texture" and side["media_type"] == "image/png"
         assert base64.b64decode(side["data"]) == (root / logo).read_bytes()
         sign = doc["objects"]["sign"]
-        assert sign["scale"] == [4.0, 1, 1] and doc["materials"][sign["material"]]["base_color_texture"] == "logo"
+        assert sign["scale"] == [4.0, 1, 1] and doc["materials"][sign["materials"][0]]["base_color_texture"] == "logo"
 
     def test_one_image_used_twice_is_one_texture_and_an_unused_one_is_dropped(self, root, logo):
         run({"action": "edit", "ops": [

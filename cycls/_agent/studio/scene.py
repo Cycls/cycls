@@ -17,7 +17,8 @@ import math
 import re
 
 FORMAT = "cycls.studio.scene"
-VERSION = 1
+VERSION = 2                 # 2: an object's material slots (`materials`); 1 had one `material`
+MAX_SLOTS = 32
 
 MAX_PIXELS = 1920 * 1080
 MAX_SAMPLES = 256
@@ -356,7 +357,7 @@ def _vec3(value, where, default):
 # ─────────────────────────────── normalize ────────────────────────────────────
 
 _OBJECT_KEYS = {"name", "type", "parent", "location", "rotation", "scale", "visible", "renderable",
-                "mesh", "material", "shading", "modifiers", "light", "camera", "text", "dof_focus"}
+                "mesh", "material", "materials", "shading", "modifiers", "light", "camera", "text", "dof_focus"}
 
 
 def _mesh(mid, m):
@@ -462,7 +463,7 @@ def _object(oid, o):
            "visible": _field(("b", True), o.get("visible", True), f"{where}.visible"),
            "renderable": _field(("b", True), o.get("renderable", True), f"{where}.renderable")}
     if t in ("mesh", "text"):
-        out["material"] = _field(("id", None), o.get("material"), f"{where}.material")
+        out["materials"] = _slots(o, where)
         out["shading"] = _field(("s:smooth|flat|auto", "auto"), o.get("shading", "auto"), f"{where}.shading")
         out["modifiers"] = _modifiers(oid, o.get("modifiers"))
     if t == "mesh":
@@ -481,11 +482,32 @@ def _object(oid, o):
         out["dof_focus"] = _field(("id", None), o.get("dof_focus"), f"{where}.dof_focus")
     elif t == "text":
         out["text"] = _fill(TEXT, o.get("text"), f"{where}.text")
-    for k in ("mesh", "light", "camera", "text", "dof_focus", "material", "shading", "modifiers"):
-        if k in o and k not in out and not (k in ("material", "modifiers") and not o[k]):
+    for k in ("mesh", "light", "camera", "text", "dof_focus", "material", "materials", "shading", "modifiers"):
+        if k in o and k not in out and not (k in ("material", "materials", "modifiers") and not o[k]) \
+                and not (k == "material" and "materials" in out):
             raise SceneError(f"{where}.{k}: not valid on {'an' if t == 'empty' else 'a'} {t} object"
                              + (f" — set \"type\": \"{k}\"" if k in ("light", "camera", "text") else ""))
     return out
+
+
+def _slots(o, where):
+    """An object's material slots — Blender's: a face's material_index picks one. `material`
+    (version 1's single field, and still what ops accept) is slot 0."""
+    slots = o.get("materials")
+    if slots is None:
+        slots = []
+    if not isinstance(slots, list) or len(slots) > MAX_SLOTS:
+        raise SceneError(f"{where}.materials: a list of up to {MAX_SLOTS} material ids (or null)")
+    slots = [_field(("id", None), m, f"{where}.materials[{i}]") for i, m in enumerate(slots)]
+    if "material" in o:
+        m = _field(("id", None), o["material"], f"{where}.material")
+        if slots:
+            slots[0] = m
+        elif m is not None:
+            slots = [m]
+    while slots and slots[-1] is None:
+        slots.pop()
+    return slots
 
 
 def _check_refs(doc):
@@ -502,8 +524,9 @@ def _check_refs(doc):
             cur = objs[cur]["parent"]
         if o["type"] == "mesh" and o["mesh"] not in meshes:
             raise SceneError(f"objects.{oid}.mesh: no mesh {o['mesh']!r}")
-        if o.get("material") is not None and o["material"] not in mats:
-            raise SceneError(f"objects.{oid}.material: no material {o['material']!r}")
+        for i, m in enumerate(o.get("materials", [])):
+            if m is not None and m not in mats:
+                raise SceneError(f"objects.{oid}.materials[{i}]: no material {m!r}")
         for i, mod in enumerate(o.get("modifiers", [])):
             ref = mod.get("object") if mod["type"] == "boolean" else mod.get("mirror_object") if mod["type"] == "mirror" else None
             if mod["type"] == "boolean" and ref is None:
@@ -559,8 +582,10 @@ def normalize(doc):
 
 
 def migrate(doc):
+    """Older documents read as the current one. Version 1 → 2 is `_slots` taking an
+    object's single `material` as slot 0, so nothing else needs doing here."""
     v = doc.get("version", VERSION)
-    if v != VERSION:
+    if v not in (1, VERSION):
         if isinstance(v, int) and v > VERSION:
             raise SceneError(f"scene version {v} is newer than this Studio ({VERSION}) — update Studio")
         raise SceneError(f"scene version {v!r} is not supported")
@@ -763,6 +788,8 @@ def _op_add(doc, op, where, selection):
             doc["materials"][mid] = spec
             mat = mid
         obj["material"] = mat
+        if op.get("materials") is not None:
+            obj["materials"] = op["materials"]
     doc["objects"][oid] = obj
     doc.update(normalize(doc))
     if op.get("on_floor"):
@@ -848,7 +875,7 @@ def _op_duplicate(doc, op, where, selection):
 
 
 def _op_material(doc, op, where, selection):
-    spec = {k: v for k, v in op.items() if k not in ("op", "id", "assign")}
+    spec = {k: v for k, v in op.items() if k not in ("op", "id", "assign", "slot")}
     mid = op.get("id") or _new_id(doc, "materials", spec.get("name") or spec.get("preset") or "material")
     current = doc["materials"].get(mid, {})
     if spec.get("preset"):                          # a preset resets what it defines — not the images
@@ -859,7 +886,14 @@ def _op_material(doc, op, where, selection):
         for oid in _targets(doc, op["assign"], selection, f"{where}.assign"):
             if doc["objects"][oid]["type"] not in ("mesh", "text"):
                 raise SceneError(f"{where}.assign: {oid!r} is a {doc['objects'][oid]['type']}, it takes no material")
-            doc["objects"][oid]["material"] = mid
+            o = doc["objects"][oid]
+            slots, slot = list(o.get("materials", [])), _field(("i", 0, 0, MAX_SLOTS - 1), op.get("slot", 0),
+                                                              f"{where}.slot")
+            if slot > len(slots):
+                raise SceneError(f"{where}.slot: {oid!r} has {len(slots)} slot(s) — use {len(slots)} to add one")
+            slots[slot:slot + 1] = [mid]
+            o["materials"] = slots
+            o.pop("material", None)
             touched.append(f"objects.{oid}")
     doc.update(normalize(doc))
     return touched
@@ -1150,8 +1184,7 @@ def merge_fragment(doc, frag):
             o["parent"] = renames["objects"][o["parent"]]
         if o.get("mesh"):
             o["mesh"] = renames["meshes"][o["mesh"]]
-        if o.get("material"):
-            o["material"] = renames["materials"][o["material"]]
+        o["materials"] = [renames["materials"][m] if m else None for m in o.get("materials", [])]
         if o.get("dof_focus"):
             o["dof_focus"] = renames["objects"].get(o["dof_focus"])
         for mod in o.get("modifiers", []):
@@ -1272,8 +1305,11 @@ def summary(doc, selection=None):
             bits.append(f"scale {_fmt(o['scale'])}")
         if o["parent"]:
             bits.append(f"parent {o['parent']}")
-        if o.get("material"):
-            bits.append(f"material {o['material']}")
+        slots = o.get("materials") or []
+        if len(slots) == 1:
+            bits.append(f"material {slots[0]}")
+        elif slots:
+            bits.append("materials [" + ", ".join(m or "-" for m in slots) + "] (slot per face)")
         if o.get("modifiers"):
             bits.append("mods " + ",".join(m["type"] for m in o["modifiers"]))
         if not o["visible"]:

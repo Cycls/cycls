@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { SCHEMA, clone, deepEqual, diff, patch, merge3, make, addObject, duplicate, remove, decodeSidecar, newId, isBackdrop, pruneTextures, hasTexture } from "../src/doc.js";
+import { SCHEMA, clone, deepEqual, diff, patch, merge3, make, addObject, duplicate, remove, decodeSidecar, newId, isBackdrop, pruneTextures, hasTexture, migrate } from "../src/doc.js";
 
 const scene = () => clone(SCHEMA.new_scene);
 
 describe("entries the app makes are already normalized (as scene.py would write them)", () => {
   it("a mesh object and its primitive", () => {
     const py = SCHEMA.new_scene;
-    expect(deepEqual(make.mesh("Cube", "cube", { material: "material", location: [0, 0, 1] }), py.objects.cube)).toBe(true);
+    expect(deepEqual(make.mesh("Cube", "cube", { materials: ["material"], location: [0, 0, 1] }), py.objects.cube)).toBe(true);
     expect(deepEqual(make.primitive("cube"), py.meshes.cube)).toBe(true);
   });
   it("a light, a camera and a material", () => {
@@ -117,5 +117,19 @@ describe("textures", () => {
     const m = make.material("Wood");
     expect(m).toMatchObject({ base_color_texture: null, roughness_texture: null, normal_texture: null,
                               texture_scale: [1, 1], texture_offset: [0, 0], texture_rotation: 0, normal_strength: 1 });
+  });
+});
+
+describe("version 2", () => {
+  it("a version 1 scene reads with slots, and a current one is left alone", () => {
+    const v1 = { version: 1, objects: { cube: { type: "mesh", mesh: "cube", material: "m" },
+                                        bare: { type: "mesh", mesh: "cube", material: null } } };
+    const v2 = migrate(v1);
+    expect(v2.version).toBe(2);
+    expect(v2.objects.cube.materials).toEqual(["m"]);
+    expect(v2.objects.bare.materials).toEqual([]);
+    expect("material" in v2.objects.cube).toBe(false);
+    const now = scene();
+    expect(migrate(now)).toBe(now);
   });
 });

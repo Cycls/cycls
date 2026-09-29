@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fromSidecar, toSidecar, sidecarId, edges, remove, extrudeFaces, extrudeEdges, extrudeVerts, fill,
-         mergeAtCenter, moveVerts, faceNormal, centroid, displayBuffers, selectedVerts, engineSelection } from "../src/mesh.js";
+import { fromSidecar, toSidecar, sidecarId, edges, remove, extrudeFaces, extrudeEdges, extrudeVerts, fill, mergeAtCenter, moveVerts, faceNormal, centroid, displayBuffers, selectedVerts, engineSelection, assignSlot } from "../src/mesh.js";
 import { decodeSidecar } from "../src/doc.js";
 
 // Blender's default cube: 8 vertices, 6 outward quads.
@@ -157,5 +156,24 @@ describe("display buffers", () => {
     expect([...b.uv.slice(0, 8)]).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);          // face 0: none
     expect(b.uv[9]).toBeCloseTo(1 / 6);                                           // face 1, corner 0: v
     expect(displayBuffers(cube()).uv).toBe(null);
+  });
+});
+
+describe("material slots", () => {
+  it("a face's slot survives the mesh file, and Assign sets it", () => {
+    const m = assignSlot(cube(), [TOP], 2);
+    expect(m.mi[TOP]).toBe(2);
+    const back = fromSidecar(toSidecar(m));
+    expect(back.mi).toEqual(m.mi);
+    expect(toSidecar(cube()).material_index).toBeUndefined();          // all slot 0: nothing to write
+  });
+
+  it("extruded side faces take their face's slot; display triangles carry it", () => {
+    const m = assignSlot(cube(), [TOP], 1);
+    const r = extrudeFaces(m, [TOP]);
+    expect(r.mesh.mi.slice(6)).toEqual([1, 1, 1, 1]);
+    const b = displayBuffers(r.mesh);
+    expect(b.triMat.length).toBe(b.index.length / 3);
+    expect(b.triMat.filter((x) => x === 1).length).toBe(10);           // the top + 4 sides, 2 triangles each
   });
 });

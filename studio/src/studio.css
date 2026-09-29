@@ -98,3 +98,8 @@ input[type=checkbox] { accent-color: var(--blue); }
 .thumb { width: 28px; height: 28px; border-radius: 3px; object-fit: cover; background: #222; border: 1px solid var(--line); flex: none; }
 label.btn { cursor: pointer; padding: 2px 8px; border: 1px solid var(--line); border-radius: 4px; background: #333; white-space: nowrap; }
 label.btn:hover { background: #3c3c3c; }
+.slots { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; }
+.slot { display: flex; align-items: center; gap: 6px; text-align: left; }
+.slot.on { background: #3a5a8c; }
+.swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #0006; flex: none; }
+.slot-tools > div { display: flex; gap: 4px; flex-wrap: wrap; }

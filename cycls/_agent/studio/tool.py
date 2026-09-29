@@ -390,12 +390,14 @@ async def _apply(ws, inp):
         after = json.loads(json.dumps(before))
         o = after["objects"][oid]
         keep = {k: o[k] for k in ("name", "parent", "location", "rotation", "scale", "visible", "renderable",
-                                  "material", "shading", "modifiers") if k in o}
+                                  "materials", "shading", "modifiers") if k in o}
         after["objects"][oid] = {**keep, "type": "mesh", "mesh": res["mesh_id"]}
         after["meshes"][res["mesh_id"]] = {"data": rel, "verts": res["verts"], "faces": res["faces"],
                                            "bbox": res["bbox"]}
         if res.get("modifiers") is not None:
             after["objects"][oid]["modifiers"] = res["modifiers"]
+        if res.get("materials") is not None:                  # a join merges the others' slots
+            after["objects"][oid]["materials"] = res["materials"]
         if op == "convert" or o["type"] == "text":
             after["objects"][oid].setdefault("modifiers", [])
         if res.get("removed"):

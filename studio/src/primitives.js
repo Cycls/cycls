@@ -61,12 +61,27 @@ function monkeyStandIn(size) {
   return g;
 }
 
-// Evaluated / explicit meshes: per-corner positions + normals (+ UVs) + triangle index.
-export function bufferGeometry({ positions, normals, uv, index }) {
+// Evaluated / explicit meshes: per-corner positions + normals (+ UVs) + triangle index;
+// `triMat` (a slot per triangle) sorts the triangles into one group per material slot.
+export function bufferGeometry({ positions, normals, uv, index, triMat }) {
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   if (normals) g.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
   if (uv) g.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+  if (triMat && triMat.length && triMat.some((x) => x)) {
+    const slots = Math.max(...triMat) + 1, sorted = new Uint32Array(index.length);
+    let at = 0;
+    for (let slot = 0; slot < slots; slot++) {
+      const start = at;
+      for (let t = 0; t < triMat.length; t++) {
+        if (triMat[t] !== slot) continue;
+        sorted[at++] = index[t * 3]; sorted[at++] = index[t * 3 + 1]; sorted[at++] = index[t * 3 + 2];
+      }
+      if (at > start) g.addGroup(start, at - start, slot);
+    }
+    index = sorted;
+    g.userData.slots = slots;
+  }
   g.setIndex(new THREE.BufferAttribute(index, 1));
   if (!normals) g.computeVertexNormals();
   g.computeBoundingSphere();

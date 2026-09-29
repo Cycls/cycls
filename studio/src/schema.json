@@ -606,7 +606,9 @@
      0.0,
      1.0
     ],
-    "material": "material",
+    "materials": [
+     "material"
+    ],
     "mesh": "cube",
     "modifiers": [],
     "name": "Cube",
@@ -670,7 +672,7 @@
   "textures": {},
   "units": "m",
   "up": "Z",
-  "version": 1,
+  "version": 2,
   "world": {
    "color": "#303030",
    "hdri": "studio",
@@ -1022,7 +1024,7 @@
   },
   "type": "object"
  },
- "version": 1,
+ "version": 2,
  "world": {
   "additionalProperties": false,
   "properties": {

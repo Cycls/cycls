@@ -1,6 +1,6 @@
 // The app's only way out of its sandbox: window.cycls (the host shim). Without it
 // (vite dev, a shared view) the app still runs on an in-memory scene.
-import { SCHEMA, clone } from "./doc.js";
+import { SCHEMA, clone, migrate } from "./doc.js";
 
 const c = () => window.cycls;
 export const hasBridge = () => typeof window.cycls === "object" && !!window.cycls;
@@ -14,7 +14,7 @@ export async function ready() {
 
 export async function readScene() {
   if (!hasBridge()) return clone(memory || SCHEMA.new_scene);
-  return JSON.parse(await c().read("data/scene.json"));
+  return migrate(JSON.parse(await c().read("data/scene.json")));
 }
 
 export async function writeScene(doc) {
