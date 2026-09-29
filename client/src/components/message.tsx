@@ -10,6 +10,7 @@ import { ImagePart } from "./parts/image-part";
 import { StepPart } from "./parts/step-part";
 import { StepGroup } from "./parts/step-group";
 import { FilePart } from "./parts/file-part";
+import { SelectionChip } from "./selection-chip";
 import { SourcesPart } from "./parts/sources-part";
 import { AttachmentBody } from "./attachment-body";
 import { Icon } from "./icon";
@@ -124,6 +125,7 @@ export function MessageBubble({
     return (
       <div className="flex w-full max-w-3xl items-start gap-4 px-6 pb-2 justify-end">
         <div className="flex flex-col items-end gap-2 max-w-[80%]">
+          {message.selection && <SelectionChip selection={message.selection} />}
           {attachments && attachments.length > 0 && (
             <div className="flex flex-row gap-2 flex-wrap justify-end">
               {attachments.map((att, i) => (

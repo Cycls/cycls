@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, cleanup, act, fireEvent, screen } from "@testing-library/react";
 import {
-  DesignEditorView, detachDesignEditorsUnder, flushDesignEditor, fullscreenDesignEditor, type DesignHost,
+  DesignEditorView, designSelection, detachDesignEditorsUnder, flushDesignEditor, fullscreenDesignEditor, type DesignHost,
 } from "../src/components/design-editor-view";
 import { ToastProvider } from "../src/lib/toast";
 
@@ -31,7 +31,21 @@ function host(): DesignHost & { [k: string]: ReturnType<typeof vi.fn> } {
   } as never;
 }
 
-function mount(opts: { writeFile?: (p: string, d: BlobPart) => Promise<void>; reload?: () => Promise<string>; host?: DesignHost } = {}) {
+// A host whose server serves designs with their version (X-Version).
+function versioned(version: () => string) {
+  const h = host();
+  h.fetchVersioned = vi.fn(async () => ({ url: "blob:orig", version: version() }));
+  return h;
+}
+
+// A save the server refused: the file is at `version` now.
+const stale412 = (version: string) =>
+  Object.assign(new Error("HTTP 412"), { status: 412, response: new Response(JSON.stringify({ detail: "changed", version })) });
+
+const command = (detail: Record<string, unknown>) =>
+  act(async () => { window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: { path: "designs/launch.fig", ...detail } })); });
+
+function mount(opts: { writeFile?: (p: string, d: BlobPart, o?: unknown) => Promise<unknown>; reload?: () => Promise<string>; host?: DesignHost } = {}) {
   const writeFile = vi.fn(opts.writeFile ?? (async () => {}));
   const utils = render(
     <DesignEditorView url="blob:orig" path="designs/launch.fig" name="launch.fig" editorUrl={EDITOR}
@@ -126,7 +140,7 @@ describe("DesignEditorView", () => {
 
     fromEditor(frame(), "saved", { doc: load.doc, id: "s1", fig: b64([5, 6]) });
     await flush();
-    expect(writeFile).toHaveBeenCalledWith("designs/launch.fig", expect.anything());
+    expect(writeFile).toHaveBeenCalledWith("designs/launch.fig", expect.anything(), expect.objectContaining({ silent: true }));
     expect(post).toHaveBeenCalledWith({ target: "cycls-editor", type: "written", doc: load.doc, id: "s1", ok: true }, EDITOR);
 
     // A save from a document since replaced isn't written over the file.
@@ -181,6 +195,99 @@ describe("DesignEditorView", () => {
     expect(post).toHaveBeenCalledWith({ target: "cycls-editor", type: "theme", theme: "dark" }, EDITOR);
     expect(frame()).toBe(first);
     expect(frame().getAttribute("src")).toBe(src);
+  });
+
+  it("saves name the version they started from; a change made elsewhere asks, and Keep mine writes over it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const writeFile = vi.fn()
+        .mockRejectedValueOnce(stale412("v9"))
+        .mockResolvedValue({ version: "v10" });
+      const { frame } = mount({ host: versioned(() => "v1"), writeFile });
+      const { post, load } = await ready(frame(), 2);
+      fromEditor(frame(), "saved", { doc: load.doc, id: "s1", name: "launch.fig", fig: b64([7]) });
+      await flush();
+      expect(writeFile).toHaveBeenLastCalledWith("designs/launch.fig", expect.anything(), { silent: true, base: "v1" });
+      expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: "written", id: "s1", ok: false }), EDITOR);
+      expect(screen.queryByText("This design changed elsewhere")).toBeNull();   // an agent edit may yet explain it
+      await act(async () => { vi.advanceTimersByTime(3100); });
+      expect(screen.getByText("This design changed elsewhere")).toBeTruthy();
+
+      fromEditor(frame(), "saved", { doc: load.doc, id: "s2", name: "launch.fig", fig: b64([8]) });   // held while deciding
+      await flush();
+      expect(writeFile).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByText("Keep mine"));
+      await flush();
+      expect(post).toHaveBeenCalledWith({ target: "cycls-editor", type: "save" }, EDITOR);
+      fromEditor(frame(), "saved", { doc: load.doc, id: "s3", name: "launch.fig", fig: b64([8]) });
+      await flush();
+      expect(writeFile).toHaveBeenLastCalledWith("designs/launch.fig", expect.anything(), { silent: true, base: "v9", force: true });
+      expect(screen.queryByText("This design changed elsewhere")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an agent edit landing makes a stale save expected: quiet, and saved again on the edit's version", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const writeFile = vi.fn()
+        .mockRejectedValueOnce(stale412("v2"))
+        .mockResolvedValue({ version: "v3" });
+      const { frame } = mount({ host: versioned(() => "v1"), writeFile });
+      const { post, load } = await ready(frame(), 2);
+      await command({ script: "S", intent: "tidy", version: "v2" });
+      expect(post).toHaveBeenCalledWith({ target: "cycls-editor", type: "command", script: "S", intent: "tidy" }, EDITOR);
+      fromEditor(frame(), "saved", { doc: load.doc, id: "s1", name: "launch.fig", fig: b64([7]) });   // made before the edit
+      await flush();
+      await act(async () => { vi.advanceTimersByTime(3500); });
+      expect(screen.queryByText("This design changed elsewhere")).toBeNull();
+      fromEditor(frame(), "applied", { doc: load.doc });
+      await flush();
+      expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: "flush" }), EDITOR);   // what was refused goes now
+      fromEditor(frame(), "saved", { doc: load.doc, id: "s2", name: "launch.fig", fig: b64([9]) });
+      await flush();
+      expect(writeFile).toHaveBeenLastCalledWith("designs/launch.fig", expect.anything(), { silent: true, base: "v2" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("agent edits replay one at a time, and one the editor loaded already is skipped", async () => {
+    const { frame } = mount({ host: versioned(() => "v5") });
+    const { post, load } = await ready(frame(), 2);
+    const commands = () => post.mock.calls.map((c) => c[0] as Record<string, unknown>).filter((m) => m.type === "command").map((m) => m.script);
+    await command({ script: "A", version: "v5" });   // saved before this load read the file: it's in already
+    await command({ script: "B", version: "v6" });
+    await command({ script: "C", version: "v7" });
+    expect(commands()).toEqual(["B"]);
+    fromEditor(frame(), "applied", { doc: load.doc });
+    await flush();
+    expect(commands()).toEqual(["B", "C"]);
+  });
+
+  it("reports what's selected, by name, for Add selection", async () => {
+    const { frame } = mount({ host: versioned(() => "v1") });
+    const { load } = await ready(frame(), 2);
+    const heard: unknown[] = [];
+    const listen = (e: Event) => heard.push((e as CustomEvent).detail);
+    window.addEventListener("cycls:design-selection", listen);
+    fromEditor(frame(), "selection", { doc: load.doc, frame: "slide-1", nodes: [{ name: "headline", type: "TEXT", text: "Night Roast" }] });
+    await flush();
+    const sel = { path: "designs/launch.fig", frame: "slide-1", nodes: [{ name: "headline", type: "TEXT", text: "Night Roast" }] };
+    expect(designSelection("designs/launch.fig")).toEqual(sel);
+    expect(heard).toEqual([sel]);
+    fromEditor(frame(), "selection", { doc: load.doc, frame: null, nodes: [] });
+    await flush();
+    expect(designSelection("designs/launch.fig")).toBeNull();
+    window.removeEventListener("cycls:design-selection", listen);
+  });
+
+  it("the editor gets Cycls's language: in its URL, and on every load", async () => {
+    const { frame } = mount({ host: versioned(() => "v1") });
+    expect(frame().getAttribute("src")).toContain("&lang=en");
+    const { post } = await ready(frame(), 2);
+    expect(post).toHaveBeenCalledWith({ target: "cycls-editor", type: "locale", lang: "en" }, EDITOR);
   });
 
   it("goes full screen in its own box, keeps Esc, and leaves first for what opens elsewhere", async () => {

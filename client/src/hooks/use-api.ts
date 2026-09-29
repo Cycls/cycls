@@ -31,8 +31,10 @@ export function useApi(baseUrl: string = "") {
     }
     const res = await fetch(`${baseUrl}${path}`, { ...rest, headers, body });
     if (!res.ok) {
-      const err = new Error(`HTTP ${res.status}`) as Error & { status: number };
+      // `response`: for a caller whose failure carries an answer (a stale save's 412 says the version now).
+      const err = new Error(`HTTP ${res.status}`) as Error & { status: number; response: Response };
       err.status = res.status;
+      err.response = res.clone();
       if (!silent) error(await reasonOf(res));
       throw err;
     }

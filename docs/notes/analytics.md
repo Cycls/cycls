@@ -161,6 +161,9 @@ Identified users also carry **person properties** (via identify): `email`,
 | `design_created` | "New design" — the canvas `+`, the Files panel, or File › New design in the editor | `source` (`canvas` / `files` / `editor`), `size` (the preset or `WxH`) — do people start designs by hand, not only by asking? |
 | `design_exported` | an export from the design editor, written into the workspace beside the design | `format`, `files` — which formats leave the editor |
 | `design_copied` | "Save a copy" in the design editor | — do people branch designs? |
+| `design_save_conflict` | a design save refused because the file changed elsewhere (another tab, person or script), then the choice made | `choice` (`shown` / `latest` / `mine` / `copy`) — how often do edits collide, and how do people settle it? |
+| `design_version_restored` | a design restored from Version history | `reason` (what replaced the restored version: `save` / `agent` / `restore` / `keep`) — do people undo the agent? |
+| `design_selection_attached` | "Add selection" — what's selected in an open design, attached to a message | `nodes` (how many) — do people point at the design rather than describe it? |
 
 ### Sharing loop (organic acquisition)
 

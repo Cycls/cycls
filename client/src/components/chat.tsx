@@ -24,8 +24,8 @@ import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-chat";
-import type { BrandKit, FileEntry } from "../hooks/use-files";
-import { detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditorsUnder, type DesignHost } from "./design-editor-view";
+import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, WriteFile } from "../hooks/use-files";
+import { designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignSelection } from "./design-editor-view";
 import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
@@ -88,10 +88,14 @@ export interface FilesPanelProps {
   onEmptyTrash?: () => Promise<void>;
   onOpenFile: (path: string) => Promise<string>;
   readFile: (path: string) => Promise<string>;
-  writeFile: (path: string, data: BlobPart) => Promise<void>;   // binary too — the .fig editor writes raw bytes
+  writeFile: WriteFile;   // binary too — the .fig editor writes raw bytes
   writeNew?: (path: string, data: BlobPart) => Promise<string>;  // a NEW file (next free name) → its path: design exports, copies
   newDesign?: (body: { name?: string; size?: string | [number, number]; background?: string }) => Promise<{ path: string; name: string; size: [number, number] }>;
   brand?: () => Promise<BrandKit | null>;                        // the brand kit, for the design editor
+  fetchVersioned?: FetchVersioned;                               // a design with its version (its saves' base)
+  listVersions?: (path: string) => Promise<DesignVersion[]>;     // a design's earlier versions
+  versionBlob?: (path: string, id: string) => Promise<Blob>;
+  restoreVersion?: (path: string, id: string) => Promise<{ version: string }>;
   onNewDesign?: () => void;                                      // the Files panel's "New design"
   deckOp?: (path: string, body: DeckOp) => Promise<void>;       // the deck viewer's slide moves / copies / deletes
   pollsFor?: (deck: string) => PollApi;                         // live polls when the owner presents a deck
@@ -270,6 +274,20 @@ export function Chat({ chat, onShare, files, account, config }: {
   const [canvasTabs, setCanvasTabs] = useState<CanvasFile[]>([]);
   const [canvasActive, setCanvasActive] = useState<string | null>(null);
   const [canvasHidden, setCanvasHidden] = useState(false);
+  // "Add selection": the visible design's latest selection (its editor reports it),
+  // and the one attached to the message being written.
+  const activeDesign = canvasHidden ? null : (canvasActive ?? canvasTabs[canvasTabs.length - 1]?.path ?? null);
+  const [designSel, setDesignSel] = useState<DesignSelection | null>(null);
+  const [attachedSel, setAttachedSel] = useState<DesignSelection | null>(null);
+  useEffect(() => {
+    setDesignSel(activeDesign ? designSelection(activeDesign) : null);
+    const onSelection = (e: Event) => {
+      const sel = (e as CustomEvent).detail as DesignSelection;
+      if (sel?.path === activeDesign) setDesignSel(sel.nodes.length ? sel : null);
+    };
+    window.addEventListener("cycls:design-selection", onSelection);
+    return () => window.removeEventListener("cycls:design-selection", onSelection);
+  }, [activeDesign]);
   const [rightExpanded, setRightExpanded] = useState(false);
   const isDesktop = useMediaQuery("(min-width: 1024px)");
 
@@ -373,7 +391,10 @@ export function Chat({ chat, onShare, files, account, config }: {
       } else if (ev.action === "design_command" && typeof ev.path === "string" && typeof ev.script === "string") {
         // The agent is editing an OPEN design live — forward the script to that
         // .fig's embedded editor (DesignEditorView listens for this and relays it).
-        window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: { path: ev.path, script: ev.script, intent: typeof ev.intent === "string" ? ev.intent : undefined } }));
+        window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: {
+          path: ev.path, script: ev.script, intent: typeof ev.intent === "string" ? ev.intent : undefined,
+          version: typeof ev.version === "string" ? ev.version : undefined,   // the file as the agent saved it
+        } }));
         track("ui_action", { action: "design_command" });
       } else if (ev.action === "suggest" && typeof ev.text === "string") {
         if (followUpsEnabled()) {
@@ -512,6 +533,8 @@ export function Chat({ chat, onShare, files, account, config }: {
     const sendAttachments = attachments.length > 0 ? [...attachments] : undefined;
     const mentioned = pillsRef.current.filter((p) => text.includes(`@${connectorLabel(p)}`)).map((p) => p.name);
     if (mentioned.length) { extra = { ...extra, connectors: mentioned }; setPills([]); }
+    const selection = attachedSel;
+    if (selection) { extra = { ...extra, selection }; setAttachedSel(null); }
     setInput("");
     setAttachments([]);
     setFollowUp(null);
@@ -527,9 +550,12 @@ export function Chat({ chat, onShare, files, account, config }: {
       return;
     }
     heldRef.current = false;
-    onSend(text, sendAttachments, origin, extra);
-    setTimeout(() => scrollToBottom(), 0);
-  }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId]);
+    // With a selection attached, its design's unsaved work is saved first, so the
+    // agent reads the design the person is looking at.
+    const go = () => { onSend(text, sendAttachments, origin, extra); setTimeout(() => scrollToBottom(), 0); };
+    if (selection) void flushDesignEditor(selection.path, 1500).then(go);
+    else go();
+  }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId, attachedSel]);
 
   // Drain on the falling edge of `isStreaming` — one message per edge, and the
   // send it triggers raises the flag again, so the rest follow in order.
@@ -739,6 +765,10 @@ export function Chat({ chat, onShare, files, account, config }: {
     brand: files.brand,
     openInCanvas: (p) => openFileInCanvas(p),
     refreshFiles: () => files.onReload(files.path),
+    fetchVersioned: files.fetchVersioned,
+    listVersions: files.listVersions,
+    versionBlob: files.versionBlob,
+    restoreVersion: files.restoreVersion,
   } : undefined), [files, createDesign, openFileInCanvas]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -834,6 +864,12 @@ export function Chat({ chat, onShare, files, account, config }: {
     },
     onAddConnector: (c: Connector) => addPill(c, "picker"),
     placeholder: inputPlaceholder,
+    selection: attachedSel,
+    onAddSelection: designSel && !attachedSel ? () => {
+      setAttachedSel(designSel);
+      track("design_selection_attached", { nodes: designSel.nodes.length });
+    } : undefined,
+    onRemoveSelection: () => setAttachedSel(null),
   };
 
   return (

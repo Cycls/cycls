@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useApi, reasonOf } from "./use-api";
 import { encPath } from "./use-files";
+import type { DesignSelection } from "../components/design-editor-view";
 import { track } from "../lib/analytics";
 import { webSearchEnabled, autoApprove } from "../lib/utils";
 import { useToast } from "../lib/toast";
@@ -46,7 +47,8 @@ export interface Part {
 }
 
 export type UIAction = { action: string } & Record<string, unknown>;
-export type SendExtra = { approvals?: string[]; connectors?: string[] };
+// `selection`: what the person selected in an open design, attached with "Add selection".
+export type SendExtra = { approvals?: string[]; connectors?: string[]; selection?: DesignSelection };
 export type UIHandler = (ev: UIAction) => void;
 
 export interface Attachment {
@@ -63,6 +65,7 @@ export interface Message {
   content: string;
   parts?: Part[];
   attachments?: Attachment[];
+  selection?: DesignSelection;   // a user message's attached design selection (shown as a chip)
 }
 
 export interface PassMetadata {
@@ -253,7 +256,7 @@ export function useChat(baseUrl: string = "") {
     async (text: string, attachments?: Attachment[], origin: string = "keyboard", extra?: SendExtra) => {
       if (isStreaming) return;
 
-      const userMessage: Message = { role: "user", content: text, attachments };
+      const userMessage: Message = { role: "user", content: text, attachments, ...(extra?.selection ? { selection: extra.selection } : {}) };
       const assistantMessage: Message = {
         role: "assistant",
         content: "",
@@ -328,7 +331,8 @@ export function useChat(baseUrl: string = "") {
                                  detach: true,   // we poll, and we stop through the endpoint
                                  ...(autoApprove() ? {} : { auto: false }),
                                  ...(extra?.approvals?.length ? { approvals: extra.approvals } : {}),
-                                 ...(extra?.connectors?.length ? { connectors: extra.connectors } : {}) }),
+                                 ...(extra?.connectors?.length ? { connectors: extra.connectors } : {}),
+                                 ...(extra?.selection ? { selection: extra.selection } : {}) }),
           signal: controller.signal,
         });
 

@@ -84,14 +84,19 @@ class Scripted:
         return self._turn(context)
 
     async def _turn(self, context):
+        from cycls._agent.design.store import read_fig, write_fig
         content = context.messages[-1].get("content", "") if context.messages else ""
         text = content if isinstance(content, str) else " ".join(
             p.get("text", "") for p in content if isinstance(p, dict))
-        if "edit" in text:
-            (self.root / DESIGN).write_bytes((DATA / "e2e-after.fig").read_bytes())
-            yield {"type": "ui", "action": "design_command", "path": DESIGN,
+        if "edit" in text:   # as the Design tool does: saved first (compared, kept), then replayed
+            _, base = read_fig(self.root, DESIGN)
+            version = await write_fig(self.root, DESIGN, (DATA / "e2e-after.fig").read_bytes(), base=base,
+                                      by="agent", reason="agent", intent="Day Roast")
+            yield {"type": "ui", "action": "design_command", "path": DESIGN, "version": version,
                    "script": (DATA / "e2e-edit.js").read_text(encoding="utf-8"), "intent": "Day Roast"}
             yield "Edited."
+        elif "note" in text:
+            yield "Noted."
         else:
             yield {"type": "ui", "action": "open_canvas", "path": DESIGN}
             yield "Opened."
@@ -143,14 +148,19 @@ class Session:
     """One browser page on Cycls, with the design reset to its fixture."""
 
     def __init__(self, browser, server, init_script=None):
+        from cycls._agent import versions
         self.server = server
         (server.root / "designs").mkdir(parents=True, exist_ok=True)
         shutil.copy(DATA / "e2e.fig", server.root / DESIGN)
+        shutil.rmtree(server.root / versions.DIR, ignore_errors=True)   # each test's own history
+        versions._last.clear()
         self.context = browser.new_context(viewport={"width": 1600, "height": 1000})
         self.context.add_init_script(RECORD)
         if init_script:
             self.context.add_init_script(init_script)
         self.page = self.context.new_page()
+        self.console = []
+        self.page.on("console", lambda m: self.console.append(f"{m.type}: {m.text}"))
         self.page.goto(server.url)
 
     def close(self):
@@ -202,6 +212,20 @@ class Session:
 
     def no_editor_error(self):
         assert self.page.get_by_text("Editor error").count() == 0
+
+    def features(self):
+        ready = next((e for e in self.events() if e.get("type") == "ready"), {})
+        return set(ready.get("features") or [])
+
+    def nudge(self):
+        """A change of the person's own in the editor: the design's frame moved."""
+        self.focus_editor()
+        self.page.keyboard.press("Control+a")
+        for _ in range(3):
+            self.page.keyboard.press("Shift+ArrowRight")
+
+    def versions(self):
+        return self.page.evaluate("fetch('/versions/designs/e2e.fig').then((r) => r.json())")["versions"]
 
 
 @pytest.fixture
@@ -278,3 +302,67 @@ def test_full_screen_is_the_editors_own_box(session):
     assert session.page.evaluate("(f) => document.fullscreenElement === f.parentElement", frame)
     assert session.page.get_by_text("Exit full screen").count() == 1
     session.page.evaluate("document.exitFullscreen()")
+
+
+# ---- 6. A change made elsewhere isn't overwritten: the person decides ---------------------
+
+def test_a_change_made_elsewhere_asks_and_keep_mine_writes(session):
+    session.open_design()
+    (session.server.root / DESIGN).write_bytes((DATA / "e2e-after.fig").read_bytes())   # another tab, a script…
+    theirs = session.on_disk()
+    session.nudge()
+    session.page.get_by_text("This design changed elsewhere").wait_for(timeout=20000)
+    assert session.on_disk() == theirs                                   # nothing written meanwhile
+    n = session.mark()
+    session.page.get_by_text("Keep mine").click()
+    saved = session.wait_for("saved", after=n, timeout=15)
+    session.page.wait_for_timeout(1000)
+    assert session.on_disk() == base64.b64decode(saved["fig"])
+    assert [v["reason"] for v in session.versions()][0] == "keep"         # theirs is kept, in Version history
+
+
+# ---- 7. An agent edit leaves the design before it in Version history; Restore brings it back
+
+def test_version_history_restores_what_an_agent_edit_replaced(session):
+    session.open_design()
+    original = session.on_disk()
+    n = session.mark()
+    session.say("edit the headline")
+    session.wait_for("applied", after=n)
+    session.page.wait_for_timeout(3000)
+    assert session.page.get_by_text("This design changed elsewhere").count() == 0   # the edit's own save isn't a conflict
+    session.page.get_by_label("More").last.click()
+    session.page.get_by_text("Version history").click()
+    row = session.page.get_by_test_id("design-version").filter(has_text="Before an agent edit")
+    n = session.mark()
+    row.get_by_text("Restore").click()
+    session.wait_for("loaded", after=n, timeout=60)                        # the editor reopens on it
+    assert session.on_disk() == original
+
+
+# ---- 8. Add selection tells the agent what the person pointed at -------------------------
+
+def test_add_selection_sends_the_selection_with_the_message(session):
+    session.open_design()
+    if "selection" not in session.features():
+        pytest.skip("this editor doesn't report selection yet")
+    session.focus_editor()
+    session.page.keyboard.press("Control+a")
+    session.page.get_by_test_id("add-selection").click(timeout=10000)
+    assert "e2e.fig" in session.page.get_by_test_id("selection-chip").first.inner_text()
+    before = len(session.server.agent.contexts)
+    session.say("note this")
+    session.page.get_by_text("Noted.").wait_for(timeout=30000)
+    sel = session.server.agent.contexts[before].selection
+    assert sel["path"] == DESIGN and sel["nodes"]
+
+
+# ---- 9. The editor speaks Cycls's language ------------------------------------------------
+
+def test_the_editor_follows_cycls_into_arabic(session):
+    session.page.evaluate("document.documentElement.lang = 'ar'; window.dispatchEvent(new Event('langchange'))")
+    session.open_design()
+    if "lang" not in session.features():
+        pytest.skip("this editor has no Arabic yet")
+    first = session.editor.get_by_role("menuitem").first.inner_text().strip()
+    assert any("؀" <= c <= "ۿ" for c in first), first

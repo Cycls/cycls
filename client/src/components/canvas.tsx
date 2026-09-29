@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
+import type { WriteFile } from "../hooks/use-files";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence, Reorder } from "framer-motion";
 import { Icon } from "./icon";
@@ -13,6 +14,7 @@ import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { DesignEditorView, canFullscreen, flushDesignEditor, fullscreenDesignEditor, type DesignHost } from "./design-editor-view";
+import { VersionHistory } from "./version-history";
 import { DeckView, type DeckOp } from "./deck-view";
 import type { PollApi } from "../lib/polls";
 import { attachBridge, appScope } from "./app-bridge";
@@ -116,7 +118,7 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
   content: string;
   shared: boolean;
   readFile?: (path: string, silent?: boolean) => Promise<string>;
-  writeFile?: (path: string, text: string, silent?: boolean) => Promise<void>;
+  writeFile?: WriteFile;
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
@@ -144,7 +146,7 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
       // Silent: the app is told what failed over the bridge and decides what it
       // means. A missing key-value file on first open is not a host-level error.
       readFile: (p) => readForApp(p, true),
-      writeFile: shared || !writeFile ? undefined : (p, text) => writeFile(p, text, true),
+      writeFile: shared || !writeFile ? undefined : async (p, text) => { await writeFile(p, text, true); },
       // One dialog per save: the app never holds standing permission to write
       // outside its own folder.
       requestSave: canSave
@@ -243,7 +245,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   shared?: boolean;
   readFile?: (path: string, silent?: boolean) => Promise<string>;
   openFile?: (path: string, silent?: boolean) => Promise<string>;   // authed blob URL (a deck's downloads, its .fig)
-  writeFile?: (path: string, data: BlobPart, silent?: boolean) => Promise<void>;
+  writeFile?: WriteFile;
   deckOp?: (path: string, body: DeckOp) => Promise<void>;          // a deck's slide moves / copies / deletes
   pollsFor?: (deck: string) => PollApi;   // live polls in a presented deck (the owner's)
   listFolders?: () => Promise<{ name: string; path: string }[]>;
@@ -399,7 +401,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   searchFiles?: (q: string) => Promise<{ name: string; path: string }[]>;
   readFile: (path: string) => Promise<string>;   // authed text fetch (md/html/code source)
   openFile: (path: string, silent?: boolean) => Promise<string>;    // authed blob URL (pdf / download / media)
-  writeFile: (path: string, data: BlobPart) => Promise<void>;  // overwrite (editor); binary for the .fig editor
+  writeFile: WriteFile;  // overwrite (editor); binary for the .fig editor
   uploadFile?: (dir: string, file: File) => Promise<void>;   // images and videos dropped into the editor
   deckOp?: (path: string, body: DeckOp) => Promise<void>;        // a deck's slide moves / copies / deletes
   pollsFor?: (deck: string) => PollApi;   // live polls in a presented deck (the owner's)
@@ -771,7 +773,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   uploadFile?: (dir: string, file: File) => Promise<void>;
   readFile: (path: string) => Promise<string>;
   openFile: (path: string, silent?: boolean) => Promise<string>;
-  writeFile: (path: string, data: BlobPart) => Promise<void>;
+  writeFile: WriteFile;
   deckOp?: (path: string, body: DeckOp) => Promise<void>;
   pollsFor?: (deck: string) => PollApi;   // live polls in a presented deck (the owner's)
   listFolders?: () => Promise<{ name: string; path: string }[]>;
@@ -794,6 +796,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const md = isMd(fileKind(file));
   const lang = codeLang(fileKind(file));
   const deck = isDeck(fileKind(file));
@@ -894,6 +897,8 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
                 ...(isHtml(fileKind(file)) && content != null
                   ? [{ label: t("openInTab"), onClick: openInTab }] : []),
                 ...(md ? [{ label: t("exportPdf"), onClick: () => window.print() }] : []),
+                ...(isDesignEditor(fileKind(file)) && designEditorUrl && designHost?.listVersions
+                  ? [{ label: t("versionHistory"), onClick: () => setHistoryOpen(true) }] : []),
                 { label: t("download"), onClick: download },
               ];
               return (
@@ -913,7 +918,10 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
       </div>
 
       {/* Body */}
-      <div className="flex-1 overflow-hidden">
+      <div className="relative flex-1 overflow-hidden">
+        {historyOpen && designHost && (
+          <VersionHistory path={file.path} host={designHost} onClose={() => setHistoryOpen(false)} />
+        )}
         {editing && md && content != null && !PLAIN_MD.test(content) ? (
           <Suspense fallback={<LoadingBar />}>
             <MdEditor value={draft} onChange={setDraft} placeholder={file.writable ? t("instructionsPlaceholder") : undefined}
