@@ -4,6 +4,7 @@ import type { BrandKit } from "../hooks/use-files";
 import { track } from "../lib/analytics";
 import { t } from "../lib/i18n";
 import { useToast } from "../lib/toast";
+import { cn } from "../lib/utils";
 
 // Renders a `.fig` on the canvas as the embedded OpenPencil editor — an iframe on
 // its OWN origin (the deployed editor), editing ONE design of the workspace: the
@@ -53,9 +54,9 @@ export type DesignHost = {
 };
 
 // Every mounted editor, by the file it edits — so Cycls can have one save what's
-// unsaved before its tab closes, the file is renamed or the canvas hides, and can
-// stop one from writing a file that is being deleted.
-type Handle = { flush: (ms: number) => Promise<boolean>; detach: () => () => void };
+// unsaved before its tab closes, the file is renamed or the canvas hides, can stop
+// one from writing a file that is being deleted, and can open one full screen.
+type Handle = { flush: (ms: number) => Promise<boolean>; detach: () => () => void; fullscreen: () => void };
 const editors = new Map<string, Set<Handle>>();
 const under = (path: string, prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
 const handlesUnder = (prefix: string | null) =>
@@ -72,6 +73,17 @@ export function detachDesignEditorsUnder(prefix: string): () => void {
   const undo = handlesUnder(prefix).map((h) => h.detach());
   return () => undo.forEach((f) => f());
 }
+// The editor of `path`, full screen: the whole screen for designing, the same iframe
+// (nothing reloads, saves go on). Called from a click — the browser asks for one.
+export function fullscreenDesignEditor(path: string): void {
+  [...(editors.get(path) ?? [])].pop()?.fullscreen();
+}
+export const canFullscreen = () => typeof document !== "undefined" && document.fullscreenEnabled === true;
+
+// Chrome and Edge let a full-screen page keep Esc (holding it still leaves): the
+// editor's Esc — deselect, leave a text edit — then doesn't end full screen.
+type KeyboardLock = { lock?: (keys?: string[]) => Promise<void>; unlock?: () => void };
+const keyboard = () => (navigator as Navigator & { keyboard?: KeyboardLock }).keyboard;
 
 // What an export may write into the workspace, by the type the editor gives it.
 const EXPORT_TYPES: Record<string, string> = {
@@ -94,6 +106,9 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   host?: DesignHost;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);        // what goes full screen: the editor and its pills
+  const [full, setFull] = useState(false);
+  const [hint, setHint] = useState(false);            // "Exit full screen", shown for a moment on entry
   const [frameKey, setFrameKey] = useState(0);        // bump → the editor iframe remounts
   const sourceRef = useRef<string | null>(null);      // what the next `ready` loads, if not `url`
   const [status, setStatus] = useState<"loading" | "ready" | "saved" | "error" | "saveerror">("loading");
@@ -121,7 +136,41 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
     if (protocol.current >= 2) post({ type: "theme", theme: dark ? "dark" : "light" });
   }, [dark, post]);
 
-  // This editor in the registry, for Cycls's flushes and deletes.
+  // Full screen is the editor's box, not the page: the iframe stays where it is.
+  const enterFullscreen = useCallback(() => {
+    const box = boxRef.current;
+    if (!box?.requestFullscreen || document.fullscreenElement) return;
+    box.requestFullscreen({ navigationUI: "hide" }).then(() => {
+      keyboard()?.lock?.(["Escape"]).catch(() => {});
+      frameRef.current?.focus();   // keys go to the editor, not the button left behind
+    }).catch(() => {});
+  }, []);
+  // What opens in another canvas tab (a new design, a copy, an export) isn't seen
+  // under a full-screen editor, so it leaves full screen first.
+  const leaveFullscreen = useCallback(async () => {
+    if (boxRef.current && document.fullscreenElement === boxRef.current) await document.exitFullscreen().catch(() => {});
+  }, []);
+  useEffect(() => {
+    let timer: number | undefined;
+    let was = false;
+    const onChange = () => {
+      const on = !!boxRef.current && document.fullscreenElement === boxRef.current;
+      setFull(on);
+      setHint(on);
+      window.clearTimeout(timer);
+      if (on) timer = window.setTimeout(() => setHint(false), 2500);
+      else if (was) keyboard()?.unlock?.();
+      was = on;
+    };
+    document.addEventListener("fullscreenchange", onChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onChange);
+      window.clearTimeout(timer);
+      if (was) keyboard()?.unlock?.();   // closed while full screen (the browser leaves it)
+    };
+  }, []);
+
+  // This editor in the registry, for Cycls's flushes, deletes and full screen.
   useEffect(() => {
     const handle: Handle = {
       flush: (ms) => {
@@ -137,6 +186,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         detached.current = true;
         return () => { detached.current = false; };
       },
+      fullscreen: enterFullscreen,
     };
     let set = editors.get(path);
     if (!set) editors.set(path, (set = new Set()));
@@ -145,7 +195,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       set!.delete(handle);
       if (!set!.size) editors.delete(path);
     };
-  }, [path, post]);
+  }, [path, post, enterFullscreen]);
 
   useEffect(() => {
     let disposed = false;
@@ -178,7 +228,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         const text = written.length === 1
           ? t("exportedTo").replace("{name}", written[0].split("/").pop() ?? written[0])
           : t("exportedN").replace("{n}", String(written.length)).replace("{dir}", dir || "/");
-        toast.action(text, t("open"), () => host.openInCanvas(written[0]));
+        toast.action(text, t("open"), () => { void leaveFullscreen().then(() => host.openInCanvas(written[0])); });
       } catch {
         toast.error(t("exportFailed"));
       }
@@ -252,6 +302,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         // live editor stays up.
         if (!disposed) loaded ? flash("saveerror") : setStatus("error");
       } else if (m.type === "newDesign" && host) {
+        await leaveFullscreen();
         try { await host.newDesign(Array.isArray(m.size) ? m.size : undefined); } catch { toast.error(t("newDesignFailed")); }
       } else if (m.type === "export" && Array.isArray(m.files)) {
         await exportFiles(m.files);
@@ -274,7 +325,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       window.removeEventListener("message", onMessage);
       window.removeEventListener("cycls:design-command", onCommand as EventListener);
     };
-  }, [origin, post, name, dir, stem, frameKey]);
+  }, [origin, post, name, dir, stem, frameKey, leaveFullscreen]);
 
   const saveCopy = async (copyName: string) => {
     const { host, toast } = latest.current;
@@ -284,6 +335,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       const written = await host.writeNew(`${dir ? `${dir}/` : ""}${copyName}.fig`, fromBase64(copyOf.fig) as unknown as BlobPart);
       track("design_copied", {});
       host.refreshFiles?.();
+      await leaveFullscreen();
       host.openInCanvas(written);
       toast.info(t("savedCopy").replace("{name}", written.split("/").pop() ?? written));
     } catch {
@@ -292,10 +344,29 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   };
 
   return (
-    <div className="relative h-full w-full">
+    // `data-toasts`: Cycls's toasts show inside it while it's full screen.
+    <div ref={boxRef} data-toasts="" className="relative h-full w-full bg-background">
       {/* Own-origin editor iframe (not sandboxed): the app needs its full
           capabilities — CanvasKit, workers, storage — on its real origin. */}
       <iframe key={frameKey} ref={frameRef} src={src} title={name} className="h-full w-full border-0" />
+      {full && (
+        // A strip along the top middle: the pointer there (or the first moments of
+        // full screen) shows the way out. The iframe keeps every other pointer event.
+        <div className="group absolute left-1/2 top-0 z-10 flex h-2 w-72 -translate-x-1/2 justify-center hover:h-14">
+          <button
+            onClick={() => void leaveFullscreen()}
+            className={cn(
+              "mt-2 flex h-8 items-center gap-1.5 rounded-full bg-background/90 px-3 text-xs text-foreground shadow backdrop-blur transition-opacity cursor-pointer",
+              hint ? "opacity-100" : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100",
+            )}
+          >
+            <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 3.75v4.5h-4.5m12-4.5v4.5h4.5m0 7.5h-4.5v4.5m-7.5 0v-4.5h-4.5" />
+            </svg>
+            {t("exitFullScreen")}
+          </button>
+        </div>
+      )}
       {status !== "ready" && (
         <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow backdrop-blur">
           {t(status === "error" ? "editorError"

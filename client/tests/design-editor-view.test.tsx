@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, cleanup, act, fireEvent, screen } from "@testing-library/react";
 import {
-  DesignEditorView, detachDesignEditorsUnder, flushDesignEditor, type DesignHost,
+  DesignEditorView, detachDesignEditorsUnder, flushDesignEditor, fullscreenDesignEditor, type DesignHost,
 } from "../src/components/design-editor-view";
+import { ToastProvider } from "../src/lib/toast";
 
 // The editor iframe talks to its host over postMessage (protocol 2). It edits ONE
 // workspace file: every save goes to that file, confirmed with `written`; a save
@@ -37,6 +38,28 @@ function mount(opts: { writeFile?: (p: string, d: BlobPart) => Promise<void>; re
                       writeFile={writeFile} reload={opts.reload} host={opts.host} />);
   const frame = () => utils.container.querySelector("iframe")!;
   return { ...utils, frame, writeFile };
+}
+
+// The browser's full screen (jsdom has none): one element at a time, with its
+// change event, and the keyboard lock Chrome and Edge have.
+function fakeFullscreen() {
+  let el: Element | null = null;
+  const change = () => document.dispatchEvent(new Event("fullscreenchange"));
+  const exit = vi.fn(async () => { el = null; change(); });
+  const keyboard = { lock: vi.fn(async () => {}), unlock: vi.fn() };
+  Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => el });
+  Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
+  Object.defineProperty(document, "exitFullscreen", { configurable: true, value: exit });
+  Object.defineProperty(Element.prototype, "requestFullscreen", {
+    configurable: true, value: async function (this: Element) { el = this; change(); },
+  });
+  Object.defineProperty(navigator, "keyboard", { configurable: true, value: keyboard });
+  const restore = () => {
+    for (const k of ["fullscreenElement", "fullscreenEnabled", "exitFullscreen"]) delete (document as unknown as Record<string, unknown>)[k];
+    delete (Element.prototype as unknown as Record<string, unknown>).requestFullscreen;
+    delete (navigator as unknown as Record<string, unknown>).keyboard;
+  };
+  return { exit, keyboard, restore };
 }
 
 // The editor side of a load: `ready` → the host's `load` (returned).
@@ -158,6 +181,50 @@ describe("DesignEditorView", () => {
     expect(post).toHaveBeenCalledWith({ target: "cycls-editor", type: "theme", theme: "dark" }, EDITOR);
     expect(frame()).toBe(first);
     expect(frame().getAttribute("src")).toBe(src);
+  });
+
+  it("goes full screen in its own box, keeps Esc, and leaves first for what opens elsewhere", async () => {
+    const fs = fakeFullscreen();
+    try {
+      const h = host();
+      const { frame } = mount({ host: h });
+      const first = frame();
+      await ready(first, 2);
+      await act(async () => { fullscreenDesignEditor("designs/launch.fig"); await new Promise((r) => setTimeout(r, 0)); });
+      expect(document.fullscreenElement).toBe(first.parentElement);        // the editor's box, not the page
+      expect(frame()).toBe(first);                                          // nothing reloads
+      expect(fs.keyboard.lock).toHaveBeenCalledWith(["Escape"]);
+      expect(screen.getByText("Exit full screen")).toBeTruthy();
+
+      fromEditor(first, "newDesign", { size: [1080, 1080] });              // opens in another canvas tab
+      await flush();
+      expect(fs.exit).toHaveBeenCalledOnce();
+      expect(fs.exit.mock.invocationCallOrder[0]).toBeLessThan(h.newDesign.mock.invocationCallOrder[0]);
+      expect(fs.keyboard.unlock).toHaveBeenCalled();
+      expect(screen.queryByText("Exit full screen")).toBeNull();
+    } finally {
+      fs.restore();
+    }
+  });
+
+  it("full screen shows Cycls's toasts inside it", async () => {
+    const fs = fakeFullscreen();
+    try {
+      const h = host();
+      const { container } = render(
+        <ToastProvider>
+          <DesignEditorView url="blob:orig" path="designs/launch.fig" name="launch.fig" editorUrl={EDITOR}
+                            writeFile={async () => {}} host={h} />
+        </ToastProvider>);
+      const frame = container.querySelector("iframe")!;
+      const { load } = await ready(frame, 2);
+      await act(async () => { fullscreenDesignEditor("designs/launch.fig"); await new Promise((r) => setTimeout(r, 0)); });
+      fromEditor(frame, "export", { doc: load.doc, files: [{ name: "hero.png", mime: "image/png", data: b64([137, 80]) }] });
+      await flush();
+      expect(frame.parentElement!.contains(screen.getByText("Exported to launch-hero-2.png"))).toBe(true);
+    } finally {
+      fs.restore();
+    }
   });
 
   it("flushes on request, and a file being deleted gets no more writes", async () => {
