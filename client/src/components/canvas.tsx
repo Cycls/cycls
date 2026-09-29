@@ -437,6 +437,12 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
       });
     }
   }, [draining]);
+  // A design closed beside other tabs drains (above). The last tab takes the canvas
+  // with it, leaving nothing mounted to drain, so its editor saves first.
+  const closeTab = (path: string) => {
+    if (tabs.length === 1 && designEditorUrl) void flushDesignEditor(path, 1500).then(() => onCloseTab(path));
+    else onCloseTab(path);
+  };
   const { width, startResize, resizing } = usePaneWidth("cycls_canvas_width", 560, 380, 420, railWidth, undefined, 1, 0.25);
 
   const inner = file && (
@@ -463,7 +469,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
                   : tint && <span className="size-1.5 rounded-full" style={{ backgroundColor: tint }} />}
                 <span className="min-w-0 flex-1 truncate">{f.name}</span>
                 <button
-                  onClick={(e) => { e.stopPropagation(); onCloseTab(f.path); }}
+                  onClick={(e) => { e.stopPropagation(); closeTab(f.path); }}
                   className={cn("shrink-0 rounded p-0.5 hover:bg-accent/20", on ? "" : "opacity-0 group-hover:opacity-100")}
                   aria-label={`Close ${f.name}`}
                 >

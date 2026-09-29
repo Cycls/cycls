@@ -438,7 +438,8 @@ Cycls tab opened, and everything it makes lands in the workspace.
   description nor a page's plugin data), so a colour changed by hand stands.
 - **Switching, closing, renaming, deleting.** A design tab switched away from or
   closed stays mounted, hidden, until its editor has flushed (`flush` → `flushed`, or
-  5 s); hiding the canvas and Close all flush first. A renamed or moved file flushes,
+  5 s); closing the last tab, hiding the canvas and Close all flush first (up to
+  1.5 s), since the canvas goes with them. A renamed or moved file flushes,
   then its tabs follow it; a deleted one stops writing first (a late save would bring
   it back), then its tabs close. Light/dark follows Cycls live (`theme`).
 - **What's gone.** The AI chat and its provider keys (Cycls has its own agent), the
