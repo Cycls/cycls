@@ -10,6 +10,8 @@ export type MentionHit = { name: string; path: string; connector?: Connector };
 import { AttachmentBody } from "./attachment-body";
 import { extTint } from "./canvas-utils";
 import type { Attachment } from "../hooks/use-chat";
+import type { DesignSelection } from "./design-editor-view";
+import { SelectionChip } from "./selection-chip";
 
 const MENTION_DEBOUNCE_MS = 150;
 
@@ -71,6 +73,9 @@ export function InputBox({
   approveSwitch,
   onAddConnector,
   placeholder,
+  selection,
+  onAddSelection,
+  onRemoveSelection,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   input: string;
@@ -84,6 +89,9 @@ export function InputBox({
   onOpenFiles?: () => void;
   attachments?: Attachment[];
   onRemoveFile?: (index: number) => void;
+  selection?: DesignSelection | null;   // attached with "Add selection": sent with the message
+  onAddSelection?: () => void;          // a design is open with something selected
+  onRemoveSelection?: () => void;
   listening: boolean;
   transcribing: boolean;
   startMic: () => void;
@@ -271,6 +279,24 @@ export function InputBox({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* A design's selection: "Add selection" while one is open with something selected;
+          once attached, a chip the message carries. */}
+      {(selection || onAddSelection) && (
+        <div className="flex flex-wrap items-center gap-2 px-3 pt-3" onClick={(e) => e.stopPropagation()}>
+          {selection ? (
+            <SelectionChip selection={selection} onRemove={onRemoveSelection} />
+          ) : (
+            <button type="button" onClick={onAddSelection} title={t("addSelectionHint")} data-testid="add-selection"
+                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-dashed border-border px-2.5 py-1 text-xs text-muted-foreground hover:bg-secondary/60 hover:text-foreground">
+              <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4l7 17 2.5-7.5L21 11 4 4z" />
+              </svg>
+              {t("addSelection")}
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="relative">
         {/* @-mention file picker — floats above the textarea */}

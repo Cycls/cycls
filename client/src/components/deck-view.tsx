@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DropdownMenu } from "./files";
-import { DesignEditorView, flushDesignEditor, type DesignHost } from "./design-editor-view";
+import { DesignEditorView, flushDesignEditor, reloadDesignEditors, type DesignHost } from "./design-editor-view";
 import { PresentMode } from "./present-mode";
 import type { DeckPoll, PollApi } from "../lib/polls";
+import type { WriteFile } from "../hooks/use-files";
 import { saveBlob } from "./canvas-utils";
 import { useSlideNav } from "../hooks/use-slide-nav";
 import { track } from "../lib/analytics";
@@ -52,7 +53,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
   data: string;
   path: string;                 // the deck document (or .fig) this manifest is of
   openFile?: (path: string, silent?: boolean) => Promise<string>;   // authed blob URL: downloads, the editor's .fig
-  writeFile?: (path: string, data: BlobPart, silent?: boolean) => Promise<void>;
+  writeFile?: WriteFile;
   designEditorUrl?: string;     // with writeFile + openFile: Edit opens the design editor
   designHost?: DesignHost;      // what the editor asks of Cycls (new designs, copies, exports, brand)
   onReload?: () => void;        // refetch the manifest (the deck was edited)
@@ -113,12 +114,16 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
     if (!canEdit || !fig) return;
     try { setEditing(await openFile!(fig)); } catch { /* the toast already said why */ }
   };
-  // A slide change runs on the deck's .fig on the server; then the slides are fetched again.
+  // A slide change runs on the deck's .fig on the server; then the slides are fetched
+  // again. An editor open on that .fig elsewhere saves first and reopens after, so its
+  // next save isn't taken for someone else's change.
   const slideOp = async (op: DeckOp) => {
     if (!onSlideOp || busy) return;
     setBusy(true);
     try {
+      if (fig) await flushDesignEditor(fig, 3000);
       await onSlideOp(op);
+      if (fig) reloadDesignEditors(fig);
       track("deck_slide_changed", { op: op.op });
       onReload?.();
     } catch { /* the toast said why */ } finally {

@@ -38,6 +38,13 @@ export function encPath(path: string): string {
 
 // The workspace brand kit (brand/brand.yaml) as the design editor takes it.
 export type BrandKit = { colors?: Record<string, string>; fonts?: { heading?: string | null; body?: string | null } };
+// One of a design's earlier versions (cycls/_agent/versions.py): who replaced it, and why.
+export type DesignVersion = { id: string; at: string; by: string; reason: string; intent?: string; size: number };
+// A write that may name the version it started from (a design's save), and what it wrote.
+export type WriteOpts = { silent?: boolean; base?: string; force?: boolean };
+export type WriteFile = (path: string, data: BlobPart, opts?: boolean | WriteOpts) => Promise<{ version?: string } | void>;
+// A design's bytes (a blob URL) with the version they are.
+export type FetchVersioned = (path: string) => Promise<{ url: string; version: string }>;
 
 export function useFiles(baseUrl: string = "") {
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -186,11 +193,38 @@ export function useFiles(baseUrl: string = "") {
   }, [baseUrl, authHeaders]);
 
   // Overwrite a workspace file from the canvas. Accepts text OR binary (a
-  // Uint8Array / ArrayBuffer / Blob) — the design editor writes raw .fig bytes.
-  const writeFile = useCallback(async (filePath: string, data: BlobPart, silent = false) => {
-    await api(`/files/${encPath(filePath)}`, { method: "PUT", body: new Blob([data]), silent });
+  // Uint8Array / ArrayBuffer / Blob) — the design editor writes raw .fig bytes. A
+  // design's save names the version it started from (`base`): the server refuses it
+  // (412, carrying the version now) when the file changed since; `force` writes anyway.
+  const writeFile = useCallback(async (filePath: string, data: BlobPart,
+                                       opts: boolean | { silent?: boolean; base?: string; force?: boolean } = false) => {
+    const { silent = false, base, force } = typeof opts === "boolean" ? { silent: opts } : opts;
+    const q = new URLSearchParams();
+    if (base) q.set("base", base);
+    if (force) q.set("force", "1");
+    const res = await api(`/files/${encPath(filePath)}${q.size ? `?${q}` : ""}`, { method: "PUT", body: new Blob([data]), silent });
     track("file_saved", { path: filePath });
+    try {
+      return (await res.json()) as { version?: string };
+    } catch {
+      return {};
+    }
   }, [api]);
+
+  // A design, fetched with its version (X-Version) — what its saves name as their base.
+  const fetchVersioned = useCallback(async (filePath: string) => {
+    const res = await api(`/files/${encPath(filePath)}`, { silent: true });
+    return { url: URL.createObjectURL(await res.blob()), version: res.headers.get("X-Version") ?? "" };
+  }, [api]);
+
+  // A design's earlier versions (newest first), one's bytes, and a restore.
+  const listVersions = useCallback(async (filePath: string) =>
+    ((await (await api(`/versions/${encPath(filePath)}`)).json()) as { versions: DesignVersion[] }).versions, [api]);
+  const versionBlob = useCallback(async (filePath: string, id: string) =>
+    (await api(`/versions/${encPath(filePath)}?id=${encodeURIComponent(id)}`)).blob(), [api]);
+  const restoreVersion = useCallback(async (filePath: string, id: string) =>
+    (await (await api(`/versions/${encPath(filePath)}?restore=${encodeURIComponent(id)}`, { method: "POST" })).json()) as { version: string },
+  [api]);
 
   // A NEW file at `filePath`, never over one: the server takes the next free name
   // (…-2, -3) and says which. What the design editor exports and copies.
@@ -276,7 +310,7 @@ export function useFiles(baseUrl: string = "") {
     makeLink: async () => voteUrl(await shareFile(deck, "public")),
   }), [api, shareFile]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, writeNew, newDesign, brand, deckOp, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, listVersions, versionBlob, restoreVersion, writeNew, newDesign, brand, deckOp, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

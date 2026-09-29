@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useDarkMode } from "../hooks/use-dark-mode";
-import type { BrandKit } from "../hooks/use-files";
+import type { BrandKit, DesignVersion, FetchVersioned, WriteFile } from "../hooks/use-files";
 import { track } from "../lib/analytics";
-import { t } from "../lib/i18n";
+import { getLang, t, useLang } from "../lib/i18n";
 import { useToast } from "../lib/toast";
 import { cn } from "../lib/utils";
 
@@ -51,12 +51,18 @@ export type DesignHost = {
   brand: () => Promise<BrandKit | null>;
   openInCanvas: (path: string) => void;
   refreshFiles?: () => void;
+  // A design with its version, which its saves name as their base (design/store.py),
+  // and its earlier versions — absent on an older server or a shared view.
+  fetchVersioned?: FetchVersioned;
+  listVersions?: (path: string) => Promise<DesignVersion[]>;
+  versionBlob?: (path: string, id: string) => Promise<Blob>;
+  restoreVersion?: (path: string, id: string) => Promise<{ version: string }>;
 };
 
 // Every mounted editor, by the file it edits — so Cycls can have one save what's
 // unsaved before its tab closes, the file is renamed or the canvas hides, can stop
 // one from writing a file that is being deleted, and can open one full screen.
-type Handle = { flush: (ms: number) => Promise<boolean>; detach: () => () => void; fullscreen: () => void };
+type Handle = { flush: (ms: number) => Promise<boolean>; detach: () => () => void; fullscreen: () => void; reload: () => void };
 const editors = new Map<string, Set<Handle>>();
 const under = (path: string, prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
 const handlesUnder = (prefix: string | null) =>
@@ -79,6 +85,11 @@ export function fullscreenDesignEditor(path: string): void {
   [...(editors.get(path) ?? [])].pop()?.fullscreen();
 }
 export const canFullscreen = () => typeof document !== "undefined" && document.fullscreenEnabled === true;
+// Re-open the editors of `path` on the file as saved now — after a restore, or a
+// slide change made beside them (the deck viewer's own).
+export function reloadDesignEditors(path: string): void {
+  for (const h of editors.get(path) ?? []) h.reload();
+}
 
 // Chrome and Edge let a full-screen page keep Esc (holding it still leaves): the
 // editor's Esc — deselect, leave a text edit — then doesn't end full screen.
@@ -92,16 +103,27 @@ const EXPORT_TYPES: Record<string, string> = {
 
 type EditorMessage = {
   source?: string; type?: string; protocol?: number; doc?: string; id?: string; ok?: boolean; name?: string;
-  fig?: string; message?: string; size?: [number, number];
+  fig?: string; message?: string; size?: [number, number]; features?: string[];
   files?: { name: string; mime: string; data: string }[];
+  frame?: string | null; nodes?: DesignSelection["nodes"];
 };
 
+// What the person has selected in an open design, by name (the editor's `selection`)
+// — what "Add selection" attaches to a message. The latest, per design.
+export type DesignSelection = { path: string; frame: string | null; nodes: { name: string; type: string; text?: string }[] };
+const selections = new Map<string, DesignSelection>();
+export const designSelection = (path: string) => selections.get(path) ?? null;
+
+// An agent edit to replay in the editor: its script, the cursor's label, and the
+// design's version once the server saved it.
+type Command = { script: string; intent?: string; version?: string };
+
 export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload, host }: {
-  url: string;        // blob URL of the .fig bytes (already fetched, authed)
+  url: string;        // blob URL of the .fig bytes (already fetched, authed) — used when there's no host.fetchVersioned
   path: string;       // workspace path to write edits back to
   name: string;
   editorUrl: string;  // base URL of the deployed editor (config.design_editor_url)
-  writeFile: (path: string, data: BlobPart, silent?: boolean) => Promise<void>;
+  writeFile: WriteFile;
   reload?: () => Promise<string>;   // a FRESH blob URL of the saved .fig (re-open after a failed replay)
   host?: DesignHost;
 }) {
@@ -113,11 +135,23 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   const sourceRef = useRef<string | null>(null);      // what the next `ready` loads, if not `url`
   const [status, setStatus] = useState<"loading" | "ready" | "saved" | "error" | "saveerror">("loading");
   const [copyOf, setCopyOf] = useState<{ fig: string } | null>(null);
+  // A save refused because the design changed elsewhere (not by an agent edit landing
+  // here): the person decides, and saves wait meanwhile. `fig` is the refused save.
+  const [conflict, setConflict] = useState<{ version: string; fig: string } | null>(null);
+  const conflictRef = useRef(conflict);
+  conflictRef.current = conflict;
   const dark = useDarkMode();
+  const lang = useLang();
   const toast = useToast();
   const base = editorUrl.replace(/\/+$/, "");
-  // The theme at first load; later changes go to the editor live (`theme`).
-  const [src] = useState(() => `${base}/?embed=cycls&theme=${dark ? "dark" : "light"}`);
+  // The theme and language at first load; later changes go to the editor live (`theme`, `locale`).
+  const [src] = useState(() => `${base}/?embed=cycls&theme=${dark ? "dark" : "light"}&lang=${lang}`);
+  const version = useRef<string | null>(null);        // the version the editor's document stands on: its saves' base
+  const loadedVersion = useRef<string | null>(null);  // the version this load read
+  const commands = useRef<Command[]>([]);             // agent edits waiting to replay, one at a time
+  const replaying = useRef<Command | null>(null);
+  const pending = useRef<{ version: string; timer: number } | null>(null);   // a 412 an agent edit may yet explain
+  const force = useRef(false);                        // "keep mine": the next save writes over the newer file
   const origin = (() => { try { return new URL(editorUrl).origin; } catch { return "*"; } })();
   const latest = useRef({ url, path, writeFile, reload, host, toast });
   latest.current = { url, path, writeFile, reload, host, toast };
@@ -125,16 +159,39 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   const doc = useRef("");               // the current load's tag
   const detached = useRef(false);       // the file is being deleted: write nothing
   const flushes = useRef(new Map<string, (ok: boolean) => void>());
+  const features = useRef<Set<string>>(new Set());   // what the editor does beyond protocol 2 (its `ready`)
   const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
   const stem = (path.split("/").pop() ?? name).replace(/\.fig$/i, "");
 
   const post = useCallback((msg: Record<string, unknown>) =>
     frameRef.current?.contentWindow?.postMessage({ target: "cycls-editor", ...msg }, origin), [origin]);
 
-  // Light/dark follows Cycls, live.
+  // Light/dark and the language follow Cycls, live.
   useEffect(() => {
     if (protocol.current >= 2) post({ type: "theme", theme: dark ? "dark" : "light" });
   }, [dark, post]);
+  useEffect(() => {
+    if (protocol.current >= 2) post({ type: "locale", lang });
+  }, [lang, post]);
+
+  // One agent edit replays at a time; the next goes once the editor says `applied`.
+  // One the editor loaded already (its version is what it read) is in the document.
+  const pump = useCallback(() => {
+    if (replaying.current) return;
+    let next = commands.current.shift();
+    while (next?.version && next.version === loadedVersion.current) next = commands.current.shift();
+    if (!next) return;
+    replaying.current = next;
+    post({ type: "command", script: next.script, intent: next.intent });
+  }, [post]);
+
+  // Re-open the editor on the saved file (a fresh fetch, with its version).
+  const reopen = useCallback(() => {
+    commands.current = [];
+    replaying.current = null;
+    setStatus("loading");
+    setFrameKey((k) => k + 1);
+  }, []);
 
   // Full screen is the editor's box, not the page: the iframe stays where it is.
   const enterFullscreen = useCallback(() => {
@@ -187,6 +244,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         return () => { detached.current = false; };
       },
       fullscreen: enterFullscreen,
+      reload: reopen,
     };
     let set = editors.get(path);
     if (!set) editors.set(path, (set = new Set()));
@@ -195,7 +253,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       set!.delete(handle);
       if (!set!.size) editors.delete(path);
     };
-  }, [path, post, enterFullscreen]);
+  }, [path, post, enterFullscreen, reopen]);
 
   useEffect(() => {
     let disposed = false;
@@ -242,11 +300,27 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       const { host, toast } = latest.current;
       if (m.type === "ready") {
         protocol.current = typeof m.protocol === "number" ? m.protocol : 0;
-        // The first load has the bytes this view fetched; a later one (the editor
-        // reloaded itself) reads the file again, for what's saved now.
+        features.current = new Set(Array.isArray(m.features) ? m.features : []);
         let source = sourceRef.current;
         sourceRef.current = null;
-        if (!source && readies > 0 && latest.current.reload) {
+        version.current = loadedVersion.current = null;
+        commands.current = [];
+        replaying.current = null;
+        if (protocol.current >= 2 && host?.fetchVersioned) {
+          // Every load reads the file afresh, with its version: what its saves name as
+          // their base, so a save over a newer file is refused (design/store.py).
+          if (source) URL.revokeObjectURL(source);
+          try {
+            const got = await host.fetchVersioned(latest.current.path);
+            source = got.url;
+            version.current = loadedVersion.current = got.version || null;
+          } catch {
+            if (!disposed) setStatus("error");
+            return;
+          }
+        } else if (!source && readies > 0 && latest.current.reload) {
+          // The first load has the bytes this view fetched; a later one (the editor
+          // reloaded itself) reads the file again, for what's saved now.
           try { source = await latest.current.reload(); } catch { source = null; }
         }
         readies++;
@@ -258,7 +332,10 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           if (disposed) return;
           doc.current = `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
           post({ type: "load", protocol: 2, doc: doc.current, name, fig: toBase64(new Uint8Array(buf)), ...(brand ? { brand } : {}) });
-          if (protocol.current >= 2) post({ type: "theme", theme: document.body.classList.contains("dark") ? "dark" : "light" });
+          if (protocol.current >= 2) {
+            post({ type: "theme", theme: document.body.classList.contains("dark") ? "dark" : "light" });
+            post({ type: "locale", lang: getLang() });
+          }
         } catch {
           if (!disposed) setStatus("error");
         } finally {
@@ -274,23 +351,56 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           reply(false);
           return;
         }
+        if (conflictRef.current) {   // the person is deciding: nothing is written meanwhile
+          reply(false);
+          return;
+        }
+        const keep = force.current;
         try {
           // Cast: TS 5.7 types Uint8Array as Uint8Array<ArrayBufferLike>, which
           // doesn't structurally match BlobPart's ArrayBufferView<ArrayBuffer>.
-          await latest.current.writeFile(latest.current.path, fromBase64(m.fig) as unknown as BlobPart);
+          const r = await latest.current.writeFile(latest.current.path, fromBase64(m.fig) as unknown as BlobPart, {
+            silent: true, ...(version.current ? { base: version.current } : {}), ...(keep ? { force: true } : {}),
+          });
+          if (keep) force.current = false;
+          if (r && r.version && version.current !== null) version.current = r.version;
           reply(true);
           flash("saved");
-        } catch {
+        } catch (err) {
           reply(false);
-          flash("saveerror");
+          if ((err as { status?: number }).status === 412) {
+            const now = await (err as { response?: Response }).response?.json().then((j) => j?.version).catch(() => undefined);
+            stale(typeof now === "string" ? now : "", m.fig);
+          } else {
+            flash("saveerror");
+          }
         }
       } else if (m.type === "flushed" && typeof m.id === "string") {
         flushes.current.get(m.id)?.(m.ok === true);
         flushes.current.delete(m.id);
+      } else if (m.type === "applied") {
+        // An agent edit is in the document now: saves go on from its version, and one
+        // refused while it replayed goes now.
+        const done = replaying.current;
+        replaying.current = null;
+        if (done?.version && version.current !== null) {
+          version.current = done.version;
+          post({ type: "flush", id: `v${done.version}` });
+        }
+        pump();
+      } else if (m.type === "selection" && Array.isArray(m.nodes)) {
+        const sel: DesignSelection = { path: latest.current.path, frame: typeof m.frame === "string" ? m.frame : null, nodes: m.nodes };
+        if (sel.nodes.length) selections.set(sel.path, sel);
+        else selections.delete(sel.path);
+        window.dispatchEvent(new CustomEvent("cycls:design-selection", { detail: sel }));
       } else if (m.type === "commandError") {
         // The live replay of an agent edit failed; the saved file already holds the
         // edit. Re-open the editor on it (a fresh fetch — `url` may predate the edit).
-        try { sourceRef.current = latest.current.reload ? await latest.current.reload() : null; } catch { sourceRef.current = null; }
+        commands.current = [];
+        replaying.current = null;
+        if (!host?.fetchVersioned) {
+          try { sourceRef.current = latest.current.reload ? await latest.current.reload() : null; } catch { sourceRef.current = null; }
+        }
         if (disposed) return;
         loaded = false;
         readies = 0;
@@ -310,22 +420,78 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         setCopyOf({ fig: m.fig });
       }
     };
+    // A save refused as stale. While an agent edit is landing here that's expected —
+    // it saved the file first — and the save goes again once the edit is applied.
+    // Otherwise the design changed elsewhere; the agent's event may still be on its
+    // way (it travels apart from the save's answer), so give it a moment first.
+    const stale = (now: string, fig: string) => {
+      if (replaying.current || commands.current.length) return;
+      if (pending.current) window.clearTimeout(pending.current.timer);
+      pending.current = {
+        version: now,
+        timer: window.setTimeout(() => {
+          pending.current = null;
+          if (disposed || replaying.current || commands.current.length) return;
+          setConflict({ version: now, fig });
+          track("design_save_conflict", { choice: "shown" });
+        }, 3000),
+      };
+    };
+
     // The agent edits an open design live: chat.tsx dispatches this when its
-    // Design tool fires a `design_command`; we relay the script to our editor.
+    // Design tool fires a `design_command`; it replays here, one at a time.
     const onCommand = (e: Event) => {
-      const d = (e as CustomEvent).detail as { path?: string; script?: string; intent?: string };
+      const d = (e as CustomEvent).detail as { path?: string; script?: string; intent?: string; version?: string };
       if (!d || d.path !== latest.current.path || typeof d.script !== "string") return;
-      post({ type: "command", script: d.script, intent: d.intent });
+      if (protocol.current < 2) {   // an editor from before the protocol never says `applied`
+        post({ type: "command", script: d.script, intent: d.intent });
+        return;
+      }
+      if (pending.current && d.version === pending.current.version) {   // the change was this edit's
+        window.clearTimeout(pending.current.timer);
+        pending.current = null;
+      }
+      commands.current.push({ script: d.script, intent: d.intent, version: typeof d.version === "string" ? d.version : undefined });
+      pump();
     };
 
     window.addEventListener("message", onMessage);
     window.addEventListener("cycls:design-command", onCommand as EventListener);
     return () => {
       disposed = true;
+      if (pending.current) window.clearTimeout(pending.current.timer);
+      pending.current = null;
       window.removeEventListener("message", onMessage);
       window.removeEventListener("cycls:design-command", onCommand as EventListener);
     };
-  }, [origin, post, name, dir, stem, frameKey, leaveFullscreen]);
+  }, [origin, post, name, dir, stem, frameKey, leaveFullscreen, pump]);
+
+  // The conflict's three ways out.
+  const resolve = async (choice: "latest" | "mine" | "copy") => {
+    const c = conflictRef.current;
+    if (!c) return;
+    setConflict(null);
+    track("design_save_conflict", { choice });
+    if (choice === "mine") {
+      version.current = c.version || version.current;
+      force.current = true;
+      post({ type: "save" });
+      return;
+    }
+    if (choice === "copy" && host) {
+      try {
+        const written = await host.writeNew(`${dir ? `${dir}/` : ""}${stem} ${t("copySuffix")}.fig`, fromBase64(c.fig) as unknown as BlobPart);
+        host.refreshFiles?.();
+        await leaveFullscreen();
+        host.openInCanvas(written);
+        toast.info(t("savedCopy").replace("{name}", written.split("/").pop() ?? written));
+      } catch {
+        toast.error(t("copyFailed"));
+        return;   // keep this editor's work: nothing was saved anywhere
+      }
+    }
+    reopen();   // this design, as it is now
+  };
 
   const saveCopy = async (copyName: string) => {
     const { host, toast } = latest.current;
@@ -378,6 +544,38 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       {copyOf && (
         <SaveCopyDialog initial={`${stem} ${t("copySuffix")}`} onCancel={() => setCopyOf(null)} onSave={saveCopy} />
       )}
+      {conflict && <ConflictDialog canCopy={!!host} onChoose={(c) => void resolve(c)} />}
+    </div>
+  );
+}
+
+// The design changed elsewhere — another tab, another person, a script — while this
+// editor had unsaved work: which one stands. Nothing is written until they choose.
+function ConflictDialog({ canCopy, onChoose }: { canCopy: boolean; onChoose: (c: "latest" | "mine" | "copy") => void }) {
+  const choice = "w-full cursor-pointer rounded-md px-3 py-2 text-start text-xs hover:bg-secondary";
+  return (
+    <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true"
+         aria-labelledby="design-conflict-title">
+      <div className="w-96 rounded-xl border border-border bg-background p-4 shadow-xl">
+        <div id="design-conflict-title" className="mb-1 text-sm font-medium text-foreground">{t("designChangedTitle")}</div>
+        <p className="mb-3 text-xs text-muted-foreground">{t("designChangedBody")}</p>
+        <div className="flex flex-col gap-1">
+          <button type="button" className={choice} onClick={() => onChoose("latest")}>
+            <div className="font-medium text-foreground">{t("designLoadLatest")}</div>
+            <div className="text-muted-foreground">{t("designLoadLatestHint")}</div>
+          </button>
+          <button type="button" className={choice} onClick={() => onChoose("mine")}>
+            <div className="font-medium text-foreground">{t("designKeepMine")}</div>
+            <div className="text-muted-foreground">{t("designKeepMineHint")}</div>
+          </button>
+          {canCopy && (
+            <button type="button" className={choice} onClick={() => onChoose("copy")}>
+              <div className="font-medium text-foreground">{t("designSaveMineAsCopy")}</div>
+              <div className="text-muted-foreground">{t("designSaveMineAsCopyHint")}</div>
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
