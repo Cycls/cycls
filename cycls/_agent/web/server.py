@@ -285,6 +285,29 @@ class Messages(list):
     def raw(self):
         return self._raw
 
+def _clean_selection(raw):
+    """The person's "Add selection" — what they selected in an open design, by name:
+    {path: a .fig in the workspace, frame, nodes: [{name, type, text?}]} — capped, or
+    None when it isn't one."""
+    if not isinstance(raw, dict):
+        return None
+    path = raw.get("path")
+    if (not isinstance(path, str) or not path.lower().endswith(".fig") or len(path) > 300
+            or path.startswith("/") or "\\" in path or ".." in path.split("/")):
+        return None
+    nodes = []
+    for n in (raw.get("nodes") if isinstance(raw.get("nodes"), list) else [])[:20]:
+        if isinstance(n, dict) and isinstance(n.get("name"), str) and isinstance(n.get("type"), str):
+            node = {"name": n["name"][:120], "type": n["type"][:24]}
+            if isinstance(n.get("text"), str) and n["text"]:
+                node["text"] = n["text"][:80]
+            nodes.append(node)
+    if not nodes:
+        return None
+    frame = raw.get("frame")
+    return {"path": path, "frame": frame[:120] if isinstance(frame, str) and frame else None, "nodes": nodes}
+
+
 def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
     from fastapi import FastAPI, Request, HTTPException, Depends
     from fastapi import Response as FastAPIResponse
@@ -315,6 +338,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         approvals: list = []       # approval keys from the confirm card — this turn only
         auto: bool = True          # the composer's switch; absent means Auto
         connectors: list = []      # connectors the person @-mentioned — the turn gets a "[Using: …]" line
+        selection: Optional[dict] = None   # "Add selection" from an open design — the turn gets a "[Selected in …]" block
 
         model_config = {"arbitrary_types_allowed": True}
 
@@ -374,7 +398,8 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                           workspace_id=ws_id,
                           disabled_tools=[t for t in (data.get("disabled_tools") or []) if isinstance(t, str)][:20],
                           approvals=[t for t in (data.get("approvals") or []) if isinstance(t, str)][:20], auto=data.get("auto") is not False,
-                          connectors=[t for t in (data.get("connectors") or []) if isinstance(t, str)][:10])
+                          connectors=[t for t in (data.get("connectors") or []) if isinstance(t, str)][:10],
+                          selection=_clean_selection(data.get("selection")))
 
         # Every run gets an entry, fresh id or not: `stop` finds it there, the cap
         # counts it, and shutdown drains it. A fresh id simply never collides.

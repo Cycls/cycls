@@ -1101,11 +1101,16 @@ def test_a_mention_becomes_one_line_the_model_reads():
     assert _with_mention([{"type": "text", "text": "hi"}], "[Using: Salla]")[-1] == {"type": "text", "text": "[Using: Salla]"}
 
 
-def test_a_mention_becomes_one_line_the_model_reads():
-    from cycls._agent.harness.main import _with_mention
-    assert _with_mention("list my files", "[Using: Google Drive]") == "list my files\n\n[Using: Google Drive]"
-    assert _with_mention("", "[Using: Salla]") == "[Using: Salla]"
-    assert _with_mention([{"type": "text", "text": "hi"}], "[Using: Salla]")[-1] == {"type": "text", "text": "[Using: Salla]"}
+def test_a_selection_becomes_its_own_block_the_model_reads():
+    from cycls._agent.harness.main import _with_selection
+    sel = {"path": "designs/launch.fig", "frame": "slide-1",
+           "nodes": [{"name": "headline", "type": "TEXT", "text": "Night Roast"}, {"name": "cta", "type": "FRAME"}]}
+    assert _with_selection("make this bigger", sel) == [
+        {"type": "text", "text": "make this bigger"},
+        {"type": "text", "text": '[Selected in designs/launch.fig › slide-1: headline (TEXT) "Night Roast", cta (FRAME)]'}]
+    image = {"type": "image", "source": {}}
+    assert _with_selection([image], {**sel, "frame": None})[:1] == [image]
+    assert _with_selection([image], {**sel, "frame": None})[-1]["text"].startswith("[Selected in designs/launch.fig: ")
 
 
 def test_a_connector_step_shows_the_human_line_never_the_raw_command():

@@ -52,6 +52,15 @@ def paths(root, name):
             root / "designs" / f"{name}.deck.json", f"designs/{name}.deck.json")
 
 
+def _intent(ops):
+    """What a version history says a slide change was ("move slide 4")."""
+    labels = {"slide_add": "add a slide", "slide_update": "change slide {n}", "slide_move": "move slide {n}",
+              "slide_duplicate": "duplicate slide {n}", "slide_delete": "delete slide {n}", "slide_meta": "slide {n}'s notes"}
+    op = (ops or [{}])[0]
+    n = op.get("index", op.get("from"))
+    return labels.get(op.get("op"), "change the slides").format(n=(n + 1) if isinstance(n, int) else "")
+
+
 def read_doc(deck_path):
     try:
         doc = json.loads(deck_path.read_text("utf-8"))
@@ -67,14 +76,21 @@ async def apply_ops(root, name, ops, user_id=None, preview=False):
     document is created when a single design becomes a deck). Raises FileNotFoundError
     (no such design), design.Unavailable, RuntimeError (the op's own error)."""
     from cycls._agent import design
+    from .store import Stale, read_fig, write_fig
     fig_path, fig_rel, deck_path, _ = paths(root, name)
     async with lock(fig_path):
-        if not fig_path.is_file():
-            raise FileNotFoundError(fig_rel)
-        r = await design.apply(await asyncio.to_thread(fig_path.read_bytes), ops=ops, preview=preview, user_id=user_id)
-        tmp = fig_path.with_name(f".{fig_path.name}.part")
-        await asyncio.to_thread(tmp.write_bytes, r["fig"])
-        await asyncio.to_thread(tmp.replace, fig_path)
+        for attempt in (1, 2):
+            data, base = await asyncio.to_thread(read_fig, root, fig_rel)
+            if data is None:
+                raise FileNotFoundError(fig_rel)
+            r = await design.apply(data, ops=ops, preview=preview, user_id=user_id)
+            try:   # the person may have saved in the editor meanwhile: apply to that, once
+                r["version"] = await write_fig(root, fig_rel, r["fig"], base=base, by="agent", reason="agent",
+                                               intent=_intent(ops))
+                break
+            except Stale:
+                if attempt == 2:
+                    raise RuntimeError("the design changed while the slides were being changed — try again")
     refresh.schedule(root, fig_rel, user_id)
     count = len(r.get("slides") or [])
     if count:

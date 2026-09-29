@@ -1163,7 +1163,9 @@ def test_add_slide_lays_it_out_with_the_decks_settings(tmp_path, monkeypatch):
     assert op["deck"]["logo"]["svg"].startswith("<svg")                     # the deck's logo, resolved again
     assert (d / "pitch.fig").read_bytes() == b"NEW-FIG" and scheduled == ["designs/pitch.fig"]
     assert json.loads((d / "pitch.deck.json").read_text())["slides"] == 4
-    assert out["_ui"] == [{"type": "ui", "action": "design_command", "path": "designs/pitch.fig", "script": "S"},
+    from cycls._agent.design.store import version_of
+    assert out["_ui"] == [{"type": "ui", "action": "design_command", "path": "designs/pitch.fig", "script": "S",
+                           "version": version_of(b"NEW-FIG")},   # an open editor's saves go on from it
                           {"type": "ui", "action": "open_canvas", "path": "designs/pitch.deck.json", "name": "pitch.deck.json"}]
     m = out["_model"]
     assert m[0]["text"] == "Slide 2:" and "Slide added at position 2" in m[-1]["text"] and "now has 4 slides" in m[-1]["text"]

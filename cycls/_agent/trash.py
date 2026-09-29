@@ -105,6 +105,18 @@ def restore(ws, tid):
     return str(dest.relative_to(ws))
 
 
+def _forget_versions(ws, meta):
+    """A file gone for good takes its design history (cycls/_agent/versions.py) with it,
+    unless a file is back at its path."""
+    if not meta or meta.get("kind") != "file" or not meta.get("path"):
+        return
+    try:
+        from cycls._agent import versions
+    except Exception:
+        return
+    versions.forget(ws, meta["path"])
+
+
 def purge(ws, tid):
     """Returns the meta of what went, so a caller can drop what lives off-disk."""
     entry = _root(ws) / tid
@@ -112,6 +124,7 @@ def purge(ws, tid):
         raise FileNotFoundError(tid)
     meta = _read(entry)
     shutil.rmtree(entry, ignore_errors=True)
+    _forget_versions(ws, meta)
     return meta
 
 
@@ -123,6 +136,8 @@ def empty(ws):
             if e.is_dir():
                 gone.append(_read(e))
                 shutil.rmtree(e, ignore_errors=True)
+    for m in gone:
+        _forget_versions(ws, m)
     return [m for m in gone if m]
 
 
@@ -143,5 +158,6 @@ def sweep(ws, now=None):
             at = None
         if at is None or (now - at).days >= TTL_DAYS:
             shutil.rmtree(e, ignore_errors=True)
+            _forget_versions(ws, m)
             gone += 1
     return gone

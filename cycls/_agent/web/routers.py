@@ -10,7 +10,7 @@ from typing import Any, Optional
 from urllib.parse import urlsplit, parse_qs
 from fastapi import APIRouter, Depends, Request, Response, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from cycls._app.db import DB, Conflict, Workspace, workspace
 from cycls._agent import connectors as oauth, credentials, spill, state, trash
@@ -92,7 +92,8 @@ def to_ui_messages(raw):
                     if msg.get("cards") and out and out[-1]["role"] == "assistant":
                         out[-1]["parts"] += [{"type": "card", "card": card} for card in msg["cards"]]
                     continue
-                text = "".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
+                text = "".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text"
+                               and not (msg.get("selection") and b.get("text", "").startswith("[Selected in ")))
             elif isinstance(c, str):
                 text = c
             else:
@@ -100,6 +101,8 @@ def to_ui_messages(raw):
             ui = {"role": "user", "content": text}
             if msg.get("attachments"):
                 ui["attachments"] = msg["attachments"]
+            if msg.get("selection"):   # the model read it as a line; the person sees a chip
+                ui["selection"] = msg["selection"]
             out.append(ui)
         elif role == "assistant":
             blocks = c if isinstance(c, list) else [{"type": "text", "text": c}] if isinstance(c, str) else []
@@ -221,7 +224,7 @@ def resolve_path(workspace, rel):
     ws = workspace.resolve()
     if not resolved.is_relative_to(ws):
         raise ValueError("Path traversal denied")
-    for name in (".db", ".database", ".trash", ".secrets", ".connectors", ".settings"):
+    for name in (".db", ".database", ".trash", ".versions", ".secrets", ".connectors", ".settings"):
         reserved = ws / name
         if resolved == reserved or resolved.is_relative_to(reserved):
             raise ValueError(f"Reserved path: {name}/ is managed by cycls")
@@ -871,6 +874,13 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             return FileResponse(pdf, media_type="application/pdf", headers=_NO_CACHE)
         if request.query_params.get("download") is not None:
             return FileResponse(file_path, filename=file_path.name, headers=_NO_CACHE)
+        if file_path.suffix.lower() == ".fig":
+            # A design comes with its version, from the very bytes served: what a save
+            # names as its base (design/store.py) — a save over a newer file is refused.
+            from cycls._agent.design.store import version_of
+            data = await asyncio.to_thread(file_path.read_bytes)
+            return Response(data, media_type="application/octet-stream",
+                            headers={**_NO_CACHE, "X-Version": version_of(data)})
         return FileResponse(file_path, headers=_NO_CACHE)
 
     @r.post("/deck/{path:path}")
@@ -956,17 +966,54 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             return {"brand": None}
         return {"brand": {"colors": colors, "fonts": fonts}}
 
+    # ---- A design's earlier versions (cycls/_agent/versions.py) ----
+
+    @r.get("/versions/{path:path}")
+    async def list_versions(path: str, request: Request, ws: Workspace = ws_dep):
+        """A design's versions, newest first: {versions: [{id, at, by, reason, intent?,
+        size}]} — or, with `?id=`, that version's bytes."""
+        from cycls._agent import versions
+        rel = _safe_path(ws.root, path).relative_to(Path(ws.root).resolve()).as_posix()
+        if vid := request.query_params.get("id"):
+            data = await asyncio.to_thread(versions.read, ws.root, rel, vid)
+            if data is None:
+                raise HTTPException(404, "No such version")
+            return Response(data, media_type="application/octet-stream", headers=_NO_CACHE)
+        return {"versions": await asyncio.to_thread(versions.listing, ws.root, rel)}
+
+    @r.post("/versions/{path:path}")
+    async def restore_version(path: str, request: Request, ws: Workspace = ws_dep):
+        """`?restore=<id>`: the design becomes that version again. What it was is kept
+        as a version first, so a restore is undone by restoring. → {ok, version}"""
+        from cycls._agent import versions
+        from cycls._agent.design.store import write_fig
+        rel = _safe_path(ws.root, path).relative_to(Path(ws.root).resolve()).as_posix()
+        data = await asyncio.to_thread(versions.read, ws.root, rel, request.query_params.get("restore") or "")
+        if data is None:
+            raise HTTPException(404, "No such version")
+        version = await write_fig(ws.root, rel, data, by="user", reason="restore")
+        _catalog_drop(ws.root)
+        design_refresh.schedule(ws.root, rel, ws.subject)
+        return {"ok": True, "version": version}
+
     @r.put("/files/{path:path}")
     async def put_file(path: str, request: Request, ws: Workspace = ws_dep):
         """Streams the raw body to a .part temp, then renames. No File(...)
         param — that reads the whole body before auth runs, so uploads longer
         than the JWT lifetime 401 at the end. Multipart kept for old clients.
         `?dedupe=1` writes a new file instead of replacing one — the name, or the
-        next free one (`_free_rel`); the reply's `path` says which."""
-        if request.query_params.get("dedupe") is not None:
+        next free one (`_free_rel`); the reply's `path` says which.
+
+        A design (`.fig`) is written through `design.store.write_fig`: what it replaces
+        is kept as a version, and `?base=<version>` (what `GET` served as X-Version)
+        must still be current — else 412 {detail, version}, nothing written. `?force=1`
+        writes anyway ("keep mine"). The reply carries the new `version`."""
+        dedupe = request.query_params.get("dedupe") is not None
+        if dedupe:
             _safe_path(ws.root, path)
             path = _free_rel(ws.root, unicodedata.normalize("NFC", path))
         file_path = _safe_path(ws.root, path)
+        design_file = file_path.suffix.lower() == ".fig" and not dedupe
         limit_msg = f"File exceeds the {max_bytes // (1024 * 1024)} MB limit"
         if int(request.headers.get("content-length") or 0) > max_bytes:
             raise HTTPException(413, limit_msg)
@@ -994,16 +1041,29 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
                     if size > max_bytes:
                         raise HTTPException(413, limit_msg)
                     out.write(chunk)
-            tmp.replace(file_path)
+            if not design_file:
+                tmp.replace(file_path)
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
+        rel = file_path.relative_to(Path(ws.root).resolve()).as_posix()
+        reply = {"ok": True, "path": rel}
+        if design_file:
+            from cycls._agent.design.store import Stale, write_fig
+            data = await asyncio.to_thread(tmp.read_bytes)
+            tmp.unlink(missing_ok=True)
+            force = request.query_params.get("force") is not None
+            try:
+                reply["version"] = await write_fig(ws.root, rel, data, base=request.query_params.get("base") or None,
+                                                   by="user", reason="keep" if force else "save", force=force)
+            except Stale as e:
+                return JSONResponse(status_code=412, content={
+                    "detail": "This design changed since it was opened.", "version": e.current})
         _catalog_drop(ws.root)
         # The design editor saves an edited designs/<name>.fig here; re-export the
         # image beside it so a download (or the agent) never gets the pre-edit one.
-        rel = file_path.relative_to(Path(ws.root).resolve()).as_posix()
         design_refresh.schedule(ws.root, rel, ws.subject)
-        return {"ok": True, "path": rel}
+        return reply
 
     @r.post("/files-batch/{path:path}")
     async def upload_batch(path: str, request: Request, ws: Workspace = ws_dep):
@@ -1077,8 +1137,12 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         # workspace mount, which doesn't support renaming directories — it falls
         # back to recursive copy + delete.
         was_app = trash.kind_of(rel, src.is_dir()) == "app"
+        was_file = src.is_file()
         shutil.move(str(src), str(dest))
         dst = str(dest.relative_to(Path(ws.root).resolve()))
+        if was_file:   # a design's history follows it (directory moves don't carry it)
+            from cycls._agent import versions
+            await asyncio.to_thread(versions.move, ws.root, Path(rel).as_posix(), Path(dst).as_posix())
         if was_app and trash.kind_of(dst, True) == "app":
             await _move_app_data(ws, rel.split("/")[1], dst.split("/")[1])
         _catalog_drop(ws.root)

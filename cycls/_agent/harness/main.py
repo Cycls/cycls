@@ -124,6 +124,20 @@ def _with_mention(content, line):
     return f"{content}\n\n{line}" if content else line
 
 
+SELECTED = "[Selected in "
+
+
+def _with_selection(content, sel):
+    """The person's "Add selection" — what they selected in an open design, by name — as
+    its own text block the model reads (the chat shows it as a chip, not this line)."""
+    def node(n):
+        return f'{n["name"]} ({n["type"]})' + (f' "{n["text"]}"' if n.get("text") else "")
+    where = sel["path"] + (f' › {sel["frame"]}' if sel.get("frame") else "")
+    line = f"{SELECTED}{where}: " + ", ".join(node(n) for n in sel["nodes"]) + "]"
+    blocks = content if isinstance(content, list) else ([{"type": "text", "text": content}] if content else [])
+    return [*blocks, {"type": "text", "text": line}]
+
+
 def _shape(block, out, ok, handlers, mcp_names):
     """A tool's output as (what the model reads, what the chat is shown, whether
     the turn now waits on the person). Split out so the cancel path can derive
@@ -271,7 +285,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         titles = {s._connector.name: connectors.copy_of(s._connector)[0] or s._connector.name
                   for s in mcp_servers or [] if s._connector}
         content = _with_mention(content, "[Using: " + ", ".join(titles.get(m, m) for m in mentions) + "]")
-    await session.add_user(content, attachments=incoming.get("attachments"), internal=bool(approvals))
+    if selection := getattr(context, "selection", None):
+        content = _with_selection(content, selection)
+    await session.add_user(content, attachments=incoming.get("attachments"), internal=bool(approvals),
+                           selection=selection)
     messages = session.messages
 
     system_text = DEFAULT_SYSTEM + ("\n\n" + system if system else "")
