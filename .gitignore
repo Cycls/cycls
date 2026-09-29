@@ -29,3 +29,6 @@ mj/
 *.tsbuildinfo
 uv.lock
 examples/agent/super_new.py
+studio/dev/ws/
+studio/dev/shots/
+studio/dev/host.js

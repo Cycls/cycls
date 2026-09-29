@@ -195,6 +195,9 @@ export class Viewport {
     diag.canvas = [this.renderer.domElement.width, this.renderer.domElement.height];
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
+    // three keeps the gizmo a fixed share of the view's height; keep it ~95 px instead,
+    // so it stays grabbable in the chat's narrow canvas.
+    this.gizmo.setSize(Math.min(2.2, Math.max(0.9, 780 / Math.max(1, h))));
     this.fitShot();
     this.touch();
   }

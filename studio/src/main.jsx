@@ -18,7 +18,7 @@ addEventListener("keydown", (e) => {
   const handled = () => { e.preventDefault(); e.stopPropagation(); };
   if (ctrl && k === "KeyZ") { e.shiftKey ? a.redo() : a.undo(); return handled(); }
   if (ctrl && k === "KeyY") { a.redo(); return handled(); }
-  if (k === "Tab" && !ctrl && !e.altKey) { if (!s.busy) a.edit.toggle(); return handled(); }
+  if (k === "Tab" && !ctrl && !e.altKey && !e.shiftKey) { if (!s.busy) a.edit.toggle(); return handled(); }
   if (s.mode === "edit") {
     if (ctrl && k === "KeyB") { runEditOp(a, "bevel"); return handled(); }
     if (ctrl && k === "KeyI") { a.edit.invert(); return handled(); }
