@@ -52,6 +52,27 @@ describe("designs in the canvas", () => {
     expect(container.querySelector("iframe")).toBeNull();                   // saved: gone
   });
 
+  it("closing the last tab saves its editor before the canvas goes", async () => {
+    const onCloseTab = vi.fn();
+    const { container } = render(canvas("designs/a.fig", { tabs: [TABS[0]], onCloseTab }));
+    await flush();
+    const frame = container.querySelector("iframe")!;
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    const say = (type: string, extra: Record<string, unknown> = {}) => window.dispatchEvent(
+      new MessageEvent("message", { origin: EDITOR, source: frame.contentWindow, data: { source: "cycls-editor", type, ...extra } }));
+    say("ready", { protocol: 2 });
+    await flush();
+
+    fireEvent.click(screen.getByLabelText("Close a.fig"));
+    await flush();
+    const ask = post.mock.calls.map((c) => c[0] as Record<string, unknown>).find((m) => m.type === "flush");
+    expect(ask).toBeTruthy();
+    expect(onCloseTab).not.toHaveBeenCalled();                              // not before it has saved
+    say("flushed", { id: ask!.id, ok: true });
+    await flush();
+    expect(onCloseTab).toHaveBeenCalledWith("designs/a.fig");
+  });
+
   it("offers New design in the + menu, with the server's sizes", async () => {
     const onNewDesign = vi.fn();
     render(canvas("notes.md", { onAddFile: () => {}, searchFiles: async () => [], onNewDesign }));
