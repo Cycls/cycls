@@ -867,6 +867,13 @@ export function createApp(viewportFactory) {
     driving.add(id);
     dropped.delete(id);
     set({ video: { id, status: "running", done: 0, total: 0, seconds_left: 0, ...job, at: Date.now() } });
+    // The agent's command names the job only: its frames and estimate, before the first chunk is in.
+    if (!job) {
+      bridge.engine("video_jobs", {}).then((q) => {
+        const j = (q.jobs || []).find((x) => x.id === id);
+        if (j && s.video?.id === id && !s.video.total) set({ video: { ...s.video, ...j, at: Date.now() } });
+      }).catch(() => {});
+    }
     let failures = 0;
     try {
       while (!dropped.has(id)) {

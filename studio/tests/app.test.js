@@ -529,4 +529,17 @@ describe("animation in the app", () => {
     expect(h.engineCalls.map((c) => c.op)).toEqual(["video_jobs", "video_chunk", "video_cancel"]);
     expect(app.state.video).toBeNull();
   });
+
+  it("the agent's command names the job; its frames show before the first chunk is in", async () => {
+    const { h, s } = await started(spinning());
+    const job = { id: "v-0000cafe", status: "running", done: 0, total: 120, seconds_left: 400 };
+    h.onEngine((op) => {
+      if (op === "video_jobs") return { jobs: [job] };
+      if (op === "video_chunk") return new Promise(() => {});      // rendering
+      throw new Error(op);
+    });
+    h.send({ type: "video", job: "v-0000cafe" });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(s.video).toMatchObject({ id: "v-0000cafe", total: 120, seconds_left: 400 });
+  });
 });
