@@ -274,6 +274,42 @@ describe("edit mode", () => {
     expect(s.mode).toBe("edit");
   });
 
+  it("bisect sends the drawn plane, the side to drop and the fill, on everything when nothing is selected", async () => {
+    const { doc, files } = explicit();
+    const { h, a, s, vp } = await started(doc, files);
+    a.select(["cube"]);
+    a.edit.toggle();
+    await vi.advanceTimersByTimeAsync(0);
+    vp.bisectPlane = (points) => (points.length === 2 ? { plane_co: [0, 0, 5], plane_no: [0, 0, 1] } : null);
+    const half = M.toSidecar(cubeMesh());
+    h.onEngine((op, payload, disk) => {
+      disk.set("data/meshes/m-cccccccccccc.json", JSON.stringify(half));
+      return { ok: true, mesh_id: "m-cccccccccccc", data: "meshes/m-cccccccccccc.json", verts: 8, faces: 6,
+               bbox: half.bbox, modifiers: null, removed: [], selection: { edges: [[0, 1], [1, 3]] } };
+    });
+    a.edit.startTool("bisect");
+    expect(s.tool).toEqual({ kind: "bisect", points: [] });
+    a.setTool("bisect_clear", "left");
+    a.setTool("bisect_fill", true);
+    await vp.hooks.onToolCommit({ kind: "bisect", points: [[10, 10], [200, 40]] });
+    await vi.advanceTimersByTimeAsync(0);
+    const call = h.engineCalls.at(-1);
+    expect(call.payload.params).toMatchObject({ op: "bisect", selection: "all", plane_co: [0, 0, 5], plane_no: [0, 0, 1],
+                                                clear_outer: true, clear_inner: false, fill: true });
+    expect(s.tool).toBeNull();
+    expect(s.doc.objects.cube.mesh).toBe("m-cccccccccccc");
+    expect(s.edit.mode).toBe("vert");
+    expect(s.edit.items.length).toBeGreaterThan(0);                 // the cut, selected
+  });
+
+  it("picking what moves snap to turns snapping on", async () => {
+    const { a, s, vp } = await started(scene());
+    let target = null;
+    vp.setSnapTarget = (t) => { target = t; };
+    a.edit.setSnapTarget("surface");
+    expect([s.snap, s.snapTarget, target]).toEqual([true, "surface", "surface"]);
+  });
+
   it("keeps what Blender left selected, in the current element mode — inset, then extrude", async () => {
     const { doc, files } = explicit();
     const { h, a, s, pick } = await started(doc, files);

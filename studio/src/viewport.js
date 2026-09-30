@@ -150,7 +150,7 @@ export class Viewport {
     host.appendChild(this.overlay);
     this.tool = null;                          // { kind: "loopcut", cuts, edge } | { kind: "knife", points: [[x, y]] }
     this.proportional = { on: false, radius: 1, falloff: "smooth" };
-    this.snap = { on: false };
+    this.snap = { on: false, target: "increment" };        // increment | vertex | surface
     this.ctrl = false;
     addEventListener("keydown", (e) => { if (e.key === "Control") { this.ctrl = true; this.applySnap(); } });
     addEventListener("keyup", (e) => { if (e.key === "Control") { this.ctrl = false; this.applySnap(); } });
@@ -199,7 +199,8 @@ export class Viewport {
     gizmo.addEventListener("dragging-changed", (e) => {
       this.orbit.enabled = !e.value;
       const o = gizmo.object;
-      this.moveStart = e.value && o ? { position: o.position.clone(), quaternion: o.quaternion.clone() } : null;
+      this.moveStart = e.value && o ? this.dragStart(o) : null;
+      if (!e.value) this.drawSnap(null);
       if (gizmo.object === this.pivot) { e.value ? this.editDragStart() : this.editDragEnd(); return; }
       if (!e.value && gizmo.object) this.hooks.onTransformEnd?.(gizmo.object.userData.id, trsOf(gizmo.object));
     });
@@ -215,9 +216,12 @@ export class Viewport {
     ray.params.Line.threshold = 0.05;
     let down = null;
     r.domElement.addEventListener("pointerdown", (e) => { down = [e.clientX, e.clientY]; r.domElement.focus(); });
-    // Hover, for the loop cut's preview — once a frame at most.
+    // Hover, for the loop cut's preview — once a frame at most. The pointer, for snapping and
+    // the bisect's line.
     let hoverAt = null;
     r.domElement.addEventListener("pointermove", (e) => {
+      this.pointer = [e.clientX, e.clientY];
+      if (this.tool?.kind === "bisect" && this.tool.points.length === 1) { this.tool.cursor = this.pointer; this.drawBisect(); return; }
       if (!this.tool || this.tool.kind !== "loopcut" || gizmo.dragging) return;
       if (!hoverAt) requestAnimationFrame(() => { const [x, y] = hoverAt; hoverAt = null; this.hoverLoopCut(x, y); });
       hoverAt = [e.clientX, e.clientY];
@@ -1098,8 +1102,38 @@ export class Viewport {
   drawTool() {
     if (this.tool?.kind === "loopcut") this.drawLoopCut();
     else if (this.tool?.kind === "knife") this.drawKnife();
+    else if (this.tool?.kind === "bisect") this.drawBisect();
     else this.overlay.innerHTML = "";
     this.drawProportional();
+  }
+
+  // The bisect's line: from the first click to the pointer, then to the second click.
+  drawBisect() {
+    const t = this.tool, rect = this.renderer.domElement.getBoundingClientRect();
+    const pts = [...(t?.points || []), ...(t?.points?.length === 1 && t.cursor ? [t.cursor] : [])];
+    this.overlay.innerHTML = pts.map(([x, y]) => `<circle class="knife-dot" cx="${x - rect.left}" cy="${y - rect.top}" r="3.5"/>`).join("")
+      + (pts.length === 2 ? `<line class="knife bisect" x1="${pts[0][0] - rect.left}" y1="${pts[0][1] - rect.top}" x2="${pts[1][0] - rect.left}" y2="${pts[1][1] - rect.top}"/>` : "");
+  }
+
+  // The plane through the eye and a line drawn on the screen, in the edited object's own
+  // space, its normal pointing to the line's left as drawn — Blender's bisect.
+  bisectPlane(points) {
+    const e = this.edit, node = e && this.nodes.get(e.id);
+    if (!node || points.length < 2) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect(), cam = this.camera;
+    const ray = (x, y) => new THREE.Vector3((x - rect.left) / rect.width * 2 - 1, -((y - rect.top) / rect.height) * 2 + 1, 0.5)
+      .unproject(cam).sub(cam.position).normalize();
+    const [[x0, y0], [x1, y1]] = points;
+    if (Math.hypot(x1 - x0, y1 - y0) < 4) return null;
+    const n = new THREE.Vector3().crossVectors(ray(x0, y0), ray(x1, y1)).normalize();
+    const len = Math.hypot(x1 - x0, y1 - y0), mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+    const left = ray(mx + ((y1 - y0) / len) * 20, my - ((x1 - x0) / len) * 20);     // screen-left of the stroke (y down)
+    if (n.dot(left) < 0) n.negate();
+    node.updateWorldMatrix(true, false);
+    const inv = node.matrixWorld.clone().invert();
+    const co = cam.position.clone().applyMatrix4(inv);
+    const no = n.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(inv)).normalize();
+    return { plane_co: co.toArray(), plane_no: no.toArray() };
   }
 
   hoverLoopCut(cx, cy) {
@@ -1157,6 +1191,10 @@ export class Viewport {
     } else if (t.kind === "knife") {
       t.points.push([cx, cy]);
       this.drawKnife();
+    } else if (t.kind === "bisect") {
+      t.points.push([cx, cy]);
+      this.drawBisect();
+      if (t.points.length === 2) this.hooks.onToolCommit?.({ kind: "bisect", points: t.points });
     }
   }
 
@@ -1197,12 +1235,28 @@ export class Viewport {
     return out;
   }
 
+  // Where a move starts: the moved thing's own and world placement, and — for an object — how far
+  // its origin sits above its lowest point, so a surface snap can stand it on a floor.
+  dragStart(o) {
+    o.updateWorldMatrix(true, false);
+    const st = { position: o.position.clone(), quaternion: o.quaternion.clone(),
+                 world: o.getWorldPosition(new THREE.Vector3()), worldQ: o.getWorldQuaternion(new THREE.Quaternion()), lift: 0 };
+    const surface = o !== this.pivot && o.userData.surface;
+    if (surface) {
+      const box = new THREE.Box3().setFromObject(surface);
+      if (!box.isEmpty()) st.lift = st.world.z - box.min.z;
+    }
+    return st;
+  }
+
   // Moves snap by increments of the move itself, as Blender does by default: what's moved
   // keeps its offset from the grid. (TransformControls' translationSnap rounds the position,
-  // which in Edit mode would jump the selection's centre onto the grid first.)
+  // which in Edit mode would jump the selection's centre onto the grid first.) Or to a vertex or
+  // a surface under the pointer.
   snapMove(o) {
     const st = this.moveStart;
     if (!st || this.gizmo.mode !== "translate" || this.snap.on === this.ctrl) return;
+    if (this.snap.target !== "increment") { this.snapTo(o, st); return; }
     const d = o.position.clone().sub(st.position), local = this.gizmo.space === "local";
     const q = st.quaternion.clone();
     if (local) d.applyQuaternion(q.clone().invert());
@@ -1211,6 +1265,66 @@ export class Viewport {
     o.position.copy(st.position).add(d);
     o.updateMatrixWorld(true);
   }
+
+  // Vertex: the moved thing's origin (Edit mode: the selection's centre) onto the nearest corner
+  // of the face under the pointer. Surface: onto the point under the pointer — an object stands
+  // on a surface that faces up. Within the gizmo's axis or plane, as Blender constrains a snap.
+  snapTo(o, st) {
+    const hit = this.snapTarget(o);
+    this.drawSnap(hit);
+    if (!hit) return;                                     // nothing there: the free move stands
+    const want = hit.point.clone();
+    if (this.snap.target === "surface" && o !== this.pivot && hit.normal.z > 0.7) want.z += st.lift;
+    const d = want.sub(st.world), ax = this.gizmo.axis || "XYZ";
+    if (ax.length < 3 && /^[XYZ]+$/.test(ax)) {
+      const q = this.gizmo.space === "local" ? st.worldQ : new THREE.Quaternion();
+      d.applyQuaternion(q.clone().invert());
+      if (!ax.includes("X")) d.x = 0;
+      if (!ax.includes("Y")) d.y = 0;
+      if (!ax.includes("Z")) d.z = 0;
+      d.applyQuaternion(q);
+    }
+    const world = st.world.clone().add(d);
+    if (o.parent) { o.parent.updateWorldMatrix(true, false); o.parent.worldToLocal(world); }
+    o.position.copy(world);
+    o.updateMatrixWorld(true);
+  }
+
+  // What's under the pointer that the move could land on: never the thing moving (nor what it
+  // carries), the edited mesh's own cage, a set's shadow catcher or an invisible pick proxy.
+  snapTarget(moving) {
+    if (!this.pointer) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera({ x: ((this.pointer[0] - rect.left) / rect.width) * 2 - 1,
+                        y: -((this.pointer[1] - rect.top) / rect.height) * 2 + 1 }, this.camera);
+    const inside = (obj, n0) => { for (let n = obj; n; n = n.parent) if (n === n0) return true; return false; };
+    const cage = this.edit?.group;
+    const hit = ray.intersectObjects(this.root.children, true).find((h) => h.object.isMesh && h.face
+      && !h.object.userData.catcher && h.object.material?.visible !== false && this.pickable(h.object)
+      && !inside(h.object, moving) && !(cage && inside(h.object, cage)));
+    if (!hit) return null;
+    const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+    if (this.snap.target === "surface") return { point: hit.point, normal };
+    const pos = hit.object.geometry.attributes.position;
+    let best = null, bd = Infinity;
+    for (const i of [hit.face.a, hit.face.b, hit.face.c]) {
+      const p = new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(hit.object.matrixWorld);
+      const [sx, sy] = this.toScreen(p);
+      const d = Math.hypot(sx + rect.left - this.pointer[0], sy + rect.top - this.pointer[1]);
+      if (d < bd) { bd = d; best = p; }
+    }
+    return { point: best, normal };
+  }
+
+  drawSnap(hit) {
+    this.overlay.querySelectorAll(".snap").forEach((n) => n.remove());
+    if (!hit) return;
+    const [x, y] = this.toScreen(hit.point);
+    this.overlay.insertAdjacentHTML("beforeend", `<circle class="snap" cx="${x}" cy="${y}" r="6"/>`);
+  }
+
+  setSnapTarget(target) { this.snap.target = target; }
 
   applySnap() {
     const on = this.snap.on !== this.ctrl;                 // Ctrl held flips it, as in Blender

@@ -20,11 +20,12 @@ const MAX_FRAME = 100000;              // scene.py MAX_FRAME
 const KEEP = ["name", "parent", "location", "rotation", "scale", "visible", "renderable", "materials", "shading", "modifiers"];
 // Edit-mode Blender ops that work on the selection (the rest take the whole mesh);
 // the first three need one, the others take "nothing selected" as everything.
-const ON_SELECTION = new Set(["bevel", "inset", "subdivide", "triangulate", "merge_by_distance", "recalc_normals", "uv"]);
+const ON_SELECTION = new Set(["bevel", "inset", "subdivide", "triangulate", "merge_by_distance", "recalc_normals", "uv",
+                              "bisect"]);
 const NEEDS_SELECTION = new Set(["bevel", "inset", "subdivide"]);
 
 export const TOOL_DEFAULTS = { width: 0.05, segments: 2, thickness: 0.05, depth: 0, cuts: 1, distance: 0.0001,
-                               voxel_size: 0.05, ratio: 0.5 };
+                               voxel_size: 0.05, ratio: 0.5, bisect_clear: "none", bisect_fill: false };
 
 async function digest(bytes) {
   if (globalThis.crypto?.subtle) {
@@ -48,7 +49,7 @@ export function createApp(viewportFactory) {
     doc: null, base: null, selection: [], shading: "material", gizmo: "translate", status: "loading",
     busy: null, preview: null, toast: null, undo: [], redo: [], error: null, engine: bridge.canEngine(),
     mode: "object", edit: null, editMesh: null, tools: { ...TOOL_DEFAULTS },
-    tool: null, proportional: { on: false, radius: 1, falloff: "smooth" }, snap: false, lastCut: null,
+    tool: null, proportional: { on: false, radius: 1, falloff: "smooth" }, snap: false, snapTarget: "increment", lastCut: null,
     frame: 1, playing: false, autokey: false, video: null,
   };
   const emit = () => { diag.status = s.status; diag.selection = s.selection; diag.mode = s.mode; listeners.forEach((f) => f(s)); };
@@ -481,11 +482,25 @@ export function createApp(viewportFactory) {
     // adjustable (cuts, slide) until something else happens, like Blender's last-op panel.
     startTool(kind) {
       if (!s.edit) return;
+      if (kind === "bisect" && !bridge.canEngine()) { toast("Bisect needs the Blender engine — open the Studio from the chat", "error"); return; }
       s.tool = kind === "loopcut" ? { kind, cuts: 1 } : { kind, points: [] };
       vp.setTool(s.tool);
       emit();
       toast(kind === "loopcut" ? "Loop cut: point at an edge, wheel for more cuts, click to cut — Esc to stop"
+        : kind === "bisect" ? "Bisect: click two points across the mesh — it cuts all the way through (the selection, or all of it). Esc to stop"
         : "Knife: click along the cut, Enter to cut — Esc to stop");
+    },
+    // Bisect: the plane through the eye and the drawn line cuts everything it passes, hidden
+    // faces too; one side can go, and the hole be filled (Tool settings).
+    async bisect(points) {
+      const plane = vp.bisectPlane(points);
+      s.tool = null;
+      vp.setTool(null);
+      emit();
+      if (!plane) { toast("Draw the bisect's line across the mesh"); return; }
+      const t = s.tools;
+      await edit.blender("bisect", "bisect", { ...plane, clear_outer: t.bisect_clear === "left",
+                                               clear_inner: t.bisect_clear === "right", fill: t.bisect_fill });
     },
     cancelTool() { s.tool = null; vp.setTool(null); emit(); },
     loopCut(edge, cuts, slide = 0) {
@@ -539,6 +554,15 @@ export function createApp(viewportFactory) {
       emit();
     },
     toggleSnap() { s.snap = !s.snap; vp.setSnap(s.snap); emit(); toast(s.snap ? "Snapping on (Shift+Tab)" : "Snapping off"); },
+    // What a move snaps to: increments of itself, a vertex, or a surface under the pointer.
+    setSnapTarget(target) {
+      s.snapTarget = target;
+      vp.setSnapTarget(target);
+      if (!s.snap) { s.snap = true; vp.setSnap(true); }
+      emit();
+      toast({ increment: "Snapping moves by 0.1 m", vertex: "Snapping to vertices: the nearest corner under the pointer",
+              surface: "Snapping to surfaces: an object stands on what's under the pointer" }[target]);
+    },
     // Blender's "Assign": the selected faces use slot `slot`.
     assignSlot(slot) {
       const e = s.edit;
@@ -1075,7 +1099,7 @@ export function createApp(viewportFactory) {
         onEditPick: editPick,
         onEditTransformEnd: edit.onTransformEnd,
         onEditLost: () => { if (s.mode === "edit") leaveEdit(); },
-        onToolCommit: (t) => { if (t.kind === "loopcut") edit.loopCut(t.edge, t.cuts); },
+        onToolCommit: (t) => { if (t.kind === "loopcut") edit.loopCut(t.edge, t.cuts); else if (t.kind === "bisect") edit.bisect(t.points); },
         onToolChange: (t) => { if (t.kind === "proportional") { s.proportional = { ...s.proportional, radius: t.radius }; emit(); } },
         explicitGeometry,
         loadTexture,

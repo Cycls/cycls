@@ -115,7 +115,7 @@ both come out right.
 | op | who | what |
 |---|---|---|
 | `evaluate` | app, agent | display meshes after modifiers (per-loop positions/normals, triangles) |
-| `apply` | app, agent | `modifier_apply {index}`, `convert`, `join {others}`, `remesh`, `decimate`, `boolean`, and on a selection: `bevel`, `inset`, `subdivide`, `triangulate`, `merge_by_distance`, `recalc_normals`, `uv {method: cube\|cylinder\|sphere\|reset}`, `assign {slot}` (faces → a material slot), `connect {verts}` (an edge between two vertices, splitting the faces between them); a join answers with the merged slots |
+| `apply` | app, agent | `modifier_apply {index}`, `convert`, `join {others}`, `remesh`, `decimate`, `boolean`, and on a selection: `bevel`, `inset`, `subdivide`, `triangulate`, `merge_by_distance`, `recalc_normals`, `uv {method: cube\|cylinder\|sphere\|reset}`, `assign {slot}` (faces → a material slot), `connect {verts}` (an edge between two vertices, splitting the faces between them), `bisect {plane_co, plane_no, clear_inner?, clear_outer?, fill?}` (a plane in the object's space cuts all the way through; one side can go and the hole be filled); a join answers with the merged slots |
 | `snapshot` | app, agent | ~640×360, few samples, ~5 s — for checking work; `frame` poses an animation there |
 | `render` | app, agent | the Cycles render, PBR Neutral, denoised |
 | `video` | route | frames `[a, b]` (≤ 120) as an H.264 segment, and the first frame as a poster when asked — see Video |
@@ -132,7 +132,8 @@ flattening it — a glb's packed images pass through as their own bytes, never t
 transform.
 
 A selection is `"all"`, `{faces: [i]}`, `{edges: [[a, b]]}` or `{verts: [i]}` — indices into the
-object's explicit mesh. `bevel`, `inset` and `subdivide` answer with a `selection` too — what
+object's explicit mesh. As in Blender, a face counts as selected when all its vertices (or edges)
+are, so triangulate or a UV projection on selected vertices works on those faces, not all of them. `bevel`, `inset` and `subdivide` answer with a `selection` too — what
 Blender leaves selected (the bevel's faces, the inset's inner faces, the subdivided edges), as
 indices into the mesh they return.
 
@@ -320,15 +321,25 @@ the picked one (a local op, like extrude). Every edit is a new mesh file and one
   through, as a bisect, isn't there.
 - **Connect (J).** Two selected vertices on one face split it here; otherwise Blender's
   `connect_vert_pair` does it.
+- **Bisect (Mesh menu).** Two clicks draw a line; the plane through the eye and the line cuts
+  the selection — or all of it — straight through, hidden faces too (Blender's `bisect_plane`),
+  and the cut comes back selected. Tool settings: remove the side left or right of the line as
+  drawn, and fill the hole.
 - **Proportional editing (O).** Smooth, sphere, linear, sharp or constant falloff over a
   radius, measured in world space. The wheel resizes it mid-drag, and a circle shows it.
-- **Snapping (Shift+Tab, or the Snap button in the header).** Holding Ctrl flips it during a
-  drag. A move snaps by 0.1 m steps of the move itself, not the grid, so an off-grid vertex
-  stays off it (TransformControls' own translation snap rounds the position). Rotation snaps
-  by 15°, scale by 0.1. There's no vertex or surface snapping yet.
+- **Snapping (Shift+Tab, or the Snap button in the header; its ▾ picks what to).** Holding Ctrl
+  flips it during a drag. Increment: a move snaps by 0.1 m steps of the move itself, not the
+  grid, so an off-grid vertex stays off it (TransformControls' own translation snap rounds the
+  position). Vertex: the origin (Edit mode: the selection's centre) lands on the nearest corner
+  of the face under the pointer. Surface: on the point under the pointer — and an object
+  dropped on a surface that faces up stands on it (its lowest point there). Vertex and surface
+  snaps keep to the gizmo's axis or plane, as Blender's do, and never land on what's moving.
+  Rotation snaps by 15°, scale by 0.1. Object mode and Edit mode alike.
 
 `studio/dev/checks/tools.js` drives each tool with real input and then round-trips the result
-through Blender (recalculate normals on all of it has to bring back the same mesh).
+through Blender (recalculate normals on all of it has to bring back the same mesh);
+`checks/snap.js` drags a ball's X arrow onto a cube's corner (x lands on the corner's), its centre
+onto the cube's top (it stands there), then bisects the cube twice.
 
 **Time.** The timeline is one row under everything, Blender's: first/previous key/play/next
 key/last, the frame, a scrub bar with the selection's keys as diamonds, start, end and fps, auto-key
@@ -420,9 +431,9 @@ carried. The tool counts material notes for the model rather than listing dozens
 ## Known limitations
 
 - One editor at a time; two editing the same entry keep the local copy.
-- No UV editing beyond projections, geometry nodes, sculpting, knife bisect, or
-  vertex/surface snapping. Animation is transforms only (no armatures, shape keys or animated
-  materials); a video is at most 240 frames at 720p, and renders only while a Studio is open.
+- No UV editing beyond projections, geometry nodes, sculpting, or edge snapping. Animation is
+  transforms only (no armatures, shape keys or animated materials); a video is at most 240
+  frames at 720p, and renders only while a Studio is open.
 - Engine capacity is shared: four instances, one job each.
 - The phone client has no `cycls.engine`; the app degrades to viewing and local edits.
 

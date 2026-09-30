@@ -145,3 +145,5 @@ label.btn:hover { background: #3c3c3c; }
 .videobar { position: absolute; left: 10px; top: 10px; z-index: 5; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 60px);
   background: #000c; color: #fff; padding: 5px 6px 5px 12px; border-radius: 16px; flex-wrap: wrap; }
 .videobar .muted { font-size: 11px; }
+.tool-overlay .snap { fill: none; stroke: #ffd24a; stroke-width: 2; }
+.tool-overlay .bisect { stroke-dasharray: 8 4; }

@@ -102,7 +102,8 @@ const OBJECT_OPS = [["convert", "Convert to mesh"], ["join", "Join selected", "C
                     "-", ...UV_OPS];
 const EDIT_OPS = [["extrude", "Extrude", "E"], ["fill", "Fill", "F"], ["merge", "Merge at center", "M"], ["delete", "Delete", "X"], "-",
                   ["loopcut", "Loop cut", "Ctrl R"], ["knife", "Knife", "K"], ["connect", "Connect vertices", "J"], "-",
-                  { head: "With Blender" }, ["bevel", "Bevel", "Ctrl B"], ["inset", "Inset faces", "I"], ["subdivide", "Subdivide"],
+                  { head: "With Blender" }, ["bisect", "Bisect (cut all the way through)"],
+                  ["bevel", "Bevel", "Ctrl B"], ["inset", "Inset faces", "I"], ["subdivide", "Subdivide"],
                   ["triangulate", "Triangulate"], ["merge_by_distance", "Merge by distance"], ["recalc_normals", "Recalculate normals"],
                   "-", ...UV_OPS];
 const EXPORTS = [{ head: "Into exports/" }, { id: "glb", label: "glTF binary (.glb)" }, { id: "blend", label: "Blender (.blend)" },
@@ -111,7 +112,7 @@ const items = (ops) => ops.map((o) => (o === "-" || o.head ? o : { id: o[0], lab
 
 export function runEditOp(a, op) {
   if (op.startsWith("uv:")) { a.uv(op.slice(3)); return; }
-  if (op === "loopcut" || op === "knife") { a.edit.startTool(op); return; }
+  if (op === "loopcut" || op === "knife" || op === "bisect") { a.edit.startTool(op); return; }
   if (op === "connect") { a.edit.connect(); return; }
   const e = a.edit;
   const local = { extrude: e.extrude, fill: e.fill, merge: e.merge, delete: e.remove }[op];
@@ -150,8 +151,14 @@ function Header({ s, a }) {
           <Menu label="Object" items={items(OBJECT_OPS)} onPick={(op) => runObjectOp(a, op)} /></>}
     <Menu label="View" items={views} onPick={(v) => v === "shadows" ? a.setShadows(!s.shadows) : v === "frame-all" ? a.frame(true) : v === "frame-sel" ? a.frame(false)
       : v === "cam-to-view" ? a.cameraToView() : a.view(v)} />
-    <button class={`toggle ${s.snap ? "on" : ""}`} title="Snap to 0.1 m / 15° / 0.1 (Shift Tab; Ctrl while dragging flips it)"
-      onClick={() => a.edit.toggleSnap()}>Snap</button>
+    <div class="seg">
+      <button class={`toggle ${s.snap ? "on" : ""}`} onClick={() => a.edit.toggleSnap()}
+        title={`Snap ${s.snapTarget === "increment" ? "moves by 0.1 m" : `moves to a ${s.snapTarget}`}, turns by 15°, scale by 0.1 (Shift Tab; Ctrl while dragging flips it)`}>
+        {s.snapTarget === "increment" ? "Snap" : `Snap: ${label(s.snapTarget)}`}</button>
+      <Menu label="▾" onPick={(t) => a.edit.setSnapTarget(t)} items={[{ head: "Moves snap to" },
+        ...[["increment", "Increment (0.1 m)"], ["vertex", "Vertex"], ["surface", "Surface"]]
+          .map(([id, t]) => ({ id, label: `${s.snapTarget === id ? "✓ " : ""}${t}` }))]} />
+    </div>
     <div class="seg">{[["translate", "Move", "G"], ["rotate", "Rotate", "R"], ["scale", "Scale", "S"]].map(([m, t, k]) =>
       <button key={m} class={s.gizmo === m ? "on" : ""} title={`${t} (${k})`} onClick={() => a.setGizmo(m)}>{t}</button>)}</div>
     <div class="seg">{[["solid", "Solid"], ["material", "Material"]].map(([m, t]) =>
@@ -455,7 +462,7 @@ function EditPanel({ s, a }) {
       <div class="muted">{e.items.length} of {total} {e.mode === "vert" ? "vertices" : e.mode === "edge" ? "edges" : "faces"} selected
         · {m.co.length / 3} verts · {m.faces.length} faces</div>
       <div class="muted">Click to select, Shift-click to add. G/R/S or the gizmo to move. E extrude, F fill, M merge, X delete,
-        Ctrl R loop cut, K knife, J connect, O proportional.</div>
+        Ctrl R loop cut, K knife, J connect, O proportional; Mesh › Bisect cuts all the way through.</div>
     </Section>
     {cut && <Section title="Loop cut">
       <label class="row"><span>Cuts</span><Num value={cut.cuts} step={1} min={1} max={32} digits={0}
@@ -480,6 +487,11 @@ function EditPanel({ s, a }) {
       {num("thickness", "Inset thickness")}{num("depth", "Inset depth", { min: -10 })}
       {num("cuts", "Subdivide cuts", { step: 1, int: true, digits: 0, max: 10 })}
       {num("distance", "Merge distance", { step: 0.0001, digits: 5 })}
+      <label class="row"><span>Bisect removes</span><select value={t.bisect_clear} onChange={(ev) => a.setTool("bisect_clear", ev.currentTarget.value)}>
+        <option value="none">nothing</option><option value="left">the side left of the line</option>
+        <option value="right">the side right of the line</option></select></label>
+      <label class="row"><span>Bisect fills</span><input type="checkbox" checked={t.bisect_fill}
+        onChange={(ev) => a.setTool("bisect_fill", ev.currentTarget.checked)} /></label>
     </Section>
   </>;
 }
