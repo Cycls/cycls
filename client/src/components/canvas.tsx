@@ -8,7 +8,7 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob, liveApps } from "./canvas-utils";
+import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob, liveApps, takesKeysOnHover } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
@@ -185,6 +185,7 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
         srcDoc={doc}
         title={file.name}
         className="h-full w-full border-0 bg-white"
+        onPointerEnter={isApp ? () => { if (takesKeysOnHover(document.activeElement)) ref.current?.focus({ preventScroll: true }); } : undefined}
       />
       {crash && (
         <div className="absolute inset-x-0 bottom-0 border-t border-border bg-card px-4 py-2 text-xs text-destructive">

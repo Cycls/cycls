@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { fileKind } from "../src/components/canvas";
-import { isHtml, isMd, isPdf, codeLang, ext, editWorkingPath, liveApps } from "../src/components/canvas-utils";
+import { isHtml, isMd, isPdf, codeLang, ext, editWorkingPath, liveApps, takesKeysOnHover } from "../src/components/canvas-utils";
 
 // An app's canvas tab is titled by its manifest, so the display name has no
 // extension. Every renderer check must therefore key off the path — keyed off
@@ -79,5 +79,18 @@ describe("liveApps", () => {
     expect(live).toEqual(["apps/sales/index.html", "apps/x/index.html", "apps/y/index.html"]);
     expect(liveApps(live, "renders/a.png", isApp, open.filter((p) => p !== "apps/x/index.html")))
       .toEqual(["apps/sales/index.html", "apps/y/index.html"]);
+  });
+});
+
+// An app frame the pointer enters takes the keyboard — never from someone typing.
+describe("takesKeysOnHover", () => {
+  it("takes the keys from nothing in particular, never from a field being typed in", () => {
+    expect(takesKeysOnHover(null)).toBe(true);
+    expect(takesKeysOnHover(document.body)).toBe(true);
+    expect(takesKeysOnHover(document.createElement("button"))).toBe(true);
+    for (const tag of ["input", "textarea", "select"]) expect(takesKeysOnHover(document.createElement(tag))).toBe(false);
+    const editor = document.createElement("div");
+    editor.setAttribute("contenteditable", "true");
+    expect(takesKeysOnHover(editor)).toBe(false);
   });
 });

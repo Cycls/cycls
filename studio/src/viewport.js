@@ -182,10 +182,13 @@ export class Viewport {
     this.orbit = new OrbitControls(cam, r.domElement);
     this.orbit.target.set(0, 0, 1);
     this.orbit.screenSpacePanning = true;
+    // A wheel notch zooms ~1.17x, near Blender's 1.2x (three's default 1.05x took ~90 notches to
+    // get 100x closer — a crawl across a site-sized scene).
+    this.orbit.zoomSpeed = 3;
     this.orbit.update();
     // Orbiting leaves the camera view — but only once the view moves: a plain click
     // starts an orbit too, and must not put the camera's own lines at the eye.
-    this.orbit.addEventListener("change", () => { this.touch(); if (this.orbiting) this.leaveCamera(); });
+    this.orbit.addEventListener("change", () => { this.fitDepth(); this.touch(); if (this.orbiting) this.leaveCamera(); });
     this.orbit.addEventListener("start", () => { this.orbiting = true; });
     this.orbit.addEventListener("end", () => { this.orbiting = false; });
 
@@ -1400,6 +1403,17 @@ export class Viewport {
     node.children.forEach((c) => { c.visible = false; });     // don't draw the camera we're looking through
     this.touch();
     return true;
+  }
+
+  // The depth range follows the view: close up it resolves millimetres, from a kilometre out
+  // it still reaches the far side of a site (a fixed 2 km cut a venue's terrain off).
+  fitDepth() {
+    const c = this.camera, d = c.position.distanceTo(this.orbit.target);
+    const near = Math.min(5, Math.max(0.005, d / 2000)), far = Math.max(2000, d * 60);
+    if (Math.abs(near - c.near) / c.near < 0.2 && Math.abs(far - c.far) / c.far < 0.2) return;
+    c.near = near;
+    c.far = far;
+    c.updateProjectionMatrix();
   }
 
   // In camera view the whole render frame fits the viewport, whatever its shape.

@@ -13,6 +13,17 @@ export const isImage = (name: string) => IMAGE_EXTS.has(ext(name));
 const AUDIO_EXTS = new Set(["mp3", "wav", "ogg", "oga", "m4a", "aac", "flac", "opus", "weba"]);
 export const isAudio = (name: string) => AUDIO_EXTS.has(ext(name));
 
+// Keys go where the pointer is, as in Blender: an app frame the pointer enters takes the
+// keyboard (a cross-origin frame gets none until it's focused, so Home or Tab over the
+// Studio went to the chat) — unless someone is typing elsewhere, which a passing pointer
+// mustn't cut off.
+export function takesKeysOnHover(active: Element | null): boolean {
+  if (!active || active === document.body) return true;
+  const el = active as HTMLElement;
+  if (el.isContentEditable || el.getAttribute?.("contenteditable") === "true") return false;
+  return !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+}
+
 const VIDEO_EXTS = new Set(["mp4", "webm", "mov", "m4v", "ogv"]);
 export const isVideo = (name: string) => VIDEO_EXTS.has(ext(name));
 
