@@ -35,7 +35,7 @@ the schema has one source and the engine can't drift from it.
 
 ## The document
 
-`apps/studio/data/scene.json`, format `cycls.studio.scene` v2. Blender's conventions, so an agent
+`apps/studio/data/scene.json`, format `cycls.studio.scene` v3. Blender's conventions, so an agent
 that knows bpy reads it on sight: Z up, metres, angles in degrees (Euler XYZ — three.js's `'ZYX'`),
 colours sRGB hex (linear only at the edges), bpy field names (`energy`, `lens`, `levels`,
 `segments`). `objects`, `meshes` and `materials` are maps keyed by stable id; `world` and `render`
@@ -45,6 +45,19 @@ A mesh or text object has material **slots**, `materials: [id|null, …]`, and a
 last. Version 1 had one `material`; a v1 document reads as v2 (it becomes slot 0) in `scene.py`'s
 `migrate` and in the app's `bridge.readScene`, so an older scene or an open older tab merge cleanly.
 Ops still take `material` as slot 0; `material {assign, slot}` sets another.
+
+**Animation** (v3). `animation` is the timeline, `{fps, frame_start, frame_end}`, and an object's
+`keys` are its motion: `{location|rotation|scale: [[frame, [x, y, z], interpolation], …]}`, one key
+a frame, the interpolation (`bezier`, `linear`, `constant`) for the segment that key starts. They
+are Blender's F-curves exactly as the engine builds them — auto-clamped handles with
+auto-smoothing off (a new curve smooths by default, which no twin could match), constant
+extrapolation — so `scene.py sample` and its JS twin `studio/src/anim.js` land on Blender's own
+numbers: both are held to samples Blender took of the same keys through the real `build`
+(`studio/tests/fixtures/anim_golden.json`, within 1e-4 — Blender works in float32). An animated
+channel's stored value is where its keys put the first frame (normalize pins it), which is what
+framing, layout checks and a still render see. Ops that would set an animated channel outright are
+refused with a pointer to `keyframe`; `duplicate` and `on_floor` carry the keys along. A v2
+document reads as v3 with a still timeline.
 
 The file on disk is always normalized — every key present, defaults filled — and the app's
 `make.*` builds entries in exactly that shape from `schema.json` (generated from `scene.py`; a
@@ -103,11 +116,13 @@ both come out right.
 |---|---|---|
 | `evaluate` | app, agent | display meshes after modifiers (per-loop positions/normals, triangles) |
 | `apply` | app, agent | `modifier_apply {index}`, `convert`, `join {others}`, `remesh`, `decimate`, `boolean`, and on a selection: `bevel`, `inset`, `subdivide`, `triangulate`, `merge_by_distance`, `recalc_normals`, `uv {method: cube\|cylinder\|sphere\|reset}`, `assign {slot}` (faces → a material slot), `connect {verts}` (an edge between two vertices, splitting the faces between them); a join answers with the merged slots |
-| `snapshot` | app, agent | ~640×360, few samples, ~5 s — for checking work |
+| `snapshot` | app, agent | ~640×360, few samples, ~5 s — for checking work; `frame` poses an animation there |
 | `render` | app, agent | the Cycles render, PBR Neutral, denoised |
+| `video` | route | frames `[a, b]` (≤ 120) as an H.264 segment, and the first frame as a poster when asked — see Video |
+| `encode` | route | `segments/s-000.mp4 …` joined into `video.mp4` through the sequencer (tainted: the segments are workspace files) |
 | `export` | app, agent | glb, blend, fbx, obj, stl |
 | `script` | agent | bpy against the scene; what comes back is read, not trusted |
-| `import` | agent | glb, gltf, obj, fbx, stl, ply, blend — packed images come along as textures |
+| `import` | agent | glb, gltf, obj, fbx, stl, ply, blend — packed images come along as textures, motion as keys |
 | `texture` | agent | an uploaded image Blender can read → PNG/JPEG ≤ 2048 px (a fresh sandboxed worker, like import) |
 
 Images go up only with the ops that draw or read materials back (snapshot, render, export, script),
@@ -120,6 +135,20 @@ A selection is `"all"`, `{faces: [i]}`, `{edges: [[a, b]]}` or `{verts: [i]}` �
 object's explicit mesh. `bevel`, `inset` and `subdivide` answer with a `selection` too — what
 Blender leaves selected (the bevel's faces, the inset's inner faces, the subdivided edges), as
 indices into the mesh they return.
+
+**Keys in Blender.** `build` makes each object's keys an action — Blender 5's actions are layered,
+so the curves live in a slot's channelbag (`bpy_extras.anim_utils`) — with each key's interpolation
+and AUTO_CLAMPED handles, `auto_smoothing = "NONE"`, then sets the scene's fps and range and
+`frame_set(frame_start)`. `to_doc` reads them back: the Studio's own curves key for key; anything
+else — quaternions, another Euler order, a parent offset (`matrix_parent_inverse`) — re-keyed as XYZ
+Euler at its keys through the object's local matrix, whole turns kept (compatible Eulers); a glTF
+import's actions parked on the NLA are taken from their strip. What the document can't say (an
+easing, hand-set handles, keys between frames, curve modifiers, drivers) is noted, not refused, and
+more than 1,000 keys on a channel are thinned evenly. A glb or fbx carries motion but no timeline,
+so its keys set the range. Exports write the scene's motion as one animation (glTF `SCENE` mode; FBX
+without per-action stacks): per-action exports import as one active action and the rest parked, so
+only one object would move. `.blend`, glb and fbx all round-trip the turntable and a keyed pedestal
+(FBX shifts keys by a frame on its own round trip).
 
 **The warm worker.** The deployed shim unpickles the function once per process, so a Blender
 process started in one call is still there for the next (`sys._cycls_blender`). Jobs go in on
@@ -161,6 +190,43 @@ once (40 a call, carrying only their meshes) and share the result; undo keeps 16
 ground — not framed or lit for. An import hides volume-only objects (haze, fog), which as a
 surface would box everything in.
 
+## Video
+
+A five-second 720p video is minutes of Cycles (15.3 s a frame at 1280×720 and 16 samples on the
+8-core engine): more than one engine call may take, and Cloud Run throttles a server's CPU once it has
+answered, so nothing can render in the background on the agent server. **The app drives it**, in
+`cycls/_agent/studio/video.py`:
+
+- `video_start` snapshots the scene (the app's own, unsaved edits included) into a job —
+  `apps/studio/data/jobs/<id>.json`, the scene in `jobs/<id>/scene.json`. One running job a
+  workspace; at most 240 frames, 1280×720 (a bigger render keeps its shape) and 64 samples
+  (16 unless asked).
+- `video_chunk` claims the next frames under a per-job lock and renders them into
+  `jobs/<id>/s-NNN.mp4` — one request, a few minutes. A chunk is sized from the job's measured
+  seconds a frame to take ~240 s of Blender (the first is short, ~90 s, to measure; before that
+  the workspace's stills give the rate); a claim older than 15 minutes is taken again (a tab
+  closed mid-chunk — whose request still finishes on the server). Engine slots: one chunk at a
+  time on the shared engine (interactive ops keep the rest of it), four when
+  `CYCLS_STUDIO_RENDERER` names a deployment of its own; a chunk waits up to 600 s for one. A
+  chunk that fails is taken again; the third failure ends the job. 600 frames an hour a person.
+  An answer with `wait` (nothing to take yet, the engine busy, the hour's frames spent) says when
+  to come back.
+- `video_finish` joins the segments (`encode`) into `renders/<name>.mp4`, logs it with the
+  renders (`video: true`, frames, fps), drops the segments and answers `open` — the host opens the
+  video on the canvas.
+- `video_cancel`, and `video_jobs` (running first) so a reload, another tab or the agent's
+  `render {animation: true}` (an `app_command {type: "video"}`) picks a job up where it stands.
+
+On the engine a chunk renders PNG frames with persistent data (the scene syncs once, not once a
+frame), then the sequencer encodes them in the Standard view — they're already tone-mapped — as
+near-lossless H.264 (an intermediate; the join encodes once more at CRF "high"). A decoded frame
+sits within ~1 of 255 of its PNG. The segments are joined, not the frames: 240 frames of 720p PNG
+would be ~300 MB to carry back and forth. Store sweeps keep the mesh files a running job's scene
+names. Measured: 48 frames at 480×270 and 4 samples, 0.65 s a frame, 45 s end to end; 96 at
+640×360 and 8 samples, two chunks of ~73 s, joined. A snapshot during a chunk: the first ~12 s
+(Cloud Run starts another instance, which is sent the scene's files), then 3.7–3.9 s as without
+one (3.5–4.3 s).
+
 ## The app's route
 
 `POST /apps/studio/engine`, mounted only when Studio is configured. It answers 404 unless the slug
@@ -171,7 +237,7 @@ minute, 30 renders an hour, one render at a time. It saves what the engine made 
 plus the log, mesh files, `exports/*` — before answering, so a tab closed mid-render loses nothing.
 One op never reaches the engine: `open {path}` answers `{open: path}` for a render the log lists or
 a file under `exports/`, and the host bridge opens it on the canvas (the Renders list, the preview's
-Open).
+Open). The `video_*` ops are the video jobs above.
 
 ## The app
 
@@ -264,6 +330,22 @@ the picked one (a local op, like extrude). Every edit is a new mesh file and one
 `studio/dev/checks/tools.js` drives each tool with real input and then round-trips the result
 through Blender (recalculate normals on all of it has to bring back the same mesh).
 
+**Time.** The timeline is one row under everything, Blender's: first/previous key/play/next
+key/last, the frame, a scrub bar with the selection's keys as diamonds, start, end and fps, auto-key
+(●), ◆ Key, the interpolation of the key under the playhead, and Render video. Keys are Blender's:
+I keys the selection's location, rotation and scale where they are, Alt+I removes this frame's
+keys, Space plays (Esc stops where it began), ←/→ step a frame (Shift: to the ends), ↑/↓ jump key
+to key. The Object panel shows the pose at this frame; each channel's ◆ keys or unkeys it here
+(green when the channel moves, yellow when it has a key here). Moving a channel that has keys keys
+it at this frame — the next frame would put it back otherwise; a still channel just moves, unless
+auto-key is on. A turn keeps counting past 180° (the gizmo's Euler is made compatible with the
+key's). The viewport draws the document posed at the current frame; playback runs off the clock
+(a cross-origin frame gets few animation frames unfocused), and each tick moves only the keyed
+objects' transforms (`vp.pose`) — no rebuild, no probe or lamp-rig bake, the shadow maps redraw,
+the camera view rides an animated camera — and at rest a full sync catches up. What an animation
+moves is never drawn batched. A video rendering shows its frames, the server's estimate counting
+down, and Cancel; when it's done its poster shows with Open.
+
 **Keeping the agent in the picture.** The app publishes `{selection, mode, edit?}` to its
 per-person shelf (`cycls.me.set("view")`). The tool resolves the id `"selected"` against it, and
 in Edit mode `inspect` says what's selected and `apply` takes `selection: "selected"` — but only
@@ -282,8 +364,9 @@ app is installed and current.
 |---|---|
 | `open` | shows the app on the canvas, and tells the model what's already in the scene |
 | `inspect` | the scene as a table, the person's selection, layout warnings |
-| `edit {ops, intent, snapshot?}` | atomic ops (add, set, delete, duplicate, material, texture, modifier, world, render, look_at, frame, preset) — all or none, one rev, one patch |
-| `snapshot` · `render` | preview to the model; a render also lands in `renders/` and opens |
+| `edit {ops, intent, snapshot?}` | atomic ops (add, set, delete, duplicate, material, texture, modifier, world, render, look_at, frame, preset, keyframe, unkey, animation, turntable) — all or none, one rev, one patch |
+| `snapshot {frame?}` · `render` | preview to the model; a render also lands in `renders/` and opens |
+| `render {animation: true}` | starts a video job, opens the Studio and tells it to render; the model says how long and doesn't wait (`inspect` reports progress) |
 | `apply` · `script` · `import` · `export` | engine ops, results merged under the lock and pushed |
 | `revert {rev}` | a scene from history |
 
@@ -337,21 +420,26 @@ carried. The tool counts material notes for the model rather than listing dozens
 ## Known limitations
 
 - One editor at a time; two editing the same entry keep the local copy.
-- No UV editing beyond projections, animation, geometry nodes, sculpting, knife bisect, or
-  vertex/surface snapping.
+- No UV editing beyond projections, geometry nodes, sculpting, knife bisect, or
+  vertex/surface snapping. Animation is transforms only (no armatures, shape keys or animated
+  materials); a video is at most 240 frames at 720p, and renders only while a Studio is open.
 - Engine capacity is shared: four instances, one job each.
 - The phone client has no `cycls.engine`; the app degrades to viewing and local edits.
 
 ## Testing
 
-- `tests/agent/studio_scene_test.py` — the document: normalize, ops, merge, layout, schema drift.
-- `tests/agent/studio_test.py` — the tool, installer, route and mount, with the engine faked.
+- `tests/agent/studio_scene_test.py` — the document: normalize, ops, merge, layout, schema drift,
+  keys, and the evaluator against Blender's samples.
+- `tests/agent/studio_test.py` — the tool, installer, route and mount, video jobs (chunk sizing,
+  stale claims, failures, cancel, budgets, busy), with the engine faked.
 - `studio/tests/` (vitest) — `doc` (entries, merge3, set vs subjects), `mesh` (codec and edits),
-  `app` (the controller against a fake bridge: merging, saving, Edit mode, Apply, Blender's
-  selection carried on).
+  `anim` (the evaluator against scene.py and against Blender), `app` (the controller against a fake
+  bridge: merging, saving, Edit mode, Apply, Blender's selection carried on, keying, the video loop).
 - The viewport itself needs WebGL, so it's checked in a browser: the real host, or headless Chrome
   driving the built bundle through the real shim, bridge and route (gizmo drag and autosave, the
   Render button, Edit mode, and screenshots of Material Preview against a Cycles render).
 - `client/tests/app-bridge.test.ts`, `app-shim.test.ts` — `engine`, `onCommand`, `ask`.
 - The engine's own: `studio_try.py dev|remote selftest evaluate …` round-trips every object type
-  and modifier through Blender and back.
+  and modifier through Blender and back; `anim` round-trips keys and regenerates
+  `anim_golden.json`, `anim-io` round-trips motion through blend/glb/fbx, `video` renders and joins
+  two segments (with a decode check).

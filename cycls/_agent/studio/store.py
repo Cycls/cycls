@@ -26,7 +26,7 @@ _MESH = re.compile(r"^meshes/m-[0-9a-f]{12}\.json$")
 _TEXTURE = re.compile(r"^textures/t-[0-9a-f]{12}\.json$")
 MEDIA = {"image/png": "png", "image/jpeg": "jpg"}
 # The ops that draw (or read materials back) get the images; geometry ops don't need them.
-TEXTURE_OPS = {"snapshot", "render", "export", "script"}
+TEXTURE_OPS = {"snapshot", "render", "export", "script", "video"}
 _locks = {}
 
 
@@ -86,14 +86,17 @@ def _files_of(doc):
 def _sweep_files(root, doc):
     """Mesh and texture files are immutable, so every edit in the app's Edit mode (or a
     replaced image) leaves the last one behind. Delete those no scene here uses — the
-    current one or any in history — once they're a day old: younger ones may be an open
-    app's, written ahead of its scene or held by its undo."""
+    current one, any in history, a video's still rendering — once they're a day old:
+    younger ones may be an open app's, written ahead of its scene or held by its undo."""
     import time
+    from .video import scenes_in_use
     data = root / APP_DIR / "data"
     used = _files_of(doc)
     for h in (data / "history").glob("*.json"):
         with contextlib.suppress(Exception):
             used |= _files_of(json.loads(h.read_text(encoding="utf-8")))
+    for job_scene in scenes_in_use(root):             # a video still rendering needs its scene's files
+        used |= _files_of(job_scene)
     cutoff = time.time() - MESH_TTL
     for folder, pattern in (("meshes", "m-*.json"), ("textures", "t-*.json")):
         for p in (data / folder).glob(pattern):

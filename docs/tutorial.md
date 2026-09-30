@@ -366,8 +366,10 @@ python browser_service.py        # → https://cycls-browser.cycls.ai
 Give an agent a **Blender-style 3D studio**. The agent builds a scene from a sentence
 ("a gold ring on a marble pedestal, dramatic light"), checks it with a quick preview and
 renders it with real Blender (Cycles). The person opens the same scene as an app on the
-canvas: an outliner, a viewport, properties, Object and Edit modes, modifiers, materials
-and a Render button. What either side changes, the other sees.
+canvas: an outliner, a viewport, properties, Object and Edit modes, modifiers, materials,
+a timeline and a Render button. What either side changes, the other sees. Things move, too:
+"a five-second turntable of this" keys a spin, and `render {animation: true}` makes the mp4,
+rendered a chunk at a time by the Studio while it's open.
 
 ```python
 llm = cycls.LLM().model(...).allowed_tools(["Studio", "Canvas"])

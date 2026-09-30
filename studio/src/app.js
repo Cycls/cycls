@@ -7,6 +7,7 @@ import * as M from "./mesh.js";
 import { b64Floats, bufferGeometry } from "./primitives.js";
 import { diag, recordError } from "./diag.js";
 import { estimateSeconds } from "./eta.js";
+import { CHANNELS, posed, pose, setKeys, removeKeys, setInterpolation, keyFrames, pinStill } from "./anim.js";
 
 const SESSION = Math.random().toString(36).slice(2, 8);
 const UNDO_LIMIT = 128;
@@ -14,6 +15,7 @@ const EVAL_BATCH = 40;                 // objects per Blender evaluate call
 // Every undo step is a whole document; a scene of thousands of objects keeps fewer of them.
 const undoLimit = (doc) => (Object.keys(doc?.objects || {}).length > 1000 ? 16 : UNDO_LIMIT);
 const VIEW_ITEMS = 2000;               // element selections past this go to the agent as a count only
+const MAX_FRAME = 100000;              // scene.py MAX_FRAME
 // What an object keeps when Blender hands back its mesh (the Studio tool keeps the same).
 const KEEP = ["name", "parent", "location", "rotation", "scale", "visible", "renderable", "materials", "shading", "modifiers"];
 // Edit-mode Blender ops that work on the selection (the rest take the whole mesh);
@@ -47,6 +49,7 @@ export function createApp(viewportFactory) {
     busy: null, preview: null, toast: null, undo: [], redo: [], error: null, engine: bridge.canEngine(),
     mode: "object", edit: null, editMesh: null, tools: { ...TOOL_DEFAULTS },
     tool: null, proportional: { on: false, radius: 1, falloff: "smooth" }, snap: false, lastCut: null,
+    frame: 1, playing: false, autokey: false, video: null,
   };
   const emit = () => { diag.status = s.status; diag.selection = s.selection; diag.mode = s.mode; listeners.forEach((f) => f(s)); };
   const set = (p) => { Object.assign(s, p); emit(); };
@@ -65,8 +68,11 @@ export function createApp(viewportFactory) {
 
   // ─── the document ──────────────────────────────────────────────────────────
 
+  // What the viewport draws: the document posed at the current frame.
+  const shown = () => posed(s.doc, s.frame);
+
   function show() {
-    vp?.sync(s.doc, s.selection, s.shading);
+    vp?.sync(shown(), s.selection, s.shading);
     if (s.mode === "edit") syncEdit();
     scheduleEvaluate();
   }
@@ -180,6 +186,8 @@ export function createApp(viewportFactory) {
       }
     } else if (cmd.type === "turn_end") {
       reload();
+    } else if (cmd.type === "video" && typeof cmd.job === "string") {
+      driveVideo(cmd.job);                          // the agent started one: this tab renders it
     } else if (cmd.type === "render_done" || cmd.type === "snapshot") {
       set({ preview: { src: cmd.preview, path: cmd.path || null, kind: cmd.type === "snapshot" ? "Snapshot" : "Render" } });
     }
@@ -258,7 +266,7 @@ export function createApp(viewportFactory) {
       if (last && next.includes(last)) next = [...next.filter((x) => x !== last), last];   // clicked = active
     }
     set({ selection: next });
-    vp?.sync(s.doc, next, s.shading);
+    vp?.sync(shown(), next, s.shading);
     publishView();
   }
 
@@ -582,7 +590,7 @@ export function createApp(viewportFactory) {
       const key = evalKey(id);
       if (evalKeys.get(id) !== key) want.push([id, key]);
     }
-    if (cleared) vp?.sync(s.doc, s.selection, s.shading);
+    if (cleared) vp?.sync(shown(), s.selection, s.shading);
     if (!want.length) return;
     for (const [id, key] of want) evalKeys.set(id, key);
     diag.evaluations++;
@@ -609,7 +617,7 @@ export function createApp(viewportFactory) {
                          triMat: m.material_index ? new Uint16Array(b64Floats(m.material_index)) : null };
           for (const id of sameShape.get(key)) if (evalKeys.get(id) === key) vp?.setEvaluated(id, key, data);
         }
-        vp?.sync(s.doc, s.selection, s.shading);                      // once a batch, not once an object
+        vp?.sync(shown(), s.selection, s.shading);                    // once a batch, not once an object
       }
     } catch (e) {
       recordError("evaluate", e);
@@ -631,7 +639,7 @@ export function createApp(viewportFactory) {
       arrived.clear();
       arrivedTimer = null;
       vp?.invalidate((id, o) => paths.has(s.doc.meshes[o.mesh]?.data));
-      vp?.sync(s.doc, s.selection, s.shading);
+      vp?.sync(shown(), s.selection, s.shading);
     }, 150);
   }
 
@@ -706,6 +714,193 @@ export function createApp(viewportFactory) {
     }
   }
 
+  // ─── time ──────────────────────────────────────────────────────────────────
+  // The current frame poses the viewport. Playback moves only what's keyed (vp.pose) and
+  // tells the timeline, not the whole app, each frame; at rest the app hears of it too.
+
+  const frameListeners = new Set();
+  let playTimer = null, playFrom = null;
+
+  function setFrame(f, { quiet = false } = {}) {
+    f = Math.max(0, Math.min(MAX_FRAME, Math.round(f)));
+    if (f === s.frame) return;
+    s.frame = f;
+    diag.frame = f;
+    vp?.pose(shown());
+    frameListeners.forEach((fn) => fn(f));
+    if (!quiet) emit();
+  }
+
+  // Playback runs off the clock, not off frames drawn: a cross-origin frame gets few animation
+  // frames when it isn't focused, so a timer drives it and each tick draws at once.
+  function play() {
+    if (s.playing) { pause(); return; }
+    const a = s.doc.animation;
+    playFrom = s.frame;
+    if (s.frame < a.frame_start || s.frame >= a.frame_end) setFrame(a.frame_start, { quiet: true });
+    const t0 = performance.now(), f0 = s.frame;
+    set({ playing: true });
+    const tick = () => {
+      if (!s.playing) return;
+      const t = s.doc.animation, n = t.frame_end - t.frame_start + 1;
+      const k = Math.floor(((performance.now() - t0) / 1000) * t.fps);
+      setFrame(t.frame_start + ((((f0 - t.frame_start + k) % n) + n) % n), { quiet: true });
+      vp?.draw();
+      playTimer = setTimeout(tick, Math.max(4, 500 / t.fps));
+    };
+    tick();
+  }
+
+  // Esc stops where it started (Blender's cancel); Space stops where it is.
+  function pause(restore = false) {
+    if (!s.playing) return;
+    clearTimeout(playTimer);
+    s.playing = false;
+    if (restore && playFrom != null) setFrame(playFrom, { quiet: true });
+    emit();
+    vp?.sync(shown(), s.selection, s.shading);                   // at rest: the probe and the rig catch up
+  }
+
+  function jumpKey(dir) {
+    const ids = s.selection.length ? s.selection : Object.keys(s.doc.objects);
+    const frames = [...new Set(ids.flatMap((id) => keyFrames(s.doc.objects[id])))].sort((x, y) => x - y);
+    const to = dir > 0 ? frames.find((f) => f > s.frame) : frames.reverse().find((f) => f < s.frame);
+    if (to == null) toast(dir > 0 ? "No later keys" : "No earlier keys");
+    else setFrame(to);
+  }
+
+  const near = (a, b, tol) => a.every((v, i) => Math.abs(v - b[i]) <= tol);
+  // An Euler that turns the same way as `ref` does: whole turns added, so keys don't unwind.
+  const compatible = (e, ref) => e.map((v, i) => v + 360 * Math.round((ref[i] - v) / 360));
+
+  // A move — the gizmo, a field: a channel with keys (or any, with auto-key on) is keyed at
+  // this frame, since the next frame would put it back; a still one just moves.
+  function setTransform(id, trs, label = "transform") {
+    const o = s.doc.objects[id];
+    if (!o) return;
+    const at = pose(o, s.frame);
+    const next = { ...trs };
+    if (next.rotation) next.rotation = compatible(next.rotation, at.rotation);
+    const changed = CHANNELS.filter((ch) => next[ch] && !near(next[ch], at[ch], ch === "rotation" ? 1e-3 : 1e-5));
+    if (!changed.length) { vp?.sync(shown(), s.selection, s.shading); return; }
+    update((d) => {
+      const x = d.objects[id];
+      for (const ch of changed) {
+        if (x.keys?.[ch] || s.autokey) setKeys(x, s.frame, [ch], { [ch]: next[ch] });
+        else x[ch] = [...next[ch]];
+      }
+      pinStill(d);
+    }, label);
+  }
+
+  // I: key the selection's location, rotation and scale here, where they are.
+  function insertKeys(chans = CHANNELS, ids = s.selection) {
+    const live = ids.filter((id) => s.doc.objects[id]);
+    if (!live.length) { toast("Select what to key"); return; }
+    const f = s.frame;
+    update((d) => { for (const id of live) setKeys(d.objects[id], f, chans); pinStill(d); }, "insert keyframe");
+    toast(`Keyed ${chans.length === 3 ? "location, rotation and scale" : chans.join(" and ")} at frame ${f}`);
+  }
+
+  // Alt+I: the selection's keys at this frame go (on `chans`).
+  function deleteKeys(chans = CHANNELS, ids = s.selection) {
+    const f = s.frame;
+    const hit = ids.filter((id) => chans.some((ch) => s.doc.objects[id]?.keys?.[ch]?.some((k) => k[0] === f)));
+    if (!hit.length) { toast(`Nothing selected has a key at frame ${f}`); return; }
+    update((d) => { for (const id of hit) removeKeys(d.objects[id], f, chans); pinStill(d); }, "delete keyframe");
+  }
+
+  function setAnimation(k, v) {
+    update((d) => {
+      d.animation[k] = v;
+      if (d.animation.frame_end < d.animation.frame_start) {
+        if (k === "frame_end") d.animation.frame_start = v; else d.animation.frame_end = v;
+      }
+      pinStill(d);
+    }, "timeline");
+  }
+
+  // ─── video ─────────────────────────────────────────────────────────────────
+  // The app drives a video: a chunk at a time — each a request of a few minutes, sized by the
+  // server — then the join. A reload, another tab or the agent's `render {animation}` picks a
+  // job up where it stands (video_jobs / an app_command).
+
+  const driving = new Set(), dropped = new Set();
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function renderVideo() {
+    if (!bridge.canEngine()) { toast("Rendering needs the Blender engine — open the Studio from the chat", "error"); return; }
+    try {
+      const r = await engine("video_start", { scene: s.doc, params: { name: "animation" } });
+      driveVideo(r.job.id, r.job);
+    } catch (e) {
+      toast(e.message, "error");
+    }
+  }
+
+  async function driveVideo(id, job = null) {
+    if (!bridge.canEngine() || driving.has(id)) return;
+    driving.add(id);
+    dropped.delete(id);
+    set({ video: { id, status: "running", done: 0, total: 0, seconds_left: 0, ...job, at: Date.now() } });
+    let failures = 0;
+    try {
+      while (!dropped.has(id)) {
+        let r;
+        // A chunk is minutes: meanwhile the job file says what other tabs (or a closed one's
+        // chunk, still finishing on the server) have done.
+        const poll = setInterval(() => {
+          bridge.engine("video_jobs", {}).then((q) => {
+            const j = (q.jobs || []).find((x) => x.id === id);
+            if (j && !dropped.has(id) && s.video?.id === id && j.done !== s.video.done) set({ video: { ...s.video, ...j, at: Date.now() } });
+          }).catch(() => {});
+        }, 15000);
+        try {
+          r = await bridge.engine("video_chunk", { params: { job: id } });
+          failures = 0;
+        } catch (e) {                                   // the line, not the job: try again, less often
+          if (++failures >= 5) throw e;
+          if (!dropped.has(id)) set({ video: { ...s.video, note: e.message } });
+          await sleep(10000 * failures);
+          continue;
+        } finally {
+          clearInterval(poll);
+        }
+        if (dropped.has(id)) break;
+        set({ video: { ...r.job, at: Date.now(), note: r.reason || null } });
+        if (r.error) throw new Error(r.error);
+        if (r.job.status !== "running") break;
+        if (r.wait > 0) { await sleep(Math.min(r.wait, 60) * 1000); continue; }
+        if (r.wait === 0 && r.job.done >= r.job.total) {
+          set({ video: { ...s.video, note: "Joining the video…" } });
+          const f = await bridge.engine("video_finish", { params: { job: id } });   // the host opens it
+          if (f.poster) set({ preview: { src: f.poster, path: f.path, kind: "Video" } });
+          toast(`Saved ${f.path}`);
+          break;
+        }
+      }
+    } catch (e) {
+      recordError("video", e);
+      if (!dropped.has(id)) toast(`The video stopped: ${e.message}`, "error");
+    } finally {
+      driving.delete(id);
+      if (s.video?.id === id) set({ video: null });
+    }
+  }
+
+  async function cancelVideo() {
+    const v = s.video;
+    if (!v) return;
+    dropped.add(v.id);
+    set({ video: null });
+    try {
+      await bridge.engine("video_cancel", { params: { job: v.id } });
+      toast("Video cancelled");
+    } catch (e) {
+      toast(e.message, "error");
+    }
+  }
+
   // ─── actions ───────────────────────────────────────────────────────────────
 
   // What "frame all" means: the subjects, not the studio sweep or a ground plane.
@@ -745,11 +940,11 @@ export function createApp(viewportFactory) {
              on ? "hide" : "unhide");
       if (on) select([]);
     },
-    setShading(shading) { set({ shading }); vp?.sync(s.doc, s.selection, shading); },
+    setShading(shading) { set({ shading }); vp?.sync(shown(), s.selection, shading); },
     setShadows(on) { set({ shadows: on }); vp?.setShadows(on); },
     setGizmo(mode) { set({ gizmo: mode }); vp?.setGizmoMode(mode); },
     setTool(k, v) { set({ tools: { ...s.tools, [k]: v } }); },
-    view(name) { if (name === "camera") { if (!vp.throughCamera(s.doc)) toast("No render camera yet"); } else vp.view(name); },
+    view(name) { if (name === "camera") { if (!vp.throughCamera(shown())) toast("No render camera yet"); } else vp.view(name); },
     frame(all) {
       if (s.mode === "edit" && !all && s.edit?.items.length) { vp.frame([s.edit.id]); return; }
       vp.frame(all || !s.selection.length ? subjects() : s.selection);
@@ -858,6 +1053,15 @@ export function createApp(viewportFactory) {
       runApply(id, "uv", { method }, `Blender: ${method} UVs…`, `${method} UVs`);
     },
     ask(text) { bridge.ask(text).catch((e) => toast(e.message, "error")); },
+    setFrame, play, pause, jumpKey, setTransform, insertKeys, deleteKeys, setAnimation, renderVideo, cancelVideo,
+    // After a scrub: the app hears of the frame, and the probe and the rig catch up.
+    settle() { emit(); vp?.sync(shown(), s.selection, s.shading); },
+    setAutokey(on) { set({ autokey: on }); toast(on ? "Auto-key on: changes are keyed at this frame" : "Auto-key off"); },
+    setInterpolation(interp) {
+      update((d) => { for (const id of s.selection) if (d.objects[id]) setInterpolation(d.objects[id], s.frame, interp); },
+             "interpolation");
+    },
+    onFrame(fn) { frameListeners.add(fn); return () => frameListeners.delete(fn); },
   };
 
   return {
@@ -867,7 +1071,7 @@ export function createApp(viewportFactory) {
       vp = viewportFactory(host, {
         onPick: (id, shift) => select(id ? [id] : [], shift && !!id),
         onTransform: () => {},
-        onTransformEnd: (id, trs) => update((d) => Object.assign(d.objects[id], trs), "transform"),
+        onTransformEnd: (id, trs) => setTransform(id, trs),
         onEditPick: editPick,
         onEditTransformEnd: edit.onTransformEnd,
         onEditLost: () => { if (s.mode === "edit") leaveEdit(); },
@@ -883,6 +1087,7 @@ export function createApp(viewportFactory) {
         const doc = await bridge.readScene();
         s.doc = doc;
         s.base = clone(doc);
+        s.frame = doc.animation.frame_start;
         set({ status: "saved" });
       } catch (e) {
         s.doc = clone(SCHEMA.new_scene);
@@ -892,8 +1097,15 @@ export function createApp(viewportFactory) {
       }
       show();
       // Open on the shot: through the render camera when there is one.
-      if (!(s.doc.render.camera && vp.throughCamera(s.doc))) vp.frame(subjects());
+      if (!(s.doc.render.camera && vp.throughCamera(shown()))) vp.frame(subjects());
       bridge.onCommand(onCommand);
+      // A video still rendering (this tab reloaded, or another closed) carries on here.
+      if (bridge.canEngine()) {
+        bridge.engine("video_jobs", {}).then((r) => {
+          const j = (r.jobs || []).find((x) => x.status === "running");
+          if (j) driveVideo(j.id, j);
+        }).catch(() => {});
+      }
       return vp;
     },
     get viewport() { return vp; },

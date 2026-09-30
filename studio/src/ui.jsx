@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { SCHEMA, make, TEXTURE_FIELDS } from "./doc.js";
 import { FALLOFFS } from "./mesh.js";
+import { pose, keyFrames, animated } from "./anim.js";
 
 const PRIMS = ["cube", "uv_sphere", "ico_sphere", "cylinder", "cone", "torus", "plane", "grid", "circle", "monkey"];
 const LIGHTS = ["point", "sun", "spot", "area"];
@@ -246,14 +247,26 @@ function ObjectPick({ s, value, onChange, filter }) {
 
 // ─── properties ──────────────────────────────────────────────────────────────
 
+// A channel's key at this frame, Blender's way: a filled diamond when there is one here, a
+// hollow green one when the channel moves, grey when it's still. Click keys or unkeys here.
+function KeyDot({ s, a, id, ch }) {
+  const ks = s.doc.objects[id].keys?.[ch];
+  const here = !!ks?.some((k) => k[0] === s.frame);
+  const title = here ? `Delete the ${ch} key at frame ${s.frame}` : `Key ${ch} at frame ${s.frame}`;
+  return <button class={`keydot ${here ? "here" : ks ? "moves" : ""}`} title={title}
+    onClick={() => (here ? a.deleteKeys([ch], [id]) : a.insertKeys([ch], [id]))}>◆</button>;
+}
+
 function ObjectPanel({ s, a, id }) {
   const o = s.doc.objects[id];
+  const at = pose(o, s.frame);                      // where it is at this frame
   const set = (k, v) => a.update((d) => { d.objects[id][k] = v; }, k);
+  const move = (ch, v) => a.setTransform(id, { [ch]: v }, ch);
   return <Section title="Object">
     <label class="row"><span>Name</span><input value={o.name} onChange={(e) => set("name", e.currentTarget.value.slice(0, 64) || o.name)} /></label>
-    <div class="row col"><span>Location</span><Vec value={o.location} onChange={(v) => set("location", v)} /></div>
-    <div class="row col"><span>Rotation °</span><Vec value={o.rotation} step={5} onChange={(v) => set("rotation", v)} /></div>
-    <div class="row col"><span>Scale</span><Vec value={o.scale} onChange={(v) => set("scale", v)} /></div>
+    <div class="row col"><span class="keyed">Location<KeyDot s={s} a={a} id={id} ch="location" /></span><Vec value={at.location} onChange={(v) => move("location", v)} /></div>
+    <div class="row col"><span class="keyed">Rotation °<KeyDot s={s} a={a} id={id} ch="rotation" /></span><Vec value={at.rotation} step={5} onChange={(v) => move("rotation", v)} /></div>
+    <div class="row col"><span class="keyed">Scale<KeyDot s={s} a={a} id={id} ch="scale" /></span><Vec value={at.scale} onChange={(v) => move("scale", v)} /></div>
     <label class="row"><span>Parent</span><ObjectPick s={s} value={o.parent} onChange={(v) => set("parent", v)}
       filter={(k) => k !== id} /></label>
     <label class="row"><span>Renders</span><input type="checkbox" checked={o.renderable} onChange={(e) => set("renderable", e.currentTarget.checked)} /></label>
@@ -417,8 +430,8 @@ function RendersPanel({ s, a }) {
   if (!list?.length) return null;
   return <Section title="Renders">
     {list.slice(-8).reverse().map((r) => <div class="row render-row" key={r.path + r.at}>
-      <span title={r.at}>{r.path.replace(/^renders\//, "")}</span>
-      <span class="muted">{r.resolution?.join("×")} · {Math.round(r.seconds)}s</span>
+      <span title={r.at}>{r.video ? "▶ " : ""}{r.path.replace(/^renders\//, "")}</span>
+      <span class="muted">{r.video ? `${r.frames} frames · ${r.fps} fps` : `${r.resolution?.join("×")} · ${Math.round(r.seconds)}s`}</span>
       {s.engine && <button onClick={() => a.openFile(r.path)}>Open</button>}
     </div>)}
   </Section>;
@@ -495,6 +508,92 @@ function Properties({ s, a }) {
   </div>;
 }
 
+// ─── time ────────────────────────────────────────────────────────────────────
+
+const INTERPS = [["bezier", "Bézier"], ["linear", "Linear"], ["constant", "Constant"]];
+
+// Blender's timeline, one row: transport, the frame, a scrub bar with the selection's keys,
+// the range and rate, auto-key, and the key at this frame's interpolation.
+function Timeline({ s, a }) {
+  const an = s.doc.animation;
+  const [f, setF] = useState(s.frame);                         // playback ticks here, not the whole app
+  useEffect(() => a.onFrame(setF), [a]);
+  useEffect(() => setF(s.frame), [s.frame]);
+  const track = useRef(null);
+  const sel = s.selection.filter((id) => s.doc.objects[id]);
+  const keys = useMemo(() => [...new Set(sel.flatMap((id) => keyFrames(s.doc.objects[id])))].sort((x, y) => x - y),
+                       [s.doc.objects, s.selection]);
+  const lo = an.frame_start, hi = Math.max(an.frame_end, an.frame_start + 1);
+  const pct = (x) => `${((Math.min(hi, Math.max(lo, x)) - lo) / (hi - lo)) * 100}%`;
+  const at = (e) => { const r = track.current.getBoundingClientRect(); return lo + ((e.clientX - r.left) / r.width) * (hi - lo); };
+  const scrub = (e) => {
+    if (e.button !== 0) return;
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    if (s.playing) a.pause();
+    a.setFrame(at(e), { quiet: true });
+    const move = (ev) => a.setFrame(at(ev), { quiet: true });
+    const up = () => { el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); a.settle(); };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+  };
+  const here = keys.includes(f) && !s.playing;
+  const interp = here ? sel.map((id) => Object.values(s.doc.objects[id].keys || {}).flat().find((k) => k[0] === f)?.[2])
+    .find(Boolean) : null;
+  const step = Math.max(1, Math.ceil((hi - lo) / 12 / 5) * 5);
+  const ticks = [];
+  for (let t = Math.ceil(lo / step) * step; t <= hi; t += step) ticks.push(t);
+  return <div class="timeline">
+    <div class="seg transport">
+      <button title="First frame (Shift ←)" onClick={() => a.setFrame(an.frame_start)}>⏮</button>
+      <button title="Previous key (↓)" onClick={() => a.jumpKey(-1)}>◂◆</button>
+      <button class={s.playing ? "on" : ""} title="Play / pause (Space) — Esc stops where it began" onClick={a.play}>{s.playing ? "❚❚" : "▶"}</button>
+      <button title="Next key (↑)" onClick={() => a.jumpKey(1)}>◆▸</button>
+      <button title="Last frame (Shift →)" onClick={() => a.setFrame(an.frame_end)}>⏭</button>
+    </div>
+    <span class="tl-frame" title="The current frame"><Num value={f} step={1} min={0} max={100000} digits={0} onChange={(v) => a.setFrame(v)} /></span>
+    <div class="tl-track" onPointerDown={scrub} title="Drag to scrub">
+      <div class="tl-in" ref={track}>
+        {ticks.map((t) => <span key={t} class="tick" style={{ left: pct(t) }}>{t}</span>)}
+        {keys.filter((k) => k >= lo && k <= hi).map((k) => <i key={k} class={`kd ${k === f ? "on" : ""}`} style={{ left: pct(k) }} />)}
+        <b class="playhead" style={{ left: pct(f) }} />
+      </div>
+    </div>
+    <div class="tl-range">
+      <label title="First frame">Start <Num value={an.frame_start} step={1} min={0} max={100000} digits={0} onChange={(v) => a.setAnimation("frame_start", v)} /></label>
+      <label title="Last frame">End <Num value={an.frame_end} step={1} min={0} max={100000} digits={0} onChange={(v) => a.setAnimation("frame_end", v)} /></label>
+      <label title="Frames a second">FPS <Num value={an.fps} step={1} min={1} max={120} digits={0} onChange={(v) => a.setAnimation("fps", v)} /></label>
+    </div>
+    <button class={`rec ${s.autokey ? "on" : ""}`} title="Auto-key: every change is keyed at this frame (moving something that already has keys always keys it)"
+      onClick={() => a.setAutokey(!s.autokey)}>●</button>
+    <button title="Key the selection's location, rotation and scale here (I) — Alt I removes" disabled={!sel.length}
+      onClick={() => a.insertKeys()}>◆ Key</button>
+    {here && <select value={interp || "bezier"} title="How the motion leaves this key" onChange={(e) => a.setInterpolation(e.currentTarget.value)}>
+      {INTERPS.map(([v, t]) => <option key={v} value={v}>{t}</option>)}</select>}
+    {s.engine && <button class="primary" disabled={!animated(s.doc).length || !!s.video}
+      title={animated(s.doc).length ? "Render the animation as an mp4 (Cycles, a chunk at a time)" : "Key something first"}
+      onClick={a.renderVideo}>Render video</button>}
+  </div>;
+}
+
+const clock = (secs) => (secs >= 90 ? `${Math.round(secs / 60)} min` : `${Math.max(1, Math.round(secs))} s`);
+
+// A video rendering: frames done, the time left (the server's estimate, counting down between
+// chunks), what it's waiting on, and Cancel.
+function VideoBar({ v, a }) {
+  const [, tick] = useState(0);
+  useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
+  const left = Math.max(0, (v.seconds_left || 0) - (Date.now() - v.at) / 1000);
+  const pct = v.total ? (v.done / v.total) * 100 : 0;
+  return <div class="videobar">
+    <span class="spin" />
+    <span>Rendering video{v.total ? ` · ${v.done}/${v.total} frames` : ""}{v.total ? ` · ${left > 0 ? `about ${clock(left)} left` : "nearly there"}` : ""}</span>
+    <span class="bar"><i style={{ width: `${pct}%` }} /></span>
+    {v.note && <span class="muted" title={v.note}>{v.note.length > 60 ? `${v.note.slice(0, 60)}…` : v.note}</span>}
+    <button title="Stop it — what's rendered is dropped" onClick={a.cancelVideo}>Cancel</button>
+  </div>;
+}
+
 // ─── shell ───────────────────────────────────────────────────────────────────
 
 export function Studio({ app }) {
@@ -519,6 +618,7 @@ export function Studio({ app }) {
       {panels && s.doc && <Outliner s={s} a={a} />}
       <div class="viewport" ref={host}>
         {s.busy && <div class="busy"><span class="spin" /><span>{s.busy}</span>{s.progress && <Progress p={s.progress} />}</div>}
+        {s.video && <VideoBar v={s.video} a={a} />}
         {!s.engine && s.doc && <div class="hint">Open the Studio from the chat to render and use Blender's tools.</div>}
         <button class="panels-toggle" onClick={() => setPanels(!panels)}>{panels ? "⤢" : "☰"}</button>
         {s.preview && <div class="preview">
@@ -531,6 +631,7 @@ export function Studio({ app }) {
       </div>
       {panels && s.doc && <Properties s={s} a={a} />}
     </div>
+    {s.doc && <Timeline s={s} a={a} />}
     {s.toast && <div class={`toast ${s.toast.kind}`}>{s.toast.text}</div>}
   </div>;
 }

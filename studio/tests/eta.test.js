@@ -22,6 +22,11 @@ describe("render time estimate", () => {
     expect(Math.abs(est - 51) / 51).toBeLessThan(0.25);
   });
 
+  it("a video's row — many frames' seconds — isn't a still", () => {
+    const rows = [...log([[1280, 720, 32, 60]]), { resolution: [1280, 720], samples: 16, seconds: 1800, frames: 120, video: true }];
+    expect(fit(rows)).toEqual(fit(log([[1280, 720, 32, 60]])));
+  });
+
   it("ignores rows it can't read", () => {
     expect(fit([null, { resolution: "x" }, { resolution: [10, 10], samples: 0, seconds: 3 }])).toEqual({ a: 1, b: 0.8 });
   });

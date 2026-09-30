@@ -16,6 +16,7 @@ addEventListener("keydown", (e) => {
   if (!s.doc) return;
   const k = e.code, ctrl = e.ctrlKey || e.metaKey;
   const handled = () => { e.preventDefault(); e.stopPropagation(); };
+  if (s.playing && k === "Escape") { a.pause(true); return handled(); }
   if (ctrl && k === "KeyZ") { e.shiftKey ? a.redo() : a.undo(); return handled(); }
   if (ctrl && k === "KeyY") { a.redo(); return handled(); }
   if (k === "Tab" && e.shiftKey && !ctrl) { a.edit.toggleSnap(); return handled(); }
@@ -25,6 +26,7 @@ addEventListener("keydown", (e) => {
       if (k === "Escape") { a.edit.cancelTool(); return handled(); }
       if (s.tool.kind === "knife" && (k === "Enter" || k === "NumpadEnter" || k === "Space")) { a.edit.knife(); return handled(); }
     }
+    if (k === "Space" && !ctrl) { a.play(); return handled(); }
     if (ctrl && k === "KeyR") { a.edit.startTool("loopcut"); return handled(); }
     if (ctrl && k === "KeyB") { runEditOp(a, "bevel"); return handled(); }
     if (ctrl && k === "KeyI") { a.edit.invert(); return handled(); }
@@ -41,6 +43,14 @@ addEventListener("keydown", (e) => {
   } else {
     if (ctrl && k === "KeyJ") { a.join(); return handled(); }
     if (ctrl) return;
+    // Time: I keys, Alt+I unkeys, Space plays; ←/→ step a frame (Shift: to the ends), ↑/↓ jump key to key.
+    if (k === "KeyI") { e.altKey ? a.deleteKeys() : a.insertKeys(); return handled(); }
+    if (k === "Space") { a.play(); return handled(); }
+    const an = s.doc.animation;
+    if (k === "ArrowLeft") { a.setFrame(e.shiftKey ? an.frame_start : s.frame - 1); return handled(); }
+    if (k === "ArrowRight") { a.setFrame(e.shiftKey ? an.frame_end : s.frame + 1); return handled(); }
+    if (k === "ArrowUp") { a.jumpKey(1); return handled(); }
+    if (k === "ArrowDown") { a.jumpKey(-1); return handled(); }
     if (k === "KeyX" || k === "Delete") { a.remove(); return handled(); }
     if (k === "KeyD" && e.shiftKey) { a.duplicate(); return handled(); }
     if (k === "KeyA" && e.shiftKey) { dispatchEvent(new CustomEvent("studio:open-menu", { detail: "Add" })); return handled(); }

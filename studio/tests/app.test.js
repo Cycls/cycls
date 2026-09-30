@@ -27,7 +27,12 @@ function host(scene, extra = {}) {
     ready: Promise.resolve(),
     read: async (p) => { if (!files.has(p)) throw new Error(`no ${p}`); return files.get(p); },
     write: async (p, text) => { writes.push(p); files.set(p, text); },
-    engine: async (op, payload) => { engineCalls.push({ op, payload: clone(payload) }); return engineImpl(op, payload, files); },
+    engine: async (op, payload) => {
+      // Every start asks for a video left running; that's `jobs`, not an engine call.
+      if (op === "video_jobs" && !engineImpl) return { jobs: [] };
+      engineCalls.push({ op, payload: clone(payload) });
+      return engineImpl(op, payload, files);
+    },
     onCommand: (fn) => { command = fn; return () => {}; },
     me: { set: () => {} },
   };
@@ -47,6 +52,7 @@ function fakeViewport() {
     setTool(t) { vp.tool = t; }, setSnap() {}, setProportional() {},
     knifeCrossings: () => vp.crossings || [],
     isGround: () => false,
+    pose(doc) { vp.posed = doc; }, draw() {},
   };
   return vp;
 }
@@ -380,5 +386,111 @@ describe("edit mode", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(h.engineCalls.find((c) => c.op === "apply").payload.params).toEqual({ id: "cube", op: "modifier_apply", index: 0 });
     expect(s.doc.objects.cube.modifiers.map((m) => m.type)).toEqual(["subsurf"]);
+  });
+});
+
+
+describe("animation in the app", () => {
+  const spinning = () => {
+    const d = scene();
+    d.objects.cube.keys = { location: [[1, [0, 0, 1], "bezier"], [60, [4, 0, 1], "bezier"]] };
+    return d;
+  };
+
+  it("draws the frame it's on, keys a move of an animated channel there, and moves a still one", async () => {
+    const { a, s, vp } = await started(spinning());
+    expect(s.frame).toBe(1);
+    a.setFrame(60);
+    expect(vp.posed.objects.cube.location).toEqual([4, 0, 1]);
+    a.setFrame(30);
+    a.setTransform("cube", { location: [2, 3, 1], rotation: [0, 0, 45], scale: [1, 1, 1] });
+    const cube = s.doc.objects.cube;
+    expect(cube.keys.location.map((k) => k[0])).toEqual([1, 30, 60]);
+    expect(cube.keys.location[1][1]).toEqual([2, 3, 1]);
+    expect(cube.rotation).toEqual([0, 0, 45]);                   // still: it just turns
+    expect(cube.keys.rotation).toBeUndefined();
+    expect(cube.location).toEqual([0, 0, 1]);                    // an animated channel rests at the first frame
+    expect(s.undo.at(-1).label).toBe("transform");
+  });
+
+  it("auto-key keys a still channel too, and a turn keeps counting past 180°", async () => {
+    const { a, s } = await started(spinning());
+    a.setAutokey(true);
+    a.setFrame(10);
+    a.setTransform("cube", { rotation: [0, 0, 170] });
+    a.setFrame(20);
+    a.setTransform("cube", { rotation: [0, 0, -170] });          // the gizmo's Euler wraps; the key doesn't
+    expect(s.doc.objects.cube.keys.rotation.map((k) => k[1][2])).toEqual([170, 190]);
+  });
+
+  it("I keys the selection where it is, Alt+I takes this frame's keys away", async () => {
+    const { a, s } = await started(scene());
+    a.select(["cube"]);
+    a.setFrame(12);
+    a.insertKeys();
+    expect(Object.keys(s.doc.objects.cube.keys)).toEqual(["location", "rotation", "scale"]);
+    expect(s.doc.objects.cube.keys.location).toEqual([[12, [0, 0, 1], "bezier"]]);
+    a.setInterpolation("linear");
+    expect(s.doc.objects.cube.keys.scale[0][2]).toBe("linear");
+    a.deleteKeys();
+    expect(s.doc.objects.cube.keys).toBeUndefined();
+  });
+
+  it("the timeline's range pins what rests where the keys put its first frame", async () => {
+    const { a, s } = await started(spinning());
+    a.setAnimation("frame_start", 60);
+    expect(s.doc.objects.cube.location).toEqual([4, 0, 1]);
+    a.setAnimation("frame_end", 20);                              // before the start: the start follows
+    expect([s.doc.animation.frame_start, s.doc.animation.frame_end]).toEqual([20, 20]);
+  });
+
+  it("drives a video a chunk at a time, waits when told to, then joins it", async () => {
+    const { h, a, s } = await started(spinning());
+    const job = { id: "v-0000abcd", status: "running", done: 0, total: 60, seconds_left: 300, by: "app" };
+    let chunks = 0;
+    h.onEngine((op) => {
+      if (op === "video_start") return { job };
+      if (op === "video_chunk") {
+        chunks++;
+        if (chunks === 2) return { job: { ...job, done: 6 }, wait: 5, reason: "the Studio engine is busy" };
+        const done = Math.min(60, chunks * 30);
+        return { job: { ...job, done }, chunk: chunks, wait: done === 60 ? 0 : undefined };
+      }
+      if (op === "video_finish") return { job: { ...job, status: "done", done: 60 }, path: "renders/animation.mp4", poster: "data:image/jpeg;base64,x" };
+      throw new Error(op);
+    });
+    await a.renderVideo();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.engineCalls.find((c) => c.op === "video_start").payload.scene.objects.cube.keys).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(6000);                      // the busy wait
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.engineCalls.filter((c) => c.op === "video_chunk")).toHaveLength(3);
+    expect(h.engineCalls.at(-1).op).toBe("video_finish");
+    expect(s.preview).toMatchObject({ kind: "Video", path: "renders/animation.mp4" });
+    expect(s.video).toBeNull();
+  });
+
+  it("an agent's video, or one left running, is picked up; Cancel stops it", async () => {
+    const d = spinning();
+    const h = host(d);
+    const job = { id: "v-0000beef", status: "running", done: 30, total: 60, seconds_left: 100 };
+    let release;
+    h.onEngine((op) => {
+      if (op === "video_jobs") return { jobs: [job] };
+      if (op === "video_chunk") return new Promise((r) => { release = r; });
+      if (op === "video_cancel") return { job: { ...job, status: "cancelled" } };
+      throw new Error(op);
+    });
+    const vp = fakeViewport();
+    const app = createApp((el, hooks) => { vp.hooks = hooks; return vp; });
+    await app.start({});
+    await vi.advanceTimersByTimeAsync(1);
+    expect(app.state.video).toMatchObject({ id: "v-0000beef", done: 30 });
+    await app.actions.cancelVideo();
+    expect(app.state.video).toBeNull();
+    release({ job: { ...job, done: 60 }, chunk: 2, wait: 0 });   // the chunk in flight comes back: dropped
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.engineCalls.map((c) => c.op)).toEqual(["video_jobs", "video_chunk", "video_cancel"]);
+    expect(app.state.video).toBeNull();
   });
 });

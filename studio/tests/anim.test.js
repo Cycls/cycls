@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { sample, posed, setKeys, removeKeys, keyFrames, turntable, pinStill } from "../src/anim.js";
 import { SCHEMA, clone } from "../src/doc.js";
 import twin from "./fixtures/anim_twin.json";
+import golden from "./fixtures/anim_golden.json";
 
 // scene.py sampled these (tests/fixtures/anim_twin.json, regenerated from scene.sample):
 // the twin must land on the same numbers, or a save would read as a change.
@@ -11,6 +12,21 @@ describe("the evaluator is scene.py's", () => {
       for (const [f, v] of samples) {
         const got = sample(keys, f);
         for (let c = 0; c < 3; c++) expect(Math.abs(got[c] - v[c])).toBeLessThan(1e-9);
+      }
+    });
+  }
+});
+
+// Blender keyed these through the engine's real build and sampled them (cycls-render's
+// `studio_try.py dev anim`): an empty's location, and another's rotation in degrees. float32.
+describe("the evaluator lands on Blender's own samples", () => {
+  for (const [name, c] of Object.entries(golden)) {
+    it(name, () => {
+      for (const ch of ["location", "rotation"]) {
+        for (const [f, want] of c[ch]) {
+          const got = sample(c.keys, f);
+          for (let i = 0; i < 3; i++) expect(Math.abs(got[i] - want[i])).toBeLessThanOrEqual(1e-4 + 1e-6 * Math.abs(want[i]));
+        }
       }
     });
   }

@@ -16,7 +16,7 @@ import time
 
 from fastapi import APIRouter, HTTPException, Request
 
-from . import APP_DIR, SLUG, engine, store
+from . import APP_DIR, SLUG, engine, store, video
 from . import scene as S
 from .tool import EXPORT_EXTS, _free, _slug
 
@@ -103,6 +103,31 @@ async def _open(ws, body):
     return {"ok": True, "open": path}
 
 
+VIDEO_OPS = {"video_start", "video_chunk", "video_finish", "video_cancel", "video_jobs"}
+
+
+async def _video(ws, op, body):
+    """The app drives a video job: start one, render it a chunk at a time, join it, cancel it,
+    or find the ones still going (docs/notes/studio.md, Video)."""
+    params = body.get("params") or {}
+    if not isinstance(params, dict):
+        raise HTTPException(400, "params must be an object")
+    try:
+        if op == "video_jobs":
+            return {"ok": True, "jobs": await video.jobs(ws)}
+        if op == "video_start":
+            doc = S.normalize(body["scene"]) if body.get("scene") is not None else await store.load(ws)
+            return {"ok": True, "job": await video.start(ws, doc, params, by="app")}
+        jid = params.get("job")
+        if op == "video_chunk":
+            return {"ok": True, **await video.chunk(ws, jid)}
+        if op == "video_finish":
+            return {"ok": True, **await video.finish(ws, jid)}
+        return {"ok": True, **await video.cancel(ws, jid)}
+    except (video.VideoError, S.SceneError, engine.EngineError) as e:
+        return {"ok": False, "error": str(e)}
+
+
 def studio_router(ws_dep, user_dep):
     r = APIRouter()
 
@@ -121,6 +146,11 @@ def studio_router(ws_dep, user_dep):
         op = body.get("op")
         if op == "open":
             return await _open(ws, body)
+        if op in VIDEO_OPS:
+            refusal = _budget(ws.subject, op)
+            if refusal:
+                raise HTTPException(429, refusal)
+            return await _video(ws, op, body)
         if op not in engine.APP_OPS:
             raise HTTPException(400, f"op: one of {', '.join(sorted(engine.APP_OPS))}")
         params = body.get("params") or {}

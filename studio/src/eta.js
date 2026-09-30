@@ -1,6 +1,8 @@
 // How long a Cycles render will take, from this workspace's own renders (data/renders.json
 // logs resolution, samples and Blender's seconds): seconds ≈ a + b · (pixels × samples / 1e6),
 // least squares over the recent ones, or a prior until there are some. Plus the round trip.
+// A video's row is many frames' seconds, so stills are fitted on stills alone (a video's
+// own estimate comes from the server, which measures its frames as they render).
 
 const PRIOR = { a: 1, b: 0.8 };        // 1280×720 at 32 samples ≈ 24 s on the 8-core engine
 const TRIP = 4;                        // upload, scene build, preview, answer
@@ -11,7 +13,7 @@ export function workOf(width, height, samples) {
 
 export function fit(history) {
   const pts = (Array.isArray(history) ? history : [])
-    .filter((r) => r && Array.isArray(r.resolution) && r.samples > 0 && r.seconds > 0)
+    .filter((r) => r && !r.video && Array.isArray(r.resolution) && r.samples > 0 && r.seconds > 0)
     .slice(-12)
     .map((r) => [workOf(r.resolution[0], r.resolution[1], r.samples), r.seconds]);
   if (!pts.length) return PRIOR;

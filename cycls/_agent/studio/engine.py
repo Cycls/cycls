@@ -9,7 +9,9 @@ import pathlib
 from . import engine_name, renderer_name
 
 TIMEOUTS = {"evaluate": 90, "apply": 150, "snapshot": 150, "render": 660, "export": 210,
-            "script": 150, "import": 330, "selftest": 150, "ping": 60, "texture": 90}
+            "script": 150, "import": 330, "selftest": 150, "ping": 60, "texture": 90,
+            "video": 660, "encode": 210}
+LONG_OPS = {"render", "video", "encode"}      # a separate renderer takes these, when there is one
 APP_OPS = {"evaluate", "apply", "snapshot", "render", "export"}      # what the Studio app may ask for
 AGENT_OPS = APP_OPS | {"script", "import", "texture"}
 
@@ -53,7 +55,7 @@ async def call(op, scene, *, blobs=None, params=None, ws=None):
     """One engine op. With `ws`, the mesh and image files go by name first: the engine keeps
     what it has been sent (per workspace), answers with what it's missing, and only those
     follow — a snapshot after a lighting change sends none of a big scene's meshes."""
-    name = renderer_name() if op == "render" else engine_name()
+    name = renderer_name() if op in LONG_OPS else engine_name()
     if not name:
         raise EngineError("Studio isn't configured (CYCLS_STUDIO_ENGINE)")
     blobs = blobs or {}

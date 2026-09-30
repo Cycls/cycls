@@ -12,7 +12,7 @@ import pathlib
 import re
 
 
-from . import APP_DIR, SLUG, engine, install, store
+from . import APP_DIR, SLUG, engine, install, store, video
 from . import scene as S
 
 APP_ENTRY = f"{APP_DIR}/index.html"
@@ -32,7 +32,11 @@ STUDIO_TOOL = {
         "- edit {ops, intent, snapshot?}: change the scene with a list of ops, applied atomically "
         "(all or none). Batch a whole scene into ONE edit. `snapshot: true` also returns a quick preview.\n"
         "- snapshot: a fast low-quality Cycles preview (~5 s) of the current scene, for checking your work.\n"
-        "- render {name, resolution?, samples?}: the final image (~25-60 s), saved to renders/ and opened.\n"
+        "- render {name, resolution?, samples?}: the final image (~25-60 s), saved to renders/ and opened. "
+        "With `animation: true`: the animation as an mp4 — the Studio app renders it a chunk at a time "
+        "(~15 s a frame at 1280x720 and 16 samples, so minutes), then renders/<name>.mp4 opens. At most 240 "
+        "frames, 1280x720, 64 samples; one video at a time.\n"
+        "- snapshot {frame?}: as above; `frame` looks at an animation's pose there.\n"
         "- apply {id, operation, params?}: a destructive mesh operation by real Blender: modifier_apply "
         "{index}, convert, bevel {selection, width, segments}, subdivide {selection, cuts}, inset "
         "{selection, thickness}, triangulate, merge_by_distance, recalc_normals, remesh {voxel_size}, "
@@ -70,6 +74,12 @@ STUDIO_TOOL = {
         "- world {kind: hdri|color, hdri, strength, color, rotation} · render {resolution, samples, camera, transparent}\n"
         "- preset {studio: {lighting: studio-3point|softbox|dramatic|rim, backdrop: hex, camera: "
         "front|front-3/4|side|top|low|hero}} — a photo-studio sweep, light rig, framed camera and world.\n"
+        "- turntable {target?, turns?, direction? (ccw|cw), seconds?, fps?}: spin the subjects (or target) on the "
+        "spot, a seamless loop, under a new empty (5 s unless the timeline is set).\n"
+        "- keyframe {id, frame, location?, rotation?, scale?, interpolation? (bezier|linear|constant)}: key "
+        "channels at a frame — the values given, or where the object is then (none given: all three). Key the "
+        "start pose, then the changes at later frames. A channel with keys changes only by keyframe, not set.\n"
+        "- unkey {id, frame?, channel?} · animation {fps?, frame_start?, frame_end?, seconds?}: the timeline.\n"
         "Use id \"selected\" for whatever the user has selected in the Studio.\n\n"
         "Limits: materials are Principled surfaces with optional image maps (base colour — its transparency "
         "too — roughness, normal) on the object's UVs. Other node networks come back flattened to their plain "
@@ -87,6 +97,8 @@ STUDIO_TOOL = {
             "name": {"type": "string", "description": "render/export: file name"},
             "resolution": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2},
             "samples": {"type": "integer", "minimum": 1, "maximum": 256},
+            "animation": {"type": "boolean", "description": "render: the animation as an mp4 video"},
+            "frame": {"type": "integer", "description": "snapshot: the frame to look at (animations)"},
             "id": {"type": "string", "description": "apply: the object"},
             "operation": {"type": "string", "description": "apply: which operation"},
             "params": {"type": "object", "description": "apply: the operation's parameters"},
@@ -107,6 +119,7 @@ Build scenes with the `studio` tool; the user watches them appear in the Studio 
 - "this"/"that"/"it" usually means what the user selected: use id "selected". `inspect` shows the selection.
 - Check your work with `snapshot` (5 s) before a final `render` (25-60 s). Look at the preview: framing, overlaps, floating objects, materials.
 - An image the user gives you (a logo, a label, a photo): `add {image: {path}}` for a flat sign or label in front of a surface, or a material's `base_color_texture: {path}` to wrap it round an object. Tile patterns with `texture_scale`.
+- Motion: `turntable` for a product spin; `keyframe` for moves (key the start, then later frames). `snapshot {frame}` checks a pose; `render {animation: true}` makes the video — say roughly how long it will take, and don't wait for it.
 - Use `script` only for what ops can't express; never edit apps/studio/data/ files directly.
 - After a render, describe what you made in a sentence and offer one concrete variation."""
 
@@ -340,8 +353,10 @@ async def _edit(ws, inp):
 
 async def _snapshot(ws, inp):
     doc = await store.load(ws)
-    r = await engine.call("snapshot", doc, blobs=store.blobs(ws, doc, "snapshot"),
-                          params={"samples": inp.get("samples") or 12}, ws=ws)
+    params = {"samples": inp.get("samples") or 12}
+    if isinstance(inp.get("frame"), int):
+        params["frame"] = inp["frame"]
+    r = await engine.call("snapshot", doc, blobs=store.blobs(ws, doc, "snapshot"), params=params, ws=ws)
     jpg = r["files"]["preview.jpg"]
     ui = _command({"type": "snapshot", "rev": doc["rev"],
                    "preview": "data:image/jpeg;base64," + base64.b64encode(jpg).decode()})
@@ -351,7 +366,21 @@ async def _snapshot(ws, inp):
             "_ui": ui}
 
 
+async def _video(ws, inp):
+    doc = await store.load(ws)
+    job = await video.start(ws, doc, {k: inp[k] for k in ("resolution", "samples", "name") if inp.get(k)}, by="agent")
+    (a, b), (w, h) = job["frames"], job["resolution"]
+    ack = (f"Started video {job['id']}: frames {a}–{b} ({job['total']} frames at {job['fps']} fps, {w}x{h}, "
+           f"{job['samples']} samples), about {max(1, round(job['seconds_left'] / 60))} min. The Studio (open on "
+           "the canvas now) renders it a chunk at a time while it's open; when it's done, "
+           f"renders/{job['name']}.mp4 opens there. `inspect` says how far it is. Tell the user it's rendering and "
+           "roughly how long — don't wait for it.")
+    return {"_model": ack, "_ui": [_studio_canvas(), _command({"type": "video", "job": job["id"]})]}
+
+
 async def _render(ws, inp):
+    if inp.get("animation"):
+        return await _video(ws, inp)
     doc = await store.load(ws)
     params = {k: inp[k] for k in ("resolution", "samples") if inp.get(k)}
     r = await engine.call("render", doc, blobs=store.blobs(ws, doc, "render"), params=params, ws=ws)
@@ -469,6 +498,11 @@ async def _import(ws, inp):
         if res.get("world") and before["world"] == S.new_scene()["world"]:
             after = S.normalize({**after, "world": {**after["world"], **res["world"]}})
             said.append("took the file's world")
+        # Its timeline, for its keys — when nothing here moves yet.
+        if res.get("animation") and S.animated(after) and not S.animated(before):
+            after = S.normalize({**after, "animation": res["animation"]})
+            a = after["animation"]
+            said.append(f"its animation came along (frames {a['frame_start']}–{a['frame_end']} at {a['fps']} fps)")
         cam = dict(zip(frag["objects"], added)).get(res.get("camera"))
         if cam:
             said.append(f"the file's camera is {cam!r} — `render {{camera: \"{cam}\"}}` looks through it")
@@ -505,17 +539,35 @@ async def _revert(ws, inp):
     return {"_model": f"Restored the scene as it was at rev {rev} (now rev {saved['rev']}).", "_ui": event}
 
 
+async def _videos_note(ws):
+    jobs = await video.jobs(ws)
+    if not jobs:
+        return ""
+    j = jobs[0]
+    if j["status"] == "running":
+        return (f"\nVideo {j['id']} is rendering: {j['done']}/{j['total']} frames, about "
+                f"{max(1, round(j['seconds_left'] / 60))} min left (it renders while the Studio is open).")
+    if j["status"] == "done":
+        return f"\nThe last video is {j['path']}."
+    if j["status"] == "failed":
+        return f"\nThe last video failed: {j.get('error', 'unknown error')}"
+    return ""
+
+
 async def _inspect(ws, inp):
     doc = await store.load(ws)
     view = await _view(ws)
-    return S.summary(doc, _picked(view)) + _edit_note(view, doc)
+    return S.summary(doc, _picked(view)) + _edit_note(view, doc) + await _videos_note(ws)
+
+
+def _studio_canvas():
+    return {"type": "ui", "action": "open_canvas", "path": APP_ENTRY, "name": "Studio", "icon": install.ICON}
 
 
 async def _open(ws, inp):
     # What's already there, so the model doesn't greet a finished scene as an empty one.
-    return {"type": "ui", "action": "open_canvas", "path": APP_ENTRY, "name": "Studio", "icon": install.ICON,
-            "ack": "Opened the Studio on the canvas; your edits appear there as you go. It holds:\n"
-                   + await _inspect(ws, inp)}
+    return {**_studio_canvas(), "ack": "Opened the Studio on the canvas; your edits appear there as you go. It holds:\n"
+                                       + await _inspect(ws, inp)}
 
 
 _ACTIONS = {"edit": _edit, "snapshot": _snapshot, "render": _render, "apply": _apply, "script": _script,
@@ -535,7 +587,7 @@ async def run(inp, ws):
         return f"Error: {e}"
     except S.SceneError as e:
         return f"Error: {e}"
-    except engine.EngineError as e:
+    except (engine.EngineError, video.VideoError) as e:
         return f"Error: {e}"
     if installed == "installed" and isinstance(out, str):
         out += " (The Studio app was just added to the Apps tab.)"

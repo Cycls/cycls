@@ -8,7 +8,7 @@ import cycls
 import pytest
 
 from cycls._agent import tools
-from cycls._agent.studio import install, store, tool
+from cycls._agent.studio import install, store, tool, video
 from cycls._agent.studio import scene as S
 from cycls._app.db import workspace
 
@@ -105,6 +105,15 @@ class FakeEngine:
                 ext = kw["params"]["format"]
                 return {"ok": True, "result": {"file": f"export.{ext}", "format": ext},
                         "files": {f"export.{ext}": b"model-bytes"}}
+            if op == "video":
+                a, b = kw["params"]["frames"]
+                return {"ok": True, "result": {"segment": "segment.mp4", "frames": [a, b], "render_seconds": 4.0 * (b - a + 1),
+                                               "seconds_per_frame": 4.0, "resolution": kw["params"]["resolution"]},
+                        "files": {"segment.mp4": f"[{a}-{b}]".encode(),
+                                  **({"poster.jpg": JPG} if kw["params"].get("poster") else {})}}
+            if op == "encode":
+                segs = [kw["blobs"][f"segments/s-{i:03d}.mp4"] for i in range(kw["params"]["segments"])]
+                return {"ok": True, "result": {"video": "video.mp4", "frames": 0}, "files": {"video.mp4": b"".join(segs)}}
             raise AssertionError(op)
         return fn
 
@@ -163,10 +172,10 @@ class TestInstall:
     def test_fresh_install(self, root):
         assert asyncio.run(install.ensure_installed(_ws(root))) == "installed"
         app = root / "apps/studio"
-        assert (app / "index.html").read_text().startswith("<!doctype html>")
+        assert (app / "index.html").read_text(encoding="utf-8").startswith("<!doctype html>")
         manifest = json.loads((app / "app.json").read_text())
         assert manifest["name"] == "Studio" and manifest["studio"]["version"] == install.bundle()[1]
-        assert "Change it with the `studio`" in (app / "README.md").read_text().replace("**", "")
+        assert "Change it with the `studio`" in (app / "README.md").read_text(encoding="utf-8").replace("**", "")
         assert S.normalize(scene(root)) == S.new_scene()
 
     def test_idempotent_and_upgrades_the_bundle_only(self, root, tmp_path, monkeypatch):
@@ -544,6 +553,175 @@ class TestRoute:
         monkeypatch.setattr(route, "CALLS_PER_MINUTE", 3)
         codes = [client.post("/apps/studio/engine", json={"op": "snapshot"}).status_code for _ in range(4)]
         assert codes == [200, 200, 200, 429]
+
+
+# ─── video ──────────────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def fresh_video_state():
+    video._slots = None
+    video._locks.clear()
+    video._frames.clear()
+    yield
+    video._slots = None
+
+
+def _spinning(root):
+    """A saved scene with a five-second turntable (120 frames at 24 fps)."""
+    run({"action": "edit", "ops": [{"op": "turntable"}]}, root)
+    return scene(root)
+
+
+class TestVideo:
+    @pytest.fixture
+    def client(self, root, engine):
+        from fastapi import Depends, FastAPI
+        from fastapi.testclient import TestClient
+        from cycls._agent.studio import route
+        route._calls.clear(); route._renders.clear(); route._rendering.clear()
+        ws = _ws(root)
+        app = FastAPI()
+        app.include_router(route.studio_router(Depends(lambda: ws), Depends(lambda: object())))
+        asyncio.run(install.ensure_installed(ws))
+        return TestClient(app)
+
+    @staticmethod
+    def op(client, op, **params):
+        return client.post("/apps/studio/engine", json={"op": op, "params": params}).json()
+
+    def test_a_still_scene_has_nothing_to_render(self, client):
+        r = self.op(client, "video_start")
+        assert r == {"ok": False, "error": r["error"]} and "nothing moves" in r["error"]
+
+    def test_chunks_sized_from_the_measured_pace_then_joined_in_order(self, client, root, engine):
+        _spinning(root)
+        job = self.op(client, "video_start", name="Spin")["job"]
+        assert job["frames"] == [1, 120] and job["resolution"] == [1280, 720] and job["samples"] == 16
+        assert job["status"] == "running" and job["done"] == 0 and job["seconds_left"] > 0
+        sizes = []
+        while True:
+            r = self.op(client, "video_chunk", job=job["id"])
+            assert r["ok"], r
+            if "chunk" not in r:
+                break
+            call = engine.calls[-1]
+            assert call["op"] == "video" and call["params"]["poster"] == (r["chunk"] == 0)
+            sizes.append(call["params"]["frames"])
+        # the first chunk is short (it measures); then ~240 s of Blender at the measured 4 s a frame
+        assert sizes == [[1, 6], [7, 66], [67, 120]] and r["job"]["done"] == 120
+        assert r["wait"] == 0                                     # nothing left: finish it
+        seg = root / "apps/studio/data/jobs" / job["id"]
+        assert sorted(p.name for p in seg.glob("s-*.mp4")) == ["s-000.mp4", "s-001.mp4", "s-002.mp4"]
+        done = self.op(client, "video_finish", job=job["id"])
+        assert done["path"] == "renders/spin.mp4" and done["open"] == "renders/spin.mp4"
+        assert done["poster"].startswith("data:image/jpeg;base64,") and done["job"]["status"] == "done"
+        assert (root / "renders/spin.mp4").read_bytes() == b"[1-6][7-66][67-120]"
+        log = json.loads((root / "apps/studio/data/renders.json").read_text())[-1]
+        assert log["video"] is True and log["frames"] == 120 and log["path"] == "renders/spin.mp4"
+        assert not list(seg.glob("s-*.mp4")) and not (seg / "scene.json").exists()
+        assert self.op(client, "open", path="renders/spin.mp4") == {"ok": True, "open": "renders/spin.mp4"}
+        assert self.op(client, "video_jobs")["jobs"][0]["path"] == "renders/spin.mp4"
+
+    def test_the_agent_starts_it_and_the_app_is_told(self, root, engine):
+        _spinning(root)
+        out = run({"action": "render", "animation": True, "name": "loop"}, root)
+        assert "Started video v-" in _text(out) and "don't wait" in _text(out)
+        opened, cmd = _uis(out)
+        assert opened["action"] == "open_canvas" and opened["path"] == "apps/studio/index.html"
+        assert cmd["command"]["type"] == "video" and cmd["command"]["job"].startswith("v-")
+        assert "is rendering: 0/120 frames" in run({"action": "inspect"}, root)
+        again = run({"action": "render", "animation": True}, root)
+        assert again.startswith("Error: a video is already rendering")
+
+    def test_the_scene_is_the_one_it_started_with(self, client, root, engine):
+        doc = _spinning(root)
+        doc["objects"]["cube"]["name"] = "Unsaved in the app"
+        jid = client.post("/apps/studio/engine", json={"op": "video_start", "scene": doc}).json()["job"]["id"]
+        run({"action": "edit", "ops": [{"op": "delete", "id": "cube"}]}, root)       # the agent carries on meanwhile
+        self.op(client, "video_chunk", job=jid)
+        assert engine.calls[-1]["scene"]["objects"]["cube"]["name"] == "Unsaved in the app"
+
+    def test_cancel_frees_the_slot_and_drops_a_late_chunk(self, client, root, engine, monkeypatch):
+        _spinning(root)
+        jid = self.op(client, "video_start")["job"]["id"]
+        real = video.engine.call
+
+        async def cancelled_meanwhile(*a, **kw):
+            r = await real(*a, **kw)
+            await video.cancel(_ws(root), jid)
+            return r
+        monkeypatch.setattr(video.engine, "call", cancelled_meanwhile)
+        r = self.op(client, "video_chunk", job=jid)
+        assert r["job"]["status"] == "cancelled" and "chunk" not in r
+        assert not (root / "apps/studio/data/jobs" / jid).exists()
+        monkeypatch.setattr(video.engine, "call", real)
+        assert self.op(client, "video_start")["ok"]
+
+    def test_a_stale_claim_is_taken_again_and_three_failures_end_it(self, client, root, engine, monkeypatch):
+        _spinning(root)
+        jid = self.op(client, "video_start")["job"]["id"]
+        path = root / f"apps/studio/data/jobs/{jid}.json"
+        job = json.loads(path.read_text())
+        job["chunks"] = [{"frames": [1, 6], "state": "claimed", "at": 0, "fails": 0}]       # a tab closed mid-chunk
+        job["next"] = 7
+        path.write_text(json.dumps(job))
+        self.op(client, "video_chunk", job=jid)
+        assert engine.calls[-1]["params"]["frames"] == [1, 6]
+        engine.fail = "Blender crashed"
+        r1, r2 = self.op(client, "video_chunk", job=jid), self.op(client, "video_chunk", job=jid)
+        assert r1["wait"] and r1["reason"] == "Blender crashed" and r2["job"]["status"] == "running"
+        r3 = self.op(client, "video_chunk", job=jid)
+        assert r3["job"]["status"] == "failed" and r3["error"] == "Blender crashed"
+        assert "The last video failed: Blender crashed" in run({"action": "inspect"}, root)
+
+    def test_an_hours_frames_then_it_waits(self, client, root, engine, monkeypatch):
+        monkeypatch.setattr(video, "FRAMES_PER_HOUR", 10)
+        _spinning(root)
+        jid = self.op(client, "video_start")["job"]["id"]
+        assert "chunk" in self.op(client, "video_chunk", job=jid)               # 6 frames
+        r = self.op(client, "video_chunk", job=jid)
+        assert r["wait"] >= 60 and "this hour" in r["reason"]
+        assert json.loads((root / f"apps/studio/data/jobs/{jid}.json").read_text())["next"] == 7   # not claimed
+
+    def test_busy_engine_is_a_wait(self, client, root, engine, monkeypatch):
+        monkeypatch.setattr(video, "SLOT_WAIT", 0.05)
+        _spinning(root)
+        jid = self.op(client, "video_start")["job"]["id"]
+
+        async def held():
+            sem = video._slots_now()
+            await sem.acquire()
+            try:
+                return await video.chunk(_ws(root), jid)
+            finally:
+                sem.release()
+        video._slots = None
+        r = asyncio.run(held())
+        assert r["wait"] == 30 and "busy" in r["reason"]
+        video._slots = None
+        assert "chunk" in self.op(client, "video_chunk", job=jid)                 # the same frames, next time
+        assert engine.calls[-1]["params"]["frames"] == [1, 6]
+
+    def test_limits(self, client, root):
+        run({"action": "edit", "ops": [{"op": "turntable", "seconds": 20}]}, root)
+        r = self.op(client, "video_start")
+        assert not r["ok"] and "at most 240" in r["error"]
+        r = self.op(client, "video_start", frames=[1, 48], resolution=[1920, 1080], samples=500)
+        assert r["job"]["resolution"] == [1280, 720] and r["job"]["samples"] == 64
+
+    def test_a_job_keeps_its_scenes_mesh_files(self, root, engine):
+        ws = _ws(root)
+        run({"action": "edit", "ops": [{"op": "turntable"}]}, root)
+        doc = scene(root)
+        store.write_mesh(ws, "m-aaaaaaaaaaaa", '{"format": "cycls.mesh"}')
+        doc["meshes"]["cube"] = {"data": "meshes/m-aaaaaaaaaaaa.json", "verts": 8, "faces": 6,
+                                 "bbox": [[-1, -1, -1], [1, 1, 1]]}
+        asyncio.run(video.start(ws, doc))
+        mesh = root / "apps/studio/data/meshes/m-aaaaaaaaaaaa.json"
+        import os
+        os.utime(mesh, (0, 0))                                                    # old enough to sweep
+        run({"action": "edit", "ops": [{"op": "set", "id": "cube", "name": "x"}]}, root)
+        assert mesh.exists()
 
 
 def test_route_mounts_only_when_configured(monkeypatch):

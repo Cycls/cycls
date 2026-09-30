@@ -24,12 +24,15 @@ A Blender-style 3D scene, rendered by real Blender. **Change it with the `studio
 tool, not by editing these files** — the tool validates every change, keeps the
 open app in sync and lets a change be reverted.
 
-- `data/scene.json` — the scene document (format `cycls.studio.scene`, version 1).
+- `data/scene.json` — the scene document (format `cycls.studio.scene`, version 3).
   Z up, metres, angles in degrees (Euler XYZ), colours as sRGB hex. `objects`,
-  `meshes` and `materials` are maps keyed by id; `rev` counts saves.
-- `data/meshes/m-<hash>.json` — explicit meshes (base64 buffers), immutable.
+  `meshes`, `materials` and `textures` are maps keyed by id; `animation` is the
+  timeline and an object's `keys` its motion; `rev` counts saves.
+- `data/meshes/m-<hash>.json`, `data/textures/t-<hash>.json` — explicit meshes and
+  images (base64), immutable.
 - `data/history/<rev>.json` — the scenes the last agent edits replaced.
-- `data/renders.json` — the renders made from this scene (the images are in `renders/`).
+- `data/renders.json` — the renders made from this scene (images and videos are in `renders/`).
+- `data/jobs/` — videos rendering, a chunk at a time, while the Studio is open.
 """
 
 

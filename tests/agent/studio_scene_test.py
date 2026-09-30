@@ -429,7 +429,23 @@ def test_add_infers_light_camera_and_text_types():
 
 # ─── animation (version 3) ──────────────────────────────────────────────────
 
+GOLDEN = pathlib.Path(__file__).resolve().parents[2] / "studio/tests/fixtures/anim_golden.json"
+
+
 class TestAnimation:
+    def test_the_evaluator_lands_on_blenders_own_samples(self):
+        """Blender keyed each set through the engine's real build (an empty's location, and
+        another's rotation in degrees, through radians) and sampled it: cycls-render's
+        `studio_try.py dev anim` regenerates the file. Blender works in float32."""
+        import json
+        golden = json.loads(GOLDEN.read_text())
+        assert {"ease", "mixed", "turntable", "single"} <= set(golden)
+        for name, c in golden.items():
+            for ch in ("location", "rotation"):
+                for f, want in c[ch]:
+                    got = S.sample(c["keys"], f)
+                    assert all(abs(g - w) <= 1e-4 + 1e-6 * abs(w) for g, w in zip(got, want)), (name, ch, f, got, want)
+
     def test_a_version_2_scene_reads_with_a_still_timeline(self):
         v2 = {**S.new_scene(), "version": 2}
         v2.pop("animation")

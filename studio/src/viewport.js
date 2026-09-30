@@ -308,7 +308,7 @@ export class Viewport {
     this.headlight.visible = shading === "solid";
     for (const id of [...this.nodes.keys()]) if (!(id in doc.objects)) this.drop(id);
     for (const [id, o] of Object.entries(doc.objects)) {
-      const sig = { o: { ...o, location: 0, rotation: 0, scale: 0, parent: 0 },
+      const sig = { o: { ...o, location: 0, rotation: 0, scale: 0, parent: 0, keys: 0 },
                     m: o.mesh ? doc.meshes[o.mesh] : null, mat: (o.materials || []).map((mid) => mid && doc.materials[mid]),
                     ev: this.evaluated.get(id)?.key ?? null };
       if (!this.nodes.has(id) || !deepEqual(this.sigs.get(id), sig)) {
@@ -331,6 +331,7 @@ export class Viewport {
       const parent = o.parent && this.nodes.get(o.parent) ? this.nodes.get(o.parent) : this.root;
       if (node.parent !== parent) parent.add(node);
     }
+    this.findMovers(doc);
     if (this.edit) this.attachEdit();
     this.rebatch(doc);
     if (this.through && !this.throughCamera(doc)) this.leaveCamera();      // camera view follows the camera
@@ -338,6 +339,36 @@ export class Viewport {
     this.scene.background = shading === "material" ? this.worldBackground : GREY;      // the world, as it renders
     this.shadowRig(doc);
     this.highlight();
+    this.touch();
+  }
+
+  // What an animation moves: keyed objects, and everything they carry. They're never drawn
+  // batched (a batch's matrices are baked), and playback touches only them.
+  findMovers(doc) {
+    this.animatedIds = Object.keys(doc.objects).filter((id) => doc.objects[id].keys);
+    const movers = new Set(this.animatedIds);
+    if (movers.size) {
+      for (const id of Object.keys(doc.objects)) {
+        for (let p = doc.objects[id].parent, n = 0; p && n < 64; p = doc.objects[p]?.parent, n++) {
+          if (movers.has(p)) { movers.add(id); break; }
+        }
+      }
+    }
+    this.movers = movers;
+  }
+
+  // Playback and scrubbing: the keyed objects' transforms at this frame, nothing rebuilt and
+  // nothing re-baked (the probe and the lamp rig wait for the next full sync); the shadow maps
+  // redraw, and the camera view rides an animated camera.
+  pose(doc) {
+    this.doc = doc;
+    for (const id of this.animatedIds || []) {
+      const node = this.nodes.get(id), o = doc.objects[id];
+      if (node && o && !(this.gizmo.dragging && this.gizmo.object === node)) applyTRS(node, o);
+    }
+    this.shadowsDirty = true;
+    if (this.through && this.movers?.has(this.through)) this.throughCamera(doc);
+    if (this.edit && this.movers?.has(this.edit.id)) this.placePivot();
     this.touch();
   }
 
@@ -783,7 +814,7 @@ export class Viewport {
       if (this.edit?.id === id) continue;                      // Edit mode shows the cage instead
       s.userData.batched = false;
       const mats = [].concat(s.material);
-      if (!on || sel.has(id) || !doc.objects[id] || isBackdrop(doc, id) || !this.pickable(node)
+      if (!on || sel.has(id) || !doc.objects[id] || this.movers?.has(id) || isBackdrop(doc, id) || !this.pickable(node)
           || mats.some((m) => m.transparent || m.transmission > 0)) { s.visible = true; continue; }
       const key = `${s.geometry.uuid}|${mats.map((m) => m.uuid).join(",")}`;
       if (!groups.has(key)) groups.set(key, []);

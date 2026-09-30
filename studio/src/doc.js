@@ -87,6 +87,7 @@ export function duplicate(doc, id, offset = [0.5, 0.5, 0]) {
   }
   o.name = `${o.name}.001`;
   o.location = o.location.map((v, i) => v + offset[i]);
+  for (const k of o.keys?.location || []) k[1] = k[1].map((v, i) => v + offset[i]);     // its motion moves with it
   d.objects[nid] = o;
   return { doc: d, id: nid };
 }

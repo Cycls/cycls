@@ -116,3 +116,32 @@ label.btn:hover { background: #3c3c3c; }
 .tool-overlay .knife-dot { fill: #ff5a5a; }
 .tool-overlay .prop { fill: none; stroke: #fff; stroke-opacity: 0.7; stroke-width: 1.5; stroke-dasharray: 4 3; }
 .toggle.on { background: #3a5a8c; }
+
+/* The timeline: one row under everything, Blender's. */
+.timeline { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: var(--panel2); border-top: 1px solid var(--line);
+  min-height: 34px; flex-wrap: nowrap; }
+.timeline .transport button { padding: 2px 7px; min-width: 28px; }
+.tl-frame { width: 58px; flex: none; }
+.tl-track { position: relative; flex: 1; min-width: 80px; height: 24px; background: #232323; border: 1px solid var(--line);
+  border-radius: 4px; cursor: ew-resize; touch-action: none; overflow: hidden; }
+.tl-in { position: absolute; left: 7px; right: 7px; top: 0; bottom: 0; }      /* the first and last frames' keys show whole */
+.tl-track .tick { position: absolute; top: 2px; transform: translateX(-50%); font-size: 9px; color: #777; pointer-events: none;
+  user-select: none; }
+.tl-track .kd { position: absolute; bottom: 3px; width: 8px; height: 8px; background: #e8c547; border: 1px solid #0008;
+  transform: translateX(-50%) rotate(45deg); pointer-events: none; }
+.tl-track .kd.on { background: #fff3a8; }
+.tl-track .playhead { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--blue); pointer-events: none; }
+.tl-range { display: flex; gap: 6px; flex: none; }
+.tl-range label { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; }
+.tl-range .num { width: 50px; }
+.rec { color: #9a9a9a; padding: 2px 8px; }
+.rec.on { background: #8c2f2f; color: #ffb3b3; }
+@media (max-width: 760px) { .tl-range, .timeline .transport button:nth-child(1), .timeline .transport button:nth-child(5) { display: none; } }
+@media (max-width: 520px) { .timeline .transport button:nth-child(2), .timeline .transport button:nth-child(4), .rec { display: none; } }
+.keyed { display: flex; align-items: center; gap: 4px; }
+.keydot { border: 0; background: transparent; padding: 0 2px; font-size: 10px; line-height: 1; color: #6a6a6a; }
+.keydot.moves { color: #6fbf5a; }
+.keydot.here { color: #f0d060; }
+.videobar { position: absolute; left: 10px; top: 10px; z-index: 5; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 60px);
+  background: #000c; color: #fff; padding: 5px 6px 5px 12px; border-radius: 16px; flex-wrap: wrap; }
+.videobar .muted { font-size: 11px; }
