@@ -11,7 +11,7 @@ import os
 
 import pytest
 
-from cycls._agent.studio import engine, store, tool
+from cycls._agent.studio import engine, store, tool, video
 from cycls._app.db import workspace
 
 pytestmark = pytest.mark.live
@@ -97,3 +97,29 @@ def test_render_saves_logs_and_opens(root):
     assert (root / "renders/live.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
     log = json.loads((root / "apps/studio/data/renders.json").read_text())
     assert log[-1]["path"] == "renders/live.png" and log[-1]["resolution"] == [320, 180]
+
+
+def test_a_turntable_poses_and_renders_as_a_video(root):
+    """Keys through the real build: a snapshot at another frame is another picture. Then a tiny
+    video, driven the way the app drives it — chunks, then the join."""
+    run(root, {"action": "edit", "ops": [{"op": "turntable", "target": "ring", "seconds": 1, "fps": 12},
+                                          {"op": "render", "resolution": [160, 90], "samples": 2}]})
+    first, _ = run(root, {"action": "snapshot", "samples": 2})
+    turned, _ = run(root, {"action": "snapshot", "samples": 2, "frame": 4})
+    assert first["_model"][0]["source"]["data"] != turned["_model"][0]["source"]["data"]
+
+    async def drive():
+        w = ws(root)
+        job = await video.start(w, await store.load(w), {"name": "spin"})
+        for _ in range(8):
+            r = await video.chunk(w, job["id"])
+            assert "error" not in r, r
+            if r.get("wait") == 0 and r["job"]["done"] == r["job"]["total"]:
+                return await video.finish(w, job["id"])
+        raise AssertionError(r)
+    done = asyncio.run(drive())
+    assert done["path"] == "renders/spin.mp4" and done["poster"].startswith("data:image/jpeg")
+    mp4 = (root / "renders/spin.mp4").read_bytes()
+    assert mp4[4:8] == b"ftyp" and len(mp4) > 1000
+    log = json.loads((root / "apps/studio/data/renders.json").read_text())
+    assert log[-1]["video"] is True and log[-1]["frames"] == 12
