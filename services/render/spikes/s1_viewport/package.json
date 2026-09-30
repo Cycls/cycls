@@ -1,0 +1,8 @@
+{
+  "name": "studio-spike-s1",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "vite build" },
+  "dependencies": { "three": "0.186.1", "preact": "10.29.8" },
+  "devDependencies": { "vite": "8.3.1", "vite-plugin-singlefile": "2.3.3" }
+}

@@ -2,7 +2,7 @@
 # the canvas plus the .glb to orbit. The heavy part — headless Blender, a 1 GB
 # image — is its own deployment, called by name; this agent's image stays small.
 #
-#   uv run cycls deploy render_fn.py        # once, from the cycls-render repo → cycls-render
+#   uv run cycls deploy render_fn.py        # once, from services/render → cycls-render
 #   uv run cycls run examples/agents/render.py
 #
 # cycls.remote authenticates with CYCLS_API_KEY, so a deployed agent needs it in

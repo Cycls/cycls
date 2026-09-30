@@ -62,7 +62,7 @@ cycls/
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
     ├── browser/            # cycls Browser tool — thin CDP client to a shared real-Chrome service (Steel); docs/notes/browser.md
-    ├── studio/             # cycls Studio tool — a Blender-style mini-app (app/index.html, built from /studio) + real Blender via cycls-render; scene.py is the document; docs/notes/studio.md
+    ├── studio/             # cycls Studio tool — a Blender-style mini-app (app/index.html, built from /studio) + real Blender via cycls-render (services/render); scene.py is the document; docs/notes/studio.md
     ├── tools/              # tool schemas + execution + `Tool` rows: run/step/once/terminal/prompt (docs/notes/tool-rows.md)
     ├── harness/            # the managed LLM loop and the kit a custom loop needs
     │   ├── llm.py          # cycls.LLM fluent builder (.loop(fn) swaps the loop; .price()/.context() set cost rates + window)

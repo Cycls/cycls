@@ -25,13 +25,13 @@ Agent server (SDK)  cycls/_agent/studio/
   store.py    scene.json under a lock, rev, history, mesh files · engine.py  the cycls.remote client
   install.py  puts the app in the workspace and keeps it current · app/index.html  the built bundle
   ▼ cycls.remote(CYCLS_STUDIO_ENGINE)(op=…, scene=…, blobs=…, params=…)
-cycls-render  (its own folder, like cycls-design) — a warm Blender worker behind unshare + bwrap
+services/render  (cycls-render, its own deployment) — a warm Blender worker behind unshare + bwrap
 ```
 
 The app's source is `studio/` at the repo root (`npm run build` writes the bundle into
-`cycls/_agent/studio/app/index.html`, refusing past 1.2 MB). The engine lives outside the repo,
-in `cycls-render`; at deploy it captures `scene.py`'s source from the installed SDK by value, so
-the schema has one source and the engine can't drift from it.
+`cycls/_agent/studio/app/index.html`, refusing past 1.2 MB). The engine is `services/render`, deployed
+on its own as `cycls-render`; at deploy it captures `scene.py`'s source from the SDK on its
+`PYTHONPATH` (this checkout) by value, so the schema has one source and the engine can't drift from it.
 
 ## The document
 
@@ -403,7 +403,7 @@ the installer refuses, and `build_app` refuses to overwrite a stamped one.
 
 ```bash
 # the engine (Python 3.12, the SDK checkout on PYTHONPATH so scene.py is captured)
-cd cycls-render && PYTHONPATH=<sdk> cycls deploy render_fn.py
+cd services/render && PYTHONPATH=../.. cycls deploy render_fn.py
 # the app bundle, then the web client (both are committed build output)
 cd studio && npm run build
 cd client && npm run build
