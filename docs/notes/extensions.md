@@ -8,7 +8,7 @@ and put the Studio in every agent's wheel. Now the SDK knows nothing about it.
 ```python
 import cycls, cycls_studio
 
-@cycls.agent(image=cycls.Image().pip("cycls-studio"),
+@cycls.agent(image=cycls.Image().pip("https://github.com/Cycls/cycls-studio/archive/refs/heads/main.zip"),
              web=cycls.Web().auth(cycls.Clerk()).use(cycls_studio.Studio()),
              volumes={"/workspace": cycls.Volume("my-agent")})
 async def my_agent(context):
@@ -53,7 +53,8 @@ class Extension:
   `cycls._agent.extension.register` directly.
 
 Pickling: the extension instance rides the agent into the container by reference to its class,
-so the package must be installed in the image (`cycls.Image().pip(...)`).
+so the package must be installed in the image (`cycls.Image().pip(...)`). Cycls Studio
+isn't on PyPI: an archive URL from GitHub installs it without git, which the image doesn't have.
 
 ## What a tool or a route may use
 

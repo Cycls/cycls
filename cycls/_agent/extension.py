@@ -3,7 +3,7 @@
     import cycls, cycls_studio
 
     @cycls.agent(web=cycls.Web().auth(cycls.Clerk()).use(cycls_studio.Studio()),
-                 image=cycls.Image().pip("cycls-studio"), volumes={...})
+                 image=cycls.Image().pip("https://github.com/Cycls/cycls-studio/archive/refs/heads/main.zip"), volumes={...})
 
 Declared once, on the agent's Web: the server mounts the extension's routes and every
 `LLM.run()` of the agent offers its tools — unless it isn't configured, or the person
