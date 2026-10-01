@@ -8,11 +8,14 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob } from "./canvas-utils";
+import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, is3d, codeLang, extTint, tintTile, tintLabel, ext, saveBlob, liveApps, takesKeysOnHover } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { attachBridge, appScope } from "./app-bridge";
+import type { BridgeOptions } from "./app-bridge";
+
+type EngineCall = NonNullable<BridgeOptions["callEngine"]>;
 import { injectShim } from "./app-shim";
 import { SaveDialog } from "./save-dialog";
 import type { AppInfo } from "../hooks/use-apps";
@@ -102,7 +105,7 @@ interface PendingSave {
 }
 
 // Without readFile (shared pages have no workspace) this is a plain sandboxed doc.
-function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetchConnector, appData }: {
+function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetchConnector, appData, callEngine, onAsk, onOpen }: {
   file: CanvasFile;
   content: string;
   shared: boolean;
@@ -111,6 +114,9 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
+  callEngine?: EngineCall;
+  onAsk?: (text: string) => void;
+  onOpen?: (path: string) => void;
 }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const [pending, setPending] = useState<PendingSave | null>(null);
@@ -144,12 +150,17 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
         : undefined,
       fetchConnector: shared ? undefined : fetchConnector,
       appData: shared ? undefined : appData,
+      callEngine: shared ? undefined : callEngine,
+      onAsk: shared ? undefined : onAsk,
+      onOpen: shared ? undefined : onOpen,
       context: {
         theme: document.documentElement.classList.contains("dark") ? "dark" : "light",
         locale: document.documentElement.lang || "en",
       },
     });
-  }, [file.path, readForApp, writeFile, shared, canSave, isApp, appData]);
+    // Every dep must be stable: re-attaching closes the app's port, and a running app
+    // never announces again, so its calls would hang.
+  }, [file.path, readForApp, writeFile, shared, canSave, isApp, appData, callEngine, onAsk, onOpen]);
 
   const doc = useMemo(() => (readForApp && isApp ? injectShim(content) : content), [content, readForApp, isApp]);
 
@@ -174,6 +185,7 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
         srcDoc={doc}
         title={file.name}
         className="h-full w-full border-0 bg-white"
+        onPointerEnter={isApp ? () => { if (takesKeysOnHover(document.activeElement)) ref.current?.focus({ preventScroll: true }); } : undefined}
       />
       {crash && (
         <div className="absolute inset-x-0 bottom-0 border-t border-border bg-card px-4 py-2 text-xs text-destructive">
@@ -225,7 +237,7 @@ function NoPreviewCard({ file, onDownload, onShare }: {
   );
 }
 
-export function CanvasDoc({ file, content, error, shared = false, readFile, resolveMedia, writeFile, listFolders, fetchConnector, appData, onDownload, onShare }: {
+export function CanvasDoc({ file, content, error, shared = false, readFile, resolveMedia, writeFile, listFolders, fetchConnector, appData, callEngine, onAsk, onOpen, onDownload, onShare }: {
   file: CanvasFile;
   resolveMedia?: (path: string) => Promise<string>;
   content: string | null;
@@ -236,6 +248,9 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, reso
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
+  callEngine?: EngineCall;
+  onAsk?: (text: string) => void;
+  onOpen?: (path: string) => void;
   onDownload?: () => void;
   onShare?: () => void;
 }) {
@@ -250,7 +265,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, reso
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Couldn't load this file.</div>;
   }
   if (isHtml(fileKind(file))) {
-    return <HtmlDoc file={file} content={content ?? ""} shared={shared} readFile={readFile} writeFile={writeFile} listFolders={listFolders} fetchConnector={fetchConnector} appData={appData} />;
+    return <HtmlDoc file={file} content={content ?? ""} shared={shared} readFile={readFile} writeFile={writeFile} listFolders={listFolders} fetchConnector={fetchConnector} appData={appData} callEngine={callEngine} onAsk={onAsk} onOpen={onOpen} />;
   }
   // Word .docx renders natively as formatted HTML (docx-preview) from its raw
   // bytes — a document view, not a flat PDF.
@@ -341,7 +356,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, listFolders, fetchConnector, appData, org, onShareFile, railWidth = 0, reloadKey, working }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, listFolders, fetchConnector, appData, callEngine, onAsk, onOpen, org, onShareFile, railWidth = 0, reloadKey, working }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -365,12 +380,18 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   listFolders?: () => Promise<{ name: string; path: string }[]>;  // app save dialog
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;   // an app's live call to a connector API
+  callEngine?: EngineCall;                       // an app's relayed engine call (Studio → Blender)
+  onAsk?: (text: string) => void;                // an app pre-filling the composer
+  onOpen?: (path: string) => void;               // an app opening a file it made (Studio's renders)
   org?: { id: string; name: string } | null;   // lets the share dialog offer the org audience
   onShareFile?: (path: string, audience: string) => Promise<string>;
   railWidth?: number;   // pane docked to our right; the drag must account for it
   reloadKey?: number;  // bump to re-fetch the open document
 }) {
   const file = hidden ? null : tabs.find((f) => f.path === active) ?? tabs[tabs.length - 1] ?? null;
+  const [live, setLive] = useState<string[]>([]);
+  const alive = liveApps(live, file?.path ?? null, (p) => appScope(p) !== null, tabs.map((f) => f.path));
+  useEffect(() => { if (alive !== live) setLive(alive); }, [alive, live]);
   const { width, startResize, resizing } = usePaneWidth("cycls_canvas_width", 560, 380, 420, railWidth, undefined, 1, 0.25);
 
   const inner = file && (
@@ -429,24 +450,38 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
           </button>
         )}
       </div>
-      {working?.includes(file.path) ? (
-        <CanvasWorking key={file.path} name={file.name} />
-      ) : (
-        <CanvasFileView
-          key={file.path}
-          file={file}
-          readFile={readFile}
-          openFile={openFile}
-          writeFile={writeFile}
-          uploadFile={uploadFile}
-          listFolders={listFolders}
-          fetchConnector={fetchConnector}
-          appData={appData}
-          org={org}
-          onShareFile={onShareFile}
-          reloadKey={reloadKey}
-        />
-      )}
+      {/* Apps stay mounted behind the tab in front (liveApps); anything else mounts when shown.
+          The order is stable (by path, the non-app last): moving an iframe in the page reloads it. */}
+      <div className="relative min-h-0 flex-1">
+        {[...[...alive].sort(), ...(alive.includes(file.path) ? [] : [file.path])]
+          .map((p) => tabs.find((f) => f.path === p))
+          .filter((f): f is CanvasFile => !!f)
+          .map((f) => (
+            <div key={f.path} aria-hidden={f.path !== file.path}
+                 className={cn("absolute inset-0 flex flex-col", f.path !== file.path && "invisible pointer-events-none")}>
+              {working?.includes(f.path) ? (
+                <CanvasWorking name={f.name} />
+              ) : (
+                <CanvasFileView
+                  file={f}
+                  readFile={readFile}
+                  openFile={openFile}
+                  writeFile={writeFile}
+                  uploadFile={uploadFile}
+                  listFolders={listFolders}
+                  fetchConnector={fetchConnector}
+                  appData={appData}
+                  callEngine={callEngine}
+                  onAsk={onAsk}
+                  onOpen={onOpen}
+                  org={org}
+                  onShareFile={onShareFile}
+                  reloadKey={reloadKey}
+                />
+              )}
+            </div>
+          ))}
+      </div>
     </>
   );
 
@@ -661,7 +696,7 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp }: {
 }
 
 // Keyed by path from the parent, so per-file state resets on tab switch.
-function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, listFolders, fetchConnector, appData, org, onShareFile, reloadKey }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, listFolders, fetchConnector, appData, callEngine, onAsk, onOpen, org, onShareFile, reloadKey }: {
   file: CanvasFile;
   uploadFile?: (dir: string, file: File) => Promise<void>;
   readFile: (path: string) => Promise<string>;
@@ -670,6 +705,9 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, listF
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
+  callEngine?: EngineCall;
+  onAsk?: (text: string) => void;
+  onOpen?: (path: string) => void;
   org?: { id: string; name: string } | null;
   onShareFile?: (path: string, audience: string) => Promise<string>;
   reloadKey?: number;
@@ -822,6 +860,9 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, listF
           <CanvasDoc file={file} content={content} error={error} readFile={readFile} resolveMedia={resolveMedia} writeFile={writeFile} listFolders={listFolders}
                      fetchConnector={fetchConnector}
                      appData={appData}
+                     callEngine={callEngine}
+                     onAsk={onAsk}
+                     onOpen={onOpen}
                      onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
         )}
       </div>

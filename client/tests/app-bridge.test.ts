@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { appScope, inScope, canWrite, attachBridge, MSG, MAX_WRITE_BYTES, overWriteLimit } from "../src/components/app-bridge";
+import { appScope, inScope, canWrite, attachBridge, MSG, MAX_WRITE_BYTES, overWriteLimit, APP_COMMAND_EVENT, MAX_ENGINE_BYTES } from "../src/components/app-bridge";
 
 const APP = "apps/burnup/index.html";
 const scope = appScope(APP)!;
@@ -121,6 +121,30 @@ describe("attachBridge", () => {
     send(contentWindow, { type: MSG.ready });
     await settle();
     expect(sent).toEqual([{ type: MSG.init, path: APP, scope, canWrite: false, theme: "dark" }]);
+  });
+
+  it("answers on the channel a request arrived on, however many times the shim announced", async () => {
+    // A heavy app keeps its frame busy past the shim's 50 ms retry, so several `ready`s go out
+    // before the first `init` is handled. Each one mints a channel; the shim keeps the FIRST
+    // port it was handed. Replying on "the latest" channel stranded every call on a port nobody
+    // listens to: reads hung forever and writes landed but never resolved.
+    const inits: { m: unknown; transfer?: MessagePort[] }[] = [];
+    const contentWindow = { postMessage: (m: unknown, _o: string, transfer?: MessagePort[]) => inits.push({ m, transfer }) };
+    const frame = { contentWindow } as unknown as HTMLIFrameElement;
+    detach = attachBridge({ frame, appPath: APP, readFile: async () => "{}" });
+    send(contentWindow, { type: MSG.ready });
+    send(contentWindow, { type: MSG.ready });
+    send(contentWindow, { type: MSG.ready });
+    await settle();
+    expect(inits.filter((i) => (i.m as { type: string }).type === MSG.init)).toHaveLength(3);
+
+    const kept = inits[0].transfer![0];          // what the shim adopts: the first port
+    const replies: unknown[] = [];
+    kept.onmessage = (ev) => replies.push(ev.data);
+    kept.postMessage({ type: MSG.read, id: 7, path: "apps/burnup/data/state.json" });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(replies).toEqual([{ type: MSG.readResult, id: 7, ok: true, content: "{}" }]);
+    for (const i of inits) i.transfer?.forEach((p) => p.close());
   });
 
   it("reads a file inside the scope", async () => {
@@ -375,5 +399,84 @@ describe("cycls:fetch — an app calling a connector", () => {
     await settle();
     expect(shared.posted.at(-1)).toMatchObject({ ok: false, error: "connectors are not available here" });
     shared.stop();
+  });
+});
+
+describe("cycls:engine / cycls:ask / pushed commands (Studio)", () => {
+  let stop: () => void;
+  afterEach(() => stop?.());
+
+  function wiredApp(opts: Partial<Parameters<typeof attachBridge>[0]> = {}) {
+    const posted: Record<string, unknown>[] = [];
+    const transfers: MessagePort[] = [];
+    const contentWindow = {
+      postMessage: (m: Record<string, unknown>, _o: string, t?: MessagePort[]) => { posted.push(m); if (t) transfers.push(...t); },
+    };
+    const frame = { contentWindow } as unknown as HTMLIFrameElement;
+    stop = attachBridge({ frame, appPath: APP, readFile: async () => "", ...opts });
+    return { posted, transfers, contentWindow };
+  }
+
+  it("relays an engine call as this app, and answers with the result", async () => {
+    const callEngine = vi.fn(async () => ({ ok: true, preview: "data:image/jpeg;base64,x" }));
+    const { posted, contentWindow } = wiredApp({ callEngine });
+    send(contentWindow, { type: MSG.engine, id: 3, op: "snapshot", payload: { scene: { objects: {} } } });
+    await settle();
+    expect(callEngine).toHaveBeenCalledWith("burnup", "snapshot", { scene: { objects: {} } });
+    expect(posted.at(-1)).toEqual({ type: MSG.engineResult, id: 3, ok: true,
+                                    result: { ok: true, preview: "data:image/jpeg;base64,x" } });
+  });
+
+  it("opens a render or export the reply names, and nothing else", async () => {
+    const onOpen = vi.fn();
+    const replies = [{ ok: true, open: "renders/hero.png" }, { ok: true, open: "exports/scene.glb" },
+                     { ok: true, open: "../secrets.env" }, { ok: true, open: "apps/other/index.html" },
+                     { ok: true, open: "renders/a/b.png" }, { ok: true }];
+    const callEngine = vi.fn(async () => replies.shift());
+    const { contentWindow } = wiredApp({ callEngine, onOpen });
+    for (let i = 0; i < 6; i++) send(contentWindow, { type: MSG.engine, id: i, op: "open", payload: {} });
+    await settle();
+    expect(onOpen.mock.calls).toEqual([["renders/hero.png"], ["exports/scene.glb"]]);
+  });
+
+  it("refuses a bad op, a non-object payload, an oversized one, and a view with no engine", async () => {
+    const callEngine = vi.fn(async () => ({}));
+    const { posted, contentWindow } = wiredApp({ callEngine });
+    send(contentWindow, { type: MSG.engine, id: 1, op: "../x", payload: {} });
+    send(contentWindow, { type: MSG.engine, id: 2, op: "render", payload: [1] });
+    send(contentWindow, { type: MSG.engine, id: 3, op: "render", payload: { s: "x".repeat(MAX_ENGINE_BYTES + 1) } });
+    await settle();
+    expect(callEngine).not.toHaveBeenCalled();
+    expect(posted.map((m) => m.error)).toEqual(["bad op", "payload must be an object", "payload too large"]);
+    stop();
+    const none = wiredApp({});
+    send(none.contentWindow, { type: MSG.engine, id: 4, op: "render", payload: {} });
+    await settle();
+    expect(none.posted.at(-1)).toMatchObject({ ok: false, error: "this view can't run the engine" });
+  });
+
+  it("forwards a pushed command to its own app only, over the port", async () => {
+    const { transfers, contentWindow } = wiredApp({});
+    send(contentWindow, { type: MSG.ready });
+    await settle();
+    const got: unknown[] = [];
+    transfers[0].onmessage = (e) => got.push(e.data);
+    window.dispatchEvent(new CustomEvent(APP_COMMAND_EVENT, { detail: { path: "apps/other/index.html", command: { n: 1 } } }));
+    window.dispatchEvent(new CustomEvent(APP_COMMAND_EVENT, { detail: { path: APP, command: { n: 2 } } }));
+    window.dispatchEvent(new CustomEvent(APP_COMMAND_EVENT, { detail: { path: "*", command: { type: "turn_end" } } }));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(got).toEqual([{ type: MSG.command, command: { n: 2 } }, { type: MSG.command, command: { type: "turn_end" } }]);
+    transfers.forEach((p) => p.close());
+  });
+
+  it("ask pre-fills through the host, trimmed and rate-limited", async () => {
+    const onAsk = vi.fn();
+    const { posted, contentWindow } = wiredApp({ onAsk });
+    send(contentWindow, { type: MSG.ask, id: 1, text: "render it gold " + "x".repeat(2000) });
+    send(contentWindow, { type: MSG.ask, id: 2, text: "again" });
+    await settle();
+    expect(onAsk).toHaveBeenCalledTimes(1);
+    expect((onAsk.mock.calls[0][0] as string).length).toBe(1000);
+    expect(posted.map((m) => m.ok)).toEqual([true, false]);
   });
 });

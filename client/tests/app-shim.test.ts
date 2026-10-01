@@ -284,3 +284,46 @@ describe("the store's two safety rails", () => {
     await expect(done).resolves.toEqual([1, 2, 9]);
   });
 });
+
+describe("pushed commands and the engine (Studio)", () => {
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  function load() {
+    const js = shimOf("<html><head></head></html>").replace(/^<script>|<\/script>$/g, "");
+    const posted: Record<string, unknown>[] = [];
+    const listeners: ((e: { data: unknown }) => void)[] = [];
+    const win: Record<string, unknown> = {};
+    const env = {
+      window: win,
+      parent: { postMessage: (m: Record<string, unknown>) => posted.push(m) },
+      addEventListener: (t: string, fn: (e: { data: unknown }) => void) => t === "message" && listeners.push(fn),
+      setTimeout: (fn: () => void) => setTimeout(fn, 0),
+      clearTimeout,
+    };
+    new Function(...Object.keys(env), js)(...Object.values(env));
+    const deliver = (data: unknown) => listeners.forEach((fn) => fn({ data }));
+    deliver({ type: "cycls:init", path: "apps/studio/index.html", scope: "apps/studio", canWrite: true });
+    return { api: win.cycls as Record<string, (...a: unknown[]) => unknown>, posted, deliver };
+  }
+
+  it("holds commands that arrive before a handler, then delivers them in order", () => {
+    const { api, deliver } = load();
+    deliver({ type: "cycls:command", command: { n: 1 } });
+    deliver({ type: "cycls:command", command: { n: 2 } });
+    const got: unknown[] = [];
+    const off = api.onCommand((c: unknown) => got.push(c)) as () => void;
+    deliver({ type: "cycls:command", command: { n: 3 } });
+    off();
+    deliver({ type: "cycls:command", command: { n: 4 } });
+    expect(got).toEqual([{ n: 1 }, { n: 2 }, { n: 3 }]);
+  });
+
+  it("engine() sends the op and payload and resolves with the host's result", async () => {
+    const { api, posted, deliver } = load();
+    const p = api.engine("snapshot", { scene: { a: 1 } }) as Promise<unknown>;
+    await tick();
+    const sent = posted.find((m) => m.type === "cycls:engine")!;
+    expect(sent).toMatchObject({ op: "snapshot", payload: { scene: { a: 1 } } });
+    deliver({ type: "cycls:engine:result", id: sent.id, ok: true, result: { preview: "x" } });
+    await expect(p).resolves.toEqual({ preview: "x" });
+  });
+});

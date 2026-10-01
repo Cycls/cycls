@@ -152,6 +152,7 @@ Identified users also carry **person properties** (via identify): `email`,
 | `trash_restored` | something comes back from the trash | `kind`, `method` (`toast` / `shortcut` / `trash_tab`) — which undo affordance people actually use |
 | `trash_purged` | delete-forever (admin) | `kind`, or `all: true` for empty-trash |
 | `app_updated` | an app renamed or re-iconed from its ⋯ menu (manifest edit) | `field` (`name` / `icon`) |
+| `app_ask` | an open app pre-fills the composer (`cycls.ask`) — never sent for the person | `chars` — do apps hand work back to the chat? |
 
 ### Sharing loop (organic acquisition)
 
