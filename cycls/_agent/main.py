@@ -60,6 +60,9 @@ class Agent(App):
         if web._workspaces and web._auth is None:
             raise ValueError("Web().workspaces() requires Web().auth(...) — "
                              "workspaces are keyed on the authenticated user")
+        if web._extensions and web._auth is None:
+            raise ValueError("Web().use() requires Web().auth(...) — an extension works "
+                             "in the signed-in user's workspace")
         self.theme = web._theme
         self.copy_public = web._copy_public
         self.server = _Routes()
@@ -81,6 +84,7 @@ class Agent(App):
         self._iap = web._iap
         self._on_run = web._on_run
         self.connectors = web._connectors
+        self.extensions = web._extensions
 
         # Merge Web's copy_public files under public/. App.__init__ adds
         # the cycls source tree on top.

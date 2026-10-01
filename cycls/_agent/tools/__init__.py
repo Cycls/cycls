@@ -378,8 +378,12 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
             from cycls._agent import browser as _browser
             if _browser.configured():
                 tools.append(_BROWSER_TOOL)
+        elif name in _BUILTINS:
+            tools += _BUILTINS[name]
         else:
-            tools += _BUILTINS.get(name, [])
+            # A package's tools (cycls.Extension) — absent while it isn't configured.
+            from .. import extension
+            tools += extension.schemas(name)
     tools += [_normalize_tool(t) for t in (custom or [])]
     return tools
 
@@ -755,6 +759,15 @@ def app_catalog(root):
     return text
 
 
+def _extension_app(root, slug):
+    """The extension that installed apps/<slug> (its manifest's `extension`), if one did."""
+    try:
+        owner = json.loads((pathlib.Path(root) / "apps" / slug / "app.json").read_text(encoding="utf-8")).get("extension")
+    except Exception:
+        return None
+    return owner if isinstance(owner, str) and owner else None
+
+
 async def _exec_build_app(inp, ws):
     import cycls
 
@@ -763,6 +776,9 @@ async def _exec_build_app(inp, ws):
     slug = str(inp.get("slug", "")).strip().lower()
     if not slug or set(slug) - _APP_SLUG_OK:
         return "Error: slug must be lowercase letters, digits, - or _"
+    if owner := _extension_app(workspace, slug):
+        return (f"Error: apps/{slug} is the {owner} app — change it with its own tool, "
+                "or build your app under another slug.")
 
     try:
         src_dir = _resolve_path(inp.get("source", ""), workspace)

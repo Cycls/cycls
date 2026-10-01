@@ -176,11 +176,15 @@ class LLM:
         # A switch in Settings turns a tool off for this person; it never
         # turns one on the operator didn't allow.
         off = set(getattr(context, "disabled_tools", None) or [])
+        # The agent's extensions (cycls.Web().use) are on in every run, and switch off the same way.
+        from .. import extension
+        allowed = [t for t in self._allowed_tools if t not in off]
+        allowed += [n for n in extension.names() if n not in off and n not in allowed]
         async for ev in loop(
             context=context,
             system=self._system,
             tools=self._tools,
-            allowed_tools=[t for t in self._allowed_tools if t not in off],
+            allowed_tools=allowed,
             model=self._model,
             max_tokens=self._max_tokens,
             bash_timeout=self._bash_timeout,

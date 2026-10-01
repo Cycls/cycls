@@ -1833,3 +1833,8 @@ def install_routers(cycls_app, app, required_auth, volume, base):
         app.include_router(workspaces_router(cycls_app, required_auth, volume, base))
     if getattr(cycls_app, "connectors", None):
         app.include_router(connectors_router(cycls_app, ws_dep, required_auth, volume, base))
+    from .. import extension
+    for ext in getattr(cycls_app, "extensions", None) or ():
+        extension.register(ext)
+        if ext.configured() and (r := ext.router(ws_dep, required_auth)) is not None:
+            app.include_router(r)
