@@ -266,6 +266,42 @@ describe("DesignEditorView", () => {
     expect(commands()).toEqual(["B", "C"]);
   });
 
+  it("an agent edit that arrives while the editor is still loading waits for it", async () => {
+    // It used to go at once, the editor answered `commandError: no document is open`,
+    // and the host threw the load away for a second one.
+    const { frame } = mount({ host: versioned(() => "v5") });
+    const post = vi.spyOn(frame().contentWindow!, "postMessage");
+    const sent = (type: string) => post.mock.calls.map((c) => c[0] as Record<string, unknown>).filter((m) => m.type === type);
+    fromEditor(frame(), "ready", { protocol: 2 });
+    await flush();
+    await flush();
+    expect(sent("load").length).toBe(1);
+    await command({ script: "A", version: "v5" });   // in the file this load read (its version)
+    await command({ script: "B", version: "v6" });   // saved after it
+    expect(sent("command")).toEqual([]);              // the document isn't open yet
+    fromEditor(frame(), "loaded", { doc: sent("load")[0].doc });
+    await flush();
+    expect(sent("command").map((m) => m.script)).toEqual(["B"]);
+    expect(frame().contentWindow).toBe(post.mock.instances[0]);   // the same editor: no reload
+  });
+
+  it("edits the loaded file already holds are not replayed, however many", async () => {
+    const { frame } = mount({ host: versioned(() => "v7") });
+    const post = vi.spyOn(frame().contentWindow!, "postMessage");
+    const scripts = () => post.mock.calls.map((c) => c[0] as Record<string, unknown>).filter((m) => m.type === "command").map((m) => m.script);
+    await command({ script: "A", version: "v6" });   // both saved before the editor asked for the file
+    await command({ script: "B", version: "v7" });
+    fromEditor(frame(), "ready", { protocol: 2 });
+    await flush();
+    await flush();
+    const load = post.mock.calls.map((c) => c[0] as Record<string, unknown>).find((m) => m.type === "load")!;
+    fromEditor(frame(), "loaded", { doc: load.doc });
+    await flush();
+    expect(scripts()).toEqual([]);                    // v7 holds A and B
+    await command({ script: "C", version: "v8" });
+    expect(scripts()).toEqual(["C"]);
+  });
+
   it("reports what's selected, by name, for Add selection", async () => {
     const { frame } = mount({ host: versioned(() => "v1") });
     const { load } = await ready(frame(), 2);
