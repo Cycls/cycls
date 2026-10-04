@@ -354,7 +354,14 @@ def test_full_screen_is_the_editors_own_box(session):
     session.page.wait_for_timeout(1000)
     assert session.page.evaluate("(f) => document.fullscreenElement === f.parentElement", frame)
     assert session.page.get_by_text("Exit full screen").count() == 1
-    session.page.evaluate("document.exitFullscreen()")
+    # The way out stays in view (it used to hide after 2.5 s, behind a thin hover strip
+    # — with Esc locked to the editor there was no visible way to leave), and it works.
+    session.page.wait_for_timeout(3500)
+    exit_button = session.page.get_by_label("Exit full screen")
+    assert exit_button.is_visible()
+    exit_button.click()
+    session.page.wait_for_timeout(500)
+    assert session.page.evaluate("document.fullscreenElement === null")
 
 
 def test_full_screen_fits_the_design_to_the_bigger_box(session):

@@ -49,6 +49,7 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
     writeFile: f.writeFile,
     writeNew: f.writeNew,
     newDesign: f.newDesign,
+    exportDesign: f.exportDesign,
     brand: f.brand,
     fetchVersioned: f.fetchVersioned,
     listVersions: f.listVersions,

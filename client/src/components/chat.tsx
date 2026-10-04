@@ -92,6 +92,7 @@ export interface FilesPanelProps {
   writeFile: WriteFile;   // binary too — the .fig editor writes raw bytes
   writeNew?: (path: string, data: BlobPart) => Promise<string>;  // a NEW file (next free name) → its path: design exports, copies
   newDesign?: (body: { name?: string; size?: string | [number, number]; background?: string }) => Promise<{ path: string; name: string; size: [number, number] }>;
+  exportDesign?: (path: string, format: "pdf" | "png") => Promise<string>;   // a design as a PDF / PNG beside it
   brand?: () => Promise<BrandKit | null>;                        // the brand kit, for the design editor
   fetchVersioned?: FetchVersioned;                               // a design with its version (its saves' base)
   listVersions?: (path: string) => Promise<DesignVersion[]>;     // a design's earlier versions
@@ -771,6 +772,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     listVersions: files.listVersions,
     versionBlob: files.versionBlob,
     restoreVersion: files.restoreVersion,
+    exportDesign: files.exportDesign,
   } : undefined), [files, createDesign, openFileInCanvas]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

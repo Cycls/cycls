@@ -23,6 +23,7 @@
 //   ready {protocol:2, features} · loaded {doc, name} · saved {doc, id, name, fig} · flushed {id, ok}
 //   error {doc?, message} · applied {doc} · commandError {doc, message}
 //   newDesign {size?} · saveCopy {doc, name, fig} · export {doc, files:[{name, mime, data}]}
+//   exportAs {doc, format}   the whole design as 'pdf' | 'png', made by Cycls (host.ts)
 //   selection {doc, frame, nodes:[{name, type, text?}]}  what the person has selected
 // `features` says what this editor does beyond protocol 2 ("selection", "lang", "fit"), so a
 // Cycls app offers only what the editor it loaded supports.

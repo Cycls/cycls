@@ -1058,6 +1058,41 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         _catalog_drop(ws.root)
         return {"path": f"designs/{base}.fig", "name": base, "size": wh}
 
+    @r.post("/design/export")
+    async def export_design(request: Request, ws: Workspace = ws_dep):
+        """A design as a file beside it — `{path, format: "pdf" | "png"}` → `{path}`: the
+        editor's File › Export › PDF. Rendered by the design service (the export behind
+        `?as=`: every page of the design, with its own fonts), not in the browser, where
+        the editor's PDF embeds no fonts. Under designs/ it is `<name>.<format>`, the
+        design's own image — replaced, and kept in step by the refresh from then on;
+        anywhere else it takes a free name, never a file that's there."""
+        from cycls._agent import design
+        body = await request.json()
+        fmt = str(body.get("format") or "pdf")
+        if fmt not in ("pdf", "png"):
+            raise HTTPException(400, "format is pdf or png")
+        src = _safe_path(ws.root, str(body.get("path") or ""))
+        if src.suffix.lower() != ".fig" or not src.is_file():
+            raise HTTPException(404, "No such design")
+        try:
+            made, _ = await _design_export(ws.root, src, fmt, ws.subject)
+        except design.Unavailable as e:
+            raise HTTPException(415, str(e))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        except RuntimeError as e:
+            raise HTTPException(502, f"Couldn't export the design: {e}")
+        root = Path(ws.root).resolve()
+        rel = src.with_suffix(f".{fmt}").relative_to(root).as_posix()
+        if not rel.startswith("designs/"):
+            rel = _free_rel(root, rel)
+        out = root / rel
+        tmp = out.with_name(f".{out.name}.part")
+        await asyncio.to_thread(shutil.copyfile, made, tmp)
+        await asyncio.to_thread(tmp.replace, out)
+        _catalog_drop(ws.root)
+        return {"path": rel}
+
     @r.get("/brand")
     async def brand(ws: Workspace = ws_dep):
         """The workspace brand kit (brand/brand.yaml) for the design editor: its named

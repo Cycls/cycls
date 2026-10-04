@@ -31,6 +31,35 @@ describe("the + menu", () => {
   });
 });
 
+describe("a design's Download", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ arrayBuffer: async () => new Uint8Array([1]).buffer })));
+    URL.revokeObjectURL = vi.fn();
+  });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+  it("offers the picture and a PDF, not only the .fig", async () => {
+    // ⋮ › Download gave the .fig alone: nothing a person can post or send.
+    const openFile = vi.fn(async () => "blob:x");
+    render(canvas("designs/a.fig", { openFile }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    for (const label of ["Download PNG", "Download PDF", "Download design (.fig)"]) expect(screen.getByText(label)).toBeTruthy();
+    expect(screen.queryByText("Download")).toBeNull();
+    openFile.mockClear();
+    await act(async () => { fireEvent.click(screen.getByText("Download PDF")); await new Promise((r) => setTimeout(r, 0)); });
+    expect(openFile).toHaveBeenCalledWith("designs/a.fig?as=pdf");
+  });
+
+  it("another file keeps its one Download", async () => {
+    render(canvas("notes.md"));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    expect(screen.getByText("Download")).toBeTruthy();
+    expect(screen.queryByText("Download PDF")).toBeNull();
+  });
+});
+
 describe("designs in the canvas", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ arrayBuffer: async () => new Uint8Array([1]).buffer })));
