@@ -324,6 +324,27 @@ def test_a_design_opened_hidden_loads_when_shown(browser, server):
         s.close()
 
 
+def test_an_agent_edit_made_while_the_editor_loads_waits_for_it(browser, server):
+    """It was posted at once: the editor answered `commandError: no document is open`,
+    and Cycls threw the load away for a second one."""
+    s = Session(browser, server, init_script=HIDDEN)
+    try:
+        n = s.mark()
+        s.say("open the design")
+        s.wait_for("ready", after=n, timeout=90)
+        s.page.wait_for_timeout(3000)            # the load is posted; hidden, it can't finish
+        s.say("edit the headline")               # saved on the server, then sent to the editor
+        s.page.wait_for_timeout(4000)
+        assert not any(e["type"] in ("commandError", "loaded") for e in s.events(n))
+        s.editor.evaluate("window.__show()")
+        s.wait_for("loaded", after=n, timeout=30)
+        s.wait_for("applied", after=n, timeout=30)   # replayed once the document was open
+        assert [e["type"] for e in s.events(n)].count("ready") == 1   # one load, not two
+        s.no_editor_error()
+    finally:
+        s.close()
+
+
 # ---- 5. Full screen is the editor's own box -------------------------------------------
 
 def test_full_screen_is_the_editors_own_box(session):
@@ -333,6 +354,25 @@ def test_full_screen_is_the_editors_own_box(session):
     session.page.wait_for_timeout(1000)
     assert session.page.evaluate("(f) => document.fullscreenElement === f.parentElement", frame)
     assert session.page.get_by_text("Exit full screen").count() == 1
+    session.page.evaluate("document.exitFullscreen()")
+
+
+def test_full_screen_fits_the_design_to_the_bigger_box(session):
+    """The design stayed small in a corner of a full-screen editor, at the docked zoom.
+    Cycls tells the editor its box changed (`fit`), and the editor fits it again."""
+    session.open_design()
+    if "fit" not in session.features():
+        pytest.skip("this editor has no `fit`")
+    n = session.mark()
+    session.say("paint a panel")                 # something to measure on screen
+    session.wait_for("applied", after=n)
+    session.page.wait_for_timeout(1500)
+    docked = session.panel_pixels()
+    assert docked > 1000
+    session.page.get_by_label("Full screen").click()
+    session.page.wait_for_timeout(2500)
+    assert session.page.evaluate("!!document.fullscreenElement")
+    assert session.panel_pixels() > docked * 1.3, docked
     session.page.evaluate("document.exitFullscreen()")
 
 
