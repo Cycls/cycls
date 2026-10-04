@@ -166,6 +166,20 @@ describe("PresentMode", () => {
     expect(chatEscape).not.toHaveBeenCalled();            // nothing underneath saw a key
   });
 
+  it("back from the end screen is the last slide, whichever key goes back", () => {
+    for (const back of ["ArrowLeft", "ArrowUp", "PageUp", "Backspace"]) {
+      render(<PresentMode deck={deck} start={2} onClose={() => {}} />);
+      key("ArrowRight");
+      expect(screen.getByText(/End of presentation/)).toBeTruthy();
+      key(back);
+      expect(screen.queryByText(/End of presentation/)).toBeNull();
+      expect(screen.getByTestId("present-counter").textContent, back).toBe("3 / 3");
+      key(back);
+      expect(screen.getByTestId("present-counter").textContent, back).toBe("2 / 3");
+      cleanup();
+    }
+  });
+
   it("Escape leaves present mode and never reaches the canvas", () => {
     const onClose = vi.fn();
     render(<PresentMode deck={deck} onClose={onClose} />);

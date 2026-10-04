@@ -165,7 +165,8 @@ export function PresentMode({ deck, start = 0, onClose, polls }: {
       forward();
       return;
     }
-    if (k === "Backspace") { e.preventDefault(); back(); return; }
+    // Back is its own step: from the end screen it returns to the last slide, not past it.
+    if (k === "Backspace" || k === "ArrowLeft" || k === "ArrowUp" || k === "PageUp") { e.preventDefault(); back(); return; }
     const to = slideKeyTarget(k, state.current.index, count);
     if (to != null) { e.preventDefault(); go(to); }
   }, [close, forward, back, go, count, openPresenter, regainFullscreen]);

@@ -319,6 +319,73 @@ describe("regenerate() — rewind the last exchange, then re-send it", () => {
 });
 
 
+describe("retry() — the failed turn is dropped on the server, then sent once", () => {
+  // "hello" answers; "make a deck" reaches the server, which stores it, and then the
+  // connection fails before a byte comes back — twice (send's own one retry).
+  function failingSecondTurn() {
+    const calls: { url: string; method?: string }[] = [];
+    let deckPosts = 0;
+    const fetchMock = vi.fn(async (url: any, init: any) => {
+      const u = String(url);
+      calls.push({ url: u, method: init?.method });
+      if (u.includes("last-exchange")) return { ok: true, json: async () => ({ ok: true }) };
+      if (init?.method === "POST" && u.includes("/chat")) {
+        const text = JSON.parse(init.body).messages[0].content;
+        if (text === "make a deck" && ++deckPosts <= 2) throw new TypeError("failed to fetch");
+        return sseTurn("c1", `answer to ${text}`);
+      }
+      throw new TypeError("failed to fetch");   // the run poll: still no connection
+    });
+    global.fetch = fetchMock as any;
+    return calls;
+  }
+
+  test("DELETE …/last-exchange?expect=<sha256 of the text> comes before the one re-send", async () => {
+    const { createHash } = await import("node:crypto");
+    const calls = failingSecondTurn();
+    const { result } = renderHook(() => useChat("http://api.test"));
+    await act(async () => { await result.current.send("hello"); });
+    await act(async () => { await result.current.send("make a deck"); });
+    const failed = result.current.messages[result.current.messages.length - 1];
+    expect(failed.parts?.some((p: any) => p.type === "callout" && p.style === "error")).toBe(true);
+
+    const before = calls.length;
+    await act(async () => { await result.current.retry(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+
+    const after = calls.slice(before);
+    const dropAt = after.findIndex((c) => c.url.includes("last-exchange"));
+    expect(dropAt).toBeGreaterThanOrEqual(0);
+    expect(after[dropAt].method).toBe("DELETE");
+    expect(after[dropAt].url).toContain(
+      `/chats/c1/last-exchange?expect=${createHash("sha256").update("make a deck").digest("hex")}`);
+    const resends = after.map((c, n) => (c.method === "POST" ? n : -1)).filter((n) => n >= 0);
+    expect(resends.length).toBe(1);
+    expect(resends[0]).toBeGreaterThan(dropAt);
+
+    expect(result.current.messages.map((m) => m.content)).toEqual(
+      ["hello", "answer to hello", "make a deck", "answer to make a deck"]);
+  });
+
+  test("a refused drop (the chat is still working) sends nothing", async () => {
+    const calls = failingSecondTurn();
+    const { result } = renderHook(() => useChat("http://api.test"));
+    await act(async () => { await result.current.send("hello"); });
+    await act(async () => { await result.current.send("make a deck"); });
+    const inner = global.fetch as any;
+    global.fetch = vi.fn(async (url: any, init: any) => (String(url).includes("last-exchange")
+      ? { ok: false, status: 409, statusText: "Conflict", clone: () => ({ json: async () => ({ detail: "busy" }) }) }
+      : inner(url, init))) as any;
+
+    const before = calls.length;
+    await act(async () => { await result.current.retry(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+    expect(calls.slice(before).filter((c) => c.method === "POST").length).toBe(0);
+    expect(result.current.messages.map((m) => m.content).slice(0, 3)).toEqual(["hello", "answer to hello", "make a deck"]);
+  });
+});
+
+
 describe("sources — citation parts from web search", () => {
   function sseLines(lines: string[]): any {
     const body = lines.map((l) => `data: ${l}\n\n`).join("");

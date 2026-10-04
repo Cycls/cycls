@@ -1069,7 +1069,7 @@ def test_put_schedules_a_design_reexport(tmp_path, monkeypatch):
     re-export of the image beside it (the refresh module filters to designs/*.fig)."""
     from cycls._agent.design import refresh
     seen = []
-    monkeypatch.setattr(refresh, "schedule", lambda root, rel, user_id=None: seen.append((rel, user_id)))
+    monkeypatch.setattr(refresh, "schedule", lambda root, rel, user_id=None, ensure=False: seen.append((rel, user_id)))
     client = _ws_routers_client(tmp_path)
     assert client.put("/files/designs/launch.fig", content=b"FIG").status_code == 200
     assert seen and seen[-1][0] == "designs/launch.fig"
@@ -1840,6 +1840,19 @@ def test_put_dedupe_writes_a_new_file(tmp_path, monkeypatch):
     assert (root / "my docs" / "a#b.txt").read_bytes() == b"hi"
 
 
+def test_a_new_design_file_is_left_with_an_image(tmp_path, monkeypatch):
+    """A copy from the editor (`?dedupe=1`) asks the refresh for its `.png`; an ordinary
+    save only keeps up the images already beside the design."""
+    from cycls._agent.design import refresh
+    asked = []
+    monkeypatch.setattr(refresh, "schedule", lambda root, rel, user_id=None, ensure=False: asked.append((rel, ensure)))
+    _seed(tmp_path, {"designs/launch.fig": b"FIG", "designs/launch.png": b"PNG"})
+    client = _ws_routers_client(tmp_path)
+    assert client.put("/files/designs/launch copy.fig?dedupe=1", content=b"COPY").json()["path"] == "designs/launch copy.fig"
+    client.put("/files/designs/launch copy.fig", content=b"EDITED")
+    assert asked == [("designs/launch copy.fig", True), ("designs/launch copy.fig", False)]
+
+
 def test_refresh_managed_names_the_images_beside_a_design(tmp_path):
     from cycls._agent.design import refresh
     root = _seed(tmp_path, {"designs/launch.fig": b"FIG", "designs/sub/deck.fig": b"FIG"})
@@ -2108,6 +2121,45 @@ def test_last_exchange_route_rewinds_the_chat(tmp_path):
     # Nothing left to rewind past — the route reports it rather than erroring.
     client.delete("/chats/c1/last-exchange")
     assert client.delete("/chats/c1/last-exchange").json() == {"ok": False}
+
+
+def test_retry_drops_only_the_turn_it_is_about_to_resend(tmp_path):
+    """`?expect=<sha256 of the text>` — retry's form. A stopped or failed turn keeps its
+    user message on disk; re-sending without dropping it stored the message twice."""
+    import asyncio, hashlib
+    from cycls._agent import state
+    from cycls._app.db import workspace
+    from cycls._app.auth import User
+
+    client = _ws_routers_client(tmp_path)
+    client.put("/chats/c1", json={"title": "hello"})
+    ws = workspace(User(id="user_1", org_id="org_1"), tmp_path, base=f"file://{tmp_path}", ws="u-user_1")
+    sha = lambda text: hashlib.sha256(text.encode()).hexdigest()
+    shown = lambda: [m["content"] for m in client.get("/chats/c1").json()["messages"]]
+    put_run = lambda status: asyncio.run(state.put_run(ws, "c1", {"run": "r", "status": status}))
+    asyncio.run(state.append_messages(ws, "c1", [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": [{"type": "text", "text": "one"}]},
+        {"role": "user", "content": [{"type": "text", "text": "[Selected in designs/a.fig: cta]"},
+                                     {"type": "text", "text": "make a deck"}],
+         "selection": {"path": "designs/a.fig", "nodes": [{"name": "cta"}]}},
+        {"role": "assistant", "content": [{"type": "text", "text": "half an ans"}]},
+    ], 0))
+
+    # Another message: the failed request never arrived, and what is here stays.
+    put_run("stopped")
+    assert client.delete(f"/chats/c1/last-exchange?expect={sha('something else')}").json() == {"ok": False}
+    assert shown() == ["first", "one", "make a deck", "half an ans"]
+
+    # The same text, but that turn ended well: it is not the one being retried.
+    put_run("done")
+    assert client.delete(f"/chats/c1/last-exchange?expect={sha('make a deck')}").json() == {"ok": False}
+    assert shown() == ["first", "one", "make a deck", "half an ans"]
+
+    # The stopped turn, named by what the person typed (the selection line is the model's).
+    put_run("stopped")
+    assert client.delete(f"/chats/c1/last-exchange?expect={sha('make a deck')}").json() == {"ok": True}
+    assert shown() == ["first", "one"]
 
 
 def test_last_exchange_route_404s_on_unknown_chat(tmp_path):

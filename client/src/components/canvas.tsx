@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
 import type { WriteFile } from "../hooks/use-files";
+import { useEscape } from "../hooks/use-escape";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence, Reorder } from "framer-motion";
 import { Icon } from "./icon";
@@ -668,6 +669,7 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp, onNewDesign }: {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<{ name: string; path: string }[]>([]);
   const needle = q.trim().toLowerCase();
+  useEscape(() => setPos(null), pos != null);
   const matchedApps = onAddApp
     ? apps.filter((a) => !needle || a.name.toLowerCase().includes(needle) || a.slug.includes(needle))
     : [];

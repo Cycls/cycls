@@ -7,6 +7,7 @@ import { Icon, Spinner } from "./icon";
 import { ShareDialog } from "./share-dialog";
 import { isRenderable, saveBlob, tintTile, tintLabel, tileExt } from "./canvas-utils";
 import { useToast } from "../lib/toast";
+import { useEscape } from "../hooks/use-escape";
 import type { FilesPanelProps } from "./chat";
 
 const MOVE_TYPE = "application/x-cycls-move";   // internal drag payload (vs OS file drops)
@@ -49,6 +50,7 @@ export function DropdownMenu({ items, onClose }: { items: MenuItem[]; onClose: (
   const here = useRef<HTMLSpanElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState<{ top: number; left: number } | null>(null);
+  useEscape(onClose);
 
   useLayoutEffect(() => {
     const anchor = here.current?.previousElementSibling ?? here.current?.parentElement;
@@ -96,6 +98,7 @@ export function DropdownMenu({ items, onClose }: { items: MenuItem[]; onClose: (
 
 // Context menu pinned at cursor coordinates (right-click).
 function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
+  useEscape(onClose);
   return (
     <>
       <div className="fixed inset-0 z-50" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
@@ -199,7 +202,7 @@ export function InlineInput({ initial, onSubmit, onCancel }: {
         ref={ref}
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Escape") onCancel(); }}
+        onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onCancel(); } }}
         onBlur={onCancel}
         className="h-7 rounded-md border border-border bg-background px-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-accent w-48"
       />
@@ -370,7 +373,7 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
     const onKey = (e: KeyboardEvent) => {
       const tag = (document.activeElement?.tagName || "").toLowerCase();
       if (tag === "input" || tag === "textarea") return;
-      if (e.key === "Escape") setSelected(new Set());
+      if (e.key === "Escape") { e.preventDefault(); setSelected(new Set()); }   // the key is used: the pane stays
       else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteNames([...selected]); }
     };
     window.addEventListener("keydown", onKey);

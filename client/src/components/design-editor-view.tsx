@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useDarkMode } from "../hooks/use-dark-mode";
+import { useEscape } from "../hooks/use-escape";
 import type { BrandKit, DesignVersion, FetchVersioned, WriteFile } from "../hooks/use-files";
 import { track } from "../lib/analytics";
 import { getLang, t, useLang } from "../lib/i18n";
@@ -556,6 +557,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
 // editor had unsaved work: which one stands. Nothing is written until they choose.
 function ConflictDialog({ canCopy, onChoose }: { canCopy: boolean; onChoose: (c: "latest" | "mine" | "copy") => void }) {
   const choice = "w-full cursor-pointer rounded-md px-3 py-2 text-start text-xs hover:bg-secondary";
+  useEscape(() => {});   // it wants an answer: Escape doesn't dismiss it, nor close the canvas under it
   return (
     <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true"
          aria-labelledby="design-conflict-title">
@@ -591,6 +593,7 @@ function SaveCopyDialog({ initial, onCancel, onSave }: {
 }) {
   const [value, setValue] = useState(initial);
   const name = value.trim().replace(/[\\/]+/g, "-").replace(/\.fig$/i, "");
+  useEscape(onCancel);
   return (
     <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/30" onClick={onCancel}>
       <form
@@ -605,7 +608,6 @@ function SaveCopyDialog({ initial, onCancel, onSave }: {
           autoFocus
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Escape") onCancel(); }}
           className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           dir="auto"
         />

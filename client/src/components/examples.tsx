@@ -6,6 +6,7 @@ import { Icon } from "./icon";
 import { track } from "../lib/analytics";
 import { t, getLang } from "../lib/i18n";
 import { cn } from "../lib/utils";
+import { useEscape } from "../hooks/use-escape";
 
 // The examples gallery — curated public shares rendered as artifact cards on
 // the empty-chat screen (docs/notes/examples-gallery.md). Cards preview the
@@ -125,11 +126,7 @@ export function ExamplesGallery({ onUsePrompt, className }: {
 // In-page player for tutorial cards — dimmed backdrop, Esc/backdrop/X to
 // close. YouTube plays through the privacy embed; files through <video>.
 function VideoLightbox({ item, onClose }: { item: ExampleItem; onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useEscape(onClose);
   const yt = youtubeId(item.video || "");
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 sm:p-8" onClick={onClose}>

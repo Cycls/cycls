@@ -94,6 +94,16 @@ export interface AppConfig {
   design_editor_url?: string;   // base URL of the embedded OpenPencil editor for .fig files (env DESIGN_EDITOR_URL)
 }
 
+// How `retry` names the message it re-sends to the server: the sha256 of its text.
+async function sha256Hex(text: string): Promise<string | null> {
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return null;   // no WebCrypto (an insecure origin)
+  }
+}
+
 export function useChat(baseUrl: string = "") {
   const [messages, _setMessages] = useState<Message[]>([]);
   const setMessages = useCallback((updater: Message[] | ((prev: Message[]) => Message[])) => {
@@ -115,7 +125,7 @@ export function useChat(baseUrl: string = "") {
   const chatIdRef = useRef<string | null>(null);
   const messagesRef = useRef<Message[]>([]);
   const abortRef = useRef<AbortController | null>(null);
-  const lastRequestRef = useRef<{ text: string; attachments?: Attachment[]; origin?: string } | null>(null);
+  const lastRequestRef = useRef<{ text: string; attachments?: Attachment[]; origin?: string; selection?: DesignSelection } | null>(null);
   // Which conversation the view is showing. A run captures it when it starts and
   // writes nothing once it no longer matches — the chat id is not enough, since a
   // run can learn its id after the user has already moved on.
@@ -283,7 +293,7 @@ export function useChat(baseUrl: string = "") {
       });
 
       // Store for retry
-      lastRequestRef.current = { text, attachments, origin };
+      lastRequestRef.current = { text, attachments, origin, selection: extra?.selection };
 
       let receivedData = false;
       let sawDone = false;   // the server's end marker; its absence means the run may live on
@@ -594,22 +604,36 @@ export function useChat(baseUrl: string = "") {
     [isStreaming, baseUrl, authHeaders],
   );
 
-  const retry = useCallback(() => {
-    if (isStreaming || !lastRequestRef.current) return;
-    track("message_retried", { chat_id: chatIdRef.current });
-    const { text, attachments, origin } = lastRequestRef.current;
-    // Remove the last assistant message (the error one)
-    setMessages((prev) => {
-      const updated = [...prev];
-      if (updated.length >= 2 && updated[updated.length - 1].role === "assistant") {
-        // Remove both the failed assistant and the user message — send() will re-add them
-        updated.splice(updated.length - 2, 2);
+  // Send a failed turn's message again. A stopped or failed run keeps that message on
+  // the server, so it is dropped there first — or the resend stores it a second time
+  // and a reload shows it twice. `expect` names the message: the server drops that
+  // turn and no other, so a request that never arrived costs the chat nothing.
+  const retry = useCallback(async () => {
+    if (isStreaming) return;
+    const msgs = messagesRef.current;
+    let i = msgs.length - 1;
+    while (i >= 0 && msgs[i].role !== "user") i--;
+    // A turn that failed on the server ends its stream cleanly, which clears the stored
+    // request — the message is then the last one the person sent.
+    const request = lastRequestRef.current
+      ?? (i >= 0 ? { text: msgs[i].content, attachments: msgs[i].attachments, origin: "retry", selection: msgs[i].selection } : null);
+    if (!request) return;
+    const { text, attachments, origin, selection } = request;
+    if (chatIdRef.current && origin !== "confirm") {
+      const expect = await sha256Hex(text);
+      if (expect) {
+        try {
+          await api(`/chats/${encodeURIComponent(chatIdRef.current)}/last-exchange?expect=${expect}`, { method: "DELETE" });
+        } catch { return; }   // api() has toasted why (the chat is still working, no connection)
       }
-      return updated;
-    });
-    // Re-send after state update
-    setTimeout(() => send(text, attachments, origin), 0);
-  }, [isStreaming, send]);
+    }
+    track("message_retried", { chat_id: chatIdRef.current });
+    // Off the screen too — send() puts the message and a fresh reply back. A silent
+    // send (an approval) has no bubble of its own: only the failed reply goes.
+    const shown = i >= 0 && msgs[i].content === text && origin !== "confirm";
+    setMessages(shown ? msgs.slice(0, i) : msgs[msgs.length - 1]?.role === "assistant" ? msgs.slice(0, -1) : msgs);
+    setTimeout(() => send(text, attachments, origin, selection ? { selection } : undefined), 0);
+  }, [isStreaming, send, api, setMessages]);
 
   // Re-run the last exchange. The server holds the finished turn on disk, so
   // the old one has to be dropped there BEFORE re-sending — otherwise the

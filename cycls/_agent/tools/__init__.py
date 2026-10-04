@@ -2027,7 +2027,7 @@ async def _exec_design(inp, workspace):
                         return (f"Error: {rel} changed while the edit was being made (it's being edited "
                                 f"by hand). Nothing was changed; inspect it again, then edit.")
         from cycls._agent.design import refresh
-        refresh.schedule(workspace.root, rel, subject)        # the image beside it follows
+        refresh.schedule(workspace.root, rel, subject, ensure=True)   # the image beside it follows — or is made
         ui = {"type": "ui", "action": "design_command", "path": rel, "script": r.get("script") or script,
               "version": version}   # what the file is now — an open editor's saves go on from it
         if intent := inp.get("intent"):
