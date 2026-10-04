@@ -60,6 +60,82 @@ describe("a design's Download", () => {
   });
 });
 
+describe("a design's Edit | Preview switch", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ arrayBuffer: async () => new Uint8Array([1]).buffer })));
+    URL.revokeObjectURL = vi.fn();
+  });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+  const slides = (n: number) => JSON.stringify({ count: n, slides: Array.from({ length: n }, (_, i) => `data:image/jpeg;base64,S${i + 1}`), fig: "designs/a.fig" });
+  const reader = (n: number) => vi.fn(async (p: string) => (p.includes("?as=slides") ? slides(n) : "# notes"));
+  const pressed = (name: string) => screen.getByRole("button", { name }).getAttribute("aria-pressed");
+
+  it("shows the design without the editor around it, and comes back to the same editor", async () => {
+    const readFile = reader(1);
+    const { container } = render(canvas("designs/a.fig", { readFile }));
+    await flush();
+    const frame = container.querySelector("iframe")!;
+    expect(pressed("Edit")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await flush();
+    expect(readFile).toHaveBeenCalledWith("designs/a.fig?as=slides", true);
+    expect((screen.getByTestId("design-picture") as HTMLImageElement).src).toBe("data:image/jpeg;base64,S1");
+    expect(pressed("Preview")).toBe("true");
+    expect(container.querySelector("iframe")).toBe(frame);                  // the editor is still there…
+    expect(frame.closest("[inert]")).toBeTruthy();                           // …under the preview, out of reach
+    expect(screen.queryByRole("button", { name: "Full screen" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await flush();
+    expect(screen.queryByTestId("design-preview")).toBeNull();
+    expect(container.querySelector("iframe")).toBe(frame);                  // the same one: nothing reloaded
+    expect(frame.closest("[inert]")).toBeNull();
+  });
+
+  it("a design of several frames previews as its slides", async () => {
+    render(canvas("designs/a.fig", { readFile: reader(3) }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await flush();
+    expect(screen.getByTestId("deck-counter").textContent).toBe("1 / 3");
+    expect(screen.getByRole("button", { name: /Present/ })).toBeTruthy();
+  });
+
+  it("saves what's unsaved before it shows the preview", async () => {
+    const readFile = reader(1);
+    const { container } = render(canvas("designs/a.fig", { readFile }));
+    await flush();
+    const frame = container.querySelector("iframe")!;
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    const say = (type: string, extra: Record<string, unknown> = {}) => window.dispatchEvent(
+      new MessageEvent("message", { origin: EDITOR, source: frame.contentWindow, data: { source: "cycls-editor", type, ...extra } }));
+    say("ready", { protocol: 2 });
+    await flush();
+    readFile.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await flush();
+    const ask = post.mock.calls.map((c) => c[0] as Record<string, unknown>).find((m) => m.type === "flush");
+    expect(ask).toBeTruthy();
+    expect(readFile).not.toHaveBeenCalled();                                // not before the save
+    say("flushed", { id: ask!.id, ok: true });
+    await flush();
+    expect(readFile).toHaveBeenCalledWith("designs/a.fig?as=slides", true);
+  });
+
+  it("when there's nothing to show it says so, and Edit still works", async () => {
+    const readFile = vi.fn(async (p: string) => { if (p.includes("?as=slides")) throw new Error("415"); return "x"; });
+    render(canvas("designs/a.fig", { readFile }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await flush();
+    expect(screen.getByText(/Preview isn't available/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.queryByTestId("design-preview")).toBeNull();
+  });
+});
+
 describe("designs in the canvas", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ arrayBuffer: async () => new Uint8Array([1]).buffer })));

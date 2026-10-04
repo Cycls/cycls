@@ -110,6 +110,24 @@ describe("DeckView", () => {
     expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
   });
 
+  it("Edit and Preview are one switch: into the editor, and back to the slides", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ arrayBuffer: async () => new Uint8Array([1]).buffer })));
+    URL.revokeObjectURL = vi.fn();
+    const onReload = vi.fn();
+    render(<DeckView data={manifest(2)} path="designs/pitch.deck.json" openFile={async () => "blob:fig"}
+                     writeFile={async () => {}} designEditorUrl="https://ed.example" onReload={onReload} />);
+    const pressed = (name: string) => screen.getByRole("button", { name }).getAttribute("aria-pressed");
+    expect(pressed("Preview")).toBe("true");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Edit" })); });
+    expect(document.querySelector("iframe")).toBeTruthy();
+    expect(pressed("Edit")).toBe("true");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Preview" })); await new Promise((r) => setTimeout(r, 0)); });
+    expect(screen.getByTestId("deck-view")).toBeTruthy();
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(onReload).toHaveBeenCalled();                                    // the slides, as edited
+    vi.unstubAllGlobals();
+  });
+
   it("Present opens present mode on the current slide, and returns to where it ended", () => {
     render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" />);
     fireEvent.keyDown(screen.getByTestId("deck-view"), { key: "ArrowRight" });
