@@ -65,6 +65,8 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
           step={part.step || ""}
           toolName={part.tool_name}
           isStreaming={isStreaming}
+          args={part.args}
+          at={part.at}
         />
       );
     case "status":

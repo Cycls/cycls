@@ -688,7 +688,12 @@ function CanvasWorking({ name }: { name: string }) {
 }
 
 // The menu is position:fixed from the button's rect so the pane's
-// overflow-hidden can't clip it.
+// overflow-hidden can't clip it — and kept inside the window: the + sits at the
+// end of the tab strip, often less than the menu's width from the edge.
+const ADD_MENU_W = 288;   // w-72
+export const addMenuLeft = (buttonLeft: number, viewport: number) =>
+  Math.max(8, Math.min(buttonLeft, viewport - ADD_MENU_W - 8));
+
 function AddTab({ onAdd, searchFiles, apps = [], onAddApp, onNewDesign }: {
   onAdd: (path: string) => void;
   searchFiles: (q: string) => Promise<{ name: string; path: string }[]>;
@@ -716,7 +721,7 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp, onNewDesign }: {
     if (pos) { setPos(null); return; }
     const r = e.currentTarget.getBoundingClientRect();
     setQ("");
-    setPos({ x: r.left, y: r.bottom + 4 });
+    setPos({ x: addMenuLeft(r.left, window.innerWidth), y: r.bottom + 4 });
   };
 
   return (

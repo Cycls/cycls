@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, cleanup, act, fireEvent, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Canvas, type CanvasFile } from "../src/components/canvas";
+import { Canvas, addMenuLeft, type CanvasFile } from "../src/components/canvas";
 import { DESIGN_PRESETS } from "../src/components/canvas-utils";
 import { encPath } from "../src/hooks/use-files";
 
@@ -22,6 +22,14 @@ function canvas(active: string, extra: Record<string, unknown> = {}) {
             designEditorUrl={EDITOR} {...extra} />
   );
 }
+
+describe("the + menu", () => {
+  it("stays inside the window", () => {
+    expect(addMenuLeft(400, 1536)).toBe(400);            // room to spare: under the button
+    expect(addMenuLeft(1289, 1536)).toBe(1240);          // QA: its right edge was at 1577 in a 1536 window
+    expect(addMenuLeft(20, 300)).toBe(8);                // a window narrower than the menu: from the left
+  });
+});
 
 describe("designs in the canvas", () => {
   beforeEach(() => {

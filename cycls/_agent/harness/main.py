@@ -241,8 +241,9 @@ def _retry_delay(attempt, error=None):
 async def _stream_with_retry(provider, **kw):
     """`provider.stream` with exponential backoff on overload / rate-limit.
     A stream that fails after some deltas re-emits them on retry — accepted;
-    stored history isn't touched until the turn completes."""
-    attempt = 0
+    stored history isn't touched until the turn completes. The attempts share one
+    step id, so the person sees one line counting up rather than a row per attempt."""
+    attempt, notice = 0, f"retry-{uuid.uuid4().hex[:8]}"
     while True:
         try:
             async for ev in provider.stream(**kw):
@@ -252,7 +253,7 @@ async def _stream_with_retry(provider, **kw):
             attempt += 1
             if not (_is_retryable(e) and attempt <= MAX_RETRIES): raise
             delay = _retry_delay(attempt, e)
-            yield events.step(f"Model endpoint busy, retrying in {delay:.1f}s... (attempt {attempt}/{MAX_RETRIES})")
+            yield events.step(f"Model endpoint busy, retrying in {delay:.1f}s... (attempt {attempt}/{MAX_RETRIES})", id=notice)
             await asyncio.sleep(delay)
 
 

@@ -2132,9 +2132,13 @@ async def _exec_design(inp, workspace):
         # A deck (or carousel) opens in the deck viewer: its slides, Present, the
         # downloads, and Edit into the editor.
         deck_rel = f"designs/{name}.deck.json"
-        ack = (f"{what}. It's OPEN in the deck viewer ({deck_rel}) — the user can page "
-               f"through it, Present it full screen (with the speaker notes), download it "
-               f"as PowerPoint or PDF{', or Edit it in the design editor' if editor else ''}. "
+        # Said plainly, because the reply used to tell the person it was "open in the
+        # design editor": a carousel opens here too, and is downloaded as its images.
+        downloads = "its images (a .zip), PowerPoint or PDF" if len(saved) > 1 else "PowerPoint, PDF or its images"
+        ack = (f"{what}. It's OPEN in the deck viewer ({deck_rel}) — say \"the deck viewer\", not the "
+               f"design editor. There the user can page through it, Present it full screen (with the "
+               f"speaker notes), and download it as {downloads}"
+               f"{'; the viewer has an Edit button that opens the design editor' if editor else ''}. "
                f"Editable source: {fig_rel}; change it with Design edit.")
         ui = {"type": "ui", "action": "open_canvas", "path": deck_rel, "name": f"{name}.deck.json"}
     elif editor:
