@@ -637,7 +637,10 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
                         initial={entry.name}
                         onSubmit={async (newName) => {
                           setRenaming(null);
-                          if (newName !== entry.name) { await onRename(entryPath, fullPath(newName)); onReload(path); }
+                          if (newName === entry.name) return;
+                          // Reload either way: a rename that failed part-way has still changed the folder.
+                          try { await onRename(entryPath, fullPath(newName)); } catch { /* the toast said why */ }
+                          onReload(path);
                         }}
                         onCancel={() => setRenaming(null)}
                       />
