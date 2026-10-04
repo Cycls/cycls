@@ -541,7 +541,9 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
         {loading && entries.length === 0 ? (
           <LoadingBar />
         ) : (
-          <div className="divide-y divide-border">
+          // A container: the size and date columns show by the panel's own width, not
+          // the window's — docked beside the canvas it is narrow, and the name needs the room.
+          <div className="@container divide-y divide-border">
             {/* Back row — move drop-target */}
             {path && (
               <button
@@ -645,15 +647,15 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
                         onCancel={() => setRenaming(null)}
                       />
                     ) : (
-                      <span className="text-sm text-foreground truncate block select-none">{entry.name}</span>
+                      <span className="text-sm text-foreground truncate block select-none" title={entry.name}>{entry.name}</span>
                     )}
                   </div>
 
                   {/* Meta */}
                   {!isDir && (
-                    <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">{formatSize(entry.size)}</span>
+                    <span className="hidden @lg:block text-xs text-muted-foreground shrink-0 w-16 text-right">{formatSize(entry.size)}</span>
                   )}
-                  <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">{formatDate(entry.modified)}</span>
+                  <span className="hidden @md:block text-xs text-muted-foreground shrink-0 w-16 text-right">{formatDate(entry.modified)}</span>
 
                   {/* More menu */}
                   <div className="relative shrink-0">

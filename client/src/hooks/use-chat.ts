@@ -29,6 +29,7 @@ export interface Part {
   ok?: boolean; // false when the tool call errored (refetch projection)
   id?: string;       // tool-call id — threads ToolStart → step_arg → final step
   args?: string;     // accumulated tool-call input (partial JSON), for the live preview
+  at?: number;       // when this step first appeared in this tab (not stored) — its elapsed time
   connector?: string; // a connector's tool: the name whose logo heads the call block
   icon?: string;     // a custom tool's own image, from `.on(icon=…)`
   result?: string;   // a connector call's outcome, bounded — the block's Response
@@ -415,7 +416,7 @@ export function useChat(baseUrl: string = "") {
                   Object.assign(existing, item);
                   currentPart = existing;
                 } else {
-                  currentPart = { ...item };
+                  currentPart = { ...item, at: Date.now() };
                   parts.push(currentPart);
                 }
               } else if (currentPart && currentPart.type === type) {

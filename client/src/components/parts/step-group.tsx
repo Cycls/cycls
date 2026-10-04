@@ -35,7 +35,7 @@ function summarize(items: Part[], connectors: Connector[]) {
 }
 
 const Row = ({ p, live }: { p: Part; live?: boolean }) =>
-  isCall(p) ? <ToolCall p={p} live={live} /> : <StepPart step={p.step || ""} toolName={p.tool_name} isStreaming={live} ok={p.ok} />;
+  isCall(p) ? <ToolCall p={p} live={live} /> : <StepPart step={p.step || ""} toolName={p.tool_name} isStreaming={live} ok={p.ok} args={p.args} at={p.at} />;
 
 // Consecutive tool steps fold into one summary line ("7 steps — searched the
 // web · edited files"), expandable on tap. While streaming, the current step

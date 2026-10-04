@@ -1241,6 +1241,10 @@ def test_auto_retry_on_overloaded(agent_env):
     callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
     assert not callouts
     assert call_count == 3
+    # The attempts are one line that counts up: they share a step id.
+    notices = [i for i in items if isinstance(i, dict) and i.get("type") == "step" and "retrying" in i.get("step", "")]
+    assert ["attempt 1/" in notices[0]["step"], "attempt 2/" in notices[1]["step"]] == [True, True]
+    assert notices[0]["id"] == notices[1]["id"] and notices[0]["id"].startswith("retry-")
 
 
 def test_auto_retry_exhausted_shows_error(agent_env):

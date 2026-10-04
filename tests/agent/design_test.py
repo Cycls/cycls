@@ -446,6 +446,8 @@ def test_carousel_saves_every_slide(tmp_path, monkeypatch):
         "designs/tips-slide-1.png", "designs/tips-slide-2.png", "designs/tips-slide-3.png"]
     assert "Carousel saved (3 slides: designs/tips-slide-1.png … designs/tips-slide-3.png" in out["_model"][-1]["text"]
     assert out["_ui"]["path"] == "designs/tips.deck.json"                   # the deck viewer opens
+    said = out["_model"][-1]["text"]
+    assert "deck viewer" in said and "its images (a .zip)" in said          # where it opened, and how a carousel downloads
     # The same name again is bumped — a carousel's slide files count as taken.
     _fake_render(monkeypatch, image=b"Q1", images=[b"Q1", b"Q2", b"Q3"])
     asyncio.run(_exec_design({"action": "render", "name": "tips", "spec": spec}, _ws(tmp_path)))
