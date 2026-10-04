@@ -16,12 +16,15 @@
 //   theme   {theme}          'dark' | 'light'
 //   locale  {lang}           'ar' | 'en' — the editor's own menus and panels
 //   brand   {brand}          the workspace brand kit: {colors:{primary,…}, fonts:{heading,body}}
+//   fit     {}               the editor's box changed size (full screen, the canvas
+//                            expanded): fit the design to it again — unless the person
+//                            has zoomed or panned since it was last fitted
 // Editor → Cycls, {source:'cycls-editor', type, …}:
 //   ready {protocol:2, features} · loaded {doc, name} · saved {doc, id, name, fig} · flushed {id, ok}
 //   error {doc?, message} · applied {doc} · commandError {doc, message}
 //   newDesign {size?} · saveCopy {doc, name, fig} · export {doc, files:[{name, mime, data}]}
 //   selection {doc, frame, nodes:[{name, type, text?}]}  what the person has selected
-// `features` says what this editor does beyond protocol 2 ("selection", "lang"), so a
+// `features` says what this editor does beyond protocol 2 ("selection", "lang", "fit"), so a
 // Cycls app offers only what the editor it loaded supports.
 // `commandError` is a live agent edit that failed HERE. The server applied and saved
 // the same edit before sending it (Cycls checks every edit headlessly first), so Cycls
@@ -504,6 +507,30 @@ export function startCyclsEmbedBridge(): void {
   let touched = false
   let loading: Promise<void> = Promise.resolve()
   let pendingBrand: Brand | null = null
+
+  // The view as the last fit left it. While it is still that, a resized editor fits
+  // the design again (it stayed small in a corner of a full-screen editor, at the
+  // docked zoom); once the person has zoomed or panned, the view is theirs.
+  type View = { zoom: number; panX: number; panY: number }
+  const viewOf = (store: EditorStore): View => {
+    const s = store.state as unknown as View
+    return { zoom: s.zoom, panX: s.panX, panY: s.panY }
+  }
+  let fitted: View | null = null
+  async function fit(): Promise<void> {
+    await loading
+    const store = boundDocument()?.store
+    if (!store || !fitted) return
+    const now = viewOf(store)
+    if (now.zoom !== fitted.zoom || now.panX !== fitted.panX || now.panY !== fitted.panY) return
+    try {
+      await store.fitCurrentPageToViewport()
+      fitted = viewOf(store)
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.log('[cycls] fit failed', error)
+    }
+  }
   for (const kind of ['pointerdown', 'keydown'] as const) {
     window.addEventListener(kind, () => { if (!settled) touched = true }, { capture: true })
   }
@@ -560,7 +587,9 @@ export function startCyclsEmbedBridge(): void {
     touched = false
     pendingBrand = msg.brand ?? null
     loadBrandFonts(pendingBrand)
+    fitted = null
     await loadDocument(store, decodeBase64(msg.fig), name)
+    fitted = viewOf(store)
     bind({ store, doc, name })
     reflowTextEdits(store)
     watchSelection(store)
@@ -670,6 +699,8 @@ export function startCyclsEmbedBridge(): void {
       applyTheme(msg.theme)
     } else if (msg.type === 'locale' && typeof msg.lang === 'string') {
       applyLocale(msg.lang)
+    } else if (msg.type === 'fit') {
+      void fit()
     } else if (msg.type === 'brand') {
       if (settled) applyBrand(msg.brand ?? null)
       else pendingBrand = msg.brand ?? null
@@ -736,5 +767,5 @@ export function startCyclsEmbedBridge(): void {
     scheduleSave()
   }, 700)
 
-  post({ type: 'ready', protocol: 2, features: ['selection', 'lang'] })
+  post({ type: 'ready', protocol: 2, features: ['selection', 'lang', 'fit'] })
 }

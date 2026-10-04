@@ -887,6 +887,16 @@ def test_an_agent_edit_asks_for_the_image(tmp_path, monkeypatch):
     assert asked == [("designs/launch.fig", True)]
 
 
+def test_a_background_op_goes_through_as_it_is(tmp_path, monkeypatch):
+    # The slide's own fill: no node to name, and `frame` a number even when quoted.
+    calls, _ = _fake_apply(monkeypatch)
+    _design(tmp_path)
+    ops = [{"op": "background", "frame": "1", "fill": {"gradient": ["#0f172a", "#1e3a8a"], "angle": 90}}]
+    out = asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": ops}, _ws(tmp_path)))
+    assert not (isinstance(out, str) and out.startswith("Error")), out
+    assert calls["ops"] == [{"op": "background", "frame": 1, "fill": {"gradient": ["#0f172a", "#1e3a8a"], "angle": 90}}]
+
+
 # ---- layouts that would silently pile up at the frame edge ----
 
 def test_quoted_numbers_are_numbers(tmp_path, monkeypatch):

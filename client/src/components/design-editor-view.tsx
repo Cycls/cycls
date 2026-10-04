@@ -16,6 +16,7 @@ import { cn } from "../lib/utils";
 // postMessage protocol 2 (the editor's embed bridge, cycls-design editor/patches):
 //   host → editor : load {protocol:2, doc, name, fig, brand?} · written {doc, id, ok}
 //                   save · flush {id} · command {script, intent?} · theme {theme} · locale {lang}
+//                   fit (the editor's box changed size: fit the design again — feature "fit")
 //   editor → host : ready {protocol, features?} · loaded {doc} · saved {doc, id, name, fig}
 //                   flushed {id, ok} · error · applied · commandError · selection {doc, frame, nodes}
 //                   newDesign {size?} · saveCopy {doc, name, fig} · export {doc, files}
@@ -154,6 +155,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   const loadedVersion = useRef<string | null>(null);  // the version this load read
   const commands = useRef<Command[]>([]);             // agent edits waiting to replay, one at a time
   const replaying = useRef<Command | null>(null);
+  const editorLoaded = useRef(false);                 // the editor has this load's document open (`loaded`)
   const pending = useRef<{ version: string; timer: number } | null>(null);   // a 412 an agent edit may yet explain
   const force = useRef(false);                        // "keep mine": the next save writes over the newer file
   const origin = (() => { try { return new URL(editorUrl).origin; } catch { return "*"; } })();
@@ -180,8 +182,10 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
 
   // One agent edit replays at a time; the next goes once the editor says `applied`.
   // One the editor loaded already (its version is what it read) is in the document.
+  // None goes before the editor has the document open: an edit that arrived while it
+  // was still loading got `commandError: no document is open`, and a whole reload.
   const pump = useCallback(() => {
-    if (replaying.current) return;
+    if (replaying.current || !editorLoaded.current) return;
     let next = commands.current.shift();
     while (next?.version && next.version === loadedVersion.current) next = commands.current.shift();
     if (!next) return;
@@ -193,6 +197,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   const reopen = useCallback(() => {
     commands.current = [];
     replaying.current = null;
+    editorLoaded.current = false;
     setStatus("loading");
     setFrameKey((k) => k + 1);
   }, []);
@@ -231,6 +236,30 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
     };
   }, []);
 
+  // A much bigger or smaller editor — full screen, the canvas expanded over the chat —
+  // fits the design to it again. (The editor does, unless the person has set their own
+  // view; it stayed small in a corner, at the docked zoom.)
+  useEffect(() => {
+    const box = boxRef.current;
+    if (!box || typeof ResizeObserver === "undefined") return;
+    let last = box.getBoundingClientRect();
+    let timer: number | undefined;
+    const observer = new ResizeObserver(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        const now = box.getBoundingClientRect();
+        if (!now.width || !now.height) return;   // hidden (another canvas tab is showing)
+        const grew = (a: number, b: number) => b > 0 && Math.abs(a - b) > b * 0.15;
+        if ((grew(now.width, last.width) || grew(now.height, last.height)) && editorLoaded.current && features.current.has("fit")) {
+          post({ type: "fit" });
+        }
+        last = now;
+      }, 250);
+    });
+    observer.observe(box);
+    return () => { observer.disconnect(); window.clearTimeout(timer); };
+  }, [post]);
+
   // This editor in the registry, for Cycls's flushes, deletes and full screen.
   useEffect(() => {
     const handle: Handle = {
@@ -267,6 +296,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
     // so it must not latch the scary permanent "Editor error". Only a failure
     // BEFORE load is a real, sticky error.
     let loaded = false;
+    let spoke = false;    // the editor has said `ready`: its protocol is known
     const flash = (s: "saved" | "saveerror") => {
       if (disposed) return;
       setStatus(s);
@@ -308,8 +338,10 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         let source = sourceRef.current;
         sourceRef.current = null;
         version.current = loadedVersion.current = null;
-        commands.current = [];
+        commands.current = [];          // edits made before now are in the file this load reads
         replaying.current = null;
+        editorLoaded.current = false;   // ones that arrive from here wait until it is open
+        spoke = true;
         if (protocol.current >= 2 && host?.fetchVersioned) {
           // Every load reads the file afresh, with its version: what its saves name as
           // their base, so a save over a newer file is refused (design/store.py).
@@ -348,6 +380,13 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       } else if (m.type === "loaded") {
         loaded = true;
         if (!disposed) setStatus("ready");
+        // What it read holds every edit up to the one whose version it is; the rest replay.
+        const waiting = commands.current;
+        for (let i = waiting.length - 1; i >= 0; i--) {
+          if (waiting[i].version && waiting[i].version === loadedVersion.current) { waiting.splice(0, i + 1); break; }
+        }
+        editorLoaded.current = true;
+        pump();
       } else if (m.type === "saved" && typeof m.fig === "string") {
         const reply = (ok: boolean) => post({ type: "written", doc: m.doc, id: m.id, ok });
         // A save from a document since replaced, or of a file being deleted: not written.
@@ -402,6 +441,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         // edit. Re-open the editor on it (a fresh fetch — `url` may predate the edit).
         commands.current = [];
         replaying.current = null;
+        editorLoaded.current = false;
         if (!host?.fetchVersioned) {
           try { sourceRef.current = latest.current.reload ? await latest.current.reload() : null; } catch { sourceRef.current = null; }
         }
@@ -447,7 +487,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
     const onCommand = (e: Event) => {
       const d = (e as CustomEvent).detail as { path?: string; script?: string; intent?: string; version?: string };
       if (!d || d.path !== latest.current.path || typeof d.script !== "string") return;
-      if (protocol.current < 2) {   // an editor from before the protocol never says `applied`
+      if (spoke && protocol.current < 2) {   // an editor from before the protocol never says `applied`
         post({ type: "command", script: d.script, intent: d.intent });
         return;
       }
