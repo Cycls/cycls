@@ -48,6 +48,24 @@ export function parseDeck(data: string): DeckManifest | null {
   }
 }
 
+// Edit | Preview for a design: the editor, or what it looks like without the editor
+// around it. One control wherever a design is open — a deck in the viewer, a design in
+// the canvas — so it is always the same switch.
+export function EditPreviewSwitch({ previewing, onEdit, onPreview }: {
+  previewing: boolean;
+  onEdit: () => void;
+  onPreview: () => void;
+}) {
+  const item = (on: boolean) => cn("rounded-md px-2.5 py-1 text-xs transition-colors cursor-pointer",
+    on ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground");
+  return (
+    <div className="flex shrink-0 rounded-lg bg-secondary p-0.5" role="group" data-testid="edit-preview">
+      <button aria-pressed={!previewing} onClick={() => { if (previewing) onEdit(); }} className={item(!previewing)}>{t("edit")}</button>
+      <button aria-pressed={previewing} onClick={() => { if (!previewing) onPreview(); }} className={item(previewing)}>{t("preview")}</button>
+    </div>
+  );
+}
+
 const baseName = (path: string) => (path.split("/").pop() || path).replace(/\.deck\.json$|\.fig$/i, "");
 
 export function DeckView({ data, path, openFile, writeFile, designEditorUrl, designHost, onReload, onSlideOp, pollsFor }: {
@@ -155,9 +173,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
         <div className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-xs text-muted-foreground">
           <span className="min-w-0 truncate">{fig}</span>
           <div className="flex-1" />
-          <button onClick={doneEditing} className="rounded-md bg-secondary px-3 py-1 font-medium text-foreground hover:bg-secondary/80 cursor-pointer">
-            {t("done")}
-          </button>
+          <EditPreviewSwitch previewing={false} onEdit={() => {}} onPreview={() => void doneEditing()} />
         </div>
         <div className="min-h-0 flex-1">
           <DesignEditorView url={editing} path={fig} name={`${name}.fig`} editorUrl={designEditorUrl!}
@@ -197,9 +213,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
             )}
           </div>
         )}
-        {canEdit && (
-          <button onClick={edit} className={cn(tool, "text-muted-foreground hover:bg-secondary/80 hover:text-foreground")}>{t("edit")}</button>
-        )}
+        {canEdit && <EditPreviewSwitch previewing onEdit={() => void edit()} onPreview={() => {}} />}
         <button onClick={() => present(mode === "stage" ? nav.active : 0)}
                 className={cn(tool, "bg-foreground text-background hover:opacity-90")}>
           <svg className="size-3" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>

@@ -17,7 +17,7 @@ import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { DesignEditorView, canFullscreen, flushDesignEditor, fullscreenDesignEditor, type DesignHost } from "./design-editor-view";
 import { VersionHistory } from "./version-history";
-import { DeckView, parseDeck, type DeckOp } from "./deck-view";
+import { DeckView, EditPreviewSwitch, parseDeck, type DeckOp } from "./deck-view";
 import type { ShareLinks } from "./share-dialog";
 import type { PollApi } from "../lib/polls";
 import { attachBridge, appScope } from "./app-bridge";
@@ -811,7 +811,7 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp, onNewDesign }: {
 function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, reloadKey, designEditorUrl, designHost }: {
   file: CanvasFile;
   uploadFile?: (dir: string, file: File) => Promise<void>;
-  readFile: (path: string) => Promise<string>;
+  readFile: (path: string, silent?: boolean) => Promise<string>;
   openFile: (path: string, silent?: boolean) => Promise<string>;
   writeFile: WriteFile;
   deckOp?: (path: string, body: DeckOp) => Promise<void>;
@@ -850,6 +850,38 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  // A design's preview: what it looks like without the editor around it — its picture,
+  // or (several frames) the slides with Present. The editor stays mounted underneath,
+  // so switching back is at once and nothing reloads.
+  const design = isDesignEditor(fileKind(file)) && !!designEditorUrl;
+  const [previewing, setPreviewing] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);     // its slide manifest
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const loadPreview = useCallback(async () => {
+    try {
+      setPreview(await readFile(`${file.path}?as=slides`, true));
+      setPreviewFailed(false);
+    } catch {
+      setPreviewFailed(true);
+    }
+  }, [readFile, file.path]);
+  const showPreview = async () => {
+    setPreview(null);
+    setPreviewFailed(false);
+    setPreviewing(true);
+    track("design_previewed", {});
+    await flushDesignEditor(file.path, 3000);   // what's unsaved is in the preview
+    await loadPreview();
+  };
+  useEffect(() => {   // an agent edit while previewing: the server has saved it — show it
+    if (!previewing) return;
+    const onCommand = (e: Event) => {
+      if ((e as CustomEvent<{ path?: string }>).detail?.path === file.path) void loadPreview();
+    };
+    window.addEventListener("cycls:design-command", onCommand);
+    return () => window.removeEventListener("cycls:design-command", onCommand);
+  }, [previewing, file.path, loadPreview]);
 
   const download = () => openFile(file.path).then((url) => saveBlob(url, file.path.split('/').pop() || file.name)).catch(() => {});
   // A design as what it's used as: its picture or a PDF, rendered by the design service
@@ -930,7 +962,8 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
                 {t("edit")}
               </button>
             )}
-            {isDesignEditor(fileKind(file)) && designEditorUrl && canFullscreen() && (
+            {design && <EditPreviewSwitch previewing={previewing} onEdit={() => setPreviewing(false)} onPreview={() => void showPreview()} />}
+            {design && !previewing && canFullscreen() && (
               <button onClick={() => fullscreenDesignEditor(file.path)} className={headerBtn}
                       aria-label={t("fullScreen")} title={t("fullScreen")}>
                 <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -1000,11 +1033,30 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
             </button>
           </div>
         ) : (
-          <CanvasDoc file={file} content={content} error={error} readFile={readFile} openFile={openFile} resolveMedia={resolveMedia} writeFile={writeFile} deckOp={deckOp} pollsFor={pollsFor} listFolders={listFolders}
-                     fetchConnector={fetchConnector}
-                     appData={appData}
-                     designEditorUrl={designEditorUrl} designHost={designHost} reloadFile={reloadFile} onReload={onReload}
-                     onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
+          <>
+            {/* Under a preview the editor stays mounted (hidden, out of reach): it keeps
+                its state and its saves, and Edit is back at once. */}
+            <div className={previewing ? "invisible absolute inset-0" : "h-full"} inert={previewing} aria-hidden={previewing || undefined}>
+              <CanvasDoc file={file} content={content} error={error} readFile={readFile} openFile={openFile} resolveMedia={resolveMedia} writeFile={writeFile} deckOp={deckOp} pollsFor={pollsFor} listFolders={listFolders}
+                         fetchConnector={fetchConnector}
+                         appData={appData}
+                         designEditorUrl={designEditorUrl} designHost={designHost} reloadFile={reloadFile} onReload={onReload}
+                         onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
+            </div>
+            {previewing && (() => {
+              const pictures = preview ? parseDeck(preview) : null;
+              return (
+                <div className="absolute inset-0 bg-background" data-testid="design-preview">
+                  {previewFailed || (preview != null && !pictures?.count) ? <NoPreviewCard file={file} onDownload={download} />
+                    : !pictures ? <LoadingBar />
+                    : pictures.count > 1
+                      ? <DeckView data={preview!} path={file.path} openFile={openFile} onReload={() => void loadPreview()}
+                                  onSlideOp={deckOp ? (op) => deckOp(file.path, op) : undefined} />
+                      : <DesignPicture file={file} src={pictures.slides[0]} openFile={openFile} />}
+                </div>
+              );
+            })()}
+          </>
         )}
       </div>
 

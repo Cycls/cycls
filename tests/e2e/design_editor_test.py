@@ -383,6 +383,29 @@ def test_full_screen_fits_the_design_to_the_bigger_box(session):
     session.page.evaluate("document.exitFullscreen()")
 
 
+def test_preview_and_back_is_the_same_editor(session):
+    """Edit | Preview: the preview covers the editor, which stays mounted underneath —
+    back on Edit it is the same editor, nothing reloaded, and it still saves."""
+    session.open_design()
+    frame = session.page.locator("iframe").first.element_handle()
+    n = session.mark()
+    session.page.get_by_role("button", name="Preview", exact=True).click()
+    session.page.wait_for_timeout(1500)
+    assert session.page.get_by_test_id("design-preview").count() == 1
+    assert session.page.evaluate("(f) => !!f.closest('[inert]')", frame)
+    session.page.get_by_role("button", name="Edit", exact=True).click()
+    session.page.wait_for_timeout(500)
+    assert session.page.get_by_test_id("design-preview").count() == 0
+    assert session.page.evaluate("(f) => document.querySelector('iframe') === f && !f.closest('[inert]')", frame)
+    assert not any(e["type"] == "ready" for e in session.events(n))   # no second load
+    before = session.on_disk()
+    session.nudge()
+    session.wait_for("saved", after=n, timeout=30)
+    session.page.wait_for_timeout(1000)
+    assert session.on_disk() != before
+    session.no_editor_error()
+
+
 # ---- 6. A change made elsewhere isn't overwritten: the person decides ---------------------
 
 def test_a_change_made_elsewhere_asks_and_keep_mine_writes(session):

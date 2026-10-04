@@ -159,6 +159,7 @@ Identified users also carry **person properties** (via identify): `email`,
 | `deck_exported` | a deck downloaded from the deck viewer | `format` (`pptx` / `pdf`) — which file people take away |
 | `deck_slide_changed` | the owner moved (drag), duplicated or deleted a slide in the deck viewer's grid | `op` (`move` / `duplicate` / `delete`) — do people shape decks by hand, or ask the agent? |
 | `design_created` | "New design" — the canvas `+`, the Files panel, or File › New design in the editor | `source` (`canvas` / `files` / `editor`), `size` (the preset or `WxH`) — do people start designs by hand, not only by asking? |
+| `design_previewed` | the Edit \| Preview switch of a design in the canvas, to Preview | — how often a design is looked at without the editor |
 | `design_exported` | an export from the design editor, written into the workspace beside the design | `format`, `files` — which formats leave the editor |
 | `design_copied` | "Save a copy" in the design editor | — do people branch designs? |
 | `design_save_conflict` | a design save refused because the file changed elsewhere (another tab, person or script), then the choice made | `choice` (`shown` / `latest` / `mine` / `copy`) — how often do edits collide, and how do people settle it? |

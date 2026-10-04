@@ -447,6 +447,14 @@ Cycls tab opened, and everything it makes lands in the workspace.
   and never on a name the refresh keeps for the design's own images
   (`refresh.managed`). "Save a copy…" asks for a name and writes a new `.fig` beside
   it, then opens it. No downloads or file pickers from inside the editor.
+- **Edit | Preview.** A design open in the canvas has one switch in its header
+  (`EditPreviewSwitch`, `deck-view.tsx`): **Edit** is the editor; **Preview** is what the
+  design looks like without the editor around it — its picture, or for several frames
+  the slides (filmstrip, grid, notes, Present, downloads). Preview saves what's unsaved
+  first, then reads the slide manifest (`?as=slides`); the editor stays mounted
+  underneath, hidden and inert, so Edit is back at once with nothing reloaded, and an
+  agent edit made meanwhile shows in the preview. A deck opened as its `.deck.json` has
+  the same switch (it opens on Preview; Edit swaps the editor in).
 - **A PDF is made by Cycls.** The editor's own PDF is SVG → jsPDF with no fonts
   embedded, so Arabic and web fonts come out wrong; the design service's is each page's
   own render with a text layer. So File › Export selection › **PDF** (and **Export PDF**
