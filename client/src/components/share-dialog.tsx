@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { t } from "../lib/i18n";
 import { Popover } from "./popover";
 import { Icon, Spinner } from "./icon";
@@ -18,12 +18,6 @@ export function ShareDialog({ onClose, mode = "chat", subtitle = "", org, onShar
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   return (
     <Popover open onClose={onClose} className="right-2 top-12 mt-2 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-background shadow-lg overflow-hidden">

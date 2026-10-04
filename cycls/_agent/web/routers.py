@@ -92,8 +92,7 @@ def to_ui_messages(raw):
                     if msg.get("cards") and out and out[-1]["role"] == "assistant":
                         out[-1]["parts"] += [{"type": "card", "card": card} for card in msg["cards"]]
                     continue
-                text = "".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text"
-                               and not (msg.get("selection") and b.get("text", "").startswith("[Selected in ")))
+                text = state.user_text(msg)
             elif isinstance(c, str):
                 text = c
             else:
@@ -332,18 +331,27 @@ def chats_router(ws_dep):
         return merged
 
     @r.delete("/chats/{chat_id}/last-exchange")
-    async def truncate_last_exchange(chat_id: str, ws: Workspace = ws_dep):
+    async def truncate_last_exchange(chat_id: str, expect: Optional[str] = None, ws: Workspace = ws_dep):
         """Drop the last user turn and everything after it — the persistence
         half of `regenerate`. The FE then re-sends the same message, so the
-        run that follows is an ordinary send."""
+        run that follows is an ordinary send.
+
+        `?expect=<sha256 of the message's text>` is `retry`'s form: a failed or stopped
+        turn is dropped before its message is sent again, so the chat keeps it once. It
+        only ever drops that turn — not a turn with other text, and not one that ended
+        well (the failed request never arrived; the exchange before it stays) — and
+        says `{ok: false}` when it dropped nothing."""
         if (await state.get_meta(ws, chat_id)) is None:
             raise HTTPException(status_code=404, detail="Chat not found")
         # This is the one route that still deletes and renumbers every turn file.
         # Under a live run that moves the slots it is appending to — the exact way
         # two production chats lost turns (docs/notes/runs.md).
-        if state.run_status(await state.get_run(ws, chat_id)) == "running":
+        status = state.run_status(await state.get_run(ws, chat_id))
+        if status == "running":
             raise HTTPException(status_code=409, detail="This chat is still working on your last message.")
-        removed = await state.truncate_last_exchange(ws, chat_id)
+        if expect is not None and status == "done":
+            return {"ok": False}
+        removed = await state.truncate_last_exchange(ws, chat_id, expect)
         return {"ok": removed is not None}
 
     @r.delete("/chats/{chat_id}")
@@ -1062,7 +1070,8 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         _catalog_drop(ws.root)
         # The design editor saves an edited designs/<name>.fig here; re-export the
         # image beside it so a download (or the agent) never gets the pre-edit one.
-        design_refresh.schedule(ws.root, rel, ws.subject)
+        # A new design (a copy, a version opened as one) has none yet: it gets its .png.
+        design_refresh.schedule(ws.root, rel, ws.subject, ensure=dedupe)
         return reply
 
     @r.post("/files-batch/{path:path}")
@@ -1142,7 +1151,10 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         dst = str(dest.relative_to(Path(ws.root).resolve()))
         if was_file:   # a design's history follows it (directory moves don't carry it)
             from cycls._agent import versions
-            await asyncio.to_thread(versions.move, ws.root, Path(rel).as_posix(), Path(dst).as_posix())
+            try:
+                await asyncio.to_thread(versions.move, ws.root, Path(rel).as_posix(), Path(dst).as_posix())
+            except OSError as e:   # the file has moved: its history staying behind must not fail the rename
+                log("warn", message=f"history of {rel} did not follow it to {dst}: {type(e).__name__}: {e}")
         if was_app and trash.kind_of(dst, True) == "app":
             await _move_app_data(ws, rel.split("/")[1], dst.split("/")[1])
         _catalog_drop(ws.root)

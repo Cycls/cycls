@@ -3,6 +3,7 @@ import type { DesignVersion } from "../hooks/use-files";
 import { track } from "../lib/analytics";
 import { getLang, t } from "../lib/i18n";
 import { useToast } from "../lib/toast";
+import { useEscape } from "../hooks/use-escape";
 import { flushDesignEditor, reloadDesignEditors, type DesignHost } from "./design-editor-view";
 
 // A design's earlier versions (cycls/_agent/versions.py): each is what a save, an
@@ -32,6 +33,7 @@ export function VersionHistory({ path, host, onClose }: { path: string; host: De
   const [rows, setRows] = useState<DesignVersion[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const toast = useToast();
+  useEscape(onClose);
   const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
   const stem = (path.split("/").pop() ?? path).replace(/\.fig$/i, "");
 

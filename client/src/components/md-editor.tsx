@@ -462,7 +462,7 @@ function Toolbar() {
           autoFocus
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") applyLink(); if (e.key === "Escape") setUrl(null); }}
+          onKeyDown={(e) => { if (e.key === "Enter") applyLink(); if (e.key === "Escape") { e.preventDefault(); setUrl(null); } }}
           onBlur={() => setUrl(null)}
           placeholder="https://"
           dir="ltr"

@@ -137,6 +137,42 @@ def test_a_rename_carries_the_history_and_a_purge_ends_it(tmp_path):
     assert client.get("/versions/designs/b.fig").json()["versions"] == []
 
 
+def test_a_rename_carries_the_history_where_a_directory_cannot_be_renamed(tmp_path, monkeypatch):
+    """The gcsfuse workspace mount refuses to rename a directory (EMFILE, "Too many open
+    files") — and a design's history is one. It is copied across instead."""
+    import errno, os
+    from pathlib import Path
+    client, root = _client(tmp_path)
+    _put(root, "designs/a.fig", b"FIRST")
+    client.put("/files/designs/a.fig", content=b"SECOND")
+
+    def refusing(real):
+        def rename(src, dst, *a, **k):
+            if os.path.isdir(src):
+                raise OSError(errno.EMFILE, "Too many open files", str(src))
+            return real(src, dst, *a, **k)
+        return rename
+    monkeypatch.setattr(os, "rename", refusing(os.rename))
+    monkeypatch.setattr(Path, "replace", lambda self, target, _real=Path.replace: refusing(_real)(self, target))
+
+    assert client.patch("/files/designs/a.fig", json={"to": "designs/b.fig"}).status_code == 200
+    [v] = client.get("/versions/designs/b.fig").json()["versions"]
+    assert client.get(f"/versions/designs/b.fig?id={v['id']}").content == b"FIRST"
+    assert not (root / ".versions/designs/a.fig").exists()
+
+
+def test_a_rename_succeeds_even_when_its_history_cannot_follow(tmp_path, monkeypatch):
+    client, root = _client(tmp_path)
+    _put(root, "designs/a.fig", b"FIRST")
+    client.put("/files/designs/a.fig", content=b"SECOND")
+
+    def broken(*a):
+        raise OSError(5, "Input/output error")
+    monkeypatch.setattr(versions, "move", broken)
+    assert client.patch("/files/designs/a.fig", json={"to": "designs/b.fig"}).status_code == 200
+    assert (root / "designs/b.fig").read_bytes() == b"SECOND"
+
+
 # ---- the agent's edits ----
 
 def test_an_agent_edit_applies_to_a_save_made_while_it_ran(tmp_path, monkeypatch):

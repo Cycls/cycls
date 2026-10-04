@@ -262,7 +262,7 @@ export function WorkspacePanel({ workspaces, onBack, onClose }: {
               value={newWsName}
               onChange={(e) => setNewWsName(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Escape") setNewWsName(null);
+                if (e.key === "Escape") { e.preventDefault(); setNewWsName(null); }
                 if (e.key === "Enter" && newWsName.trim()) {
                   workspaces.onCreate(newWsName.trim()).then((r) => { workspaces.onSwitch(r.id); onClose(); });
                 }

@@ -34,6 +34,7 @@ import { useSpeechRecognition } from "../hooks/use-speech";
 import { useUrlParam } from "../hooks/use-url-param";
 import { useMediaQuery } from "../hooks/use-media-query";
 import { usePaneWidth } from "../hooks/use-pane-width";
+import { useEscapeFallback } from "../hooks/use-escape";
 import { SUGGESTIONS } from "./suggestions-data";
 import { ExamplesGallery } from "./examples";
 import { AskCard, type AskQuestion } from "./ask-card";
@@ -831,12 +832,9 @@ export function Chat({ chat, onShare, files, account, config }: {
     setRightExpanded(false);
     setRailIcons(false);
   };
-  useEffect(() => {
-    if (!rightOpen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeRight(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
+  // Escape closes the side pane — when nothing in it took the key: an open menu,
+  // popover or dialog closes itself first (useEscape), a field cancels its own edit.
+  useEscapeFallback(closeRight, rightOpen);
 
   const openRight = () => {
     setRailIcons(false);

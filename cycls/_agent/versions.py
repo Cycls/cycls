@@ -94,11 +94,12 @@ def read(root, rel, vid):
 
 
 def move(root, src, dst):
-    """A renamed file keeps its history."""
+    """A renamed file keeps its history. The history is a directory, and the gcsfuse
+    workspace mount can't rename one (EMFILE) — `shutil.move` falls back to copy + delete."""
     s, d = _dir(root, src), _dir(root, dst)
     if s.is_dir() and not d.exists():
         d.parent.mkdir(parents=True, exist_ok=True)
-        s.replace(d)
+        shutil.move(str(s), str(d))
         _last.pop((str(Path(root)), src), None)
 
 

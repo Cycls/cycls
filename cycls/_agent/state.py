@@ -18,7 +18,7 @@ Keys:
     <.database/ slot>         — agent-controlled KV exposed to the LLM
     <.org/ slot>              — workspaces registry + ACL (docs/workspaces.md)
 """
-import asyncio, json, os, re, secrets, shutil
+import asyncio, hashlib, json, os, re, secrets, shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -353,12 +353,25 @@ def _is_plain_user(msg):
     return True
 
 
-async def truncate_last_exchange(workspace, chat_id):
+def user_text(msg):
+    """What the person typed in a user turn: its text, without the line a design
+    selection adds for the model (kept beside it as `selection`)."""
+    c = msg.get("content")
+    if isinstance(c, str):
+        return c
+    return "".join(b.get("text", "") for b in c or [] if isinstance(b, dict) and b.get("type") == "text"
+                   and not (msg.get("selection") and b.get("text", "").startswith("[Selected in ")))
+
+
+async def truncate_last_exchange(workspace, chat_id, expect=None):
     """Drop the last user turn and everything after it. Returns the removed
     user content, or None when there was nothing to remove.
 
     Backs `regenerate`: the caller re-sends the same message, so the run that
-    follows is an ordinary send — the loop needs no special case.
+    follows is an ordinary send — the loop needs no special case. And `retry`,
+    which names the message it is about to re-send — `expect`, the sha256 of its
+    text: a failed request may never have arrived, and then the last exchange here
+    is the one before it, which stays.
 
     Two invariants make this the only safe shape of deletion here:
       * Turn files are `{turn:06d}` and `Session._saved` is `len(messages)`, so
@@ -371,6 +384,8 @@ async def truncate_last_exchange(workspace, chat_id):
     messages = await load_messages(workspace, chat_id)
     cut = next((i for i in range(len(messages) - 1, -1, -1) if _is_plain_user(messages[i])), None)
     if cut is None:
+        return None
+    if expect is not None and hashlib.sha256(user_text(messages[cut]).encode("utf-8")).hexdigest() != expect:
         return None
     removed = messages[cut].get("content")
     await replace_messages(workspace, chat_id, messages[:cut])

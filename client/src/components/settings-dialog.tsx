@@ -324,7 +324,7 @@ function EditableText({ value, onSave, dir, disabled }: {
         onBlur={() => editing && commit()}
         onKeyDown={(e) => {
           if (e.key === "Enter") commit();
-          if (e.key === "Escape") { setDraft(value); setEditing(false); }
+          if (e.key === "Escape") { e.preventDefault(); setDraft(value); setEditing(false); }
         }}
         className={cn(
           "w-full max-w-56 rounded-md border border-border px-2 py-1 text-end text-sm text-foreground focus:outline-none",

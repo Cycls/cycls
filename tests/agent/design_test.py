@@ -273,7 +273,7 @@ def _fake_apply(monkeypatch, result=b"EDITED-FIG", error=None, compiled=None, pr
     monkeypatch.setattr("cycls._agent.design.apply", _apply)
     scheduled = []
     monkeypatch.setattr("cycls._agent.design.refresh.schedule",
-                        lambda root, rel, user_id=None: scheduled.append(rel))
+                        lambda root, rel, user_id=None, ensure=False: scheduled.append(rel))
     return calls, scheduled
 
 
@@ -822,6 +822,67 @@ def test_only_design_figs_reexport(tmp_path, monkeypatch):
     monkeypatch.delenv("DESIGN_URL")                                        # no service → nothing to do
     _saves(tmp_path, "designs/launch.fig")
     assert calls == []
+
+
+def _bare_copy(tmp_path, monkeypatch):
+    """A design with nothing beside it — what "Save a copy" leaves."""
+    calls = _refresh_env(tmp_path, monkeypatch)
+    (tmp_path / "designs" / "launch copy.fig").write_bytes(b"COPY-FIG")
+    return calls, tmp_path / "designs"
+
+
+def test_a_design_with_no_image_gets_one_when_asked(tmp_path, monkeypatch):
+    calls, d = _bare_copy(tmp_path, monkeypatch)
+    _saves(tmp_path, "designs/launch copy.fig")                             # a plain save: only what's there
+    assert calls == [] and not (d / "launch copy.png").exists()
+
+    async def copy():
+        refresh.schedule(tmp_path, "designs/launch copy.fig", "org:u", ensure=True)
+        await asyncio.gather(*refresh._pending.values(), return_exceptions=True)
+    asyncio.run(copy())
+    assert (d / "launch copy.png").read_bytes() == b"NEW-png"
+    assert calls == [{"fig": b"COPY-FIG", "fmt": "png", "width": None, "user_id": "org:u", "every": False}]
+    assert refresh._ensure == set() and refresh._pending == {}
+
+
+def test_a_save_right_after_the_copy_still_leaves_it_an_image(tmp_path, monkeypatch):
+    # The copy opens in the editor, which saves it at once (its Brand variables): that
+    # save restarts the wait, and must not drop what the copy asked for.
+    calls, d = _bare_copy(tmp_path, monkeypatch)
+
+    async def copy_then_save():
+        refresh.schedule(tmp_path, "designs/launch copy.fig", "org:u", ensure=True)
+        refresh.schedule(tmp_path, "designs/launch copy.fig", "org:u")
+        await asyncio.gather(*refresh._pending.values(), return_exceptions=True)
+    asyncio.run(copy_then_save())
+    assert (d / "launch copy.png").read_bytes() == b"NEW-png" and len(calls) == 1
+
+
+def test_a_deck_or_a_carousel_is_not_given_a_png(tmp_path, monkeypatch):
+    calls = _refresh_env(tmp_path, monkeypatch)
+    d = tmp_path / "designs"
+    (d / "launch.png").unlink()                                             # a deck: its .pptx only
+    (d / "reel.fig").write_bytes(b"REEL-FIG")
+    (d / "reel-slide-1.png").write_bytes(_png(1080, 1350))                  # a carousel: its slides only
+
+    async def go():
+        for name in ("launch", "reel"):
+            refresh.schedule(tmp_path, f"designs/{name}.fig", "org:u", ensure=True)
+        await asyncio.gather(*refresh._pending.values(), return_exceptions=True)
+    asyncio.run(go())
+    assert not (d / "launch.png").exists() and not (d / "reel.png").exists()
+    assert sorted((c["fmt"], c["every"]) for c in calls) == [("png", True), ("pptx", False)]
+    assert refresh._ensure == set()
+
+
+def test_an_agent_edit_asks_for_the_image(tmp_path, monkeypatch):
+    _fake_apply(monkeypatch)
+    asked = []
+    monkeypatch.setattr("cycls._agent.design.refresh.schedule",
+                        lambda root, rel, user_id=None, ensure=False: asked.append((rel, ensure)))
+    _design(tmp_path)
+    asyncio.run(_exec_design({"action": "edit", "name": "launch", "script": "x"}, _ws(tmp_path)))
+    assert asked == [("designs/launch.fig", True)]
 
 
 # ---- layouts that would silently pile up at the frame edge ----

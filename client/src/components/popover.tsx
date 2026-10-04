@@ -1,4 +1,5 @@
 import { createPortal } from "react-dom";
+import { useEscape } from "../hooks/use-escape";
 
 export function Popover({ open, onClose, className, dim, children }: {
   open: boolean;
@@ -7,6 +8,7 @@ export function Popover({ open, onClose, className, dim, children }: {
   dim?: boolean;
   children: React.ReactNode;
 }) {
+  useEscape(onClose, open);
   if (!open) return null;
   return createPortal(
     <>

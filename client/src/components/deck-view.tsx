@@ -6,6 +6,7 @@ import type { DeckPoll, PollApi } from "../lib/polls";
 import type { WriteFile } from "../hooks/use-files";
 import { saveBlob } from "./canvas-utils";
 import { useSlideNav } from "../hooks/use-slide-nav";
+import { useEscape } from "../hooks/use-escape";
 import { track } from "../lib/analytics";
 import { t } from "../lib/i18n";
 import { cn } from "../lib/utils";
@@ -74,6 +75,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
   const [over, setOver] = useState<number | null>(null);
   const [menuFor, setMenuFor] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  useEscape(() => setConfirmDelete(null), confirmDelete !== null);
   const railRef = useRef<HTMLDivElement>(null);
   const fig = deck?.fig;
   const name = baseName(fig || path);
