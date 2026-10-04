@@ -284,15 +284,24 @@ office-render is configured, else a download card.
 **Decks open in the deck viewer.** A multi-frame render opens its
 `designs/<name>.deck.json` (`DeckView`, `client/src/components/deck-view.tsx`): a
 filmstrip beside the current slide and its speaker notes, or a grid of every slide;
-**Present**; **Download** — the whole deck as PowerPoint or PDF, exported on demand;
-and **Edit**, which swaps in the design editor on the deck's `.fig`. Its content is
+**Present**; **Download** — the whole deck as PowerPoint or PDF, or every slide as a
+PNG in one zip (`<name>-slide-<n>.png`; listed first for a carousel, which is posted
+as images), exported on demand; and **Edit**, which swaps in the design editor on the
+deck's `.fig`. Its content is
 the slide manifest from `GET /files/<deck>?as=slides` — the server resolves the
 deck document to its `.fig` (inside the workspace), asks the service's `/slides`
 for every slide as a JPEG plus its name / title / notes / transition, and caches the
 manifest in `.cache/design/` keyed by the `.fig`'s path + mtime + size, so an edit is
-a fresh render. `?as=pptx` / `?as=pdf` export the same way; a file share of the deck
-document serves all three, so a shared deck presents. An agent `edit` of the deck
-while the viewer (not the editor) is open refetches the manifest. `.fig` files are
+a fresh render. `?as=pptx` / `?as=pdf` / `?as=images` (the zip) / `?as=png` (the first
+frame) export the same way; a file share of the deck document serves them all, so a
+shared deck presents. An agent `edit` of the deck while the viewer (not the editor)
+is open refetches the manifest.
+
+**A design where there is no editor** — a shared page, an examples card, a deployment
+without `DESIGN_EDITOR_URL` — shows as what it looks like. The canvas fetches the
+`.fig`'s slide manifest (`?as=slides`) instead of its bytes (`useFileContent`'s
+`designAsPictures`): one frame is a picture with **Download image** (`?as=png`), several
+are the read-only deck viewer. With the design service down it is the download card. `.fig` files are
 kind `design` and `.deck.json` kind `deck` in the Files panel, so neither downloads
 on click.
 
@@ -302,7 +311,12 @@ slide / none), click or ←/→/Space/PageUp/PageDown/Home/End to move, **N** no
 **G** grid, **P** a presenter window (current + next slide, notes, a timer — a React
 root rendered into the popup from the presenting page, so its buttons drive the deck).
 It takes every key in the capture phase, so chat's global Escape — which closes the
-whole canvas — never sees the Escape that ends a presentation. Office presentations
+whole canvas — never sees the Escape that ends a presentation. (The same rule for
+everything else that opens over the canvas — menus, popovers, the version history,
+the save-a-copy and conflict dialogs: `hooks/use-escape.ts`. An open layer registers
+with `useEscape` and the newest takes the key; chat's own Escape, `useEscapeFallback`,
+acts only when no layer and no field did.) ←, ↑, PageUp and Backspace all step back —
+from the end screen, to the last slide. Office presentations
 (`SlidesView`) present the same way.
 
 **Live polls.** A `poll` slide (`{layout: "poll", question, options}`, 2–6 options)
@@ -393,7 +407,11 @@ saves in bursts while someone drags, and a newer save cancels an export in
 flight). A raster sends its old pixel width, and the service sets the scale to
 width ÷ frame width, so a @1x render stays @1x. A deck's `.pptx` / `.pdf` re-exports
 whole (notes and transitions come from the `.fig`); a carousel's `-slide-N` images
-re-export together, and a slide deleted since loses its image. Best effort: a failure logs and
+re-export together, and a slide deleted since loses its image. A design with nothing
+beside it — a copy made in the editor, a version opened as a copy — gets `<name>.png`:
+a new `.fig` (`?dedupe=1`) and an agent `edit` schedule with `ensure=True`, which
+survives the save the editor makes right after opening it; a deck or a carousel keeps
+only its own files. Best effort: a failure logs and
 leaves the old image — it never fails the save. Eager rather than on-read,
 because the sandbox reads the file straight off the volume where no hook can
 intercept it. The `edit` ack tells the model the image catches up a few seconds
@@ -478,7 +496,9 @@ Cycls tab opened, and everything it makes lands in the workspace.
   copy** makes it a new design. Routes: `GET /versions/<path>` (`?id=` one's bytes),
   `POST /versions/<path>?restore=<id>`. `.versions` is managed by cycls: refused by
   the files routes and the agent's tools, masked in the bash sandbox; a rename
-  carries a file's history, a purged trash entry ends it. A bash `cp` over a `.fig`
+  carries a file's history (copied, where the mount can't rename a directory — gcsfuse;
+  a history that can't follow is logged and never fails the rename), a purged trash
+  entry ends it. A bash `cp` over a `.fig`
   bypasses it.
 - **Add selection.** The editor reports what's selected (`selection {doc, frame,
   nodes:[{name, type, text?}]}`, by name — ids change on save), and the composer
