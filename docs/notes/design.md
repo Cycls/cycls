@@ -455,7 +455,11 @@ Cycls tab opened, and everything it makes lands in the workspace.
   the last sync (recorded on the first frame: a `.fig` keeps neither a variable's
   description nor a page's plugin data), so a colour changed by hand stands.
 - **Full screen.** The button beside a design's ⋮ puts the editor's own box full
-  screen: the same iframe, so nothing reloads and saves go on. Chrome and Edge keep
+  screen: the same iframe, so nothing reloads and saves go on. The design is fitted to
+  the bigger box: when the editor's box changes size by more than 15% (full screen, the
+  canvas expanded over the chat) the host posts `fit`, and the editor fits the design
+  again unless the person has zoomed or panned since the last fit (an editor that
+  lists the `fit` feature; before it the design stayed small in a corner). Chrome and Edge keep
   Esc for the editor (hold it to leave); "Exit full screen" shows at the top middle
   on entry and under the pointer there. Toasts show inside it (`data-toasts`), and a
   new design, a copy or an export's Open leaves full screen first, since each opens
@@ -477,9 +481,13 @@ Cycls tab opened, and everything it makes lands in the workspace.
   short per-file lock, never `deck.lock` (held across the service call, minutes).
   - **An agent edit** is saved on the server first, so a save the editor posted before
     replaying it is expected to be refused: `design_command` carries the edit's
-    version, the edits replay one at a time (the next after `applied`; one this load
-    already read is skipped), and on `applied` the base moves to the edit's version
-    and the refused work is flushed again.
+    version, the edits replay one at a time (the next after `applied`), and on
+    `applied` the base moves to the edit's version and the refused work is flushed
+    again. None is sent before the editor says `loaded` — one that arrived while it
+    was loading used to get `commandError: no document is open`, and a second load:
+    an edit made before the editor's `ready` is in the file it is about to read;
+    of those that arrive while it loads, the one whose version the load read (and
+    every one before it) is in the document already, and the rest replay.
   - **Anything else** — another tab, another person, a script — after 3 s (the
     agent's event travels apart from the save's answer) asks: **Load the latest**,
     **Keep mine** (`?force=1`: written over, the other kept as a version), or **Save
@@ -568,7 +576,8 @@ the build until it is reviewed. The patches and build recipe live in
   to the QA image. Nodes carry names from the spec's `id`.
 - **Edits by name.** `inspect` returns a design's outline (frames, named nodes with
   box/text/font/colour); `edit` takes `ops` — set_text, style, move, resize, delete,
-  duplicate, replace_image, add — which the service compiles with the builder's own
+  duplicate, replace_image, add, and background (the slide's own fill: a slide isn't a
+  node `style` can name) — which the service compiles with the builder's own
   code and applies to the saved .fig. The reply's compiled script is what the live
   editor replays (`design_command`), so both copies change identically; the edited
   design comes back to the model with a layout check. A raw `script` still works as
