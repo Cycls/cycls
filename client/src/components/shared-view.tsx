@@ -257,7 +257,7 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
   const readFile = useCallback(async (p: string) => (await authedFetch(p)).text(), [authedFetch]);
   const openFile = useCallback(async (p: string) => URL.createObjectURL(await (await authedFetch(p)).blob()), [authedFetch]);
 
-  const { content, error } = useFileContent(renderable ? file : null, readFile, openFile);
+  const { content, error } = useFileContent(renderable ? file : null, readFile, openFile, 0, true);
   const download = () => openFile(path).then((url) => saveBlob(url, name)).catch(() => {});
   const openInTab = () => {
     if (content == null) return;
@@ -375,7 +375,7 @@ function SharedFile({ share, getToken }: { share: FileShare; getToken?: () => Pr
   const openFile = useCallback(async (p: string) => URL.createObjectURL(await (await authedFetch(p)).blob()), [authedFetch]);
 
   // Fetch only renderable files; unrenderable just offer download.
-  const { content, error } = useFileContent(renderable ? file : null, readFile, openFile);
+  const { content, error } = useFileContent(renderable ? file : null, readFile, openFile, 0, true);
   const download = () => openFile(share.path).then((url) => saveBlob(url, name)).catch(() => {});
 
   // A shared page renders HTML in a sandboxed iframe sized to this layout; the

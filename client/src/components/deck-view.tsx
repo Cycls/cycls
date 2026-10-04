@@ -107,11 +107,20 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
     track("deck_presented", { slides: count, from: from === 0 ? "start" : "current" });
     setPresenting(from);
   };
-  const download = (format: "pptx" | "pdf") => {
+  const download = (format: "pptx" | "pdf" | "images") => {
     if (!openFile) return;
     track("deck_exported", { format });
-    openFile(`${path}?as=${format}`).then((url) => saveBlob(url, `${name}.${format}`)).catch(() => {});
+    openFile(`${path}?as=${format}`).then((url) => saveBlob(url, `${name}.${format === "images" ? "zip" : format}`)).catch(() => {});
   };
+  // A carousel (square or portrait slides) is posted as images: they come first.
+  const [w, h] = deck.sizes?.[0] ?? [16, 9];
+  const images = { label: t("imagesZip"), onClick: () => download("images") };
+  const downloads = [
+    ...(w <= h ? [images] : []),
+    { label: t("pptxFile"), onClick: () => download("pptx") },
+    { label: t("pdfFile"), onClick: () => download("pdf") },
+    ...(w <= h ? [] : [images]),
+  ];
   const edit = async () => {
     if (!canEdit || !fig) return;
     try { setEditing(await openFile!(fig)); } catch { /* the toast already said why */ }
@@ -184,10 +193,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
               {t("download")}
             </button>
             {menuOpen && (
-              <DropdownMenu onClose={() => setMenuOpen(false)} items={[
-                { label: t("pptxFile"), onClick: () => download("pptx") },
-                { label: t("pdfFile"), onClick: () => download("pdf") },
-              ]} />
+              <DropdownMenu onClose={() => setMenuOpen(false)} items={downloads} />
             )}
           </div>
         )}

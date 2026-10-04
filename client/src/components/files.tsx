@@ -221,7 +221,7 @@ type SortKey = "name" | "size" | "modified" | "type";
 
 const fileExt = (name: string) => (name.includes(".") ? name.split(".").pop()!.toLowerCase() : "");
 
-export function Files({ entries, path, loading, onNavigate, onReload, onUpload, onUploadBatch, onMkdir, onRename, onDelete, onOpenFile, onShareFile, onOpenInCanvas, onNewDesign, listFolders, maxUpload, org }: FilesPanelProps) {
+export function Files({ entries, path, loading, onNavigate, onReload, onUpload, onUploadBatch, onMkdir, onRename, onDelete, onOpenFile, onShareFile, shareLinks, onOpenInCanvas, onNewDesign, listFolders, maxUpload, org }: FilesPanelProps) {
   useLang();
   const { error: toastError } = useToast();
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
@@ -705,6 +705,8 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
           subtitle={shareDialog.name}
           org={org}
           onShare={(audience) => onShareFile(shareDialog.path, audience)}
+          path={`file/${shareDialog.path}`}
+          links={shareLinks}
         />
       )}
     </div>

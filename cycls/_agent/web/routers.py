@@ -523,11 +523,13 @@ async def _office_slides(root, src, user_id):
 # Designs as decks. A multi-frame render writes `designs/<name>.deck.json` (the deck
 # document) beside its `.fig`; either one previews slide by slide (?as=slides — a
 # manifest the deck viewer shows and presents) and exports the whole deck on demand
-# (?as=pptx / ?as=pdf), through the cycls-design service. Cached like the office
+# (?as=pptx / ?as=pdf, or ?as=images: every slide as a PNG, zipped — what a carousel
+# is posted from; ?as=png: the first frame, a single design's picture), through the
+# cycls-design service. Cached like the office
 # renders, keyed by the .fig's path + mtime + size — so an edit (the editor's
 # auto-save, an agent's `edit`) is a fresh render.
 _DESIGN_CACHE = ".cache/design"
-_DESIGN_AS = ("slides", "pptx", "pdf")
+_DESIGN_AS = ("slides", "pptx", "pdf", "images", "png")
 
 
 def _design_doc(name):
@@ -618,24 +620,40 @@ def _write_design_export(cache_dir, stem, fmt, dst, data):
         return tmp
 
 
+def _zip_slides(stem, pngs):
+    """Every slide's PNG as `<stem>-slide-<n>.png` — the names a carousel render writes."""
+    import io
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:       # PNGs don't deflate
+        for n, png in enumerate(pngs, 1):
+            zf.writestr(f"{stem}-slide-{n}.png", png)
+    return buf.getvalue()
+
+
 async def _design_export(root, src, fmt, user_id):
-    """The whole deck behind `src` as `fmt` (pptx / pdf), cached → (path, the
-    download name). Same errors as _design_slides."""
+    """The whole deck behind `src` as `fmt` (pptx / pdf / images: a zip of every
+    slide's PNG) — or `png`, its first frame — cached → (path, the download name).
+    Same errors as _design_slides."""
     from cycls._agent import design
     root = Path(root).resolve()
     fig, _ = await asyncio.to_thread(_deck_fig, root, src)
     stem, key = _design_cache_key(root, fig)
     cache_dir = root / _DESIGN_CACHE
-    dst = cache_dir / f"{stem}-{key}.{fmt}"
-    name = f"{fig.stem}.{fmt}"
+    ext = "zip" if fmt == "images" else fmt
+    dst = cache_dir / f"{stem}-{key}.{ext}"
+    name = f"{fig.stem}.{ext}"
     if dst.exists():
         return dst, name
-    data = await design.export(await asyncio.to_thread(fig.read_bytes), fmt=fmt, user_id=user_id)
-    return await asyncio.to_thread(_write_design_export, cache_dir, stem, fmt, dst, data), name
+    data = await asyncio.to_thread(fig.read_bytes)
+    if fmt == "images":
+        data = _zip_slides(fig.stem, await design.export(data, fmt="png", user_id=user_id, every=True))
+    else:
+        data = await design.export(data, fmt=fmt, user_id=user_id)
+    return await asyncio.to_thread(_write_design_export, cache_dir, stem, ext, dst, data), name
 
 
 async def _design_response(root, src, as_, user_id):
-    """?as=slides|pptx|pdf on a deck document or a .fig → the response."""
+    """?as=slides|pptx|pdf|images|png on a deck document or a .fig → the response."""
     from cycls._agent import design
     try:
         if as_ == "slides":

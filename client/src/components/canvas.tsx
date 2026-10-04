@@ -16,7 +16,8 @@ import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { DesignEditorView, canFullscreen, flushDesignEditor, fullscreenDesignEditor, type DesignHost } from "./design-editor-view";
 import { VersionHistory } from "./version-history";
-import { DeckView, type DeckOp } from "./deck-view";
+import { DeckView, parseDeck, type DeckOp } from "./deck-view";
+import type { ShareLinks } from "./share-dialog";
 import type { PollApi } from "../lib/polls";
 import { attachBridge, appScope } from "./app-bridge";
 import { injectShim } from "./app-shim";
@@ -59,6 +60,7 @@ export function useFileContent(
   readFile: (p: string, silent?: boolean) => Promise<string>,
   openFile: (p: string, silent?: boolean) => Promise<string>,
   reloadKey: number = 0,   // bump to re-fetch: the agent rewrote the file
+  designAsPictures: boolean = false,   // no editor to open a .fig in (a shared page): fetch its slide manifest
 ) {
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState(false);
@@ -87,7 +89,7 @@ export function useFileContent(
     // fetch their raw bytes (a blob URL) for the native renderer; other office
     // files fetch the server's PDF render.
     // A design deck fetches its slide manifest (the design service renders it).
-    const load = isDeck(kind)
+    const load = isDeck(kind) || (designAsPictures && isDesignEditor(kind))
       ? readFile(`${file.path}?as=slides`, true)
       : isMd(kind) || isHtml(kind) || codeLang(kind) != null
       ? readFile(file.path, file.writable)
@@ -100,7 +102,7 @@ export function useFileContent(
     load.then((v) => { if (!cancelled) { setContent(v); setError(false); loaded.current = true; } })
         .catch((e) => { if (!cancelled) { if (file.writable && e?.status === 404) setContent(""); else if (!loaded.current) setError(true); } });
     return () => { cancelled = true; if (blobUrl) URL.revokeObjectURL(blobUrl); };
-  }, [file?.path, file?.name, file?.writable, readFile, openFile, reloadKey]);
+  }, [file?.path, file?.name, file?.writable, readFile, openFile, reloadKey, designAsPictures]);
 
   return { content, setContent, error };
 }
@@ -238,6 +240,28 @@ function NoPreviewCard({ file, onDownload, onShare }: {
   );
 }
 
+// A single design where there's no editor to open it in — a shared page, or a
+// deployment without one: its picture, and the image to keep.
+function DesignPicture({ file, src, openFile }: {
+  file: CanvasFile;
+  src: string;
+  openFile?: (path: string, silent?: boolean) => Promise<string>;
+}) {
+  const stem = file.name.replace(/\.fig$/i, "");
+  const save = () => openFile?.(`${file.path}?as=png`).then((url) => saveBlob(url, `${stem}.png`)).catch(() => {});
+  return (
+    <div className="relative flex h-full items-center justify-center overflow-auto bg-secondary/40 p-4">
+      <img src={src} alt={file.name} data-testid="design-picture" className="max-h-full max-w-full object-contain shadow-sm" />
+      {openFile && (
+        <button onClick={save}
+                className="absolute bottom-4 end-4 cursor-pointer rounded-full border border-border bg-background/90 px-4 py-2 text-xs font-medium text-foreground shadow-lg backdrop-blur transition-colors hover:bg-secondary">
+          {t("downloadImage")}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, deckOp, pollsFor, listFolders, fetchConnector, appData, designEditorUrl, designHost, reloadFile, onReload, onDownload, onShare }: {
   file: CanvasFile;
   resolveMedia?: (path: string) => Promise<string>;
@@ -265,7 +289,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
     // A failed Office conversion / render (service down, unconvertible, parse
     // error) degrades to the download card rather than a dead error — same as an
     // unrenderable file.
-    if (isOffice(fileKind(file)) || isDocx(fileKind(file)) || isPresentation(fileKind(file)) || isDeck(fileKind(file)))
+    if (isOffice(fileKind(file)) || isDocx(fileKind(file)) || isPresentation(fileKind(file)) || isDeck(fileKind(file)) || isDesignEditor(fileKind(file)))
       return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Couldn't load this file.</div>;
   }
@@ -294,15 +318,20 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   }
   // OpenPencil .fig → the embedded editor on its own origin, so the human edits
   // the same design the agent renders headlessly. Needs a configured editor URL
-  // (config.design_editor_url) + the fetched bytes; otherwise the download card.
+  // (config.design_editor_url) + the fetched bytes. Without one — a shared page —
+  // `content` is the design's slide manifest, and it shows as what it looks like: one
+  // picture, or (several frames) the read-only deck viewer.
   if (isDesignEditor(fileKind(file))) {
-    return content && designEditorUrl ? (
-      <DesignEditorView url={content} path={file.path} name={file.name}
-                        editorUrl={designEditorUrl} writeFile={writeFile ?? (async () => {})}
-                        reload={reloadFile} host={shared ? undefined : designHost} />
-    ) : (
-      <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />
-    );
+    if (content && designEditorUrl) {
+      return <DesignEditorView url={content} path={file.path} name={file.name}
+                               editorUrl={designEditorUrl} writeFile={writeFile ?? (async () => {})}
+                               reload={reloadFile} host={shared ? undefined : designHost} />;
+    }
+    const pictures = content ? parseDeck(content) : null;
+    if (!pictures?.count) return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
+    return pictures.count > 1
+      ? <DeckView data={content!} path={file.path} openFile={openFile} />
+      : <DesignPicture file={file} src={pictures.slides[0]} openFile={openFile} />;
   }
   // Office docs arrive here as a converted-PDF blob URL, so they ride the same
   // native PDF viewer (search / zoom / print, mobile open-in-tab).
@@ -383,7 +412,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, railWidth = 0, reloadKey, working, designEditorUrl, designHost, onNewDesign }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, railWidth = 0, reloadKey, working, designEditorUrl, designHost, onNewDesign }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -411,6 +440,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;   // an app's live call to a connector API
   org?: { id: string; name: string } | null;   // lets the share dialog offer the org audience
   onShareFile?: (path: string, audience: string) => Promise<string>;
+  shareLinks?: ShareLinks;   // a file's existing share links (the Share popover shows one instead of making another)
   railWidth?: number;   // pane docked to our right; the drag must account for it
   reloadKey?: number;  // bump to re-fetch the open document
   designEditorUrl?: string;   // embedded .fig editor base URL (config.design_editor_url)
@@ -527,6 +557,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
                   appData={appData}
                   org={org}
                   onShareFile={onShareFile}
+                  shareLinks={shareLinks}
                   reloadKey={reloadKey}
                   designEditorUrl={designEditorUrl}
                   designHost={designHost}
@@ -770,7 +801,7 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp, onNewDesign }: {
 }
 
 // Keyed by path from the parent, so per-file state resets on tab switch.
-function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, reloadKey, designEditorUrl, designHost }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, reloadKey, designEditorUrl, designHost }: {
   file: CanvasFile;
   uploadFile?: (dir: string, file: File) => Promise<void>;
   readFile: (path: string) => Promise<string>;
@@ -783,12 +814,13 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   org?: { id: string; name: string } | null;
   onShareFile?: (path: string, audience: string) => Promise<string>;
+  shareLinks?: ShareLinks;
   reloadKey?: number;
   designEditorUrl?: string;
   designHost?: DesignHost;
 }) {
   const [bump, setBump] = useState(0);   // a document asked to refetch itself (a deck was edited)
-  const { content, setContent, error } = useFileContent(file, readFile, openFile, (reloadKey ?? 0) + bump);
+  const { content, setContent, error } = useFileContent(file, readFile, openFile, (reloadKey ?? 0) + bump, !designEditorUrl);
   const onReload = useCallback(() => setBump((n) => n + 1), []);
   const resolveMedia = useMemo(() => mediaResolver(file.path, openFile), [file.path, openFile]);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -976,6 +1008,8 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
           subtitle={file.name}
           org={org}
           onShare={(audience) => onShareFile(file.path, audience)}
+          path={`file/${file.path}`}
+          links={shareLinks}
         />
       )}
     </>
