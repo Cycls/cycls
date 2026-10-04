@@ -3,7 +3,8 @@
 Chat metadata + message log and shares live in the workspace DB — see
 `cycls._agent.state`. Files stay on the workspace filesystem (POSIX-shaped).
 """
-import asyncio, base64, hashlib, json, os, re, secrets, shutil, tempfile, time, unicodedata, uuid, zipfile
+import asyncio, base64, hashlib, itertools, json, os, re, secrets, shutil, tempfile, time, unicodedata, uuid, zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -370,21 +371,28 @@ def chats_router(ws_dep):
 
 # ---- Files ----
 #
-# The file browser and the @-picker are both served from one cached walk, and
+# The file browser reads the one folder it shows. The @-picker, the flat listing
+# and "Move to…" need the whole tree, and are served from one cached walk of it;
 # matching/ordering/render-class are decided here rather than once per client.
 
 _LIST_CAP = 2000          # flat-listing response cap
 _SEARCH_CAP = 12          # @-picker results per query
-_CATALOG_MAX = 10000      # entries in one cached walk; above it, list per-request
+_CATALOG_MAX = 10000      # entries in one cached walk
 _CATALOG_WORKSPACES = 8   # workspaces one instance keeps warm
 
-# Serving is serverless, so this cache is per-instance: `_catalog_drop` clears
+# Serving is serverless, so this cache is per-instance: `_catalog_drop` marks
 # only the instance that handled the write, and agent writes go through the
 # sandbox rather than these routes and so never invalidate at all. The TTL is
 # what bounds both.
-_CATALOG_TTL = 5.0
+_CATALOG_TTL = 5.0        # how long a walk is reused, from when it ended
+_CATALOG_WAIT = 0.5       # how long a reader waits for a re-walk before taking the last one
+_CATALOG_SLOW = 2.0       # a walk slower than this is logged, with where its entries are
 
-_catalog = {}   # str(root) -> (deadline, Task[(entries, truncated)])
+# str(root) -> {tree: (entries, truncated) | None, began, ended, dropped, walk: Task | None}.
+# `began` / `dropped` are ticks of one counter: a tree is current only when its walk
+# began after the last write here.
+_catalog = {}
+_tick = itertools.count(1)
 
 
 def _norm(text):
@@ -686,39 +694,93 @@ def _walk_catalog(root):
 
 def _catalog_evict(keep):
     """One instance is reused across every workspace it serves, so an unbounded
-    dict of walked trees leaks. Nearest deadline first drops expired entries
-    before live ones."""
+    dict of walked trees leaks. The tree walked longest ago goes first."""
     while len(_catalog) > _CATALOG_WORKSPACES:
         victim = min((k for k in _catalog if k != keep),
-                     key=lambda k: _catalog[k][0], default=None)
+                     key=lambda k: _catalog[k]["ended"], default=None)
         if victim is None:
             return
         del _catalog[victim]
 
 
+def _catalog_slot(key):
+    slot = _catalog.get(key)
+    if slot is None:
+        slot = _catalog[key] = {"tree": None, "began": 0, "ended": 0.0, "dropped": 0, "walk": None}
+        _catalog_evict(key)
+    return slot
+
+
+def _catalog_walk(key, root, slot):
+    """Walk `root` off the request → the task. Its tree replaces an older one."""
+    began, started = next(_tick), time.monotonic()
+
+    async def walk():
+        try:
+            tree = await asyncio.to_thread(_walk_catalog, root)
+        except BaseException:
+            if slot["tree"] is None and _catalog.get(key) is slot:
+                del _catalog[key]      # a failed walk leaves nothing to serve
+            raise
+        finally:
+            if slot["walk"] is task:
+                slot["walk"] = None
+        if began > slot["began"]:
+            slot.update(tree=tree, began=began, ended=time.monotonic())
+        if (took := time.monotonic() - started) > _CATALOG_SLOW:
+            top = {}
+            for e in tree[0]:
+                head = e["path"].split("/", 1)[0] if "/" in e["path"] else "."
+                top[head] = top.get(head, 0) + 1
+            log("files", message=f"catalog walk took {took:.1f}s", entries=len(tree[0]), truncated=tree[1],
+                largest=dict(sorted(top.items(), key=lambda kv: -kv[1])[:5]))
+        return tree
+
+    task = slot["walk"] = asyncio.ensure_future(walk())
+    task.add_done_callback(lambda t: t.cancelled() or t.exception())   # nobody may be waiting on it
+    return task
+
+
 async def _catalog_get(root, fresh=False):
-    """The workspace tree, walked at most once per TTL. Caches the task rather
-    than the result so callers arriving mid-walk join it instead of starting
-    their own."""
+    """The workspace tree — every file and folder — from a walk cached per workspace.
+
+    A walk is reused for _CATALOG_TTL after it ends. Past that, or after a write
+    here, the tree is walked again: the reader waits _CATALOG_WAIT for it, and if it
+    takes longer is handed the last tree while the new one finishes behind it — a
+    large workspace on the gcsfuse mount takes 30–40 s to walk, and a search must
+    not. `fresh` waits for a walk begun after the call, however long. Readers
+    arriving mid-walk join it instead of starting their own."""
     key = str(root)
-    hit = _catalog.get(key)
-    if hit and not fresh and time.monotonic() < hit[0]:
-        return await hit[1]
-    task = asyncio.ensure_future(asyncio.to_thread(_walk_catalog, root))
-    _catalog[key] = (time.monotonic() + _CATALOG_TTL, task)
-    _catalog_evict(key)
-    try:
-        return await task
-    except BaseException:
-        if (cur := _catalog.get(key)) and cur[1] is task:
-            del _catalog[key]      # a failed walk must not be served for the rest of the TTL
-        raise
+    slot = _catalog_slot(key)
+    last = slot["tree"]
+    if (last is not None and not fresh and slot["began"] > slot["dropped"]
+            and time.monotonic() - slot["ended"] < _CATALOG_TTL):
+        return last
+    walk = slot["walk"]
+    if fresh or walk is None or walk.done():
+        walk = _catalog_walk(key, root, slot)
+    if last is None or fresh:
+        return await asyncio.shield(walk)
+    done, _ = await asyncio.wait({walk}, timeout=_CATALOG_WAIT)
+    if done and not walk.cancelled() and walk.exception() is None:
+        return walk.result()
+    return last
+
+
+def _catalog_warm(root):
+    """A workspace's first walk, begun in the background by its first folder listing —
+    so the search that follows finds a tree instead of waiting for one."""
+    key = str(root)
+    if key not in _catalog:
+        _catalog_walk(key, root, _catalog_slot(key))
 
 
 def _catalog_drop(root):
-    """Resolves the root as `_catalog_get` does; a mismatched key would
-    silently never invalidate."""
-    _catalog.pop(str(Path(root).resolve()), None)
+    """A write happened under `root`: its cached tree is out of date. The tree stays
+    (the next reader may be handed it while the re-walk runs). Resolves the root as
+    `_catalog_get` does; a mismatched key would silently never invalidate."""
+    if slot := _catalog.get(str(Path(root).resolve())):
+        slot["dropped"] = next(_tick)
 
 
 def _search(entries, query, cap=_SEARCH_CAP):
@@ -798,31 +860,48 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         return datetime.fromtimestamp(t, tz=timezone.utc).isoformat() if t else ""
 
     def _scandir_slice(target, root):
-        """Only reached above _CATALOG_MAX."""
-        out = []
+        """One folder, read from the folder: its files, and its subfolders with their
+        times (each a scan of that subfolder — a few at a time, a list call apiece on
+        the gcsfuse mount)."""
+        out, dirs = [], []
         for entry in os.scandir(target):
             if entry.name.startswith(".") or Path(entry.path).relative_to(root).as_posix().lower() == "agent.md":
                 continue
-            st = entry.stat()
+            try:
+                st = entry.stat()
+            except OSError:      # vanished mid-scan, or unreadable
+                continue
             is_dir = entry.is_dir()
             out.append({
                 "name": entry.name,
                 "path": Path(entry.path).relative_to(root).as_posix(),
                 "type": "directory" if is_dir else "file",
                 "size": 0 if is_dir else st.st_size,
-                "modified": _dir_mtime(entry.path) if is_dir else _iso(st.st_mtime),
+                "modified": "" if is_dir else _iso(st.st_mtime),
                 "kind": "folder" if is_dir else _kind(entry.name),
             })
+            if is_dir:
+                dirs.append((out[-1], entry.path))
+        if len(dirs) > 1:
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                times = list(pool.map(_dir_mtime, [path for _, path in dirs]))
+        else:
+            times = [_dir_mtime(path) for _, path in dirs]
+        for (row, _), modified in zip(dirs, times):
+            row["modified"] = modified
         return out
 
     @r.get("/files")
     async def list_files(request: Request, response: Response, ws: Workspace = ws_dep):
         """One folder, the whole tree, or a search across it.
 
-        `search=q` backs the @-picker and returns files only. `recursive=1` still
-        returns the flat tree, so clients predating `search` keep working.
-        `fresh=1` skips the cache — for right after a client's own write, which
-        another instance may have handled, and right after an agent turn.
+        One folder is read from that folder, so it is always current and costs what
+        the folder costs — never a walk of the workspace. `search=q` backs the
+        @-picker and returns files only; `recursive=1` still returns the flat tree,
+        so clients predating `search` keep working. Both come from the cached walk
+        (`_catalog_get`), where `fresh=1` waits for a new one — for right after a
+        client's own write, which another instance may have handled, and right after
+        an agent turn.
         """
         q = request.query_params
         root = Path(ws.root).resolve()
@@ -846,9 +925,8 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             return []
         sort_key = q.get("sort") if q.get("sort") in _SORTS else "name"
         desc = q.get("desc") is not None
-        entries, truncated = await _catalog_get(root, fresh)
-        slice_ = (await asyncio.to_thread(_scandir_slice, target, root) if truncated
-                  else [e for e in entries if e["_dir"] == rel])
+        slice_ = await asyncio.to_thread(_scandir_slice, target, root)
+        _catalog_warm(root)
         return [_public(e) for e in _sorted(slice_, sort_key, desc)]
 
     @r.get("/files/{path:path}")

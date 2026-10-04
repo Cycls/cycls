@@ -3,6 +3,7 @@ import base64
 import json
 import asyncio
 import os
+import time
 import importlib.resources
 from cycls._agent.web import web, Config, Messages, sse, encoder, openai_encoder
 
@@ -1976,8 +1977,8 @@ def test_listing_sorts_folders_first_and_honours_sort_key(tmp_path):
     assert client.get("/files", params={"sort": "nonsense"}).json() == by_name
 
 
-def test_folder_time_comes_from_newest_child_without_rescanning(tmp_path):
-    """Folder mtime is derived from the walk that already visited the folder."""
+def test_folder_time_comes_from_its_newest_child(tmp_path):
+    """A folder's own mtime means nothing on the gcsfuse mount; its newest file's does."""
     root = _seed(tmp_path, {"docs/old.txt": b"x", "docs/new.txt": b"y"})
     os.utime(root / "docs" / "old.txt", (1_600_000_000, 1_600_000_000))
     os.utime(root / "docs" / "new.txt", (1_700_000_000, 1_700_000_000))
@@ -2005,18 +2006,137 @@ def test_write_routes_invalidate_the_catalog(tmp_path):
 
 def test_fresh_bypasses_a_warm_cache(tmp_path):
     """Writes that never reach these routes — another instance, or the agent's
-    sandbox — are invisible until the TTL, so clients can force a walk."""
-    from cycls._agent.web import routers
-
+    sandbox — are invisible to a search until the TTL, so clients can force a walk.
+    A folder listing reads the folder, and shows them at once."""
     root = _seed(tmp_path, {"a.txt": b"x"})
     client = _ws_routers_client(tmp_path)
-    client.get("/files")                                  # warm it
+    names = lambda **params: [e["name"] for e in client.get("/files", params=params).json()]
+    assert names(search="") == ["a.txt"]                   # warm it
 
     (root / "agent-made.txt").write_bytes(b"z")            # bypasses the write routes
-    assert "agent-made.txt" not in [e["name"] for e in client.get("/files").json()]
+    assert "agent-made.txt" not in names(search="")
+    assert "agent-made.txt" in names(search="", fresh=1)
+    assert "agent-made.txt" in names()
 
-    fresh = client.get("/files", params={"fresh": 1}).json()
-    assert "agent-made.txt" in [e["name"] for e in fresh]
+
+def test_a_folder_listing_does_not_depend_on_the_walk(tmp_path, monkeypatch):
+    """The Files panel took 30–40 s on a large workspace: every listing, even of one
+    folder, waited for a walk of the whole tree. It reads the folder it shows."""
+    from cycls._agent.web import routers
+
+    _seed(tmp_path, {"designs/launch.fig": b"FIG", "designs/launch.png": b"PNG", "notes/a.md": b"x"})
+
+    def no_walk(root):
+        raise OSError("the walk is not what a folder listing reads")
+    monkeypatch.setattr(routers, "_walk_catalog", no_walk)
+    client = _ws_routers_client(tmp_path)
+    assert [e["name"] for e in client.get("/files").json()] == ["designs", "notes"]
+    listed = client.get("/files", params={"path": "designs"}).json()
+    assert [(e["name"], e["path"], e["kind"]) for e in listed] == [
+        ("launch.fig", "designs/launch.fig", "design"), ("launch.png", "designs/launch.png", "image")]
+
+
+def test_a_search_right_after_a_write_sees_it(tmp_path):
+    _seed(tmp_path, {"a.txt": b"x"})
+    client = _ws_routers_client(tmp_path)
+    found = lambda q: [e["path"] for e in client.get("/files", params={"search": q}).json()]
+    assert found("txt") == ["a.txt"]
+    client.put("/files/docs/b.txt", content=b"y")
+    assert found("txt") == ["a.txt", "docs/b.txt"]
+    client.delete("/files/a.txt")
+    assert found("txt") == ["docs/b.txt"]
+
+
+def _slow_walks(monkeypatch):
+    """`_walk_catalog` behind a gate the test opens → (gate, how many walks began)."""
+    import threading
+    from cycls._agent.web import routers
+    real, gate, began = routers._walk_catalog, threading.Event(), []
+
+    def gated(root):
+        began.append(root)
+        gate.wait(5)
+        return real(root)
+    monkeypatch.setattr(routers, "_walk_catalog", gated)
+    return gate, began
+
+
+def test_a_slow_rewalk_is_not_waited_for(tmp_path, monkeypatch):
+    """The + popover's search took 39 s: the cache lasted 5 s from when a walk BEGAN,
+    and that workspace's walk takes longer — every search walked the tree again and
+    waited. Now the last tree is served while the new one finishes behind it."""
+    from cycls._agent.web import routers
+    root = _seed(tmp_path, {"a.txt": b"x"})
+    names = lambda tree: sorted(e["name"] for e in tree[0])
+    monkeypatch.setattr(routers, "_CATALOG_WAIT", 0.05)
+
+    async def go():
+        first = await routers._catalog_get(root)
+        (root / "b.txt").write_bytes(b"y")
+        routers._catalog_drop(root)                            # a write here
+        gate, began = _slow_walks(monkeypatch)
+        t0 = time.monotonic()
+        served = await routers._catalog_get(root)
+        waited = time.monotonic() - t0
+        again = await routers._catalog_get(root)               # joins the walk under way
+        gate.set()
+        await routers._catalog[str(root)]["walk"]
+        return names(first), names(served), waited, names(again), len(began), names(await routers._catalog_get(root))
+
+    first, served, waited, again, walks, landed = asyncio.run(go())
+    assert first == served == again == ["a.txt"] and waited < 2
+    assert walks == 1
+    assert landed == ["a.txt", "b.txt"]
+
+
+def test_a_walk_is_reused_from_when_it_ended(tmp_path, monkeypatch):
+    from cycls._agent.web import routers
+    root = _seed(tmp_path, {"a.txt": b"x"})
+    real, walks = routers._walk_catalog, []
+
+    def slow(r):
+        walks.append(r)
+        time.sleep(0.3)                                        # longer than the TTL
+        return real(r)
+    monkeypatch.setattr(routers, "_walk_catalog", slow)
+    monkeypatch.setattr(routers, "_CATALOG_TTL", 0.2)
+
+    async def go():
+        await routers._catalog_get(root)
+        await routers._catalog_get(root)
+    asyncio.run(go())
+    assert len(walks) == 1
+
+
+def test_a_walk_begun_before_a_write_is_walked_again(tmp_path, monkeypatch):
+    from cycls._agent.web import routers
+    root = _seed(tmp_path, {"a.txt": b"x"})
+    gate, began = _slow_walks(monkeypatch)
+
+    async def go():
+        walking = asyncio.ensure_future(routers._catalog_get(root))
+        while not began:
+            await asyncio.sleep(0.01)
+        (root / "b.txt").write_bytes(b"y")
+        routers._catalog_drop(root)                            # lands mid-walk
+        gate.set()
+        await walking
+        return sorted(e["name"] for e in (await routers._catalog_get(root))[0])
+    assert asyncio.run(go()) == ["a.txt", "b.txt"] and len(began) == 2
+
+
+def test_fresh_waits_for_a_new_walk(tmp_path, monkeypatch):
+    from cycls._agent.web import routers
+    root = _seed(tmp_path, {"a.txt": b"x"})
+    monkeypatch.setattr(routers, "_CATALOG_WAIT", 0.01)
+
+    async def go():
+        await routers._catalog_get(root)
+        (root / "agent-made.txt").write_bytes(b"z")
+        real = routers._walk_catalog
+        monkeypatch.setattr(routers, "_walk_catalog", lambda r: (time.sleep(0.2), real(r))[1])
+        return sorted(e["name"] for e in (await routers._catalog_get(root, fresh=True))[0])
+    assert asyncio.run(go()) == ["a.txt", "agent-made.txt"]
 
 
 def test_catalog_is_bounded_per_instance(tmp_path):
