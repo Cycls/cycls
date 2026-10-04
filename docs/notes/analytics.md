@@ -122,7 +122,7 @@ Identified users also carry **person properties** (via identify): `email`,
 | `sign_up_attempted` / `sign_in_attempted` | auth form or OAuth submitted, named by the screen's mode | `method` (`password` / `email_code` / `oauth_google` / `oauth_apple`), `step` |
 | `sign_up` | account created — Clerk complete for password/code; OAuth inferred on first authed load (account < 5 min old); once per **account** (a browser can host many — a tester's own sign-in must not silence the next registration) | `method` (`password` / `email_code`, or the OAuth provider: `google` / `apple`) — gate → account conversion |
 | `first_agent_use` | the account's first chat ever — the server keeps a per-account marker (`activation/first_use_at` in the personal workspace) and flags `first` on the `chat_id` event once (a browser flag would re-fire per device, a per-workspace check per workspace) | the marketing funnel's activation tick; GA can't derive "first" itself |
-| `message_sent` | every send | `origin` (keyboard/suggestion/example/follow_up/ask/voice/regenerate/url_param), `is_new_chat` — the funnel spine |
+| `message_sent` | every send | `origin` (keyboard/suggestion/example/follow_up/ask/voice/regenerate/retry/url_param), `is_new_chat` — the funnel spine |
 | `examples_shown` | gallery renders with cards | `categories`, `items` — denominator for the gallery |
 | `example_category_selected` / `example_prompt_used` / `example_viewed` / `example_watched` | gallery interactions | which examples actually activate |
 | `suggestion_category_selected` / `suggestion_prompt_clicked` | empty-state chips (no-examples fallback) | |
