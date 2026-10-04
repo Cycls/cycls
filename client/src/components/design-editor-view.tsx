@@ -20,6 +20,7 @@ import { cn } from "../lib/utils";
 //   editor → host : ready {protocol, features?} · loaded {doc} · saved {doc, id, name, fig}
 //                   flushed {id, ok} · error · applied · commandError · selection {doc, frame, nodes}
 //                   newDesign {size?} · saveCopy {doc, name, fig} · export {doc, files}
+//                   exportAs {doc, format}  (the design as a PDF / PNG — Cycls renders it)
 // Every load reads the design with its version, and its saves name it as their
 // base: a save over a newer file is refused (docs/notes/design.md, "No save
 // overwrites what it didn't see").
@@ -56,6 +57,8 @@ export type DesignHost = {
   brand: () => Promise<BrandKit | null>;
   openInCanvas: (path: string) => void;
   refreshFiles?: () => void;
+  // The design as a file beside it (the design service renders it) → its path.
+  exportDesign?: (path: string, format: "pdf" | "png") => Promise<string>;
   // A design with its version, which its saves name as their base (design/store.py),
   // and its earlier versions — absent on an older server or a shared view.
   fetchVersioned?: FetchVersioned;
@@ -96,11 +99,6 @@ export function reloadDesignEditors(path: string): void {
   for (const h of editors.get(path) ?? []) h.reload();
 }
 
-// Chrome and Edge let a full-screen page keep Esc (holding it still leaves): the
-// editor's Esc — deselect, leave a text edit — then doesn't end full screen.
-type KeyboardLock = { lock?: (keys?: string[]) => Promise<void>; unlock?: () => void };
-const keyboard = () => (navigator as Navigator & { keyboard?: KeyboardLock }).keyboard;
-
 // What an export may write into the workspace, by the type the editor gives it.
 const EXPORT_TYPES: Record<string, string> = {
   "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/svg+xml": "svg", "application/pdf": "pdf",
@@ -108,7 +106,7 @@ const EXPORT_TYPES: Record<string, string> = {
 
 type EditorMessage = {
   source?: string; type?: string; protocol?: number; doc?: string; id?: string; ok?: boolean; name?: string;
-  fig?: string; message?: string; size?: [number, number]; features?: string[];
+  fig?: string; message?: string; size?: [number, number]; features?: string[]; format?: string;
   files?: { name: string; mime: string; data: string }[];
   frame?: string | null; nodes?: DesignSelection["nodes"];
 };
@@ -203,11 +201,13 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   }, []);
 
   // Full screen is the editor's box, not the page: the iframe stays where it is.
+  // Esc leaves it, as on any full-screen page. (It used to be kept for the editor with
+  // a keyboard lock — hold Esc to leave — and the Exit button hid after a moment: in
+  // practice there was no way out.)
   const enterFullscreen = useCallback(() => {
     const box = boxRef.current;
     if (!box?.requestFullscreen || document.fullscreenElement) return;
     box.requestFullscreen({ navigationUI: "hide" }).then(() => {
-      keyboard()?.lock?.(["Escape"]).catch(() => {});
       frameRef.current?.focus();   // keys go to the editor, not the button left behind
     }).catch(() => {});
   }, []);
@@ -218,21 +218,17 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   }, []);
   useEffect(() => {
     let timer: number | undefined;
-    let was = false;
     const onChange = () => {
       const on = !!boxRef.current && document.fullscreenElement === boxRef.current;
       setFull(on);
       setHint(on);
       window.clearTimeout(timer);
       if (on) timer = window.setTimeout(() => setHint(false), 2500);
-      else if (was) keyboard()?.unlock?.();
-      was = on;
     };
     document.addEventListener("fullscreenchange", onChange);
     return () => {
       document.removeEventListener("fullscreenchange", onChange);
       window.clearTimeout(timer);
-      if (was) keyboard()?.unlock?.();   // closed while full screen (the browser leaves it)
     };
   }, []);
 
@@ -321,6 +317,24 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           ? t("exportedTo").replace("{name}", written[0].split("/").pop() ?? written[0])
           : t("exportedN").replace("{n}", String(written.length)).replace("{dir}", dir || "/");
         toast.action(text, t("open"), () => { void leaveFullscreen().then(() => host.openInCanvas(written[0])); });
+      } catch {
+        toast.error(t("exportFailed"));
+      }
+    };
+
+    // "Export › PDF" in the editor: Cycls renders it — the design service, so its fonts
+    // and its Arabic are as in every other export; the editor's own PDF embeds no fonts —
+    // and writes it beside the design, like the editor's other exports.
+    const exportAs = async (format: "pdf" | "png") => {
+      const { host, toast, path } = latest.current;
+      if (!host?.exportDesign) return;
+      try {
+        await flushDesignEditor(path, 3000);   // what's unsaved is in the export
+        const written = await host.exportDesign(path, format);
+        track("design_exported", { format, files: 1 });
+        host.refreshFiles?.();
+        toast.action(t("exportedTo").replace("{name}", written.split("/").pop() ?? written), t("open"),
+                     () => { void leaveFullscreen().then(() => host.openInCanvas(written)); });
       } catch {
         toast.error(t("exportFailed"));
       }
@@ -460,6 +474,8 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         try { await host.newDesign(Array.isArray(m.size) ? m.size : undefined); } catch { toast.error(t("newDesignFailed")); }
       } else if (m.type === "export" && Array.isArray(m.files)) {
         await exportFiles(m.files);
+      } else if (m.type === "exportAs" && (m.format === "pdf" || m.format === "png")) {
+        await exportAs(m.format);
       } else if (m.type === "saveCopy" && typeof m.fig === "string" && host) {
         setCopyOf({ fig: m.fig });
       }
@@ -560,22 +576,24 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           capabilities — CanvasKit, workers, storage — on its real origin. */}
       <iframe key={frameKey} ref={frameRef} src={src} title={name} className="h-full w-full border-0" />
       {full && (
-        // A strip along the top middle: the pointer there (or the first moments of
-        // full screen) shows the way out. The iframe keeps every other pointer event.
-        <div className="group absolute left-1/2 top-0 z-10 flex h-2 w-72 -translate-x-1/2 justify-center hover:h-14">
-          <button
-            onClick={() => void leaveFullscreen()}
-            className={cn(
-              "mt-2 flex h-8 items-center gap-1.5 rounded-full bg-background/90 px-3 text-xs text-foreground shadow backdrop-blur transition-opacity cursor-pointer",
-              hint ? "opacity-100" : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100",
-            )}
-          >
-            <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 3.75v4.5h-4.5m12-4.5v4.5h4.5m0 7.5h-4.5v4.5m-7.5 0v-4.5h-4.5" />
-            </svg>
-            {t("exitFullScreen")}
-          </button>
-        </div>
+        // The way out, in view for as long as it's full screen: named for the first
+        // moments, then a small button at the top middle. The iframe keeps every other
+        // pointer event.
+        <button
+          onClick={() => void leaveFullscreen()}
+          aria-label={t("exitFullScreen")}
+          title={t("exitFullScreen")}
+          data-testid="exit-fullscreen"
+          className={cn(
+            "absolute left-1/2 top-2 z-10 flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-full bg-background/90 text-xs text-foreground shadow backdrop-blur transition-opacity cursor-pointer",
+            hint ? "px-3 opacity-100" : "w-8 justify-center opacity-60 hover:opacity-100",
+          )}
+        >
+          <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 3.75v4.5h-4.5m12-4.5v4.5h4.5m0 7.5h-4.5v4.5m-7.5 0v-4.5h-4.5" />
+          </svg>
+          {hint && t("exitFullScreen")}
+        </button>
       )}
       {status !== "ready" && (
         <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow backdrop-blur">

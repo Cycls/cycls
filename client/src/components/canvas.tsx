@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
 import type { WriteFile } from "../hooks/use-files";
 import { useEscape } from "../hooks/use-escape";
+import { track } from "../lib/analytics";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence, Reorder } from "framer-motion";
 import { Icon } from "./icon";
@@ -248,15 +249,16 @@ function DesignPicture({ file, src, openFile }: {
   openFile?: (path: string, silent?: boolean) => Promise<string>;
 }) {
   const stem = file.name.replace(/\.fig$/i, "");
-  const save = () => openFile?.(`${file.path}?as=png`).then((url) => saveBlob(url, `${stem}.png`)).catch(() => {});
+  const save = (as: "png" | "pdf") => openFile?.(`${file.path}?as=${as}`).then((url) => saveBlob(url, `${stem}.${as}`)).catch(() => {});
+  const pill = "cursor-pointer rounded-full border border-border bg-background/90 px-4 py-2 text-xs font-medium text-foreground shadow-lg backdrop-blur transition-colors hover:bg-secondary";
   return (
     <div className="relative flex h-full items-center justify-center overflow-auto bg-secondary/40 p-4">
       <img src={src} alt={file.name} data-testid="design-picture" className="max-h-full max-w-full object-contain shadow-sm" />
       {openFile && (
-        <button onClick={save}
-                className="absolute bottom-4 end-4 cursor-pointer rounded-full border border-border bg-background/90 px-4 py-2 text-xs font-medium text-foreground shadow-lg backdrop-blur transition-colors hover:bg-secondary">
-          {t("downloadImage")}
-        </button>
+        <div className="absolute bottom-4 end-4 flex gap-2">
+          <button onClick={() => save("png")} className={pill}>{t("downloadImage")}</button>
+          <button onClick={() => save("pdf")} className={pill}>{t("downloadPdf")}</button>
+        </div>
       )}
     </div>
   );
@@ -850,6 +852,13 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   };
 
   const download = () => openFile(file.path).then((url) => saveBlob(url, file.path.split('/').pop() || file.name)).catch(() => {});
+  // A design as what it's used as: its picture or a PDF, rendered by the design service
+  // from the saved file — so an open editor saves first.
+  const downloadDesignAs = async (as: "png" | "pdf") => {
+    await flushDesignEditor(file.path, 3000);
+    track("design_exported", { format: as, files: 1 });
+    openFile(`${file.path}?as=${as}`).then((url) => saveBlob(url, `${file.name.replace(/\.fig$/i, "")}.${as}`)).catch(() => {});
+  };
   const reloadFile = useCallback(() => openFile(file.path), [openFile, file.path]);
 
   // Open HTML as a standalone page (its own browsing context) — a stable,
@@ -938,7 +947,11 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
                 ...(md ? [{ label: t("exportPdf"), onClick: () => window.print() }] : []),
                 ...(isDesignEditor(fileKind(file)) && designEditorUrl && designHost?.listVersions
                   ? [{ label: t("versionHistory"), onClick: () => setHistoryOpen(true) }] : []),
-                { label: t("download"), onClick: download },
+                ...(isDesignEditor(fileKind(file)) && designEditorUrl ? [
+                  { label: t("downloadPng"), onClick: () => void downloadDesignAs("png") },
+                  { label: t("downloadPdf"), onClick: () => void downloadDesignAs("pdf") },
+                  { label: t("downloadFig"), onClick: download },
+                ] : [{ label: t("download"), onClick: download }]),
               ];
               return (
                 <div className="relative shrink-0">

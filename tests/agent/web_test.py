@@ -1796,6 +1796,41 @@ def test_a_decks_images_download_as_a_zip(tmp_path, monkeypatch):
     assert calls == [("png", b"FIG", "org_1:user_1")]
 
 
+def test_a_design_exports_to_a_file_beside_it(tmp_path, monkeypatch):
+    """The editor's File › Export › PDF: Cycls renders the design through the service
+    and writes `designs/<name>.pdf` — the design's own image, replaced by the next one."""
+    from cycls._agent import design
+    root = _seed(tmp_path, {"designs/launch.fig": b"FIG", "notes/logo.fig": b"LOGO", "notes/logo.pdf": b"MINE",
+                            "notes/a.txt": b"x"})
+    calls = _fake_design(monkeypatch)
+    client = _ws_routers_client(tmp_path)
+    export = lambda **body: client.post("/design/export", json=body)
+
+    r = export(path="designs/launch.fig", format="pdf")
+    assert r.status_code == 200 and r.json() == {"path": "designs/launch.pdf"}
+    assert (root / "designs/launch.pdf").read_bytes() == b"%PDF-deck" and calls == [("pdf", b"FIG", "org_1:user_1")]
+    (root / "designs/launch.fig").write_bytes(b"EDITED")                      # an edit, then again: replaced
+    assert export(path="designs/launch.fig").json() == {"path": "designs/launch.pdf"}     # pdf is the default
+    assert calls[-1] == ("pdf", b"EDITED", "org_1:user_1")
+    assert "launch.pdf" in [e["name"] for e in client.get("/files", params={"path": "designs"}).json()]
+    assert not list((root / "designs").glob(".*.part"))
+
+    # Outside designs/ a file that's there is the person's own: the export takes a free name.
+    assert export(path="notes/logo.fig", format="pdf").json() == {"path": "notes/logo-2.pdf"}
+    assert (root / "notes/logo.pdf").read_bytes() == b"MINE"
+
+    assert export(path="designs/launch.fig", format="exe").status_code == 400
+    assert export(path="notes/a.txt").status_code == 404
+    assert export(path="designs/nope.fig").status_code == 404
+    assert export(path="../outside.fig").status_code == 403
+
+    async def down(*a, **k):
+        raise design.Unavailable("design not configured (DESIGN_URL)")
+    monkeypatch.setattr(design, "export", down)
+    (root / "designs/launch.fig").write_bytes(b"AGAIN")
+    assert export(path="designs/launch.fig").status_code == 415
+
+
 def test_deck_errors(tmp_path, monkeypatch):
     from cycls._agent import design
     root = _seed(tmp_path, {"designs/pitch.deck.json": _DECK_DOC,

@@ -447,6 +447,16 @@ Cycls tab opened, and everything it makes lands in the workspace.
   and never on a name the refresh keeps for the design's own images
   (`refresh.managed`). "Save a copy…" asks for a name and writes a new `.fig` beside
   it, then opens it. No downloads or file pickers from inside the editor.
+- **A PDF is made by Cycls.** The editor's own PDF is SVG → jsPDF with no fonts
+  embedded, so Arabic and web fonts come out wrong; the design service's is each page's
+  own render with a text layer. So File › Export selection › **PDF** (and **Export PDF**
+  in the docked pane's menu) sends `exportAs {doc, format}`: the host flushes the
+  editor and calls `POST /design/export {path, format: "pdf" | "png"}`, which exports
+  the saved file through the service and writes it beside the design — under
+  `designs/` as `<name>.pdf`, the design's own image (replaced; the refresh keeps it in
+  step from then on), elsewhere under a free name — and a toast offers to open it. The
+  canvas ⋮ menu of a design downloads it as **PNG**, **PDF** or the `.fig`
+  (`?as=png|pdf`, after a flush), and the no-editor view has both downloads too.
 - **Brand kit.** With each `load`, Cycls sends `GET /brand` — the named colours of
   `brand/brand.yaml` (primary, secondary, accent, background, text, neutral; only
   those it names) and its heading/body fonts. The editor adds them as a **Brand**
@@ -459,9 +469,11 @@ Cycls tab opened, and everything it makes lands in the workspace.
   the bigger box: when the editor's box changes size by more than 15% (full screen, the
   canvas expanded over the chat) the host posts `fit`, and the editor fits the design
   again unless the person has zoomed or panned since the last fit (an editor that
-  lists the `fit` feature; before it the design stayed small in a corner). Chrome and Edge keep
-  Esc for the editor (hold it to leave); "Exit full screen" shows at the top middle
-  on entry and under the pointer there. Toasts show inside it (`data-toasts`), and a
+  lists the `fit` feature; before it the design stayed small in a corner). **Esc leaves
+  it**, as on any full-screen page, and an Exit button stays at the top middle the whole
+  time — named for the first moments, then a small icon. (It was built with a keyboard
+  lock that kept Esc for the editor — hold it to leave — and a button that hid after
+  2.5 s behind a thin hover strip: in practice there was no way out.) Toasts show inside it (`data-toasts`), and a
   new design, a copy or an export's Open leaves full screen first, since each opens
   another canvas tab.
 - **Switching, closing, renaming, deleting.** A design tab switched away from or

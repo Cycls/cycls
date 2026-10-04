@@ -326,7 +326,7 @@ describe("DesignEditorView", () => {
     expect(post).toHaveBeenCalledWith({ target: "cycls-editor", type: "locale", lang: "en" }, EDITOR);
   });
 
-  it("goes full screen in its own box, keeps Esc, and leaves first for what opens elsewhere", async () => {
+  it("goes full screen in its own box, and leaves first for what opens elsewhere", async () => {
     const fs = fakeFullscreen();
     try {
       const h = host();
@@ -336,18 +336,67 @@ describe("DesignEditorView", () => {
       await act(async () => { fullscreenDesignEditor("designs/launch.fig"); await new Promise((r) => setTimeout(r, 0)); });
       expect(document.fullscreenElement).toBe(first.parentElement);        // the editor's box, not the page
       expect(frame()).toBe(first);                                          // nothing reloads
-      expect(fs.keyboard.lock).toHaveBeenCalledWith(["Escape"]);
       expect(screen.getByText("Exit full screen")).toBeTruthy();
 
       fromEditor(first, "newDesign", { size: [1080, 1080] });              // opens in another canvas tab
       await flush();
       expect(fs.exit).toHaveBeenCalledOnce();
       expect(fs.exit.mock.invocationCallOrder[0]).toBeLessThan(h.newDesign.mock.invocationCallOrder[0]);
-      expect(fs.keyboard.unlock).toHaveBeenCalled();
-      expect(screen.queryByText("Exit full screen")).toBeNull();
+      expect(screen.queryByTestId("exit-fullscreen")).toBeNull();
     } finally {
       fs.restore();
     }
+  });
+
+  it("full screen can be left: Esc stays the browser's, and the Exit button never goes away", async () => {
+    // Esc was locked to the editor (hold it to leave) and the button hid after 2.5 s,
+    // reachable only from a thin strip at the top: no visible way out.
+    const fs = fakeFullscreen();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { frame } = mount({ host: host() });
+      await ready(frame(), 2);
+      await act(async () => { fullscreenDesignEditor("designs/launch.fig"); await new Promise((r) => setTimeout(r, 0)); });
+      expect(fs.keyboard.lock).not.toHaveBeenCalled();                      // one press of Esc leaves, as on any page
+      await act(async () => { vi.advanceTimersByTime(4000); });             // long after the first hint
+      const exit = screen.getByRole("button", { name: "Exit full screen" });
+      expect(exit.className).not.toContain("pointer-events-none");
+      expect(exit.className).not.toContain("opacity-0");
+      await act(async () => { fireEvent.click(exit); });
+      expect(fs.exit).toHaveBeenCalledOnce();
+      expect(document.fullscreenElement).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      fs.restore();
+    }
+  });
+
+  it("Export › PDF in the editor is rendered by Cycls and lands beside the design", async () => {
+    // The editor's own PDF embeds no fonts (Arabic and web fonts come out wrong), so
+    // the editor asks (`exportAs`) and Cycls exports the saved file through the service.
+    const h = host();
+    h.exportDesign = vi.fn(async () => "designs/launch.pdf");
+    const { container } = render(
+      <ToastProvider>
+        <DesignEditorView url="blob:orig" path="designs/launch.fig" name="launch.fig" editorUrl={EDITOR}
+                          writeFile={async () => {}} host={h} />
+      </ToastProvider>);
+    const frame = container.querySelector("iframe")!;
+    const { post, load } = await ready(frame, 2);
+    fromEditor(frame, "exportAs", { doc: load.doc, format: "pdf" });
+    await flush();
+    const asked = post.mock.calls.map((c) => c[0] as Record<string, unknown>).find((m) => m.type === "flush")!;
+    expect(asked).toBeTruthy();                                              // what's unsaved goes first
+    expect(h.exportDesign).not.toHaveBeenCalled();
+    fromEditor(frame, "flushed", { id: asked.id, ok: true });
+    await flush();
+    expect(h.exportDesign).toHaveBeenCalledWith("designs/launch.fig", "pdf");
+    expect(screen.getByText("Exported to launch.pdf")).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByText("Open")); });
+    expect(h.openInCanvas).toHaveBeenCalledWith("designs/launch.pdf");
+    fromEditor(frame, "exportAs", { doc: load.doc, format: "exe" });         // only what Cycls exports
+    await flush();
+    expect(h.exportDesign).toHaveBeenCalledOnce();
   });
 
   it("full screen shows Cycls's toasts inside it", async () => {

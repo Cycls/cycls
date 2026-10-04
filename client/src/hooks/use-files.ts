@@ -238,6 +238,12 @@ export function useFiles(baseUrl: string = "") {
     return (await (await api("/design/new", { method: "POST", json: body })).json()) as { path: string; name: string; size: [number, number] };
   }, [api]);
 
+  // A design as a file beside it — designs/<name>.pdf — rendered by the design service:
+  // the editor's File › Export › PDF.
+  const exportDesign = useCallback(async (filePath: string, format: "pdf" | "png") => {
+    return ((await (await api("/design/export", { method: "POST", json: { path: filePath, format } })).json()) as { path: string }).path;
+  }, [api]);
+
   // The brand kit for the design editor (null without one, or on a server without the route).
   const brand = useCallback(async (): Promise<BrandKit | null> => {
     try {
@@ -310,7 +316,7 @@ export function useFiles(baseUrl: string = "") {
     makeLink: async () => voteUrl(await shareFile(deck, "public")),
   }), [api, shareFile]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, listVersions, versionBlob, restoreVersion, writeNew, newDesign, brand, deckOp, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, listVersions, versionBlob, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

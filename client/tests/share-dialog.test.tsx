@@ -63,6 +63,8 @@ describe("a design where there's no editor to open it in (a shared page)", () =>
     expect(screen.queryByText(/Preview isn't available/)).toBeNull();
     await act(async () => { fireEvent.click(screen.getByText("Download image")); });
     expect(openFile).toHaveBeenCalledWith("designs/launch.fig?as=png");
+    await act(async () => { fireEvent.click(screen.getByText("Download PDF")); });
+    expect(openFile).toHaveBeenCalledWith("designs/launch.fig?as=pdf");
   });
 
   it("with several frames, shows as a read-only deck", () => {
