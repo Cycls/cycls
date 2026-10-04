@@ -85,6 +85,23 @@ describe("DeckView", () => {
     expect(openFile).toHaveBeenCalledWith("designs/pitch.deck.json?as=pdf");
   });
 
+  it("a carousel downloads as its images, offered first", async () => {
+    const openFile = vi.fn(async () => "blob:zip");
+    const square = manifest(2, { sizes: [[1080, 1080], [1080, 1080]] });
+    render(<DeckView data={square} path="designs/reel.deck.json" openFile={openFile} />);
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+    const items = ["Images (.zip)", "PowerPoint (.pptx)", "PDF"].map((name) => screen.getByRole("button", { name }));
+    expect(items[0].compareDocumentPosition(items[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await act(async () => { fireEvent.click(items[0]); });
+    expect(openFile).toHaveBeenCalledWith("designs/reel.deck.json?as=images");
+    cleanup();
+
+    render(<DeckView data={manifest(2, { sizes: [[1920, 1080], [1920, 1080]] })} path="designs/pitch.deck.json" openFile={openFile} />);
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+    const [pptx, images] = ["PowerPoint (.pptx)", "Images (.zip)"].map((name) => screen.getByRole("button", { name }));
+    expect(pptx.compareDocumentPosition(images) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();   // a deck: after
+  });
+
   it("Edit is offered only with an editor and a workspace to write to", () => {
     const { rerender } = render(<DeckView data={manifest(2)} path="designs/pitch.deck.json" openFile={async () => "b"} />);
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();

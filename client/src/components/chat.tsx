@@ -18,7 +18,7 @@ import { ConnectorsDialog, connectorLabel, openAuth, type Connector } from "./co
 import { CyclsLogo } from "./cycls-logo";
 import { LoadingBar } from "./loading-bar";
 import { InputBox } from "./input-box";
-import { ShareDialog } from "./share-dialog";
+import { ShareDialog, type ShareLink, type ShareLinks } from "./share-dialog";
 import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
@@ -105,6 +105,7 @@ export interface FilesPanelProps {
   searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
   listFolders: () => Promise<{ name: string; path: string }[]>;
   onShareFile?: (path: string, audience: string) => Promise<string>;
+  shareLinks?: ShareLinks;   // what's already shared, for the Share popover
   onOpenInCanvas?: (path: string, name: string) => void;
   maxUpload?: number;   // per-file cap (MB) for the client pre-check
   org?: { id: string; name: string } | null;
@@ -832,6 +833,13 @@ export function Chat({ chat, onShare, files, account, config }: {
     setRightExpanded(false);
     setRailIcons(false);
   };
+  // The links a chat or a file already has: the Share popover shows one instead of
+  // offering to make another.
+  const shareLinks = useMemo<ShareLinks>(() => ({
+    find: async (path) => ((await onListShares()) as (ShareLink & { path?: string })[])
+      .filter((s) => s.path === path && s.token && s.url),
+    revoke: (token) => onDeleteShare(token),
+  }), [onListShares, onDeleteShare]);
   // Escape closes the side pane — when nothing in it took the key: an open menu,
   // popover or dialog closes itself first (useEscape), a field cancels its own edit.
   useEscapeFallback(closeRight, rightOpen);
@@ -946,6 +954,8 @@ export function Chat({ chat, onShare, files, account, config }: {
                         onClose={() => setShareOpen(false)}
                         org={org}
                         onShare={onShare}
+                        path={chatId ? `chat/${chatId}` : undefined}
+                        links={shareLinks}
                         onManageShares={account ? () => { setShareOpen(false); openPanel("shares"); } : undefined}
                       />
                     )}
@@ -1290,6 +1300,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           listFolders={files.listFolders}
           org={files.org}
           onShareFile={files.onShareFile}
+          shareLinks={shareLinks}
           railWidth={railPx}
           reloadKey={reloadKey}
           designEditorUrl={config?.design_editor_url}
@@ -1398,7 +1409,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </div>
               )}
               {!railIconsOnly && (<div className="relative flex min-h-0 flex-1 flex-col">{filesTab === "files" && files ? (
-                <Files {...files} onDelete={deleteFromFiles} onRename={renameFromFiles}
+                <Files {...files} shareLinks={shareLinks} onDelete={deleteFromFiles} onRename={renameFromFiles}
                        onNewDesign={config?.design_editor_url && files.newDesign ? () => void createDesign("square", "files") : undefined}
                        onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
               ) : filesTab === "apps" ? (

@@ -584,6 +584,39 @@ def test_shared_office_file_previews_as_pdf(tmp_path, monkeypatch):
     assert raw.status_code == 200 and raw.content == b"raw-pptx"
 
 
+def test_a_shared_design_shows_as_its_picture(tmp_path, monkeypatch):
+    """The shared page of a .fig said "Preview isn't available": a visitor has no editor.
+    Over the share transport it gets the design's slide manifest (?as=slides) and its
+    first frame as a PNG (?as=png) — rendered on demand, for the share's file only."""
+    from cycls._app.db import workspace
+    from cycls._agent import design
+
+    svc, user, client = _share_test_app(tmp_path)
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    (ws.root / "designs").mkdir(parents=True, exist_ok=True)
+    (ws.root / "designs" / "launch.fig").write_bytes(b"FIG")
+    (ws.root / "designs" / "other.fig").write_bytes(b"OTHER")
+
+    async def slides(fig, scale=1, fmt="jpg", user_id=None):
+        return {"images": [b"\xff\xd8one"], "sizes": [[1080, 1080]], "format": "jpg", "meta": [{"name": "slide-1"}]}
+
+    async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False):
+        return b"PNG:" + fig
+    monkeypatch.setattr(design, "slides", slides)
+    monkeypatch.setattr(design, "export", export)
+
+    body = client.post("/share", json={"path": "file/designs/launch.fig"}).json()
+    url = client.get(f"/share/user_test/{body['token']}/data").json()["url"]
+    shown = client.get(url, params={"as": "slides"})
+    assert shown.status_code == 200 and shown.json()["count"] == 1
+    assert shown.json()["slides"][0].startswith("data:image/jpeg;base64,")
+    png = client.get(url, params={"as": "png"})
+    assert png.content == b"PNG:FIG" and 'filename="launch.png"' in png.headers["content-disposition"]
+    assert client.get(url).content == b"FIG"                                  # the design itself still downloads
+    other = url.replace("launch.fig", "other.fig")
+    assert client.get(other, params={"as": "slides"}).status_code == 403      # the share is of one file
+
+
 def _seed_canvas_chat(ws, chat_id="c1", title="Site build"):
     """A chat that produced a canvas artifact (site.html), plus one canvas
     call that errored (broken.html) — the shareable surface is only the
@@ -1677,7 +1710,7 @@ def test_office_slides_unavailable_returns_415(tmp_path, monkeypatch):
     assert client.get("/files/deck.pptx", params={"as": "slides"}).status_code == 415
 
 
-# ---- design decks: ?as=slides|pptx|pdf on a deck document or a .fig ----
+# ---- design decks: ?as=slides|pptx|pdf|images on a deck document or a .fig ----
 
 _DECK_DOC = json.dumps({"type": "cycls.deck", "version": 1, "fig": "designs/pitch.fig",
                         "size": [1920, 1080], "slides": 2, "exports": ["designs/pitch.pptx"]}).encode()
@@ -1696,6 +1729,8 @@ def _fake_design(monkeypatch):
 
     async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False):
         calls.append((fmt, fig, user_id))
+        if every:
+            return [b"PNG-one", b"PNG-two"]
         return b"%PDF-deck" if fmt == "pdf" else b"PK-deck"
     monkeypatch.setattr(design, "slides", slides)
     monkeypatch.setattr(design, "export", export)
@@ -1743,6 +1778,22 @@ def test_deck_downloads_export_on_demand(tmp_path, monkeypatch):
     client.get("/files/designs/pitch.deck.json", params={"as": "pdf"})       # cached
     assert [c[0] for c in calls] == ["pdf", "pptx"]
     assert client.get("/files/designs/pitch.deck.json").content == _DECK_DOC   # no ?as: the document itself
+
+
+def test_a_decks_images_download_as_a_zip(tmp_path, monkeypatch):
+    """A carousel is posted as images: the deck viewer's Download had only PowerPoint
+    and PDF. `?as=images` is every slide as a PNG, named as a carousel render names them."""
+    import io, zipfile
+    _seed(tmp_path, {"designs/pitch.fig": b"FIG", "designs/pitch.deck.json": _DECK_DOC})
+    calls = _fake_design(monkeypatch)
+    client = _ws_routers_client(tmp_path)
+    r = client.get("/files/designs/pitch.deck.json", params={"as": "images"})
+    assert r.status_code == 200 and 'filename="pitch.zip"' in r.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        assert zf.namelist() == ["pitch-slide-1.png", "pitch-slide-2.png"]
+        assert zf.read("pitch-slide-2.png") == b"PNG-two"
+    client.get("/files/designs/pitch.fig", params={"as": "images"})          # the .fig itself: same cache
+    assert calls == [("png", b"FIG", "org_1:user_1")]
 
 
 def test_deck_errors(tmp_path, monkeypatch):

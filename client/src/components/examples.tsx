@@ -261,7 +261,7 @@ function ExamplePreview({ item, load }: { item: ExampleItem; load: boolean }) {
   }, [file?.url]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const renderable = !!file && isRenderable(file.path);
-  const { content, error } = useFileContent(load && renderable && !item.video ? file! : null, readFile, openFile);
+  const { content, error } = useFileContent(load && renderable && !item.video ? file! : null, readFile, openFile, 0, true);
 
   // Tutorial preview — a muted looping clip for direct files, the thumbnail
   // for YouTube, a play glyph for other hosted players (Vimeo has no free
