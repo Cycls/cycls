@@ -351,6 +351,9 @@ the pages make themselves.
   its pages) and `open_canvas`. Without `replace`, the same name makes `<name>-2`, as
   any render does. A page edited by hand does not re-flow the pages after it; the
   tool's reply says so.
+- **Arguments as text.** Some models hand a large nested argument over as a JSON string;
+  `spec`, `ops` and `slide` given that way are read as the object (seen on prod with a
+  document's spec — it used to cost a refused call).
 - **QA.** Every page comes back to the model (the first twelve of a long document), with
   the layout check — text sized for paper, not a slide — and the service's notes in
   words: a block taller than a page, a page a section left nearly empty.
