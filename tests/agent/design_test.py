@@ -1681,3 +1681,25 @@ def test_replace_renders_the_same_document_again_and_keeps_the_old_one(tmp_path,
     # Without `replace`, the same name is a new document beside it — nothing is overwritten.
     asyncio.run(_exec_design({"action": "render", "name": "report", "spec": {"document": plain}}, ws))
     assert (d / "report-2.pdf").is_file() and (d / "report.fig").read_bytes() == b"FIG-TWO"
+
+
+def test_an_argument_sent_as_its_json_text_is_read_as_the_object(tmp_path, monkeypatch):
+    # Some models hand a large nested argument over as a JSON string (seen on prod:
+    # a document's spec, refused as "needs a `spec` object" — one wasted round trip).
+    calls = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "name": "launch", "format": "png",
+                                    "spec": json.dumps({"size": [1080, 1080]})}, _ws(tmp_path)))
+    assert calls["spec"] == {"size": [1080, 1080]} and "saved (designs/launch.png" in _text(out)
+    calls = _doc_render(monkeypatch)
+    doc = {"title": "T", "sections": [{"title": "A", "blocks": ["Text."]}]}
+    out = asyncio.run(_exec_design({"action": "render", "name": "r", "spec": json.dumps({"document": doc})}, _ws(tmp_path)))
+    assert calls["spec"]["document"]["title"] == "T" and "Document saved" in out["_model"][-1]["text"]
+    # An edit's ops the same way.
+    _design(tmp_path, "poster")
+    applied, _ = _fake_apply(monkeypatch)
+    asyncio.run(_exec_design({"action": "edit", "name": "poster",
+                              "ops": json.dumps([{"op": "set_text", "node": "title", "text": "Hi"}])}, _ws(tmp_path)))
+    assert applied["ops"] == [{"op": "set_text", "node": "title", "text": "Hi"}]
+    # Text that isn't an object is still told what's needed.
+    assert "needs a `spec` object" in asyncio.run(_exec_design({"action": "render", "name": "x", "spec": "a poster, please"}, _ws(tmp_path)))
+    assert "needs a `spec` object" in asyncio.run(_exec_design({"action": "render", "name": "x", "spec": ""}, _ws(tmp_path)))

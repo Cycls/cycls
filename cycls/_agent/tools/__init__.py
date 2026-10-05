@@ -420,8 +420,8 @@ _DESIGN_TOOL = {
         "numbers are added. A block is {\"<kind>\": …}: \"lead\" (the opening paragraph) · \"p\" (or a "
         "bare string; takes **bold**, *italic*, [links](https://…)) · \"h2\" · \"h3\" · \"bullets\" / "
         "\"numbered\": [..] · \"callout\": {title?, text, tone?} · \"quote\" + \"by\" · \"stats\": "
-        "[{value, label}] · \"chart\": {kind, data} + \"title\", \"caption\" · \"table\": {columns, rows} "
-        "+ \"caption\" · \"image\": \"path\" (or {\"stock\": \"query\"}) + \"caption\" — a photo is cropped "
+        "[{value, label}] · \"chart\": {kind, data} + \"title\", \"caption\" · \"table\": {columns, rows} + \"title\" "
+        "/ \"caption\" · \"image\": \"path\" (or {\"stock\": \"query\"}) + \"caption\" — a photo is cropped "
         "to a band, a diagram or screenshot shown whole (\"fit\": \"cover\"|\"contain\" to say) · "
         "\"columns\": [[blocks],[blocks]] · "
         "\"cards\": [{icon?, title, text}] · \"pairs\": [[label, value]] · \"note\" (a source) · "
@@ -2132,6 +2132,15 @@ async def _exec_design(inp, workspace):
     channels: the model reads a short ack; the client opens the render (same
     open_canvas event the Canvas tool and browser screenshots use)."""
     from cycls._agent import design
+    # A model may hand a large nested argument over as its JSON text: read as the object.
+    inp = dict(inp)
+    for key in ("spec", "ops", "slide"):
+        v = inp.get(key)
+        if isinstance(v, str) and v.strip()[:1] in ("{", "["):
+            try:
+                inp[key] = json.loads(v)
+            except ValueError:
+                pass
     action = (inp.get("action") or "render").lower()
     fmt = (inp.get("format") or "png").lower()
     if fmt not in _DESIGN_EXTS:
