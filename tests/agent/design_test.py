@@ -178,13 +178,14 @@ def _text(out):
 
 
 def _fake_render(monkeypatch, image=b"\x89PNGrender", fig=b"FIGZ", preview=None, notes=(), lint=(),
-                 previews=(), images=(), slides=(), dir=None):
+                 previews=(), images=(), slides=(), dir=None, pages=(), page_images=(), preview_pages=()):
     calls = {}
 
     async def _r(spec, fmt="png", scale=2, user_id=None, every=False):
         calls.update(spec=spec, fmt=fmt, scale=scale, user_id=user_id, every=every)
         return design.Rendered(image, fig, "0:6", fmt, preview, list(notes), list(lint),
-                               list(previews), list(images) if every else [], list(slides), dir)
+                               list(previews), list(images) if every else [], list(slides), dir,
+                               list(pages), list(page_images), list(preview_pages))
 
     monkeypatch.setattr("cycls._agent.design.render", _r)
     return calls
@@ -258,22 +259,26 @@ def test_script_escape_hatch(tmp_path, monkeypatch):
 
 
 def _fake_apply(monkeypatch, result=b"EDITED-FIG", error=None, compiled=None, preview=None, lint=(),
-                previews=(), touched=(), slides=()):
+                previews=(), touched=(), slides=(), pages=(), page="", started=""):
     """`design.apply` faked: records the call, returns the edited .fig (plus the
     compiled script, preview and lint the service sends) or raises the edit's error.
     `refresh.schedule` is captured instead of run."""
     calls = {}
 
     async def _apply(fig, script=None, user_id=None, ops=None, preview_=None, **kw):
-        calls.update(fig=fig, script=script, ops=ops, user_id=user_id, preview=kw.get("preview"))
+        calls.update(fig=fig, script=script, ops=ops, user_id=user_id, preview=kw.get("preview"), page=kw.get("page"))
         if error:
             raise RuntimeError(error)
         return {"fig": result, "lint": list(lint), "script": compiled, "preview": preview,
-                "previews": list(previews), "touched": list(touched), "slides": list(slides)}
+                "previews": list(previews), "touched": list(touched), "slides": list(slides),
+                "pages": list(pages), "page": page, "started": started}
     monkeypatch.setattr("cycls._agent.design.apply", _apply)
     scheduled = []
-    monkeypatch.setattr("cycls._agent.design.refresh.schedule",
-                        lambda root, rel, user_id=None, ensure=False: scheduled.append(rel))
+
+    def _schedule(root, rel, user_id=None, ensure=False, pages=False):
+        scheduled.append(rel)
+        calls["pages_asked"] = pages
+    monkeypatch.setattr("cycls._agent.design.refresh.schedule", _schedule)
     return calls, scheduled
 
 
@@ -881,7 +886,7 @@ def test_an_agent_edit_asks_for_the_image(tmp_path, monkeypatch):
     _fake_apply(monkeypatch)
     asked = []
     monkeypatch.setattr("cycls._agent.design.refresh.schedule",
-                        lambda root, rel, user_id=None, ensure=False: asked.append((rel, ensure)))
+                        lambda root, rel, user_id=None, ensure=False, pages=False: asked.append((rel, ensure)))
     _design(tmp_path)
     asyncio.run(_exec_design({"action": "edit", "name": "launch", "script": "x"}, _ws(tmp_path)))
     assert asked == [("designs/launch.fig", True)]
@@ -950,7 +955,8 @@ def test_apply_posts_fig_and_script(monkeypatch):
     monkeypatch.setenv("DESIGN_URL", "https://d")
     _mock(monkeypatch, _FakeResp(200, {"ok": True, "fig_base64": base64.b64encode(b"EDITED").decode()}))
     assert asyncio.run(design.apply(b"FIG", "t.characters='x'", user_id="u")) == \
-        {"fig": b"EDITED", "lint": [], "script": None, "preview": None, "previews": [], "touched": [], "slides": []}
+        {"fig": b"EDITED", "lint": [], "script": None, "preview": None, "previews": [], "touched": [], "slides": [],
+         "pages": [], "page": "", "started": ""}
     assert _FakeClient.last["url"] == "https://d/apply"
     assert _FakeClient.last["json"] == {"fig": base64.b64encode(b"FIG").decode(), "script": "t.characters='x'"}
     _mock(monkeypatch, _FakeResp(422, {"ok": False, "error": "null is not an object"}))
@@ -1041,16 +1047,18 @@ def test_inspect_lists_frames_and_nodes(tmp_path, monkeypatch):
     _design(tmp_path)
     got = {}
 
-    async def _inspect(fig, user_id=None):
-        got.update(fig=fig, user_id=user_id)
-        return [{"slide": 1, "name": "cover", "title": "Cover", "notes": "Open with the story.", "transition": "fade",
+    async def _outline(fig, user_id=None, page=None):
+        got.update(fig=fig, user_id=user_id, page=page)
+        return {"pages": [{"name": "design", "frames": 1}], "page": "design", "frames": [
+                {"slide": 1, "name": "cover", "title": "Cover", "notes": "Open with the story.", "transition": "fade",
                  "size": [1080, 1080], "fill": "#0f172a", "nodes": [
             {"name": "headline", "type": "text", "x": 90, "y": 120, "w": 900, "h": 220, "text": "Night Roast",
              "font": "Playfair Display Bold", "size": 96, "color": "#ffffff"},
-            {"name": "cta", "type": "rect", "x": 90, "y": 900, "w": 240, "h": 72, "fill": "#f5a623", "radius": 36}]}]
-    monkeypatch.setattr("cycls._agent.design.inspect", _inspect)
+            {"name": "cta", "type": "rect", "x": 90, "y": 900, "w": 240, "h": 72, "fill": "#f5a623", "radius": 36}]}]}
+    monkeypatch.setattr("cycls._agent.design.outline", _outline)
     out = asyncio.run(_exec_design({"action": "inspect", "name": "launch"}, _ws(tmp_path)))
-    assert got["fig"] == b"ORIGINAL-FIG"
+    assert got["fig"] == b"ORIGINAL-FIG" and got["page"] is None
+    assert out.startswith("designs/launch.fig — 1 frame.") and "pages" not in out   # one page: nothing about pages
     assert 'slide 1 "cover" (1080×1080, fill #0f172a, title "Cover", transition "fade"):' in out
     assert '  notes: "Open with the story."' in out
     assert 'headline  text  (90,120 900×220)  "Night Roast"  Playfair Display Bold 96px #ffffff' in out
@@ -1067,8 +1075,193 @@ def test_the_client_inspects_and_applies_ops(monkeypatch):
     _mock(monkeypatch, _FakeResp(200, {"ok": True, "fig_base64": base64.b64encode(b"E").decode(), "script": "S",
                                        "preview_base64": base64.b64encode(b"J").decode(), "lint": []}))
     r = asyncio.run(design.apply(b"FIG", ops=[{"op": "delete", "node": "x"}], preview=True))
-    assert r == {"fig": b"E", "lint": [], "script": "S", "preview": b"J", "previews": [], "touched": [], "slides": []}
+    assert r == {"fig": b"E", "lint": [], "script": "S", "preview": b"J", "previews": [], "touched": [], "slides": [],
+                 "pages": [], "page": "", "started": ""}
     assert _FakeClient.last["json"] == {"fig": base64.b64encode(b"FIG").decode(), "ops": [{"op": "delete", "node": "x"}], "preview": True}
+
+
+# ---- pages: a design's variants (a post, a story, a banner of one piece of work) ----
+
+_PAGES = [{"name": "Post", "frames": 1}, {"name": "Story", "frames": 1}, {"name": "Banner", "frames": 1}]
+
+
+def test_the_client_names_the_page_and_reads_the_pages(monkeypatch):
+    monkeypatch.setenv("DESIGN_URL", "https://d")
+    b64 = lambda b: base64.b64encode(b).decode()
+    paged = {"pages": _PAGES, "page": "Story"}
+    _mock(monkeypatch, _FakeResp(200, {"ok": True, "frames": [{"slide": 1, "nodes": []}], **paged}))
+    assert asyncio.run(design.outline(b"FIG", page="Story")) == {"frames": [{"slide": 1, "nodes": []}], **paged}
+    assert _FakeClient.last["json"] == {"fig": b64(b"FIG"), "page": "Story"}
+    asyncio.run(design.outline(b"FIG"))
+    assert "page" not in _FakeClient.last["json"]                            # none named: the first page
+
+    _mock(monkeypatch, _FakeResp(200, {"ok": True, "format": "png", "image_base64": b64(b"STORY"), **paged}))
+    assert asyncio.run(design.export_page(b"FIG", "Story", fmt="png")) == (b"STORY", _PAGES, "Story")
+    assert _FakeClient.last["json"]["page"] == "Story"
+    assert asyncio.run(design.export(b"FIG", page=2)) == b"STORY" and _FakeClient.last["json"]["page"] == 2   # or its place
+
+    _mock(monkeypatch, _FakeResp(200, {"ok": True, "slides": [b64(b"J")], "sizes": [[300, 600]], "meta": [{}], **paged}))
+    s = asyncio.run(design.slides(b"FIG", page="Story"))
+    assert s["pages"] == _PAGES and s["page"] == "Story" and _FakeClient.last["json"]["page"] == "Story"
+
+    _mock(monkeypatch, _FakeResp(200, {"ok": True, "fig_base64": b64(b"E"), "started": "Story", **paged}))
+    r = asyncio.run(design.apply(b"FIG", ops=[{"op": "delete", "node": "x"}], page="Story"))
+    assert (r["started"], r["page"], r["pages"]) == ("Story", "Story", _PAGES)
+    assert _FakeClient.last["json"]["page"] == "Story"
+
+    _mock(monkeypatch, _FakeResp(200, {**_ok(), "pages": _PAGES, "page_images_base64": [b64(b"A"), b64(b"B"), b64(b"C")],
+                                       "preview_pages": ["Post", "Story", "Banner"]}))
+    out = asyncio.run(design.render({"pages": []}))
+    assert out.pages == _PAGES and out.page_images == [b"A", b"B", b"C"] and out.preview_pages == ["Post", "Story", "Banner"]
+
+
+def _variants():
+    node = lambda text: [{"text": text, "x": 40, "y": 40, "size": 64}]
+    return {"pages": [{"name": "Post", "size": "square", "fill": "#0f172a", "nodes": node("Launch")},
+                      {"name": "Story", "size": "story", "fill": "#0f172a", "nodes": node("Launch day")},
+                      {"name": "Banner", "size": [1600, 400], "nodes": node("Launch")}]}
+
+
+def test_a_render_of_pages_is_one_design_with_an_image_a_page(tmp_path, monkeypatch):
+    """"A post, a story and a banner" is one design of three pages — not three files to
+    keep alike by hand: one .fig, each page's own image beside it, every page back to QA."""
+    monkeypatch.setenv("DESIGN_EDITOR_URL", "https://ed")
+    calls = _fake_render(monkeypatch, pages=_PAGES, page_images=[b"POST", b"STORY", b"BANNER"],
+                         previews=[b"\xff\xd8p", b"\xff\xd8s", b"\xff\xd8b"], preview_pages=["Post", "Story", "Banner"],
+                         lint=[{"page": "Story", "frame": 0, "node": "headline", "issue": "runs off the right edge", "fix": "narrow it"}])
+    out = asyncio.run(_exec_design({"action": "render", "name": "launch", "spec": _variants()}, _ws(tmp_path)))
+    sent = calls["spec"]["pages"]
+    assert [p["name"] for p in sent] == ["Post", "Story", "Banner"]
+    assert [p["size"] for p in sent] == [[1080, 1080], [1080, 1920], [1600, 400]]      # each its own size
+    assert sent[1]["nodes"][0]["type"] == "text" and sent[1]["nodes"][0]["color"]     # prepared like any design
+    assert calls["every"] is False
+    d = tmp_path / "designs"
+    assert sorted(f.name for f in d.iterdir()) == ["launch-page-2.png", "launch-page-3.png", "launch.fig", "launch.png"]
+    assert (d / "launch.png").read_bytes() == b"POST" and (d / "launch-page-3.png").read_bytes() == b"BANNER"
+    assert out["_ui"] == {"type": "ui", "action": "open_canvas", "path": "designs/launch.fig", "name": "launch.fig"}
+    text = [b["text"] for b in out["_model"] if b["type"] == "text"][-1]
+    assert 'with 3 pages: "Post" (designs/launch.png); "Story" (designs/launch-page-2.png); "Banner" (designs/launch-page-3.png)' in text
+    assert 'page "Story": headline runs off the right edge' in text           # the layout check says which page
+    labels = [b["text"] for b in out["_model"] if b["type"] == "text"][:3]
+    assert labels == ['Page "Post":', 'Page "Story":', 'Page "Banner":']       # every page is looked at
+    assert sum(b["type"] == "image" for b in out["_model"]) == 3
+
+
+def test_pages_say_what_they_need(tmp_path, monkeypatch):
+    _fake_render(monkeypatch)
+    run = lambda spec, **kw: asyncio.run(_exec_design({"action": "render", "name": "x", "spec": spec, **kw}, _ws(tmp_path)))
+    page = lambda name: {"name": name, "size": "square", "nodes": []}
+    assert "needs a `name`" in run({"pages": [{"size": "square", "nodes": []}]})
+    assert "two pages are named 'post'" in run({"pages": [page("Post"), page("post")]})
+    assert "a deck of layouts is a design of its own" in run({"pages": [{"name": "Deck", "deck": {"slides": []}}]})
+    assert "`pages` is a list of pages" in run({"pages": []})
+    # A page's own mistakes say which page.
+    assert "page 'Story': unknown size 'tall'" in run({"pages": [page("Post"), {"name": "Story", "size": "tall", "nodes": []}]})
+    assert "renders to an image" in run({"pages": [page("Post"), page("Story")]}, format="pdf")
+
+
+def test_inspect_and_edit_work_on_the_page_named(tmp_path, monkeypatch):
+    _design(tmp_path)
+    got = {}
+
+    async def _outline(fig, user_id=None, page=None):
+        got["page"] = page
+        return {"pages": _PAGES, "page": "Story", "frames": [
+            {"slide": 1, "name": "slide-1", "size": [1080, 1920], "nodes": []}]}
+    monkeypatch.setattr("cycls._agent.design.outline", _outline)
+    out = asyncio.run(_exec_design({"action": "inspect", "name": "launch", "page": "Story"}, _ws(tmp_path)))
+    assert got["page"] == "Story"
+    assert out.startswith('designs/launch.fig — page "Story" — 1 frame.')
+    assert 'This design has 3 pages: "Post", "Story", "Banner"' in out and "passing its name as `page`" in out
+
+    calls, scheduled = _fake_apply(monkeypatch, compiled="S", pages=_PAGES, page="Story", started="Story")
+    out = asyncio.run(_exec_design({"action": "edit", "name": "launch", "page": "Story",
+                                    "ops": [{"op": "set_text", "node": "headline", "text": "Tomorrow"}]}, _ws(tmp_path)))
+    assert calls["page"] == "Story" and calls["pages_asked"] is False
+    assert out["_ui"]["page"] == "Story" and "reload" not in out["_ui"]        # an open editor shows that page first, and replays
+    assert 'on page "Story"' in out["_model"] and "designs/launch-page-2.png" in out["_model"]
+
+
+def test_a_page_an_edit_makes_is_prepared_and_gets_its_image(tmp_path, monkeypatch):
+    _design(tmp_path)
+    grown = [{"name": "design", "frames": 1}, {"name": "Story", "frames": 1}]
+    calls, _ = _fake_apply(monkeypatch, compiled="S", pages=grown, page="Story", started="design")
+    out = asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": [
+        {"op": "page_add", "name": "Story", "spec": {"size": "story", "nodes": [{"text": "Hi", "x": 40, "y": 40}]}}]}, _ws(tmp_path)))
+    spec = calls["ops"][0]["spec"]
+    assert spec["size"] == [1080, 1920] and spec["nodes"][0]["type"] == "text"   # as a render prepares it
+    assert calls["pages_asked"] is True                                        # the new page gets its image
+    # Pages changed: an open editor re-opens the saved file, on the page the edit ended on.
+    assert out["_ui"]["reload"] is True and out["_ui"]["page"] == "Story"
+    assert 'on page "Story"' in out["_model"] and '"design", "Story"' in out["_model"]
+    bad = asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": [{"op": "page_add", "name": "X"}]}, _ws(tmp_path)))
+    assert bad.startswith("Error: op 1: `page_add` needs `spec`")
+
+
+def _page_env(tmp_path, monkeypatch, pages=3, empty=()):
+    """A design of `pages` pages with its images beside it; exports are recorded."""
+    monkeypatch.setenv("DESIGN_URL", "https://d")
+    monkeypatch.setattr(refresh, "DELAY", 0.05)
+    listed = [{"name": f"p{n}", "frames": 0 if n in empty else 1} for n in range(1, pages + 1)]
+    calls = []
+
+    async def _export(fig, fmt="png", scale=2, width=None, user_id=None, every=False):
+        return _png(width or 1080, 1080) + b"NEW"            # the design's own image, at the width it had
+
+    async def _export_page(fig, page, fmt="png", scale=2, width=None, user_id=None):
+        calls.append((page, fmt, scale))
+        return f"NEW-{fmt}-page-{page + 1}".encode(), listed, listed[page]["name"]
+
+    async def _outline(fig, user_id=None, page=None):
+        return {"frames": [{"size": [720, 720]}], "pages": listed, "page": listed[0]["name"]}
+    monkeypatch.setattr(refresh, "export", _export)
+    monkeypatch.setattr(refresh, "export_page", _export_page)
+    monkeypatch.setattr(refresh, "outline", _outline)
+    d = tmp_path / "designs"
+    d.mkdir()
+    (d / "launch.fig").write_bytes(b"FIG")
+    (d / "launch.png").write_bytes(_png(1080, 1080))
+    return d, calls
+
+
+def test_page_images_follow_the_designs_pages(tmp_path, monkeypatch):
+    """Each page after the first keeps its image as <name>-page-<n>: re-exported with the
+    design, one for a page added since, none left for a page that's gone."""
+    d, calls = _page_env(tmp_path, monkeypatch, pages=3)
+    (d / "launch-page-2.png").write_bytes(_png(540, 960))
+    (d / "launch-page-5.png").write_bytes(b"OLD")                            # its page was removed
+    (d / "launch-page-2.pdf").write_bytes(b"OLD-PDF")                        # someone exported page 2 as a PDF
+    _saves(tmp_path, "designs/launch.fig")
+    assert (d / "launch.png").read_bytes().endswith(b"NEW")                    # the first page is the design's own image
+    assert (d / "launch-page-2.png").read_bytes() == b"NEW-png-page-2"
+    assert (d / "launch-page-3.png").read_bytes() == b"NEW-png-page-3"         # a page added since gets one
+    assert not (d / "launch-page-5.png").exists()
+    assert (d / "launch-page-2.pdf").read_bytes() == b"NEW-pdf-page-2"
+    assert not (d / "launch-page-3.pdf").exists()                             # a PDF only where there was one
+    # Each at the design's own scale — its 1080 px image of a 720 px frame — whatever
+    # was in that place before (a page's place changes when one before it goes).
+    assert (1, "png", 1.5) in calls and (2, "png", 1.5) in calls and (1, "pdf", 2) in calls
+    assert refresh.managed(tmp_path, "designs/launch-page-2.png")
+    assert not refresh.managed(tmp_path, "designs/other-page-2.png")
+
+
+def test_a_design_with_no_page_images_is_exported_as_before(tmp_path, monkeypatch):
+    d, calls = _page_env(tmp_path, monkeypatch, pages=3)
+    _saves(tmp_path, "designs/launch.fig")                                    # pages made by hand: no page images asked for
+    assert calls == [] and sorted(f.name for f in d.iterdir()) == ["launch.fig", "launch.png"]
+
+    async def go():                                                           # an agent made a page: now they are
+        refresh.schedule(tmp_path, "designs/launch.fig", "org:u", pages=True)
+        await asyncio.gather(*refresh._pending.values(), return_exceptions=True)
+    asyncio.run(go())
+    assert sorted(f.name for f in d.iterdir()) == ["launch-page-2.png", "launch-page-3.png", "launch.fig", "launch.png"]
+
+
+def test_an_empty_page_has_no_image(tmp_path, monkeypatch):
+    d, calls = _page_env(tmp_path, monkeypatch, pages=3, empty=(3,))
+    (d / "launch-page-2.png").write_bytes(_png(540, 960))
+    _saves(tmp_path, "designs/launch.fig")
+    assert [c[0] for c in calls] == [1] and not (d / "launch-page-3.png").exists()
 
 
 # ---- M5: more node types, bigger photos ----

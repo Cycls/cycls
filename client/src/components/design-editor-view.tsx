@@ -57,8 +57,9 @@ export type DesignHost = {
   brand: () => Promise<BrandKit | null>;
   openInCanvas: (path: string) => void;
   refreshFiles?: () => void;
-  // The design as a file beside it (the design service renders it) → its path.
-  exportDesign?: (path: string, format: "pdf" | "png") => Promise<string>;
+  // The design as a file beside it (the design service renders it) → its path. `page`
+  // is the page exported, by name (the first when absent).
+  exportDesign?: (path: string, format: "pdf" | "png", page?: string) => Promise<string>;
   // A design with its version, which its saves name as their base (design/store.py),
   // and its earlier versions — absent on an older server or a shared view.
   fetchVersioned?: FetchVersioned;
@@ -70,7 +71,10 @@ export type DesignHost = {
 // Every mounted editor, by the file it edits — so Cycls can have one save what's
 // unsaved before its tab closes, the file is renamed or the canvas hides, can stop
 // one from writing a file that is being deleted, and can open one full screen.
-type Handle = { flush: (ms: number) => Promise<boolean>; detach: () => () => void; fullscreen: () => void; reload: () => void };
+type Handle = {
+  flush: (ms: number) => Promise<boolean>; detach: () => () => void; fullscreen: () => void; reload: () => void;
+  page: (name: string) => void;
+};
 const editors = new Map<string, Set<Handle>>();
 const under = (path: string, prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
 const handlesUnder = (prefix: string | null) =>
@@ -109,17 +113,56 @@ type EditorMessage = {
   fig?: string; message?: string; size?: [number, number]; features?: string[]; format?: string;
   files?: { name: string; mime: string; data: string }[];
   frame?: string | null; nodes?: DesignSelection["nodes"];
+  page?: string; pages?: string[];
 };
 
 // What the person has selected in an open design, by name (the editor's `selection`)
-// — what "Add selection" attaches to a message. The latest, per design.
-export type DesignSelection = { path: string; frame: string | null; nodes: { name: string; type: string; text?: string }[] };
+// — what "Add selection" attaches to a message. The latest, per design. `page` is the
+// page they are on, when the design has several.
+export type DesignSelection = { path: string; frame: string | null; nodes: { name: string; type: string; text?: string }[]; page?: string };
 const selections = new Map<string, DesignSelection>();
 export const designSelection = (path: string) => selections.get(path) ?? null;
 
-// An agent edit to replay in the editor: its script, the cursor's label, and the
-// design's version once the server saved it.
-type Command = { script: string; intent?: string; version?: string };
+// A design's pages — its variants: a post, a story, a banner of one piece of work — as
+// its open editor has them, and the one in view (the editor's `pages`). It is what a
+// preview shows and a download exports. Absent while no editor of the design is open.
+export type DesignPages = { path: string; page: string; pages: string[] };
+const pageSets = new Map<string, DesignPages>();
+export const designPages = (path: string) => pageSets.get(path) ?? null;
+// The page in view, when the design has more than one (else undefined: the design is its page).
+export const designPage = (path: string) => {
+  const p = pageSets.get(path);
+  return p && p.pages.length > 1 ? p.page : undefined;
+};
+// Show `page` in the editors of `path` (a preview's tabs: Edit comes back on that page).
+export function showDesignPage(path: string, page: string): void {
+  for (const h of editors.get(path) ?? []) h.page(page);
+}
+export function useDesignPages(path: string): DesignPages | null {
+  const [value, setValue] = useState(() => designPages(path));
+  useEffect(() => {
+    setValue(designPages(path));
+    const onPages = (e: Event) => {
+      if ((e as CustomEvent<{ path?: string }>).detail?.path === path) setValue(designPages(path));
+    };
+    window.addEventListener("cycls:design-pages", onPages);
+    return () => window.removeEventListener("cycls:design-pages", onPages);
+  }, [path]);
+  return value;
+}
+// The page a design was last on, kept in this browser: it opens there again.
+const pageKey = (path: string) => `cycls:design-page:${path}`;
+const lastPage = (path: string) => { try { return localStorage.getItem(pageKey(path)) || undefined; } catch { return undefined; } };
+function keepPage(path: string, page: string | null) {
+  try {
+    if (page) localStorage.setItem(pageKey(path), page);
+    else localStorage.removeItem(pageKey(path));
+  } catch { /* no storage: it opens on its first page */ }
+}
+
+// An agent edit to replay in the editor: its script, the cursor's label, the design's
+// version once the server saved it, and the page it is made on.
+type Command = { script: string; intent?: string; version?: string; page?: string };
 
 export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload, host }: {
   url: string;        // blob URL of the .fig bytes (already fetched, authed) — used when there's no host.fetchVersioned
@@ -188,7 +231,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
     while (next?.version && next.version === loadedVersion.current) next = commands.current.shift();
     if (!next) return;
     replaying.current = next;
-    post({ type: "command", script: next.script, intent: next.intent });
+    post({ type: "command", script: next.script, intent: next.intent, ...(next.page ? { page: next.page } : {}) });
   }, [post]);
 
   // Re-open the editor on the saved file (a fresh fetch, with its version).
@@ -274,13 +317,17 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       },
       fullscreen: enterFullscreen,
       reload: reopen,
+      page: (name) => { if (features.current.has("pages")) post({ type: "page", name }); },
     };
     let set = editors.get(path);
     if (!set) editors.set(path, (set = new Set()));
     set.add(handle);
     return () => {
       set!.delete(handle);
-      if (!set!.size) editors.delete(path);
+      if (!set!.size) {
+        editors.delete(path);
+        if (pageSets.delete(path)) window.dispatchEvent(new CustomEvent("cycls:design-pages", { detail: { path } }));
+      }
     };
   }, [path, post, enterFullscreen, reopen]);
 
@@ -330,7 +377,8 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       if (!host?.exportDesign) return;
       try {
         await flushDesignEditor(path, 3000);   // what's unsaved is in the export
-        const written = await host.exportDesign(path, format);
+        const page = designPage(path);            // the page in view, on a design of several
+        const written = await (page ? host.exportDesign(path, format, page) : host.exportDesign(path, format));
         track("design_exported", { format, files: 1 });
         host.refreshFiles?.();
         toast.action(t("exportedTo").replace("{name}", written.split("/").pop() ?? written), t("open"),
@@ -381,7 +429,9 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           ]);
           if (disposed) return;
           doc.current = `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-          post({ type: "load", protocol: 2, doc: doc.current, name, fig: toBase64(new Uint8Array(buf)), ...(brand ? { brand } : {}) });
+          const page = lastPage(latest.current.path);   // where they left it (the editor opens its first page otherwise)
+          post({ type: "load", protocol: 2, doc: doc.current, name, fig: toBase64(new Uint8Array(buf)),
+                 ...(brand ? { brand } : {}), ...(page ? { page } : {}) });
           if (protocol.current >= 2) {
             post({ type: "theme", theme: document.body.classList.contains("dark") ? "dark" : "light" });
             post({ type: "locale", lang: getLang() });
@@ -446,10 +496,19 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         }
         pump();
       } else if (m.type === "selection" && Array.isArray(m.nodes)) {
-        const sel: DesignSelection = { path: latest.current.path, frame: typeof m.frame === "string" ? m.frame : null, nodes: m.nodes };
+        const page = designPage(latest.current.path);
+        const sel: DesignSelection = { path: latest.current.path, frame: typeof m.frame === "string" ? m.frame : null, nodes: m.nodes,
+                                       ...(page ? { page } : {}) };
         if (sel.nodes.length) selections.set(sel.path, sel);
         else selections.delete(sel.path);
         window.dispatchEvent(new CustomEvent("cycls:design-selection", { detail: sel }));
+      } else if (m.type === "pages" && Array.isArray(m.pages) && typeof m.page === "string") {
+        // The design's pages and the one in view, whenever either changes.
+        if (m.doc && m.doc !== doc.current) return;
+        const now: DesignPages = { path: latest.current.path, page: m.page, pages: m.pages.filter((p) => typeof p === "string") };
+        pageSets.set(now.path, now);
+        keepPage(now.path, now.pages.length > 1 && now.page !== now.pages[0] ? now.page : null);
+        window.dispatchEvent(new CustomEvent("cycls:design-pages", { detail: now }));
       } else if (m.type === "commandError") {
         // The live replay of an agent edit failed; the saved file already holds the
         // edit. Re-open the editor on it (a fresh fetch — `url` may predate the edit).
@@ -501,17 +560,27 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
     // The agent edits an open design live: chat.tsx dispatches this when its
     // Design tool fires a `design_command`; it replays here, one at a time.
     const onCommand = (e: Event) => {
-      const d = (e as CustomEvent).detail as { path?: string; script?: string; intent?: string; version?: string };
+      const d = (e as CustomEvent).detail as { path?: string; script?: string; intent?: string; version?: string; page?: string; reload?: boolean };
       if (!d || d.path !== latest.current.path || typeof d.script !== "string") return;
       if (spoke && protocol.current < 2) {   // an editor from before the protocol never says `applied`
         post({ type: "command", script: d.script, intent: d.intent });
+        return;
+      }
+      if (d.reload) {
+        // The edit changed the pages themselves (one added, copied, renamed, removed).
+        // The server has saved it: open that file, on the page the edit ended on.
+        if (pending.current) window.clearTimeout(pending.current.timer);
+        pending.current = null;
+        keepPage(latest.current.path, d.page || null);
+        reopen();
         return;
       }
       if (pending.current && d.version === pending.current.version) {   // the change was this edit's
         window.clearTimeout(pending.current.timer);
         pending.current = null;
       }
-      commands.current.push({ script: d.script, intent: d.intent, version: typeof d.version === "string" ? d.version : undefined });
+      commands.current.push({ script: d.script, intent: d.intent, version: typeof d.version === "string" ? d.version : undefined,
+                              page: typeof d.page === "string" && d.page ? d.page : undefined });
       pump();
     };
 
@@ -524,7 +593,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       window.removeEventListener("message", onMessage);
       window.removeEventListener("cycls:design-command", onCommand as EventListener);
     };
-  }, [origin, post, name, dir, stem, frameKey, leaveFullscreen, pump]);
+  }, [origin, post, name, dir, stem, frameKey, leaveFullscreen, pump, reopen]);
 
   // The conflict's three ways out.
   const resolve = async (choice: "latest" | "mine" | "copy") => {

@@ -32,6 +32,7 @@ THEME = ROOT / "cycls" / "_agent" / "web" / "themes" / "default"
 DATA = ROOT / "tests" / "data"
 EDITOR = os.environ.get("E2E_EDITOR_URL", "https://cycls-design.cycls.ai").rstrip("/")
 DESIGN = "designs/e2e.fig"
+PAGED = "designs/e2e-pages.fig"      # two pages, "Post" and "Story" (cycls-design: a render of {pages})
 
 # The host page's record of what its editors say (the app's own listener is inside
 # React; this one sits beside it on the same window).
@@ -42,7 +43,8 @@ RECORD = """(() => {
     const d = e.data || {};
     if (d.source !== 'cycls-editor') return;
     window.__ed.push({ type: d.type, doc: d.doc, id: d.id, ok: d.ok, name: d.name, features: d.features,
-                       fig: typeof d.fig === 'string' ? d.fig : undefined, message: d.message });
+                       fig: typeof d.fig === 'string' ? d.fig : undefined, message: d.message,
+                       page: d.page, pages: d.pages });
   });
 })();"""
 
@@ -88,6 +90,18 @@ class Scripted:
         content = context.messages[-1].get("content", "") if context.messages else ""
         text = content if isinstance(content, str) else " ".join(
             p.get("text", "") for p in content if isinstance(p, dict))
+        if "story" in text:   # an agent's edit on the page "Story" of the paged design
+            _, base = read_fig(self.root, PAGED)
+            version = await write_fig(self.root, PAGED, (DATA / "e2e-pages-after.fig").read_bytes(), base=base,
+                                      by="agent", reason="agent", intent="Tomorrow")
+            yield {"type": "ui", "action": "design_command", "path": PAGED, "version": version, "page": "Story",
+                   "script": (DATA / "e2e-pages-edit.js").read_text(encoding="utf-8"), "intent": "Tomorrow"}
+            yield "Done."
+            return
+        if "pages" in text:
+            yield {"type": "ui", "action": "open_canvas", "path": PAGED}
+            yield "Opened."
+            return
         edit = ("e2e-after.fig", "e2e-edit.js", "Day Roast") if "edit" in text else \
             ("e2e-paint.fig", "e2e-paint.js", "Panel") if "paint" in text else None
         if edit:   # as the Design tool does: saved first (compared, kept), then replayed
@@ -155,6 +169,7 @@ class Session:
         self.server = server
         (server.root / "designs").mkdir(parents=True, exist_ok=True)
         shutil.copy(DATA / "e2e.fig", server.root / DESIGN)
+        shutil.copy(DATA / "e2e-pages.fig", server.root / PAGED)
         shutil.rmtree(server.root / versions.DIR, ignore_errors=True)   # each test's own history
         versions._last.clear()
         self.context = browser.new_context(viewport={"width": 1600, "height": 1000})
@@ -404,6 +419,35 @@ def test_preview_and_back_is_the_same_editor(session):
     session.page.wait_for_timeout(1000)
     assert session.on_disk() != before
     session.no_editor_error()
+
+
+# ---- A design's pages: its variants, one in view --------------------------------------------
+
+def test_an_agent_edit_goes_to_its_page_and_the_design_opens_where_it_was_left(session):
+    """A design of two pages: the editor tells Cycls its pages; an agent's edit on
+    "Story" is shown and made there; and opened again, the design is on "Story"."""
+    n = session.mark()
+    session.say("open the pages")
+    session.wait_for("loaded", after=n, timeout=90)
+    if "pages" not in session.features():
+        pytest.skip("the editor at E2E_EDITOR_URL predates pages")
+    said = session.wait_for("pages", after=n, where=lambda e: e.get("page") == "Post")
+    assert said["pages"] == ["Post", "Story"]
+    session.page.wait_for_timeout(3500)                        # past the editor's settle window
+    n = session.mark()
+    session.say("change the story")
+    session.wait_for("applied", after=n, timeout=60)
+    session.wait_for("pages", after=n, where=lambda e: e.get("page") == "Story")   # the editor went to the page it changed
+    session.page.wait_for_timeout(2500)
+    assert not any(e["type"] in ("commandError", "ready") for e in session.events(n))   # replayed, not reloaded
+    assert session.page.evaluate("localStorage.getItem('cycls:design-page:designs/e2e-pages.fig')") == "Story"
+    session.no_editor_error()
+    # Opened again (the browser page reloaded): on the page it was left on.
+    session.page.reload()
+    n = session.mark()
+    session.say("open the pages")
+    session.wait_for("loaded", after=n, timeout=90)
+    session.wait_for("pages", after=n, where=lambda e: e.get("page") == "Story")
 
 
 # ---- 6. A change made elsewhere isn't overwritten: the person decides ---------------------

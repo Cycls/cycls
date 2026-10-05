@@ -37,6 +37,26 @@ export interface DeckManifest {
   transitions?: string[];
   polls?: (DeckPoll | null)[];   // a poll slide's live poll
   fig?: string;
+  // The design's pages — its variants — and the one these slides are (a manifest is one page).
+  pages?: { name: string; frames: number }[];
+  page?: string;
+}
+
+// A design's pages, to pick one: what a preview shows, a page at a time.
+export function PageTabs({ pages, page, onPick }: { pages: string[]; page: string; onPick: (page: string) => void }) {
+  return (
+    <div role="tablist" aria-label={t("pages")} data-testid="design-pages"
+         className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-background px-3 py-1.5">
+      {pages.map((name) => (
+        <button key={name} role="tab" aria-selected={name === page} title={name} dir="auto"
+                onClick={() => { if (name !== page) onPick(name); }}
+                className={cn("max-w-[14rem] shrink-0 truncate rounded-md px-2.5 py-1 text-xs transition-colors cursor-pointer",
+                              name === page ? "bg-secondary font-medium text-foreground" : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground")}>
+          {name}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 export function parseDeck(data: string): DeckManifest | null {
@@ -128,7 +148,10 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
   const download = (format: "pptx" | "pdf" | "images") => {
     if (!openFile) return;
     track("deck_exported", { format });
-    openFile(`${path}?as=${format}`).then((url) => saveBlob(url, `${name}.${format === "images" ? "zip" : format}`)).catch(() => {});
+    // One page of several: that page's slides, in a file named for it.
+    const page = deck.pages && deck.pages.length > 1 ? deck.page : undefined;
+    openFile(`${path}?as=${format}${page ? `&page=${encodeURIComponent(page)}` : ""}`)
+      .then((url) => saveBlob(url, `${name}${page ? `-${page}` : ""}.${format === "images" ? "zip" : format}`)).catch(() => {});
   };
   // A carousel (square or portrait slides) is posted as images: they come first.
   const [w, h] = deck.sizes?.[0] ?? [16, 9];

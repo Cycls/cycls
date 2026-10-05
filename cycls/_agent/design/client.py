@@ -90,7 +90,10 @@ class Rendered(NamedTuple):
     lines for the agent's ack. `lint` is the layout check: [{frame, node, issue, fix}].
     `slides` is each frame's deck metadata: [{name, title?, notes?, transition?}].
     `dir` is a deck of layouts' direction ("ltr" / "rtl"), which its bilingual slides
-    follow — kept so a later slide op lays out the same way (None for anything else)."""
+    follow — kept so a later slide op lays out the same way (None for anything else).
+    `pages` is the design's pages — its variants — in order: [{name, frames}]; with more
+    than one, `page_images` is each page's own image (its first frame) and
+    `preview_pages` whose page each of `previews` is."""
     image: bytes
     fig: bytes
     frame_id: object
@@ -102,10 +105,26 @@ class Rendered(NamedTuple):
     images: list
     slides: list
     dir: object = None
+    pages: list = []
+    page_images: list = []
+    preview_pages: list = []
 
 
 def _b64s(values):
     return [base64.b64decode(v) for v in values or [] if isinstance(v, str)]
+
+
+def _pages(data):
+    """A reply's pages → [{name, frames}]."""
+    return [{"name": str(p.get("name") or ""), "frames": int(p.get("frames") or 0)}
+            for p in data.get("pages") or [] if isinstance(p, dict)]
+
+
+def _paged(body, page):
+    """`page` — a page's name, or its place from 0 — onto a request (none: the first)."""
+    if page is not None and page != "":
+        body["page"] = page
+    return body
 
 
 def _decode(data):
@@ -120,12 +139,16 @@ def _decode(data):
         _b64s(data.get("previews_base64")),
         _b64s(data.get("images_base64")),
         [dict(i) for i in data.get("slides") or [] if isinstance(i, dict)],
-        data.get("dir") if data.get("dir") in ("ltr", "rtl") else None)
+        data.get("dir") if data.get("dir") in ("ltr", "rtl") else None,
+        _pages(data),
+        _b64s(data.get("page_images_base64")),
+        [str(p) for p in data.get("preview_pages") or []])
 
 
 async def render(spec, fmt="png", scale=2, user_id=None, every=False):
     """Render a declarative design spec → a Rendered. `spec` is `{size:[w,h], fill,
-    nodes:[...]}` or a deck `{frames:[...]}` (see the Design tool description);
+    nodes:[...]}`, a deck `{frames:[...]}`, or several pages `{pages:[{name, size, fill,
+    nodes}]}` — one design, a variant a page (see the Design tool description);
     `every` asks for every frame in a raster `fmt` (a carousel's slides)."""
     body = {"spec": spec, "format": fmt, "scale": scale, "preview": True}
     if every:
@@ -133,15 +156,17 @@ async def render(spec, fmt="png", scale=2, user_id=None, every=False):
     return _decode(await _post("/render", body, user_id))
 
 
-async def apply(fig, script=None, user_id=None, ops=None, preview=False):
+async def apply(fig, script=None, user_id=None, ops=None, preview=False, page=None):
     """Edit a saved `.fig` (bytes) with the editor's own plugin API, headless — by
     `ops` (named operations: set_text, style, move, …) or a raw plugin-API `script` →
     a dict: `fig` (the edited document), `lint` (the layout check of the result),
     `script` (for ops, the compiled script the live editor replays; else None) and
     `preview` (a @1x JPEG of the first frame, when asked). A failing edit raises
     RuntimeError carrying its own error (e.g. 'no node named "cta" — this design
-    has: …' or "null is not an object …")."""
-    body = {"fig": base64.b64encode(fig).decode()}
+    has: …' or "null is not an object …"). `page` is the page it is made on (a name;
+    the first when absent): the dict's `started` names it, `page` the one the edit
+    ended on (a page op may have made another) and `pages` all of them."""
+    body = _paged({"fig": base64.b64encode(fig).decode()}, page)
     if ops is not None:
         body["ops"] = ops
     else:
@@ -157,31 +182,51 @@ async def apply(fig, script=None, user_id=None, ops=None, preview=False):
             # metadata after it (its count is the deck's).
             "previews": _b64s(data.get("previews_base64")),
             "touched": [int(i) for i in data.get("touched") or [] if isinstance(i, int)],
-            "slides": [dict(s) for s in data.get("slides") or [] if isinstance(s, dict)]}
+            "slides": [dict(s) for s in data.get("slides") or [] if isinstance(s, dict)],
+            "pages": _pages(data), "page": str(data.get("page") or ""), "started": str(data.get("started") or "")}
 
 
-async def inspect(fig, user_id=None):
-    """A saved `.fig`'s outline → [{slide, name, size, fill?, nodes: [{name, type, x,
-    y, w, h, text?, font?, size?, color?, fill?, radius?, …}]}] — every frame and its
-    nodes by name, measured, for edits that name nodes which exist."""
-    data = await _post("/inspect", {"fig": base64.b64encode(fig).decode()}, user_id)
-    return data.get("frames") or []
+async def outline(fig, user_id=None, page=None):
+    """One page of a saved `.fig` → {"frames": [{slide, name, size, fill?, nodes: [{name,
+    type, x, y, w, h, text?, font?, size?, color?, fill?, radius?, …}]}], "pages":
+    [{name, frames}], "page": its name} — the page's frames and their nodes by name,
+    measured, for edits that name nodes which exist. `page` is a name or a place from
+    0; the first when absent."""
+    data = await _post("/inspect", _paged({"fig": base64.b64encode(fig).decode()}, page), user_id)
+    return {"frames": data.get("frames") or [], "pages": _pages(data), "page": str(data.get("page") or "")}
 
 
-async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False):
+async def inspect(fig, user_id=None, page=None):
+    """`outline`'s frames alone."""
+    return (await outline(fig, user_id=user_id, page=page))["frames"]
+
+
+async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False, page=None):
     """Re-export an edited `.fig` (bytes) → image bytes (pptx / pdf: the whole deck).
     `width`, the old image's pixel width, keeps its resolution (the service derives
     the scale from it). `every` → a list: every frame in `fmt` (a carousel's slides),
-    `width` being the first one's."""
-    body = {"fig": base64.b64encode(fig).decode(), "format": fmt, "scale": scale}
+    `width` being the first one's. `page` is the page exported — a name, or a place
+    from 0; the first when absent."""
+    data = await _export(fig, fmt, scale, width, user_id, every, page)
+    if every:
+        return _b64s(data.get("images_base64"))
+    return base64.b64decode(data["image_base64"])
+
+
+async def export_page(fig, page, fmt="png", scale=2, width=None, user_id=None):
+    """One page of a design as `fmt` → (bytes, the design's pages [{name, frames}], that
+    page's name). A page that isn't there is a RuntimeError naming the ones that are."""
+    data = await _export(fig, fmt, scale, width, user_id, False, page)
+    return base64.b64decode(data["image_base64"]), _pages(data), str(data.get("page") or "")
+
+
+async def _export(fig, fmt, scale, width, user_id, every, page):
+    body = _paged({"fig": base64.b64encode(fig).decode(), "format": fmt, "scale": scale}, page)
     if width:
         body["width"] = width
     if every:
         body["every"] = True
-    data = await _post("/export", body, user_id)
-    if every:
-        return _b64s(data.get("images_base64"))
-    return base64.b64decode(data["image_base64"])
+    return await _post("/export", body, user_id)
 
 
 async def evaluate(script, fmt="png", scale=2, user_id=None):
@@ -190,12 +235,15 @@ async def evaluate(script, fmt="png", scale=2, user_id=None):
     return _decode(await _post("/eval", {"script": script, "format": fmt, "scale": scale, "preview": True}, user_id))
 
 
-async def slides(fig, scale=1, fmt="jpg", user_id=None):
+async def slides(fig, scale=1, fmt="jpg", user_id=None, page=None):
     """A saved deck (`.fig` bytes), slide by slide → {"images": [bytes], "sizes":
-    [[w, h]], "meta": [{name, title?, notes?, transition?}]} — what the deck viewer
-    shows and presents."""
-    data = await _post("/slides", {"fig": base64.b64encode(fig).decode(), "scale": scale, "format": fmt}, user_id)
+    [[w, h]], "meta": [{name, title?, notes?, transition?}], "pages": [{name, frames}],
+    "page": its name} — what the deck viewer shows and presents: one page's slides
+    (`page`, a name or a place from 0; the first when absent)."""
+    body = _paged({"fig": base64.b64encode(fig).decode(), "scale": scale, "format": fmt}, page)
+    data = await _post("/slides", body, user_id)
     return {"images": _b64s(data.get("slides")),
             "sizes": [list(s) for s in data.get("sizes") or []],
             "meta": [dict(m) for m in data.get("meta") or [] if isinstance(m, dict)],
-            "format": data.get("format") or fmt}
+            "format": data.get("format") or fmt,
+            "pages": _pages(data), "page": str(data.get("page") or "")}

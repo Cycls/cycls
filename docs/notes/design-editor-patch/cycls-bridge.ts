@@ -7,12 +7,15 @@
 // Cycls instead.
 //
 // Protocol 2 (postMessage, JSON). Cycls → editor, {target:'cycls-editor', type, …}:
-//   load    {protocol:2, doc, name, fig, brand?}  open this document (a second load
-//                                                  replaces it); `doc` tags its saves
+//   load    {protocol:2, doc, name, fig, brand?, page?}  open this document (a second
+//                            load replaces it); `doc` tags its saves; `page` is the page
+//                            to open it on, by name (the first when absent or gone)
 //   written {id, ok}         the workspace has save `id` (or couldn't write it)
 //   save    {}               save now
 //   flush   {id}             save anything unsaved, then → flushed {id, ok}
-//   command {script, intent?} a live agent edit (Figma plugin API) on this document
+//   command {script, intent?, page?} a live agent edit (Figma plugin API) on this
+//                            document — on `page` (by name), shown first
+//   page    {name}           show this page (Cycls's preview picked it)
 //   theme   {theme}          'dark' | 'light'
 //   locale  {lang}           'ar' | 'en' — the editor's own menus and panels
 //   brand   {brand}          the workspace brand kit: {colors:{primary,…}, fonts:{heading,body}}
@@ -25,8 +28,12 @@
 //   newDesign {size?} · saveCopy {doc, name, fig} · export {doc, files:[{name, mime, data}]}
 //   exportAs {doc, format}   the whole design as 'pdf' | 'png', made by Cycls (host.ts)
 //   selection {doc, frame, nodes:[{name, type, text?}]}  what the person has selected
-// `features` says what this editor does beyond protocol 2 ("selection", "lang", "fit"), so a
-// Cycls app offers only what the editor it loaded supports.
+//   pages {doc, page, pages:[name]}  the design's pages — its variants — and the one in
+//                            view, whenever either changes: what Cycls previews and
+//                            downloads. Every page has a name of its own (a second
+//                            "Story" becomes "Story 2"): Cycls and the agent name pages.
+// `features` says what this editor does beyond protocol 2 ("selection", "lang", "fit",
+// "pages"), so a Cycls app offers only what the editor it loaded supports.
 // `commandError` is a live agent edit that failed HERE. The server applied and saved
 // the same edit before sending it (Cycls checks every edit headlessly first), so Cycls
 // re-opens the saved file rather than leave this editor on a stale document.
@@ -34,6 +41,7 @@
 // An older Cycls app sends `load` without `protocol`: its saves count as done once
 // posted, and it gets no new-design, copy or export messages (host.ts).
 import { decodeBase64 } from '@open-pencil/core/bytes'
+import { populateAllLazyFigImportRoots } from '@open-pencil/core/kiwi'
 import { computeAllLayouts } from '@open-pencil/core/layout'
 import { fontManager } from '@open-pencil/core/text'
 import { wrapEvalCode } from '@open-pencil/core/tools'
@@ -217,20 +225,25 @@ function isPresentationTimeout(error: unknown): boolean {
 // Open a .fig in the editor's one document store, replacing what's there — the
 // upstream open path (src/app/tabs readFigForTab + showImportedGraph), without the
 // new tab it would open for a second file (docs/quirks.md #30).
-async function loadDocument(store: EditorStore, bytes: Uint8Array, fileName: string): Promise<void> {
+async function loadDocument(store: EditorStore, bytes: Uint8Array, fileName: string, page?: string): Promise<void> {
   store.state.documentName = fileName.replace(/\.[^.]+$/i, '')
   const load = store.preparationController.begin({ kind: 'document-open', subject: fileName })
   let loaded = false
   try {
     load.update({ phase: 'decoding', detail: fileName })
     const graph = await readFigDocument(new File([bytes], fileName), load.signal)
+    // The reader fills in the first page only and the rest when they are opened. Every
+    // page is filled in here: an agent's edit, the brand kit and a page's copy read
+    // pages nobody has opened yet.
+    populateAllLazyFigImportRoots(graph)
     const firstPage = graph.getPages()[0]?.id
     if (firstPage) computeAllLayouts(graph, firstPage)
     load.update({ phase: 'materializing', detail: store.state.documentName })
     await applyImportedDocument(store, graph, load)
     load.signal.throwIfAborted()
     store.setDocumentSource(fileName, 'fig')
-    const pageId = store.graph.getPages()[0]?.id ?? store.graph.rootId
+    const pages = store.graph.getPages()
+    const pageId = (page ? pages.find((p) => p.name === page)?.id : undefined) ?? pages[0]?.id ?? store.graph.rootId
     load.update({ phase: 'populating-page', detail: store.graph.getNode(pageId)?.name ?? null })
     // Showing the page waits for its first frame (10 s, then it throws) and fitting
     // it for an animation frame (none, ever, in a hidden page): opened in a
@@ -404,6 +417,61 @@ function watchSelection(store: EditorStore): void {
   s.onEditorEvent('graph:replaced', report)
 }
 
+// --- Pages: the design's pages (its variants — a post, a story, a banner of one piece
+// of work) and the one in view, for Cycls's preview and downloads.
+type PageNode = { id: string; name: string; childIds: string[] }
+type PagedStore = {
+  graph: { getPages(): PageNode[]; getNode(id: string): unknown; updateNode(id: string, changes: { name: string }): void }
+  state: { currentPageId: string; zoom: number; panX: number; panY: number }
+  switchPage(id: string): Promise<void>
+  fitCurrentPageToViewport(): Promise<void>
+  requestRender(): void
+  onEditorEvent(event: 'page:changed', handler: () => void): () => void
+}
+
+function pagesOf(store: EditorStore): { page: string; pages: string[] } {
+  const s = store as unknown as PagedStore
+  const pages = s.graph.getPages()
+  const current = pages.find((p) => p.id === s.state.currentPageId) ?? pages[0]
+  return { page: current?.name ?? '', pages: pages.map((p) => p.name) }
+}
+
+// Cycls and the agent name a page, so each has a name of its own: an empty one becomes
+// "Page", and a name another page has gets a number ("Story 2"). True when one changed.
+function nameEveryPage(store: EditorStore): boolean {
+  const s = store as unknown as PagedStore
+  const taken = new Set<string>()
+  let changed = false
+  for (const page of s.graph.getPages()) {
+    const base = page.name.trim() || 'Page'
+    let name = base
+    for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${base} ${n}`
+    taken.add(name.toLowerCase())
+    if (name !== page.name) {
+      s.graph.updateNode(page.id, { name })
+      changed = true
+    }
+  }
+  if (changed) s.requestRender()
+  return changed
+}
+
+// Show the page named `name` (an agent's edit is made on it; a preview picked it).
+// False when there is no such page.
+async function showPage(store: EditorStore, name: string): Promise<boolean> {
+  const s = store as unknown as PagedStore
+  const page = s.graph.getPages().find((p) => p.name === name)
+  if (!page) return false
+  if (page.id !== s.state.currentPageId) {
+    try {
+      await s.switchPage(page.id)
+    } catch (error) {
+      if (!isPresentationTimeout(error)) throw error   // a hidden tab draws no frame: the page is switched all the same
+    }
+  }
+  return true
+}
+
 // --- Brand kit: the workspace's brand/brand.yaml, as Cycls reads it. Its colours
 // become variables in a "Brand" collection, so a person editing by hand picks the
 // same colours the agent uses, and its fonts are loaded before they're picked.
@@ -440,7 +508,8 @@ export function syncBrandVariables(store: EditorStore, brand: Brand | null | und
     getVariablesForCollection(id: string): Variable[]
   }
   type Holder = { type: string; getPluginData(key: string): string; setPluginData(key: string, value: string): void }
-  const page = (makeFigmaFromStore(store, store.state.currentPageId) as unknown as {
+  // The design's first page, whichever is open: one record a design, not one a page.
+  const page = (makeFigmaFromStore(store, store.graph.getPages()[0]?.id ?? store.state.currentPageId) as unknown as {
     currentPage: Holder & { children: Holder[] }
   }).currentPage
   const holder = page.children.find((n) => n.type === 'FRAME') ?? page
@@ -576,7 +645,39 @@ export function startCyclsEmbedBridge(): void {
     }
   }
 
-  async function open(msg: { protocol?: number; doc?: string; name?: string; fig: string; brand?: Brand }): Promise<void> {
+  // A page shown for the first time has no view of its own yet (the editor gives it
+  // 100% at the corner, on its stock backdrop): fit it, on Cycls's backdrop.
+  function watchPages(store: EditorStore): void {
+    const s = store as unknown as PagedStore & { __cyclsPages?: boolean }
+    if (s.__cyclsPages) return
+    s.__cyclsPages = true
+    s.onEditorEvent('page:changed', () => {
+      paintBackdrop(store)
+      const first = s.state.zoom === 1 && s.state.panX === 0 && s.state.panY === 0
+      const page = s.graph.getPages().find((p) => p.id === s.state.currentPageId)
+      if (!first || !page?.childIds.length) return
+      void s.fitCurrentPageToViewport().then(() => {
+        if (boundDocument()?.store === store) fitted = viewOf(store)
+      }).catch(() => undefined)
+    })
+  }
+
+  // The pages as Cycls last heard them; told again when they change (a page added,
+  // renamed, removed, or another one shown).
+  let toldPages = ''
+  function tellPages(): void {
+    const bound = boundDocument()
+    if (!bound) return
+    // A page renamed here while the document settles is a change to save, not settling.
+    if (nameEveryPage(bound.store) && !settled) touched = true
+    const now = pagesOf(bound.store)
+    const key = JSON.stringify([bound.doc, now])
+    if (key === toldPages) return
+    toldPages = key
+    post({ type: 'pages', doc: bound.doc, ...now })
+  }
+
+  async function open(msg: { protocol?: number; doc?: string; name?: string; fig: string; brand?: Brand; page?: string }): Promise<void> {
     setHostProtocol(typeof msg.protocol === 'number' ? msg.protocol : 0)
     cancelScheduledSave()
     await loading   // one load at a time
@@ -589,11 +690,12 @@ export function startCyclsEmbedBridge(): void {
     pendingBrand = msg.brand ?? null
     loadBrandFonts(pendingBrand)
     fitted = null
-    await loadDocument(store, decodeBase64(msg.fig), name)
+    await loadDocument(store, decodeBase64(msg.fig), name, typeof msg.page === 'string' ? msg.page : undefined)
     fitted = viewOf(store)
     bind({ store, doc, name })
     reflowTextEdits(store)
     watchSelection(store)
+    watchPages(store)
     // Fonts the document uses (and any fallback pack). A face that's slow to arrive
     // doesn't fail the load — the document is open and editable, and the late-fonts
     // refresh below re-shapes its text when the face lands.
@@ -609,18 +711,39 @@ export function startCyclsEmbedBridge(): void {
     paintBackdrop(store)
     settleUntil = performance.now() + 2500
     post({ type: 'loaded', doc, name })
+    tellPages()
+  }
+
+  async function show(name: string): Promise<void> {
+    await loading
+    const store = boundDocument()?.store
+    if (!store) return
+    try {
+      await showPage(store, name)
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.log('[cycls] page switch failed', error)
+    }
+    tellPages()
   }
 
   // Apply an agent "command" — a Figma-plugin-API script — to the LIVE editor
   // (mirrors the app's automation eval-handler), so the person watches the agent's
   // edits appear on the canvas they're using. Auto-save then persists them.
-  async function runCommand(script: string, intent?: string): Promise<void> {
+  async function runCommand(script: string, intent?: string, page?: string): Promise<void> {
     const bound = boundDocument()
     if (!bound) {
       post({ type: 'commandError', message: 'no document is open' })
       return
     }
     const { store, doc } = bound
+    try {
+      // An edit is made on one page: show it first, so it is watched where it lands.
+      if (page && !(await showPage(store, page))) throw new Error(`there is no page "${page}" in the open design`)
+    } catch (error) {
+      post({ type: 'commandError', doc, message: String((error as Error)?.message ?? error) })
+      return
+    }
     showAgent(intent) // Super glides onto the canvas before it acts
     try {
       const pageId = store.state.currentPageId
@@ -639,6 +762,12 @@ export function startCyclsEmbedBridge(): void {
         }
       )
       store.requestRender()
+      // A script that made, or left, a page: the editor shows where it ended.
+      const ended = (figma as unknown as { currentPageId: string }).currentPageId
+      if (ended !== store.state.currentPageId && store.graph.getNode(ended)) {
+        await (store as unknown as PagedStore).switchPage(ended).catch(() => undefined)
+      }
+      tellPages()
       // Land Super's cursor exactly on the node it just changed, then "click" it.
       try {
         const f = figma as unknown as {
@@ -681,6 +810,7 @@ export function startCyclsEmbedBridge(): void {
     const msg = event.data as {
       target?: string; type?: string; protocol?: number; doc?: string; name?: string; fig?: string
       id?: string; ok?: boolean; script?: string; intent?: string; theme?: string; lang?: string; brand?: Brand
+      page?: string
     }
     if (!msg || msg.target !== 'cycls-editor') return
     if (msg.type === 'load' && typeof msg.fig === 'string') {
@@ -695,7 +825,10 @@ export function startCyclsEmbedBridge(): void {
     } else if (msg.type === 'flush' && typeof msg.id === 'string') {
       void flush(msg.id)
     } else if (msg.type === 'command' && typeof msg.script === 'string') {
-      void runCommand(msg.script, typeof msg.intent === 'string' ? msg.intent : undefined)
+      void runCommand(msg.script, typeof msg.intent === 'string' ? msg.intent : undefined,
+        typeof msg.page === 'string' && msg.page ? msg.page : undefined)
+    } else if (msg.type === 'page' && typeof msg.name === 'string') {
+      void show(msg.name)
     } else if (msg.type === 'theme' && typeof msg.theme === 'string') {
       applyTheme(msg.theme)
     } else if (msg.type === 'locale' && typeof msg.lang === 'string') {
@@ -763,10 +896,11 @@ export function startCyclsEmbedBridge(): void {
       }
       return
     }
+    tellPages()
     if (!store.hasUnsavedChanges() || store.state.sceneVersion === seenVersion) return
     seenVersion = store.state.sceneVersion
     scheduleSave()
   }, 700)
 
-  post({ type: 'ready', protocol: 2, features: ['selection', 'lang', 'fit'] })
+  post({ type: 'ready', protocol: 2, features: ['selection', 'lang', 'fit', 'pages'] })
 }

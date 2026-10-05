@@ -8,7 +8,8 @@ import { t } from "../lib/i18n";
 export function selectionLabel(sel: DesignSelection): string {
   const file = sel.path.split("/").pop() ?? sel.path;
   const names = sel.nodes.map((n) => n.name);
-  return `${file}: ${names.slice(0, 3).join(", ")}${names.length > 3 ? ` +${names.length - 3}` : ""}`;
+  const where = sel.page ? `${file} › ${sel.page}` : file;   // which page, on a design of several
+  return `${where}: ${names.slice(0, 3).join(", ")}${names.length > 3 ? ` +${names.length - 3}` : ""}`;
 }
 
 export function SelectionChip({ selection, onRemove }: { selection: DesignSelection; onRemove?: () => void }) {

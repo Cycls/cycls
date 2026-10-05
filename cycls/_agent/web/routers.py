@@ -528,8 +528,34 @@ async def _office_slides(root, src, user_id):
 # cycls-design service. Cached like the office
 # renders, keyed by the .fig's path + mtime + size — so an edit (the editor's
 # auto-save, an agent's `edit`) is a fresh render.
+#
+# A design's PAGES are its variants (a post, a story, a banner of one piece of work),
+# and each of these is ONE page: `&page=<its name>`, the first when absent. The slides
+# manifest lists them all (`pages: [{name, frames}]`) and says which it is (`page`).
 _DESIGN_CACHE = ".cache/design"
 _DESIGN_AS = ("slides", "pptx", "pdf", "images", "png")
+
+
+def _page_param(raw):
+    """A request's `page` — a page's name — or None (the first page)."""
+    return raw.strip()[:80] if isinstance(raw, str) and raw.strip() else None
+
+
+def _page_tag(page):
+    """What a page adds to a cache file's name (nothing for the first page)."""
+    return f"-p{hashlib.sha1(page.encode('utf-8')).hexdigest()[:10]}" if page else ""
+
+
+def _page_label(page):
+    """A page's name as part of a file name."""
+    return re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "-", page).strip(" .-") or "page"
+
+
+def _design_error(e):
+    """A design-service failure → the HTTP error: a page that isn't there is the
+    caller's (it was renamed or removed), anything else the service's."""
+    missing = str(e).startswith("there is no page")
+    return HTTPException(404 if missing else 502, str(e) if missing else f"Couldn't render the design: {e}")
 
 
 def _design_doc(name):
@@ -573,21 +599,21 @@ def _poll_of(raw):
     return poll if isinstance(poll, dict) and poll.get("question") and isinstance(poll.get("options"), list) else None
 
 
-async def _design_slides(root, src, user_id):
-    """A cached slide render of a design — {count, slides: [data-URI JPEGs],
-    sizes, names, titles, notes, transitions, fig}. Raises design.Unavailable
-    (no service), FileNotFoundError / ValueError (not a deck)."""
+async def _design_slides(root, src, user_id, page=None):
+    """A cached slide render of one page of a design — {count, slides: [data-URI
+    JPEGs], sizes, names, titles, notes, transitions, fig, pages, page}. Raises
+    design.Unavailable (no service), FileNotFoundError / ValueError (not a deck)."""
     from cycls._agent import design
     root = Path(root).resolve()
     fig, size = await asyncio.to_thread(_deck_fig, root, src)
     stem, key = _design_cache_key(root, fig)
     cache_dir = root / _DESIGN_CACHE
-    dst = cache_dir / f"{stem}-{key}.slides.json"
+    dst = cache_dir / f"{stem}-{key}{_page_tag(page)}.slides.json"
     if dst.exists():
         return dst
     # ~1920px on the long side: sharp on the stage and in present mode.
     scale = min(2, max(1, 1920 / max(size))) if size and all(isinstance(v, (int, float)) and v > 0 for v in size) else 1
-    s = await design.slides(await asyncio.to_thread(fig.read_bytes), scale=scale, user_id=user_id)
+    s = await design.slides(await asyncio.to_thread(fig.read_bytes), scale=scale, user_id=user_id, page=page)
     mime = "image/png" if s["format"] == "png" else "image/jpeg"
     meta = s["meta"] + [{}] * (len(s["images"]) - len(s["meta"]))
     payload = json.dumps({
@@ -600,14 +626,20 @@ async def _design_slides(root, src, user_id):
         "transitions": [m.get("transition") or "" for m in meta],
         "polls": [_poll_of(m.get("poll")) for m in meta],
         "fig": fig.relative_to(root).as_posix(),
+        "pages": s.get("pages") or [],
+        "page": s.get("page") or "",
     })
-    return await asyncio.to_thread(_write_office_slides, cache_dir, stem, dst, payload)
+    return await asyncio.to_thread(_write_design_cache, cache_dir, stem, key, "slides.json", dst, payload.encode("utf-8"))
 
 
-def _write_design_export(cache_dir, stem, fmt, dst, data):
+def _write_design_cache(cache_dir, stem, key, ext, dst, data):
+    """Write one cached render of a design. What an older save of the design left goes;
+    the same save's other renders — its other pages — stay."""
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
-        for old in cache_dir.glob(f"{stem}-*.{fmt}"):
+        for old in cache_dir.glob(f"{stem}-*.{ext}"):
+            if old.name.startswith(f"{stem}-{key}"):
+                continue
             try: old.unlink()
             except OSError: pass
         tmp = cache_dir / f".{stem}-{uuid.uuid4().hex}.part"
@@ -615,7 +647,7 @@ def _write_design_export(cache_dir, stem, fmt, dst, data):
         tmp.replace(dst)
         return dst
     except OSError:
-        tmp = Path(tempfile.gettempdir()) / f"design-{uuid.uuid4().hex}.{fmt}"
+        tmp = Path(tempfile.gettempdir()) / f"design-{uuid.uuid4().hex}.{ext}"
         tmp.write_bytes(data)
         return tmp
 
@@ -630,36 +662,40 @@ def _zip_slides(stem, pngs):
     return buf.getvalue()
 
 
-async def _design_export(root, src, fmt, user_id):
-    """The whole deck behind `src` as `fmt` (pptx / pdf / images: a zip of every
-    slide's PNG) — or `png`, its first frame — cached → (path, the download name).
-    Same errors as _design_slides."""
+async def _design_export(root, src, fmt, user_id, page=None):
+    """One page of the design behind `src` as `fmt` (pptx / pdf: its whole deck; images:
+    a zip of every slide's PNG; `png`: its first frame) — cached → (path, the download
+    name). `page` is the page's name; the first when absent. Same errors as
+    _design_slides."""
     from cycls._agent import design
     root = Path(root).resolve()
     fig, _ = await asyncio.to_thread(_deck_fig, root, src)
     stem, key = _design_cache_key(root, fig)
     cache_dir = root / _DESIGN_CACHE
     ext = "zip" if fmt == "images" else fmt
-    dst = cache_dir / f"{stem}-{key}.{ext}"
-    name = f"{fig.stem}.{ext}"
+    dst = cache_dir / f"{stem}-{key}{_page_tag(page)}.{ext}"
+    base = f"{fig.stem}-{_page_label(page)}" if page else fig.stem   # a named page's download says which
+    name = f"{base}.{ext}"
     if dst.exists():
         return dst, name
     data = await asyncio.to_thread(fig.read_bytes)
     if fmt == "images":
-        data = _zip_slides(fig.stem, await design.export(data, fmt="png", user_id=user_id, every=True))
+        data = _zip_slides(base, await design.export(data, fmt="png", user_id=user_id, every=True, page=page))
     else:
-        data = await design.export(data, fmt=fmt, user_id=user_id)
-    return await asyncio.to_thread(_write_design_export, cache_dir, stem, ext, dst, data), name
+        data = await design.export(data, fmt=fmt, user_id=user_id, page=page)
+    return await asyncio.to_thread(_write_design_cache, cache_dir, stem, key, ext, dst, data), name
 
 
-async def _design_response(root, src, as_, user_id):
-    """?as=slides|pptx|pdf|images|png on a deck document or a .fig → the response."""
+async def _design_response(root, src, as_, user_id, page=None):
+    """?as=slides|pptx|pdf|images|png[&page=<name>] on a deck document or a .fig → the
+    response."""
     from cycls._agent import design
+    page = _page_param(page)
     try:
         if as_ == "slides":
-            return FileResponse(await _design_slides(root, src, user_id),
+            return FileResponse(await _design_slides(root, src, user_id, page),
                                 media_type="application/json", headers=_NO_CACHE)
-        path, name = await _design_export(root, src, as_, user_id)
+        path, name = await _design_export(root, src, as_, user_id, page)
         return FileResponse(path, filename=name, headers=_NO_CACHE)
     except design.Unavailable as e:
         raise HTTPException(415, str(e))
@@ -668,7 +704,7 @@ async def _design_response(root, src, as_, user_id):
     except ValueError as e:
         raise HTTPException(422, str(e))
     except RuntimeError as e:
-        raise HTTPException(502, f"Couldn't render the deck: {e}")
+        raise _design_error(e)
 
 
 def _walk_catalog(root):
@@ -957,7 +993,8 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         # A design deck (its deck document or its .fig): ?as=slides is the deck
         # viewer's manifest, ?as=pptx / ?as=pdf the whole deck, exported on demand.
         if request.query_params.get("as") in _DESIGN_AS and _design_doc(file_path.name):
-            return await _design_response(ws.root, file_path, request.query_params["as"], ws.subject)
+            return await _design_response(ws.root, file_path, request.query_params["as"], ws.subject,
+                                          request.query_params.get("page"))
         # ?as=slides previews a presentation as a slide viewer — a JSON manifest
         # of per-slide PNG data-URIs (office-render /v1/render). The canvas shows
         # the deck slide-by-slide rather than as a flat PDF.
@@ -1060,12 +1097,14 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.post("/design/export")
     async def export_design(request: Request, ws: Workspace = ws_dep):
-        """A design as a file beside it — `{path, format: "pdf" | "png"}` → `{path}`: the
-        editor's File › Export › PDF. Rendered by the design service (the export behind
-        `?as=`: every page of the design, with its own fonts), not in the browser, where
-        the editor's PDF embeds no fonts. Under designs/ it is `<name>.<format>`, the
-        design's own image — replaced, and kept in step by the refresh from then on;
-        anywhere else it takes a free name, never a file that's there."""
+        """A design as a file beside it — `{path, format: "pdf" | "png", page?}` →
+        `{path}`: the editor's File › Export › PDF. Rendered by the design service (the
+        export behind `?as=`: every slide of the page, with its own fonts), not in the
+        browser, where the editor's PDF embeds no fonts. Under designs/ it is
+        `<name>.<format>`, the design's own image — replaced, and kept in step by the
+        refresh from then on; anywhere else it takes a free name, never a file that's
+        there. `page` names the page exported (the first when absent): a later page is
+        `<name>-page-<its place>.<format>`, kept in step the same way."""
         from cycls._agent import design
         body = await request.json()
         fmt = str(body.get("format") or "pdf")
@@ -1074,21 +1113,30 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         src = _safe_path(ws.root, str(body.get("path") or ""))
         if src.suffix.lower() != ".fig" or not src.is_file():
             raise HTTPException(404, "No such design")
+        page, place, made, data = _page_param(body.get("page")), 1, None, None
         try:
-            made, _ = await _design_export(ws.root, src, fmt, ws.subject)
+            if page:   # its place names the file, so the service is asked (not the cache)
+                data, pages, name = await design.export_page(await asyncio.to_thread(src.read_bytes), page,
+                                                             fmt=fmt, user_id=ws.subject)
+                place = next((n for n, p in enumerate(pages, 1) if p["name"] == name), 1)
+            else:
+                made, _ = await _design_export(ws.root, src, fmt, ws.subject)
         except design.Unavailable as e:
             raise HTTPException(415, str(e))
         except ValueError as e:
             raise HTTPException(422, str(e))
         except RuntimeError as e:
-            raise HTTPException(502, f"Couldn't export the design: {e}")
+            raise _design_error(e)
         root = Path(ws.root).resolve()
-        rel = src.with_suffix(f".{fmt}").relative_to(root).as_posix()
+        rel = src.with_name(design_refresh.page_file(src.stem, place, fmt)).relative_to(root).as_posix()
         if not rel.startswith("designs/"):
             rel = _free_rel(root, rel)
         out = root / rel
         tmp = out.with_name(f".{out.name}.part")
-        await asyncio.to_thread(shutil.copyfile, made, tmp)
+        if data is None:
+            await asyncio.to_thread(shutil.copyfile, made, tmp)
+        else:
+            await asyncio.to_thread(tmp.write_bytes, data)
         await asyncio.to_thread(tmp.replace, out)
         _catalog_drop(ws.root)
         return {"path": rel}
@@ -1716,7 +1764,8 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
                 raise HTTPException(403, "Path traversal denied")
             if not target.is_file():
                 raise HTTPException(404, "File not found")
-            return await _design_response(ws_owner.root, target, as_, ws_owner.subject)
+            return await _design_response(ws_owner.root, target, as_, ws_owner.subject,
+                                          request.query_params.get("page"))
         if as_ in ("slides", "pdf") and office.convertible(file_path):
             try:
                 target = resolve_path(ws_owner.root, file_path)

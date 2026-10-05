@@ -240,8 +240,9 @@ export function useFiles(baseUrl: string = "") {
 
   // A design as a file beside it — designs/<name>.pdf — rendered by the design service:
   // the editor's File › Export › PDF.
-  const exportDesign = useCallback(async (filePath: string, format: "pdf" | "png") => {
-    return ((await (await api("/design/export", { method: "POST", json: { path: filePath, format } })).json()) as { path: string }).path;
+  const exportDesign = useCallback(async (filePath: string, format: "pdf" | "png", page?: string) => {
+    const json = { path: filePath, format, ...(page ? { page } : {}) };
+    return ((await (await api("/design/export", { method: "POST", json })).json()) as { path: string }).path;
   }, [api]);
 
   // The brand kit for the design editor (null without one, or on a server without the route).

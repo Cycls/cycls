@@ -132,7 +132,9 @@ def _with_selection(content, sel):
     its own text block the model reads (the chat shows it as a chip, not this line)."""
     def node(n):
         return f'{n["name"]} ({n["type"]})' + (f' "{n["text"]}"' if n.get("text") else "")
-    where = sel["path"] + (f' › {sel["frame"]}' if sel.get("frame") else "")
+    # A design of several pages says which one they are on (the tool's `page`).
+    where = (sel["path"] + (f' page {json.dumps(sel["page"], ensure_ascii=False)}' if sel.get("page") else "")
+             + (f' › {sel["frame"]}' if sel.get("frame") else ""))
     line = f"{SELECTED}{where}: " + ", ".join(node(n) for n in sel["nodes"]) + "]"
     blocks = content if isinstance(content, list) else ([{"type": "text", "text": content}] if content else [])
     return [*blocks, {"type": "text", "text": line}]

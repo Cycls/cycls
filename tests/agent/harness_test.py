@@ -1111,6 +1111,17 @@ def test_a_selection_becomes_its_own_block_the_model_reads():
     image = {"type": "image", "source": {}}
     assert _with_selection([image], {**sel, "frame": None})[:1] == [image]
     assert _with_selection([image], {**sel, "frame": None})[-1]["text"].startswith("[Selected in designs/launch.fig: ")
+    # On a design of several pages, the page they are on — what the tool's `page` takes.
+    assert _with_selection("x", {**sel, "page": "Story"})[-1]["text"].startswith(
+        '[Selected in designs/launch.fig page "Story" › slide-1: headline (TEXT)')
+
+
+def test_a_selection_keeps_the_page_it_is_on():
+    from cycls._agent.web.server import _clean_selection
+    raw = {"path": "designs/launch.fig", "frame": "slide-1", "nodes": [{"name": "headline", "type": "TEXT"}]}
+    assert "page" not in _clean_selection(raw)
+    assert _clean_selection({**raw, "page": " Story "})["page"] == "Story"
+    assert "page" not in _clean_selection({**raw, "page": {"name": "x"}})
 
 
 def test_a_connector_step_shows_the_human_line_never_the_raw_command():
