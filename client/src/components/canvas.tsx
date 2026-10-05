@@ -963,8 +963,11 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
               </button>
             )}
             {design && <EditPreviewSwitch previewing={previewing} onEdit={() => setPreviewing(false)} onPreview={() => void showPreview()} />}
-            {design && !previewing && canFullscreen() && (
-              <button onClick={() => fullscreenDesignEditor(file.path)} className={headerBtn}
+            {/* In a preview the button keeps its place, unseen: the switch beside it
+                doesn't jump when the editor goes under the preview. */}
+            {design && canFullscreen() && (
+              <button onClick={() => fullscreenDesignEditor(file.path)} className={cn(headerBtn, previewing && "invisible")}
+                      disabled={previewing} aria-hidden={previewing || undefined} tabIndex={previewing ? -1 : undefined}
                       aria-label={t("fullScreen")} title={t("fullScreen")}>
                 <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 8.25v-4.5h4.5m7.5 0h4.5v4.5m0 7.5v4.5h-4.5m-7.5 0h-4.5v-4.5" />
@@ -1052,7 +1055,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
                     : pictures.count > 1
                       ? <DeckView data={preview!} path={file.path} openFile={openFile} onReload={() => void loadPreview()}
                                   onSlideOp={deckOp ? (op) => deckOp(file.path, op) : undefined} />
-                      : <DesignPicture file={file} src={pictures.slides[0]} openFile={openFile} />}
+                      : <DesignPicture file={file} src={pictures.slides[0]} />}   {/* the ⋮ menu has the downloads: nothing over the picture */}
                 </div>
               );
             })()}
