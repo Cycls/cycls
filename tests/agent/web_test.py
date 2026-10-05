@@ -1780,6 +1780,25 @@ def test_a_designs_pages_preview_and_download_one_at_a_time(tmp_path, monkeypatc
     assert len(list((root / ".cache/design").glob("*.slides.json"))) == 1     # what the old save left is gone
 
 
+def test_a_documents_manifest_says_it_is_one(tmp_path, monkeypatch):
+    """A document's deck (kind "document") tells the viewer so — pages, PDF first. The
+    same pages asked for through the .fig, or through a deck that isn't one, carry no
+    kind; each is cached by itself, so neither answers for the other."""
+    doc = json.dumps({"type": "cycls.deck", "version": 1, "kind": "document", "fig": "designs/report.fig",
+                      "size": [1240, 1754], "slides": 2, "exports": ["designs/report.pdf"]}).encode()
+    _seed(tmp_path, {"designs/report.fig": b"FIG", "designs/report.deck.json": doc,
+                     "designs/pitch.fig": b"FIG2", "designs/pitch.deck.json": _DECK_DOC})
+    calls = _fake_design(monkeypatch)
+    client = _ws_routers_client(tmp_path)
+    slides = lambda path: client.get(f"/files/{path}", params={"as": "slides"}).json()
+    assert slides("designs/report.deck.json")["kind"] == "document"
+    assert "kind" not in slides("designs/report.fig")                         # asked for as a design: its frames
+    assert slides("designs/report.deck.json")["kind"] == "document"           # …and the deck's answer is still its own
+    assert "kind" not in slides("designs/pitch.deck.json")
+    assert client.get("/files/designs/report.deck.json", params={"as": "pdf"}).content == b"%PDF-deck"
+    assert [c[0] for c in calls].count("slides") == 3                         # report (deck), report (.fig), pitch
+
+
 def test_a_page_that_is_gone_is_a_404(tmp_path, monkeypatch):
     from cycls._agent import design
     _seed(tmp_path, {"designs/launch.fig": b"FIG"})

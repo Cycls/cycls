@@ -410,6 +410,30 @@ _DESIGN_TOOL = {
         "asks for the same thing in several formats or versions — not separate renders, and not "
         "for a deck's slides (those are `frames` / a `deck`). Lay each page out for ITS size: "
         "never the same coordinates on another shape.\n"
+        "  A DOCUMENT — a report, a proposal, a white paper, a guide, a brochure, a CV: anything that "
+        "is read on paper-sized pages and comes out as a PDF — is spec = {\"document\": {\"title\", "
+        "\"subtitle\"?, \"author\"?, \"date\"?, \"organization\"?, \"size\"?: \"a4\"|\"letter\"|\"a5\" "
+        "(\"landscape\": true), \"theme\"?, \"cover\"?: {\"style\": \"full\"|\"band\"|\"minimal\", "
+        "\"eyebrow\"?, \"image\"?}, \"sections\": [{\"title\", \"blocks\": […]}], \"back\"?: {\"title\", "
+        "\"text\", \"contact\"}}}. You write the CONTENT, in order; the pages make themselves: text flows "
+        "from page to page, a heading never ends a page, the contents page, running header and page "
+        "numbers are added. A block is {\"<kind>\": …}: \"lead\" (the opening paragraph) · \"p\" (or a "
+        "bare string; takes **bold**, *italic*, [links](https://…)) · \"h2\" · \"h3\" · \"bullets\" / "
+        "\"numbered\": [..] · \"callout\": {title?, text, tone?} · \"quote\" + \"by\" · \"stats\": "
+        "[{value, label}] · \"chart\": {kind, data} + \"title\", \"caption\" · \"table\": {columns, rows} "
+        "+ \"caption\" · \"image\": \"path\" (or {\"stock\": \"query\"}) + \"caption\" — a photo is cropped "
+        "to a band, a diagram or screenshot shown whole (\"fit\": \"cover\"|\"contain\" to say) · "
+        "\"columns\": [[blocks],[blocks]] · "
+        "\"cards\": [{icon?, title, text}] · \"pairs\": [[label, value]] · \"note\" (a source) · "
+        "\"nodes\": [spec nodes] + \"h\" (a hand-built area) · \"break\". Write it as a real document: "
+        "open each section with what it found, real numbers, a caption on every chart and table, short "
+        "paragraphs. The LOOK is yours to choose unless the user says: the workspace brand kit when "
+        "there is one (the default), else a theme that fits the subject — and its accent or fonts "
+        "overridden ({base, accent, heading, body}) when that fits better. It saves designs/<name>.pdf "
+        "and opens in the page viewer; every page comes back to you to QA. A small fix on one page is "
+        "an `edit` (ops with `frame`: the page, from 0); anything that changes the length — rewriting, "
+        "adding a section — is the same render again with \"replace\": true (the earlier version is "
+        "kept), not an edit and not a new name.\n"
         "- script {script, name, format?} — escape hatch: a raw OpenPencil / Figma "
         "plugin-API script for what the spec can't express. It MUST end with "
         "`console.log('__FRAME__'+frame.id)` naming the frame to export.\n"
@@ -464,6 +488,7 @@ _DESIGN_TOOL = {
         "action": {"type": "string", "enum": ["render", "script", "edit", "inspect", "add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide"],
                    "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes), `edit` it (checked, saved, replayed live in the editor), or change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide."},
         "page": {"type": "string", "description": "For `inspect` / `edit` on a design with several pages: the page's name (default: the first page)."},
+        "replace": {"type": "boolean", "description": "For `render` of a document: re-render it under the SAME name (after changing its content) instead of making a new one; the earlier version is kept in its history."},
         "slide": {"type": "object", "description": "For add_slide / update_slide: the slide — a layout slide {layout, …slots, notes?} laid out with the deck's own theme and footer, or a hand-built one {nodes, fill?}. update_slide replaces the slide whole: start from its `source` in inspect and change what you need."},
         "number": {"type": "integer", "description": "For update_slide / move_slide / duplicate_slide / delete_slide: the slide's number, from 1."},
         "to": {"type": "integer", "description": "For move_slide: the position it moves to, from 1."},
@@ -473,7 +498,7 @@ _DESIGN_TOOL = {
         "transition": {"type": "string", "enum": ["fade", "slide", "none"], "description": "For update_slide without `slide`: how the slide enters when presented."},
         "ops": {"type": "array", "items": {"type": "object"},
                 "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?} (a stack's id moves the whole block; a node in a stack moved on its own leaves it); resize {node, w?, h?}; delete {node}; duplicate {node, dx?, dy?, id?} (in a stack, the copy is its next item); replace_image {node, src}; add {node:<spec node>, frame?}; background {fill, frame?} — the slide's OWN fill: a colour, {\"gradient\": [...]} or \"none\" (a slide isn't a node `style` can name — never cover it with a full-size rect). `frame` (slide index from 0) narrows a name to one slide. Pages: page_add {name, spec}; page_duplicate {page?, name?}; page_rename {page?, name}; page_delete {page?}."},
-        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}; several variants of one design as pages {pages:[{name, size, fill, nodes}]}; a presentation as a deck of layouts {deck:{theme, footer?, slides:[{layout, …slots, notes}]}} (the normal way for decks); or hand-built frames {frames:[...]} (one per slide, all one size, each with optional id/title/notes/transition; export pptx or pdf, or png for a carousel); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
+        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}; several variants of one design as pages {pages:[{name, size, fill, nodes}]}; a document (a report or any PDF that flows over pages) {document:{title, sections:[{title, blocks:[…]}]}}; a presentation as a deck of layouts {deck:{theme, footer?, slides:[{layout, …slots, notes}]}} (the normal way for decks); or hand-built frames {frames:[...]} (one per slide, all one size, each with optional id/title/notes/transition; export pptx or pdf, or png for a carousel); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s). Scripts may use only `figma` (and `console`): no `this`, globals, network, eval/Function or `.constructor` — anything else is refused before it runs."},
         "intent": {"type": "string",
@@ -1703,6 +1728,8 @@ def _image_slot(src, root):
     if not _image_size(data):
         raise ValueError(f"image {src!r} isn't a PNG, JPEG, WebP, GIF or SVG")
     slot = {"image": base64.b64encode(data).decode(), "src": src}
+    if (natural := _image_size(data)):
+        slot["w"], slot["h"] = natural                      # a document sizes a picture from its own shape
     if isinstance(focus, list) and len(focus) == 2:
         slot["focus"] = focus
     return slot, size
@@ -1789,6 +1816,92 @@ def _prepare_deck(spec, brand, root):
                 if err:
                     return None, err.replace("Error: ", f"Error: slide {i}: ", 1), []
                 s["nodes"] = sub["nodes"]
+    except ValueError as e:
+        return None, f"Error: {e}.", []
+    return spec, None, notes
+
+
+_PAPER = {"a4": [1240, 1754], "letter": [1275, 1650], "a5": [874, 1240], "a3": [1754, 2480]}   # px at 150 dpi
+
+
+def _prepare_document(spec, brand, root):
+    """A document — {document: {title, sections: [{title, blocks: […]}]}} — made ready for
+    the service, which designs and paginates it (cycls-design document.js / flow.js):
+    every image (the cover's, the logo, an `image` block's, wherever it sits) read from
+    the workspace; theme "brand" — or no theme, when the workspace has a brand kit —
+    built from the kit, with brand/logo.* as the logo; hand-built `nodes` and `pages`
+    prepared like a single design's. → (spec, error, notes)."""
+    spec = json.loads(json.dumps(spec))
+    doc = spec["document"]
+    sections = doc.get("sections")
+    if not isinstance(sections, list) or not sections:
+        return None, ("Error: a document needs `sections` — a list of {title, blocks: […]} "
+                      "(the blocks are in the tool description)."), []
+    if not str(doc.get("title") or "").strip():
+        return None, "Error: a document needs a `title`.", []
+    notes, total = [], 0
+
+    def slot(value):
+        nonlocal total
+        if isinstance(value, dict) and (isinstance(value.get("image"), str) or isinstance(value.get("svg"), str)):
+            return value                                      # resolved already
+        resolved, n = _image_slot(value, root)
+        total += n
+        if total > _DESIGN_IMAGES_MAX:
+            raise ValueError(f"the document's images total over {_DESIGN_IMAGES_MAX >> 20} MB — use smaller copies "
+                             f"(longest side ~2000px)")
+        return resolved
+
+    def nodes_of(nodes, size, fill=None):
+        sub, err, _ = _prepare_spec({"size": size, "fill": fill, "nodes": nodes}, None, root)
+        if err:
+            raise ValueError(err.replace("Error: ", "", 1).rstrip("."))
+        return sub["nodes"]
+
+    def block(b):
+        """One block's images and hand-built nodes, wherever they are nested."""
+        if not isinstance(b, dict):
+            return b
+        for key in ("image", "photo", "picture"):
+            if b.get(key):
+                b[key] = slot(b[key])
+        if str(b.get("type") or "") in ("image", "photo", "picture") and b.get("src") and not b.get("image"):
+            b["image"] = slot(b.pop("src"))
+        if isinstance(b.get("columns"), list):
+            b["columns"] = [[block(x) for x in col] if isinstance(col, list) else block(col) for col in b["columns"]]
+        if isinstance(b.get("nodes"), list):
+            b["nodes"] = nodes_of(b["nodes"], [100000, 100000])
+        return b
+
+    theme = doc.get("theme")
+    if theme == "brand" and not brand:
+        return None, (f"Error: theme \"brand\" needs a brand kit (brand/brand.yaml) — or pick a theme: "
+                      f"{', '.join(_DECK_THEMES)}."), []
+    if (theme is None or theme == "brand") and brand:
+        doc["theme"] = _brand_theme(brand)
+        logo = next((f"brand/{n}" for n in _BRAND_LOGOS if root and (pathlib.Path(root) / "brand" / n).is_file()), None)
+        if logo and not doc.get("logo"):
+            doc["logo"] = logo
+        fonts = " / ".join(f for f in (brand.get("heading"), brand.get("body")) if f)
+        notes.append(f"The document uses the workspace brand kit as its theme (primary {brand['primary']}, accent "
+                     f"{brand['accent']}{', fonts ' + fonts if fonts else ''}{', logo ' + logo if logo else ''}).")
+    size = doc.get("size") or "a4"
+    paper = list(_PAPER.get(str(size).lower().replace("-landscape", "").replace(" landscape", ""), _PAPER["a4"])) \
+        if isinstance(size, str) else size
+    try:
+        if doc.get("logo"):
+            doc["logo"] = slot(doc["logo"])
+        if isinstance(doc.get("cover"), dict) and doc["cover"].get("image"):
+            doc["cover"]["image"] = slot(doc["cover"]["image"])
+        for i, s in enumerate(sections, 1):
+            if not isinstance(s, dict):
+                return None, f"Error: section {i} must be an object: {{title, blocks: […]}}.", []
+            if isinstance(s.get("blocks"), list):
+                s["blocks"] = [block(b) for b in s["blocks"]]
+        for i, p in enumerate(doc.get("pages") or [], 1):
+            if not isinstance(p, dict) or not isinstance(p.get("nodes"), list):
+                return None, f"Error: pages[{i}] must be {{nodes: [spec nodes], fill?}} — a hand-built page.", []
+            p["nodes"] = nodes_of(p["nodes"], paper, p.get("fill"))
     except ValueError as e:
         return None, f"Error: {e}.", []
     return spec, None, notes
@@ -2131,6 +2244,8 @@ async def _exec_design(inp, workspace):
         if action == "render":
             if not isinstance(inp.get("spec"), dict):
                 return "Error: `render` needs a `spec` object, e.g. {size:[1080,1080], fill:'#0f172a', nodes:[...]}."
+            if isinstance(inp["spec"].get("document"), dict):
+                return await _render_document(inp, workspace, name)
             root = workspace.root   # reads the brand kit + any image files: off the loop
             # Photos named rather than saved — {"stock": "coffee beans"} — are found and
             # saved to the workspace first, so the spec below sees ordinary files.
@@ -2277,6 +2392,85 @@ async def _exec_design(inp, workspace):
                                                     "data": base64.b64encode(look).decode()}},
                        {"type": "text", "text": ack}],
             "_ui": ui}
+
+
+async def _render_document(inp, workspace, name):
+    """A document (a report, a proposal — anything that flows over paper pages): rendered
+    by the service to a PDF and its editable pages, saved as designs/<name>.pdf / .fig
+    with a deck document (kind "document") that opens the page viewer; every page comes
+    back to the model to QA. `replace` re-renders the same document — its earlier .fig
+    kept as a version — instead of taking a new name."""
+    from cycls._agent import design
+    from cycls._agent.design import stock
+    from cycls._agent.design.deck import lock
+    from cycls._agent.design.store import write_fig
+    root, subject = pathlib.Path(workspace.root), getattr(workspace, "subject", None)
+    credits, err = await stock.resolve(inp["spec"], workspace.root)
+    if err:
+        return err
+    source = json.loads(json.dumps(inp["spec"]["document"]))       # as it was written (a stock photo: the file it became)
+    spec, err, notes = await asyncio.to_thread(lambda: _prepare_document(inp["spec"], _load_brand(workspace.root), workspace.root))
+    if err:
+        return err
+    try:
+        r = await design.render(spec, fmt="pdf", scale=2, user_id=subject)
+    except design.Unavailable as e:
+        return f"Error: design unavailable — {e}"
+    except Exception as e:
+        return f"Error: the document didn't render — {e}"
+    notes = [*notes, *(f"{c}." for c in credits), *r.notes]
+    designs = root / "designs"
+    await asyncio.to_thread(designs.mkdir, parents=True, exist_ok=True)
+    requested = name
+    replacing = inp.get("replace") is True and (designs / f"{name}.fig").is_file() and (designs / f"{name}.deck.json").is_file()
+    if not replacing:
+        name = _dedupe_design_name(designs, name, "pdf")
+    fig_rel, pdf_rel, deck_rel = f"designs/{name}.fig", f"designs/{name}.pdf", f"designs/{name}.deck.json"
+    version = None
+    if replacing:
+        async with lock(root / fig_rel):
+            version = await write_fig(workspace.root, fig_rel, r.fig, by="agent", reason="agent",
+                                      intent=str(inp.get("intent") or "re-rendered")[:80])
+    else:
+        await asyncio.to_thread((root / fig_rel).write_bytes, r.fig)
+    await asyncio.to_thread((root / pdf_rel).write_bytes, r.image)
+    count = max(len(r.slides), 1)
+    deck = {"type": "cycls.deck", "version": 1, "kind": "document", "fig": fig_rel, "size": r.size or _PAPER["a4"],
+            "slides": count, "exports": [pdf_rel], "document": source}
+    await asyncio.to_thread((root / deck_rel).write_text, json.dumps(deck, indent=2, ensure_ascii=False), "utf-8")
+    note = f" (named '{name}' so it doesn't overwrite the existing '{requested}')" if name != requested else ""
+    editor = bool(os.environ.get("DESIGN_EDITOR_URL"))
+    ack = (f"Document {'re-rendered' if replacing else 'saved'} ({pdf_rel}, {count} pages, {len(r.image) // 1024} KB{note}). "
+           f"It's OPEN in the page viewer ({deck_rel}): the user pages through it and downloads the PDF"
+           f"{'; Edit opens the pages in the design editor' if editor else ''}. Its pages were laid out from the "
+           f"content — so a small fix on one page (a word, a colour) is Design edit {{name: \"{name}\", ops}} with "
+           f"`frame` = the page from 0, and anything that changes the length (a rewrite, a new section) is this "
+           f"render again with \"replace\": true (its source is in {deck_rel} under \"document\"). A page edited "
+           f"by hand does not re-flow the pages after it.")
+    for line in notes:
+        ack += " " + line
+    ack += _layout_check(r.lint, "pptx")
+    ui = {"type": "ui", "action": "open_canvas", "path": deck_rel, "name": f"{name}.deck.json"}
+    if replacing:      # what is open shows the new pages: the viewer fetches them again, an editor re-opens the file
+        ui = [{"type": "ui", "action": "design_command", "path": fig_rel, "script": "", "version": version, "reload": True}, ui]
+    blocks, total = [], 0
+    for n, jpg in enumerate(r.previews[:_DESIGN_QA_SLIDES], 1):
+        if blocks and total + len(jpg) > _DESIGN_QA_MAX:
+            break
+        total += len(jpg)
+        blocks += [{"type": "text", "text": f"Page {n}:"},
+                   {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                "data": base64.b64encode(jpg).decode()}}]
+    if not blocks:
+        return {"_model": ack, "_ui": ui}
+    shown = len(blocks) // 2
+    which = (f"All {count} pages are attached" if shown >= count else
+             f"Pages 1–{shown} of {count} are attached (Design inspect lists the rest)")
+    ack += (f" {which} — QA them before you present: the cover reads at a glance; no page ends in a large "
+            "hole that a shorter or reordered block would close; every chart and table has its caption and "
+            "says something; nothing overlaps or is cut; names, numbers and dates are exactly right. If the "
+            "content needs changing, render again with \"replace\": true; then present.")
+    return {"_model": [*blocks, {"type": "text", "text": ack}], "_ui": ui}
 
 
 async def _save_pages(r, name, fmt, workspace, notes):

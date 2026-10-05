@@ -178,14 +178,14 @@ def _text(out):
 
 
 def _fake_render(monkeypatch, image=b"\x89PNGrender", fig=b"FIGZ", preview=None, notes=(), lint=(),
-                 previews=(), images=(), slides=(), dir=None, pages=(), page_images=(), preview_pages=()):
+                 previews=(), images=(), slides=(), dir=None, pages=(), page_images=(), preview_pages=(), size=None):
     calls = {}
 
     async def _r(spec, fmt="png", scale=2, user_id=None, every=False):
-        calls.update(spec=spec, fmt=fmt, scale=scale, user_id=user_id, every=every)
+        calls.update(spec=spec, fmt=fmt, scale=scale, user_id=user_id, every=every, renders=calls.get("renders", 0) + 1)
         return design.Rendered(image, fig, "0:6", fmt, preview, list(notes), list(lint),
                                list(previews), list(images) if every else [], list(slides), dir,
-                               list(pages), list(page_images), list(preview_pages))
+                               list(pages), list(page_images), list(preview_pages), size)
 
     monkeypatch.setattr("cycls._agent.design.render", _r)
     return calls
@@ -1579,3 +1579,105 @@ def test_an_edit_replaces_an_image_with_a_stock_photo(tmp_path, monkeypatch):
     op = calls["ops"][0]
     assert "stock" not in op and op.get("image")
     assert "Photo by Ana on Pexels" in _text(out)
+
+
+# ---- documents: content that flows over paper pages, saved as a PDF ----
+
+_DOC = {"title": "State of Coffee", "author": "Brewly", "theme": "editorial", "sections": [
+    {"title": "Summary", "blocks": [{"lead": "Demand grew 18%."}, "A paragraph.", {"image": "attachments/beans.png", "caption": "Figure 1"}]},
+    {"title": "Numbers", "blocks": [{"columns": [[{"image": "attachments/beans.png"}], ["Beside it."]]},
+                                    {"nodes": [{"type": "image", "src": "attachments/beans.png", "x": 0, "y": 0, "w": 200, "h": 100}], "h": 120}]}]}
+
+
+def _doc_render(monkeypatch, pages=3, **kw):
+    return _fake_render(monkeypatch, image=b"%PDF-report", previews=[f"J{n}".encode() for n in range(1, pages + 1)],
+                        slides=[{"name": "cover"}] + [{"name": f"page-{n}"} for n in range(2, pages + 1)], size=[1240, 1754], **kw)
+
+
+def test_a_document_saves_its_pdf_and_opens_the_page_viewer(tmp_path, monkeypatch):
+    _img(tmp_path, "attachments/beans.png", _png(1600, 900))
+    calls = _doc_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "name": "coffee-report", "spec": {"document": _DOC}}, _ws(tmp_path)))
+    d = tmp_path / "designs"
+    assert (d / "coffee-report.pdf").read_bytes() == b"%PDF-report" and (d / "coffee-report.fig").read_bytes() == b"FIGZ"
+    assert calls["fmt"] == "pdf"                                              # whatever `format` says: a document is a PDF
+    deck = json.loads((d / "coffee-report.deck.json").read_text(encoding="utf-8"))
+    assert deck == {"type": "cycls.deck", "version": 1, "kind": "document", "fig": "designs/coffee-report.fig",
+                    "size": [1240, 1754], "slides": 3, "exports": ["designs/coffee-report.pdf"], "document": _DOC}
+    # The source is kept as it was written — paths, not the images' bytes.
+    assert deck["document"]["sections"][0]["blocks"][2]["image"] == "attachments/beans.png"
+    assert out["_ui"] == {"type": "ui", "action": "open_canvas", "path": "designs/coffee-report.deck.json", "name": "coffee-report.deck.json"}
+    m = out["_model"]
+    assert [b["text"] for b in m if b["type"] == "text"][:3] == ["Page 1:", "Page 2:", "Page 3:"]
+    ack = m[-1]["text"]
+    assert "Document saved (designs/coffee-report.pdf, 3 pages" in ack and "page viewer" in ack
+    assert "All 3 pages are attached" in ack and '"replace": true' in ack
+
+
+def test_a_documents_images_are_read_wherever_they_sit(tmp_path, monkeypatch):
+    data = _img(tmp_path, "attachments/beans.png", _png(1600, 900))
+    _img(tmp_path, "attachments/cover.png", _png(800, 1200))
+    calls = _doc_render(monkeypatch)
+    doc = {**_DOC, "cover": {"style": "full", "image": "attachments/cover.png"}, "logo": "attachments/beans.png",
+           "pages": [{"fill": "#111111", "nodes": [{"type": "image", "src": "attachments/beans.png", "x": 0, "y": 0, "w": 620, "h": 400}]}]}
+    asyncio.run(_exec_design({"action": "render", "name": "r", "spec": {"document": doc}}, _ws(tmp_path)))
+    sent = calls["spec"]["document"]
+    b64 = base64.b64encode(data).decode()
+    figure = sent["sections"][0]["blocks"][2]["image"]
+    assert figure == {"image": b64, "src": "attachments/beans.png", "w": 1600, "h": 900}    # its own shape: the page sizes it from that
+    assert sent["cover"]["image"]["w"] == 800 and sent["cover"]["image"]["h"] == 1200
+    assert sent["logo"]["image"] == b64
+    assert sent["sections"][1]["blocks"][0]["columns"][0][0]["image"]["image"] == b64       # inside a column
+    assert sent["sections"][1]["blocks"][1]["nodes"][0]["image"] == b64                     # a hand-built area's nodes
+    assert sent["pages"][0]["nodes"][0]["image"] == b64                                     # a hand-built page's
+    assert sent["theme"] == "editorial"
+
+
+def test_a_document_takes_the_brand_kit_unless_it_names_a_theme(tmp_path, monkeypatch):
+    _brand(tmp_path, "colors:\n  primary: '#0b3d2e'\n  accent: '#e0a526'\nfonts:\n  heading: Fraunces\n  body: Inter\n")
+    _img(tmp_path, "brand/logo.png", _png(400, 120))
+    calls = _doc_render(monkeypatch)
+    plain = {"title": "T", "sections": [{"title": "A", "blocks": ["Text."]}]}
+    out = asyncio.run(_exec_design({"action": "render", "name": "r", "spec": {"document": plain}}, _ws(tmp_path)))
+    theme = calls["spec"]["document"]["theme"]
+    assert theme["hero"] == "#0b3d2e" and theme["accent2"] == "#e0a526" and theme["heading"] == "Fraunces Bold"
+    assert calls["spec"]["document"]["logo"]["src"] == "brand/logo.png"
+    assert "uses the workspace brand kit" in out["_model"][-1]["text"]
+    # A theme the agent (or the user) chose stands; so does a document with no kit at all.
+    asyncio.run(_exec_design({"action": "render", "name": "r2", "spec": {"document": {**plain, "theme": "tech-dark"}}}, _ws(tmp_path)))
+    assert calls["spec"]["document"]["theme"] == "tech-dark" and "logo" not in calls["spec"]["document"]
+
+
+def test_what_is_wrong_with_a_document_is_said_in_words(tmp_path, monkeypatch):
+    calls = _doc_render(monkeypatch)
+    run = lambda doc: asyncio.run(_exec_design({"action": "render", "name": "r", "spec": {"document": doc}}, _ws(tmp_path)))
+    assert "needs `sections`" in run({"title": "T"})
+    assert "needs a `title`" in run({"sections": [{"title": "A", "blocks": ["x"]}]})
+    assert 'theme "brand" needs a brand kit' in run({"title": "T", "theme": "brand", "sections": [{"title": "A", "blocks": ["x"]}]})
+    assert "missing.png" in run({"title": "T", "sections": [{"title": "A", "blocks": [{"image": "attachments/missing.png"}]}]})
+    assert "renders" not in calls and not (tmp_path / "designs").exists()   # nothing was sent, nothing saved
+
+
+def test_replace_renders_the_same_document_again_and_keeps_the_old_one(tmp_path, monkeypatch):
+    from cycls._agent import versions
+    ws = _ws(tmp_path)
+    plain = {"title": "T", "sections": [{"title": "A", "blocks": ["Text."]}]}
+    _doc_render(monkeypatch, fig=b"FIG-ONE")
+    asyncio.run(_exec_design({"action": "render", "name": "report", "spec": {"document": plain}}, ws))
+    _doc_render(monkeypatch, pages=4, fig=b"FIG-TWO")
+    longer = {**plain, "sections": [*plain["sections"], {"title": "B", "blocks": ["More."]}]}
+    out = asyncio.run(_exec_design({"action": "render", "name": "report", "replace": True, "spec": {"document": longer}}, ws))
+    d = tmp_path / "designs"
+    assert sorted(p.name for p in d.iterdir() if p.is_file()) == ["report.deck.json", "report.fig", "report.pdf"]   # no report-2
+    assert (d / "report.fig").read_bytes() == b"FIG-TWO"
+    deck = json.loads((d / "report.deck.json").read_text(encoding="utf-8"))
+    assert deck["slides"] == 4 and len(deck["document"]["sections"]) == 2
+    kept = versions.listing(tmp_path, "designs/report.fig")
+    assert len(kept) == 1 and kept[0]["by"] == "agent"                         # the earlier pages are in its history
+    assert "Document re-rendered (designs/report.pdf, 4 pages" in out["_model"][-1]["text"]
+    # What is open follows: an editor on the .fig re-opens it, the viewer fetches its pages again.
+    assert [e["action"] for e in out["_ui"]] == ["design_command", "open_canvas"]
+    assert out["_ui"][0]["path"] == "designs/report.fig" and out["_ui"][0]["reload"] is True
+    # Without `replace`, the same name is a new document beside it — nothing is overwritten.
+    asyncio.run(_exec_design({"action": "render", "name": "report", "spec": {"document": plain}}, ws))
+    assert (d / "report-2.pdf").is_file() and (d / "report.fig").read_bytes() == b"FIG-TWO"

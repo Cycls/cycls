@@ -111,6 +111,26 @@ describe("DeckView", () => {
     expect(pptx.compareDocumentPosition(images) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();   // a deck: after
   });
 
+  it("a document is pages, downloaded as a PDF first, and its pages aren't moved one by one", async () => {
+    const openFile = vi.fn(async () => "blob:pdf");
+    const onSlideOp = vi.fn(async () => {});
+    const report = manifest(3, { kind: "document", sizes: [[1240, 1754], [1240, 1754], [1240, 1754]], fig: "designs/report.fig" });
+    render(<DeckView data={report} path="designs/report.deck.json" openFile={openFile} onSlideOp={onSlideOp} />);
+    expect(screen.getByRole("button", { name: "Pages" })).toBeTruthy();          // not "Slides"
+    expect(screen.queryByRole("button", { name: "Slides" })).toBeNull();
+    expect(screen.getByText("3 pages")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+    const [pdf, pptx, images] = ["PDF", "PowerPoint (.pptx)", "Images (.zip)"].map((name) => screen.getByRole("button", { name }));
+    expect(pdf.compareDocumentPosition(pptx) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pptx.compareDocumentPosition(images) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();   // portrait, yet not a carousel
+    await act(async () => { fireEvent.click(pdf); });
+    expect(openFile).toHaveBeenCalledWith("designs/report.deck.json?as=pdf");
+    // Its pages are numbered and listed in its contents: no drag, no duplicate / delete.
+    fireEvent.click(screen.getByRole("button", { name: "Grid" }));
+    expect(screen.queryByRole("button", { name: "Slide actions" })).toBeNull();
+    expect(screen.getAllByTestId("grid-slide")[0].getAttribute("draggable")).toBe("false");
+  });
+
   it("Edit is offered only with an editor and a workspace to write to", () => {
     const { rerender } = render(<DeckView data={manifest(2)} path="designs/pitch.deck.json" openFile={async () => "b"} />);
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();

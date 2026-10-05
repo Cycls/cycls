@@ -313,6 +313,55 @@ Pages panel), and Cycls works on **one page at a time**, named by its name:
   changes the pages themselves is not replayed: the event says `reload`, and the editor
   re-opens the saved file on the page the edit ended on.
 
+## Documents
+
+A **document** is what is read on paper-sized pages and handed over as a PDF: a report,
+a proposal, a white paper, a guide, a brochure, a CV. It differs from everything else
+the tool makes in one way: nothing is placed. The agent writes **content, in order**, and
+the pages make themselves.
+
+- **Making one.** `render {spec: {document: {title, sections: [{title, blocks: […]}],
+  …}}}`. A block is `{<kind>: …}` — `lead`, `p` (or a bare string; `**bold**`,
+  `*italic*`, `[links](…)`), `h2`, `h3`, `bullets`, `numbered`, `callout`, `quote`,
+  `stats`, `chart`, `table`, `image`, `columns`, `cards`, `pairs`, `note`, `nodes` (a
+  hand-built area), `break`. `size` is the paper (`a4` by default, `letter`, `a5`,
+  `landscape`), `cover.style` is `full`, `band` or `minimal`, `pages` are hand-built
+  full pages, `back` a closing page. The service (cycls-design `document.js` + `flow.js`)
+  designs and paginates it: text runs from page to page, a heading never ends a page, a
+  figure that doesn't fit waits for the next page while the text after it moves up, a
+  long table goes on under its header, and the contents page, running header and page
+  numbers are added. Arabic content is laid out right-to-left.
+- **The look.** Open, by the user's choice: a theme named in the spec (or one with its
+  accent or fonts overridden) stands; with none, the workspace **brand kit** is the
+  theme and `brand/logo.*` the logo (`_prepare_document`, as a deck); with no kit, the
+  tool description tells the agent to pick a theme that fits the subject.
+- **`_prepare_document`.** Reads every image from the workspace wherever it sits — the
+  cover's, the logo, an `image` block's (also inside `columns`), a `nodes` area's and a
+  hand-built page's — into slots that carry the image's own size (`w`, `h`: the page
+  sizes a figure from its shape). `"stock": "<query>"` works as everywhere else.
+- **The files.** `designs/<name>.pdf` (the deliverable), `designs/<name>.fig` (its
+  pages, editable) and `designs/<name>.deck.json` — a deck document with `kind:
+  "document"`, the paper `size`, and `document`: the source as the agent wrote it (paths,
+  not image bytes).
+- **Changing one.** A small fix on one page — a word, a colour — is an ordinary `edit`
+  (ops with `frame`: the page, from 0). Anything that changes the length is the same
+  `render` again with **`replace: true`**: the same name, the earlier `.fig` kept as a
+  version (History restores it), and what is open follows — the event list is a
+  `design_command` with `reload` (an open editor re-opens the file, the viewer fetches
+  its pages) and `open_canvas`. Without `replace`, the same name makes `<name>-2`, as
+  any render does. A page edited by hand does not re-flow the pages after it; the
+  tool's reply says so.
+- **QA.** Every page comes back to the model (the first twelve of a long document), with
+  the layout check — text sized for paper, not a slide — and the service's notes in
+  words: a block taller than a page, a page a section left nearly empty.
+- **The canvas.** The deck document opens the **page viewer** — the deck viewer, told
+  `kind: "document"` by the slides manifest: "Pages", **PDF first** in Download, and no
+  moving, duplicating or deleting a page (its number and the contents would be wrong).
+  Edit opens the pages in the design editor, as for a deck.
+- **The PDF.** Real text in its own embedded fonts, A4 (or the paper asked for), a few
+  KB a text page, an outline of the sections, a contents page whose rows are links.
+  `?as=pdf` on the deck document writes it from the `.fig`, so it is what was last saved.
+
 ## Two channels + the canvas
 
 `_exec_design` (in `_agent/tools`) saves the render to `designs/<name>.<fmt>` and
