@@ -287,8 +287,8 @@ class Messages(list):
 
 def _clean_selection(raw):
     """The person's "Add selection" — what they selected in an open design, by name:
-    {path: a .fig in the workspace, frame, nodes: [{name, type, text?}]} — capped, or
-    None when it isn't one."""
+    {path: a .fig in the workspace, frame, nodes: [{name, type, text?}], page?: the page
+    they are on, when the design has several} — capped, or None when it isn't one."""
     if not isinstance(raw, dict):
         return None
     path = raw.get("path")
@@ -304,8 +304,11 @@ def _clean_selection(raw):
             nodes.append(node)
     if not nodes:
         return None
-    frame = raw.get("frame")
-    return {"path": path, "frame": frame[:120] if isinstance(frame, str) and frame else None, "nodes": nodes}
+    frame, page = raw.get("frame"), raw.get("page")
+    sel = {"path": path, "frame": frame[:120] if isinstance(frame, str) and frame else None, "nodes": nodes}
+    if isinstance(page, str) and page.strip():
+        sel["page"] = page.strip()[:80]
+    return sel
 
 
 def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):

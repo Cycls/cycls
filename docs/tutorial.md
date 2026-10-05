@@ -397,6 +397,11 @@ The model calls one `design` tool:
   brand kit is the default theme. Arabic slides are laid out right-to-left; a slide mixing Arabic and English follows the deck's `dir`.
 - **Several hand-built frames** `{frames:[…]}` — a deck with full control, or, as
   png, a carousel (`designs/<name>-slide-N.png`).
+- **Several pages** `{pages:[{name, size, fill, nodes}, …]}` — one design in several
+  variants (a post, a story and a banner of one campaign), each page its own size. One
+  `.fig` whose pages the person switches between in the editor, previews and downloads
+  one at a time; `inspect` and `edit` take `page`, and the `page_add` / `page_duplicate`
+  / `page_rename` / `page_delete` ops change the pages themselves.
 
 Every render comes back to the model as an image (a deck: every slide) with a layout
 check — overlapping text, text off an edge, too small, low contrast — to fix before it

@@ -85,6 +85,15 @@ describe("DeckView", () => {
     expect(openFile).toHaveBeenCalledWith("designs/pitch.deck.json?as=pdf");
   });
 
+  it("the slides of one page of several download as that page", async () => {
+    const openFile = vi.fn(async () => "blob:x");
+    const paged = manifest(2, { pages: [{ name: "Post", frames: 1 }, { name: "Launch reel", frames: 2 }], page: "Launch reel" });
+    render(<DeckView data={paged} path="designs/launch.fig" openFile={openFile} />);
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "PDF" })); });
+    expect(openFile).toHaveBeenCalledWith("designs/launch.fig?as=pdf&page=Launch%20reel");
+  });
+
   it("a carousel downloads as its images, offered first", async () => {
     const openFile = vi.fn(async () => "blob:zip");
     const square = manifest(2, { sizes: [[1080, 1080], [1080, 1080]] });

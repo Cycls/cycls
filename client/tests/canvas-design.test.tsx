@@ -136,6 +136,149 @@ describe("a design's Edit | Preview switch", () => {
   });
 });
 
+// A design's pages are its variants — a post, a story, a banner of one piece of work.
+// A preview shows one page at a time, and a download is of the page in view.
+describe("a design of several pages", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ arrayBuffer: async () => new Uint8Array([1]).buffer })));
+    URL.revokeObjectURL = vi.fn();
+    localStorage.clear();
+  });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+  const PAGES = [{ name: "Post", frames: 1 }, { name: "Story", frames: 1 }, { name: "Carousel", frames: 2 }, { name: "Blank", frames: 0 }];
+  const manifest = (page: string) => {
+    const n = PAGES.find((p) => p.name === page)!.frames;
+    return JSON.stringify({ count: n, slides: Array.from({ length: n }, (_, i) => `data:image/jpeg;base64,${page}${i + 1}`),
+                            fig: "designs/a.fig", pages: PAGES, page });
+  };
+  const reader = () => vi.fn(async (p: string) => {
+    if (!p.includes("?as=slides")) return "# notes";
+    return manifest(decodeURIComponent(/[?&]page=([^&]+)/.exec(p)?.[1] ?? "Post"));
+  });
+  // The canvas with its editor loaded, on `page`.
+  async function open(readFile: ReturnType<typeof reader>, page: string, extra: Record<string, unknown> = {}) {
+    const utils = render(canvas("designs/a.fig", { readFile, ...extra }));
+    await flush();
+    const frame = utils.container.querySelector("iframe")!;
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    const say = (type: string, more: Record<string, unknown> = {}) => window.dispatchEvent(
+      new MessageEvent("message", { origin: EDITOR, source: frame.contentWindow, data: { source: "cycls-editor", type, ...more } }));
+    say("ready", { protocol: 2, features: ["pages"] });
+    await flush();
+    await flush();
+    const load = post.mock.calls.map((c) => c[0] as Record<string, unknown>).find((m) => m.type === "load")!;
+    say("loaded", { doc: load.doc });
+    say("pages", { doc: load.doc, page, pages: PAGES.map((p) => p.name) });
+    await flush();
+    // The editor answers a flush at once (nothing unsaved).
+    post.mockImplementation(((m: Record<string, unknown>) => { if (m.type === "flush") say("flushed", { id: m.id, ok: true }); }) as never);
+    return { ...utils, post, say };
+  }
+  const sent = (post: { mock: { calls: unknown[][] } }, type: string) =>
+    post.mock.calls.map((c) => c[0] as Record<string, unknown>).filter((m) => m.type === type);
+  const tab = (name: string) => screen.getByRole("tab", { name });
+
+  it("its pages are tabs above the editor: one click goes to that page", async () => {
+    // The docked editor is too narrow for its own Pages panel: Cycls has the tabs.
+    const readFile = reader();
+    const { post, say } = await open(readFile, "Story");
+    expect(screen.getAllByRole("tab").map((el) => el.textContent)).toEqual(["Post", "Story", "Carousel", "Blank"]);
+    expect(tab("Story").getAttribute("aria-selected")).toBe("true");
+    readFile.mockClear();
+    fireEvent.click(tab("Post"));
+    expect(sent(post, "page")).toEqual([{ target: "cycls-editor", type: "page", name: "Post" }]);
+    expect(readFile).not.toHaveBeenCalled();                                // nothing is rendered for it: the editor shows it
+    say("pages", { doc: sent(post, "load")[0]?.doc, page: "Post", pages: ["Post", "Story"] });   // the editor says so; a page went
+    await flush();
+    expect(tab("Post").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(screen.getAllByRole("tablist")).toHaveLength(1);
+  });
+
+  it("previews the page in view, and its tabs go to the others — in the editor too", async () => {
+    const readFile = reader();
+    const { post } = await open(readFile, "Story");
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await flush();
+    await flush();
+    expect(readFile).toHaveBeenCalledWith("designs/a.fig?as=slides&page=Story", true);   // not the first page's
+    expect((screen.getByTestId("design-picture") as HTMLImageElement).src).toBe("data:image/jpeg;base64,Story1");
+    expect(screen.getAllByRole("tab").map((el) => el.textContent)).toEqual(["Post", "Story", "Carousel", "Blank"]);
+    expect(tab("Story").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getAllByRole("tablist")).toHaveLength(1);                 // one row of tabs, not the preview's own too
+
+    fireEvent.click(tab("Carousel"));                                       // a page of several frames: its slides
+    await flush();
+    expect(readFile).toHaveBeenCalledWith("designs/a.fig?as=slides&page=Carousel", true);
+    expect(screen.getByTestId("deck-counter").textContent).toBe("1 / 2");
+    expect(tab("Carousel").getAttribute("aria-selected")).toBe("true");
+    expect(sent(post, "page")).toEqual([{ target: "cycls-editor", type: "page", name: "Carousel" }]);   // Edit comes back on it
+
+    fireEvent.click(tab("Blank"));                                          // an empty page says so, and can be left
+    await flush();
+    expect(screen.getByTestId("page-empty").textContent).toBe("This page is empty.");
+    fireEvent.click(tab("Post"));
+    await flush();
+    expect((screen.getByTestId("design-picture") as HTMLImageElement).src).toBe("data:image/jpeg;base64,Post1");
+  });
+
+  it("downloads the page in view — the editor's, or the preview's", async () => {
+    const openFile = vi.fn(async () => "blob:x");
+    await open(reader(), "Story", { openFile });
+    const download = async (label: string) => {
+      fireEvent.click(screen.getByRole("button", { name: "More" }));
+      await act(async () => { fireEvent.click(screen.getByText(label)); await new Promise((r) => setTimeout(r, 0)); });
+    };
+    openFile.mockClear();
+    await download("Download PNG");
+    expect(openFile).toHaveBeenCalledWith("designs/a.fig?as=png&page=Story");
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await flush();
+    await flush();
+    fireEvent.click(tab("Post"));
+    await flush();
+    await download("Download PDF");
+    expect(openFile).toHaveBeenLastCalledWith("designs/a.fig?as=pdf&page=Post");
+  });
+
+  it("a page renamed since falls back to the first one", async () => {
+    const readFile = vi.fn(async (p: string) => {
+      if (p.includes("page=Story")) throw new Error("404");
+      return p.includes("?as=slides") ? manifest("Post") : "# notes";
+    });
+    await open(readFile as never, "Story");
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await flush();
+    await flush();
+    expect(readFile).toHaveBeenLastCalledWith("designs/a.fig?as=slides", true);
+    expect((screen.getByTestId("design-picture") as HTMLImageElement).src).toBe("data:image/jpeg;base64,Post1");
+    // Asked once for the page, once for the first one — not again and again.
+    expect(readFile.mock.calls.filter((c) => String(c[0]).includes("?as=slides"))).toHaveLength(2);
+  });
+
+  it("when even the first page can't be shown it says so, once", async () => {
+    const readFile = vi.fn(async (p: string) => { if (p.includes("?as=slides")) throw new Error("502"); return "# notes"; });
+    await open(readFile as never, "Story");
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await flush();
+    await flush();
+    expect(screen.getByText(/Preview isn't available/)).toBeTruthy();
+    expect(readFile.mock.calls.filter((c) => String(c[0]).includes("?as=slides"))).toHaveLength(2);
+  });
+
+  it("a design of one page has no tabs and names no page", async () => {
+    const one = JSON.stringify({ count: 1, slides: ["data:image/jpeg;base64,S1"], fig: "designs/a.fig", pages: [{ name: "design", frames: 1 }], page: "design" });
+    const readFile = vi.fn(async (p: string) => (p.includes("?as=slides") ? one : "# notes"));
+    render(canvas("designs/a.fig", { readFile }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await flush();
+    expect(readFile).toHaveBeenCalledWith("designs/a.fig?as=slides", true);
+    expect(screen.queryByRole("tablist")).toBeNull();
+  });
+});
+
 describe("designs in the canvas", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ arrayBuffer: async () => new Uint8Array([1]).buffer })));

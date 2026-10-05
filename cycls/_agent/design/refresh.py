@@ -11,6 +11,12 @@ A deck's `.pptx` / `.pdf` is the whole deck (its notes and transitions ride in t
 `.fig`); a carousel's slides (`<name>-slide-1.png`, `-slide-2.png`, …) are
 re-exported together, and a slide deleted since loses its old image.
 
+A design of several pages — its variants — keeps its first page as `<name>.<fmt>` and
+the others as `<name>-page-2.<fmt>`, `-page-3`, …, by their place: once a design has
+any of those images they follow its pages (a page added gets one, a page removed loses
+its own), and a page's `.pdf` / `.pptx` — made when someone asked for one — is
+re-exported where it is.
+
 A design with no image at all — a copy made in the editor, a version opened as a
 copy — is asked for with `ensure`: it gets `<name>.png`, so Files shows what it is
 and the agent's "the image beside it" is true. A deck or a carousel already has its
@@ -24,8 +30,10 @@ and leaves the old image; nothing here can fail the save itself.
 import asyncio
 from pathlib import Path
 
+import re
+
 from ..logs import log
-from .client import configured, export
+from .client import configured, export, export_page, outline
 
 DELAY = 2.0                                   # seconds of quiet before exporting
 FORMATS = ("png", "jpg", "webp", "svg", "pptx", "pdf")
@@ -33,13 +41,20 @@ _RASTER = ("png", "jpg", "webp")
 _DECK = ("pptx", "pdf")
 _pending = {}                                 # (root, rel) -> the waiting/running task
 _ensure = set()                               # (root, rel) to leave with an image beside it
+_pages = set()                                # (root, rel) to leave with an image of every page
+
+
+def page_file(stem, place, fmt):
+    """The file a page's image is kept in beside `<stem>.fig`: the first page (place 1)
+    is the design's own `<stem>.<fmt>`, the others `<stem>-page-<place>.<fmt>`."""
+    return f"{stem}.{fmt}" if place <= 1 else f"{stem}-page-{place}.{fmt}"
 
 
 def managed(root, rel):
     """Whether `rel` is one of the images this keeps beside a design —
-    `designs/…/<stem>.<fmt>` or `<stem>-slide-<n>.<fmt>` next to an existing
-    `<stem>.fig` — so a file written there would be replaced by the next re-export.
-    (A new file — an export from the editor — takes another name.)"""
+    `designs/…/<stem>.<fmt>`, `<stem>-slide-<n>.<fmt>` or `<stem>-page-<n>.<fmt>` next
+    to an existing `<stem>.fig` — so a file written there would be replaced by the next
+    re-export. (A new file — an export from the editor — takes another name.)"""
     rel = rel.replace("\\", "/").lstrip("/")
     if not rel.startswith("designs/"):
         return False
@@ -47,22 +62,26 @@ def managed(root, rel):
     stem, dot, fmt = path.name.rpartition(".")
     if not dot or fmt.lower() not in FORMATS:
         return False
-    base, sep, n = stem.rpartition("-slide-")
-    if sep and n.isdigit() and (Path(root) / path.parent / f"{base}.fig").is_file():
-        return True
+    for tail in ("-slide-", "-page-"):
+        base, sep, n = stem.rpartition(tail)
+        if sep and n.isdigit() and (Path(root) / path.parent / f"{base}.fig").is_file():
+            return True
     return (Path(root) / path.parent / f"{stem}.fig").is_file()
 
 
-def schedule(root, rel, user_id=None, ensure=False):
+def schedule(root, rel, user_id=None, ensure=False, pages=False):
     """Re-export the images beside `rel` (a `designs/*.fig` just written under
     workspace `root`) once its saves go quiet; with `ensure`, a design that has none
-    gets `<name>.png`. A no-op without the service."""
+    gets `<name>.png`; with `pages`, every page after the first gets its image (an
+    agent just made one). A no-op without the service."""
     rel = rel.replace("\\", "/").lstrip("/")
     if not (configured() and rel.startswith("designs/") and rel.endswith(".fig")):
         return
     key = (str(root), rel)
     if ensure:                                 # kept until an export ran: a later plain save restarts the wait
         _ensure.add(key)
+    if pages:
+        _pages.add(key)
     if (task := _pending.get(key)) and not task.done():
         task.cancel()
     _pending[key] = asyncio.get_running_loop().create_task(_refresh(key, user_id))
@@ -95,14 +114,54 @@ async def _refresh(key, user_id):
                 while images and (stale := fig_path.with_name(f"{stem}-slide-{n}.{fmt}")).is_file():
                     await asyncio.to_thread(stale.unlink)      # a slide deleted in the editor
                     n += 1
+        await _refresh_pages(fig_path, fig, key in _pages, user_id)
+        _pages.discard(key)
     except asyncio.CancelledError:
         raise
     except Exception as e:
         _ensure.discard(key)
+        _pages.discard(key)
         log("warn", message=f"design re-export of {rel} failed: {type(e).__name__}: {e}")
     finally:
         if _pending.get(key) is asyncio.current_task():
             del _pending[key]
+
+
+async def _refresh_pages(fig_path, fig, ensure, user_id):
+    """The images of the pages after the first, `<stem>-page-<n>.<fmt>`: in a format
+    that has any (or png, with `ensure`), every page's — one added since gets its own;
+    a page's .pdf / .pptx only where there is one. A file whose page is gone goes.
+    They are drawn at the design's own scale (its `<stem>.<fmt>` against its first
+    frame) — a page's place changes, so the file there may have been another page's."""
+    stem = fig_path.stem
+    held = {}                                                  # fmt -> the places with a file
+    pattern = re.compile(re.escape(stem) + r"-page-(\d+)\.(\w+)")
+    for f in await asyncio.to_thread(lambda: list(fig_path.parent.glob(f"{stem}-page-*.*"))):
+        if (m := pattern.fullmatch(f.name)) and m.group(2) in FORMATS and int(m.group(1)) >= 2:
+            held.setdefault(m.group(2), set()).add(int(m.group(1)))
+    if ensure:
+        held.setdefault("png", set())
+    if not held:
+        return
+    info = await outline(fig, user_id=user_id)
+    pages = info["pages"]
+    first_width = ((info["frames"] or [{}])[0].get("size") or [0])[0]
+    for fmt, places in held.items():
+        own = fig_path.with_name(f"{stem}.{fmt}")
+        width = await _width(own, fmt) if own.is_file() else None
+        scale = round(width / first_width, 3) if width and first_width else 2
+        todo = sorted(p for p in places if p <= len(pages)) if fmt in _DECK else range(2, len(pages) + 1)
+        for place in todo:
+            if not pages[place - 1]["frames"]:
+                continue                                       # an empty page has no picture
+            if fig_path.with_name(f"{stem}-page-{place}.fig").exists():
+                continue                                       # that name is another design's picture
+            out = fig_path.with_name(page_file(stem, place, fmt))
+            image, _, _ = await export_page(fig, place - 1, fmt=fmt, scale=scale, user_id=user_id)
+            await _replace(out, image)
+        for place in places:
+            if place > len(pages):                             # a page removed in the editor
+                await asyncio.to_thread(fig_path.with_name(page_file(stem, place, fmt)).unlink, True)
 
 
 async def _width(path, fmt):

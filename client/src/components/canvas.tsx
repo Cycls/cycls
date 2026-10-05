@@ -15,9 +15,9 @@ import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, 
 import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
-import { DesignEditorView, canFullscreen, flushDesignEditor, fullscreenDesignEditor, type DesignHost } from "./design-editor-view";
+import { DesignEditorView, canFullscreen, designPage, flushDesignEditor, fullscreenDesignEditor, showDesignPage, useDesignPages, type DesignHost } from "./design-editor-view";
 import { VersionHistory } from "./version-history";
-import { DeckView, EditPreviewSwitch, parseDeck, type DeckOp } from "./deck-view";
+import { DeckView, EditPreviewSwitch, PageTabs, parseDeck, type DeckOp } from "./deck-view";
 import type { ShareLinks } from "./share-dialog";
 import type { PollApi } from "../lib/polls";
 import { attachBridge, appScope } from "./app-bridge";
@@ -241,15 +241,68 @@ function NoPreviewCard({ file, onDownload, onShare }: {
   );
 }
 
+// `&page=<name>` for a design request — nothing for a design of one page.
+const pageQuery = (page?: string) => (page ? `&page=${encodeURIComponent(page)}` : "");
+
+// A design without its editor around it — a preview, a shared page — a PAGE at a time:
+// its pages to pick from (when it has several), then that page as its picture, or
+// (several frames) its slides. `data` is a slide manifest of one of its pages.
+function DesignPages({ file, data, readFile, openFile, downloads, tabs = true, onPage, onReload, onSlideOp }: {
+  file: CanvasFile;
+  data: string;
+  tabs?: boolean;                      // its own page tabs (false: the canvas shows them above)
+  readFile?: (path: string, silent?: boolean) => Promise<string>;   // fetches another page (none: the one given)
+  openFile?: (path: string, silent?: boolean) => Promise<string>;
+  downloads?: boolean;                 // the picture's own Download buttons (where no menu has them)
+  onPage?: (page: string) => void;     // another page was picked
+  onReload?: () => void;
+  onSlideOp?: (op: DeckOp) => Promise<void>;
+}) {
+  const [shown, setShown] = useState(data);
+  const [want, setWant] = useState<string | null>(null);   // the page being fetched
+  useEffect(() => { setShown(data); setWant(null); }, [data]);
+  const deck = parseDeck(shown);
+  const pages = deck?.pages ?? [];
+  const several = pages.length > 1;
+  const page = several ? deck?.page : undefined;
+  const pick = async (name: string) => {
+    if (!readFile) return;
+    setWant(name);
+    onPage?.(name);
+    try {
+      setShown(await readFile(`${file.path}?as=slides${pageQuery(name)}`, true));
+    } catch { /* what's shown stays */ } finally {
+      setWant((w) => (w === name ? null : w));
+    }
+  };
+  if (!deck) return null;
+  return (
+    <div className="flex h-full flex-col">
+      {tabs && several && readFile && <PageTabs pages={pages.map((p) => p.name)} page={want ?? page ?? ""} onPick={(name) => void pick(name)} />}
+      <div className="min-h-0 flex-1">
+        {deck.count > 1
+          // Slide changes are the first page's (a deck is one page): on another, the slides are looked at.
+          ? <DeckView data={shown} path={file.path} openFile={openFile} onReload={onReload}
+                      onSlideOp={!page || page === pages[0]?.name ? onSlideOp : undefined} />
+          : deck.count === 1
+            ? <DesignPicture file={file} src={deck.slides[0]} openFile={downloads ? openFile : undefined} page={page} />
+            : <div className="flex h-full items-center justify-center text-sm text-muted-foreground" data-testid="page-empty">{t("pageEmpty")}</div>}
+      </div>
+    </div>
+  );
+}
+
 // A single design where there's no editor to open it in — a shared page, or a
-// deployment without one: its picture, and the image to keep.
-function DesignPicture({ file, src, openFile }: {
+// deployment without one: its picture, and the image to keep. `page` is the page it
+// is, on a design of several.
+function DesignPicture({ file, src, openFile, page }: {
   file: CanvasFile;
   src: string;
   openFile?: (path: string, silent?: boolean) => Promise<string>;
+  page?: string;
 }) {
-  const stem = file.name.replace(/\.fig$/i, "");
-  const save = (as: "png" | "pdf") => openFile?.(`${file.path}?as=${as}`).then((url) => saveBlob(url, `${stem}.${as}`)).catch(() => {});
+  const stem = file.name.replace(/\.fig$/i, "") + (page ? `-${page}` : "");
+  const save = (as: "png" | "pdf") => openFile?.(`${file.path}?as=${as}${pageQuery(page)}`).then((url) => saveBlob(url, `${stem}.${as}`)).catch(() => {});
   const pill = "cursor-pointer rounded-full border border-border bg-background/90 px-4 py-2 text-xs font-medium text-foreground shadow-lg backdrop-blur transition-colors hover:bg-secondary";
   return (
     <div className="relative flex h-full items-center justify-center overflow-auto bg-secondary/40 p-4">
@@ -330,10 +383,8 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
                                reload={reloadFile} host={shared ? undefined : designHost} />;
     }
     const pictures = content ? parseDeck(content) : null;
-    if (!pictures?.count) return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
-    return pictures.count > 1
-      ? <DeckView data={content!} path={file.path} openFile={openFile} />
-      : <DesignPicture file={file} src={pictures.slides[0]} openFile={openFile} />;
+    if (!pictures?.count && !((pictures?.pages?.length ?? 0) > 1)) return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
+    return <DesignPages file={file} data={content!} readFile={readFile} openFile={openFile} downloads />;
   }
   // Office docs arrive here as a converted-PDF blob URL, so they ride the same
   // native PDF viewer (search / zoom / print, mobile open-in-tab).
@@ -858,26 +909,44 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   const [previewing, setPreviewing] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);     // its slide manifest
   const [previewFailed, setPreviewFailed] = useState(false);
-  const loadPreview = useCallback(async () => {
+  // The design's pages, as its open editor has them: with several, they are tabs above
+  // the design — in the editor and in its preview alike.
+  const pagesInfo = useDesignPages(file.path);
+  const several = design && !!pagesInfo && pagesInfo.pages.length > 1;
+  // The page a preview is of — the one in view in the editor when it opened, then the
+  // one picked (a design of one page has none to name).
+  const previewPage = useRef<string | undefined>(undefined);
+  const [shownPage, setShownPage] = useState<string | undefined>(undefined);
+  // `page`: the page to show — none is the first page. (No default from the ref: asking
+  // for the first page after a named one failed must not ask for the named one again.)
+  const loadPreview = useCallback(async (page: string | undefined) => {
+    previewPage.current = page;
+    setShownPage(page);
     try {
-      setPreview(await readFile(`${file.path}?as=slides`, true));
+      setPreview(await readFile(`${file.path}?as=slides${pageQuery(page)}`, true));
       setPreviewFailed(false);
     } catch {
+      if (page) return loadPreview(undefined);   // a page renamed or removed since: the first one
       setPreviewFailed(true);
     }
   }, [readFile, file.path]);
+  // A tab: the editor goes to that page (so Edit is on it), and a preview shows it.
+  const pickPage = (page: string) => {
+    showDesignPage(file.path, page);
+    if (previewing) void loadPreview(page);
+  };
   const showPreview = async () => {
     setPreview(null);
     setPreviewFailed(false);
     setPreviewing(true);
     track("design_previewed", {});
     await flushDesignEditor(file.path, 3000);   // what's unsaved is in the preview
-    await loadPreview();
+    await loadPreview(designPage(file.path));
   };
   useEffect(() => {   // an agent edit while previewing: the server has saved it — show it
     if (!previewing) return;
     const onCommand = (e: Event) => {
-      if ((e as CustomEvent<{ path?: string }>).detail?.path === file.path) void loadPreview();
+      if ((e as CustomEvent<{ path?: string }>).detail?.path === file.path) void loadPreview(previewPage.current);
     };
     window.addEventListener("cycls:design-command", onCommand);
     return () => window.removeEventListener("cycls:design-command", onCommand);
@@ -886,10 +955,13 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   const download = () => openFile(file.path).then((url) => saveBlob(url, file.path.split('/').pop() || file.name)).catch(() => {});
   // A design as what it's used as: its picture or a PDF, rendered by the design service
   // from the saved file — so an open editor saves first.
+  // On a design of several pages it is the page in view — the preview's, else the editor's.
   const downloadDesignAs = async (as: "png" | "pdf") => {
     await flushDesignEditor(file.path, 3000);
     track("design_exported", { format: as, files: 1 });
-    openFile(`${file.path}?as=${as}`).then((url) => saveBlob(url, `${file.name.replace(/\.fig$/i, "")}.${as}`)).catch(() => {});
+    const page = previewing ? previewPage.current : designPage(file.path);
+    openFile(`${file.path}?as=${as}${pageQuery(page)}`)
+      .then((url) => saveBlob(url, `${file.name.replace(/\.fig$/i, "")}${page ? `-${page}` : ""}.${as}`)).catch(() => {});
   };
   const reloadFile = useCallback(() => openFile(file.path), [openFile, file.path]);
 
@@ -1005,6 +1077,10 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
         )}
       </div>
 
+      {several && (
+        <PageTabs pages={pagesInfo!.pages} page={(previewing ? shownPage : undefined) ?? pagesInfo!.page} onPick={pickPage} />
+      )}
+
       {/* Body */}
       <div className="relative flex-1 overflow-hidden">
         {historyOpen && designHost && (
@@ -1050,12 +1126,14 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
               const pictures = preview ? parseDeck(preview) : null;
               return (
                 <div className="absolute inset-0 bg-background" data-testid="design-preview">
-                  {previewFailed || (preview != null && !pictures?.count) ? <NoPreviewCard file={file} onDownload={download} />
+                  {previewFailed || (preview != null && !pictures?.count && !((pictures?.pages?.length ?? 0) > 1)) ? <NoPreviewCard file={file} onDownload={download} />
                     : !pictures ? <LoadingBar />
-                    : pictures.count > 1
-                      ? <DeckView data={preview!} path={file.path} openFile={openFile} onReload={() => void loadPreview()}
-                                  onSlideOp={deckOp ? (op) => deckOp(file.path, op) : undefined} />
-                      : <DesignPicture file={file} src={pictures.slides[0]} />}   {/* the ⋮ menu has the downloads: nothing over the picture */}
+                    // A page at a time; the page picked is the editor's too, so Edit comes back on it.
+                    // The ⋮ menu has the downloads: nothing over the picture.
+                    : <DesignPages file={file} data={preview!} readFile={readFile} openFile={openFile} tabs={!several}
+                                   onPage={(page) => { previewPage.current = page; setShownPage(page); showDesignPage(file.path, page); }}
+                                   onReload={() => void loadPreview(previewPage.current)}
+                                   onSlideOp={deckOp ? (op) => deckOp(file.path, op) : undefined} />}
                 </div>
               );
             })()}

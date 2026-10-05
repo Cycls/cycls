@@ -400,6 +400,16 @@ _DESIGN_TOOL = {
         "is cropped by the slide in the show). \"pdf\" is one page per slide, its words searchable. png / jpg / webp "
         "save every slide as its own image, <name>-slide-1, -slide-2 … (an Instagram carousel). "
         "Write notes for a talk deck. Every slide comes back to you to QA.\n"
+        "  PAGES — one design, several VARIANTS of the same piece of work (a post, a story and a "
+        "banner of one campaign; a light and a dark version): spec = {\"pages\":[{\"name\":\"Post\","
+        "\"size\":\"square\",\"fill\":…,\"nodes\":[…]}, {\"name\":\"Story\",\"size\":\"story\",…}]} — each page "
+        "a design of its own (its own size; or {\"name\", \"frames\":[…]} for a carousel), under a "
+        "name no other page has. It is ONE file (designs/<name>.fig) whose pages the user switches "
+        "between in the editor, previews and downloads one at a time; each page's image is saved "
+        "too (<name>.png the first, then <name>-page-2.png, -page-3 …). Use pages when the user "
+        "asks for the same thing in several formats or versions — not separate renders, and not "
+        "for a deck's slides (those are `frames` / a `deck`). Lay each page out for ITS size: "
+        "never the same coordinates on another shape.\n"
         "- script {script, name, format?} — escape hatch: a raw OpenPencil / Figma "
         "plugin-API script for what the spec can't express. It MUST end with "
         "`console.log('__FRAME__'+frame.id)` naming the frame to export.\n"
@@ -409,12 +419,14 @@ _DESIGN_TOOL = {
         "{name, number} · delete_slide {name, number}. Slides are numbered from 1; a new slide takes the "
         "deck's theme and footer, and page numbers follow any change. Use these — not a re-render — to "
         "change a deck's structure; `edit` ops still tweak nodes on a slide.\n"
-        "- inspect {name} — the design's frames and every node by name (its `id`, else "
+        "- inspect {name, page?} — the design's frames and every node by name (its `id`, else "
         "text-1, rect-2…), with its box, text, font and colour. Do this before an edit you "
-        "can't name from the spec you wrote. A message that carries "
+        "can't name from the spec you wrote. A design with several pages lists them, and shows "
+        "ONE: `page` (its name), the first when you give none. A message that carries "
         "\"[Selected in designs/<name>.fig › <frame>: <node> (<type>), …]\" is the person "
-        "pointing: \"this\" / \"the selection\" means those nodes — edit them by those names.\n"
-        "- edit {ops, name, intent?} — change a design you rendered (designs/<name>.fig) with "
+        "pointing: \"this\" / \"the selection\" means those nodes — edit them by those names "
+        "(\"[… page \"Story\" › …]\" says which page they are on: pass it as `page`).\n"
+        "- edit {ops, name, page?, intent?} — change a design you rendered (designs/<name>.fig) with "
         "named operations, applied in order: "
         "[{\"op\":\"set_text\",\"node\":\"headline\",\"text\":\"New\"}, "
         "{\"op\":\"style\",\"node\":\"headline\",\"color\":\"#f5a623\",\"font\":\"Playfair Display Bold\"}, "
@@ -430,7 +442,11 @@ _DESIGN_TOOL = {
         "labels, rows) changes by rebuilding it — update_slide with the new data, or a new render "
         "— never by moving its bars one by one (that chart then goes into PowerPoint as shapes). "
         "`name` is the design's base name "
-        "(e.g. `launch`).\n"
+        "(e.g. `launch`). An edit is made on ONE page — `page`, the first when absent; the same "
+        "node name on another page is another node. Page ops (in `ops`) change the pages "
+        "themselves: page_add {name, spec} (a new variant, `spec` as in render), page_duplicate "
+        "{page?, name?} (a copy to restyle — the ops after it in the same edit land on the copy), "
+        "page_rename {page?, name}, page_delete {page?}.\n"
         "  For what ops can't do, `edit` also takes a raw `script` instead: a Figma "
         "plugin-API snippet mutating the document (figma.currentPage.findOne(…)); set "
         "`figma.currentPage.selection` to what you change. Fonts there are "
@@ -447,6 +463,7 @@ _DESIGN_TOOL = {
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["render", "script", "edit", "inspect", "add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide"],
                    "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes), `edit` it (checked, saved, replayed live in the editor), or change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide."},
+        "page": {"type": "string", "description": "For `inspect` / `edit` on a design with several pages: the page's name (default: the first page)."},
         "slide": {"type": "object", "description": "For add_slide / update_slide: the slide — a layout slide {layout, …slots, notes?} laid out with the deck's own theme and footer, or a hand-built one {nodes, fill?}. update_slide replaces the slide whole: start from its `source` in inspect and change what you need."},
         "number": {"type": "integer", "description": "For update_slide / move_slide / duplicate_slide / delete_slide: the slide's number, from 1."},
         "to": {"type": "integer", "description": "For move_slide: the position it moves to, from 1."},
@@ -455,8 +472,8 @@ _DESIGN_TOOL = {
         "title": {"type": "string", "description": "For update_slide without `slide`: the slide's title (its name in the deck viewer)."},
         "transition": {"type": "string", "enum": ["fade", "slide", "none"], "description": "For update_slide without `slide`: how the slide enters when presented."},
         "ops": {"type": "array", "items": {"type": "object"},
-                "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?} (a stack's id moves the whole block; a node in a stack moved on its own leaves it); resize {node, w?, h?}; delete {node}; duplicate {node, dx?, dy?, id?} (in a stack, the copy is its next item); replace_image {node, src}; add {node:<spec node>, frame?}; background {fill, frame?} — the slide's OWN fill: a colour, {\"gradient\": [...]} or \"none\" (a slide isn't a node `style` can name — never cover it with a full-size rect). `frame` (slide index from 0) narrows a name to one slide."},
-        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}; a presentation as a deck of layouts {deck:{theme, footer?, slides:[{layout, …slots, notes}]}} (the normal way for decks); or hand-built frames {frames:[...]} (one per slide, all one size, each with optional id/title/notes/transition; export pptx or pdf, or png for a carousel); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
+                "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?} (a stack's id moves the whole block; a node in a stack moved on its own leaves it); resize {node, w?, h?}; delete {node}; duplicate {node, dx?, dy?, id?} (in a stack, the copy is its next item); replace_image {node, src}; add {node:<spec node>, frame?}; background {fill, frame?} — the slide's OWN fill: a colour, {\"gradient\": [...]} or \"none\" (a slide isn't a node `style` can name — never cover it with a full-size rect). `frame` (slide index from 0) narrows a name to one slide. Pages: page_add {name, spec}; page_duplicate {page?, name?}; page_rename {page?, name}; page_delete {page?}."},
+        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}; several variants of one design as pages {pages:[{name, size, fill, nodes}]}; a presentation as a deck of layouts {deck:{theme, footer?, slides:[{layout, …slots, notes}]}} (the normal way for decks); or hand-built frames {frames:[...]} (one per slide, all one size, each with optional id/title/notes/transition; export pptx or pdf, or png for a carousel); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s). Scripts may use only `figma` (and `console`): no `this`, globals, network, eval/Function or `.constructor` — anything else is refused before it runs."},
         "intent": {"type": "string",
@@ -1504,6 +1521,8 @@ def _prepare_spec(spec, brand, root=None):
     (spec, error, notes), notes being lines for the model's ack."""
     if isinstance(spec.get("deck"), dict):
         return _prepare_deck(spec, brand, root)
+    if spec.get("pages") is not None:
+        return _prepare_pages(spec, brand, root)
     colors = {_norm_hex(m) for m in _HEX.findall(json.dumps(spec))}
     spec = json.loads(json.dumps(spec))
     frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
@@ -1625,6 +1644,34 @@ def _prepare_spec(spec, brand, root=None):
         notes.append(f"Note: the workspace has a brand kit (primary {brand['primary']}, accent "
                      f"{brand['accent']}) and this design uses neither — if it should be on-brand, fix that.")
     return spec, None, notes
+
+
+def _prepare_pages(spec, brand, root):
+    """A design of several pages — its variants — each prepared as a design of its own
+    (its own size; a carousel's frames one size). → (spec, error, notes)."""
+    pages = spec.get("pages")
+    if not isinstance(pages, list) or not pages:
+        return None, ('Error: `pages` is a list of pages, each a design with a name: '
+                      '[{"name": "Post", "size": "square", "fill": …, "nodes": […]}, …].'), []
+    out, notes, seen = [], [], set()
+    for n, page in enumerate(pages, 1):
+        if not isinstance(page, dict):
+            return None, f"Error: page {n} must be an object: {{name, size, fill, nodes}}.", []
+        name = str(page.get("name") or "").strip()
+        if not name:
+            return None, f'Error: page {n} needs a `name` (e.g. "Post", "Story") — edits and downloads name a page.', []
+        if name.lower() in seen:
+            return None, f"Error: two pages are named {name!r} — every page needs its own name.", []
+        seen.add(name.lower())
+        if page.get("deck") is not None or page.get("pages") is not None:
+            return None, (f"Error: page {name!r} is a design ({{size, fill, nodes}}) or a carousel "
+                          f"({{frames}}) — a deck of layouts is a design of its own (render it by itself)."), []
+        made, err, more = _prepare_spec({k: v for k, v in page.items() if k != "name"}, brand, root)
+        if err:
+            return None, err.replace("Error: ", f"Error: page {name!r}: ", 1), []
+        out.append({"name": name[:40], **made})
+        notes += [m for m in more if m not in notes]
+    return {"pages": out}, None, notes
 
 
 _DECK_THEMES = ("minimal-light", "minimal-dark", "bold-gradient", "editorial", "corporate", "tech-dark", "warm", "mono")
@@ -1780,15 +1827,32 @@ def _prepare_ops(ops, root):
             if err:
                 return None, err.replace("Error: ", f"Error: op {k}: ", 1)
             op["node"] = spec["nodes"][0]
+        elif op["op"] == "page_add":
+            # A new page is a design: prepared as a render's is (sizes, brand, images).
+            if not isinstance(op.get("spec"), dict) or op["spec"].get("deck") or op["spec"].get("pages"):
+                return None, (f"Error: op {k}: `page_add` needs `spec` — the page's design, "
+                              f"{{size, fill, nodes}} (or a carousel's {{frames}}).")
+            spec, err, _ = _prepare_spec(op["spec"], _load_brand(root) if root else None, root)
+            if err:
+                return None, err.replace("Error: ", f"Error: op {k}: ", 1)
+            op["spec"] = spec
     return ops, None
 
 
-def _outline_text(rel, frames):
+def _outline_text(rel, frames, pages=None, page=None):
     """A design's outline (from the service's inspect) as compact lines for the model:
-    each frame, then each node — name, type, box, and its text/font/colour or fill."""
+    each frame, then each node — name, type, box, and its text/font/colour or fill. A
+    design of several `pages` says which one this is, and names the others."""
+    several = pages and len(pages) > 1
+    where = f"{rel} — page {json.dumps(page, ensure_ascii=False)}" if several else rel
+    others = ""
+    if several:
+        listed = ", ".join(json.dumps(p["name"], ensure_ascii=False) for p in pages)
+        others = (f" This design has {len(pages)} pages: {listed} — inspect or edit another by "
+                  f"passing its name as `page`.")
     if not frames:
-        return f"{rel} has no frames."
-    out = [f"{rel} — {len(frames)} frame{'s' if len(frames) != 1 else ''}. Edit with ops that name these nodes."]
+        return f"{where} has no frames.{others}"
+    out = [f"{where} — {len(frames)} frame{'s' if len(frames) != 1 else ''}. Edit with ops that name these nodes.{others}"]
     for f in frames:
         w, h = (f.get("size") or [0, 0])[:2]
         meta = "".join(f", {k} {json.dumps(f[k], ensure_ascii=False)}" for k in ("title", "transition") if f.get(k))
@@ -1977,14 +2041,15 @@ async def _exec_design(inp, workspace):
             return (f"Error: {rel} doesn't exist — `{action}` works on a design you rendered; "
                     f"`render` creates one.")
     # `inspect` lists a design's frames and their named nodes — what `edit` ops name.
+    page = str(inp.get("page") or "").strip() or None      # the page an inspect / edit is about
     if action == "inspect":
         try:
-            frames = await design.inspect(await asyncio.to_thread(fig_path.read_bytes), user_id=subject)
+            o = await design.outline(await asyncio.to_thread(fig_path.read_bytes), user_id=subject, page=page)
         except design.Unavailable as e:
             return f"Error: design unavailable — {e}"
         except Exception as e:
             return f"Error: couldn't inspect {rel} — {e}"
-        return _outline_text(rel, frames)
+        return _outline_text(rel, o["frames"], o["pages"], o["page"])
     # `edit` changes a saved design: named `ops` (the normal way) or a raw `script`.
     # The service applies it to the .fig first — the editor's own plugin API, headless
     # — so an edit that fails is the model's error now (it used to fail silently in
@@ -2012,7 +2077,7 @@ async def _exec_design(inp, workspace):
                 data, base = await asyncio.to_thread(read_fig, workspace.root, rel)
                 try:
                     r = await design.apply(data, script=None if ops else script,
-                                           ops=ops or None, preview=True, user_id=subject)
+                                           ops=ops or None, preview=True, user_id=subject, page=page)
                 except design.Unavailable as e:
                     return f"Error: design unavailable — {e}"
                 except Exception as e:
@@ -2027,12 +2092,28 @@ async def _exec_design(inp, workspace):
                         return (f"Error: {rel} changed while the edit was being made (it's being edited "
                                 f"by hand). Nothing was changed; inspect it again, then edit.")
         from cycls._agent.design import refresh
-        refresh.schedule(workspace.root, rel, subject, ensure=True)   # the image beside it follows — or is made
+        pages, ended = r.get("pages") or [], r.get("page") or ""
+        made_page = any(isinstance(op, dict) and op.get("op") in ("page_add", "page_duplicate") for op in ops or [])
+        # The image beside it follows — or is made; a page an edit made gets its own.
+        refresh.schedule(workspace.root, rel, subject, ensure=True, pages=made_page)
         ui = {"type": "ui", "action": "design_command", "path": rel, "script": r.get("script") or script,
               "version": version}   # what the file is now — an open editor's saves go on from it
+        if len(pages) > 1 or made_page:
+            ui["page"] = r.get("started") or ""   # the page it is made on: an open editor shows it first
+        if any(isinstance(op, dict) and str(op.get("op") or "").startswith("page_") for op in ops or []):
+            # Pages added, copied, renamed or removed: an open editor re-opens the saved
+            # file on the page the edit ended on — page surgery isn't replayed live.
+            ui["reload"], ui["page"] = True, ended
         if intent := inp.get("intent"):
             ui["intent"] = str(intent)[:80]   # shown on the live "Super" cursor
-        ack = (f"Edit applied and saved to {rel}; the image beside it (designs/{name}.png etc.) "
+        if len(pages) > 1:
+            place = next((n for n, p in enumerate(pages, 1) if p["name"] == ended), 1)
+            image = f"designs/{refresh.page_file(name, place, 'png')}"
+            on = (f" on page {json.dumps(ended, ensure_ascii=False)} — the design's pages are now "
+                  + ", ".join(json.dumps(p["name"], ensure_ascii=False) for p in pages))
+        else:
+            image, on = f"designs/{name}.png etc.", ""
+        ack = (f"Edit applied and saved to {rel}{on}; the image beside it ({image}) "
                f"re-exports in a few seconds. If the design is open in the editor, the Super "
                f"cursor replays the change live there." + _layout_check(r.get("lint"), "png"))
         for credit in credits:
@@ -2063,6 +2144,12 @@ async def _exec_design(inp, workspace):
             notes = [*notes, *(f"{c}." for c in credits)]
             if isinstance(spec.get("deck"), dict):
                 n_frames, size = len(spec["deck"]["slides"]), spec["deck"]["size"]
+            elif isinstance(spec.get("pages"), list):
+                # Several pages: one design, each page's own image (never a carousel or a deck file).
+                if fmt in _DECK_EXTS:
+                    return (f"Error: a design of several pages renders to an image (png, jpg, webp, svg) — "
+                            f"each page is downloaded as PDF or PowerPoint from the canvas. Render it as png.")
+                n_frames, size = 1, None
             else:
                 frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
                 n_frames, size = len(frames), frames[0].get("size")
@@ -2081,6 +2168,8 @@ async def _exec_design(inp, workspace):
     except Exception as e:
         return f"Error: design {action} failed — {type(e).__name__}: {e}"
     image, fig, preview, lint = r.image, r.fig, r.preview, r.lint
+    if len(r.pages) > 1:
+        return await _save_pages(r, name, fmt, workspace, notes)
     count = max(len(r.previews), len(r.slides), 1)
 
     # Never clobber an earlier design: if this base name is taken, bump it
@@ -2190,6 +2279,60 @@ async def _exec_design(inp, workspace):
             "_ui": ui}
 
 
+async def _save_pages(r, name, fmt, workspace, notes):
+    """A render of several pages, saved: the one `.fig`, and each page's image —
+    `<name>.<fmt>` the first, `<name>-page-<n>.<fmt>` the others (design/refresh.py
+    keeps them in step). It opens in the editor on its first page."""
+    from cycls._agent.design.refresh import page_file
+    requested = name
+    root = pathlib.Path(workspace.root)
+    name = _dedupe_design_name(root / "designs", name, fmt)
+    (root / "designs").mkdir(parents=True, exist_ok=True)
+    fig_rel = f"designs/{name}.fig"
+    await asyncio.to_thread((root / fig_rel).write_bytes, r.fig)
+    images = r.page_images or [r.image]
+    listed = []
+    for place, (page, data) in enumerate(zip(r.pages, images), 1):
+        rel = f"designs/{page_file(name, place, fmt)}"
+        if data:
+            await asyncio.to_thread((root / rel).write_bytes, data)
+        frames = f", {page['frames']} slides" if page["frames"] > 1 else ""
+        listed.append(f"{json.dumps(page['name'], ensure_ascii=False)} ({rel if data else 'empty'}{frames})")
+    note = f" (named '{name}' so it doesn't overwrite the existing '{requested}')" if name != requested else ""
+    editor = bool(os.environ.get("DESIGN_EDITOR_URL"))
+    ack = (f"Design saved as ONE file, {fig_rel}{note}, with {len(r.pages)} pages: {'; '.join(listed)}. "
+           + (f"It's OPEN in the in-canvas editor on its first page — the user switches pages in the "
+              f"editor's Pages panel (top left), and Preview and the downloads (PNG, PDF) act on the "
+              f"page in view. " if editor else "Its first page is opened on the canvas. ")
+           + f"Change a page with Design edit {{page: \"<its name>\", ops}}; add or copy one with the "
+             f"page_add / page_duplicate ops.")
+    first = f"designs/{page_file(name, 1, fmt)}"
+    ui = {"type": "ui", "action": "open_canvas", **({"path": fig_rel, "name": f"{name}.fig"} if editor
+                                                     else {"path": first, "name": first.rsplit("/", 1)[-1]})}
+    for line in notes:
+        ack += " " + line
+    ack += _layout_check(r.lint, fmt)
+    blocks, total = [], 0
+    labels = r.preview_pages + [""] * (len(r.previews) - len(r.preview_pages))
+    for label, jpg in list(zip(labels, r.previews))[:_DESIGN_QA_SLIDES]:
+        if blocks and total + len(jpg) > _DESIGN_QA_MAX:
+            break
+        total += len(jpg)
+        blocks += [{"type": "text", "text": f"Page {json.dumps(label, ensure_ascii=False)}:"},
+                   {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                "data": base64.b64encode(jpg).decode()}}]
+    if not blocks:
+        return {"_model": ack, "_ui": ui}
+    shown = len(blocks) // 2
+    which = "Every page is attached" if shown == len(r.previews) else f"The first {shown} of {len(r.previews)} frames are attached"
+    ack += (f" {which} — QA EACH page before you present, as a design in its own right: its headline "
+            "clearly dominant; margins ~8–10%, nothing crammed at an edge or left over from another "
+            "size; every text legible on what's behind it; nothing overlapping or cut off; copy exactly "
+            "right; and the pages recognisably ONE piece of work (palette, fonts, voice). If anything "
+            "is off, fix it now with Design edit on that page (don't re-render), then present.")
+    return {"_model": [*blocks, {"type": "text", "text": ack}], "_ui": ui}
+
+
 def _layout_check(lint, fmt):
     """The service's layout check of a render, as one line for the ack: what's
     wrong, where, and the fix — the mechanical backstop to the model's own look."""
@@ -2199,6 +2342,8 @@ def _layout_check(lint, fmt):
 
     def line(i):
         where = f"slide {int(i.get('frame') or 0) + 1}: " if slide else ""
+        if i.get("page"):
+            where = f"page {json.dumps(i['page'], ensure_ascii=False)}: " + where
         return f"{where}{i.get('node', '')} {i.get('issue', '')} — {i.get('fix', '')}"
     items = [line(i) for i in lint[:6]]
     more = f" (+{len(lint) - 6} more)" if len(lint) > 6 else ""

@@ -92,7 +92,7 @@ export interface FilesPanelProps {
   writeFile: WriteFile;   // binary too — the .fig editor writes raw bytes
   writeNew?: (path: string, data: BlobPart) => Promise<string>;  // a NEW file (next free name) → its path: design exports, copies
   newDesign?: (body: { name?: string; size?: string | [number, number]; background?: string }) => Promise<{ path: string; name: string; size: [number, number] }>;
-  exportDesign?: (path: string, format: "pdf" | "png") => Promise<string>;   // a design as a PDF / PNG beside it
+  exportDesign?: (path: string, format: "pdf" | "png", page?: string) => Promise<string>;   // a design (one page of it) as a PDF / PNG beside it
   brand?: () => Promise<BrandKit | null>;                        // the brand kit, for the design editor
   fetchVersioned?: FetchVersioned;                               // a design with its version (its saves' base)
   listVersions?: (path: string) => Promise<DesignVersion[]>;     // a design's earlier versions
@@ -397,6 +397,8 @@ export function Chat({ chat, onShare, files, account, config }: {
         window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: {
           path: ev.path, script: ev.script, intent: typeof ev.intent === "string" ? ev.intent : undefined,
           version: typeof ev.version === "string" ? ev.version : undefined,   // the file as the agent saved it
+          page: typeof ev.page === "string" ? ev.page : undefined,            // the page it is made on
+          reload: ev.reload === true,                                         // its pages changed: re-open, don't replay
         } }));
         track("ui_action", { action: "design_command" });
       } else if (ev.action === "suggest" && typeof ev.text === "string") {

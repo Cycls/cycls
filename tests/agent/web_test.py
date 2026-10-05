@@ -597,11 +597,11 @@ def test_a_shared_design_shows_as_its_picture(tmp_path, monkeypatch):
     (ws.root / "designs" / "launch.fig").write_bytes(b"FIG")
     (ws.root / "designs" / "other.fig").write_bytes(b"OTHER")
 
-    async def slides(fig, scale=1, fmt="jpg", user_id=None):
+    async def slides(fig, scale=1, fmt="jpg", user_id=None, page=None):
         return {"images": [b"\xff\xd8one"], "sizes": [[1080, 1080]], "format": "jpg", "meta": [{"name": "slide-1"}]}
 
-    async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False):
-        return b"PNG:" + fig
+    async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False, page=None):
+        return b"PNG:" + fig + (f":{page}".encode() if page else b"")
     monkeypatch.setattr(design, "slides", slides)
     monkeypatch.setattr(design, "export", export)
 
@@ -612,6 +612,7 @@ def test_a_shared_design_shows_as_its_picture(tmp_path, monkeypatch):
     assert shown.json()["slides"][0].startswith("data:image/jpeg;base64,")
     png = client.get(url, params={"as": "png"})
     assert png.content == b"PNG:FIG" and 'filename="launch.png"' in png.headers["content-disposition"]
+    assert client.get(url, params={"as": "png", "page": "Story"}).content == b"PNG:FIG:Story"   # a visitor sees any page
     assert client.get(url).content == b"FIG"                                  # the design itself still downloads
     other = url.replace("launch.fig", "other.fig")
     assert client.get(other, params={"as": "slides"}).status_code == 403      # the share is of one file
@@ -1720,21 +1721,91 @@ def _fake_design(monkeypatch):
     from cycls._agent import design
     calls = []
 
-    async def slides(fig, scale=1, fmt="jpg", user_id=None):
-        calls.append(("slides", fig, scale, user_id))
+    async def slides(fig, scale=1, fmt="jpg", user_id=None, page=None):
+        calls.append(("slides", fig, scale, user_id, page) if page else ("slides", fig, scale, user_id))
         return {"images": [b"\xff\xd8one", b"\xff\xd8two"], "sizes": [[1920, 1080]] * 2, "format": "jpg",
+                "pages": _PAGES, "page": page or "Post",
                 "meta": [{"name": "cover", "title": "Cover", "notes": "Hello", "transition": "fade"},
                          {"name": "slide-2", "poll": json.dumps({"question": "Tea or coffee?", "options": ["Tea", "Coffee"],
                                                                 "tracks": [], "dir": "ltr"})}]}
 
-    async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False):
-        calls.append((fmt, fig, user_id))
+    async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False, page=None):
+        calls.append((fmt, fig, user_id, page) if page else (fmt, fig, user_id))
         if every:
             return [b"PNG-one", b"PNG-two"]
-        return b"%PDF-deck" if fmt == "pdf" else b"PK-deck"
+        return (b"%PDF-deck" if fmt == "pdf" else b"PK-deck") + (f":{page}".encode() if page else b"")
+
+    async def export_page(fig, page, fmt="png", scale=2, width=None, user_id=None):
+        calls.append(("page", page, fmt, fig))
+        if page not in [p["name"] for p in _PAGES]:
+            raise RuntimeError(f'there is no page "{page}" — this design\'s pages: Post, Story')
+        return f"{fmt}:{page}".encode(), _PAGES, page
     monkeypatch.setattr(design, "slides", slides)
     monkeypatch.setattr(design, "export", export)
+    monkeypatch.setattr(design, "export_page", export_page)
     return calls
+
+
+_PAGES = [{"name": "Post", "frames": 1}, {"name": "Story", "frames": 2}]
+
+
+def test_a_designs_pages_preview_and_download_one_at_a_time(tmp_path, monkeypatch):
+    """A design's pages are its variants: `&page=<name>` is whose slides, PDF or images
+    come back (the first page's without it), each cached by itself, the download named
+    for its page; the manifest lists them all."""
+    import io, zipfile
+    root = _seed(tmp_path, {"designs/launch.fig": b"FIG"})
+    calls = _fake_design(monkeypatch)
+    client = _ws_routers_client(tmp_path)
+    get = lambda as_, page=None: client.get("/files/designs/launch.fig", params={"as": as_, **({"page": page} if page else {})})
+
+    first = get("slides").json()
+    assert first["pages"] == _PAGES and first["page"] == "Post"
+    story = get("slides", "Story").json()
+    assert story["page"] == "Story" and calls[-1] == ("slides", b"FIG", 1, "org_1:user_1", "Story")
+    get("slides"); get("slides", "Story")                                     # both stay cached, side by side
+    assert len(calls) == 2
+
+    pdf = get("pdf", "Story")
+    assert pdf.content == b"%PDF-deck:Story" and 'filename="launch-Story.pdf"' in pdf.headers["content-disposition"]
+    assert get("pdf").content == b"%PDF-deck" and 'filename="launch.pdf"' in get("pdf").headers["content-disposition"]
+    assert get("pdf", "Story").content == b"%PDF-deck:Story"                  # the first page's didn't replace it
+    assert [c for c in calls if c[0] == "pdf"] == [("pdf", b"FIG", "org_1:user_1", "Story"), ("pdf", b"FIG", "org_1:user_1")]
+    with zipfile.ZipFile(io.BytesIO(get("images", "Story").content)) as zf:
+        assert zf.namelist() == ["launch-Story-slide-1.png", "launch-Story-slide-2.png"]
+
+    (root / "designs/launch.fig").write_bytes(b"EDITED")                      # an edit: every page's render is fresh
+    get("slides", "Story")
+    assert calls[-1][1] == b"EDITED"
+    assert len(list((root / ".cache/design").glob("*.slides.json"))) == 1     # what the old save left is gone
+
+
+def test_a_page_that_is_gone_is_a_404(tmp_path, monkeypatch):
+    from cycls._agent import design
+    _seed(tmp_path, {"designs/launch.fig": b"FIG"})
+    _fake_design(monkeypatch)
+
+    async def gone(fig, **kw):
+        raise RuntimeError('there is no page "Old" — this design\'s pages: Post, Story')
+    monkeypatch.setattr(design, "slides", gone)
+    client = _ws_routers_client(tmp_path)
+    r = client.get("/files/designs/launch.fig", params={"as": "slides", "page": "Old"})
+    assert r.status_code == 404 and "there is no page" in r.json()["detail"]
+
+
+def test_a_page_exports_to_its_own_file(tmp_path, monkeypatch):
+    """Export PDF from inside the editor, on the page in view: the first page is the
+    design's own file, a later one `<name>-page-<its place>` — kept in step from then on."""
+    root = _seed(tmp_path, {"designs/launch.fig": b"FIG", "notes/logo.fig": b"LOGO"})
+    calls = _fake_design(monkeypatch)
+    client = _ws_routers_client(tmp_path)
+    export = lambda **body: client.post("/design/export", json=body)
+    assert export(path="designs/launch.fig", format="pdf", page="Story").json() == {"path": "designs/launch-page-2.pdf"}
+    assert (root / "designs/launch-page-2.pdf").read_bytes() == b"pdf:Story" and calls[-1] == ("page", "Story", "pdf", b"FIG")
+    assert export(path="designs/launch.fig", format="png", page="Post").json() == {"path": "designs/launch.png"}
+    assert export(path="notes/logo.fig", format="png", page="Story").json() == {"path": "notes/logo-page-2.png"}
+    assert export(path="designs/launch.fig", page="Nope").status_code == 404
+    assert not list((root / "designs").glob(".*.part"))
 
 
 def test_kinds_for_designs_and_decks(tmp_path):

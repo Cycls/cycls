@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, cleanup, act, fireEvent, screen } from "@testing-library/react";
 import {
-  DesignEditorView, designSelection, detachDesignEditorsUnder, flushDesignEditor, fullscreenDesignEditor, type DesignHost,
+  DesignEditorView, designPage, designPages, designSelection, detachDesignEditorsUnder, flushDesignEditor,
+  fullscreenDesignEditor, showDesignPage, type DesignHost,
 } from "../src/components/design-editor-view";
 import { ToastProvider } from "../src/lib/toast";
 
@@ -77,9 +78,9 @@ function fakeFullscreen() {
 }
 
 // The editor side of a load: `ready` → the host's `load` (returned).
-async function ready(frame: HTMLIFrameElement, protocol?: number) {
+async function ready(frame: HTMLIFrameElement, protocol?: number, features?: string[]) {
   const post = vi.spyOn(frame.contentWindow!, "postMessage");
-  fromEditor(frame, "ready", protocol ? { protocol } : {});
+  fromEditor(frame, "ready", protocol ? { protocol, ...(features ? { features } : {}) } : {});
   await flush();
   await flush();
   const load = post.mock.calls.map((c) => c[0] as Record<string, unknown>).find((m) => m.type === "load")!;
@@ -319,6 +320,84 @@ describe("DesignEditorView", () => {
     window.removeEventListener("cycls:design-selection", listen);
   });
 
+  // A design's pages are its variants (a post, a story, a banner of one piece of work).
+  it("knows the design's pages and the one in view, shows one on request, and opens where it was left", async () => {
+    localStorage.clear();
+    const first = mount({ host: versioned(() => "v1") });
+    const { post, load } = await ready(first.frame(), 2, ["pages"]);
+    expect("page" in load).toBe(false);                                     // nothing remembered: its first page
+    expect(designPages("designs/launch.fig")).toBeNull();
+    const heard: unknown[] = [];
+    const listen = (e: Event) => heard.push((e as CustomEvent).detail);
+    window.addEventListener("cycls:design-pages", listen);
+    fromEditor(first.frame(), "pages", { doc: load.doc, page: "Story", pages: ["Post", "Story", "Banner"] });
+    await flush();
+    const now = { path: "designs/launch.fig", page: "Story", pages: ["Post", "Story", "Banner"] };
+    expect(designPages("designs/launch.fig")).toEqual(now);
+    expect(designPage("designs/launch.fig")).toBe("Story");
+    expect(heard).toEqual([now]);
+
+    // What's selected says which page it is on; an export is of that page.
+    fromEditor(first.frame(), "selection", { doc: load.doc, frame: "slide-1", nodes: [{ name: "headline", type: "TEXT" }] });
+    await flush();
+    expect(designSelection("designs/launch.fig")?.page).toBe("Story");
+
+    post.mockClear();
+    showDesignPage("designs/launch.fig", "Banner");                          // a preview's tab: the editor follows
+    expect(post.mock.calls.map((c) => c[0])).toContainEqual({ target: "cycls-editor", type: "page", name: "Banner" });
+
+    // An agent edit says the page it is made on: the editor shows it before the edit.
+    await command({ script: "S", version: "v2", page: "Post" });
+    expect(post.mock.calls.map((c) => c[0])).toContainEqual({ target: "cycls-editor", type: "command", script: "S", intent: undefined, page: "Post" });
+
+    first.unmount();
+    expect(designPages("designs/launch.fig")).toBeNull();                    // no editor open: nothing known
+    expect(heard).toHaveLength(2);
+    window.removeEventListener("cycls:design-pages", listen);
+
+    const again = mount({ host: versioned(() => "v2") });                    // opened again: on the page it was left on
+    expect((await ready(again.frame(), 2, ["pages"])).load.page).toBe("Story");
+    fromEditor(again.frame(), "pages", { doc: "another-load", page: "Banner", pages: ["Post", "Banner"] });
+    await flush();
+    expect(designPages("designs/launch.fig")).toBeNull();                    // a document since replaced says nothing
+
+    // Back on the first page — or a design of one page — nothing is remembered.
+    const { load: l2 } = { load: (await ready(again.frame(), 2, ["pages"])).load };
+    fromEditor(again.frame(), "pages", { doc: l2.doc, page: "Post", pages: ["Post", "Story"] });
+    await flush();
+    expect(localStorage.getItem("cycls:design-page:designs/launch.fig")).toBeNull();
+    fromEditor(again.frame(), "pages", { doc: l2.doc, page: "design", pages: ["design"] });
+    await flush();
+    expect(designPage("designs/launch.fig")).toBeUndefined();                // one page: none to name
+  });
+
+  it("an edit that changes the pages re-opens the saved file on the page it ended on", async () => {
+    // A page added, copied, renamed or removed isn't replayed in the live document:
+    // the server saved the edit, and the editor opens that file.
+    localStorage.clear();
+    let v = "v1";
+    const h = versioned(() => v);
+    const { frame } = mount({ host: h });
+    const { post } = await ready(frame(), 2, ["pages"]);
+    const before = frame();
+    v = "v2";
+    await command({ script: "S", version: "v2", page: "Story", reload: true });
+    await flush();
+    expect(post.mock.calls.map((c) => c[0] as Record<string, unknown>).some((m) => m.type === "command")).toBe(false);
+    expect(frame()).not.toBe(before);                                       // a fresh editor…
+    const { load } = await ready(frame(), 2, ["pages"]);
+    expect(h.fetchVersioned).toHaveBeenCalledTimes(2);                      // …on the file as saved
+    expect(load.page).toBe("Story");
+  });
+
+  it("an editor that doesn't know pages is never asked to show one", async () => {
+    const { frame } = mount({ host: versioned(() => "v1") });
+    const { post } = await ready(frame(), 2, ["selection"]);
+    post.mockClear();
+    showDesignPage("designs/launch.fig", "Story");
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it("the editor gets Cycls's language: in its URL, and on every load", async () => {
     const { frame } = mount({ host: versioned(() => "v1") });
     expect(frame().getAttribute("src")).toContain("&lang=en");
@@ -397,6 +476,15 @@ describe("DesignEditorView", () => {
     fromEditor(frame, "exportAs", { doc: load.doc, format: "exe" });         // only what Cycls exports
     await flush();
     expect(h.exportDesign).toHaveBeenCalledOnce();
+
+    // On a design of several pages, it is the page in view.
+    fromEditor(frame, "pages", { doc: load.doc, page: "Story", pages: ["Post", "Story"] });
+    fromEditor(frame, "exportAs", { doc: load.doc, format: "png" });
+    await flush();
+    const again = post.mock.calls.map((c) => c[0] as Record<string, unknown>).filter((m) => m.type === "flush").pop()!;
+    fromEditor(frame, "flushed", { id: again.id, ok: true });
+    await flush();
+    expect(h.exportDesign).toHaveBeenLastCalledWith("designs/launch.fig", "png", "Story");
   });
 
   it("full screen shows Cycls's toasts inside it", async () => {

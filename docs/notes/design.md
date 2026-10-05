@@ -271,6 +271,48 @@ actions in one turn each read the same `.fig` — the later write dropped the ot
 change until they queued. The deck viewer's own drag-to-reorder, duplicate and delete
 go through `POST /deck/<deck>` and the same code.
 
+## Pages
+
+A design's **pages** are its variants — a post, a story and a banner of one campaign; a
+light and a dark version — in one `.fig`. They are OpenPencil's own pages (the editor's
+Pages panel), and Cycls works on **one page at a time**, named by its name:
+
+- **Making them.** `render {spec: {pages: [{name, size, fill, nodes}, …]}}` makes one
+  design of several pages (`_prepare_pages`: each prepared as a design of its own — its
+  own size, a carousel's frames one size); an `edit` adds, copies, renames or removes
+  one with the `page_add {name, spec}` / `page_duplicate` / `page_rename` /
+  `page_delete` ops; or the person adds one in the editor. A deck of layouts is not a
+  page — it is a design of its own, with its deck document.
+- **The agent.** `inspect {name, page?}` and `edit {name, page?, ops}` are about one
+  page (the first when none is named); a design of several lists them in every
+  outline. A render of several pages comes back with every page to look at, each
+  labelled, and a layout check whose findings name their page. "Add selection" says
+  which page the person is on (`[Selected in designs/x.fig page "Story" › …]`).
+- **The files.** One `designs/<name>.fig`. The first page's image is the design's own
+  `<name>.<fmt>`; the others are `<name>-page-2.<fmt>`, `-page-3`, … by their place
+  (`refresh.page_file`), like a carousel's `-slide-N`. A render of pages writes them
+  all; `refresh` keeps them in step: once a design has any page image in a format, each
+  page has one (a page added gets its own, one removed loses it — a page with no frame
+  has none), and a page's `.pdf` / `.pptx` is re-exported where it exists. A design
+  whose pages were all made by hand has none until one is asked for (an export, or an
+  agent's page op).
+- **The routes.** `?as=slides|pptx|pdf|images|png` take `&page=<name>` — the first page
+  without it — cached per page beside the design's other renders (a save drops them
+  all); the slides manifest carries `pages: [{name, frames}]` and `page`. A named
+  page's download is `<name>-<page>.<ext>`. `POST /design/export {path, format, page?}`
+  writes the page's own file (`<name>-page-<n>.<fmt>`). A page that is gone is a 404.
+- **The canvas.** The editor says which pages a design has and the one in view (`pages`,
+  below); a design opens on the page it was left on (this browser's `localStorage`).
+  **Preview** is of the page in view, with the pages as tabs when there are several —
+  a tab shows that page and takes the editor to it, so Edit comes back on the same
+  page; a page of several frames is its slides, an empty one says so. ⋮ › Download PNG /
+  PDF, Export in the editor's menus and a shared design's downloads are all of the page
+  in view; a shared design shows its pages the same way.
+- **An agent's edit, live.** The `design_command` event carries `page` — the page the
+  edit is made on — and the editor shows that page before replaying it. An edit that
+  changes the pages themselves is not replayed: the event says `reload`, and the editor
+  re-opens the saved file on the page the edit ended on.
+
 ## Two channels + the canvas
 
 `_exec_design` (in `_agent/tools`) saves the render to `designs/<name>.<fmt>` and
@@ -428,6 +470,10 @@ Cycls tab opened, and everything it makes lands in the workspace.
   `load` replaces the document. Before this, the editor's own "+", File › New or
   Open, or closing its only tab made the next auto-save write *that* document over
   the workspace file.
+- **Its pages.** `load` may name the `page` to open on; the editor reports `pages
+  {doc, page, pages}` whenever its pages or the one in view change, and shows one on
+  `page {name}` (feature `"pages"`). It gives every page a name of its own — Cycls and
+  the agent name pages — and a page shown for the first time is fitted to the editor.
 - **Saves are confirmed.** Protocol 2: each `load` carries a `doc` tag; the editor's
   `saved {doc, id}` is written to the tab's path and answered with `written {id, ok}`,
   after which the document counts as saved (no dirty dot, no "Leave site?"). A save

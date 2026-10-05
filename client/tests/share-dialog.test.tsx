@@ -67,6 +67,22 @@ describe("a design where there's no editor to open it in (a shared page)", () =>
     expect(openFile).toHaveBeenCalledWith("designs/launch.fig?as=pdf");
   });
 
+  it("a design of several pages shows a page at a time, each with its own downloads", async () => {
+    const pages = [{ name: "Post", frames: 1 }, { name: "Story", frames: 1 }];
+    const of = (page: string) => JSON.stringify({ count: 1, slides: [`data:image/jpeg;base64,${page}`], pages, page });
+    const readFile = vi.fn(async () => of("Story"));
+    const openFile = vi.fn(async () => "blob:png");
+    render(<CanvasDoc file={fig} content={of("Post")} error={false} shared openFile={openFile} readFile={readFile} />);
+    expect(screen.getAllByRole("tab").map((el) => el.textContent)).toEqual(["Post", "Story"]);
+    await act(async () => { fireEvent.click(screen.getByText("Download image")); });
+    expect(openFile).toHaveBeenLastCalledWith("designs/launch.fig?as=png&page=Post");
+    await act(async () => { fireEvent.click(screen.getByRole("tab", { name: "Story" })); });
+    expect(readFile).toHaveBeenCalledWith("designs/launch.fig?as=slides&page=Story", true);
+    expect((screen.getByTestId("design-picture") as HTMLImageElement).src).toBe("data:image/jpeg;base64,Story");
+    await act(async () => { fireEvent.click(screen.getByText("Download PDF")); });
+    expect(openFile).toHaveBeenLastCalledWith("designs/launch.fig?as=pdf&page=Story");
+  });
+
   it("with several frames, shows as a read-only deck", () => {
     render(<CanvasDoc file={fig} content={manifest(3)} error={false} shared openFile={async () => "b"} />);
     expect(screen.getByTestId("deck-counter").textContent).toBe("1 / 3");
