@@ -128,6 +128,29 @@ describe("DeckView", () => {
     vi.unstubAllGlobals();
   });
 
+  it("a deck's editor has Full screen too, on the editor's own box", async () => {
+    // A deck opened in the viewer and switched to Edit had no way to full screen: the
+    // button was only in the canvas header of a design opened as its .fig.
+    vi.stubGlobal("fetch", vi.fn(async () => ({ arrayBuffer: async () => new Uint8Array([1]).buffer })));
+    URL.revokeObjectURL = vi.fn();
+    Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
+    const request = vi.fn(async () => {});
+    Object.defineProperty(Element.prototype, "requestFullscreen", { configurable: true, value: request });
+    try {
+      render(<DeckView data={manifest(2)} path="designs/pitch.deck.json" openFile={async () => "blob:fig"}
+                       writeFile={async () => {}} designEditorUrl="https://ed.example" />);
+      expect(screen.queryByRole("button", { name: "Full screen" })).toBeNull();   // the viewer has Present for that
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Edit" })); });
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Full screen" })); });
+      expect(request).toHaveBeenCalledOnce();
+      expect(request.mock.instances[0]).toBe(document.querySelector("iframe")!.parentElement);   // the editor's box
+    } finally {
+      delete (document as unknown as Record<string, unknown>).fullscreenEnabled;
+      delete (Element.prototype as unknown as Record<string, unknown>).requestFullscreen;
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("Present opens present mode on the current slide, and returns to where it ended", () => {
     render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" />);
     fireEvent.keyDown(screen.getByTestId("deck-view"), { key: "ArrowRight" });

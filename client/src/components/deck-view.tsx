@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DropdownMenu } from "./files";
-import { DesignEditorView, flushDesignEditor, reloadDesignEditors, type DesignHost } from "./design-editor-view";
+import { DesignEditorView, canFullscreen, flushDesignEditor, fullscreenDesignEditor, reloadDesignEditors, type DesignHost } from "./design-editor-view";
 import { PresentMode } from "./present-mode";
 import type { DeckPoll, PollApi } from "../lib/polls";
 import type { WriteFile } from "../hooks/use-files";
@@ -174,6 +174,16 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
           <span className="min-w-0 truncate">{fig}</span>
           <div className="flex-1" />
           <EditPreviewSwitch previewing={false} onEdit={() => {}} onPreview={() => void doneEditing()} />
+          {/* The deck's editor goes full screen like a design's does (a .fig open in
+              the canvas has this button in its header; a deck's editor had none). */}
+          {canFullscreen() && (
+            <button onClick={() => fullscreenDesignEditor(fig)} aria-label={t("fullScreen")} title={t("fullScreen")}
+                    className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer">
+              <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 8.25v-4.5h4.5m7.5 0h4.5v4.5m0 7.5v4.5h-4.5m-7.5 0h-4.5v-4.5" />
+              </svg>
+            </button>
+          )}
         </div>
         <div className="min-h-0 flex-1">
           <DesignEditorView url={editing} path={fig} name={`${name}.fig`} editorUrl={designEditorUrl!}
