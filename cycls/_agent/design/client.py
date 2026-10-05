@@ -93,7 +93,8 @@ class Rendered(NamedTuple):
     follow — kept so a later slide op lays out the same way (None for anything else).
     `pages` is the design's pages — its variants — in order: [{name, frames}]; with more
     than one, `page_images` is each page's own image (its first frame) and
-    `preview_pages` whose page each of `previews` is."""
+    `preview_pages` whose page each of `previews` is. `size` is a document's paper,
+    [W, H] in pixels (None for anything else)."""
     image: bytes
     fig: bytes
     frame_id: object
@@ -108,6 +109,7 @@ class Rendered(NamedTuple):
     pages: list = []
     page_images: list = []
     preview_pages: list = []
+    size: object = None
 
 
 def _b64s(values):
@@ -142,7 +144,8 @@ def _decode(data):
         data.get("dir") if data.get("dir") in ("ltr", "rtl") else None,
         _pages(data),
         _b64s(data.get("page_images_base64")),
-        [str(p) for p in data.get("preview_pages") or []])
+        [str(p) for p in data.get("preview_pages") or []],
+        list(data["size"]) if isinstance(data.get("size"), list) and len(data["size"]) == 2 else None)
 
 
 async def render(spec, fmt="png", scale=2, user_id=None, every=False):

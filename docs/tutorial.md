@@ -402,6 +402,14 @@ The model calls one `design` tool:
   `.fig` whose pages the person switches between in the editor, previews and downloads
   one at a time; `inspect` and `edit` take `page`, and the `page_add` / `page_duplicate`
   / `page_rename` / `page_delete` ops change the pages themselves.
+- **A document** `{document: {title, sections: [{title, blocks: […]}]}}` — a report, a
+  proposal, a guide, a CV: anything read on paper pages and handed over as a **PDF**.
+  The agent writes content, in order — paragraphs, headings, bullets, callouts, stats,
+  charts, tables, images, quotes, columns, cards — and the pages make themselves: text
+  flows from page to page, with a cover, a contents page, running headers and page
+  numbers. The look is the workspace brand kit, or a theme the user or the agent picks.
+  It saves `designs/<name>.pdf` (A4 by default; real, searchable text) and opens in the
+  page viewer; `"replace": true` re-renders the same document after its content changes.
 
 Every render comes back to the model as an image (a deck: every slide) with a layout
 check — overlapping text, text off an edge, too small, low contrast — to fix before it

@@ -40,6 +40,8 @@ export interface DeckManifest {
   // The design's pages — its variants — and the one these slides are (a manifest is one page).
   pages?: { name: string; frames: number }[];
   page?: string;
+  // "document": paper pages that text flows over (a report) — read and downloaded as a PDF.
+  kind?: string;
 }
 
 // A design's pages, to pick one: what a preview shows, a page at a time.
@@ -88,7 +90,7 @@ export function EditPreviewSwitch({ previewing, onEdit, onPreview }: {
 
 const baseName = (path: string) => (path.split("/").pop() || path).replace(/\.deck\.json$|\.fig$/i, "");
 
-export function DeckView({ data, path, openFile, writeFile, designEditorUrl, designHost, onReload, onSlideOp, pollsFor }: {
+export function DeckView({ data, path, openFile, writeFile, designEditorUrl, designHost, onReload, onSlideOp: changeSlides, pollsFor }: {
   data: string;
   path: string;                 // the deck document (or .fig) this manifest is of
   openFile?: (path: string, silent?: boolean) => Promise<string>;   // authed blob URL: downloads, the editor's .fig
@@ -116,6 +118,8 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
   useEscape(() => setConfirmDelete(null), confirmDelete !== null);
   const railRef = useRef<HTMLDivElement>(null);
   const fig = deck?.fig;
+  // A document's pages are numbered and listed in its contents: they aren't moved or removed one by one.
+  const onSlideOp = deck?.kind === "document" ? undefined : changeSlides;
   const name = baseName(fig || path);
   const canEdit = !!(designEditorUrl && writeFile && openFile && fig);
   const hasNotes = !!deck?.notes?.some((n) => n && n.trim());
@@ -153,14 +157,18 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
     openFile(`${path}?as=${format}${page ? `&page=${encodeURIComponent(page)}` : ""}`)
       .then((url) => saveBlob(url, `${name}${page ? `-${page}` : ""}.${format === "images" ? "zip" : format}`)).catch(() => {});
   };
-  // A carousel (square or portrait slides) is posted as images: they come first.
+  // A carousel (square or portrait slides) is posted as images: they come first. A
+  // document is a PDF before it is anything else.
   const [w, h] = deck.sizes?.[0] ?? [16, 9];
+  const paper = deck.kind === "document";
   const images = { label: t("imagesZip"), onClick: () => download("images") };
+  const pdf = { label: t("pdfFile"), onClick: () => download("pdf") };
   const downloads = [
-    ...(w <= h ? [images] : []),
+    ...(paper ? [pdf] : []),
+    ...(w <= h && !paper ? [images] : []),
     { label: t("pptxFile"), onClick: () => download("pptx") },
-    { label: t("pdfFile"), onClick: () => download("pdf") },
-    ...(w <= h ? [] : [images]),
+    ...(paper ? [] : [pdf]),
+    ...(w <= h && !paper ? [] : [images]),
   ];
   const edit = async () => {
     if (!canEdit || !fig) return;
@@ -229,11 +237,11 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
             <button key={m} onClick={() => setMode(m)} aria-pressed={mode === m}
                     className={cn("rounded-md px-2.5 py-1 text-xs transition-colors cursor-pointer",
                                   mode === m ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
-              {m === "stage" ? t("slidesStage") : t("slidesGrid")}
+              {m === "stage" ? t(paper ? "pages" : "slidesStage") : t("slidesGrid")}
             </button>
           ))}
         </div>
-        <span className="ml-2 text-xs text-muted-foreground tabular-nums">{count} {t("slidesStage").toLowerCase()}</span>
+        <span className="ml-2 text-xs text-muted-foreground tabular-nums">{count} {t(paper ? "pages" : "slidesStage").toLowerCase()}</span>
         {busy && <span className="ml-2 text-xs text-muted-foreground">{t("saving")}</span>}
         <div className="flex-1" />
         {openFile && (

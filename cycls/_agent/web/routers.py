@@ -608,7 +608,15 @@ async def _design_slides(root, src, user_id, page=None):
     fig, size = await asyncio.to_thread(_deck_fig, root, src)
     stem, key = _design_cache_key(root, fig)
     cache_dir = root / _DESIGN_CACHE
-    dst = cache_dir / f"{stem}-{key}{_page_tag(page)}.slides.json"
+    kind = ""
+    if src.name.lower().endswith(".deck.json"):      # a document's deck says so: the viewer offers its PDF first
+        try:
+            kind = str(json.loads(await asyncio.to_thread(src.read_text, "utf-8")).get("kind") or "")
+        except (OSError, ValueError, AttributeError):
+            kind = ""
+    # (Asked for through its deck document, the manifest carries the kind: cached apart
+    # from the same slides asked for through the .fig.)
+    dst = cache_dir / f"{stem}-{key}{_page_tag(page)}{'-' + kind if kind in ('document',) else ''}.slides.json"
     if dst.exists():
         return dst
     # ~1920px on the long side: sharp on the stage and in present mode.
@@ -628,6 +636,7 @@ async def _design_slides(root, src, user_id, page=None):
         "fig": fig.relative_to(root).as_posix(),
         "pages": s.get("pages") or [],
         "page": s.get("page") or "",
+        **({"kind": kind} if kind else {}),
     })
     return await asyncio.to_thread(_write_design_cache, cache_dir, stem, key, "slides.json", dst, payload.encode("utf-8"))
 
