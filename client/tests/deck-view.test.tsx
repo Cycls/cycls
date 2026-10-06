@@ -131,6 +131,15 @@ describe("DeckView", () => {
     expect(screen.getAllByTestId("grid-slide")[0].getAttribute("draggable")).toBe("false");
   });
 
+  it("one page is \"1 page\", one slide \"1 slide\"", () => {
+    render(<DeckView data={manifest(1, { kind: "document", sizes: [[1240, 1754]] })} path="designs/cv.deck.json" />);
+    expect(screen.getByText("1 page")).toBeTruthy();
+    expect(screen.queryByText("1 pages")).toBeNull();
+    cleanup();
+    render(<DeckView data={manifest(1)} path="designs/one.deck.json" />);
+    expect(screen.getByText("1 slide")).toBeTruthy();
+  });
+
   it("Edit is offered only with an editor and a workspace to write to", () => {
     const { rerender } = render(<DeckView data={manifest(2)} path="designs/pitch.deck.json" openFile={async () => "b"} />);
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();

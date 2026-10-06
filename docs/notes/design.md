@@ -379,6 +379,11 @@ the pages make themselves.
   title block heads page 1 (`kind`, `title`, `subtitle`, `meta`), sections run on under
   compact headings, a single page has no page number, and a few lines too many for the
   page are set a little tighter to fit (cycls-design `document.js` / `flow.js`).
+  `"max_pages": N` makes it fit N pages by setting its type smaller, down to 85% — or
+  says how much too long it is; an `h2` / `h3` takes `aside` at the end of its line (a
+  role's dates); a key a block doesn't read comes back as a note. These exist because a
+  real agent's first one-page CV took five renders: it wrote dates in a key nothing read,
+  then cut content four times to get back to one page.
 - **Richer content.** A `p` takes `aside` (a note in the margin); `[^key]` cites the
   document's `footnotes: {key: text}` (numbered, set at the section's end); `numbering:
   true` numbers figures and tables; links are links in the PDF. A chart or a table can
