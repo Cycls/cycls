@@ -241,7 +241,9 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
             </button>
           ))}
         </div>
-        <span className="ml-2 text-xs text-muted-foreground tabular-nums">{count} {t(paper ? "pages" : "slidesStage").toLowerCase()}</span>
+        <span className="ml-2 text-xs text-muted-foreground tabular-nums">
+          {count === 1 ? t(paper ? "onePage" : "oneSlide") : `${count} ${t(paper ? "pages" : "slidesStage").toLowerCase()}`}
+        </span>
         {busy && <span className="ml-2 text-xs text-muted-foreground">{t("saving")}</span>}
         <div className="flex-1" />
         {openFile && (
