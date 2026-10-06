@@ -144,9 +144,11 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
 
   // Render-time, not an effect — child mount-effects fire requests before
   // parent effects would register the token getter.
-  chat.setGetToken(() => getToken());
-  files.setGetToken(() => getToken());
-  ws.setGetToken(() => getToken());
+  // (`fresh`: a token fetched now — what a request refused with a 401 is asked again with.)
+  const token = (fresh?: boolean) => getToken(fresh ? { skipCache: true } : undefined);
+  chat.setGetToken(token);
+  files.setGetToken(token);
+  ws.setGetToken(token);
 
   // A persisted selection that no longer resolves falls back to personal.
   useEffect(() => {

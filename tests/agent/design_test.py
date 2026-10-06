@@ -1703,3 +1703,193 @@ def test_an_argument_sent_as_its_json_text_is_read_as_the_object(tmp_path, monke
     # Text that isn't an object is still told what's needed.
     assert "needs a `spec` object" in asyncio.run(_exec_design({"action": "render", "name": "x", "spec": "a poster, please"}, _ws(tmp_path)))
     assert "needs a `spec` object" in asyncio.run(_exec_design({"action": "render", "name": "x", "spec": ""}, _ws(tmp_path)))
+
+
+# ---- a document's own changes: the part that changes is sent, not the whole document ----
+
+def _saved_document(tmp_path, monkeypatch, name="report"):
+    doc = {"title": "State of Coffee", "author": "Brewly", "theme": "editorial", "sections": [
+        {"title": "Summary", "blocks": [{"lead": "Demand grew 18%."}, "A paragraph."]},
+        {"title": "Numbers", "blocks": [{"table": {"columns": ["A"], "rows": [["1"]]}}]},
+        {"title": "Outlook", "blocks": ["Short."]}]}
+    _doc_render(monkeypatch, fig=b"FIG-ONE")
+    asyncio.run(_exec_design({"action": "render", "name": name, "spec": {"document": doc}}, _ws(tmp_path)))
+    return doc
+
+
+def _source(tmp_path, name="report"):
+    return json.loads((tmp_path / "designs" / f"{name}.deck.json").read_text(encoding="utf-8"))["document"]
+
+
+def test_a_documents_sections_are_added_rewritten_moved_and_removed_in_place(tmp_path, monkeypatch):
+    from cycls._agent import versions
+    ws = _ws(tmp_path)
+    _saved_document(tmp_path, monkeypatch)
+    calls = _doc_render(monkeypatch, pages=4, fig=b"FIG-TWO")
+    run = lambda inp: asyncio.run(_exec_design({"name": "report", **inp}, ws))
+
+    out = run({"action": "update_section", "number": 2, "section": {"blocks": ["Rewritten.", {"note": "Source: a panel."}]}})
+    # The whole document goes to the service — the section changed, the rest as it was — and it stays one document.
+    assert [s["title"] for s in calls["spec"]["document"]["sections"]] == ["Summary", "Numbers", "Outlook"]
+    assert calls["spec"]["document"]["sections"][1]["blocks"] == ["Rewritten.", {"note": "Source: a panel."}]
+    assert calls["spec"]["document"]["sections"][0]["blocks"] == [{"lead": "Demand grew 18%."}, "A paragraph."]
+    assert _source(tmp_path)["sections"][1]["blocks"][0] == "Rewritten."
+    assert "Document re-rendered (designs/report.pdf, 4 pages" in out["_model"][-1]["text"]
+    assert [e["action"] for e in out["_ui"]] == ["design_command", "open_canvas"]
+    assert sorted(p.name for p in (tmp_path / "designs").iterdir() if p.is_file()) == ["report.deck.json", "report.fig", "report.pdf"]
+    assert len(versions.listing(tmp_path, "designs/report.fig")) == 1                       # the earlier pages are kept
+
+    run({"action": "update_section", "number": 1, "section": {"title": "Executive summary"}})   # a title alone: its blocks stay
+    assert _source(tmp_path)["sections"][0] == {"title": "Executive summary", "blocks": [{"lead": "Demand grew 18%."}, "A paragraph."]}
+
+    run({"action": "add_section", "at": 2, "section": {"title": "Method", "blocks": ["How it was measured."]}})
+    assert [s["title"] for s in _source(tmp_path)["sections"]] == ["Executive summary", "Method", "Numbers", "Outlook"]
+    run({"action": "add_section", "section": {"title": "Appendix", "blocks": ["Tables."]}})       # no `at`: the end
+    run({"action": "move_section", "number": 5, "to": 2})
+    assert [s["title"] for s in _source(tmp_path)["sections"]] == ["Executive summary", "Appendix", "Method", "Numbers", "Outlook"]
+    run({"action": "delete_section", "number": 2})
+    assert [s["title"] for s in _source(tmp_path)["sections"]] == ["Executive summary", "Method", "Numbers", "Outlook"]
+
+    # Its title, look and cover: the keys given are changed, null takes one away, the sections stay.
+    run({"action": "update_document", "document": {"title": "State of Coffee 2026", "theme": "corporate", "author": None,
+                                                   "cover": {"style": "band"}}})
+    src = _source(tmp_path)
+    assert (src["title"], src["theme"], src["cover"], "author" in src, len(src["sections"])) == ("State of Coffee 2026", "corporate", {"style": "band"}, False, 4)
+    assert calls["spec"]["document"]["theme"] == "corporate"
+
+
+def test_a_section_action_that_cannot_be_made_says_why_and_changes_nothing(tmp_path, monkeypatch):
+    ws = _ws(tmp_path)
+    doc = _saved_document(tmp_path, monkeypatch)
+    calls = _doc_render(monkeypatch)
+    run = lambda inp: asyncio.run(_exec_design({"name": "report", **inp}, ws))
+    assert "has 3 sections" in run({"action": "update_section", "number": 7, "section": {"blocks": ["x"]}})
+    assert "`number`" in run({"action": "delete_section"})
+    assert "needs `section`" in run({"action": "add_section"})
+    assert "needs `section`" in run({"action": "update_section", "number": 1})
+    assert "needs `document`" in run({"action": "update_document"})
+    assert "`sections`" in run({"action": "update_document", "document": {"sections": []}})      # that's what the section actions are for
+    for n in (1, 1):
+        run({"action": "delete_section", "number": n})
+    assert "keeps at least one section" in run({"action": "delete_section", "number": 1})
+    assert "renders" in calls and calls["renders"] == 2 and len(_source(tmp_path)["sections"]) == 1
+    # A deck, or a design that isn't there, isn't a document.
+    _fake_render(monkeypatch, image=b"PPTX", previews=[b"J1", b"J2"], slides=[{"name": "a"}, {"name": "b"}])
+    asyncio.run(_exec_design({"action": "render", "name": "pitch", "format": "pptx", "spec": {"frames": [{"size": "slide"}, {"size": "slide"}]}}, ws))
+    assert "isn't a document" in asyncio.run(_exec_design({"action": "delete_section", "name": "pitch", "number": 1}, ws))
+    assert "isn't a document" in asyncio.run(_exec_design({"action": "add_section", "name": "nope", "section": {"title": "A", "blocks": ["x"]}}, ws))
+    # What the service refuses (a block it doesn't know) leaves the document as it was.
+    async def refuse(spec, **kw):
+        raise RuntimeError('section 1 (Outlook), block 1: unknown block "sparkles"')
+    monkeypatch.setattr("cycls._agent.design.render", refuse)
+    before = _source(tmp_path)
+    assert 'unknown block "sparkles"' in run({"action": "update_section", "number": 1, "section": {"blocks": [{"sparkles": 1}]}})
+    assert _source(tmp_path) == before
+
+
+def test_inspect_lists_a_documents_sections(tmp_path, monkeypatch):
+    _saved_document(tmp_path, monkeypatch)
+
+    async def outline(fig, user_id=None, page=None):
+        return {"frames": [{"slide": 1, "name": "cover", "size": [1240, 1754], "nodes": []}], "pages": [], "page": ""}
+    monkeypatch.setattr("cycls._agent.design.outline", outline)
+    text = asyncio.run(_exec_design({"action": "inspect", "name": "report"}, _ws(tmp_path)))
+    assert "A document of 3 sections" in text
+    assert "1. Summary — lead, p" in text and "2. Numbers — table" in text and "3. Outlook — p" in text
+    assert "update_section" in text
+
+
+# ---- charts and tables straight from a workspace spreadsheet ----
+
+def test_a_chart_and_a_table_are_read_from_a_workspace_spreadsheet(tmp_path, monkeypatch):
+    _img(tmp_path, "data/quarters.csv", "Quarter,2025,2026,Note\nQ1,96.2,104.1,a\nQ2,98.9,106.4,b\nQ3,101.3,108.7,c\n".encode("utf-8-sig"))
+    calls = _doc_render(monkeypatch)
+    doc = {"title": "T", "sections": [{"title": "A", "blocks": [
+        {"chart": {"kind": "column", "from": "data/quarters.csv"}, "caption": "By quarter"},
+        {"chart": {"kind": "line", "from": "data/quarters.csv", "x": "Quarter", "y": ["2026"]}},
+        {"table": {"from": "data/quarters.csv", "columns": ["Quarter", "2026"], "limit": 2}, "caption": "Latest"},
+        {"table": {"from": "data/quarters.csv"}}]}]}
+    asyncio.run(_exec_design({"action": "render", "name": "r", "spec": {"document": doc}}, _ws(tmp_path)))
+    blocks = calls["spec"]["document"]["sections"][0]["blocks"]
+    # Numbers are numbers; the first column names the points; the columns that aren't numbers are left out.
+    assert blocks[0]["chart"] == {"kind": "column", "data": {"labels": ["Q1", "Q2", "Q3"], "series": [
+        {"name": "2025", "values": [96.2, 98.9, 101.3]}, {"name": "2026", "values": [104.1, 106.4, 108.7]}]}}
+    assert blocks[1]["chart"]["data"] == {"labels": ["Q1", "Q2", "Q3"], "series": [{"name": "2026", "values": [104.1, 106.4, 108.7]}]}
+    assert blocks[2]["table"] == {"columns": ["Quarter", "2026"], "rows": [["Q1", "104.1"], ["Q2", "106.4"]]}
+    assert blocks[3]["table"] == {"columns": ["Quarter", "2025", "2026", "Note"], "rows": [["Q1", "96.2", "104.1", "a"], ["Q2", "98.9", "106.4", "b"], ["Q3", "101.3", "108.7", "c"]]}
+    # The document's kept source names the file, not its rows: a re-render reads it again.
+    kept = json.loads((tmp_path / "designs" / "r.deck.json").read_text(encoding="utf-8"))["document"]["sections"][0]["blocks"]
+    assert kept[0]["chart"] == {"kind": "column", "from": "data/quarters.csv"}
+
+
+def test_what_is_wrong_with_a_spreadsheet_is_said_in_words(tmp_path, monkeypatch):
+    _img(tmp_path, "data/q.csv", b"Quarter,2025\nQ1,96.2\n")
+    _img(tmp_path, "data/words.csv", b"Name,City\nA,Riyadh\n")
+    calls = _doc_render(monkeypatch)
+    run = lambda block: asyncio.run(_exec_design({"action": "render", "name": "r", "spec": {"document": {
+        "title": "T", "sections": [{"title": "A", "blocks": [block]}]}}}, _ws(tmp_path)))
+    assert "data/missing.csv" in run({"chart": {"from": "data/missing.csv"}})
+    assert 'no column "2030"' in run({"chart": {"from": "data/q.csv", "y": ["2030"]}}) and "Quarter, 2025" in run({"chart": {"from": "data/q.csv", "y": ["2030"]}})
+    assert "no column of numbers" in run({"chart": {"from": "data/words.csv"}})
+    assert ".csv" in run({"table": {"from": "notes/readme.md"}})
+    assert "renders" not in calls
+
+
+def test_a_spreadsheet_xlsx_is_read_when_openpyxl_is_there(tmp_path, monkeypatch):
+    openpyxl = pytest.importorskip("openpyxl")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Teams"
+    for row in (["Team", "Headcount"], ["Engineering", 184], ["Design", 46]):
+        wb.active.append(row)
+    (tmp_path / "data").mkdir()
+    wb.save(tmp_path / "data" / "teams.xlsx")
+    calls = _doc_render(monkeypatch)
+    asyncio.run(_exec_design({"action": "render", "name": "r", "spec": {"document": {"title": "T", "sections": [{"title": "A", "blocks": [
+        {"table": {"from": "data/teams.xlsx"}}, {"chart": {"kind": "bar", "from": "data/teams.xlsx", "sheet": "Teams"}}]}]}}}, _ws(tmp_path)))
+    blocks = calls["spec"]["document"]["sections"][0]["blocks"]
+    assert blocks[0]["table"] == {"columns": ["Team", "Headcount"], "rows": [["Engineering", "184"], ["Design", "46"]]}
+    assert blocks[1]["chart"]["data"] == {"labels": ["Engineering", "Design"], "series": [{"name": "Headcount", "values": [184, 46]}]}
+
+
+# ---- from an existing PDF: its words and its pictures, to make a document of ----
+
+def test_a_pdfs_text_and_pictures_are_taken_out_for_a_redesign(tmp_path, monkeypatch):
+    import pathlib
+    from cycls._agent.tools import _pdf_parts
+    _img(tmp_path, "attachments/old-report.pdf", b"%PDF-1.4 fake")
+    ran = []
+
+    async def tool(*argv, timeout=60):
+        ran.append(argv)
+        if argv[0] == "pdfinfo":
+            return 0, b"Title:          Old Report\nPages:          3\nPage size:      595 x 842 pts (A4)\n"
+        if argv[0] == "pdftotext":
+            return 0, "Old Report\n\nA first page of text.\n\fSecond page.\n\f\fTrailing".encode()
+        if argv[0] == "pdfimages":
+            prefix = pathlib.Path(argv[-1])
+            (prefix.parent / f"{prefix.name}-000.png").write_bytes(_png(1600, 900))
+            (prefix.parent / f"{prefix.name}-001.jpg").write_bytes(_jpeg(1200, 800))
+            (prefix.parent / f"{prefix.name}-002.png").write_bytes(_png(24, 24))            # an icon: left behind
+            (prefix.parent / f"{prefix.name}-003.png").write_bytes(_png(1600, 900))          # the same picture again
+            return 0, b""
+        return 1, b""
+    monkeypatch.setattr("cycls._agent.tools._run_tool", tool)
+    out = asyncio.run(_exec_design({"action": "extract", "path": "attachments/old-report.pdf", "name": "old-report"}, _ws(tmp_path)))
+    assert isinstance(out, str)
+    assert "attachments/old-report.pdf — 3 pages" in out and "Old Report" in out
+    assert "Page 1:" in out and "A first page of text." in out and "Page 2:" in out and "Second page." in out
+    saved = sorted(p.name for p in (tmp_path / "designs" / "old-report-assets").iterdir())
+    assert saved == ["picture-1.png", "picture-2.jpg"]                                       # no icon, no repeat
+    assert "designs/old-report-assets/picture-1.png (1600×900)" in out and "designs/old-report-assets/picture-2.jpg (1200×800)" in out
+    assert '"image": "designs/old-report-assets/picture-1.png"' in out                       # how to use one
+    assert _pdf_parts is not None
+    # Not a PDF, not there, no poppler: said in words.
+    run = lambda path: asyncio.run(_exec_design({"action": "extract", "path": path}, _ws(tmp_path)))
+    assert "doesn't exist" in run("attachments/none.pdf")
+    _img(tmp_path, "attachments/notes.txt", b"hi")
+    assert "a PDF" in run("attachments/notes.txt")
+
+    async def missing(*argv, timeout=60):
+        raise FileNotFoundError(argv[0])
+    monkeypatch.setattr("cycls._agent.tools._run_tool", missing)
+    assert "poppler" in run("attachments/old-report.pdf")

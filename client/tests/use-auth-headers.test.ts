@@ -5,7 +5,7 @@
  */
 import { renderHook } from "@testing-library/react";
 import { describe, test, expect, afterEach, vi } from "vitest";
-import { useAuthHeaders, setActiveWorkspace } from "../src/hooks/use-auth-headers";
+import { useAuthHeaders, setActiveWorkspace, fetchAuthed } from "../src/hooks/use-auth-headers";
 import { useChat } from "../src/hooks/use-chat";
 
 vi.mock("../src/lib/analytics", () => ({ track: vi.fn() }));
@@ -68,4 +68,38 @@ test("forkShare reattaches ?ws= after the /fork segment", async () => {
   await result.current.forkShare("org_1:user_1/tok123?ws=t-abc");
   expect(fetchMock).toHaveBeenCalledWith("/share/org_1:user_1/tok123/fork?ws=t-abc",
     expect.objectContaining({ method: "POST" }));
+});
+
+// A tab left in the background: the browser throttles the token's refresh, the cached
+// one goes stale, and the first request on coming back was a bare "HTTP 401".
+describe("a stale token", () => {
+  test("a 401 is asked once more with a token fetched afresh", async () => {
+    const { result } = renderHook(() => useAuthHeaders());
+    const tokens = vi.fn(async (fresh?: boolean) => (fresh ? "new" : "stale"));
+    result.current.setGetToken(tokens);
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) =>
+      new Response("", { status: (init.headers as Record<string, string>).Authorization === "Bearer new" ? 200 : 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await fetchAuthed("/chat", { method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(tokens.mock.calls.map((c) => !!c[0])).toEqual([false, true]);
+    const again = fetchMock.mock.calls[1][1] as RequestInit;
+    expect(again.method).toBe("POST");
+    expect(again.body).toBe("{}");                                   // the same request, whole
+    expect((again.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+  });
+
+  test("a second 401 is the answer, and nothing else is asked twice", async () => {
+    const { result } = renderHook(() => useAuthHeaders());
+    result.current.setGetToken(async () => "tok");
+    const always = vi.fn(async () => new Response("", { status: 401 }));
+    vi.stubGlobal("fetch", always);
+    expect((await fetchAuthed("/files")).status).toBe(401);
+    expect(always).toHaveBeenCalledTimes(2);
+    const forbidden = vi.fn(async () => new Response("", { status: 403 }));
+    vi.stubGlobal("fetch", forbidden);
+    expect((await fetchAuthed("/files")).status).toBe(403);
+    expect(forbidden).toHaveBeenCalledTimes(1);
+  });
 });

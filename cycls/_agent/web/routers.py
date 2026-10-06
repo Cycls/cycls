@@ -1343,6 +1343,13 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
                 await asyncio.to_thread(versions.move, ws.root, Path(rel).as_posix(), Path(dst).as_posix())
             except OSError as e:   # the file has moved: its history staying behind must not fail the rename
                 log("warn", message=f"history of {rel} did not follow it to {dst}: {type(e).__name__}: {e}")
+            if dest.suffix.lower() == ".fig" and Path(rel).suffix.lower() == ".fig":
+                # …and so does what is kept beside it: its images, its PDF, its deck document.
+                from cycls._agent.design import refresh
+                try:
+                    await asyncio.to_thread(refresh.follow, ws.root, Path(rel).as_posix(), Path(dst).as_posix())
+                except OSError as e:
+                    log("warn", message=f"the files beside {rel} did not follow it to {dst}: {type(e).__name__}: {e}")
         if was_app and trash.kind_of(dst, True) == "app":
             await _move_app_data(ws, rel.split("/")[1], dst.split("/")[1])
         _catalog_drop(ws.root)

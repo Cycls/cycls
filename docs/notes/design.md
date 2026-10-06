@@ -344,7 +344,14 @@ the pages make themselves.
   "document"`, the paper `size`, and `document`: the source as the agent wrote it (paths,
   not image bytes).
 - **Changing one.** A small fix on one page — a word, a colour — is an ordinary `edit`
-  (ops with `frame`: the page, from 0). Anything that changes the length is the same
+  (ops with `frame`: the page, from 0). Anything that changes the length is made on the
+  document itself — **`update_section {name, number, section}`** (just the keys that
+  change: `{blocks}` rewrites it, `{title}` renames it), **`add_section {name, section,
+  at?}`**, **`move_section {name, number, to}`**, **`delete_section {name, number}`**,
+  **`update_document {name, document}`** (its title, theme, cover… — `null` removes a
+  key): the SDK changes the kept source (`_exec_document`) and renders it again in place,
+  so the model sends the part that changes, not the whole document; `inspect` lists the
+  sections by number. Nothing is saved unless the render succeeds. Or the whole
   `render` again with **`replace: true`**: the same name, the earlier `.fig` kept as a
   version (History restores it), and what is open follows — the event list is a
   `design_command` with `reload` (an open editor re-opens the file, the viewer fetches
@@ -354,6 +361,18 @@ the pages make themselves.
 - **Arguments as text.** Some models hand a large nested argument over as a JSON string;
   `spec`, `ops` and `slide` given that way are read as the object (seen on prod with a
   document's spec — it used to cost a refused call).
+- **Richer content.** A `p` takes `aside` (a note in the margin); `[^key]` cites the
+  document's `footnotes: {key: text}` (numbered, set at the section's end); `numbering:
+  true` numbers figures and tables; links are links in the PDF. A chart or a table can
+  read a workspace spreadsheet instead of carrying its data — `"chart": {kind, "from":
+  "data/sales.csv", x?, y?: [columns]}`, `"table": {"from": "data/sales.csv", columns?,
+  limit?}` (`_sheet` / `_block_data`: `.csv`, `.tsv`, and `.xlsx` when the agent's image
+  has openpyxl; the kept source names the file, so a re-render reads it again).
+- **From an existing PDF.** `extract {path, name?}` takes a PDF apart to be redesigned
+  (`_pdf_parts`, poppler's `pdftotext` and `pdfimages`): its text page by page (capped —
+  the Read tool shows the rest) and its pictures — photographs and figures of 200 px or
+  more, each once — saved into `designs/<name>-assets/`. The model then writes it as a
+  document that uses them.
 - **QA.** Every page comes back to the model (the first twelve of a long document), with
   the layout check — text sized for paper, not a slide — and the service's notes in
   words: a block taller than a page, a page a section left nearly empty.
@@ -364,6 +383,17 @@ the pages make themselves.
 - **The PDF.** Real text in its own embedded fonts, A4 (or the paper asked for), a few
   KB a text page, an outline of the sections, a contents page whose rows are links.
   `?as=pdf` on the deck document writes it from the `.fig`, so it is what was last saved.
+
+## Two smaller things
+
+- **A renamed design takes its files with it.** `PATCH /files/<x>.fig` moved the `.fig`
+  alone and left its image, its slides' and pages' images, its PDF and its deck document
+  under the old name. `refresh.follow` now moves them too (never over a file already
+  there) and rewrites the deck document's `fig` / `exports`.
+- **A stale token is asked again.** In a tab left in the background the browser
+  throttles Clerk's token refresh, and the first request on coming back was a bare
+  "HTTP 401". `fetchAuthed` (client `use-auth-headers.ts`, used by `useApi` and the chat
+  send) asks once more with a token fetched afresh (`getToken({skipCache: true})`).
 
 ## Two channels + the canvas
 

@@ -425,15 +425,26 @@ _DESIGN_TOOL = {
         "to a band, a diagram or screenshot shown whole (\"fit\": \"cover\"|\"contain\" to say) · "
         "\"columns\": [[blocks],[blocks]] · "
         "\"cards\": [{icon?, title, text}] · \"pairs\": [[label, value]] · \"note\" (a source) · "
-        "\"nodes\": [spec nodes] + \"h\" (a hand-built area) · \"break\". Write it as a real document: "
+        "\"nodes\": [spec nodes] + \"h\" (a hand-built area) · \"break\". A `p` takes \"aside\": a short "
+        "note in the margin beside it; `[^key]` in any text cites the document's \"footnotes\": {key: text} "
+        "(numbered, set at the end of the section); \"numbering\": true numbers figures and tables; a chart "
+        "or table can read a workspace spreadsheet instead of carrying its data — \"chart\": {kind, "
+        "\"from\": \"data/sales.csv\", x?, y?: [columns]} · \"table\": {\"from\": \"data/sales.csv\", columns?, "
+        "limit?} (.csv, .tsv, .xlsx). A section opens a new page, or runs on under a few lines left over "
+        "(\"break\": \"page\" forces one, \"none\" never). Write it as a real document: "
         "open each section with what it found, real numbers, a caption on every chart and table, short "
         "paragraphs. The LOOK is yours to choose unless the user says: the workspace brand kit when "
         "there is one (the default), else a theme that fits the subject — and its accent or fonts "
         "overridden ({base, accent, heading, body}) when that fits better. It saves designs/<name>.pdf "
         "and opens in the page viewer; every page comes back to you to QA. A small fix on one page is "
-        "an `edit` (ops with `frame`: the page, from 0); anything that changes the length — rewriting, "
-        "adding a section — is the same render again with \"replace\": true (the earlier version is "
-        "kept), not an edit and not a new name.\n"
+        "an `edit` (ops with `frame`: the page, from 0). Anything that changes the length is made on the "
+        "document itself, and only the part that changes is sent: update_section {name, number, section: "
+        "{title?, blocks?}} · add_section {name, section, at?} · move_section {name, number, to} · "
+        "delete_section {name, number} · update_document {name, document: {title?, theme?, cover?, …}} — "
+        "`inspect` lists its sections; it is rendered again in place (the earlier version is kept). Or "
+        "the whole render again with \"replace\": true. Never a new name for a change.\n"
+        "- extract {path, name?} — an EXISTING PDF taken apart to be redesigned: its text page by page, "
+        "and its pictures saved into designs/<name>-assets/ to use again; then write it as a document.\n"
         "- script {script, name, format?} — escape hatch: a raw OpenPencil / Figma "
         "plugin-API script for what the spec can't express. It MUST end with "
         "`console.log('__FRAME__'+frame.id)` naming the frame to export.\n"
@@ -485,14 +496,18 @@ _DESIGN_TOOL = {
         "it gets a numeric suffix (`launch-2`); to CHANGE an existing design use `edit`."
     ),
     "input_schema": {"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["render", "script", "edit", "inspect", "add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide"],
-                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes), `edit` it (checked, saved, replayed live in the editor), or change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide."},
+        "action": {"type": "string", "enum": ["render", "script", "edit", "inspect", "add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide",
+                                              "add_section", "update_section", "move_section", "delete_section", "update_document", "extract"],
+                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes; a document's sections), `edit` it (checked, saved, replayed live in the editor), change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide, change a document: add_section / update_section / move_section / delete_section / update_document, or `extract` an existing PDF's text and pictures."},
+        "section": {"type": "object", "description": "For add_section / update_section: the section {title, blocks: […]}. update_section takes just the keys that change — {blocks} rewrites it, {title} renames it."},
+        "document": {"type": "object", "description": "For update_document: the document's own keys that change — title, subtitle, author, date, theme, cover, size, footnotes, numbering… (null removes one). Not its sections."},
+        "path": {"type": "string", "description": "For `extract`: the PDF in the workspace, e.g. attachments/report.pdf."},
         "page": {"type": "string", "description": "For `inspect` / `edit` on a design with several pages: the page's name (default: the first page)."},
         "replace": {"type": "boolean", "description": "For `render` of a document: re-render it under the SAME name (after changing its content) instead of making a new one; the earlier version is kept in its history."},
         "slide": {"type": "object", "description": "For add_slide / update_slide: the slide — a layout slide {layout, …slots, notes?} laid out with the deck's own theme and footer, or a hand-built one {nodes, fill?}. update_slide replaces the slide whole: start from its `source` in inspect and change what you need."},
-        "number": {"type": "integer", "description": "For update_slide / move_slide / duplicate_slide / delete_slide: the slide's number, from 1."},
-        "to": {"type": "integer", "description": "For move_slide: the position it moves to, from 1."},
-        "at": {"type": "integer", "description": "For add_slide: the position of the new slide, from 1 (default: the end)."},
+        "number": {"type": "integer", "description": "For update_slide / move_slide / duplicate_slide / delete_slide: the slide's number, from 1. For update_section / move_section / delete_section: the section's."},
+        "to": {"type": "integer", "description": "For move_slide / move_section: the position it moves to, from 1."},
+        "at": {"type": "integer", "description": "For add_slide / add_section: the position of the new one, from 1 (default: the end)."},
         "notes": {"type": "string", "description": "For update_slide without `slide`: the slide's new speaker notes (also `title`, `transition`)."},
         "title": {"type": "string", "description": "For update_slide without `slide`: the slide's title (its name in the deck viewer)."},
         "transition": {"type": "string", "enum": ["fade", "slide", "none"], "description": "For update_slide without `slide`: how the slide enters when presented."},
@@ -1824,6 +1839,110 @@ def _prepare_deck(spec, brand, root):
 _PAPER = {"a4": [1240, 1754], "letter": [1275, 1650], "a5": [874, 1240], "a3": [1754, 2480]}   # px at 150 dpi
 
 
+_SHEET_ROWS = 2000      # rows read from a spreadsheet for a chart or a table
+
+
+def _number(text):
+    """A cell as a number — 1,204.5, 12%, (30) — or None."""
+    if isinstance(text, bool):
+        return None
+    if isinstance(text, (int, float)):
+        return text
+    s = str(text or "").strip().replace(",", "").replace("\u00a0", "").replace(" ", "")
+    if not s:
+        return None
+    negative = s.startswith("(") and s.endswith(")")
+    s = s.strip("()").rstrip("%").lstrip("$€£")
+    try:
+        v = float(s)
+    except ValueError:
+        return None
+    v = -v if negative else v
+    return int(v) if v.is_integer() and "." not in s else v
+
+
+def _sheet(src, root, sheet=None):
+    """A workspace spreadsheet — .csv / .tsv, or .xlsx (its first sheet, or `sheet`) —
+    → (columns, rows): the first row names the columns. Raises ValueError with the fix."""
+    if not isinstance(src, str) or not src.strip():
+        raise ValueError('`from` is a workspace spreadsheet, e.g. "data/sales.csv"')
+    path = _resolve_path(src, root)
+    ext = path.suffix.lower()
+    if ext not in (".csv", ".tsv", ".xlsx"):
+        raise ValueError(f"{src} isn't a spreadsheet this reads — use a .csv, .tsv or .xlsx file")
+    if not path.is_file():
+        raise ValueError(f"{src} does not exist in the workspace")
+    if ext == ".xlsx":
+        try:
+            import openpyxl
+        except ImportError:
+            raise ValueError(f"{src}: reading .xlsx needs openpyxl in this agent's image — save the sheet as .csv instead")
+        book = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        try:
+            if sheet is not None and str(sheet) not in book.sheetnames:
+                raise ValueError(f"{src} has no sheet {str(sheet)!r} — its sheets: {', '.join(book.sheetnames)}")
+            ws = book[str(sheet)] if sheet is not None else book[book.sheetnames[0]]
+            table = [list(r) for _, r in zip(range(_SHEET_ROWS + 1), ws.iter_rows(values_only=True))]
+        finally:
+            book.close()
+    else:
+        import csv
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+        table = [r for _, r in zip(range(_SHEET_ROWS + 1), csv.reader(text.splitlines(), delimiter="\t" if ext == ".tsv" else ","))]
+    table = [r for r in table if any(c not in (None, "") for c in r)]
+    if len(table) < 2:
+        raise ValueError(f"{src} needs a header row and at least one row of data")
+    cell = lambda v: "" if v is None else str(int(v)) if isinstance(v, float) and v.is_integer() else str(v).strip()
+    columns = [cell(c) or f"Column {i + 1}" for i, c in enumerate(table[0])]
+    rows = [[r[i] if i < len(r) else None for i in range(len(columns))] for r in table[1:]]
+    return columns, rows, cell
+
+
+def _block_data(b, root):
+    """A chart or a table that names its data — {"from": "data/sales.csv", …} — filled
+    from that file: a chart's `x` (the column of labels; the first when not said) and `y`
+    (the columns of numbers; every one when not said), a table's `columns` (a choice, in
+    order) and `limit`. Raises ValueError with the fix."""
+    chart, table = b.get("chart"), b.get("table")
+    if isinstance(chart, dict) and chart.get("from"):
+        columns, rows, cell = _sheet(chart["from"], root, chart.get("sheet"))
+
+        def col(name):
+            if str(name) not in columns:
+                raise ValueError(f"{chart['from']} has no column {json.dumps(str(name))} — its columns: {', '.join(columns)}")
+            return columns.index(str(name))
+        x = col(chart["x"]) if chart.get("x") is not None else 0
+        given = chart.get("y")
+        ys = [col(y) for y in (given if isinstance(given, list) else [given])] if given is not None else [
+            i for i in range(len(columns)) if i != x and rows and all(_number(r[i]) is not None for r in rows if r[i] not in (None, ""))
+            and any(r[i] not in (None, "") for r in rows)]
+        if not ys:
+            raise ValueError(f"{chart['from']} has no column of numbers to chart — its columns: {', '.join(columns)}")
+        series = []
+        for i in ys:
+            values = [_number(r[i]) for r in rows]
+            if any(v is None for v in values):
+                raise ValueError(f"{chart['from']}: column {json.dumps(columns[i])} isn't all numbers")
+            series.append({"name": columns[i], "values": values})
+        rest = {k: v for k, v in chart.items() if k not in ("from", "sheet", "x", "y")}
+        b["chart"] = {**rest, "data": {"labels": [cell(r[x]) for r in rows], "series": series}}
+    if isinstance(table, dict) and table.get("from"):
+        columns, rows, cell = _sheet(table["from"], root, table.get("sheet"))
+        pick = table.get("columns")
+        if isinstance(pick, list) and pick:
+            missing = [str(c) for c in pick if str(c) not in columns]
+            if missing:
+                raise ValueError(f"{table['from']} has no column {json.dumps(missing[0])} — its columns: {', '.join(columns)}")
+            order = [columns.index(str(c)) for c in pick]
+        else:
+            order = list(range(len(columns)))
+        limit = _num(table.get("limit"))
+        if limit and limit > 0:
+            rows = rows[:int(limit)]
+        rest = {k: v for k, v in table.items() if k not in ("from", "sheet", "columns", "limit")}
+        b["table"] = {**rest, "columns": [columns[i] for i in order], "rows": [[cell(r[i]) for i in order] for r in rows]}
+
+
 def _prepare_document(spec, brand, root):
     """A document — {document: {title, sections: [{title, blocks: […]}]}} — made ready for
     the service, which designs and paginates it (cycls-design document.js / flow.js):
@@ -1871,6 +1990,7 @@ def _prepare_document(spec, brand, root):
             b["columns"] = [[block(x) for x in col] if isinstance(col, list) else block(col) for col in b["columns"]]
         if isinstance(b.get("nodes"), list):
             b["nodes"] = nodes_of(b["nodes"], [100000, 100000])
+        _block_data(b, root)                                  # a chart / a table read from a spreadsheet
         return b
 
     theme = doc.get("theme")
@@ -2019,6 +2139,182 @@ def _dedupe_design_name(designs_dir, name, fmt):
 
 
 _SLIDE_ACTIONS = ("add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide")
+_DOCUMENT_ACTIONS = ("add_section", "update_section", "move_section", "delete_section", "update_document")
+_BLOCK_KINDS = ("lead", "p", "h2", "h3", "bullets", "numbered", "callout", "quote", "stats", "chart", "table", "image",
+                "columns", "cards", "pairs", "note", "nodes", "break")
+
+
+def _document_source(root, name):
+    """The source a document was rendered from (kept in its deck document), or None."""
+    try:
+        deck = json.loads((pathlib.Path(root) / f"designs/{name}.deck.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    doc = deck.get("document") if isinstance(deck, dict) and deck.get("kind") == "document" else None
+    return doc if isinstance(doc, dict) and isinstance(doc.get("sections"), list) else None
+
+
+def _sections_text(name, doc):
+    """A document's sections as `inspect` lists them: what a section action names."""
+    kind = lambda b: "p" if isinstance(b, str) else next((k for k in b if k in _BLOCK_KINDS), next(iter(b), "?")) if isinstance(b, dict) else "?"
+    lines = [f"A document of {len(doc['sections'])} sections (its source is kept; a section action re-renders it in place):"]
+    for i, s in enumerate(doc["sections"], 1):
+        s = s if isinstance(s, dict) else {}
+        lines.append(f"  {i}. {str(s.get('title') or '(untitled)')[:80]} — {', '.join(kind(b) for b in (s.get('blocks') or [])[:40]) or 'empty'}")
+    lines.append(f"Change one with update_section {{name: \"{name}\", number, section: {{title?, blocks?}}}}; also add_section / "
+                 f"move_section / delete_section, and update_document for its title, theme or cover.")
+    return "\n".join(lines)
+
+
+async def _exec_document(action, inp, workspace, name):
+    """A document's own changes — a section added, rewritten, moved or removed; its title,
+    look or cover changed — made on the source kept in its deck document, then rendered
+    again in place (the earlier pages kept as a version). The model sends the part that
+    changes, not the whole document; nothing is saved unless the render succeeds."""
+    doc = await asyncio.to_thread(_document_source, workspace.root, name)
+    if doc is None:
+        return (f"Error: designs/{name}.deck.json isn't a document — `{action}` works on a document you rendered "
+                f"({{document: …}}); a deck's slides have add_slide / update_slide.")
+    sections = list(doc["sections"])
+
+    def number(key, upto):
+        v = _num(inp.get(key))
+        if v is None or v < 1 or int(v) != v:
+            raise ValueError(f"`{key}` is a section's number from 1, not {inp.get(key)!r} — the document has {len(sections)} sections")
+        if v > upto:
+            raise ValueError(f"`{key}` {int(v)}: the document has {len(sections)} sections")
+        return int(v) - 1
+
+    section = inp.get("section")
+    try:
+        if action in ("add_section", "update_section") and not isinstance(section, dict):
+            return f"Error: `{action}` needs `section` — {{title, blocks: […]}}" + (" (or just the keys that change)." if action == "update_section" else ".")
+        if action == "add_section":
+            if not isinstance(section.get("blocks"), list):
+                return "Error: a new section needs `blocks` — a list of blocks."
+            at = number("at", len(sections) + 1) if inp.get("at") is not None else len(sections)
+            sections.insert(at, section)
+            intent = f"add section {at + 1}"
+        elif action == "update_section":
+            n = number("number", len(sections))
+            sections[n] = {**(sections[n] if isinstance(sections[n], dict) else {}), **section}
+            intent = f"change section {n + 1}"
+        elif action == "move_section":
+            n, to = number("number", len(sections)), number("to", len(sections))
+            sections.insert(to, sections.pop(n))
+            intent = f"move section {n + 1}"
+        elif action == "delete_section":
+            n = number("number", len(sections))
+            if len(sections) == 1:
+                return "Error: a document keeps at least one section."
+            sections.pop(n)
+            intent = f"delete section {n + 1}"
+        else:
+            change = inp.get("document")
+            if not isinstance(change, dict) or not change:
+                return "Error: `update_document` needs `document` — the keys that change, e.g. {title, theme, cover}."
+            if "sections" in change:
+                return "Error: `update_document` changes the document's own keys — its `sections` have add_section / update_section / move_section / delete_section."
+            doc = {k: v for k, v in {**doc, **change}.items() if v is not None}
+            intent = "change the document"
+    except ValueError as e:
+        return f"Error: {e}."
+    return await _render_document({"spec": {"document": {**doc, "sections": sections}}, "replace": True,
+                                   "intent": inp.get("intent") or intent}, workspace, name)
+
+
+async def _run_tool(*argv, timeout=60):
+    """A command-line tool run to its end → (exit code, stdout)."""
+    proc = await asyncio.create_subprocess_exec(*argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise
+    return proc.returncode, out
+
+
+_PDF_TEXT_PAGE = 5000       # characters of one page's text handed to the model
+_PDF_TEXT_ALL = 60000       # …and of the whole PDF
+_PDF_PICTURES = 30          # pictures kept
+_PDF_PICTURE_MIN = 200      # px on its shorter side: smaller is an icon or a rule
+
+
+async def _pdf_parts(inp, workspace, name):
+    """An existing PDF taken apart to be made again as a document: its text, page by
+    page, and its pictures saved into designs/<name>-assets/ (poppler: pdftotext,
+    pdfimages). The model reads this, then renders a `document` that uses them."""
+    import hashlib, tempfile
+    src = inp.get("path") or inp.get("src")
+    if not isinstance(src, str) or not src.strip():
+        return 'Error: `extract` needs `path` — a PDF in the workspace, e.g. "attachments/report.pdf".'
+    try:
+        path = _resolve_path(src, workspace.root)
+    except ValueError as e:
+        return f"Error: {e}"
+    if not path.is_file():
+        return f"Error: {src} doesn't exist in the workspace."
+    if path.suffix.lower() != ".pdf":
+        return f"Error: {src} isn't a PDF — `extract` reads a PDF's text and pictures."
+    root = pathlib.Path(workspace.root)
+    assets_rel = f"designs/{name}-assets"
+    try:
+        _, info = await _run_tool("pdfinfo", str(path), timeout=20)
+        code, text = await _run_tool("pdftotext", "-layout", "-enc", "UTF-8", str(path), "-", timeout=90)
+        if code != 0:
+            return f"Error: couldn't read {src} — it may be damaged or locked with a password."
+        with tempfile.TemporaryDirectory() as tmp:
+            await _run_tool("pdfimages", "-all", str(path), str(pathlib.Path(tmp) / "img"), timeout=120)
+            found = sorted(pathlib.Path(tmp).iterdir())
+
+            def keep():
+                seen, kept = set(), []
+                for f in found:
+                    ext = {".png": "png", ".jpg": "jpg", ".jpeg": "jpg"}.get(f.suffix.lower())
+                    if not ext or len(kept) >= _PDF_PICTURES:
+                        continue
+                    data = f.read_bytes()
+                    size, digest = _image_size(data), hashlib.sha1(data).hexdigest()
+                    if not size or min(size) < _PDF_PICTURE_MIN or digest in seen or len(data) > _DESIGN_IMAGE_MAX:
+                        continue
+                    seen.add(digest)
+                    (root / assets_rel).mkdir(parents=True, exist_ok=True)
+                    rel = f"{assets_rel}/picture-{len(kept) + 1}.{ext}"
+                    (root / rel).write_bytes(data)
+                    kept.append((rel, size))
+                return kept
+            pictures = await asyncio.to_thread(keep)
+    except FileNotFoundError:
+        return "Error: reading a PDF's parts needs poppler (pdftotext, pdfimages) in this agent's image."
+    except asyncio.TimeoutError:
+        return f"Error: {src} took too long to read — try a smaller PDF."
+    info = info.decode("utf-8", "replace")
+    field = lambda key: (re.search(rf"^{key}:\s+(.+)$", info, re.M) or [None, ""])[1].strip()
+    pages = [p.strip() for p in text.decode("utf-8", "replace").split("\f")]
+    while pages and not pages[-1]:
+        pages.pop()
+    lines = [f"{src} — {field('Pages') or len(pages)} pages" + (f", titled \"{field('Title')}\"" if field("Title") else "")
+             + (f", {field('Page size')}" if field("Page size") else "") + "."]
+    total = 0
+    for n, page in enumerate(pages, 1):
+        if not page:
+            continue
+        if total >= _PDF_TEXT_ALL:
+            lines.append(f"(Pages {n}–{len(pages)} are not shown: read them with the Read tool, `pages`.)")
+            break
+        shown = page[:_PDF_TEXT_PAGE]
+        total += len(shown)
+        lines.append(f"\nPage {n}:\n{shown}" + (" […]" if len(page) > len(shown) else ""))
+    if not any(pages):
+        lines.append("It has no text layer (a scan): read its pages with the Read tool to see them.")
+    if pictures:
+        lines.append("\nIts pictures, saved to use again:")
+        lines += [f"  {rel} ({w}×{h})" for rel, (w, h) in pictures]
+        lines.append(f"Use one in a document as {{\"image\": \"{pictures[0][0]}\", \"caption\": \"…\"}} (or as the cover's `image`).")
+    else:
+        lines.append("\nIt has no pictures worth keeping (photos or figures of 200px or more).")
+    lines.append("To redesign it: write its content as a `document` — its own sections and words, better organised — and render that.")
+    return "\n".join(lines)
 
 
 def _prepare_slide(slide, settings, root):
@@ -2156,6 +2452,12 @@ async def _exec_design(inp, workspace):
     # same script in the live editor, where the user watches the Super cursor make it.
     if action in _SLIDE_ACTIONS:
         return await _exec_slides(action, inp, workspace, name)
+    if action in _DOCUMENT_ACTIONS:
+        return await _exec_document(action, inp, workspace, name)
+    if action == "extract":
+        if not inp.get("name") and isinstance(inp.get("path"), str):
+            name = _safe_filename(pathlib.PurePosixPath(inp["path"].replace("\\", "/")).stem or "pdf", "pdf")
+        return await _pdf_parts(inp, workspace, name)
     if action in ("edit", "inspect"):
         rel = f"designs/{name}.fig"
         fig_path = pathlib.Path(workspace.root) / rel
@@ -2171,7 +2473,9 @@ async def _exec_design(inp, workspace):
             return f"Error: design unavailable — {e}"
         except Exception as e:
             return f"Error: couldn't inspect {rel} — {e}"
-        return _outline_text(rel, o["frames"], o["pages"], o["page"])
+        text = _outline_text(rel, o["frames"], o["pages"], o["page"])
+        doc = await asyncio.to_thread(_document_source, workspace.root, name)
+        return f"{_sections_text(name, doc)}\n\n{text}" if doc else text
     # `edit` changes a saved design: named `ops` (the normal way) or a raw `script`.
     # The service applies it to the .fig first — the editor's own plugin API, headless
     # — so an edit that fails is the model's error now (it used to fail silently in
@@ -2453,9 +2757,10 @@ async def _render_document(inp, workspace, name):
            f"It's OPEN in the page viewer ({deck_rel}): the user pages through it and downloads the PDF"
            f"{'; Edit opens the pages in the design editor' if editor else ''}. Its pages were laid out from the "
            f"content — so a small fix on one page (a word, a colour) is Design edit {{name: \"{name}\", ops}} with "
-           f"`frame` = the page from 0, and anything that changes the length (a rewrite, a new section) is this "
-           f"render again with \"replace\": true (its source is in {deck_rel} under \"document\"). A page edited "
-           f"by hand does not re-flow the pages after it.")
+           f"`frame` = the page from 0, and anything that changes the length is made on the document: "
+           f"update_section {{name: \"{name}\", number, section}} (or add_section / move_section / delete_section / "
+           f"update_document) sends only what changes and renders it again in place — or this render again with "
+           f"\"replace\": true. A page edited by hand does not re-flow the pages after it.")
     for line in notes:
         ack += " " + line
     ack += _layout_check(r.lint, "pptx")

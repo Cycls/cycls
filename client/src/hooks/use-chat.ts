@@ -5,6 +5,7 @@ import type { DesignSelection } from "../components/design-editor-view";
 import { track } from "../lib/analytics";
 import { webSearchEnabled, autoApprove } from "../lib/utils";
 import { useToast } from "../lib/toast";
+import { fetchAuthed } from "./use-auth-headers";
 
 // One search result, as the search engine returned it. A citation chip only
 // ever renders from one of these, so a URL the model invented can't pose as a
@@ -304,10 +305,7 @@ export function useChat(baseUrl: string = "") {
         const controller = new AbortController();
         abortRef.current = controller;
 
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-          ...(await authHeaders()),
-        };
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
 
         // Server loads history from disk; only ship the new user message —
         // the one built above, NOT a re-read of messagesRef. The ref only
@@ -334,7 +332,8 @@ export function useChat(baseUrl: string = "") {
         const url = chatIdRef.current
           ? `${baseUrl}/chat?id=${encodeURIComponent(chatIdRef.current)}`
           : `${baseUrl}/chat`;
-        const response = await fetch(url, {
+        // (With the user's headers; a 401 from a token gone stale in a background tab is asked once more.)
+        const response = await fetchAuthed(url, {
           method: "POST",
           headers,
           body: JSON.stringify({ messages: [requestMessage],

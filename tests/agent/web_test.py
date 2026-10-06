@@ -2765,3 +2765,29 @@ def test_votes_are_throttled_per_address(tmp_path, monkeypatch):
     session = client.post("/polls", json={"deck": "designs/pitch.deck.json", "question": "Q?", "options": ["A", "B"]}).json()["session"]
     codes = [client.post(f"{base}/vote", json={"session": session, "option": 0, "voter": f"{i:032x}"}).status_code for i in range(3)]
     assert codes == [200, 200, 429]
+
+
+def test_renaming_a_design_takes_its_images_and_its_deck_document_with_it(tmp_path, monkeypatch):
+    """A design is its .fig and what is kept beside it — its image, its slides' and pages'
+    images, its PDF, its deck document. Renamed alone, the .fig left them behind under the
+    old name: stale pictures, and a deck document pointing at a file that was gone."""
+    deck = json.dumps({"type": "cycls.deck", "version": 1, "kind": "document", "fig": "designs/launch.fig",
+                       "size": [1240, 1754], "slides": 2, "exports": ["designs/launch.pdf"]}).encode()
+    root = _seed(tmp_path, {"designs/launch.fig": b"FIG", "designs/launch.png": b"PNG", "designs/launch-slide-2.png": b"S2",
+                            "designs/launch-page-2.jpg": b"P2", "designs/launch.pdf": b"%PDF", "designs/launch.deck.json": deck,
+                            "designs/launch-notes.txt": b"mine", "designs/launchpad.png": b"other", "designs/summer.pdf": b"KEEP"})
+    client = _ws_routers_client(tmp_path)
+    assert client.patch("/files/designs/launch.fig", json={"to": "designs/summer.fig"}).status_code == 200
+    names = sorted(p.name for p in (root / "designs").iterdir())
+    assert names == ["launch-notes.txt", "launch.pdf", "launchpad.png", "summer-page-2.jpg", "summer-slide-2.png",
+                     "summer.deck.json", "summer.fig", "summer.pdf", "summer.png"]
+    assert (root / "designs/summer.pdf").read_bytes() == b"KEEP"              # what was already there is not written over
+    moved = json.loads((root / "designs/summer.deck.json").read_text())
+    assert moved["fig"] == "designs/summer.fig" and moved["exports"] == ["designs/summer.pdf"] and moved["kind"] == "document"
+    # Moved to another folder, they go there too; a file that isn't a design moves alone.
+    assert client.patch("/files/designs/summer.fig", json={"to": "designs/2026/summer.fig"}).status_code == 200
+    assert sorted(p.name for p in (root / "designs/2026").iterdir()) == ["summer-page-2.jpg", "summer-slide-2.png", "summer.deck.json",
+                                                                          "summer.fig", "summer.pdf", "summer.png"]
+    assert json.loads((root / "designs/2026/summer.deck.json").read_text())["fig"] == "designs/2026/summer.fig"
+    assert client.patch("/files/designs/launch-notes.txt", json={"to": "designs/notes.txt"}).status_code == 200
+    assert (root / "designs/launchpad.png").is_file()
