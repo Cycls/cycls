@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { useAuthHeaders } from "./use-auth-headers";
+import { fetchAuthed, useAuthHeaders } from "./use-auth-headers";
 import { useToast } from "../lib/toast";
 
 // FastAPI puts the human reason under `{detail: "..."}`. statusText is unset on
@@ -23,13 +23,14 @@ export function useApi(baseUrl: string = "") {
   const { error } = useToast();
   const api = useCallback(async (path: string, init: RequestInit & { json?: unknown; silent?: boolean } = {}): Promise<Response> => {
     const { json, silent, headers: rawHeaders, ...rest } = init;
-    const headers: Record<string, string> = { ...(await authHeaders()), ...(rawHeaders as Record<string, string> || {}) };
+    const headers: Record<string, string> = { ...(rawHeaders as Record<string, string> || {}) };
     let body = rest.body;
     if (json !== undefined) {
       headers["Content-Type"] = "application/json";
       body = JSON.stringify(json);
     }
-    const res = await fetch(`${baseUrl}${path}`, { ...rest, headers, body });
+    // (The user's headers are added there — and a 401 from a stale token asked once more.)
+    const res = await fetchAuthed(`${baseUrl}${path}`, { ...rest, headers, body });
     if (!res.ok) {
       // `response`: for a caller whose failure carries an answer (a stale save's 412 says the version now).
       const err = new Error(`HTTP ${res.status}`) as Error & { status: number; response: Response };
@@ -39,6 +40,6 @@ export function useApi(baseUrl: string = "") {
       throw err;
     }
     return res;
-  }, [baseUrl, authHeaders, error]);
+  }, [baseUrl, error]);
   return { api, authHeaders, setGetToken };
 }

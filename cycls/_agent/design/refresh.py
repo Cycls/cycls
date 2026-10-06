@@ -69,6 +69,54 @@ def managed(root, rel):
     return (Path(root) / path.parent / f"{stem}.fig").is_file()
 
 
+def follow(root, old_rel, new_rel):
+    """A design renamed or moved: what is kept beside its .fig goes with it — its image
+    in each format, its slides' and pages' images, its deck document (whose paths are
+    written anew). A file already at the new name is left as it is. → the files moved."""
+    import json, shutil
+    root = Path(root)
+    old, new = root / old_rel, root / new_rel
+    moved = []
+    if not old.parent.is_dir():
+        return moved
+    for f in sorted(old.parent.iterdir()):
+        if not f.is_file():
+            continue
+        tail = None
+        if f.name == f"{old.stem}.deck.json":
+            tail = ".deck.json"
+        else:
+            base, dot, fmt = f.name.rpartition(".")
+            if dot and fmt.lower() in FORMATS:
+                if base == old.stem:
+                    tail = f".{fmt}"
+                for part in ("-slide-", "-page-"):
+                    head, sep, n = base.rpartition(part)
+                    if sep and n.isdigit() and head == old.stem:
+                        tail = f"{part}{n}.{fmt}"
+        dest = new.parent / f"{new.stem}{tail}" if tail else None
+        if dest is None or dest.exists():
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(f), str(dest))
+        moved.append(dest)
+    deck = new.parent / f"{new.stem}.deck.json"
+    if deck.is_file():
+        before = Path(old_rel).as_posix().rsplit(".", 1)[0]          # designs/launch
+        after = Path(new_rel).as_posix().rsplit(".", 1)[0]
+        swap = lambda p: after + p[len(before):] if isinstance(p, str) and p.startswith(before) and p[len(before):len(before) + 1] in (".", "-") else p
+        try:
+            doc = json.loads(deck.read_text(encoding="utf-8"))
+            if isinstance(doc, dict):
+                doc["fig"] = swap(doc.get("fig"))
+                if isinstance(doc.get("exports"), list):
+                    doc["exports"] = [swap(p) for p in doc["exports"]]
+                deck.write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")
+        except (OSError, ValueError):
+            pass
+    return moved
+
+
 def schedule(root, rel, user_id=None, ensure=False, pages=False):
     """Re-export the images beside `rel` (a `designs/*.fig` just written under
     workspace `root`) once its saves go quiet; with `ensure`, a design that has none

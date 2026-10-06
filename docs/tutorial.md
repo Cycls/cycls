@@ -408,8 +408,12 @@ The model calls one `design` tool:
   charts, tables, images, quotes, columns, cards — and the pages make themselves: text
   flows from page to page, with a cover, a contents page, running headers and page
   numbers. The look is the workspace brand kit, or a theme the user or the agent picks.
-  It saves `designs/<name>.pdf` (A4 by default; real, searchable text) and opens in the
-  page viewer; `"replace": true` re-renders the same document after its content changes.
+  It saves `designs/<name>.pdf` (A4 by default; real, searchable text, working links) and
+  opens in the page viewer. To change it the agent sends only what changes —
+  `update_section` / `add_section` / `move_section` / `delete_section` /
+  `update_document` — and it is rendered again in place, the earlier version kept. A
+  chart or table can read a workspace spreadsheet (`"from": "data/sales.csv"`); `extract
+  {path}` takes an existing PDF's text and pictures apart to be redesigned.
 
 Every render comes back to the model as an image (a deck: every slide) with a layout
 check — overlapping text, text off an edge, too small, low contrast — to fix before it
