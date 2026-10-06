@@ -1920,6 +1920,125 @@ def test_a_pdfs_text_and_pictures_are_taken_out_for_a_redesign(tmp_path, monkeyp
     assert "poppler" in run("attachments/old-report.pdf")
 
 
+def _pdf_tools(monkeypatch, info, flow, layout, images=(), ran=None):
+    """Poppler, faked: pdfinfo's answer, pdftotext's two readings (in reading order; as
+    laid out, with -layout), the files pdfimages leaves, and a page drawn by pdftoppm."""
+    import pathlib
+    ran = [] if ran is None else ran
+
+    async def tool(*argv, timeout=60):
+        ran.append(argv)
+        if argv[0] == "pdfinfo":
+            return 0, info.encode()
+        if argv[0] == "pdftotext":
+            return 0, (layout if "-layout" in argv else flow).encode()
+        if argv[0] == "pdfimages":
+            prefix = pathlib.Path(argv[-1])
+            for k, data in enumerate(images):
+                (prefix.parent / f"{prefix.name}-{k:03d}.png").write_bytes(data)
+            return 0, b""
+        if argv[0] == "pdftoppm":
+            out = pathlib.Path(argv[-1])
+            ext = "jpg" if "-jpeg" in argv else "png"
+            w, h = (int(argv[argv.index("-W") + 1]), int(argv[argv.index("-H") + 1])) if "-W" in argv else (850, 1100)
+            (out.parent / f"{out.name}.{ext}").write_bytes(_jpeg(w, h) if ext == "jpg" else _png(w, h))
+            return 0, b""
+        return 1, b""
+    monkeypatch.setattr("cycls._agent.tools._run_tool", tool)
+    return ran
+
+
+_LETTER = "Title:          \nSubject:        \nPages:          2\nPage size:      612 x 792 pts (letter)\n"   # (no title: pdfTeX)
+
+
+def test_a_real_pdfs_words_come_in_reading_order_and_its_tables_as_they_are_laid_out(tmp_path, monkeypatch):
+    """A two-column paper read "as laid out" came back with its columns side by side on every
+    line — the left column's sentence cut by the right one's — and most of each page's
+    allowance spent on the gap between them. The words are read in reading order; a table's
+    rows, which only the laid-out reading keeps together, are added from it."""
+    _img(tmp_path, "attachments/paper.pdf", b"%PDF-1.5 fake")
+    flow = ("Deep Residual Learning\n\nDeeper neural networks are more difficult to train. We\npresent a residual learning framework.\n"
+            "model\ntop-1 err.\ntop-5 err.\nVGG-16\n28.07\n9.33\n\fSecond page, first column.\nSecond page, second column.\n")
+    layout = ("                    Deep Residual Learning\n\n"
+              "   Deeper neural networks are more difficult to train. We          The depth of representations is of central\n"
+              "   present a residual learning framework.                          importance for many visual tasks.\n\n"
+              "        model            top-1 err.     top-5 err.\n"
+              "        VGG-16 [41]        28.07           9.33\n"
+              "        GoogLeNet [44]       -             9.15\n"
+              "        PReLU-net [13]     24.27           7.38\n"
+              "        ResNet-152         19.38           4.49\n\n"
+              "   Table 3. Error rates on ImageNet validation.\n"
+              "\fSecond page, first column.              Second page, second column.\n")
+    ran = _pdf_tools(monkeypatch, _LETTER, flow, layout)
+    out = asyncio.run(_exec_design({"action": "extract", "path": "attachments/paper.pdf"}, _ws(tmp_path)))
+    assert out.startswith("attachments/paper.pdf — 2 pages, 612 x 792 pts (letter).")    # no title is no title (not the line after it)
+    assert "Deeper neural networks are more difficult to train. We\npresent a residual learning framework." in out   # in reading order
+    assert "train. We          The depth" not in out                                    # not the two columns side by side
+    assert "Its tables, as they are laid out:" in out
+    assert "model | top-1 err. | top-5 err." in out and "VGG-16 [41] | 28.07 | 9.33" in out and "ResNet-152 | 19.38 | 4.49" in out
+    assert "Second page, first column.\nSecond page, second column." in out
+    assert [a for a in ran if a[0] == "pdftotext" and "-layout" not in a] and [a for a in ran if a[0] == "pdftotext" and "-layout" in a]
+    # A paper's charts are drawn, not stored: how to take one is said.
+    assert "no pictures" in out and '"page": 1' in out and '"area"' in out
+
+
+def test_arabic_saved_as_shaped_glyphs_is_put_back_into_letters_and_said_not_to_be_trusted(tmp_path, monkeypatch):
+    """A real Arabic PDF (Word → Distiller) keeps each letter as the glyph it was drawn with
+    — ﻟ ﺎ ﻋ — some of them twice, lines out of order. The glyphs are put back into letters,
+    and the model is told to take the wording from the pages it can see."""
+    _img(tmp_path, "attachments/declaration.pdf", b"%PDF-1.5 fake")
+    shaped = "\u202b\ufedf\ufee4\ufe8e \ufedb\ufe8e\ufee5 \u202a2026\u202c \ufe8d\ufefb\ufecb\ufe98\ufeae\ufe8d\ufed1\u202c " * 4
+    _pdf_tools(monkeypatch, "Pages:          1\nPage size:      595 x 842 pts (A4)\n", shaped + "\n", shaped + "\n")
+    out = asyncio.run(_exec_design({"action": "extract", "path": "attachments/declaration.pdf"}, _ws(tmp_path)))
+    assert out.startswith("attachments/declaration.pdf — 1 page, ")
+    assert "\u0644\u0645\u0627 \u0643\u0627\u0646 2026 " in out                     # لما كان, in letters — and none of the reader's direction marks
+    assert not [ch for ch in out if "\ufe70" <= ch <= "\ufeff" or "\u202a" <= ch <= "\u202e"]
+    assert "can't be trusted" in out and '"page": 1' in out
+
+
+def test_a_scan_is_said_to_be_one_and_its_pages_are_not_offered_as_pictures(tmp_path, monkeypatch):
+    _img(tmp_path, "attachments/scan.pdf", b"%PDF-1.5 fake")
+    _pdf_tools(monkeypatch, "Pages:          2\nPage size:      612 x 792 pts (letter)\n", "\f\f", "\f\f",
+               images=[_png(1275, 1650), _png(1274, 1649)])
+    out = asyncio.run(_exec_design({"action": "extract", "path": "attachments/scan.pdf"}, _ws(tmp_path)))
+    assert "a scan" in out and '"page": 1' in out
+    assert not (tmp_path / "designs" / "scan-assets").exists()                           # a picture of a page is not a picture to reuse
+    assert "picture-1" not in out
+
+
+def test_a_page_of_a_pdf_is_looked_at_and_a_figure_cut_out_of_it(tmp_path, monkeypatch):
+    """A chart drawn in the PDF (not a photo in it) is not among its pictures. The page is
+    looked at, and the figure cut out of it by where it is: [left, top, width, height] as
+    parts of the page."""
+    _img(tmp_path, "attachments/paper.pdf", b"%PDF-1.5 fake")
+    ran = _pdf_tools(monkeypatch, "Pages:          12\nPage    3 size: 612 x 792 pts (letter)\n", "", "")
+    out = asyncio.run(_exec_design({"action": "extract", "path": "attachments/paper.pdf", "page": 3}, _ws(tmp_path)))
+    m = out["_model"]
+    assert m[0]["type"] == "image" and m[0]["source"]["media_type"] == "image/jpeg"
+    assert "page 3 of 12" in m[-1]["text"].lower() and '"area"' in m[-1]["text"]
+    look = next(a for a in ran if a[0] == "pdftoppm")
+    assert look[look.index("-f") + 1] == "3" and look[look.index("-l") + 1] == "3" and "-x" not in look
+    assert not (tmp_path / "designs" / "paper-assets").exists()                          # looking saves nothing
+
+    ran.clear()
+    out = asyncio.run(_exec_design({"action": "extract", "path": "attachments/paper.pdf", "page": 3, "area": [0.1, 0.2, 0.5, 0.25]}, _ws(tmp_path)))
+    cut = next(a for a in ran if a[0] == "pdftoppm")
+    opt = lambda k: cut[cut.index(k) + 1]
+    # Letter at 200 to the inch is 1700 × 2200 px.
+    assert (opt("-r"), opt("-x"), opt("-y"), opt("-W"), opt("-H")) == ("200", "170", "440", "850", "550")
+    assert (tmp_path / "designs" / "paper-assets" / "figure-1.png").read_bytes() == _png(850, 550)
+    m = out["_model"]
+    assert m[0]["type"] == "image" and "designs/paper-assets/figure-1.png (850×550)" in m[-1]["text"]
+    assert '"image": "designs/paper-assets/figure-1.png"' in m[-1]["text"]
+    # The next one is its own file; what is wrong with the request is said.
+    asyncio.run(_exec_design({"action": "extract", "path": "attachments/paper.pdf", "page": 3, "area": [0, 0.5, 1, 0.3]}, _ws(tmp_path)))
+    assert (tmp_path / "designs" / "paper-assets" / "figure-2.png").is_file()
+    run = lambda **kw: asyncio.run(_exec_design({"action": "extract", "path": "attachments/paper.pdf", **kw}, _ws(tmp_path)))
+    assert "12 pages" in run(page=13) and "from 1" in run(page=0)
+    assert "[left, top, width, height]" in run(page=3, area=[0.5, 0.5, 0.8, 0.2])           # runs off the page
+    assert "[left, top, width, height]" in run(page=3, area="top half")
+
+
 # ---- a document edited by hand is not laid out again over those edits without a word ----
 
 def _outlines(monkeypatch, by_fig):
