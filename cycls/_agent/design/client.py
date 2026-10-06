@@ -94,7 +94,9 @@ class Rendered(NamedTuple):
     `pages` is the design's pages — its variants — in order: [{name, frames}]; with more
     than one, `page_images` is each page's own image (its first frame) and
     `preview_pages` whose page each of `previews` is. `size` is a document's paper,
-    [W, H] in pixels (None for anything else)."""
+    [W, H] in pixels (None for anything else). `sheets` are contact sheets — a long
+    document's pages past its previews, twelve to a JPEG — and `sheet_pages` the
+    [first, last] page each one holds ([] unless asked for, and past twelve pages)."""
     image: bytes
     fig: bytes
     frame_id: object
@@ -110,6 +112,8 @@ class Rendered(NamedTuple):
     page_images: list = []
     preview_pages: list = []
     size: object = None
+    sheets: list = []
+    sheet_pages: list = []
 
 
 def _b64s(values):
@@ -145,17 +149,22 @@ def _decode(data):
         _pages(data),
         _b64s(data.get("page_images_base64")),
         [str(p) for p in data.get("preview_pages") or []],
-        list(data["size"]) if isinstance(data.get("size"), list) and len(data["size"]) == 2 else None)
+        list(data["size"]) if isinstance(data.get("size"), list) and len(data["size"]) == 2 else None,
+        _b64s(data.get("sheets_base64")),
+        [[int(p[0]), int(p[1])] for p in data.get("sheet_pages") or [] if isinstance(p, list) and len(p) == 2])
 
 
-async def render(spec, fmt="png", scale=2, user_id=None, every=False):
+async def render(spec, fmt="png", scale=2, user_id=None, every=False, sheets=False):
     """Render a declarative design spec → a Rendered. `spec` is `{size:[w,h], fill,
     nodes:[...]}`, a deck `{frames:[...]}`, or several pages `{pages:[{name, size, fill,
     nodes}]}` — one design, a variant a page (see the Design tool description);
-    `every` asks for every frame in a raster `fmt` (a carousel's slides)."""
+    `every` asks for every frame in a raster `fmt` (a carousel's slides); `sheets` asks,
+    past twelve frames, for previews of the first four and the rest on contact sheets."""
     body = {"spec": spec, "format": fmt, "scale": scale, "preview": True}
     if every:
         body["every"] = True
+    if sheets:
+        body["sheets"] = True
     return _decode(await _post("/render", body, user_id))
 
 

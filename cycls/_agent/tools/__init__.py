@@ -438,7 +438,8 @@ _DESIGN_TOOL = {
         "paragraphs. The LOOK is yours to choose unless the user says: the workspace brand kit when "
         "there is one (the default), else a theme that fits the subject — and its accent or fonts "
         "overridden ({base, accent, heading, body}) when that fits better. It saves designs/<name>.pdf "
-        "and opens in the page viewer; every page comes back to you to QA. A small fix on one page is "
+        "and opens in the page viewer; every page comes back to you to QA (past twelve pages: the first "
+        "four to read, the rest small on contact sheets — look at how each is laid out). A small fix on one page is "
         "an `edit` (ops with `frame`: the page, from 0). Anything that changes the length is made on the "
         "document itself, and only the part that changes is sent: update_section {name, number, section: "
         "{title?, blocks?}} · add_section {name, section, at?} · move_section {name, number, to} · "
@@ -2847,7 +2848,7 @@ async def _render_document(inp, workspace, name):
     if err:
         return err
     try:
-        r = await design.render(spec, fmt="pdf", scale=2, user_id=subject)
+        r = await design.render(spec, fmt="pdf", scale=2, user_id=subject, sheets=True)
     except design.Unavailable as e:
         return f"Error: design unavailable — {e}"
     except Exception as e:
@@ -2908,8 +2909,22 @@ async def _render_document(inp, workspace, name):
     if not blocks:
         return {"_model": ack, "_ui": ui}
     shown = len(blocks) // 2
-    which = (f"All {count} pages are attached" if shown >= count else
-             f"Pages 1–{shown} of {count} are attached (Design inspect lists the rest)")
+    # A long document: the pages after those, twelve to a contact sheet — all of it is seen.
+    sheets = []
+    for pages, jpg in zip(r.sheet_pages, r.sheets):
+        if total + len(jpg) > _DESIGN_QA_MAX:
+            break
+        total += len(jpg)
+        sheets.append(pages)
+        blocks += [{"type": "text", "text": f"Pages {pages[0]}–{pages[1]}, small:" if pages[1] > pages[0] else f"Page {pages[0]}, small:"},
+                   {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                "data": base64.b64encode(jpg).decode()}}]
+    if sheets:
+        which = (f"Pages 1–{shown} are attached to read, and pages {sheets[0][0]}–{sheets[-1][1]} on {len(sheets)} contact "
+                 f"sheet{'' if len(sheets) == 1 else 's'} (small — for how every page is laid out, not for its words)")
+    else:
+        which = (f"All {count} pages are attached" if shown >= count else
+                 f"Pages 1–{shown} of {count} are attached (Design inspect lists the rest)")
     ack += (f" {which} — QA them before you present: the cover reads at a glance; no page ends in a large "
             "hole that a shorter or reordered block would close; every chart and table has its caption and "
             "says something; nothing overlaps or is cut; names, numbers and dates are exactly right. If the "

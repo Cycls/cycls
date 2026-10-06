@@ -396,9 +396,20 @@ the pages make themselves.
   the Read tool shows the rest) and its pictures — photographs and figures of 200 px or
   more, each once — saved into `designs/<name>-assets/`. The model then writes it as a
   document that uses them.
-- **QA.** Every page comes back to the model (the first twelve of a long document), with
-  the layout check — text sized for paper, not a slide — and the service's notes in
-  words: a block taller than a page, a page a section left nearly empty.
+- **QA.** Every page comes back to the model, with the layout check — text sized for
+  paper, not a slide — and the service's notes in words: a block taller than a page, a
+  page a section left nearly empty. Up to twelve pages come as a preview each. Past
+  twelve the tool asks the service for contact sheets (`design.render(…, sheets=True)`):
+  the first four pages to read, and every other page small, twelve to a JPEG, each over
+  its number — so a 33-page report is seen whole (it was shown its first twelve pages and
+  nothing after), for less than twelve previews cost, and renders a quarter faster.
+- **Arabic.** A document in Arabic is laid out from the right by the service. Three
+  things it does that the agent need not: a phone number, an IBAN's digits or a
+  reference like `2026-0412` inside Arabic text is kept reading left to right (the
+  direction rules alone drew `0000 000 5 966+`); the items of a contact line stay in the
+  order they were given; and a bullet or a table cell that opens with a Latin word
+  (`Figma و…`) still reads from the right. The PDF's text copies whole — two letters
+  drawn as one glyph are both there — and without the direction marks.
 - **The canvas.** The deck document opens the **page viewer** — the deck viewer, told
   `kind: "document"` by the slides manifest: "Pages", **PDF first** in Download, and no
   moving, duplicating or deleting a page (its number and the contents would be wrong).
