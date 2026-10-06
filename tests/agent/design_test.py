@@ -178,14 +178,17 @@ def _text(out):
 
 
 def _fake_render(monkeypatch, image=b"\x89PNGrender", fig=b"FIGZ", preview=None, notes=(), lint=(),
-                 previews=(), images=(), slides=(), dir=None, pages=(), page_images=(), preview_pages=(), size=None):
+                 previews=(), images=(), slides=(), dir=None, pages=(), page_images=(), preview_pages=(), size=None,
+                 sheets=(), sheet_pages=()):
     calls = {}
 
-    async def _r(spec, fmt="png", scale=2, user_id=None, every=False):
-        calls.update(spec=spec, fmt=fmt, scale=scale, user_id=user_id, every=every, renders=calls.get("renders", 0) + 1)
+    async def _r(spec, fmt="png", scale=2, user_id=None, every=False, **kw):
+        calls.update(spec=spec, fmt=fmt, scale=scale, user_id=user_id, every=every, sheets=kw.get("sheets", False),
+                     renders=calls.get("renders", 0) + 1)
         return design.Rendered(image, fig, "0:6", fmt, preview, list(notes), list(lint),
                                list(previews), list(images) if every else [], list(slides), dir,
-                               list(pages), list(page_images), list(preview_pages), size)
+                               list(pages), list(page_images), list(preview_pages), size,
+                               list(sheets), [list(p) for p in sheet_pages])
 
     monkeypatch.setattr("cycls._agent.design.render", _r)
     return calls
@@ -1614,6 +1617,26 @@ def test_a_document_saves_its_pdf_and_opens_the_page_viewer(tmp_path, monkeypatc
     ack = m[-1]["text"]
     assert "Document saved (designs/coffee-report.pdf, 3 pages" in ack and "page viewer" in ack
     assert "All 3 pages are attached" in ack and '"replace": true' in ack
+
+
+def test_a_long_document_is_seen_whole_its_first_pages_and_the_rest_on_contact_sheets(tmp_path, monkeypatch):
+    """Past twelve pages the service sends four previews and every other page on contact sheets; the
+    model gets them all, each sheet said for the pages it holds. (Of a 33-page report it was shown
+    the first twelve pages, and nothing of the rest.)"""
+    calls = _fake_render(monkeypatch, image=b"%PDF-long", previews=[f"J{n}".encode() for n in range(1, 5)],
+                         slides=[{"name": f"page-{n}"} for n in range(1, 34)], size=[1240, 1754],
+                         sheets=[b"S1", b"S2", b"S3"], sheet_pages=[[5, 16], [17, 28], [29, 33]])
+    doc = {"title": "Long", "sections": [{"title": "One", "blocks": ["Text."]}]}
+    out = asyncio.run(_exec_design({"action": "render", "name": "long", "spec": {"document": doc}}, _ws(tmp_path)))
+    assert calls["sheets"] is True                                           # a document always asks
+    m = out["_model"]
+    assert [b["text"] for b in m if b["type"] == "text"][:7] == [
+        "Page 1:", "Page 2:", "Page 3:", "Page 4:", "Pages 5–16, small:", "Pages 17–28, small:", "Pages 29–33, small:"]
+    assert [base64.b64decode(b["source"]["data"]) for b in m if b["type"] == "image"] == [b"J1", b"J2", b"J3", b"J4", b"S1", b"S2", b"S3"]
+    ack = m[-1]["text"]
+    assert "33 pages" in ack
+    assert "Pages 1–4 are attached to read, and pages 5–33 on 3 contact sheets" in ack
+    assert "Design inspect lists the rest" not in ack
 
 
 def test_a_documents_images_are_read_wherever_they_sit(tmp_path, monkeypatch):
