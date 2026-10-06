@@ -395,7 +395,24 @@ the pages make themselves.
   (`_pdf_parts`, poppler's `pdftotext` and `pdfimages`): its text page by page (capped —
   the Read tool shows the rest) and its pictures — photographs and figures of 200 px or
   more, each once — saved into `designs/<name>-assets/`. The model then writes it as a
-  document that uses them.
+  document that uses them. What real PDFs taught it (a two-column paper, a tax form, an
+  Arabic declaration made in Word, a scan):
+  - **Reading order.** The words are read in reading order. "As laid out" set a
+    two-column page's columns side by side on every line and spent most of a page's
+    allowance on the gap. A **table**, though, only stays in rows as laid out — so a
+    page's tables are found in that reading (`_laid_out_tables`: runs of lines three or
+    more cells apart, two of them figures) and added under the page, cells joined by ` | `.
+  - **Drawn figures.** A chart or diagram drawn in the PDF is not a picture in it (the
+    paper had none to take). `extract {path, page: N}` draws that page for the model to
+    look at; with `area: [left, top, width, height]` (parts of the page, 0 to 1) the
+    figure is cut out at 200 to the inch, saved as `<name>-assets/figure-<n>.png` and
+    shown back to be checked (`_pdf_page`, `pdftoppm`).
+  - **Text that can't be trusted.** Arabic saved as the glyphs it was drawn with
+    (presentation forms) is put back into letters, the reader's direction marks are
+    dropped, and the reply says the wording must be taken from the pages themselves —
+    letters come out doubled and lines out of order in such files.
+  - **A scan** is said to be one, and its page images are not offered as pictures to
+    reuse; its pages are read with `extract {path, page: N}`.
 - **QA.** Every page comes back to the model, with the layout check — text sized for
   paper, not a slide — and the service's notes in words: a block taller than a page, a
   page a section left nearly empty. Up to twelve pages come as a preview each. Past

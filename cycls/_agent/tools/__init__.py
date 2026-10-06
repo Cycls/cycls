@@ -453,8 +453,12 @@ _DESIGN_TOOL = {
         "run on under compact headings, and a few lines too many for the page are set a little tighter to fit. "
         "When it must fit a number of pages — a one-page CV — say \"max_pages\": 1: its type is set smaller, "
         "down to 85%, until it does, and the reply says if even that isn't enough (then cut content, once).\n"
-        "- extract {path, name?} — an EXISTING PDF taken apart to be redesigned: its text page by page, "
-        "and its pictures saved into designs/<name>-assets/ to use again; then write it as a document.\n"
+        "- extract {path, name?} — an EXISTING PDF taken apart to be redesigned: its text page by page "
+        "(in reading order, its tables as they are laid out), and its pictures saved into "
+        "designs/<name>-assets/ to use again; then write it as a document. A chart or diagram drawn in "
+        "the PDF is not among its pictures: extract {path, page: N} shows that page, and with "
+        "\"area\": [left, top, width, height] (parts of the page, 0 to 1) cuts the figure out and saves it. "
+        "A scan, or text the reply says can't be trusted, is read from its pages the same way.\n"
         "- script {script, name, format?} — escape hatch: a raw OpenPencil / Figma "
         "plugin-API script for what the spec can't express. It MUST end with "
         "`console.log('__FRAME__'+frame.id)` naming the frame to export.\n"
@@ -512,7 +516,8 @@ _DESIGN_TOOL = {
         "section": {"type": "object", "description": "For add_section / update_section: the section {title, blocks: […]}. update_section takes just the keys that change — {blocks} rewrites it, {title} renames it."},
         "document": {"type": "object", "description": "For update_document: the document's own keys that change — title, subtitle, author, date, theme, cover, size, footnotes, numbering… (null removes one). Not its sections."},
         "path": {"type": "string", "description": "For `extract`: the PDF in the workspace, e.g. attachments/report.pdf."},
-        "page": {"type": "string", "description": "For `inspect` / `edit` on a design with several pages: the page's name (default: the first page)."},
+        "page": {"type": ["string", "integer"], "description": "For `inspect` / `edit` on a design with several pages: the page's name (default: the first page). For `extract`: the PDF's page to look at, a number from 1."},
+        "area": {"type": "array", "items": {"type": "number"}, "description": "For `extract` with `page`: the part of that page to cut out and save as a picture — [left, top, width, height], each a part of the page from 0 to 1."},
         "replace": {"type": "boolean", "description": "For `render` of a document: re-render it under the SAME name (after changing its content) instead of making a new one; the earlier version is kept in its history."},
         "discard_edits": {"type": "boolean", "description": "For a document's re-render (`replace`, or a section action) after the tool said its pages were edited by hand since the last render: true once those edits are accounted for — their wording put into what you send, the user told what can't be kept."},
         "slide": {"type": "object", "description": "For add_slide / update_slide: the slide — a layout slide {layout, …slots, notes?} laid out with the deck's own theme and footer, or a hand-built one {nodes, fill?}. update_slide replaces the slide whole: start from its `source` in inspect and change what you need."},
@@ -2249,13 +2254,53 @@ _PDF_TEXT_PAGE = 5000       # characters of one page's text handed to the model
 _PDF_TEXT_ALL = 60000       # …and of the whole PDF
 _PDF_PICTURES = 30          # pictures kept
 _PDF_PICTURE_MIN = 200      # px on its shorter side: smaller is an icon or a rule
+_PDF_TABLE_ROWS = 40        # rows of one page's tables shown as they are laid out
+_PDF_LOOK_DPI = 100         # a page drawn for the model to look at
+_PDF_CUT_DPI = 200          # …and a figure cut out of one, to be used again
+# Letters saved as the glyphs they were drawn with: Latin ligatures (ﬁ), and Arabic in its
+# presentation forms (ﻟ ﺎ ﻋ) — what a PDF made from Word often holds instead of the letters.
+_SHAPED = re.compile("[\ufb00-\ufb06\ufb50-\ufdff\ufe70-\ufeff]+")
+_SHAPED_ARABIC = re.compile("[\ufb50-\ufdff\ufe70-\ufeff]")
+_DIRECTION_MARKS = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")     # what pdftotext wraps right-to-left text in
+
+
+def _laid_out_tables(page):
+    """The rows of a page's tables, from its text as laid out (`pdftotext -layout`): runs of
+    lines that are three or more cells apart, two of them figures — each row's cells joined
+    by " | ". Reading order keeps a paragraph whole and takes a table apart cell by cell;
+    this is the other half."""
+    cells = lambda line: [c for c in re.split(r"\s{2,}", line.strip()) if c]
+    figure = lambda c: (len(c) <= 16 and bool(re.search(r"\d", c))) or c in ("-", "–", "—")
+    lines = page.split("\n")
+    row = [len(c) >= 3 and sum(map(figure, c)) >= 2 for c in map(cells, lines)]
+    out, i = [], 0
+    while i < len(lines):
+        if not row[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(lines) and (row[j + 1] or (j + 2 < len(lines) and not lines[j + 1].strip() and row[j + 2])):
+            j += 1
+        rows = [k for k in range(i, j + 1) if row[k]]
+        if len(rows) >= 3:
+            head = next((k for k in range(i - 1, max(-1, i - 3), -1) if lines[k].strip()), None)
+            if head is not None and len(cells(lines[head])) >= 3:
+                rows.insert(0, head)                      # the line over them, when it is their heading
+            out += ([""] if out else []) + [" | ".join(cells(lines[k])) for k in rows]
+        i = j + 1
+    return out[:_PDF_TABLE_ROWS]
 
 
 async def _pdf_parts(inp, workspace, name):
     """An existing PDF taken apart to be made again as a document: its text, page by
     page, and its pictures saved into designs/<name>-assets/ (poppler: pdftotext,
-    pdfimages). The model reads this, then renders a `document` that uses them."""
-    import hashlib, tempfile
+    pdfimages). The model reads this, then renders a `document` that uses them.
+
+    The words are read in reading order — "as laid out" set a two-column page's columns
+    side by side on every line — and a page's tables are added from the laid-out reading,
+    which alone keeps a row together. With `page`, one page is drawn to look at, and with
+    `area` a figure is cut out of it (`_pdf_page`)."""
+    import hashlib, tempfile, unicodedata
     src = inp.get("path") or inp.get("src")
     if not isinstance(src, str) or not src.strip():
         return 'Error: `extract` needs `path` — a PDF in the workspace, e.g. "attachments/report.pdf".'
@@ -2267,13 +2312,26 @@ async def _pdf_parts(inp, workspace, name):
         return f"Error: {src} doesn't exist in the workspace."
     if path.suffix.lower() != ".pdf":
         return f"Error: {src} isn't a PDF — `extract` reads a PDF's text and pictures."
+    if inp.get("page") is not None:
+        return await _pdf_page(inp, workspace, name, path, src)
     root = pathlib.Path(workspace.root)
     assets_rel = f"designs/{name}-assets"
+    letters = lambda t: _SHAPED.sub(lambda m: unicodedata.normalize("NFKC", m[0]), _DIRECTION_MARKS.sub("", t))
     try:
         _, info = await _run_tool("pdfinfo", str(path), timeout=20)
-        code, text = await _run_tool("pdftotext", "-layout", "-enc", "UTF-8", str(path), "-", timeout=90)
+        code, text = await _run_tool("pdftotext", "-enc", "UTF-8", str(path), "-", timeout=90)
         if code != 0:
             return f"Error: couldn't read {src} — it may be damaged or locked with a password."
+        _, laid = await _run_tool("pdftotext", "-layout", "-enc", "UTF-8", str(path), "-", timeout=90)
+        info = info.decode("utf-8", "replace")
+        text = text.decode("utf-8", "replace")
+        shaped = len(_SHAPED_ARABIC.findall(text))
+        pages = [letters(p).strip() for p in text.split("\f")]
+        tables = [_laid_out_tables(letters(p)) for p in laid.decode("utf-8", "replace").split("\f")]
+        # A scan is pictures of its pages: not pictures to use again.
+        paper = re.search(r"^Page\s+(?:\d+\s+)?size:\s+([\d.]+) x ([\d.]+)", info, re.M)
+        scan = not any(pages)
+        shape = float(paper[1]) / float(paper[2]) if scan and paper and float(paper[2]) else None
         with tempfile.TemporaryDirectory() as tmp:
             await _run_tool("pdfimages", "-all", str(path), str(pathlib.Path(tmp) / "img"), timeout=120)
             found = sorted(pathlib.Path(tmp).iterdir())
@@ -2288,6 +2346,8 @@ async def _pdf_parts(inp, workspace, name):
                     size, digest = _image_size(data), hashlib.sha1(data).hexdigest()
                     if not size or min(size) < _PDF_PICTURE_MIN or digest in seen or len(data) > _DESIGN_IMAGE_MAX:
                         continue
+                    if shape and max(size) >= 900 and abs(size[0] / size[1] - shape) < 0.02 * shape:
+                        continue                          # a page of a scan
                     seen.add(digest)
                     (root / assets_rel).mkdir(parents=True, exist_ok=True)
                     rel = f"{assets_rel}/picture-{len(kept) + 1}.{ext}"
@@ -2299,12 +2359,12 @@ async def _pdf_parts(inp, workspace, name):
         return "Error: reading a PDF's parts needs poppler (pdftotext, pdfimages) in this agent's image."
     except asyncio.TimeoutError:
         return f"Error: {src} took too long to read — try a smaller PDF."
-    info = info.decode("utf-8", "replace")
-    field = lambda key: (re.search(rf"^{key}:\s+(.+)$", info, re.M) or [None, ""])[1].strip()
-    pages = [p.strip() for p in text.decode("utf-8", "replace").split("\f")]
+    field = lambda key: (re.search(rf"^{key}:[ \t]+(\S.*)$", info, re.M) or [None, ""])[1].strip()
     while pages and not pages[-1]:
         pages.pop()
-    lines = [f"{src} — {field('Pages') or len(pages)} pages" + (f", titled \"{field('Title')}\"" if field("Title") else "")
+    look = f'extract {{"path": {json.dumps(src, ensure_ascii=False)}, "page": 1}}'
+    count = field("Pages") or str(len(pages))
+    lines = [f"{src} — {count} page{'' if count == '1' else 's'}" + (f", titled \"{field('Title')}\"" if field("Title") else "")
              + (f", {field('Page size')}" if field("Page size") else "") + "."]
     total = 0
     for n, page in enumerate(pages, 1):
@@ -2316,16 +2376,103 @@ async def _pdf_parts(inp, workspace, name):
         shown = page[:_PDF_TEXT_PAGE]
         total += len(shown)
         lines.append(f"\nPage {n}:\n{shown}" + (" […]" if len(page) > len(shown) else ""))
-    if not any(pages):
-        lines.append("It has no text layer (a scan): read its pages with the Read tool to see them.")
+        rows = tables[n - 1] if n <= len(tables) else []
+        if rows:
+            total += sum(map(len, rows))
+            lines.append("Its tables, as they are laid out:\n" + "\n".join(rows))
+    if scan:
+        lines.append(f"It is a scan — pictures of its pages, with no text in it. Look at a page with {look} (then 2, 3 …) "
+                     "and take its words from what you see.")
+    elif shaped > 20:
+        lines.append(f"\nIts text can't be trusted as it stands: the Arabic is saved as the glyphs it was drawn with, so letters "
+                     f"may be doubled and lines out of order. Take the wording from the pages themselves — {look} shows one.")
     if pictures:
         lines.append("\nIts pictures, saved to use again:")
         lines += [f"  {rel} ({w}×{h})" for rel, (w, h) in pictures]
         lines.append(f"Use one in a document as {{\"image\": \"{pictures[0][0]}\", \"caption\": \"…\"}} (or as the cover's `image`).")
-    else:
-        lines.append("\nIt has no pictures worth keeping (photos or figures of 200px or more).")
+    elif not scan:
+        lines.append("\nIt has no pictures stored in it (photos of 200px or more).")
+    if not scan:
+        lines.append(f"A chart or a diagram that is drawn in the PDF is not a picture in it. To use one again, look at its page — {look} — "
+                     "and cut it out: the same with \"area\": [left, top, width, height], each a part of the page from 0 to 1.")
     lines.append("To redesign it: write its content as a `document` — its own sections and words, better organised — and render that.")
     return "\n".join(lines)
+
+
+async def _pdf_page(inp, workspace, name, path, src):
+    """One page of a PDF drawn for the model to look at — or, with `area`, that part of it
+    cut out and saved to designs/<name>-assets/figure-<n>.png: a chart or a diagram that is
+    drawn in the PDF (so not among its pictures), to be used again in the redesign."""
+    import tempfile
+    page, area = inp.get("page"), inp.get("area")
+    how = "`area` is [left, top, width, height], each a part of the page from 0 to 1 — e.g. [0.1, 0.25, 0.8, 0.3]"
+    if isinstance(page, str) and page.strip().isdigit():
+        page = int(page)
+    if not isinstance(page, int) or isinstance(page, bool) or page < 1:
+        return "Error: `page` is the PDF's page number, from 1."
+    if area is not None:
+        if isinstance(area, str):
+            try:
+                area = json.loads(area)
+            except ValueError:
+                return f"Error: {how}."
+        if not (isinstance(area, (list, tuple)) and len(area) == 4
+                and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in area)):
+            return f"Error: {how}."
+        x, y, w, h = map(float, area)
+        if not (0 <= x < 1 and 0 <= y < 1 and w >= 0.02 and h >= 0.02 and x + w <= 1.001 and y + h <= 1.001):
+            return f"Error: {how} — this one runs off the page."
+    which = ("-f", str(page), "-l", str(page))
+    try:
+        _, info = await _run_tool("pdfinfo", *which, str(path), timeout=20)
+        info = info.decode("utf-8", "replace")
+        count = int((re.search(r"^Pages:\s+(\d+)", info, re.M) or [0, 0])[1])
+        if count and page > count:
+            return f"Error: {src} has {count} pages."
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp) / "page"
+            if area is None:
+                await _run_tool("pdftoppm", "-r", str(_PDF_LOOK_DPI), *which, "-jpeg", "-singlefile", str(path), str(out), timeout=60)
+                made = out.with_suffix(".jpg")
+            else:
+                paper = re.search(r"^Page\s+(?:\d+\s+)?size:\s+([\d.]+) x ([\d.]+)", info, re.M)
+                if not paper:
+                    return f"Error: couldn't read the size of page {page} of {src}."
+                W, H = (round(float(v) * _PDF_CUT_DPI / 72) for v in paper.groups())
+                await _run_tool("pdftoppm", "-r", str(_PDF_CUT_DPI), *which, "-x", str(round(x * W)), "-y", str(round(y * H)),
+                                "-W", str(round(w * W)), "-H", str(round(h * H)), "-png", "-singlefile", str(path), str(out), timeout=60)
+                made = out.with_suffix(".png")
+            if not made.is_file():
+                return f"Error: page {page} of {src} couldn't be drawn — it may be damaged or locked with a password."
+            data = await asyncio.to_thread(made.read_bytes)
+    except FileNotFoundError:
+        return "Error: reading a PDF's pages needs poppler (pdfinfo, pdftoppm) in this agent's image."
+    except asyncio.TimeoutError:
+        return f"Error: page {page} of {src} took too long to draw."
+    said = json.dumps(src, ensure_ascii=False)
+    if area is None:
+        text = (f"Page {page} of {count or '?'} of {src}. To use a chart or a diagram on it again, cut it out: extract "
+                f"{{\"path\": {said}, \"page\": {page}, \"area\": [left, top, width, height]}} — each a part of the page from 0 to 1 "
+                f"(its top-left quarter is [0, 0, 0.5, 0.5]).")
+        media = "image/jpeg"
+    else:
+        folder = pathlib.Path(workspace.root) / "designs" / f"{name}-assets"
+
+        def save():
+            folder.mkdir(parents=True, exist_ok=True)
+            n = 1 + len(list(folder.glob("figure-*.png")))
+            (folder / f"figure-{n}.png").write_bytes(data)
+            return n
+        n = await asyncio.to_thread(save)
+        rel, size = f"designs/{name}-assets/figure-{n}.png", _image_size(data) or (0, 0)
+        text = (f"Saved {rel} ({size[0]}×{size[1]}) — page {page} of {src}, cut at {[round(v, 3) for v in (x, y, w, h)]}. "
+                f"Check it holds the whole figure and nothing beside it; if it doesn't, cut again with the area put right. "
+                f"Use it in a document as {{\"image\": \"{rel}\", \"caption\": \"…\"}}.")
+        media = "image/png"
+    if len(data) > _DESIGN_QA_MAX:
+        return text
+    return {"_model": [{"type": "image", "source": {"type": "base64", "media_type": media, "data": base64.b64encode(data).decode()}},
+                       {"type": "text", "text": text}]}
 
 
 def _prepare_slide(slide, settings, root):
