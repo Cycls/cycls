@@ -189,13 +189,14 @@ async def apply(fig, script=None, user_id=None, ops=None, preview=False, page=No
             "pages": _pages(data), "page": str(data.get("page") or ""), "started": str(data.get("started") or "")}
 
 
-async def outline(fig, user_id=None, page=None):
+async def outline(fig, user_id=None, page=None, full=False):
     """One page of a saved `.fig` → {"frames": [{slide, name, size, fill?, nodes: [{name,
     type, x, y, w, h, text?, font?, size?, color?, fill?, radius?, …}]}], "pages":
     [{name, frames}], "page": its name} — the page's frames and their nodes by name,
     measured, for edits that name nodes which exist. `page` is a name or a place from
-    0; the first when absent."""
-    data = await _post("/inspect", _paged({"fig": base64.b64encode(fig).decode()}, page), user_id)
+    0; the first when absent. `full`: every text whole, not its first lines — to compare
+    two saves of a design word for word."""
+    data = await _post("/inspect", _paged({"fig": base64.b64encode(fig).decode(), **({"full": True} if full else {})}, page), user_id)
     return {"frames": data.get("frames") or [], "pages": _pages(data), "page": str(data.get("page") or "")}
 
 

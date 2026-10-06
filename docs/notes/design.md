@@ -361,6 +361,24 @@ the pages make themselves.
 - **Arguments as text.** Some models hand a large nested argument over as a JSON string;
   `spec`, `ops` and `slide` given that way are read as the object (seen on prod with a
   document's spec — it used to cost a refused call).
+- **Hand edits are not laid out over.** A document's pages are made from its source, so
+  a re-render (`replace`, or any section action) would drop what was changed on them
+  since — by hand in the editor, or by an `edit`. The deck document keeps `rendered`, the
+  version of the `.fig` as it was rendered, and a copy of that `.fig` is kept in
+  `.cache/design/<hash>.rendered.fig`. Before a re-render the tool compares: same version
+  → render. Different → the two saves are outlined with every text whole (`/inspect
+  {full}`) and compared (`_edits_since_render`, `_page_changes`): a text's new wording
+  (shown from where it parts from the old), the nodes moved or restyled, the ones added or
+  removed, page by page. The tool then **does not render** and says so; the model folds
+  the wording into what it sends, tells the user what can't be kept, and repeats with
+  `discard_edits: true` — the edited pages are kept as a version either way. A save that
+  changed nothing (the editor writing the file again) is not an edit; a document with no
+  kept copy still holds, without the details; one rendered before `rendered` existed
+  renders as before.
+- **No cover.** `"cover": false` for a one-page CV, a letter, an invoice, a brief: a
+  title block heads page 1 (`kind`, `title`, `subtitle`, `meta`), sections run on under
+  compact headings, a single page has no page number, and a few lines too many for the
+  page are set a little tighter to fit (cycls-design `document.js` / `flow.js`).
 - **Richer content.** A `p` takes `aside` (a note in the margin); `[^key]` cites the
   document's `footnotes: {key: text}` (numbered, set at the section's end); `numbering:
   true` numbers figures and tables; links are links in the PDF. A chart or a table can

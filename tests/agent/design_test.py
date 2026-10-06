@@ -1602,8 +1602,10 @@ def test_a_document_saves_its_pdf_and_opens_the_page_viewer(tmp_path, monkeypatc
     assert (d / "coffee-report.pdf").read_bytes() == b"%PDF-report" and (d / "coffee-report.fig").read_bytes() == b"FIGZ"
     assert calls["fmt"] == "pdf"                                              # whatever `format` says: a document is a PDF
     deck = json.loads((d / "coffee-report.deck.json").read_text(encoding="utf-8"))
+    from cycls._agent.design.store import version_of
     assert deck == {"type": "cycls.deck", "version": 1, "kind": "document", "fig": "designs/coffee-report.fig",
-                    "size": [1240, 1754], "slides": 3, "exports": ["designs/coffee-report.pdf"], "document": _DOC}
+                    "size": [1240, 1754], "slides": 3, "exports": ["designs/coffee-report.pdf"], "document": _DOC,
+                    "rendered": version_of(b"FIGZ")}
     # The source is kept as it was written — paths, not the images' bytes.
     assert deck["document"]["sections"][0]["blocks"][2]["image"] == "attachments/beans.png"
     assert out["_ui"] == {"type": "ui", "action": "open_canvas", "path": "designs/coffee-report.deck.json", "name": "coffee-report.deck.json"}
@@ -1893,3 +1895,113 @@ def test_a_pdfs_text_and_pictures_are_taken_out_for_a_redesign(tmp_path, monkeyp
         raise FileNotFoundError(argv[0])
     monkeypatch.setattr("cycls._agent.tools._run_tool", missing)
     assert "poppler" in run("attachments/old-report.pdf")
+
+
+# ---- a document edited by hand is not laid out again over those edits without a word ----
+
+def _outlines(monkeypatch, by_fig):
+    """`design.outline` faked: each saved .fig's pages, by its bytes."""
+    asked = []
+
+    async def outline(fig, user_id=None, page=None, full=False):
+        asked.append((bytes(fig), full))
+        return {"frames": by_fig[bytes(fig)], "pages": [], "page": ""}
+    monkeypatch.setattr("cycls._agent.design.outline", outline)
+    return asked
+
+
+def _page(*nodes):
+    return {"slide": 1, "name": "page-2", "size": [1240, 1754], "nodes": [dict(n) for n in nodes]}
+
+
+_LEAD = {"name": "lead-1", "type": "text", "x": 124, "y": 300, "w": 992, "h": 80, "text": "Demand grew 18%.", "font": "Inter", "size": 28, "color": "#111111"}
+_RULE = {"name": "rule", "type": "rect", "x": 124, "y": 280, "w": 96, "h": 5, "fill": "#b45309"}
+
+
+def test_a_document_edited_by_hand_is_not_rendered_over_until_the_edits_are_accounted_for(tmp_path, monkeypatch):
+    from cycls._agent import versions
+    from cycls._agent.design.store import version_of
+    ws = _ws(tmp_path)
+    _saved_document(tmp_path, monkeypatch)                                   # rendered: FIG-ONE
+    d = tmp_path / "designs"
+    deck = json.loads((d / "report.deck.json").read_text(encoding="utf-8"))
+    assert deck["rendered"] == version_of(b"FIG-ONE")                         # what its pages were, as rendered
+    # The person rewords the lead and moves a rule in the editor: the .fig is saved, the source knows nothing of it.
+    (d / "report.fig").write_bytes(b"FIG-BY-HAND")
+    asked = _outlines(monkeypatch, {
+        b"FIG-ONE": [_page(), _page(_LEAD, _RULE)],                        # the cover, then page 2
+        b"FIG-BY-HAND": [_page(), _page({**_LEAD, "text": "Demand grew 21% — a record year.", "h": 120}, {**_RULE, "y": 320},
+                                        {"name": "sticker", "type": "rect", "x": 900, "y": 200, "w": 80, "h": 80, "fill": "#ff0000"})]})
+    calls = _doc_render(monkeypatch, pages=4, fig=b"FIG-TWO")
+    run = lambda extra: asyncio.run(_exec_design({"action": "update_section", "name": "report", "number": 3,
+                                                  "section": {"blocks": ["Rewritten."]}, **extra}, ws))
+    out = run({})
+    assert isinstance(out, str) and out.startswith("Error: not rendered")
+    assert 'page 2: "lead-1" now reads "Demand grew 21% — a record year." (was "Demand grew 18%.")' in out
+    assert '"rule" moved, resized or restyled' in out and "1 node added" in out
+    assert '"discard_edits": true' in out and "History" in out
+    assert all(full for _, full in asked)                                    # compared word for word, not by the first lines
+    # Nothing happened: not rendered, not saved, the hand-edited pages still there.
+    assert "renders" not in calls and (d / "report.fig").read_bytes() == b"FIG-BY-HAND"
+    assert _source(tmp_path)["sections"][2]["blocks"] == ["Short."]
+
+    # Once they are accounted for, it renders — and the hand-edited pages are kept as a version.
+    out = run({"discard_edits": True})
+    assert "Document re-rendered" in out["_model"][-1]["text"] and "kept in History" in out["_model"][-1]["text"]
+    assert (d / "report.fig").read_bytes() == b"FIG-TWO"
+    kept = versions.listing(tmp_path, "designs/report.fig")
+    assert versions.read(tmp_path, "designs/report.fig", kept[0]["id"]) == b"FIG-BY-HAND"
+    assert json.loads((d / "report.deck.json").read_text(encoding="utf-8"))["rendered"] == version_of(b"FIG-TWO")
+    # …and the next change, with no edits since, needs no such word.
+    assert "Document re-rendered" in run({})["_model"][-1]["text"]
+
+
+def test_the_whole_render_again_is_held_the_same_way_and_a_resave_with_no_change_is_not_an_edit(tmp_path, monkeypatch):
+    ws = _ws(tmp_path)
+    doc = _saved_document(tmp_path, monkeypatch)
+    d = tmp_path / "designs"
+    (d / "report.fig").write_bytes(b"FIG-BY-HAND")
+    _outlines(monkeypatch, {b"FIG-ONE": [_page(_LEAD)], b"FIG-BY-HAND": [_page({**_LEAD, "text": "Demand grew 21%."})]})
+    calls = _doc_render(monkeypatch, fig=b"FIG-TWO")
+    out = asyncio.run(_exec_design({"action": "render", "name": "report", "replace": True, "spec": {"document": doc}}, ws))
+    assert isinstance(out, str) and out.startswith("Error: not rendered") and "renders" not in calls
+    # A new name is a new document: nothing of the old one is at stake.
+    assert not isinstance(asyncio.run(_exec_design({"action": "render", "name": "report", "spec": {"document": doc}}, ws)), str)
+    assert (d / "report-2.pdf").is_file() and (d / "report.fig").read_bytes() == b"FIG-BY-HAND"
+    # The editor saved the file again without changing a thing (the bytes differ, the pages don't): not an edit.
+    (d / "report.fig").write_bytes(b"FIG-RESAVED")
+    _outlines(monkeypatch, {b"FIG-ONE": [_page(_LEAD)], b"FIG-RESAVED": [_page(dict(_LEAD))]})
+    out = asyncio.run(_exec_design({"action": "render", "name": "report", "replace": True, "spec": {"document": doc}}, ws))
+    assert not isinstance(out, str) and "Document re-rendered" in out["_model"][-1]["text"]
+
+
+def test_when_what_changed_cannot_be_told_the_hold_still_asks(tmp_path, monkeypatch):
+    import shutil
+    ws = _ws(tmp_path)
+    _saved_document(tmp_path, monkeypatch)
+    d = tmp_path / "designs"
+    (d / "report.fig").write_bytes(b"FIG-BY-HAND")
+    shutil.rmtree(tmp_path / ".cache", ignore_errors=True)                    # the pages as rendered are no longer kept
+    calls = _doc_render(monkeypatch, fig=b"FIG-TWO")
+    out = asyncio.run(_exec_design({"action": "delete_section", "name": "report", "number": 3}, ws))
+    assert isinstance(out, str) and out.startswith("Error: not rendered") and "changed after it was last rendered" in out
+    assert "renders" not in calls
+    # A document rendered before any of this was kept has nothing to compare with: it renders as it always did.
+    deck = json.loads((d / "report.deck.json").read_text(encoding="utf-8"))
+    deck.pop("rendered")
+    (d / "report.deck.json").write_text(json.dumps(deck), encoding="utf-8")
+    out = asyncio.run(_exec_design({"action": "delete_section", "name": "report", "number": 3}, ws))
+    assert not isinstance(out, str) and "Document re-rendered" in out["_model"][-1]["text"]
+
+
+def test_a_long_texts_change_is_shown_where_it_is():
+    from cycls._agent.tools import _page_changes
+    long = "Specialty coffee kept growing through the year, though not evenly. " * 8
+    page = lambda text: [{"nodes": []}, {"nodes": [{"name": "p-1", "type": "text", "x": 0, "y": 0, "w": 700, "h": 300, "text": text}]}]
+    said = _page_changes(page(long + "It ends with these last words."), page(long + "It ends with different words now."))
+    assert len(said) == 1 and said[0].startswith('page 2: "p-1" now reads "…')
+    assert "It ends with different words now." in said[0] and "It ends with these last words." in said[0]   # the part that changed, both ways
+    assert len(said[0]) < 800                                                # not the whole paragraph twice
+    # A short text is shown whole.
+    short = _page_changes(page("Demand grew 18%."), page("Demand grew 21%."))
+    assert short == ['page 2: "p-1" now reads "Demand grew 21%." (was "Demand grew 18%.")']

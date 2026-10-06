@@ -413,7 +413,10 @@ The model calls one `design` tool:
   `update_section` / `add_section` / `move_section` / `delete_section` /
   `update_document` — and it is rendered again in place, the earlier version kept. A
   chart or table can read a workspace spreadsheet (`"from": "data/sales.csv"`); `extract
-  {path}` takes an existing PDF's text and pictures apart to be redesigned.
+  {path}` takes an existing PDF's text and pictures apart to be redesigned. `"cover":
+  false` makes a one-page CV, letter, invoice or brief, headed by its title. Pages the
+  user edited by hand are never laid out again without a word: the agent is told what
+  they changed first.
 
 Every render comes back to the model as an image (a deck: every slide) with a layout
 check — overlapping text, text off an edge, too small, low contrast — to fix before it

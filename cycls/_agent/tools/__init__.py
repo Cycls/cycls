@@ -442,7 +442,12 @@ _DESIGN_TOOL = {
         "{title?, blocks?}} · add_section {name, section, at?} · move_section {name, number, to} · "
         "delete_section {name, number} · update_document {name, document: {title?, theme?, cover?, …}} — "
         "`inspect` lists its sections; it is rendered again in place (the earlier version is kept). Or "
-        "the whole render again with \"replace\": true. Never a new name for a change.\n"
+        "the whole render again with \"replace\": true. Never a new name for a change. If the user edited "
+        "its pages by hand since the last render, the tool says what they changed instead of rendering: keep "
+        "their wording in what you send, tell them what can't be kept, then repeat with \"discard_edits\": true. "
+        "A one-page CV, a letter, an invoice, a brief has no cover page: \"cover\": false — its title heads "
+        "page 1 (\"kind\": a small label over it; \"meta\": a line under it, e.g. contact details), sections "
+        "run on under compact headings, and a few lines too many for the page are set a little tighter to fit.\n"
         "- extract {path, name?} — an EXISTING PDF taken apart to be redesigned: its text page by page, "
         "and its pictures saved into designs/<name>-assets/ to use again; then write it as a document.\n"
         "- script {script, name, format?} — escape hatch: a raw OpenPencil / Figma "
@@ -504,6 +509,7 @@ _DESIGN_TOOL = {
         "path": {"type": "string", "description": "For `extract`: the PDF in the workspace, e.g. attachments/report.pdf."},
         "page": {"type": "string", "description": "For `inspect` / `edit` on a design with several pages: the page's name (default: the first page)."},
         "replace": {"type": "boolean", "description": "For `render` of a document: re-render it under the SAME name (after changing its content) instead of making a new one; the earlier version is kept in its history."},
+        "discard_edits": {"type": "boolean", "description": "For a document's re-render (`replace`, or a section action) after the tool said its pages were edited by hand since the last render: true once those edits are accounted for — their wording put into what you send, the user told what can't be kept."},
         "slide": {"type": "object", "description": "For add_slide / update_slide: the slide — a layout slide {layout, …slots, notes?} laid out with the deck's own theme and footer, or a hand-built one {nodes, fill?}. update_slide replaces the slide whole: start from its `source` in inspect and change what you need."},
         "number": {"type": "integer", "description": "For update_slide / move_slide / duplicate_slide / delete_slide: the slide's number, from 1. For update_section / move_section / delete_section: the section's."},
         "to": {"type": "integer", "description": "For move_slide / move_section: the position it moves to, from 1."},
@@ -2220,7 +2226,7 @@ async def _exec_document(action, inp, workspace, name):
     except ValueError as e:
         return f"Error: {e}."
     return await _render_document({"spec": {"document": {**doc, "sections": sections}}, "replace": True,
-                                   "intent": inp.get("intent") or intent}, workspace, name)
+                                   "intent": inp.get("intent") or intent, "discard_edits": inp.get("discard_edits")}, workspace, name)
 
 
 async def _run_tool(*argv, timeout=60):
@@ -2707,6 +2713,109 @@ async def _exec_design(inp, workspace):
             "_ui": ui}
 
 
+_OUTLINE_STYLE = ("font", "size", "color", "fill", "radius", "stroke", "rotation", "opacity", "align")
+
+
+def _rendered_copy(root, fig_rel):
+    """Where a document's .fig is kept as it was rendered — to tell, later, what was
+    changed on its pages by hand."""
+    import hashlib
+    return pathlib.Path(root) / ".cache" / "design" / f"{hashlib.sha1(fig_rel.encode('utf-8')).hexdigest()[:16]}.rendered.fig"
+
+
+def _page_changes(before, after):
+    """Two outlines of a document's pages — as rendered, and as they are now — → what
+    was changed, a line a page: a text's new wording, the nodes moved or restyled, the
+    ones added and removed."""
+    def pair(new, old):
+        """A text's wording now and before, each shown from just ahead of where they part
+        (a long paragraph changed near its end is not its opening twice)."""
+        same = next((i for i, (x, y) in enumerate(zip(new, old)) if x != y), min(len(new), len(old)))
+        start = max(0, same - 60) if max(len(new), len(old)) > 300 else 0
+        start = new.rfind(" ", 0, start) + 1 if start else 0
+        show = lambda t: (("…" if start else "") + t[start:start + 300] + ("…" if len(t) > start + 300 else "")).replace("\n", " ")
+        return show(new), show(old)
+    count = lambda n, what: f"{n} node{'' if n == 1 else 's'} {what}"
+    lines = []
+    if len(before) != len(after):
+        lines.append(f"it had {len(before)} pages as rendered and has {len(after)} now")
+    for i, (a, b) in enumerate(zip(before, after), 1):
+        old = {n.get("name"): n for n in reversed(a.get("nodes") or [])}
+        new = {n.get("name"): n for n in reversed(b.get("nodes") or [])}
+        texts, moved, added = [], [], 0
+        for key in (n.get("name") for n in b.get("nodes") or []):
+            n, o = new[key], old.get(key)
+            if n is None or key in texts or key in moved:
+                continue
+            if o is None:
+                added += 1
+            elif str(n.get("text") or "") != str(o.get("text") or ""):
+                now, was = pair(str(n.get("text") or ""), str(o.get("text") or ""))
+                texts.append(f'"{key}" now reads "{now}" (was "{was}")')
+            elif (any(abs((_num(n.get(k)) or 0) - (_num(o.get(k)) or 0)) > 1 for k in ("x", "y", "w", "h"))
+                  or any(n.get(k) != o.get(k) for k in _OUTLINE_STYLE)) and key not in moved:
+                moved.append(key)
+            new[key] = None                                   # a name used twice on a page is told once
+        removed = sum(1 for key in old if key not in new)
+        parts = [*texts]
+        if moved:
+            parts.append(", ".join(f'"{k}"' for k in moved[:5]) + (f" and {len(moved) - 5} more" if len(moved) > 5 else "") + " moved, resized or restyled")
+        if added:
+            parts.append(count(added, "added"))
+        if removed:
+            parts.append(count(removed, "removed"))
+        if parts:
+            lines.append(f"page {i}: " + "; ".join(parts))
+    return lines[:14]
+
+
+async def _edits_since_render(workspace, name):
+    """What was changed on a document's pages after it was last rendered — by hand in the
+    editor, or by an `edit` — and so is not in its source. None: nothing was (or the
+    document was rendered before its pages were kept, and it can't be told). A list:
+    lines saying what — empty when only that it changed is known."""
+    from cycls._agent import design
+    from cycls._agent.design.store import version_of
+    root = pathlib.Path(workspace.root)
+    fig_rel = f"designs/{name}.fig"
+
+    def read():
+        try:
+            deck = json.loads((root / f"designs/{name}.deck.json").read_text(encoding="utf-8"))
+            current = (root / fig_rel).read_bytes()
+        except (OSError, ValueError):
+            return None, None, None
+        rendered = deck.get("rendered") if isinstance(deck, dict) else None
+        try:
+            base = _rendered_copy(root, fig_rel).read_bytes()
+        except OSError:
+            base = None
+        return rendered, current, base
+    rendered, current, base = await asyncio.to_thread(read)
+    if not rendered or current is None or version_of(current) == rendered:
+        return None
+    if base is None or version_of(base) != rendered:
+        return []
+    subject = getattr(workspace, "subject", None)
+    try:
+        before = (await design.outline(base, user_id=subject, full=True))["frames"]
+        after = (await design.outline(current, user_id=subject, full=True))["frames"]
+    except Exception:
+        return []
+    # (The editor may save a file again without changing a thing: its bytes differ, its pages don't.)
+    return _page_changes(before, after) or None
+
+
+def _edits_hold(name, changes):
+    """Why a document was not rendered again, and what to do about it."""
+    detail = "".join(f"\n- {line}" for line in changes) if changes else ""
+    return (f"Error: not rendered — designs/{name}'s pages were changed after it was last rendered (by hand in the editor, or by an "
+            f"`edit`), and those changes are not in its source: rendering it again lays every page out from the source, without them."
+            f"{detail}\nDon't drop them silently. Put the wording changes into what you send (the section they are in — or the whole "
+            f"document with `render` and \"replace\": true), tell the user which of the others can't be kept (a page laid out again "
+            f"keeps no moved or restyled node), and call again with \"discard_edits\": true. The edited pages stay in History either way.")
+
+
 async def _render_document(inp, workspace, name):
     """A document (a report, a proposal — anything that flows over paper pages): rendered
     by the service to a PDF and its editable pages, saved as designs/<name>.pdf / .fig
@@ -2717,7 +2826,15 @@ async def _render_document(inp, workspace, name):
     from cycls._agent.design import stock
     from cycls._agent.design.deck import lock
     from cycls._agent.design.store import write_fig
+    from cycls._agent.design.store import version_of
     root, subject = pathlib.Path(workspace.root), getattr(workspace, "subject", None)
+    designs = root / "designs"
+    replacing = inp.get("replace") is True and (designs / f"{name}.fig").is_file() and (designs / f"{name}.deck.json").is_file()
+    # Pages edited since the last render aren't in the source: they are not laid out again
+    # without a word (the model folds what it can into what it sends, and says so).
+    edited = await _edits_since_render(workspace, name) if replacing else None
+    if edited is not None and inp.get("discard_edits") is not True:
+        return _edits_hold(name, edited)
     credits, err = await stock.resolve(inp["spec"], workspace.root)
     if err:
         return err
@@ -2732,10 +2849,10 @@ async def _render_document(inp, workspace, name):
     except Exception as e:
         return f"Error: the document didn't render — {e}"
     notes = [*notes, *(f"{c}." for c in credits), *r.notes]
-    designs = root / "designs"
+    if edited is not None:
+        notes.append("The pages changed after the last render were laid out again from the source; they are kept in History.")
     await asyncio.to_thread(designs.mkdir, parents=True, exist_ok=True)
     requested = name
-    replacing = inp.get("replace") is True and (designs / f"{name}.fig").is_file() and (designs / f"{name}.deck.json").is_file()
     if not replacing:
         name = _dedupe_design_name(designs, name, "pdf")
     fig_rel, pdf_rel, deck_rel = f"designs/{name}.fig", f"designs/{name}.pdf", f"designs/{name}.deck.json"
@@ -2747,9 +2864,18 @@ async def _render_document(inp, workspace, name):
     else:
         await asyncio.to_thread((root / fig_rel).write_bytes, r.fig)
     await asyncio.to_thread((root / pdf_rel).write_bytes, r.image)
+
+    def keep_rendered():                                           # its pages as rendered: what a later change is told against
+        try:
+            copy = _rendered_copy(root, fig_rel)
+            copy.parent.mkdir(parents=True, exist_ok=True)
+            copy.write_bytes(r.fig)
+        except OSError:
+            pass
+    await asyncio.to_thread(keep_rendered)
     count = max(len(r.slides), 1)
     deck = {"type": "cycls.deck", "version": 1, "kind": "document", "fig": fig_rel, "size": r.size or _PAPER["a4"],
-            "slides": count, "exports": [pdf_rel], "document": source}
+            "slides": count, "exports": [pdf_rel], "document": source, "rendered": version_of(r.fig)}
     await asyncio.to_thread((root / deck_rel).write_text, json.dumps(deck, indent=2, ensure_ascii=False), "utf-8")
     note = f" (named '{name}' so it doesn't overwrite the existing '{requested}')" if name != requested else ""
     editor = bool(os.environ.get("DESIGN_EDITOR_URL"))
