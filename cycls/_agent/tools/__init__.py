@@ -3018,6 +3018,16 @@ def _edits_hold(name, changes):
             f"keeps no moved or restyled node), and call again with \"discard_edits\": true. The edited pages stay in History either way.")
 
 
+def _seen_pages(deck_path):
+    """The fingerprints of a document's pages as last rendered (kept in its deck document) —
+    what the model has looked at — or [] when there are none to go by."""
+    try:
+        hashes = json.loads(deck_path.read_text(encoding="utf-8")).get("hashes")
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [h for h in hashes if isinstance(h, str)] if isinstance(hashes, list) else []
+
+
 async def _render_document(inp, workspace, name):
     """A document (a report, a proposal — anything that flows over paper pages): rendered
     by the service to a PDF and its editable pages, saved as designs/<name>.pdf / .fig
@@ -3045,7 +3055,10 @@ async def _render_document(inp, workspace, name):
     if err:
         return err
     try:
-        r = await design.render(spec, fmt="pdf", scale=2, user_id=subject, sheets=True)
+        # Rendered again: the pages the model has seen (their fingerprints, kept with the
+        # document) are said, and only the ones that differ come back to be looked at.
+        known = await asyncio.to_thread(_seen_pages, designs / f"{name}.deck.json") if replacing else []
+        r = await design.render(spec, fmt="pdf", scale=2, user_id=subject, sheets=True, known=known)
     except design.Unavailable as e:
         return f"Error: design unavailable — {e}"
     except Exception as e:
@@ -3077,7 +3090,8 @@ async def _render_document(inp, workspace, name):
     await asyncio.to_thread(keep_rendered)
     count = max(len(r.slides), 1)
     deck = {"type": "cycls.deck", "version": 1, "kind": "document", "fig": fig_rel, "size": r.size or _PAPER["a4"],
-            "slides": count, "exports": [pdf_rel], "document": source, "rendered": version_of(r.fig)}
+            "slides": count, "exports": [pdf_rel], "document": source, "rendered": version_of(r.fig),
+            **({"hashes": r.hashes} if r.hashes else {})}
     await asyncio.to_thread((root / deck_rel).write_text, json.dumps(deck, indent=2, ensure_ascii=False), "utf-8")
     note = f" (named '{name}' so it doesn't overwrite the existing '{requested}')" if name != requested else ""
     editor = bool(os.environ.get("DESIGN_EDITOR_URL"))
@@ -3095,14 +3109,28 @@ async def _render_document(inp, workspace, name):
     ui = {"type": "ui", "action": "open_canvas", "path": deck_rel, "name": f"{name}.deck.json"}
     if replacing:      # what is open shows the new pages: the viewer fetches them again, an editor re-opens the file
         ui = [{"type": "ui", "action": "design_command", "path": fig_rel, "script": "", "version": version, "reload": True}, ui]
-    blocks, total = [], 0
-    for n, jpg in enumerate(r.previews[:_DESIGN_QA_SLIDES], 1):
+    blocks, total, held = [], 0, []
+    numbers = r.preview_of if r.preview_of is not None else range(1, len(r.previews) + 1)
+    for n, jpg in list(zip(numbers, r.previews))[:_DESIGN_QA_SLIDES]:
         if blocks and total + len(jpg) > _DESIGN_QA_MAX:
             break
         total += len(jpg)
+        held.append(n)
         blocks += [{"type": "text", "text": f"Page {n}:"},
                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                                                 "data": base64.b64encode(jpg).decode()}}]
+    if r.preview_of is not None:
+        # Rendered again: the pages that differ from what the model last saw, and no others.
+        if not held:
+            return {"_model": ack + " No page changed from the last render: there is nothing to look at again.", "_ui": ui}
+        rest = count - len(held)
+        named = (f"Page {held[0]}" if len(held) == 1 else
+                 "Pages " + ", ".join(map(str, held[:-1])) + f" and {held[-1]}")
+        ack += (f" {named} changed and {'is' if len(held) == 1 else 'are'} attached; the other "
+                f"{'page is as you last saw it' if rest == 1 else f'{rest} pages are as you last saw them'}. "
+                "QA what changed before you present: no page ends in a large hole; nothing overlaps or is cut; "
+                "names, numbers and dates are exactly right. If the content needs changing again, change it; then present.")
+        return {"_model": [*blocks, {"type": "text", "text": ack}], "_ui": ui}
     if not blocks:
         return {"_model": ack, "_ui": ui}
     shown = len(blocks) // 2

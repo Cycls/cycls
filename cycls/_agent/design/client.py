@@ -121,7 +121,11 @@ class Rendered(NamedTuple):
     `preview_pages` whose page each of `previews` is. `size` is a document's paper,
     [W, H] in pixels (None for anything else). `sheets` are contact sheets — a long
     document's pages past its previews, twelve to a JPEG — and `sheet_pages` the
-    [first, last] page each one holds ([] unless asked for, and past twelve pages)."""
+    [first, last] page each one holds ([] unless asked for, and past twelve pages).
+    `hashes` is each frame's fingerprint — the same for a frame that looks the same —
+    to send as `known` with the next render of the design; then `preview_of` is the
+    frames (from 1) that differ, which `previews` are of ([] = none; None when the
+    service showed all of it: nothing was known, or most of it changed)."""
     image: bytes
     fig: bytes
     frame_id: object
@@ -139,6 +143,8 @@ class Rendered(NamedTuple):
     size: object = None
     sheets: list = []
     sheet_pages: list = []
+    hashes: list = []
+    preview_of: object = None
 
 
 def _b64s(values):
@@ -176,20 +182,26 @@ def _decode(data):
         [str(p) for p in data.get("preview_pages") or []],
         list(data["size"]) if isinstance(data.get("size"), list) and len(data["size"]) == 2 else None,
         _b64s(data.get("sheets_base64")),
-        [[int(p[0]), int(p[1])] for p in data.get("sheet_pages") or [] if isinstance(p, list) and len(p) == 2])
+        [[int(p[0]), int(p[1])] for p in data.get("sheet_pages") or [] if isinstance(p, list) and len(p) == 2],
+        [str(h) for h in data.get("page_hashes") or []],
+        [int(n) for n in data["preview_of"]] if isinstance(data.get("preview_of"), list) else None)
 
 
-async def render(spec, fmt="png", scale=2, user_id=None, every=False, sheets=False):
+async def render(spec, fmt="png", scale=2, user_id=None, every=False, sheets=False, known=None):
     """Render a declarative design spec → a Rendered. `spec` is `{size:[w,h], fill,
     nodes:[...]}`, a deck `{frames:[...]}`, or several pages `{pages:[{name, size, fill,
     nodes}]}` — one design, a variant a page (see the Design tool description);
     `every` asks for every frame in a raster `fmt` (a carousel's slides); `sheets` asks,
-    past twelve frames, for previews of the first four and the rest on contact sheets."""
+    past twelve frames, for previews of the first four and the rest on contact sheets;
+    `known` — the fingerprints of the frames already seen (an earlier render's `hashes`)
+    — asks for previews of the frames that differ only."""
     body = {"spec": spec, "format": fmt, "scale": scale, "preview": True}
     if every:
         body["every"] = True
     if sheets:
         body["sheets"] = True
+    if known:
+        body["known"] = list(known)
     return _decode(await _post("/render", body, user_id))
 
 

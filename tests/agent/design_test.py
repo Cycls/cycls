@@ -244,16 +244,17 @@ def _text(out):
 
 def _fake_render(monkeypatch, image=b"\x89PNGrender", fig=b"FIGZ", preview=None, notes=(), lint=(),
                  previews=(), images=(), slides=(), dir=None, pages=(), page_images=(), preview_pages=(), size=None,
-                 sheets=(), sheet_pages=()):
+                 sheets=(), sheet_pages=(), hashes=(), preview_of=None):
     calls = {}
 
     async def _r(spec, fmt="png", scale=2, user_id=None, every=False, **kw):
         calls.update(spec=spec, fmt=fmt, scale=scale, user_id=user_id, every=every, sheets=kw.get("sheets", False),
-                     renders=calls.get("renders", 0) + 1)
+                     known=list(kw.get("known") or []), renders=calls.get("renders", 0) + 1)
         return design.Rendered(image, fig, "0:6", fmt, preview, list(notes), list(lint),
                                list(previews), list(images) if every else [], list(slides), dir,
                                list(pages), list(page_images), list(preview_pages), size,
-                               list(sheets), [list(p) for p in sheet_pages])
+                               list(sheets), [list(p) for p in sheet_pages],
+                               list(hashes), None if preview_of is None else list(preview_of))
 
     monkeypatch.setattr("cycls._agent.design.render", _r)
     return calls
@@ -1702,6 +1703,40 @@ def test_a_long_document_is_seen_whole_its_first_pages_and_the_rest_on_contact_s
     assert "33 pages" in ack
     assert "Pages 1–4 are attached to read, and pages 5–33 on 3 contact sheets" in ack
     assert "Design inspect lists the rest" not in ack
+
+
+def test_a_document_rendered_again_is_looked_at_where_it_changed(tmp_path, monkeypatch):
+    """After a section was rewritten the model was shown every page again — a dozen previews, or
+    four and the contact sheets — though it had looked at all but one or two a moment before. The
+    tool keeps each page's fingerprint, says with the next render which it has seen, and attaches
+    only the pages the service says differ."""
+    doc = {"title": "Report", "sections": [{"title": "One", "blocks": ["Text."]}, {"title": "Two", "blocks": ["More."]}]}
+    three = [{"name": f"page-{n}"} for n in (1, 2, 3)]
+    deck = lambda: json.loads((tmp_path / "designs" / "report.deck.json").read_text(encoding="utf-8"))
+    calls = _fake_render(monkeypatch, image=b"%PDF-1", previews=[b"J1", b"J2", b"J3"], slides=three, size=[1240, 1754], hashes=["a1", "b2", "c3"])
+    out = asyncio.run(_exec_design({"action": "render", "name": "report", "spec": {"document": doc}}, _ws(tmp_path)))
+    assert calls["known"] == [] and "All 3 pages are attached" in out["_model"][-1]["text"]   # a first render: all of it
+    assert deck()["hashes"] == ["a1", "b2", "c3"]
+    # A section rewritten: the service is told what was seen, and previews the page that differs.
+    calls = _fake_render(monkeypatch, image=b"%PDF-2", previews=[b"K3"], slides=three, size=[1240, 1754], hashes=["a1", "b2", "d4"], preview_of=[3])
+    out = asyncio.run(_exec_design({"action": "update_section", "name": "report", "number": 2, "section": {"blocks": ["Rewritten."]}}, _ws(tmp_path)))
+    assert calls["known"] == ["a1", "b2", "c3"]
+    m = out["_model"]
+    assert [b["text"] for b in m if b["type"] == "text"][0] == "Page 3:"
+    assert [base64.b64decode(b["source"]["data"]) for b in m if b["type"] == "image"] == [b"K3"]
+    ack = m[-1]["text"]
+    assert "Page 3 changed and is attached; the other 2 pages are as you last saw them" in ack
+    assert "All 3 pages are attached" not in ack
+    assert deck()["hashes"] == ["a1", "b2", "d4"]
+    # Two pages of three.
+    calls = _fake_render(monkeypatch, image=b"%PDF-3", previews=[b"L2", b"L3"], slides=three, size=[1240, 1754], hashes=["a1", "e5", "f6"], preview_of=[2, 3])
+    out = asyncio.run(_exec_design({"action": "update_section", "name": "report", "number": 2, "section": {"blocks": ["Longer now."]}}, _ws(tmp_path)))
+    assert [b["text"] for b in out["_model"] if b["type"] == "text"][:2] == ["Page 2:", "Page 3:"]
+    assert "Pages 2 and 3 changed and are attached; the other page is as you last saw it" in out["_model"][-1]["text"]
+    # Nothing changed: nothing to look at again, and said so.
+    calls = _fake_render(monkeypatch, image=b"%PDF-4", previews=[], slides=three, size=[1240, 1754], hashes=["a1", "e5", "f6"], preview_of=[])
+    out = asyncio.run(_exec_design({"action": "update_section", "name": "report", "number": 2, "section": {"blocks": ["Longer now."]}}, _ws(tmp_path)))
+    assert isinstance(out["_model"], str) and "No page changed" in out["_model"]
 
 
 def test_a_documents_images_are_read_wherever_they_sit(tmp_path, monkeypatch):
