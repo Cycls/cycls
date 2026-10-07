@@ -327,7 +327,9 @@ the pages make themselves.
   hand-built area), `break`. `size` is the paper (`a4` by default, `letter`, `a5`,
   `landscape`), `cover.style` is `full`, `band`, `minimal`, `split` (the title on a dark
   panel beside a full-height photo) or `type` (the whole page in the accent), `openers`
-  is `plain` or `band` (each section opens on a band of the dark colour), `pages` are hand-built
+  is `plain`, `band` (each section opens on a band of the dark colour) or `page` (a
+  chapter page of its own: number, title, the section's `summary`), `columns` is 1 or 2
+  (the text in two columns, evened out, with what is wide spanning them), `pages` are hand-built
   full pages, `back` a closing page. The service (cycls-design `document.js` + `flow.js`)
   designs and paginates it: text runs from page to page, a heading never ends a page, a
   figure that doesn't fit waits for the next page while the text after it moves up, a
