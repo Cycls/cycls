@@ -443,6 +443,14 @@ the pages make themselves.
   alone and left its image, its slides' and pages' images, its PDF and its deck document
   under the old name. `refresh.follow` now moves them too (never over a file already
   there) and rewrites the deck document's `fig` / `exports`.
+- **A deploy of the service is not a failed design.** For a few minutes after
+  cycls-design is deployed its instances are swapped under the requests in flight: a
+  connection is dropped with no answer ("Server disconnected…"), or refused, or the
+  platform's front end answers 502 / 503 for a service that isn't there yet. The client
+  (`design/client.py` `_post`) makes such a request again — after 1 s, then 3 s — and
+  only then calls the service unreachable. The service keeps no state, so a request made
+  twice changes nothing. Not tried again: a timeout (a render that takes too long would
+  take as long again) and anything the service itself answered.
 - **A stale token is asked again.** In a tab left in the background the browser
   throttles Clerk's token refresh, and the first request on coming back was a bare
   "HTTP 401". `fetchAuthed` (client `use-auth-headers.ts`, used by `useApi` and the chat

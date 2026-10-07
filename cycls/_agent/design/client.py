@@ -20,6 +20,7 @@ The service is stateless: it takes a spec (or a raw script) and returns the
 rendered image plus the editable `.fig` source. State (the saved files) lives in
 the calling agent's workspace, so there is nothing to keep in sync here.
 """
+import asyncio
 import base64
 import os
 from typing import NamedTuple
@@ -29,6 +30,17 @@ import httpx
 # A render shells the CanvasKit engine on the service; give it headroom, but
 # well under a page-timeout so a hung service surfaces as an error, not a stall.
 _TIMEOUT = 240  # seconds — a whole deck (PPTX / PDF) may take a few minutes
+
+
+# A deploy of the service is not a failed render. For a few minutes after one, its
+# instances are swapped under the requests in flight: a connection is dropped with no
+# answer, or refused, or the platform's front end answers 502 / 503 for a service that
+# isn't there yet. The same request a moment later is served — so it is made again,
+# twice at most. (The service keeps no state: a request made twice changes nothing.)
+# Not tried again: a timeout — a render that takes too long would take as long again —
+# and anything the service itself answered.
+_RETRY_WAITS = (1, 3)       # seconds before the second and the third try
+_GONE = (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)
 
 
 class Unavailable(RuntimeError):
@@ -56,17 +68,30 @@ async def _post(path, body, user_id=None):
     url = os.environ.get("DESIGN_URL")
     if not url:
         raise Unavailable("design not configured (DESIGN_URL)")
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.post(f"{url.rstrip('/')}{path}", headers=_headers(user_id), json=body)
-    except httpx.HTTPError as e:
-        raise Unavailable(f"design service unreachable: {e}") from e
+    gone = None
+    for wait in (0, *_RETRY_WAITS):
+        if wait:
+            await asyncio.sleep(wait)
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                resp = await client.post(f"{url.rstrip('/')}{path}", headers=_headers(user_id), json=body)
+        except _GONE as e:
+            gone = e
+            continue
+        except httpx.HTTPError as e:
+            raise Unavailable(f"design service unreachable: {e}") from e
+        try:
+            data = resp.json()
+        except Exception:
+            data = None
+        if resp.status_code in (502, 503, 504) and not (isinstance(data, dict) and "ok" in data):
+            gone = RuntimeError(f"design service {resp.status_code} (no answer from the service itself)")
+            continue
+        break
+    else:
+        raise Unavailable(f"design service unreachable after {1 + len(_RETRY_WAITS)} tries: {gone}") from gone
     if resp.status_code == 401:
         raise Unavailable("design service rejected the secret (DESIGN_SECRET)")
-    try:
-        data = resp.json()
-    except Exception:
-        data = None
     if resp.status_code != 200 or not (isinstance(data, dict) and data.get("ok")):
         # A well-formed failure carries {ok:false,error}; anything else is raw. A
         # request over the size cap can be refused by the platform's front end
