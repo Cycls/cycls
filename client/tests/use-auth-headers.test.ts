@@ -7,6 +7,7 @@ import { renderHook } from "@testing-library/react";
 import { describe, test, expect, afterEach, vi } from "vitest";
 import { useAuthHeaders, setActiveWorkspace, fetchAuthed } from "../src/hooks/use-auth-headers";
 import { useChat } from "../src/hooks/use-chat";
+import { useFiles } from "../src/hooks/use-files";
 
 vi.mock("../src/lib/analytics", () => ({ track: vi.fn() }));
 
@@ -101,5 +102,25 @@ describe("a stale token", () => {
     vi.stubGlobal("fetch", forbidden);
     expect((await fetchAuthed("/files")).status).toBe(403);
     expect(forbidden).toHaveBeenCalledTimes(1);
+  });
+
+  // The Studio opening a big scene: its engine call waits behind hundreds of file reads,
+  // the token runs out meanwhile, and the app sat at "shaping the geometry… 0/97" for good.
+  test("an app's engine call is asked once more too, and a refusal is still the app's to show", async () => {
+    const auth = renderHook(() => useAuthHeaders());
+    auth.result.current.setGetToken(async (fresh?: boolean) => (fresh ? "new" : "stale"));
+    const files = renderHook(() => useFiles());
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) =>
+      (init.headers as Record<string, string>).Authorization === "Bearer new"
+        ? new Response(JSON.stringify({ ok: true }))
+        : new Response("", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await files.result.current.appEngine("studio", "evaluate", { scene: 1 })).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][0]).toBe("/apps/studio/engine");
+    expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toEqual({ scene: 1, op: "evaluate" });
+
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: "the engine is busy" }), { status: 429 })));
+    await expect(files.result.current.appEngine("studio", "evaluate", {})).rejects.toMatchObject({ message: "the engine is busy", status: 429 });
   });
 });

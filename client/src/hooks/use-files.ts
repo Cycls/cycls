@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { zip } from "fflate";
 import { voteUrl, type PollApi } from "../lib/polls";
 import { useApi } from "./use-api";
+import { fetchAuthed } from "./use-auth-headers";
 import { track } from "../lib/analytics";
 import type { TrashRow } from "../components/trash-view";
 
@@ -169,12 +170,14 @@ export function useFiles(baseUrl: string = "") {
     return { status: res.status, body: await res.text(), contentType: res.headers.get("content-type") || "" };
   }, [baseUrl, authHeaders]);
 
-  // An app's relayed engine call (Studio → the Blender deployment). Raw fetch: a
-  // refusal is the app's to show, never a toast over its viewport.
+  // An app's relayed engine call (Studio → the Blender deployment). Not `api`: a
+  // refusal is the app's to show, never a toast over its viewport. But a 401 from a token
+  // gone stale is asked once more, as every other request is: an app opening a big scene
+  // sends this behind hundreds of file reads, and the token can run out while it waits.
   const appEngine = useCallback(async (slug: string, op: string, payload: Record<string, unknown>) => {
-    const res = await fetch(`${baseUrl}/apps/${slug}/engine`, {
+    const res = await fetchAuthed(`${baseUrl}/apps/${slug}/engine`, {
       method: "POST",
-      headers: { ...(await authHeaders()), "content-type": "application/json" },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ ...payload, op }),
     });
     if (!res.ok) {
@@ -183,7 +186,7 @@ export function useFiles(baseUrl: string = "") {
       throw Object.assign(new Error(detail || `HTTP ${res.status}`), { status: res.status });
     }
     return res.json();
-  }, [baseUrl, authHeaders]);
+  }, [baseUrl]);
 
   // An app's rows. Raw fetch, like the connector relay: a 403 from the role gate
   // is an answer the app renders, not a toast over someone's dashboard.
