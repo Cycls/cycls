@@ -2397,7 +2397,7 @@ async def _pdf_parts(inp, workspace, name):
     else:
         lines = [f"{src} — {count} page{'' if count == '1' else 's'}" + (f", titled \"{field('Title')}\"" if field("Title") else "")
                  + (f", {field('Page size')}" if field("Page size") else "") + "."]
-    total = 0
+    total, held = 0, []
     for n, page in enumerate(pages, first):
         if not page:
             continue
@@ -2409,9 +2409,12 @@ async def _pdf_parts(inp, workspace, name):
                          f"\"pages\": \"{n}-{end}\"}} reads on.)")
             break
         total += len(shown) + sum(map(len, rows))
+        held.append(n)
         lines.append(f"\nPage {n}:\n{shown}" + (" […]" if len(page) > len(shown) else ""))
         if rows:
             lines.append("Its tables, as they are laid out:\n" + "\n".join(rows))
+    if span and held:      # its first line names the pages it holds, not the range that was asked for
+        lines[0] = f"{src} — pages {held[0]}–{held[-1]} of {count}." if held[-1] > held[0] else f"{src} — page {held[0]} of {count}."
     if span:
         if shaped > 20:
             lines.append(f"\nIts text can't be trusted as it stands (Arabic saved as drawn glyphs): take the wording from the pages themselves — {look} shows one.")

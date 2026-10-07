@@ -2122,7 +2122,8 @@ def test_a_long_pdfs_text_fits_the_reply_and_the_rest_is_read_on_by_page(tmp_pat
     # Reading on: those pages' text, numbered as they are in the PDF; its pictures are not taken again.
     ran.clear()
     out = run(pages="5-12")
-    assert out.startswith("attachments/paper.pdf — pages 5–12 of 12.") and len(out) < spill.SPILL_AT
+    # (Its first line names the pages it holds — not the range asked for, which a real agent took for what it was shown.)
+    assert out.startswith("attachments/paper.pdf — pages 5–8 of 12.") and len(out) < spill.SPILL_AT
     assert "Page 5:" in out and "Page 5 opens here." in out and "Page 8 opens here." in out and "Page 9 opens here." not in out
     assert '"pages": "9-12"' in out
     asked = [a for a in ran if a[0] == "pdftotext"]
@@ -2130,6 +2131,7 @@ def test_a_long_pdfs_text_fits_the_reply_and_the_rest_is_read_on_by_page(tmp_pat
     assert not [a for a in ran if a[0] == "pdfimages"] and "pictures" not in out
     # The other ways to name pages; and what is wrong with a request, in words.
     assert "Page 10 opens here." in run(pages=[9, 10]) and "Page 12 opens here." in run(pages=12) and "Page 7 opens here." in run(pages="7")
+    assert run(pages=12).startswith("attachments/paper.pdf — page 12 of 12.")
     assert "12 pages" in run(pages="13-14")
     assert '"5-8"' in run(pages="the end")
 
