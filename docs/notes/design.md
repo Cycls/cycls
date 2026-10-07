@@ -415,6 +415,13 @@ the pages make themselves.
     letters come out doubled and lines out of order in such files.
   - **A scan** is said to be one, and its page images are not offered as pictures to
     reuse; its pages are read with `extract {path, page: N}`.
+  - **A reply's worth at a time.** The harness files any tool reply of 20,000 characters
+    or more and shows the model its first lines (`spill.SPILL_AT`). `extract` allowed
+    60,000 — so a real agent redesigning a 12-page paper got a 600-character preview and
+    read the file back with five shell commands. A reply now holds about 16,000
+    characters of the PDF (three pages of a dense paper) and says how to read on:
+    `extract {path, pages: "4-12"}`. Reading on takes text and tables only; the pictures
+    were taken the first time.
 - **QA.** Every page comes back to the model, with the layout check — text sized for
   paper, not a slide — and the service's notes in words: a block taller than a page, a
   page a section left nearly empty. Up to twelve pages come as a preview each. Past
