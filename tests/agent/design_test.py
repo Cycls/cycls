@@ -2095,6 +2095,45 @@ def test_a_scan_is_said_to_be_one_and_its_pages_are_not_offered_as_pictures(tmp_
     assert "picture-1" not in out
 
 
+def test_a_long_pdfs_text_fits_the_reply_and_the_rest_is_read_on_by_page(tmp_path, monkeypatch):
+    """A tool's reply of 20,000 characters or more is put in a file and the model shown its
+    first lines. `extract` allowed 60,000 — so a real agent redesigning a 12-page paper got a
+    600-character preview, and read the file back with five shell commands."""
+    from cycls._agent import spill
+    _img(tmp_path, "attachments/paper.pdf", b"%PDF-1.5 fake")
+    pages = [f"Page {n} opens here. " + "words " * 660 for n in range(1, 13)]      # ~4,000 characters a page
+    ran = []
+
+    async def tool(*argv, timeout=60):
+        ran.append(argv)
+        if argv[0] == "pdfinfo":
+            return 0, b"Pages:          12\nPage size:      612 x 792 pts (letter)\n"
+        if argv[0] == "pdftotext":
+            first = int(argv[argv.index("-f") + 1]) if "-f" in argv else 1
+            last = int(argv[argv.index("-l") + 1]) if "-l" in argv else 12
+            return 0, "\f".join(pages[first - 1:last]).encode()
+        return 0, b""
+    monkeypatch.setattr("cycls._agent.tools._run_tool", tool)
+    run = lambda **kw: asyncio.run(_exec_design({"action": "extract", "path": "attachments/paper.pdf", **kw}, _ws(tmp_path)))
+    out = run()
+    assert len(out) < spill.SPILL_AT                                              # it is read, not filed
+    assert "Page 1 opens here." in out and "Page 4 opens here." in out and "Page 5 opens here." not in out
+    assert '(Pages 5–12 are not shown here: extract {"path": "attachments/paper.pdf", "pages": "5-12"} reads on.)' in out
+    # Reading on: those pages' text, numbered as they are in the PDF; its pictures are not taken again.
+    ran.clear()
+    out = run(pages="5-12")
+    assert out.startswith("attachments/paper.pdf — pages 5–12 of 12.") and len(out) < spill.SPILL_AT
+    assert "Page 5:" in out and "Page 5 opens here." in out and "Page 8 opens here." in out and "Page 9 opens here." not in out
+    assert '"pages": "9-12"' in out
+    asked = [a for a in ran if a[0] == "pdftotext"]
+    assert asked and all(a[a.index("-f") + 1] == "5" and a[a.index("-l") + 1] == "12" for a in asked)
+    assert not [a for a in ran if a[0] == "pdfimages"] and "pictures" not in out
+    # The other ways to name pages; and what is wrong with a request, in words.
+    assert "Page 10 opens here." in run(pages=[9, 10]) and "Page 12 opens here." in run(pages=12) and "Page 7 opens here." in run(pages="7")
+    assert "12 pages" in run(pages="13-14")
+    assert '"5-8"' in run(pages="the end")
+
+
 def test_a_page_of_a_pdf_is_looked_at_and_a_figure_cut_out_of_it(tmp_path, monkeypatch):
     """A chart drawn in the PDF (not a photo in it) is not among its pictures. The page is
     looked at, and the figure cut out of it by where it is: [left, top, width, height] as

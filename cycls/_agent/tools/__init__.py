@@ -459,7 +459,8 @@ _DESIGN_TOOL = {
         "When it must fit a number of pages — a one-page CV — say \"max_pages\": 1: its type is set smaller, "
         "down to 85%, until it does, and the reply says if even that isn't enough (then cut content, once).\n"
         "- extract {path, name?} — an EXISTING PDF taken apart to be redesigned: its text page by page "
-        "(in reading order, its tables as they are laid out), and its pictures saved into "
+        "(in reading order, its tables as they are laid out; a long one a few pages at a time — the reply "
+        "says how to read on: \"pages\": \"5-12\"), and its pictures saved into "
         "designs/<name>-assets/ to use again; then write it as a document. A chart or diagram drawn in "
         "the PDF is not among its pictures: extract {path, page: N} shows that page, and with "
         "\"area\": [left, top, width, height] (parts of the page, 0 to 1) cuts the figure out and saves it. "
@@ -523,6 +524,7 @@ _DESIGN_TOOL = {
         "path": {"type": "string", "description": "For `extract`: the PDF in the workspace, e.g. attachments/report.pdf."},
         "page": {"type": ["string", "integer"], "description": "For `inspect` / `edit` on a design with several pages: the page's name (default: the first page). For `extract`: the PDF's page to look at, a number from 1."},
         "area": {"type": "array", "items": {"type": "number"}, "description": "For `extract` with `page`: the part of that page to cut out and save as a picture — [left, top, width, height], each a part of the page from 0 to 1."},
+        "pages": {"type": ["string", "integer"], "description": "For `extract`: read on in a long PDF — the pages whose text to show, e.g. \"5-12\" (the reply says which are left)."},
         "replace": {"type": "boolean", "description": "For `render` of a document: re-render it under the SAME name (after changing its content) instead of making a new one; the earlier version is kept in its history."},
         "discard_edits": {"type": "boolean", "description": "For a document's re-render (`replace`, or a section action) after the tool said its pages were edited by hand since the last render: true once those edits are accounted for — their wording put into what you send, the user told what can't be kept."},
         "slide": {"type": "object", "description": "For add_slide / update_slide: the slide — a layout slide {layout, …slots, notes?} laid out with the deck's own theme and footer, or a hand-built one {nodes, fill?}. update_slide replaces the slide whole: start from its `source` in inspect and change what you need."},
@@ -2256,7 +2258,7 @@ async def _run_tool(*argv, timeout=60):
 
 
 _PDF_TEXT_PAGE = 5000       # characters of one page's text handed to the model
-_PDF_TEXT_ALL = 60000       # …and of the whole PDF
+_PDF_TEXT_ALL = 16000       # …and of one reply: with what follows it, under the 20,000 at which a reply is filed (spill.SPILL_AT)
 _PDF_PICTURES = 30          # pictures kept
 _PDF_PICTURE_MIN = 200      # px on its shorter side: smaller is an icon or a rule
 _PDF_TABLE_ROWS = 40        # rows of one page's tables shown as they are laid out
@@ -2319,16 +2321,32 @@ async def _pdf_parts(inp, workspace, name):
         return f"Error: {src} isn't a PDF — `extract` reads a PDF's text and pictures."
     if inp.get("page") is not None:
         return await _pdf_page(inp, workspace, name, path, src)
+    # `pages`: reading on — a long PDF's text comes a reply's worth at a time.
+    span = None
+    if inp.get("pages") is not None:
+        v, m = inp["pages"], None
+        if isinstance(v, int) and not isinstance(v, bool):
+            span = (v, v)
+        elif isinstance(v, (list, tuple)) and len(v) in (1, 2) and all(isinstance(n, int) and not isinstance(n, bool) for n in v):
+            span = (v[0], v[-1])
+        elif isinstance(v, str) and (m := re.fullmatch(r"\s*(\d+)\s*(?:(?:[-–—:]|to)\s*(\d+))?\s*", v)):
+            span = (int(m[1]), int(m[2] or m[1]))
+        if not span or not 1 <= span[0] <= span[1]:
+            return 'Error: `pages` is the pages to read — a number, or a range like "5-8".'
+    only = ("-f", str(span[0]), "-l", str(span[1])) if span else ()
     root = pathlib.Path(workspace.root)
     assets_rel = f"designs/{name}-assets"
     letters = lambda t: _SHAPED.sub(lambda m: unicodedata.normalize("NFKC", m[0]), _DIRECTION_MARKS.sub("", t))
     try:
         _, info = await _run_tool("pdfinfo", str(path), timeout=20)
-        code, text = await _run_tool("pdftotext", "-enc", "UTF-8", str(path), "-", timeout=90)
+        info = info.decode("utf-8", "replace")
+        length = int((re.search(r"^Pages:\s+(\d+)", info, re.M) or [0, 0])[1])
+        if span and length and span[0] > length:
+            return f"Error: {src} has {length} pages."
+        code, text = await _run_tool("pdftotext", *only, "-enc", "UTF-8", str(path), "-", timeout=90)
         if code != 0:
             return f"Error: couldn't read {src} — it may be damaged or locked with a password."
-        _, laid = await _run_tool("pdftotext", "-layout", "-enc", "UTF-8", str(path), "-", timeout=90)
-        info = info.decode("utf-8", "replace")
+        _, laid = await _run_tool("pdftotext", *only, "-layout", "-enc", "UTF-8", str(path), "-", timeout=90)
         text = text.decode("utf-8", "replace")
         shaped = len(_SHAPED_ARABIC.findall(text))
         pages = [letters(p).strip() for p in text.split("\f")]
@@ -2338,7 +2356,8 @@ async def _pdf_parts(inp, workspace, name):
         scan = not any(pages)
         shape = float(paper[1]) / float(paper[2]) if scan and paper and float(paper[2]) else None
         with tempfile.TemporaryDirectory() as tmp:
-            await _run_tool("pdfimages", "-all", str(path), str(pathlib.Path(tmp) / "img"), timeout=120)
+            if not span:                                  # (reading on: its pictures were taken the first time)
+                await _run_tool("pdfimages", "-all", str(path), str(pathlib.Path(tmp) / "img"), timeout=120)
             found = sorted(pathlib.Path(tmp).iterdir())
 
             def keep():
@@ -2369,22 +2388,34 @@ async def _pdf_parts(inp, workspace, name):
         pages.pop()
     look = f'extract {{"path": {json.dumps(src, ensure_ascii=False)}, "page": 1}}'
     count = field("Pages") or str(len(pages))
-    lines = [f"{src} — {count} page{'' if count == '1' else 's'}" + (f", titled \"{field('Title')}\"" if field("Title") else "")
-             + (f", {field('Page size')}" if field("Page size") else "") + "."]
+    first = span[0] if span else 1
+    end = first + len(pages) - 1
+    if span:
+        lines = [f"{src} — pages {first}–{end} of {count}." if end > first else f"{src} — page {first} of {count}."]
+        if not any(pages):
+            lines.append("There is no text on them.")
+    else:
+        lines = [f"{src} — {count} page{'' if count == '1' else 's'}" + (f", titled \"{field('Title')}\"" if field("Title") else "")
+                 + (f", {field('Page size')}" if field("Page size") else "") + "."]
     total = 0
-    for n, page in enumerate(pages, 1):
+    for n, page in enumerate(pages, first):
         if not page:
             continue
-        if total >= _PDF_TEXT_ALL:
-            lines.append(f"(Pages {n}–{len(pages)} are not shown: read them with the Read tool, `pages`.)")
-            break
         shown = page[:_PDF_TEXT_PAGE]
-        total += len(shown)
+        rows = tables[n - first] if n - first < len(tables) else []
+        # A reply's worth: the model reads what is here, and asks for the pages after it.
+        if total and total + len(shown) + sum(map(len, rows)) > _PDF_TEXT_ALL:
+            lines.append(f"\n(Pages {n}–{end} are not shown here: extract {{\"path\": {json.dumps(src, ensure_ascii=False)}, "
+                         f"\"pages\": \"{n}-{end}\"}} reads on.)")
+            break
+        total += len(shown) + sum(map(len, rows))
         lines.append(f"\nPage {n}:\n{shown}" + (" […]" if len(page) > len(shown) else ""))
-        rows = tables[n - 1] if n <= len(tables) else []
         if rows:
-            total += sum(map(len, rows))
             lines.append("Its tables, as they are laid out:\n" + "\n".join(rows))
+    if span:
+        if shaped > 20:
+            lines.append(f"\nIts text can't be trusted as it stands (Arabic saved as drawn glyphs): take the wording from the pages themselves — {look} shows one.")
+        return "\n".join(lines)
     if scan:
         lines.append(f"It is a scan — pictures of its pages, with no text in it. Look at a page with {look} (then 2, 3 …) "
                      "and take its words from what you see.")
