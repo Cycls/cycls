@@ -1708,6 +1708,30 @@ def test_replace_renders_the_same_document_again_and_keeps_the_old_one(tmp_path,
     assert (d / "report-2.pdf").is_file() and (d / "report.fig").read_bytes() == b"FIG-TWO"
 
 
+def test_an_argument_whose_json_text_is_broken_is_said_where_it_breaks(tmp_path, monkeypatch):
+    """A real agent's 19-page report: its 6,000-token `spec` came as text with a flaw in it. The
+    tool answered "`render` needs a `spec` object" — nothing about the text, or where — and
+    the whole document was written out again, blind."""
+    calls = _doc_render(monkeypatch)
+    good = json.dumps({"document": {"title": "Remote Work", "sections": [{"title": "Summary", "blocks": ["Hybrid has won."]}]}})
+    # A quote left unescaped inside a string.
+    broken = good.replace("Hybrid has won.", 'The "hybrid" model has won.')
+    out = asyncio.run(_exec_design({"action": "render", "name": "r", "spec": broken}, _ws(tmp_path)))
+    assert isinstance(out, str) and out.startswith("Error: `spec` came as text that isn't valid JSON")
+    assert f"character {broken.index('hybrid')}" in out and 'The "hybrid" model' in out            # where, and what is there
+    assert "unescaped" in out and "add_section" in out
+    assert "renders" not in calls                                                    # nothing was rendered
+    # Cut off before its end (the reply ran out): said as that.
+    out = asyncio.run(_exec_design({"action": "render", "name": "r", "spec": good[:-30]}, _ws(tmp_path)))
+    assert "isn't valid JSON" in out and "cut off" in out and "add_section" in out
+    # `ops` and `slide` the same.
+    out = asyncio.run(_exec_design({"action": "edit", "name": "r", "ops": '[{"op": "set_text", "node": "title", "text": "A "b""}]'}, _ws(tmp_path)))
+    assert out.startswith("Error: `ops` came as text that isn't valid JSON")
+    # Text that isn't trying to be JSON is left to the action to explain, as before.
+    out = asyncio.run(_exec_design({"action": "render", "name": "r", "spec": "a poster for the launch"}, _ws(tmp_path)))
+    assert "`render` needs a `spec` object" in out
+
+
 def test_an_argument_sent_as_its_json_text_is_read_as_the_object(tmp_path, monkeypatch):
     # Some models hand a large nested argument over as a JSON string (seen on prod:
     # a document's spec, refused as "needs a `spec` object" — one wasted round trip).

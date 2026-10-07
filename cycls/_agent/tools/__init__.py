@@ -2598,8 +2598,19 @@ async def _exec_design(inp, workspace):
         if isinstance(v, str) and v.strip()[:1] in ("{", "["):
             try:
                 inp[key] = json.loads(v)
-            except ValueError:
-                pass
+            except json.JSONDecodeError as e:
+                # Said where it breaks: "needs a `spec` object" told a model nothing, and a
+                # 6,000-token document was written out again, blind.
+                at = e.pos
+                near = v[max(0, at - 60):at + 40].replace("\n", " ")
+                # (Cut short: it stops where more was expected, or inside a string that never closes.)
+                cut = at >= len(v.rstrip()) - 1 or e.msg.startswith("Unterminated string")
+                why = ("it is cut off before its end — the call ran out of room" if cut else
+                       f"{e.msg} at character {at} of {len(v)}, near: …{near}… (most often a quote left unescaped inside a string, or a line break in one)")
+                more = (" A long document need not come in one call: render its first sections, then add_section for each of the rest."
+                        if key == "spec" else "")
+                return (f"Error: `{key}` came as text that isn't valid JSON — {why}. Nothing was done. "
+                        f"Send `{key}` again as an object, with that put right.{more}")
     action = (inp.get("action") or "render").lower()
     fmt = (inp.get("format") or "png").lower()
     if fmt not in _DESIGN_EXTS:
