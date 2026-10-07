@@ -18,9 +18,9 @@ const openFile = async () => "blob:fig";
 const writeFile = async () => {};
 const noop = () => {};
 
-function canvas(active: string, working?: string[]) {
+function canvas(active: string, working?: string[], tabs = TABS) {
   return (
-    <Canvas tabs={TABS} active={active} docked hidden={false} expanded={false} working={working}
+    <Canvas tabs={tabs} active={active} docked hidden={false} expanded={false} working={working}
             onToggleExpand={noop} onSelectTab={noop} onCloseTab={noop} onHide={noop}
             readFile={readFile} openFile={openFile} writeFile={writeFile} designEditorUrl={EDITOR} />
   );
@@ -109,5 +109,37 @@ describe("the panes behind the tab in front", () => {
     await flush();
     expect(editorFrame(container)).toBe(fig);                // the editor is there to save: it stays
     expect(appFrame(container)).toBeNull();                  // the app comes back fresh when it's written
+  });
+
+  it("two editors saving at once: neither is moved", async () => {
+    const FIG2 = "designs/b.fig";
+    const tabs = [...TABS, { path: FIG2, name: "b.fig" }];
+    const frameOf = (c: HTMLElement, title: string) => c.querySelector<HTMLIFrameElement>(`iframe[title="${title}"]`);
+    const { container, rerender } = render(canvas(FIG, undefined, tabs));
+    await flush();
+    const a = frameOf(container, "a.fig")!;
+    const edA = editor(a);
+    edA.say("ready", { protocol: 2 });
+    await flush();
+    const out = removals(container);
+
+    rerender(canvas(FIG2, undefined, tabs));                 // the second design: the first saves behind it
+    await flush();
+    const b = frameOf(container, "b.fig")!;
+    const edB = editor(b);
+    edB.say("ready", { protocol: 2 });
+    await flush();
+
+    rerender(canvas(MD, undefined, tabs));                   // and away from that one too, before the first is done
+    await flush();
+    expect(frameOf(container, "a.fig")).toBe(a);
+    expect(frameOf(container, "b.fig")).toBe(b);
+    expect(out.took(a)).toBe(false);
+    expect(out.took(b)).toBe(false);                         // a moved frame reloads, and loses what it hadn't saved
+
+    edA.say("flushed", { id: edA.asked()!.id, ok: true });
+    edB.say("flushed", { id: edB.asked()!.id, ok: true });
+    await flush();
+    expect(container.querySelector("iframe")).toBeNull();
   });
 });

@@ -551,14 +551,13 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   const alive = liveApps(live, file?.path ?? null, (p) => appScope(p) !== null, tabs.map((f) => f.path));
   useEffect(() => { if (alive !== live) setLive(alive); }, [alive, live]);
   // What stays mounted behind the tab in front: apps once shown (alive), and a design editor left
-  // behind until it has saved (draining). The order is stable — apps by path, then the file in
-  // front, then the draining — because moving an iframe in the page reloads it.
+  // behind until it has saved (draining). Always in path order, whichever is in front: two panes
+  // then never change places, and moving an iframe in the page reloads it.
   const mounted: CanvasFile[] = !file ? [] : [
-    ...[...[...alive].sort(), ...(alive.includes(file.path) ? [] : [file.path])]
-      .map((p) => tabs.find((f) => f.path === p))
-      .filter((f): f is CanvasFile => !!f),
+    ...alive.map((p) => tabs.find((f) => f.path === p)).filter((f): f is CanvasFile => !!f),
+    ...(alive.includes(file.path) ? [] : [file]),
     ...draining.filter((d) => d.path !== file.path && !alive.includes(d.path)),
-  ];
+  ].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const { width, startResize, resizing } = usePaneWidth("cycls_canvas_width", 560, 380, 420, railWidth, undefined, 1, 0.25);
 
   const inner = file && (
