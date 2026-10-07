@@ -429,6 +429,15 @@ the pages make themselves.
   the first four pages to read, and every other page small, twelve to a JPEG, each over
   its number — so a 33-page report is seen whole (it was shown its first twelve pages and
   nothing after), for less than twelve previews cost, and renders a quarter faster.
+- **Rendered again, it is looked at where it changed.** After a section was rewritten the
+  model was shown every page again, though it had looked at all but one or two a moment
+  before. The service answers a fingerprint a page (`Rendered.hashes`), kept in the deck
+  document (`hashes`); a re-render — a section action, `replace` — sends them back
+  (`design.render(…, known=…)`) and gets previews of the pages that differ only
+  (`preview_of`). The reply says which changed and that the others are as last seen, or
+  that nothing changed. A page that only moved down by one is not a changed page; a new
+  theme changes them all and is looked at whole. On a 10-page report, one section
+  rewritten came back as one page (145 KB of images where there were 1,287).
 - **Arabic.** A document in Arabic is laid out from the right by the service. Three
   things it does that the agent need not: a phone number, an IBAN's digits or a
   reference like `2026-0412` inside Arabic text is kept reading left to right (the
