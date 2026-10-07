@@ -125,6 +125,71 @@ def test_eval_posts_script(monkeypatch):
     assert "Authorization" not in _FakeClient.last["headers"]  # no secret set
 
 
+# ---- a deploy of the service is not a failed render ----
+
+class _SeqClient:
+    """An HTTP client whose posts go as listed: an exception is raised, a response returned."""
+    posts = 0
+
+    def __init__(self, outcomes, **_):
+        self._outcomes = outcomes
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, url, headers=None, json=None):
+        outcome = self._outcomes[min(_SeqClient.posts, len(self._outcomes) - 1)]
+        _SeqClient.posts += 1
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def _sequence(monkeypatch, *outcomes):
+    _SeqClient.posts = 0
+    monkeypatch.setenv("DESIGN_URL", "https://d.cycls.ai")
+    monkeypatch.setattr(client, "_RETRY_WAITS", (0, 0))                    # (no waiting in a test)
+    monkeypatch.setattr(client.httpx, "AsyncClient", lambda **k: _SeqClient(outcomes, **k))
+
+
+def test_a_connection_dropped_while_the_service_is_being_deployed_is_tried_again(monkeypatch):
+    """For a few minutes after the service is deployed its instances are swapped under the
+    requests in flight: on prod one render came back "Server disconnected without sending a
+    response" — a failed design, for a user — and the same request a moment later was fine."""
+    import httpx
+    gone = httpx.RemoteProtocolError("Server disconnected without sending a response.")
+    _sequence(monkeypatch, gone, _FakeResp(200, _ok()))
+    r = asyncio.run(design.render({"size": [1, 1]}))
+    assert r.image == b"\x89PNG" and _SeqClient.posts == 2
+    # The platform's front end answering for a service that isn't there yet (no JSON of the service's): the same.
+    _sequence(monkeypatch, httpx.ConnectError("refused"), _FakeResp(503, None), _FakeResp(200, _ok()))
+    assert asyncio.run(design.render({"size": [1, 1]})).fig == b"FIGB" and _SeqClient.posts == 3
+    # Still gone after three tries: said as unreachable, with how hard it was tried.
+    _sequence(monkeypatch, gone)
+    with pytest.raises(design.Unavailable) as ei:
+        asyncio.run(design.render({"size": [1, 1]}))
+    assert _SeqClient.posts == 3 and "3 tries" in str(ei.value) and "Server disconnected" in str(ei.value)
+
+
+def test_what_trying_again_would_not_cure_is_not_tried_again(monkeypatch):
+    import httpx
+    # A render that takes too long would take as long again.
+    _sequence(monkeypatch, httpx.ReadTimeout("timed out"), _FakeResp(200, _ok()))
+    with pytest.raises(design.Unavailable):
+        asyncio.run(design.render({"size": [1, 1]}))
+    assert _SeqClient.posts == 1
+    # The service's own answer — a spec it refuses, a render that failed — is its answer.
+    for status, payload in ((422, {"ok": False, "error": "bad spec"}), (500, {"ok": False, "error": "the script threw"}), (503, {"ok": False, "error": "busy"})):
+        _sequence(monkeypatch, _FakeResp(status, payload), _FakeResp(200, _ok()))
+        with pytest.raises(RuntimeError) as ei:
+            asyncio.run(design.render({"size": [1, 1]}))
+        assert _SeqClient.posts == 1 and payload["error"] in str(ei.value)
+        assert not isinstance(ei.value, design.Unavailable)
+
+
 def test_render_unconfigured_raises():
     with pytest.raises(design.Unavailable):
         asyncio.run(design.render({"size": [1, 1]}))
