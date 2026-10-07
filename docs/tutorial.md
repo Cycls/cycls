@@ -297,6 +297,7 @@ web = (
 | `.suggestions(bool)` | Prompt-starter suggestions on the empty-chat screen (default off) |
 | `.copy_public(*files)` | Static files served at `/public` |
 | `.workspaces(create="member")` | Multi-workspace mode: every user gets a personal workspace, teams are shared with role-based access, selected per request via the `X-Workspace` header. Requires `.auth(...)`. `create` sets who may create team workspaces (`"member"` or `"admin"`). See [docs/workspaces.md](workspaces.md) |
+| `.use(*extensions)` | Extensions (`cycls.Extension`): a package's tool in every `llm.run()` and the routes its app calls, e.g. `cycls_studio.Studio()`. Requires `.auth(...)`. See [Extensions](#extensions) |
 | `.iap(cycls.AppleIAP(...))` | Apple In-App Purchase entitlements: a StoreKit 2 signed transaction (JWS) in a header is verified offline against the bundled Apple root cert and, when valid, upgrades the request's `user.plan`. See below |
 
 Static files land at `https://your-app.cycls.ai/public/logo.png`.
@@ -448,6 +449,25 @@ a **Brand** variable collection, with its fonts loaded.
 Unset `DESIGN_URL` and the tool simply isn't offered — no crash, like the office
 fallback. The render service is a small Bun + OpenPencil app in its own repo
 (`cycls-design`). Details: [docs/notes/design.md](notes/design.md).
+
+### Extensions
+
+A package can bring a tool, and the routes its app calls, to any agent: declare it once on the
+`Web`. Its tool is offered in every `llm.run()` (a person can switch it off in Settings, like a
+builtin) and its routes are mounted on the agent's server. **Cycls Studio** is one: a
+Blender-style 3D app on the canvas with real Blender behind it, in its own repo.
+
+```python
+import cycls_studio
+
+@cycls.agent(image=cycls.Image().pip("https://github.com/Cycls/cycls-studio/archive/refs/heads/main.zip"),
+             web=cycls.Web().auth(cycls.Clerk()).use(cycls_studio.Studio()),
+             volumes={"/workspace": cycls.Volume("my-agent")})
+```
+
+Writing one: subclass `cycls.Extension` (a `name`, `tools()`, `router()`, `configured()`) and
+use the helpers in `cycls.extension` rather than SDK internals. Details:
+[docs/notes/extensions.md](notes/extensions.md).
 
 ### Apple IAP entitlements
 

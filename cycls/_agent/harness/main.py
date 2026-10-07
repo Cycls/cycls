@@ -147,7 +147,8 @@ def _shape(block, out, ok, handlers, mcp_names):
     name = block["name"]
     if ok and isinstance(out, dict) and "_model" in out:
         # Two channels: `_model` lands in tool_result, `_ui` goes to the client — one
-        # event, or a list of them (a deck change replays live AND opens the deck).
+        # event, or a list of them (a deck change replays live AND opens the deck; an
+        # extension's render opens AND tells its open app).
         ui = out.get("_ui")
         return out["_model"], [{**e, "id": block["id"]} for e in (ui if isinstance(ui, list) else [ui] if ui else [])], False
     if ok and isinstance(out, dict) and out.get("type") == "ui":

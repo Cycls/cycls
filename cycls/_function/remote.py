@@ -280,9 +280,14 @@ def _consume(name, r):
     return result
 
 
-def remote(name, *, url=None, api_key=None, timeout=3600):
+_JARS = {}
+
+
+def remote(name, *, url=None, api_key=None, timeout=3600, sticky=False):
     """Call a deployment by name: `cycls.remote("simulate")(n)`. Set `timeout` to the
-    callee's own limit so a hung service does not hold the caller long past it."""
+    callee's own limit so a hung service does not hold the caller long past it. `sticky`
+    keeps the deployment's affinity cookie between calls, so they tend to reach the same
+    instance — and whatever it has kept from the last one (deploys have session affinity on)."""
     name = name.replace('_', '-')
 
     def call(*args, **kwargs):
@@ -291,9 +296,12 @@ def remote(name, *, url=None, api_key=None, timeout=3600):
         key = api_key or _get_api_key()
         if not key:
             raise RemoteError("No API key. Set CYCLS_API_KEY or cycls.api_key.")
+        jar = _JARS.setdefault(name, httpx.Cookies()) if sticky else None
         with httpx.stream("POST", url or f"https://{name}.cycls.ai",
                           content=cloudpickle.dumps((args, kwargs)),
-                          timeout=timeout, headers=_stamp(key, name)) as r:
+                          timeout=timeout, headers=_stamp(key, name), cookies=jar) as r:
+            if jar is not None:
+                jar.extract_cookies(r)
             if r.status_code == 404:
                 raise RemoteError(f"{name}: 404 — no such deployment. Run `cycls deploy <file>` first.",
                                   status=404)

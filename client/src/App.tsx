@@ -59,6 +59,7 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
     pollsFor: withShare ? f.pollsFor : undefined,   // a poll runs through the deck's public link
     fetchConnector: f.fetchConnector,
     appData: f.appData,
+    appEngine: f.appEngine,
     searchFiles: f.searchFiles,
     listFolders: f.listFolders,
     onShareFile: withShare ? f.shareFile : undefined,

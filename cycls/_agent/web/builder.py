@@ -91,6 +91,7 @@ class Web:
         self._favicon: Optional[str] = None
         self._colors: Optional[dict] = None
         self._connectors: list = []
+        self._extensions: list = []
 
     def _copy(self, **updates):
         new = Web.__new__(Web)
@@ -234,6 +235,18 @@ class Web:
     def connectors(self, *oauths):
         """Connectors the directory offers and the connect routes serve (cycls.OAuth2)."""
         return self._copy(_connectors=[*self._connectors, *oauths])
+
+    def use(self, *extensions):
+        """Extensions (cycls.Extension): a package's tool, offered in every LLM.run() of this
+        agent, and the routes its app calls. Requires `auth(...)`. docs/notes/extensions.md"""
+        from cycls._agent.extension import Extension
+        for e in extensions:
+            if not isinstance(e, Extension) or not e.name:
+                raise TypeError(f"use() takes cycls.Extension instances with a name; got {type(e).__name__}")
+        by_name = {e.name: e for e in self._extensions}
+        for e in extensions:
+            by_name.setdefault(e.name, e)            # the first of a name wins
+        return self._copy(_extensions=list(by_name.values()))
 
     def analytics(self, *providers):
         """Analytics as plugins: one canonical event pipe in the client,

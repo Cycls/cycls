@@ -165,6 +165,7 @@ Identified users also carry **person properties** (via identify): `email`,
 | `design_save_conflict` | a design save refused because the file changed elsewhere (another tab, person or script), then the choice made | `choice` (`shown` / `latest` / `mine` / `copy`) — how often do edits collide, and how do people settle it? |
 | `design_version_restored` | a design restored from Version history | `reason` (what replaced the restored version: `save` / `agent` / `restore` / `keep`) — do people undo the agent? |
 | `design_selection_attached` | "Add selection" — what's selected in an open design, attached to a message | `nodes` (how many) — do people point at the design rather than describe it? |
+| `app_ask` | an open app pre-fills the composer (`cycls.ask`) — never sent for the person | `chars` — do apps hand work back to the chat? |
 
 ### Sharing loop (organic acquisition)
 

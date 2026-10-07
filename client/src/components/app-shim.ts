@@ -38,6 +38,10 @@ const SHIM = `<script>(function(){
     });
   }
 
+  // Commands the host pushes (an agent's change, "a turn just ended"). Held until
+  // the app registers a handler, so one sent while it boots isn't lost.
+  var commandHandlers = [], commandBacklog = [];
+
   function receive(m){
     m = m || {};
     if (m.type === 'cycls:init' && !ctx) {
@@ -46,9 +50,18 @@ const SHIM = `<script>(function(){
       resolveReady(ctx);
       return;
     }
+    if (m.type === 'cycls:command') {
+      if (!commandHandlers.length) {
+        if (commandBacklog.length < 50) commandBacklog.push(m.command);
+        return;
+      }
+      commandHandlers.slice().forEach(function(fn){ try { fn(m.command); } catch (e) { report(e && e.message || e); } });
+      return;
+    }
     if (m.type !== 'cycls:read:result' && m.type !== 'cycls:write:result'
         && m.type !== 'cycls:save:result' && m.type !== 'cycls:fetch:result'
-        && m.type !== 'cycls:data:result') return;
+        && m.type !== 'cycls:data:result' && m.type !== 'cycls:engine:result'
+        && m.type !== 'cycls:ask:result') return;
     var p = waiting.get(m.id);
     if (!p) return;
     waiting.delete(m.id);
@@ -57,6 +70,7 @@ const SHIM = `<script>(function(){
         : m.type === 'cycls:read:result' ? m.content
         : m.type === 'cycls:save:result' ? m.path
         : m.type === 'cycls:fetch:result' ? { status: m.status, body: m.body, contentType: m.contentType }
+        : m.type === 'cycls:engine:result' ? m.result
         : undefined);
   }
 
@@ -241,6 +255,26 @@ const SHIM = `<script>(function(){
     },
     keys: async function(){ return Object.keys(await load()); },
     flush: flush,
+    // A deployed service the host relays to on this app's behalf (Studio: Blender).
+    // Only an app the host grants it to gets one; others reject.
+    engine: async function(op, payload){
+      await ready;
+      return call('cycls:engine', { op: String(op), payload: payload || {} });
+    },
+    // What the host pushes: an agent's change to this app's data, a turn that ended.
+    // Returns an unsubscribe.
+    onCommand: function(fn){
+      if (typeof fn !== 'function') throw new Error('cycls.onCommand needs a function');
+      commandHandlers.push(fn);
+      var backlog = commandBacklog.splice(0);
+      backlog.forEach(function(c){ try { fn(c); } catch (e) { report(e && e.message || e); } });
+      return function(){ commandHandlers = commandHandlers.filter(function(h){ return h !== fn; }); };
+    },
+    // Put a message in the chat composer for the person to send — never sends it.
+    ask: async function(text){
+      await ready;
+      return call('cycls:ask', { text: String(text) });
+    },
     resize: function(h){ parent.postMessage({ type: 'cycls:resize', height: h }, '*'); }
   };
   window.cycls = api;

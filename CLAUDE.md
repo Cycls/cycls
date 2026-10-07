@@ -55,11 +55,13 @@ cycls/
 ├── _app/
 │   ├── main.py             # App class + @cycls.app + _make_decorator
 │   ├── auth.py             # cycls.Clerk, cycls.JWT, GCP, User, AppleIAP, validator
-│   └── web.py              # cycls.Web fluent builder
+│   ├── db.py               # Workspace + DB — per-tenant JSON KV over object storage
+│   └── sandbox/            # Sandbox — bwrap fluent builder, secure by default
 └── _agent/
     ├── main.py             # Agent class + @cycls.agent decorator
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
+    ├── extension.py        # cycls.Extension + Web().use — a package's tool + routes on any agent (public: cycls/extension.py); docs/notes/extensions.md
     ├── browser/            # cycls Browser tool — thin CDP client to a shared real-Chrome service (Steel); docs/notes/browser.md
     ├── design/             # cycls Design tool — thin HTTP client to a shared OpenPencil service (posts, carousels, decks of layouts, slide ops in deck.py); docs/notes/design.md
     ├── tools/              # tool schemas + execution + `Tool` rows: run/step/once/terminal/prompt (docs/notes/tool-rows.md)
@@ -72,7 +74,7 @@ cycls/
     │   ├── events.py       # typed loop events + to_ui (FE projection)
     │   ├── compact.py      # compaction — tool-result clearing, then a summary; append-only marker, file ledger (docs/notes/compaction.md)
     │   └── prompts.py      # system + compaction prompts + workspace instructions (AGENT.md)
-    └── web/                # FastAPI chat server, state routers, OG images, themes
+    └── web/                # FastAPI chat server, state routers, OG images, themes; builder.py is cycls.Web
 ```
 
 ## Core Architecture
@@ -142,6 +144,7 @@ tests/
 │   ├── harness_test.py          # build_tools, web search/fetch, cost math, _resolve_path, LLM builder
 │   ├── browser_test.py          # Browser tool: client config/providers, steel session parse, executor dispatch, gating
 │   ├── design_test.py           # Design tool: client, spec/deck prep (images, brand theme), decks + carousels, slide actions, refresh, gating
+│   ├── extension_test.py        # cycls.Extension: register, build_tools/dispatch rows, LLM.run gating, route mount, build_app guard
 │   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
 │   ├── events_test.py           # to_ui wire shapes for the typed events
 │   ├── pdf_test.py              # PDF page parsing
