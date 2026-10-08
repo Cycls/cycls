@@ -394,7 +394,16 @@ the pages make themselves.
   then cut content four times to get back to one page.
 - **Richer content.** A `p` takes `aside` (a note in the margin); `[^key]` cites the
   document's `footnotes: {key: text}` (numbered, set at the section's end); `numbering:
-  true` numbers figures and tables; links are links in the PDF. A chart or a table can
+  true` numbers figures and tables, and `figures: true` lists them with their pages
+  after the contents; the text can be set in 2 or 3 `columns`; links are links in the
+  PDF, which carries the document's title, author, subtitle and language (`lang`, or
+  known to be Arabic) as its own — a reader's window, a search and a screen reader go
+  by them, and with no cover the title was the first section's. Arabic in a PDF is
+  found and copied as written (it was not: Chrome, Edge and Firefox each read خلال as
+  "خالل" and scattered tashkeel, so no search found a word with لا in it — the
+  service now draws a right-to-left run as shapes and sets its letters over it
+  unseen; its README, "Arabic and Hebrew are written twice"). Still off: a mark that
+  ends a word is put one place along by a reader. A chart or a table can
   read a workspace spreadsheet instead of carrying its data — `"chart": {kind, "from":
   "data/sales.csv", x?, y?: [columns]}`, `"table": {"from": "data/sales.csv", columns?,
   limit?}` (`_sheet` / `_block_data`: `.csv`, `.tsv`, and `.xlsx` when the agent's image
