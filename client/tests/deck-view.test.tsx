@@ -223,6 +223,47 @@ describe("DeckView", () => {
     expect(onSlideOp).toHaveBeenLastCalledWith({ op: "delete", number: 1 });
   });
 
+  it("the owner adds a slide after the one in view, and is taken to it", async () => {
+    const onSlideOp = vi.fn(async () => {});
+    const onReload = vi.fn();
+    const { rerender } = render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" onSlideOp={onSlideOp} onReload={onReload} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add slide" })); });
+    expect(onSlideOp).toHaveBeenLastCalledWith({ op: "add", number: 1, title: "New slide", text: "Add your text" });
+    expect(onReload).toHaveBeenCalled();
+    rerender(<DeckView data={manifest(4)} path="designs/pitch.deck.json" onSlideOp={onSlideOp} onReload={onReload} />);
+    expect(screen.getByTestId("deck-counter").textContent).toBe("2 / 4");
+    // From the grid: after any slide.
+    fireEvent.click(screen.getByRole("button", { name: "Grid" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Slide actions" })[3]);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add slide after" })); });
+    expect(onSlideOp).toHaveBeenLastCalledWith({ op: "add", number: 4, title: "New slide", text: "Add your text" });
+  });
+
+  it("the owner writes a slide's speaker notes: saved on leaving the box, and only when they changed", async () => {
+    const onSlideOp = vi.fn(async () => {});
+    render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" onSlideOp={onSlideOp} onReload={() => {}} />);
+    const box = screen.getByRole("textbox", { name: "Speaker notes" }) as HTMLTextAreaElement;
+    expect(box.value).toBe("Welcome everyone");
+    fireEvent.blur(box);
+    expect(onSlideOp).not.toHaveBeenCalled();
+    fireEvent.change(box, { target: { value: "Welcome, and thank you" } });
+    // (Typing in the box is typing: an arrow key or a space doesn't turn the slide.)
+    fireEvent.keyDown(box, { key: "ArrowRight" });
+    expect(screen.getByTestId("deck-counter").textContent).toBe("1 / 3");
+    await act(async () => { fireEvent.blur(box); });
+    expect(onSlideOp).toHaveBeenLastCalledWith({ op: "notes", number: 1, notes: "Welcome, and thank you" });
+    // A slide with none has the box too — that is where its notes are written.
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect((screen.getByRole("textbox", { name: "Speaker notes" }) as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("a shared deck shows its notes to read, with nothing to write in and no slide to add", () => {
+    render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" />);
+    expect(screen.queryByRole("textbox", { name: "Speaker notes" })).toBeNull();
+    expect(screen.getByText("Welcome everyone")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add slide" })).toBeNull();
+  });
+
   it("a shared deck (no slide ops) shows no slide actions", () => {
     render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" />);
     fireEvent.click(screen.getByRole("button", { name: "Grid" }));

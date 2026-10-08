@@ -235,6 +235,9 @@ export function useFiles(baseUrl: string = "") {
     ((await (await api(`/versions/${encPath(filePath)}`)).json()) as { versions: DesignVersion[] }).versions, [api]);
   const versionBlob = useCallback(async (filePath: string, id: string) =>
     (await api(`/versions/${encPath(filePath)}?id=${encodeURIComponent(id)}`)).blob(), [api]);
+  // What that version looks like: a picture of it (its first slide or page), to look at before restoring.
+  const versionPreview = useCallback(async (filePath: string, id: string) =>
+    (await api(`/versions/${encPath(filePath)}?id=${encodeURIComponent(id)}&as=png`, { silent: true })).blob(), [api]);
   const restoreVersion = useCallback(async (filePath: string, id: string) =>
     (await (await api(`/versions/${encPath(filePath)}?restore=${encodeURIComponent(id)}`, { method: "POST" })).json()) as { version: string },
   [api]);
@@ -267,9 +270,9 @@ export function useFiles(baseUrl: string = "") {
     }
   }, [api]);
 
-  // A deck viewer's own slide change — move / duplicate / delete, slides from 1 — run on
-  // the deck's .fig by the server (POST /deck/<deck document or .fig>).
-  const deckOp = useCallback(async (deckPath: string, body: { op: "move" | "duplicate" | "delete"; number: number; to?: number }) => {
+  // A deck viewer's own slide change — move / duplicate / delete, a slide added, a slide's
+  // notes; slides from 1 — run on the deck's .fig by the server (POST /deck/<deck document or .fig>).
+  const deckOp = useCallback(async (deckPath: string, body: { op: string; number?: number; to?: number; title?: string; text?: string; notes?: string }) => {
     await api(`/deck/${encPath(deckPath)}`, { method: "POST", json: body });
   }, [api]);
 
@@ -330,7 +333,7 @@ export function useFiles(baseUrl: string = "") {
     makeLink: async () => voteUrl(await shareFile(deck, "public")),
   }), [api, shareFile]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, designLive, listVersions, versionBlob, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, designLive, listVersions, versionBlob, versionPreview, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

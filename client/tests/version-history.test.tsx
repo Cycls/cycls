@@ -37,6 +37,18 @@ describe("Version history", () => {
     expect(rows[1]).toContain("You");
   });
 
+  it("a change made in the deck viewer reads as a slide change, by the person", async () => {
+    const h = host();
+    h.listVersions = vi.fn(async () => [
+      { id: "20260929T120000-cccccc", at: minutesAgo(1), by: "user", reason: "change", intent: "slide 3's notes", size: 10 }]) as never;
+    render(<VersionHistory path="designs/launch.fig" host={h} onClose={() => {}} />);
+    await flush();
+    const [row] = screen.getAllByTestId("design-version").map((r) => r.textContent ?? "");
+    expect(row).toContain("Before a slide change: slide 3's notes");
+    expect(row).toContain("You");
+    expect(row).not.toContain("agent");
+  });
+
   it("Restore brings a version back and closes", async () => {
     const h = host();
     const onClose = vi.fn();
@@ -46,6 +58,56 @@ describe("Version history", () => {
     await flush();
     expect(h.restoreVersion).toHaveBeenCalledWith("designs/launch.fig", "20260929T110000-bbbbbb");
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("Preview shows what a version looks like before it is restored, and hides again", async () => {
+    const h = host();
+    (h as never as Record<string, unknown>).versionPreview = vi.fn(async () => new Blob(["PNG"], { type: "image/png" }));
+    // (jsdom has no blob URLs: stand in for them.)
+    const was = { make: URL.createObjectURL, free: URL.revokeObjectURL };
+    const freed = vi.fn();
+    (URL as never as Record<string, unknown>).createObjectURL = vi.fn(() => "blob:version-1");
+    (URL as never as Record<string, unknown>).revokeObjectURL = freed;
+    const { unmount } = render(<VersionHistory path="designs/launch.fig" host={h} onClose={() => {}} />);
+    await flush();
+    expect(screen.queryByRole("img")).toBeNull();                       // nothing is rendered until asked for
+    fireEvent.click(screen.getAllByText("Preview")[1]);
+    await flush();
+    expect(h.versionPreview).toHaveBeenCalledWith("designs/launch.fig", "20260929T110000-bbbbbb");
+    const img = screen.getByRole("img", { name: "This version" }) as HTMLImageElement;
+    expect(img.getAttribute("src")).toBe("blob:version-1");
+    expect(screen.getAllByTestId("design-version")[1].contains(img)).toBe(true);   // in its own row, over its Restore
+    expect(h.restoreVersion).not.toHaveBeenCalled();
+    // Asked again, it is put away — and not fetched a second time when shown again.
+    fireEvent.click(screen.getByText("Hide preview"));
+    expect(screen.queryByRole("img")).toBeNull();
+    fireEvent.click(screen.getAllByText("Preview")[1]);
+    await flush();
+    expect(h.versionPreview).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("img", { name: "This version" })).toBeTruthy();
+    // Closed, the panel lets the picture go.
+    unmount();
+    expect(freed).toHaveBeenCalledWith("blob:version-1");
+    URL.createObjectURL = was.make; URL.revokeObjectURL = was.free;
+  });
+
+  it("a version that can't be shown says so, and can still be restored", async () => {
+    const h = host();
+    (h as never as Record<string, unknown>).versionPreview = vi.fn(async () => { throw new Error("415"); });
+    render(<VersionHistory path="designs/launch.fig" host={h} onClose={() => {}} />);
+    await flush();
+    fireEvent.click(screen.getAllByText("Preview")[0]);
+    await flush();
+    expect(screen.getByText("Couldn’t show that version.")).toBeTruthy();
+    fireEvent.click(screen.getAllByText("Restore")[0]);
+    await flush();
+    expect(h.restoreVersion).toHaveBeenCalledWith("designs/launch.fig", "20260929T120000-aaaaaa");
+  });
+
+  it("without a way to make the picture there is no Preview", async () => {
+    render(<VersionHistory path="designs/launch.fig" host={host()} onClose={() => {}} />);
+    await flush();
+    expect(screen.queryByText("Preview")).toBeNull();
   });
 
   it("Open as copy writes it as a new design beside this one, and opens it", async () => {

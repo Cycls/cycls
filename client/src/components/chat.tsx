@@ -98,6 +98,7 @@ export interface FilesPanelProps {
   designLive?: (path: string) => Promise<DesignLive | null>;     // a design's live room + this person's pass (null: it opens alone)
   listVersions?: (path: string) => Promise<DesignVersion[]>;     // a design's earlier versions
   versionBlob?: (path: string, id: string) => Promise<Blob>;
+  versionPreview?: (path: string, id: string) => Promise<Blob>;  // a picture of that version
   restoreVersion?: (path: string, id: string) => Promise<{ version: string }>;
   onNewDesign?: () => void;                                      // the Files panel's "New design"
   deckOp?: (path: string, body: DeckOp) => Promise<void>;       // the deck viewer's slide moves / copies / deletes
@@ -774,6 +775,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     fetchVersioned: files.fetchVersioned,
     listVersions: files.listVersions,
     versionBlob: files.versionBlob,
+    versionPreview: files.versionPreview,
     restoreVersion: files.restoreVersion,
     exportDesign: files.exportDesign,
     live: files.designLive,
