@@ -5,7 +5,7 @@ stops. Yields dict events (and bare strings for text deltas) that the agent
 body forwards as-is. `Turn` is loop-internal (the last event a provider
 stream emits) — never reaches the body.
 """
-import asyncio, json, random, re, time, uuid
+import asyncio, json, os, random, re, time, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,6 +19,7 @@ from ..logs import log
 from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, interrupted_note, register_labels, detailed, excerpt, app_catalog, ToolContext
+from ..tools import DESIGN_LOADED, design_called, design_tool, design_wanted
 from ..tools import skills as skills_mod
 
 
@@ -315,6 +316,15 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         log("warn", user=user, chat_id=session.chat_id,
                  message=f"native web search unavailable on {vendor}/* — use .web_search('brave') or an anthropic model")
     tools_list = build_tools(allowed_tools, tools or [], vendor=vendor, web_search=web_search)
+    # Design's instructions are nearly half of every request. On demand, a chat carries a short
+    # form of the tool until it designs — read back from the transcript, as connectors are —
+    # and the whole of it from then on (tools `design_wanted`; swapped mid-turn in `request`).
+    design_loaded = True
+    if os.environ.get("DESIGN_INSTRUCTIONS") == "on-demand" and not design_wanted(messages):
+        for i, t in enumerate(tools_list):
+            if t is design_tool(True):
+                tools_list[i], design_loaded = design_tool(False), False
+    DESIGN_LOADED.set(design_loaded)
     if skill_catalog and not any(t.get("name") == "skill" for t in tools_list):
         tools_list.append(skills_mod.SKILL_TOOL)
     owners = {}   # tool name -> the OAuth2 it acts with, for the audit line
@@ -425,6 +435,13 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
     def request():
         """Everything a call sends besides its messages. The summary sends it too, so its prefix is cached."""
+        nonlocal design_loaded
+        if not design_loaded and design_called(messages):   # the model asked for it: whole from this call on
+            for i, t in enumerate(tools_list):
+                if t is design_tool(False):
+                    tools_list[i] = design_tool(True)
+            design_loaded = True
+            DESIGN_LOADED.set(True)
         return dict(system=system_text, tools=tools_list, mcp_servers=mcp_servers, thinking=thinking, extra_body=extra_body)
 
     def compacted(tier, reason, tokens, ok=True):

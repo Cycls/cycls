@@ -3,7 +3,7 @@
 Mocks the Anthropic streaming API to test incremental history saving
 and crash recovery without hitting a real LLM.
 """
-import asyncio, os
+import asyncio, json, os
 import sys
 import types
 from pathlib import Path
@@ -1843,3 +1843,171 @@ def test_a_tool_can_send_several_ui_events():
     assert [e["action"] for e in evs] == ["a", "b"] and all(e["id"] == "t1" for e in evs)
     assert _shape({"name": "design", "id": "t2"}, {"_model": "ok", "_ui": {"type": "ui", "action": "c"}}, True, {}, set())[1] == \
         [{"type": "ui", "action": "c", "id": "t2"}]
+
+
+# ---------------------------------------------------------------------------
+# Design's instructions, only when a chat designs (DESIGN_INSTRUCTIONS=on-demand)
+#
+# The Design tool's definition is 29,000 characters — nearly half of every request of
+# every chat, whether it ever designs or not. On demand, a chat carries a short form
+# of it until it designs: said by the person's words, by a design they point at, or by
+# the model asking for the guide. Once whole, it is today's definition, byte for byte.
+# ---------------------------------------------------------------------------
+
+def _design_def(call):
+    return next(t for t in call["tools"] if t["name"] == "design")
+
+
+def _whole(tool):
+    from cycls._agent.tools import _DESIGN_TOOL
+    return tool["description"] == _DESIGN_TOOL["description"] and tool["input_schema"] == _DESIGN_TOOL["input_schema"]
+
+
+def _design_env(monkeypatch, mode="on-demand"):
+    monkeypatch.setenv("DESIGN_URL", "https://design.example")
+    if mode:
+        monkeypatch.setenv("DESIGN_INSTRUCTIONS", mode)
+    else:
+        monkeypatch.delenv("DESIGN_INSTRUCTIONS", raising=False)
+
+
+def _fake_design_render(monkeypatch):
+    from cycls._agent import design
+    made = []
+
+    async def _render(spec, fmt="png", scale=2, user_id=None, every=False, **kw):
+        made.append(spec)
+        return design.Rendered(b"\x89PNGrender", b"FIGZ", "0:6", fmt, None, [], [], [], [], [], None, [], [], [], None, [], [], [], None)
+    monkeypatch.setattr("cycls._agent.design.render", _render)
+    return made
+
+
+def _say(ctx, text):
+    ctx.messages.raw = [{"role": "user", "content": text}]
+
+
+def _results(ctx):
+    """The text of every tool result in the chat, in order."""
+    out = []
+    for m in _read_history(ctx):
+        for b in m["content"] if isinstance(m.get("content"), list) else []:
+            if isinstance(b, dict) and b.get("type") == "tool_result":
+                c = b.get("content")
+                out.append(c if isinstance(c, str) else " ".join(x.get("text", "") for x in c if isinstance(x, dict)))
+    return out
+
+
+def test_design_goes_whole_with_every_request_unless_asked_otherwise(agent_env, monkeypatch):
+    _design_env(monkeypatch, mode=None)
+    ws, ctx = agent_env
+    _say(ctx, "what is the capital of France?")
+    client, calls = _capturing_client([_make_response([_text_block("Paris.")])])
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Design"])))
+    assert _whole(_design_def(calls[0]))
+
+
+def test_a_chat_that_does_not_design_carries_the_short_form(agent_env, monkeypatch):
+    from cycls._agent.tools import _DESIGN_TOOL
+    _design_env(monkeypatch)
+    ws, ctx = agent_env
+    _say(ctx, "what is the capital of France?")
+    client, calls = _capturing_client([_make_response([_text_block("Paris.")])])
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Design"])))
+    short = _design_def(calls[0])
+    assert len(json.dumps(short)) < len(json.dumps(_DESIGN_TOOL)) / 8        # under an eighth of it
+    assert '"action": "guide"' in short["description"]                       # how to get the rest
+    # Every parameter is still there by name: nothing the model may pass is unknown to the schema.
+    assert set(short["input_schema"]["properties"]) == set(_DESIGN_TOOL["input_schema"]["properties"])
+    assert short["input_schema"]["required"] == ["action"]
+
+
+@pytest.mark.parametrize("said", [
+    "Make me a poster for the launch",
+    "turn these notes into a pitch deck",
+    "I need a one-page CV as a PDF",
+    "صمم لي بوستر للحملة",
+    "اعمل عرض تقديمي عن الشركة",
+    "open designs/launch.fig and make the title bigger",
+    "make this bigger",                                                      # …with a part of a design selected, below
+])
+def test_a_chat_that_asks_for_a_design_has_the_whole_tool_from_its_first_request(agent_env, monkeypatch, said):
+    _design_env(monkeypatch)
+    ws, ctx = agent_env
+    _say(ctx, said)
+    if said == "make this bigger":
+        ctx.selection = {"path": "designs/launch.fig", "frame": "slide-1", "nodes": [{"name": "headline", "type": "text", "text": "Hi"}]}
+    client, calls = _capturing_client([_make_response([_text_block("On it.")])])
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Design"])))
+    assert _whole(_design_def(calls[0])), said
+
+
+def test_the_model_asks_for_the_guide_and_designs_in_the_same_turn(agent_env, monkeypatch):
+    _design_env(monkeypatch)
+    made = _fake_design_render(monkeypatch)
+    ws, ctx = agent_env
+    _say(ctx, "something for the launch next week, you choose")              # nothing here says "design"
+    spec = {"size": [1080, 1080], "nodes": [{"type": "text", "text": "Launch", "x": 80, "y": 80}]}
+    client, calls = _capturing_client([
+        _make_response([_tool_use_block("t1", name="design", inp={"action": "guide"})], stop_reason="tool_use"),
+        _make_response([_tool_use_block("t2", name="design", inp={"action": "render", "name": "launch", "spec": spec})], stop_reason="tool_use"),
+        _make_response([_text_block("Done.")])])
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Design"])))
+    assert not _whole(_design_def(calls[0]))
+    assert _whole(_design_def(calls[1])) and _whole(_design_def(calls[2]))    # whole from the call after the guide
+    said = _results(ctx)
+    assert "instructions are loaded" in said[0] and "Nothing was made" in said[0]
+    assert len(made) == 1 and "Design saved" in said[1]
+
+
+def test_a_design_call_made_before_the_instructions_is_not_run(agent_env, monkeypatch):
+    # The short form says how nothing is written: a spec guessed from it is not rendered —
+    # the call loads the instructions and is made again.
+    _design_env(monkeypatch)
+    made = _fake_design_render(monkeypatch)
+    ws, ctx = agent_env
+    _say(ctx, "something for the launch next week, you choose")
+    blind = {"action": "render", "name": "launch", "spec": {"size": [1080, 1080], "nodes": []}}
+    client, calls = _capturing_client([
+        _make_response([_tool_use_block("t1", name="design", inp=blind)], stop_reason="tool_use"),
+        _make_response([_tool_use_block("t2", name="design", inp=blind)], stop_reason="tool_use"),
+        _make_response([_text_block("Done.")])])
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Design"])))
+    said = _results(ctx)
+    assert said[0].startswith("Not run") and "instructions are loaded" in said[0]
+    assert len(made) == 1                                                    # the second call, made knowing how
+    assert _whole(_design_def(calls[1]))
+
+
+def test_once_a_chat_has_designed_the_tool_stays_whole(agent_env, monkeypatch):
+    _design_env(monkeypatch)
+    ws, ctx = agent_env
+    _say(ctx, "something for the launch next week, you choose")
+    client, calls = _capturing_client([
+        _make_response([_tool_use_block("t1", name="design", inp={"action": "guide"})], stop_reason="tool_use"),
+        _make_response([_text_block("Tell me more.")])])
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Design"])))
+    _providers._clients.clear()
+    ctx.messages.raw = [*ctx.messages.raw, {"role": "user", "content": "and what should we have for lunch?"}]
+    client, calls = _capturing_client([_make_response([_text_block("Falafel.")])])
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Design"])))
+    assert _whole(_design_def(calls[0]))                                     # the chat designs: it is not taken away again
+
+
+def test_the_guide_asked_for_when_everything_is_loaded_says_so(agent_env, monkeypatch):
+    _design_env(monkeypatch, mode=None)
+    made = _fake_design_render(monkeypatch)
+    ws, ctx = agent_env
+    client, calls = _capturing_client([
+        _make_response([_tool_use_block("t1", name="design", inp={"action": "guide"})], stop_reason="tool_use"),
+        _make_response([_text_block("Ok.")])])
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Design"])))
+    assert "already" in _results(ctx)[0] and not made
+

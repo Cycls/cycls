@@ -934,6 +934,23 @@ lets someone in.
   spec says what did come. A gradient written as a node is a rect over the frame with
   that fill. A list's `items` as one text, as `{text}` objects, or with their markers
   typed are its points. Several pages asked for as a PDF are rendered as their images.
+- **The tool's instructions, only when a chat designs** (`DESIGN_INSTRUCTIONS=on-demand`;
+  off unless set). The Design tool's definition is 28,800 characters — nearly half of
+  the fixed part of every request, in every chat. On production over three weeks, 76
+  chats of 134 never designed, and they made 1,926 of the 2,541 model calls. On
+  demand, a chat carries a SHORT form (2,200 characters: what the tool is for, every
+  parameter by name, and "call `guide` first") until it designs — which
+  `tools.design_wanted` reads back from the transcript each turn, as connectors are
+  found: the chat has called the tool, the person names a file under `designs/` or
+  has part of one selected, or their words ask for one (English and Arabic; wide on
+  purpose — a chat that matches and never designs pays what every chat paid before).
+  Otherwise the model asks: `design {action: "guide"}` loads it, and any other call
+  made on the short form is not run (`DESIGN_LOADED`, a context variable the harness
+  sets beside the definition it sends) — it loads the instructions and is made again.
+  Whole, it is the definition as it always was, byte for byte: a chat that designs is
+  told exactly what it was. It is swapped in place (`harness/main.py` `request`), so
+  the prompt cache misses once, on the turn a chat starts to design. Not yet measured
+  against the model: whether a design takes more calls this way.
 - **Nothing left out in silence.** A deck past twelve slides: twelve to read and the
   rest on contact sheets (`lead`), where eight slides of twenty were never shown. An
   edit of a deck shows the slides it changed, not the first. A layout that holds four
@@ -953,6 +970,7 @@ lets someone in.
 | `DESIGN_SECRET`     | shared render-service secret (Bearer). A local dev instance may run open; the deployed service requires it (its `deploy.py` refuses to deploy without one, since the render API runs caller-written scripts). |
 | `DESIGN_LIVE_URL`   | the live relay, e.g. `https://cycls-design-live.cycls.ai` — with `DESIGN_LIVE_SECRET`, people of a team workspace work in one design together. Unset → every design opens alone. |
 | `DESIGN_LIVE_SECRET`| the relay's secret (its `LIVE_SECRET`): signs room passes and lets the agent speak into a room. |
+| `DESIGN_INSTRUCTIONS` | `on-demand`: a chat carries a short form of the Design tool until it designs (below). Unset: the whole definition with every request, as always. |
 | `DESIGN_EDITOR_URL` | the embedded editor's own origin (a static OpenPencil build). Injected into `/config` as `design_editor_url`. Unset → `.fig` files show the download card and there is no open editor for `edit` to drive; generation (`render` / `script`) is unaffected. |
 
 Unset `DESIGN_URL` and `design.configured()` is false: the `Design` tool is never
