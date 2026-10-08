@@ -470,7 +470,7 @@ def test_no_qa_image_for_decks_svg_or_oversized(tmp_path, monkeypatch):
     for fmt in ("pptx", "svg"):
         out = asyncio.run(_exec_design({"action": "render", "spec": {}, "format": fmt}, ws))
         assert isinstance(out["_model"], str) and "QA" not in out["_model"]
-    monkeypatch.setattr("cycls._agent.tools._DESIGN_QA_MAX", 4)             # bigger than `read` allows
+    monkeypatch.setattr("cycls._agent.design.run._DESIGN_QA_MAX", 4)             # bigger than `read` allows
     out = asyncio.run(_exec_design({"action": "render", "spec": {}}, ws))
     assert isinstance(out["_model"], str)
 
@@ -682,7 +682,7 @@ def test_a_fonts_only_brand_kit_leaves_colours_alone(tmp_path, monkeypatch):
 
 def test_qa_uses_the_preview_even_when_the_render_is_huge(tmp_path, monkeypatch):
     _fake_render(monkeypatch, image=b"\x89PNG" + b"x" * 64, preview=b"\xff\xd8JPEGpreview")
-    monkeypatch.setattr("cycls._agent.tools._DESIGN_QA_MAX", 32)             # the @2x PNG is over the bound
+    monkeypatch.setattr("cycls._agent.design.run._DESIGN_QA_MAX", 32)             # the @2x PNG is over the bound
     img, txt = asyncio.run(_exec_design({"action": "render", "spec": {}}, _ws(tmp_path)))["_model"]
     assert img["source"]["media_type"] == "image/jpeg"
     assert base64.b64decode(img["source"]["data"]) == b"\xff\xd8JPEGpreview"
@@ -784,7 +784,7 @@ def test_image_errors_name_the_fix(tmp_path, monkeypatch):
     assert "SVG" in err({"src": "logo.svg", "w": 10})
     assert "w` and/or `h" in err({"src": "p.png"})
     assert "cover or contain" in err({"src": "p.png", "w": 10, "fit": "stretch"})
-    monkeypatch.setattr("cycls._agent.tools._DESIGN_IMAGE_MAX", 8)
+    monkeypatch.setattr("cycls._agent.design.images._DESIGN_IMAGE_MAX", 8)
     assert "smaller copy" in err({"src": "p.png", "w": 10})
     assert calls == {}                                                             # none reached the service
 
@@ -792,7 +792,7 @@ def test_image_errors_name_the_fix(tmp_path, monkeypatch):
 def test_images_have_a_total_budget(tmp_path, monkeypatch):
     _img(tmp_path, "a.png", _png(10, 10))
     calls = _fake_render(monkeypatch)
-    monkeypatch.setattr("cycls._agent.tools._DESIGN_IMAGES_MAX", 40)
+    monkeypatch.setattr("cycls._agent.design.prepare._DESIGN_IMAGES_MAX", 40)
     out = asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [
         {"type": "image", "src": "a.png", "w": 10}, {"type": "image", "src": "a.png", "w": 10}]}}, _ws(tmp_path)))
     assert out.startswith("Error") and "total" in out and calls == {}
@@ -2089,7 +2089,7 @@ def test_a_pdfs_text_and_pictures_are_taken_out_for_a_redesign(tmp_path, monkeyp
             (prefix.parent / f"{prefix.name}-003.png").write_bytes(_png(1600, 900))          # the same picture again
             return 0, b""
         return 1, b""
-    monkeypatch.setattr("cycls._agent.tools._run_tool", tool)
+    monkeypatch.setattr("cycls._agent.design.extract._run_tool", tool)
     out = asyncio.run(_exec_design({"action": "extract", "path": "attachments/old-report.pdf", "name": "old-report"}, _ws(tmp_path)))
     assert isinstance(out, str)
     assert "attachments/old-report.pdf — 3 pages" in out and "Old Report" in out
@@ -2107,7 +2107,7 @@ def test_a_pdfs_text_and_pictures_are_taken_out_for_a_redesign(tmp_path, monkeyp
 
     async def missing(*argv, timeout=60):
         raise FileNotFoundError(argv[0])
-    monkeypatch.setattr("cycls._agent.tools._run_tool", missing)
+    monkeypatch.setattr("cycls._agent.design.extract._run_tool", missing)
     assert "poppler" in run("attachments/old-report.pdf")
 
 
@@ -2135,7 +2135,7 @@ def _pdf_tools(monkeypatch, info, flow, layout, images=(), ran=None):
             (out.parent / f"{out.name}.{ext}").write_bytes(_jpeg(w, h) if ext == "jpg" else _png(w, h))
             return 0, b""
         return 1, b""
-    monkeypatch.setattr("cycls._agent.tools._run_tool", tool)
+    monkeypatch.setattr("cycls._agent.design.extract._run_tool", tool)
     return ran
 
 
@@ -2215,7 +2215,7 @@ def test_a_long_pdfs_text_fits_the_reply_and_the_rest_is_read_on_by_page(tmp_pat
             last = int(argv[argv.index("-l") + 1]) if "-l" in argv else 12
             return 0, "\f".join(pages[first - 1:last]).encode()
         return 0, b""
-    monkeypatch.setattr("cycls._agent.tools._run_tool", tool)
+    monkeypatch.setattr("cycls._agent.design.extract._run_tool", tool)
     run = lambda **kw: asyncio.run(_exec_design({"action": "extract", "path": "attachments/paper.pdf", **kw}, _ws(tmp_path)))
     out = run()
     assert len(out) < spill.SPILL_AT                                              # it is read, not filed
@@ -2777,3 +2777,31 @@ def test_the_tool_says_what_a_document_can_be_asked_for():
     assert '"figures": true lists them' in text
     assert '"lang"' in text and "Arabic is known without" in text
 
+
+def test_the_design_tool_lives_in_its_package_and_is_still_reached_through_tools(monkeypatch):
+    """The Design tool was two thirds of tools/__init__.py. It is in cycls/_agent/design now —
+    what the model is given, what it wrote made ready, what the tool does — and everything
+    that took a Design name from `cycls._agent.tools` still gets the very same object."""
+    from cycls._agent import paths, tools
+    from cycls._agent.design import actions, brand, extract, files, images, prepare, report, run, tool
+    homes = {"_DESIGN_TOOL": tool, "design_tool": tool, "design_wanted": tool, "DESIGN_LOADED": tool,
+             "_norm_hex": brand, "_load_brand": brand, "_brand_palette": brand,
+             "_image_size": images, "_place_image": images, "_DESIGN_QA_MAX": images,
+             "_prepare_spec": prepare, "_prepare_deck": prepare, "_prepare_document": prepare, "_prepare_slide": prepare,
+             "_prepare_ops": prepare, "_mend_json_tail": prepare, "_DESIGN_SIZES": prepare,
+             "_pdf_parts": extract, "_run_tool": extract,
+             "_outline_text": report, "_layout_check": report, "_page_changes": report,
+             "_dedupe_design_name": files, "_save_pages": files,
+             "_exec_slides": actions, "_exec_document": actions, "_exec_design_file": actions, "_render_document": actions,
+             "_exec_design": run, "_design_step": run}
+    for name, home in homes.items():
+        assert getattr(tools, name) is getattr(home, name), name
+        if callable(getattr(home, name)) and hasattr(getattr(home, name), "__module__"):
+            assert getattr(home, name).__module__ == home.__name__, name      # defined there, not passed through
+    # The tool is registered from where it lives…
+    assert tools._TOOLS["design"].step is run._design_step
+    monkeypatch.setenv("DESIGN_URL", "https://cycls-design.cycls.ai")
+    assert any(t is tool._DESIGN_TOOL for t in tools.build_tools(["Design"], []))
+    # …and what a tool was given as a path is in a module of its own, which both use.
+    assert tools._resolve_path is paths._resolve_path and tools._safe_filename is paths._safe_filename
+    assert paths._resolve_path.__module__ == "cycls._agent.paths"

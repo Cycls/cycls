@@ -2941,3 +2941,23 @@ def test_a_slide_moved_in_the_deck_viewer_tells_the_room_to_open_the_file_again(
     r = client.post("/deck/designs/pitch.fig", json={"op": "move", "number": 1, "to": 2})
     assert r.status_code == 200
     assert said == [("designs/pitch.fig", {"kind": "reload", "version": version_of(b"MOVED")})]
+
+
+def test_the_design_routes_are_a_router_of_their_own(tmp_path):
+    """The routes that act on a design — and the helpers that serve one — are in
+    web/design_routes.py; the files router keeps the file routes. Mounted together they
+    answer as before, and the names the routes file used to define are still its."""
+    from fastapi import Depends
+    from cycls._agent.web import design_routes, routers, shared
+    paths = lambda router: {route.path for route in router.routes}
+    design = paths(design_routes.design_router(Depends(lambda: None), Depends(lambda: None), lambda root: None))
+    assert design == {"/deck/{path:path}", "/design/new", "/design/export", "/design/live", "/brand", "/versions/{path:path}"}
+    from types import SimpleNamespace
+    files = paths(routers.files_router(SimpleNamespace(config=None), Depends(lambda: None), Depends(lambda: None), tmp_path, ""))
+    assert not design & files and "/files/{path:path}" in files
+    assert routers.resolve_path is shared.resolve_path and routers._NO_CACHE is shared._NO_CACHE
+    assert routers._design_response is design_routes._design_response
+    # Mounted: a design route answers through the app the routers are installed on.
+    client = _ws_routers_client(tmp_path)
+    assert client.get("/brand").json() == {"brand": None}
+    assert client.get("/versions/designs/none.fig").json() == {"versions": []}

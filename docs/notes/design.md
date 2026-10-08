@@ -492,7 +492,7 @@ the pages make themselves.
 
 ## Two channels + the canvas
 
-`_exec_design` (in `_agent/tools`) saves the render to `designs/<name>.<fmt>` and
+`_exec_design` (`_agent/design/run.py`) saves the render to `designs/<name>.<fmt>` and
 the editable source to `designs/<name>.fig`, then returns the two-channel result
 the loop already understands: the model reads a short ack (plus the render itself,
 for self-QA), and the client gets an
@@ -813,7 +813,7 @@ off — carried by a relay Cycls runs instead of the peer-to-peer room upstream 
 (public brokers and a public TURN server are not somewhere a team's design should
 go; the editor build fails if one is in the bundle).
 
-- **Who.** `GET /design/live?path=` (`routers.py`) answers `{live: {room, url,
+- **Who.** `GET /design/live?path=` (`web/design_routes.py`) answers `{live: {room, url,
   ticket, epoch}}` for a design in a **team** workspace — the room everyone the
   workspace lets in meets in (keyed with the secret: not guessable, not derivable
   from the path), the relay's address, this person's pass (`design/live.py`
@@ -870,7 +870,7 @@ go; the editor build fails if one is in the bundle).
   asked, as when alone. "Load the latest" is then for everyone (`liveReset`: the
   room starts over from the file); alone it would only be handed the room's again.
 - **The agent.** Its `edit` (and slide actions) write the file first, as always,
-  then hand the edit to the room (`tools/__init__.py` `_to_the_room` →
+  then hand the edit to the room (`design/actions.py` `_to_the_room` →
   `live.notify`): ONE editor makes it and it reaches everyone through the shared
   document, with "Super"'s cursor drawn for all of them. The relay offers it first
   — to the one who saves, then to whoever came next — and gives it only to an
@@ -892,6 +892,33 @@ go; the editor build fails if one is in the bundle).
 Not in this round: a drag is seen when it is dropped, not while it moves; brand
 colours and variables are each editor's own; a guest, a viewer, or a link that
 lets someone in.
+
+## Where the code is
+
+The Design tool was written into `cycls/_agent/tools/__init__.py` (it grew to two thirds
+of that file) and its routes into the files router. Both have a place of their own now;
+every name is still importable from where it used to be.
+
+| In `cycls/_agent/design/` | |
+|---|---|
+| `tool.py` | The tool as the model is given it — its definition, and the short form a chat carries until it designs. |
+| `run.py` | The executor, `_exec_design`: render, script, edit, inspect, extract. Registered in `tools/` as the `design` tool. |
+| `actions.py` | Slide actions, a document's section actions, the file actions (export, rename, copy, delete, versions), and a document rendered. |
+| `prepare.py` | What the model wrote, made ready for the service: a spec and its pages, a deck of layouts, a document, a slide, an edit's ops. With `brand.py` (colours, the brand kit) and `images.py` (a workspace image placed; the bounds on what is sent and shown). |
+| `extract.py` | A PDF taken apart to be made again as a document. |
+| `report.py` · `files.py` | What the model is told (the outline, what an edit touched, the layout check) · a design's files (a free name, the pages of a render written out). |
+| `client.py` | The HTTP client to the service — what `from cycls._agent import design` gives. |
+| `deck.py` · `store.py` · `refresh.py` · `live.py` · `stock.py` | Slide ops on a saved deck · versions and the base a save names · the exports kept beside a design · rooms and passes · stock photos. |
+
+`cycls/_agent/web/design_routes.py` holds a design as the app is served it (its slides
+and exports, cached against the `.fig`) and `design_router`: `/deck`, `/design/*`,
+`/brand`, `/versions`. The files routes stay in `routers.py` and ask it for `?as=…`;
+what both need (a path kept inside the workspace, a free name, the no-cache header) is
+`web/shared.py`. A path as a *tool* was given it is `cycls/_agent/paths.py`.
+
+A limit a test overrides is patched where it is read — `design.run._DESIGN_QA_MAX`,
+`design.images._DESIGN_IMAGE_MAX`, `design.prepare._DESIGN_IMAGES_MAX`,
+`design.extract._run_tool` — since a module that imports a name holds its own.
 
 ## Implementation notes
 
