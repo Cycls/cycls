@@ -99,10 +99,55 @@ async def _photo(root, query, orientation, pick):
     return rel, credit
 
 
+_FILE = re.compile(r"\.[A-Za-z0-9]{2,5}$")
+
+
+def described(src, root):
+    """Is `src` a description of a picture rather than a file's name? Several words, no
+    extension, no folder — and no such file. (`src`, a slide's `image`, held "modern
+    Riyadh skyline at dusk, glass towers": the picture the model wanted, where the name
+    of a file goes.)"""
+    if not isinstance(src, str):
+        return False
+    s = src.strip()
+    if not (8 <= len(s) <= 300) or " " not in s or "/" in s or "\\" in s or _FILE.search(s) or s.startswith(("http:", "https:", "data:")):
+        return False
+    try:
+        return not (Path(root) / s).is_file()
+    except (OSError, ValueError):
+        return True
+
+
+def _query(text):
+    """What a photo search can find of a description: its first clause, six words at most."""
+    return " ".join(re.split(r"[,.;:—–\n]", text.strip(), maxsplit=1)[0].split()[:6])
+
+
 async def resolve(obj, root):
     """Every `"stock": "<query>"` in a spec, deck, slide or ops list → `"src": "<path>"`,
-    in place. → (credits for the ack, error or None)."""
-    found = []
+    in place. A picture DESCRIBED where a file goes (`described`) is looked for the same
+    way, and said. → (credits and notes for the ack, error or None)."""
+    found, told = [], []
+
+    def describe(v):
+        if isinstance(v, dict):
+            for key in ("src", "image", "photo"):
+                if described(v.get(key), root) and not v.get("stock"):
+                    words = v[key].strip()
+                    told.append(words)
+                    if key == "src":
+                        del v["src"]
+                        v["stock"] = _query(words)
+                    else:
+                        v[key] = {"stock": _query(words)}
+            for x in v.values():
+                describe(x)
+        elif isinstance(v, list):
+            for x in v:
+                describe(x)
+
+    if configured():
+        describe(obj)
 
     def walk(v):
         if isinstance(v, dict):
@@ -135,4 +180,8 @@ async def resolve(obj, root):
         return [], f"Error: {e}"
     except Exception as e:
         return [], f"Error: couldn't fetch a stock photo ({e}) — try again, or save a photo into the workspace."
+    for words in told:
+        short = words if len(words) <= 60 else f"{words[:58]}…"
+        credits.append(f"{json.dumps(short, ensure_ascii=False)} is not a file in the workspace, so a stock photo was found for "
+                       f"those words (another of them: {{\"stock\": \"…\", \"pick\": 1}}; a file: its path as `src`)")
     return credits, None

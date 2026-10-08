@@ -898,12 +898,47 @@ lets someone in.
   to the QA image. Nodes carry names from the spec's `id`.
 - **Edits by name.** `inspect` returns a design's outline (frames, named nodes with
   box/text/font/colour); `edit` takes `ops` — set_text, style, move, resize, delete,
-  duplicate, replace_image, add, and background (the slide's own fill: a slide isn't a
-  node `style` can name) — which the service compiles with the builder's own
-  code and applies to the saved .fig. The reply's compiled script is what the live
-  editor replays (`design_command`), so both copies change identically; the edited
-  design comes back to the model with a layout check. A raw `script` still works as
-  the escape hatch.
+  duplicate, replace_image, add, and background (the slide's own fill) — which the
+  service compiles with the builder's own code and applies to the saved .fig. The
+  reply's compiled script is what the live editor replays (`design_command`), so both
+  copies change identically; the edited design comes back to the model with a layout
+  check. A raw `script` still works as the escape hatch.
+- **An edit finds the part it names** (the service's `ops.js`). Of the 30 Design
+  calls that failed on production from 17 Sep to 8 Oct 2026, 13 were an edit naming a
+  part the tool could not find. What was wrong, and what it is now:
+  - *Only a stack could be named.* An icon, an SVG, a QR code, an arrow, a list, a
+    table and a chart are frames, and `inspect` listed them — but no op could point
+    at one. Each is now ONE part: moved, copied, removed and recoloured whole; a
+    mark is resized by scaling its paths; a list, table or chart says it is laid out
+    when it is built (delete and add). `inspect` shows a mark as one line — which
+    icon, its colour — not the paths it is drawn with.
+  - *Names.* An icon was named by its Iconify name and every unnamed image `image`:
+    they are `icon-N` and `image-N`. Names were numbered on across pages (the story's
+    line was `line-4`, and was edited as the post's `line-1`): they are counted page
+    by page. What an `add` or a copy makes takes a name the page doesn't have.
+  - *A name that isn't one* is read as what it plainly means (`__resolve`): the slide
+    (its fill is styled by its name; the rest are slide ops, and the error says
+    which); an icon by its Iconify name; the only one of its kind ("qr"); in a design
+    from before parts were numbered, the n-th of its kind; a name written another
+    way; a text by what it says. The reply says which part it was (`resolved`).
+  - *One error, not one a call.* Every name an edit gets wrong is said at once,
+    before anything is changed, with what the design has — each text's first words,
+    each icon's icon. And the reply to an edit that worked names what it `changed`
+    and `added`, so the next edit needs no `inspect`.
+- **Shapes read as what they meant** (`_exec_design`, `_prepare_spec`, `stock.py` —
+  the rest of those 30). A picture *described* where a file goes (`src`, a slide's
+  `image`, a `replace_image`) is found as a stock photo and said. A `spec` that came
+  as text closed with the wrong brackets is read as closed where its content ends
+  (`_mend_json_tail`; cut off inside its content, or wrong anywhere else, it is still
+  refused with where). A design written beside the action is its spec; an error for no
+  spec says what did come. A gradient written as a node is a rect over the frame with
+  that fill. A list's `items` as one text, as `{text}` objects, or with their markers
+  typed are its points. Several pages asked for as a PDF are rendered as their images.
+- **Nothing left out in silence.** A deck past twelve slides: twelve to read and the
+  rest on contact sheets (`lead`), where eight slides of twenty were never shown. An
+  edit of a deck shows the slides it changed, not the first. A layout that holds four
+  figures and was given six says so, on a render and on a slide action. An outline
+  that stops at its cap says how many parts it left out.
 - **More primitives, bigger photos.** icon (Iconify), svg (a file or markup), qr,
   line (from/to, arrowheads), list, chart (column/bar/stacked/line/area/pie/donut),
   table, rich-text `runs`, blur / backdropBlur, image `shape`/`focus`/`crop`. The
