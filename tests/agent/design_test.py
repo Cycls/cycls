@@ -2624,3 +2624,145 @@ def test_a_lists_items_are_read_however_they_are_written(tmp_path, monkeypatch):
     assert calls["spec"]["nodes"][0]["items"] == ["One", "Two"]
     none = asyncio.run(_exec_design({"action": "render", "name": "x", "spec": {"size": [1080, 1080], "nodes": [{"type": "list", "x": 1, "y": 1}]}}, _ws(tmp_path)))
     assert none.startswith("Error") and "a list needs `items`" in none
+
+
+# ---- a saved design as another file; a design as a file ----
+
+def _fake_export(monkeypatch, data=b"EXPORTED", images=(), pages=(), page=""):
+    """`design.export` / `export_page` faked: records what was asked."""
+    calls = []
+
+    async def _export(fig, fmt="png", scale=2, width=None, user_id=None, every=False, page=None):
+        calls.append({"fig": fig, "fmt": fmt, "scale": scale, "every": every, "page": page})
+        return list(images) if every else data
+
+    async def _export_page(fig, page_, fmt="png", scale=2, width=None, user_id=None):
+        calls.append({"fig": fig, "fmt": fmt, "scale": scale, "page": page_})
+        return data, list(pages), page
+    monkeypatch.setattr("cycls._agent.design.export", _export)
+    monkeypatch.setattr("cycls._agent.design.export_page", _export_page)
+    return calls
+
+
+def test_export_makes_another_file_of_a_saved_design_and_renders_nothing(tmp_path, monkeypatch):
+    # "Send me this as a PDF": with no way to ask for that, the model rendered the design
+    # again from the spec it remembered — a second design (launch-2), without anything
+    # the person had changed by hand since.
+    _design(tmp_path)
+    calls = _fake_export(monkeypatch, data=b"%PDF-1")
+    render = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "export", "name": "launch", "format": "pdf"}, _ws(tmp_path)))
+    assert (tmp_path / "designs" / "launch.pdf").read_bytes() == b"%PDF-1"
+    assert calls == [{"fig": b"ORIGINAL-FIG", "fmt": "pdf", "scale": 2, "every": False, "page": None}]
+    assert "renders" not in render and sorted(f.name for f in (tmp_path / "designs").iterdir()) == ["launch.fig", "launch.pdf"]
+    assert "Exported designs/launch.pdf" in _text(out) and "as it is now" in _text(out)
+    assert out["_ui"] == {"type": "ui", "action": "open_canvas", "path": "designs/launch.pdf", "name": "launch.pdf"}
+    # What it needs, said.
+    assert "needs `format`" in asyncio.run(_exec_design({"action": "export", "name": "launch"}, _ws(tmp_path)))
+    missing = asyncio.run(_exec_design({"action": "export", "name": "nope", "format": "pdf"}, _ws(tmp_path)))
+    assert missing.startswith("Error") and "doesn't exist" in missing and "launch" in missing    # …and what there is
+
+
+def test_export_of_a_deck_is_one_file_or_an_image_a_slide_and_of_a_page_that_page(tmp_path, monkeypatch):
+    d = _deck(tmp_path, slides=3)
+    calls = _fake_export(monkeypatch, data=b"PK-pptx", images=[b"S1", b"S2", b"S3"])
+    out = asyncio.run(_exec_design({"action": "export", "name": "pitch", "format": "pdf"}, _ws(tmp_path)))
+    assert (d / "pitch.pdf").read_bytes() == b"PK-pptx" and calls[-1]["every"] is False
+    out = asyncio.run(_exec_design({"action": "export", "name": "pitch", "format": "jpg", "scale": 1}, _ws(tmp_path)))
+    assert calls[-1] == {"fig": b"DECK-FIG", "fmt": "jpg", "scale": 1, "every": True, "page": None}
+    assert [(d / f"pitch-slide-{n}.jpg").read_bytes() for n in (1, 2, 3)] == [b"S1", b"S2", b"S3"]
+    assert "3 images" in _text(out) and "designs/pitch-slide-1.jpg" in _text(out) and "designs/pitch-slide-3.jpg" in _text(out)
+    # One page of a design of several pages: that page's own file.
+    _design(tmp_path)
+    calls = _fake_export(monkeypatch, data=b"STORY", pages=_PAGES, page="Story")
+    out = asyncio.run(_exec_design({"action": "export", "name": "launch", "format": "png", "page": "story"}, _ws(tmp_path)))
+    assert calls[-1]["page"] == "story" and (tmp_path / "designs" / "launch-page-2.png").read_bytes() == b"STORY"
+    assert 'page "Story"' in _text(out)
+
+
+def test_a_design_is_renamed_with_what_is_kept_beside_it(tmp_path, monkeypatch):
+    d = _deck(tmp_path)
+    (d / "pitch.pptx").write_bytes(b"PPTX")
+    (d / "pitch-slide-1.png").write_bytes(b"S1")
+    out = asyncio.run(_exec_design({"action": "rename", "name": "pitch", "new_name": "seed-deck.fig"}, _ws(tmp_path)))
+    assert sorted(f.name for f in d.iterdir()) == ["seed-deck-slide-1.png", "seed-deck.deck.json", "seed-deck.fig", "seed-deck.pptx"]
+    doc = json.loads((d / "seed-deck.deck.json").read_text())
+    assert doc["fig"] == "designs/seed-deck.fig" and doc["exports"] == ["designs/seed-deck.pptx"]
+    assert "designs/seed-deck.fig" in _text(out)
+    assert out["_ui"]["path"] == "designs/seed-deck.deck.json"               # the deck is opened where it is now
+    # Never over a design that is there; and it says what it needs.
+    _design(tmp_path)
+    taken = asyncio.run(_exec_design({"action": "rename", "name": "launch", "new_name": "seed-deck"}, _ws(tmp_path)))
+    assert taken.startswith("Error") and "already" in taken and (d / "launch.fig").is_file()
+    assert "needs `new_name`" in asyncio.run(_exec_design({"action": "rename", "name": "launch"}, _ws(tmp_path)))
+
+
+def test_a_design_is_copied_to_change_freely(tmp_path, monkeypatch):
+    d = _deck(tmp_path)
+    (d / "pitch.pptx").write_bytes(b"PPTX")
+    scheduled = []
+    monkeypatch.setattr("cycls._agent.design.refresh.schedule", lambda root, rel, user_id=None, ensure=False, pages=False: scheduled.append((rel, ensure)))
+    out = asyncio.run(_exec_design({"action": "duplicate", "name": "pitch"}, _ws(tmp_path)))
+    assert (d / "pitch-copy.fig").read_bytes() == b"DECK-FIG" and (d / "pitch.fig").is_file()
+    assert (d / "pitch-copy.pptx").read_bytes() == b"PPTX"
+    assert json.loads((d / "pitch-copy.deck.json").read_text())["fig"] == "designs/pitch-copy.fig"
+    assert json.loads((d / "pitch.deck.json").read_text())["fig"] == "designs/pitch.fig"       # the original is as it was
+    assert scheduled == [("designs/pitch-copy.fig", True)] and "designs/pitch-copy.fig" in _text(out)
+    # A name of its own when asked; never over one that is there.
+    asyncio.run(_exec_design({"action": "duplicate", "name": "pitch", "new_name": "pitch-ar"}, _ws(tmp_path)))
+    asyncio.run(_exec_design({"action": "duplicate", "name": "pitch", "new_name": "pitch-ar"}, _ws(tmp_path)))
+    assert (d / "pitch-ar.fig").is_file() and (d / "pitch-ar-2.fig").is_file()
+
+
+def test_a_design_is_deleted_to_the_trash_with_what_is_kept_beside_it(tmp_path, monkeypatch):
+    from cycls._agent import trash
+    d = _deck(tmp_path)
+    (d / "pitch.pptx").write_bytes(b"PPTX")
+    _design(tmp_path)                                                        # another design, untouched
+    out = asyncio.run(_exec_design({"action": "delete", "name": "pitch"}, _ws(tmp_path)))
+    assert sorted(f.name for f in d.iterdir()) == ["launch.fig"]
+    gone = sorted(e["path"] for e in trash.list_trash(str(tmp_path)))
+    assert gone == ["designs/pitch.deck.json", "designs/pitch.fig", "designs/pitch.pptx"]
+    assert "trash" in out and "restore" in out.lower()
+
+
+def test_a_designs_earlier_versions_are_listed_and_one_is_gone_back_to(tmp_path, monkeypatch):
+    from cycls._agent import versions
+    from cycls._agent.design.store import version_of
+    _design(tmp_path, data=b"NOW")
+    one = versions.snapshot(str(tmp_path), "designs/launch.fig", b"FIRST", by="agent", reason="agent", intent="making the headline gold", always=True)
+    two = versions.snapshot(str(tmp_path), "designs/launch.fig", b"SECOND", by="user", reason="save", always=True)
+    listing = asyncio.run(_exec_design({"action": "versions", "name": "launch"}, _ws(tmp_path)))
+    ids = [v["id"] for v in versions.listing(str(tmp_path), "designs/launch.fig")]
+    assert len(ids) == 2 and all(i in listing for i in ids)
+    assert "making the headline gold" in listing and listing.index(ids[0]) < listing.index(ids[1])   # newest first, as listed
+    scheduled, told = [], []
+    monkeypatch.setattr("cycls._agent.design.refresh.schedule", lambda root, rel, user_id=None, ensure=False, pages=False: scheduled.append(rel))
+
+    async def _notify(root, rel, body):
+        told.append((rel, body))
+    monkeypatch.setattr("cycls._agent.design.live.notify", _notify)
+    oldest = ids[-1]
+    out = asyncio.run(_exec_design({"action": "restore", "name": "launch", "version": oldest}, _ws(tmp_path)))
+    assert (tmp_path / "designs" / "launch.fig").read_bytes() == b"FIRST"
+    assert b"NOW" in [versions.read(str(tmp_path), "designs/launch.fig", v["id"]) for v in versions.listing(str(tmp_path), "designs/launch.fig")]   # what it was is kept
+    assert scheduled == ["designs/launch.fig"]
+    assert told == [("designs/launch.fig", {"kind": "reload", "version": version_of(b"FIRST")})]     # people in it open it again
+    assert out["_ui"]["action"] == "design_command" and out["_ui"]["reload"] is True and out["_ui"]["version"] == version_of(b"FIRST")
+    assert "Restored" in _text(out)
+    # By its place too (1 = the newest); and one that isn't there is said, with those that are.
+    asyncio.run(_exec_design({"action": "restore", "name": "launch", "version": 1}, _ws(tmp_path)))
+    assert (tmp_path / "designs" / "launch.fig").read_bytes() == b"NOW"
+    bad = asyncio.run(_exec_design({"action": "restore", "name": "launch", "version": "nope"}, _ws(tmp_path)))
+    assert bad.startswith("Error") and "versions" in bad
+    none = asyncio.run(_exec_design({"action": "versions", "name": "launch2"}, _ws(tmp_path)))
+    assert none.startswith("Error") and "doesn't exist" in none
+
+
+def test_the_tool_says_export_is_for_another_format_and_names_the_file_actions():
+    from cycls._agent.tools import _DESIGN_TOOL, design_tool
+    for action in ("export", "rename", "duplicate", "delete", "versions", "restore"):
+        assert action in _DESIGN_TOOL["input_schema"]["properties"]["action"]["enum"]
+        assert action in design_tool(False)["input_schema"]["properties"]["action"]["description"]
+    assert "- export {name, format" in _DESIGN_TOOL["description"] and "NOT render" in _DESIGN_TOOL["description"]
+    assert {"new_name", "version"} <= set(_DESIGN_TOOL["input_schema"]["properties"])

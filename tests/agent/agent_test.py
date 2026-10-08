@@ -2010,4 +2010,3 @@ def test_the_guide_asked_for_when_everything_is_loaded_says_so(agent_env, monkey
     with _mock_anthropic(client):
         asyncio.run(_drain(_run(context=ctx, allowed_tools=["Design"])))
     assert "already" in _results(ctx)[0] and not made
-

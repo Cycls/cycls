@@ -486,6 +486,16 @@ _DESIGN_TOOL = {
         "\"[Selected in designs/<name>.fig › <frame>: <node> (<type>), …]\" is the person "
         "pointing: \"this\" / \"the selection\" means those nodes — edit them by those names "
         "(\"[… page \"Story\" › …]\" says which page they are on: pass it as `page`).\n"
+        "- export {name, format, page?} — a design you ALREADY have, as another file: pdf, pptx, png, jpg, "
+        "webp or svg, made from its saved .fig as it is now — with everything changed since, by you or by "
+        "hand in the editor. When the user wants the same design in another format (\"send me this as a "
+        "PDF\", \"I need the slides as images\"), use this, NOT render: a render makes a second design from "
+        "the spec, without those changes. A deck as png / jpg is an image a slide; `page` exports one page.\n"
+        "- A design as a file (name = the design): rename {name, new_name} · duplicate {name, new_name?} — a "
+        "copy to change freely (a variant in another language, a second direction) · delete {name} — to the "
+        "trash, where the user can restore it · versions {name} — its earlier versions (every edit and save "
+        "keeps one) · restore {name, version} — go back to one (what it is now is kept as a version). What is "
+        "kept beside a design — its images, slides, deck — goes with it.\n"
         "- edit {ops, name, page?, intent?} — change a design you rendered (designs/<name>.fig) with "
         "named operations, applied in order: "
         "[{\"op\":\"set_text\",\"node\":\"headline\",\"text\":\"New\"}, "
@@ -525,8 +535,11 @@ _DESIGN_TOOL = {
     ),
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["render", "script", "edit", "inspect", "add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide",
-                                              "add_section", "update_section", "move_section", "delete_section", "update_document", "extract"],
-                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes; a document's sections), `edit` it (checked, saved, replayed live in the editor), change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide, change a document: add_section / update_section / move_section / delete_section / update_document, or `extract` an existing PDF's text and pictures."},
+                                              "add_section", "update_section", "move_section", "delete_section", "update_document", "extract",
+                                              "export", "rename", "duplicate", "delete", "versions", "restore"],
+                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes; a document's sections), `edit` it (checked, saved, replayed live in the editor), change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide, change a document: add_section / update_section / move_section / delete_section / update_document, `extract` an existing PDF's text and pictures, `export` a saved design as another file, or handle a design as a file: rename / duplicate / delete / versions / restore."},
+        "new_name": {"type": "string", "description": "For `rename`: the design's new name. For `duplicate`: the copy's name (default <name>-copy)."},
+        "version": {"type": ["string", "integer"], "description": "For `restore`: the version to go back to — its id from `versions`, or its place there (1 = the newest)."},
         "section": {"type": "object", "description": "For add_section / update_section: the section {title, blocks: […]}. update_section takes just the keys that change — {blocks} rewrites it, {title} renames it."},
         "document": {"type": "object", "description": "For update_document: the document's own keys that change — title, subtitle, author, date, theme, cover, size, footnotes, numbering… (null removes one). Not its sections."},
         "path": {"type": "string", "description": "For `extract`: the PDF in the workspace, e.g. attachments/report.pdf."},
@@ -635,7 +648,7 @@ def _design_short():
     props["action"]["description"] = (
         "guide — load this tool's full instructions (first). Then: render, edit, inspect, extract, script, "
         "add_slide, update_slide, move_slide, duplicate_slide, delete_slide, add_section, update_section, "
-        "move_section, delete_section, update_document.")
+        "move_section, delete_section, update_document, export, rename, duplicate, delete, versions, restore.")
     return {**{k: v for k, v in _DESIGN_TOOL.items() if k not in ("description", "input_schema")},
             "description": _DESIGN_SHORT,
             "input_schema": {"type": "object", "properties": props, "required": ["action"]}}
@@ -2831,6 +2844,151 @@ async def _exec_slides(action, inp, workspace, name):
     return {"_model": ack, "_ui": ui}
 
 
+_FILE_ACTIONS = ("export", "rename", "duplicate", "delete", "versions", "restore")
+
+
+def _designs_there(root):
+    """The designs in a workspace, by name — for "no such design: there are …"."""
+    names = sorted(p.stem for p in (pathlib.Path(root) / "designs").glob("*.fig")) if (pathlib.Path(root) / "designs").is_dir() else []
+    return ", ".join(names[:30]) + (", …" if len(names) > 30 else "") if names else "none yet"
+
+
+async def _write_beside(path, data):
+    tmp = path.with_name(f".{path.name}.part")
+    await asyncio.to_thread(tmp.write_bytes, data)
+    await asyncio.to_thread(tmp.replace, path)
+
+
+async def _exec_design_file(action, inp, workspace, name):
+    """A saved design as another file (`export`), and a design as a file: `rename`,
+    `duplicate`, `delete`, `versions`, `restore`. All of them work on designs/<name>.fig
+    as it is saved — nothing is rendered again — and what is kept beside it (its images,
+    slides, deck document: design/refresh.py `beside`) goes with it."""
+    from cycls._agent import design, trash, versions
+    from cycls._agent.design import refresh
+    root, subject = pathlib.Path(workspace.root), getattr(workspace, "subject", None)
+    rel = f"designs/{name}.fig"
+    fig_path = root / rel
+    if not fig_path.is_file():
+        return (f"Error: {rel} doesn't exist — `{action}` works on a design that is saved. "
+                f"The designs here: {_designs_there(root)}.")
+    deck_path = fig_path.with_name(f"{name}.deck.json")
+    shown = lambda r: {"type": "ui", "action": "open_canvas", "path": r, "name": r.rsplit("/", 1)[-1]}
+
+    if action == "export":
+        fmt = str(inp.get("format") or "").lower()
+        if fmt not in _DESIGN_EXTS:
+            return "Error: `export` needs `format` — pdf, pptx, png, jpg, webp or svg."
+        fig = await asyncio.to_thread(fig_path.read_bytes)
+        scale, page = inp.get("scale") or 2, str(inp.get("page") or "").strip() or None
+        try:
+            slides = int((json.loads(await asyncio.to_thread(deck_path.read_text, "utf-8")) or {}).get("slides") or 1) if deck_path.is_file() else 1
+        except (OSError, ValueError, TypeError):
+            slides = 1
+        where = ""
+        try:
+            if page:
+                data, pages, page_name = await design.export_page(fig, page, fmt=fmt, scale=scale, user_id=subject)
+                place = next((n for n, p in enumerate(pages, 1) if p["name"] == page_name), 1)
+                outs = [(f"designs/{refresh.page_file(name, place, fmt)}", data)]
+                where = f" (page {json.dumps(page_name, ensure_ascii=False)})"
+            elif slides > 1 and fmt not in _DECK_EXTS:
+                images = await design.export(fig, fmt=fmt, scale=scale, user_id=subject, every=True)
+                outs = [(f"designs/{name}-slide-{n}.{fmt}", d) for n, d in enumerate(images, 1)]
+            else:
+                outs = [(f"designs/{name}.{fmt}", await design.export(fig, fmt=fmt, scale=scale, user_id=subject))]
+        except design.Unavailable as e:
+            return f"Error: design unavailable — {e}"
+        except Exception as e:
+            return f"Error: couldn't export {rel} — {e}"
+        if not outs:
+            return f"Error: {rel} has nothing to export."
+        for out_rel, data in outs:
+            await _write_beside(root / out_rel, data)
+        kb = sum(len(d) for _, d in outs) // 1024
+        what = (f"{outs[0][0]}{where}" if len(outs) == 1 else f"{len(outs)} images, {outs[0][0]} … {outs[-1][0]}")
+        return {"_model": (f"Exported {what} ({kb} KB) from the saved design {rel} — as it is now, with everything changed "
+                           f"since it was made. Nothing was rendered again. The file is kept in step with the design from here on."),
+                "_ui": shown(outs[0][0])}
+
+    if action in ("rename", "duplicate"):
+        asked = str(inp.get("new_name") or "").strip()
+        if action == "rename" and not asked:
+            return "Error: `rename` needs `new_name` — the design's new name."
+        to = _safe_filename(asked or f"{name}-copy", "design").rsplit(".", 1)[0] or "design"
+        if action == "duplicate":
+            to = await asyncio.to_thread(_dedupe_design_name, root / "designs", to, "png")
+        new_rel = f"designs/{to}.fig"
+        if (root / new_rel).exists():
+            return f"Error: {new_rel} is already a design — choose another `new_name`. Nothing was changed."
+        if action == "rename":
+            await asyncio.to_thread(fig_path.rename, root / new_rel)
+            await asyncio.to_thread(versions.move, str(root), rel, new_rel)          # its history goes with it
+        else:
+            await asyncio.to_thread(lambda: (root / new_rel).write_bytes(fig_path.read_bytes()))
+        went = await asyncio.to_thread(refresh.follow, str(root), rel, new_rel, action == "duplicate")
+        if action == "duplicate":
+            refresh.schedule(str(root), new_rel, subject, ensure=True)            # a copy with no image gets one
+        opened = f"designs/{to}.deck.json" if (root / f"designs/{to}.deck.json").is_file() else new_rel
+        beside_it = f" with what is kept beside it ({', '.join(p.name for p in went[:6])}{', …' if len(went) > 6 else ''})" if went else ""
+        ack = (f"Renamed {rel} to {new_rel}{beside_it}. Its name is now \"{to}\" — use that in the next call."
+               if action == "rename" else
+               f"Copied {rel} to {new_rel}{beside_it}. The copy is \"{to}\": change it freely with Design edit — \"{name}\" stays as it is.")
+        return {"_model": ack, "_ui": shown(opened)}
+
+    if action == "delete":
+        files = [fig_path, *(f for f, _ in await asyncio.to_thread(refresh.beside, str(root), rel))]
+        gone = []
+        for f in files:
+            try:
+                await asyncio.to_thread(trash.trash_path, str(root), f.relative_to(root).as_posix(), "agent", "delete")
+                gone.append(f.name)
+            except (OSError, ValueError) as e:
+                return f"Error: couldn't delete {f.name} — {e}. Moved to the trash so far: {', '.join(gone) or 'nothing'}."
+        return (f"Moved {rel} to the trash{f' with what was kept beside it ({len(gone) - 1} more files)' if len(gone) > 1 else ''}. "
+                f"The user can restore it from Files › Trash; tell them so. Nothing else was deleted.")
+
+    listed = await asyncio.to_thread(versions.listing, str(root), rel)             # newest first
+    if action == "versions":
+        if not listed:
+            return f"{rel} has no earlier versions yet — one is kept each time it is edited or saved."
+        lines = [f"{rel} — {len(listed)} earlier version{'s' if len(listed) != 1 else ''}, newest first:"]
+        for n, v in enumerate(listed[:30], 1):
+            why = {"agent": "an edit of yours", "save": "saved in the editor", "keep": "\"Keep mine\" in the editor",
+                   "restore": "before a restore"}.get(str(v.get("reason")), str(v.get("reason") or ""))
+            intent = f": {json.dumps(str(v['intent'])[:80], ensure_ascii=False)}" if v.get("intent") else ""
+            lines.append(f"  {n}. {v.get('id')}  {str(v.get('at') or '')[:16].replace('T', ' ')}  by {v.get('by') or '?'} — {why}{intent}  "
+                         f"({int(v.get('size') or 0) // 1024} KB)")
+        if len(listed) > 30:
+            lines.append(f"  … and {len(listed) - 30} older.")
+        lines.append("Each is the design as it was BEFORE that change. Go back to one with "
+                     "{\"action\": \"restore\", \"name\": …, \"version\": <its id, or its number here>} — what the design is now is kept first.")
+        return "\n".join(lines)
+
+    # restore
+    want = inp.get("version")
+    vid = None
+    if isinstance(want, int) or (isinstance(want, str) and want.strip().isdigit()):
+        place = int(want)
+        vid = listed[place - 1]["id"] if 1 <= place <= len(listed) else None
+    elif isinstance(want, str):
+        vid = want.strip()
+    data = await asyncio.to_thread(versions.read, str(root), rel, vid) if vid else None
+    if data is None:
+        return (f"Error: {rel} has no version {want!r} — `versions` lists the {len(listed)} it has "
+                f"(an id, or a place from 1 = the newest). Nothing was changed.")
+    from cycls._agent.design import live
+    from cycls._agent.design.deck import lock
+    from cycls._agent.design.store import write_fig
+    async with lock(fig_path):
+        version = await write_fig(str(root), rel, data, by="agent", reason="restore")
+    refresh.schedule(str(root), rel, subject, ensure=True)
+    await live.notify(str(root), rel, {"kind": "reload", "version": version})       # people in it open it again
+    return {"_model": (f"Restored {rel} to its version {vid}. What it was a moment ago is kept as a version too (`versions`), so this "
+                       f"can be undone. Its image re-exports in a few seconds; an open editor opens it again."),
+            "_ui": {"type": "ui", "action": "design_command", "path": rel, "script": "", "reload": True, "version": version}}
+
+
 async def _exec_design(inp, workspace):
     """Render a design via the shared cycls-design service, save the image + the
     editable `.fig` into the workspace, and open the image on the canvas. Two
@@ -2902,6 +3060,8 @@ async def _exec_design(inp, workspace):
         if not inp.get("name") and isinstance(inp.get("path"), str):
             name = _safe_filename(pathlib.PurePosixPath(inp["path"].replace("\\", "/")).stem or "pdf", "pdf")
         return await _pdf_parts(inp, workspace, name)
+    if action in _FILE_ACTIONS:
+        return await _exec_design_file(action, inp, workspace, name)
     if action in ("edit", "inspect"):
         rel = f"designs/{name}.fig"
         fig_path = pathlib.Path(workspace.root) / rel
