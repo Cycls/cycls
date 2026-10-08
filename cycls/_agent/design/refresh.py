@@ -69,36 +69,49 @@ def managed(root, rel):
     return (Path(root) / path.parent / f"{stem}.fig").is_file()
 
 
-def follow(root, old_rel, new_rel):
-    """A design renamed or moved: what is kept beside its .fig goes with it — its image
-    in each format, its slides' and pages' images, its deck document (whose paths are
-    written anew). A file already at the new name is left as it is. → the files moved."""
-    import json, shutil
-    root = Path(root)
-    old, new = root / old_rel, root / new_rel
-    moved = []
-    if not old.parent.is_dir():
-        return moved
-    for f in sorted(old.parent.iterdir()):
+def beside(root, rel):
+    """What is kept beside the design `rel` (its .fig): its image in each format, its
+    slides' and pages' images, its deck document → [(file, what follows the design's name
+    in the file's: ".png", "-slide-2.png", ".deck.json")]."""
+    fig = Path(root) / rel
+    found = []
+    if not fig.parent.is_dir():
+        return found
+    for f in sorted(fig.parent.iterdir()):
         if not f.is_file():
             continue
         tail = None
-        if f.name == f"{old.stem}.deck.json":
+        if f.name == f"{fig.stem}.deck.json":
             tail = ".deck.json"
         else:
             base, dot, fmt = f.name.rpartition(".")
             if dot and fmt.lower() in FORMATS:
-                if base == old.stem:
+                if base == fig.stem:
                     tail = f".{fmt}"
                 for part in ("-slide-", "-page-"):
                     head, sep, n = base.rpartition(part)
-                    if sep and n.isdigit() and head == old.stem:
+                    if sep and n.isdigit() and head == fig.stem:
                         tail = f"{part}{n}.{fmt}"
-        dest = new.parent / f"{new.stem}{tail}" if tail else None
-        if dest is None or dest.exists():
+        if tail:
+            found.append((f, tail))
+    return found
+
+
+def follow(root, old_rel, new_rel, copy=False):
+    """A design renamed or moved: what is kept beside its .fig goes with it — its image
+    in each format, its slides' and pages' images, its deck document (whose paths are
+    written anew). A file already at the new name is left as it is. → the files moved.
+    `copy`: a design copied — they are copied, and the original's stay."""
+    import json, shutil
+    root = Path(root)
+    old, new = root / old_rel, root / new_rel
+    moved = []
+    for f, tail in beside(root, old_rel):
+        dest = new.parent / f"{new.stem}{tail}"
+        if dest.exists():
             continue
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(f), str(dest))
+        (shutil.copy2 if copy else shutil.move)(str(f), str(dest))
         moved.append(dest)
     deck = new.parent / f"{new.stem}.deck.json"
     if deck.is_file():

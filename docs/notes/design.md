@@ -934,6 +934,17 @@ lets someone in.
   spec says what did come. A gradient written as a node is a rect over the frame with
   that fill. A list's `items` as one text, as `{text}` objects, or with their markers
   typed are its points. Several pages asked for as a PDF are rendered as their images.
+- **A saved design as another file, and a design as a file** (`_exec_design_file`).
+  "Send me this as a PDF" had no action of its own: the model rendered the design
+  again from the spec it remembered — a second design (`launch-2`), without what had
+  been changed by hand since. `export {name, format, page?}` makes the file from the
+  saved `.fig` as it is (a deck as png / jpg: an image a slide; `page`: that page's
+  file), beside the design, where the refresh keeps it in step. And the tool handles a
+  design as a file, which bash could only half do (a `mv` left its images and deck
+  document behind): `rename`, `duplicate` (a copy to change freely — it gets its own
+  image), `delete` (to the trash, each file restorable), `versions` and `restore`
+  (what the design is now is kept first; people in it together open it again). What
+  is kept beside a design is `refresh.beside`, and goes with it (`refresh.follow`).
 - **The tool's instructions, only when a chat designs** (`DESIGN_INSTRUCTIONS=on-demand`;
   off unless set). The Design tool's definition is 28,800 characters — nearly half of
   the fixed part of every request, in every chat. On production over three weeks, 76
