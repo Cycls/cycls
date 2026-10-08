@@ -25,8 +25,36 @@ import { cn } from "../lib/utils";
 // event arrives; while the deck (not the editor) is showing, that event just means
 // "the slides changed" — refetch the manifest.
 
-// A deck viewer's own slide change (slides from 1): reorder by drag, duplicate, delete.
-export type DeckOp = { op: "move" | "duplicate" | "delete"; number: number; to?: number };
+// A deck viewer's own slide change (slides from 1): reorder by drag, duplicate, delete;
+// a slide to start from, added after slide `number`; a slide's speaker notes.
+export type DeckOp =
+  | { op: "move" | "duplicate" | "delete"; number: number; to?: number }
+  | { op: "add"; number?: number; title?: string; text?: string }
+  | { op: "notes"; number: number; notes: string };
+
+// A slide's speaker notes, to write: saved on leaving the box when they changed (Escape
+// leaves them as they were). Typing here is typing — the keys that page the deck stay in the box.
+function NotesBox({ value, onSave }: { value: string; onSave: (notes: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  const left = useRef(false);
+  return (
+    <textarea aria-label={t("speakerNotes")} dir="auto" rows={3} value={draft} placeholder={t("addNotes")}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key !== "Escape") return;
+                e.preventDefault();
+                left.current = true;
+                setDraft(value);
+                e.currentTarget.blur();
+              }}
+              onBlur={() => {
+                if (left.current) { left.current = false; return; }
+                if (draft.trim() !== value.trim()) onSave(draft.trim());
+              }}
+              className="block w-full resize-none bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground" />
+  );
+}
 
 export interface DeckManifest {
   count: number;
@@ -116,6 +144,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
   const [over, setOver] = useState<number | null>(null);
   const [menuFor, setMenuFor] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  const [goTo, setGoTo] = useState<number | null>(null);   // the slide just added, shown once the slides are back
   useEscape(() => setConfirmDelete(null), confirmDelete !== null);
   const railRef = useRef<HTMLDivElement>(null);
   const fig = deck?.fig;
@@ -131,6 +160,13 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
   useEffect(() => {
     railRef.current?.querySelector(`[data-slide="${nav.active}"]`)?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
   }, [nav.active]);
+
+  // The slide that was added is the one in view, once the deck has it.
+  useEffect(() => {
+    if (goTo == null || goTo >= count) return;
+    nav.go(goTo);
+    setGoTo(null);
+  }, [goTo, count]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // An agent edit of this deck landed (the server already saved it): new slides.
   useEffect(() => {
@@ -186,6 +222,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
       await onSlideOp(op);
       if (fig) reloadDesignEditors(fig);
       track("deck_slide_changed", { op: op.op });
+      if (op.op === "add") { setMode("stage"); setGoTo(op.number ?? count); }
       onReload?.();
     } catch { /* the toast said why */ } finally {
       setBusy(false);
@@ -226,6 +263,8 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
     );
   }
 
+  // A slide to start from, after slide `after` (from 1): the deck's own kind of slide, titled so it reads as new.
+  const addSlide = (after: number) => void slideOp({ op: "add", number: after, title: t("newSlideTitle"), text: t("newSlideText") });
   const tool = "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors cursor-pointer";
   const note = deck.notes?.[nav.active]?.trim();
 
@@ -246,6 +285,13 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
         <span className="ml-2 text-xs text-muted-foreground tabular-nums">
           {count === 1 ? t(paper ? "onePage" : "oneSlide") : `${count} ${t(paper ? "pages" : "slidesStage").toLowerCase()}`}
         </span>
+        {onSlideOp && (
+          <button onClick={() => addSlide(mode === "stage" ? nav.active + 1 : count)} disabled={busy}
+                  aria-label={t("addSlide")} title={t("addSlide")} data-testid="add-slide"
+                  className="ml-1 flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground disabled:opacity-50 cursor-pointer">
+            <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" d="M12 5v14M5 12h14" /></svg>
+          </button>
+        )}
         {busy && <span className="ml-2 text-xs text-muted-foreground">{t("saving")}</span>}
         <div className="flex-1" />
         {openFile && (
@@ -299,6 +345,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
                     </button>
                     {menuFor === i && (
                       <DropdownMenu onClose={() => setMenuFor(null)} items={[
+                        { label: t("addSlideAfter"), onClick: () => addSlide(i + 1) },
                         { label: t("duplicate"), onClick: () => void slideOp({ op: "duplicate", number: i + 1 }) },
                         ...(count > 1 ? [{ label: t("delete"), danger: true, onClick: () => setConfirmDelete(i) }] : []),
                       ]} />
@@ -349,7 +396,14 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
                 </div>
               )}
             </div>
-            {hasNotes && (
+            {/* The owner writes them here; anyone else reads them (when the deck has any). */}
+            {onSlideOp ? (
+              <div className="max-h-32 shrink-0 overflow-y-auto border-t border-border px-4 py-2 text-xs">
+                <div className="mb-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">{t("speakerNotes")}</div>
+                <NotesBox key={`${nav.active}:${note ?? ""}`} value={note ?? ""}
+                          onSave={(notes) => void slideOp({ op: "notes", number: nav.active + 1, notes })} />
+              </div>
+            ) : hasNotes && (
               <div className="max-h-32 shrink-0 overflow-y-auto border-t border-border px-4 py-2 text-xs">
                 <div className="mb-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">{t("speakerNotes")}</div>
                 <div className={cn("whitespace-pre-wrap", note ? "text-foreground" : "text-muted-foreground")} dir="auto">

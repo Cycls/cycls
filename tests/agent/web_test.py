@@ -1962,6 +1962,62 @@ def test_deck_route_moves_duplicates_and_deletes_slides(tmp_path, monkeypatch):
     assert client.post("/deck/notes/pitch.deck.json", json={"op": "delete", "number": 1}).status_code == 404   # outside designs/
 
 
+def test_deck_route_adds_a_slide_and_keeps_a_slides_notes(tmp_path, monkeypatch):
+    """The deck viewer's "Add slide" and its notes box. A deck made of layouts gets a slide
+    laid out like its own (its theme, its size); a hand-built one gets a blank slide the
+    colour of the slide before it, titled in a colour that shows on it. Notes are the
+    slide's, as the agent's `update_slide` writes them."""
+    from cycls._agent import design
+    from cycls._agent.design import refresh
+    laid = json.dumps({"type": "cycls.deck", "version": 1, "fig": "designs/pitch.fig", "size": [1920, 1080], "slides": 3,
+                       "exports": [], "settings": {"theme": "editorial", "size": [1920, 1080]}}).encode()
+    root = _seed(tmp_path, {"designs/pitch.fig": b"FIG", "designs/pitch.deck.json": laid,
+                            "designs/hand.fig": b"FIG", "designs/hand.deck.json": _DECK_DOC})
+    seen = []
+
+    async def apply(fig, script=None, user_id=None, ops=None, preview=False):
+        seen.append(ops)
+        return {"fig": b"NEW", "lint": [], "script": "S", "preview": None, "previews": [], "touched": [], "slides": [{}] * 4}
+
+    async def inspect(fig, user_id=None, page=None):
+        return [{"slide": 1, "size": [1920, 1080], "fill": "#ffffff", "nodes": []},
+                {"slide": 2, "size": [1920, 1080], "fill": "#0f172a", "nodes": []}]
+    monkeypatch.setattr(design, "apply", apply)
+    monkeypatch.setattr(design, "inspect", inspect)
+    monkeypatch.setattr(refresh, "schedule", lambda *a, **k: None)
+    client = _ws_routers_client(tmp_path)
+
+    r = client.post("/deck/designs/pitch.deck.json", json={"op": "add", "number": 2, "title": "شريحة جديدة", "text": "أضف نصك"})
+    assert r.status_code == 200 and r.json() == {"ok": True, "slides": 4, "added": 3}
+    [op] = seen[-1]
+    assert op["op"] == "slide_add" and op["at"] == 2
+    assert op["slide"]["layout"] == "bullets" and op["slide"]["title"] == "شريحة جديدة" and op["slide"]["bullets"] == ["أضف نصك"]
+    assert op["deck"]["theme"] == "editorial"                         # laid out as the deck's own slides are
+    # No place said: at the end, with words of its own.
+    assert client.post("/deck/designs/pitch.fig", json={"op": "add"}).json() == {"ok": True, "slides": 4, "added": 4}
+    [op] = seen[-1]
+    assert "at" not in op and op["slide"]["title"] == "New slide" and op["slide"]["bullets"] == ["Add your text"]
+
+    # A hand-built deck: a blank slide the colour of the one it comes after, its title readable on it.
+    r = client.post("/deck/designs/hand.deck.json", json={"op": "add", "number": 2, "title": "Next"})
+    assert r.status_code == 200
+    [op] = seen[-1]
+    assert op["at"] == 2 and op["slide"]["fill"] == "#0f172a" and "layout" not in op["slide"]
+    [title] = [n for n in op["slide"]["nodes"] if n.get("type") == "text"]
+    assert title["text"] == "Next" and title["color"].lower() == "#ffffff"
+
+    # Notes: the slide's own, trimmed; emptied when cleared.
+    r = client.post("/deck/designs/pitch.deck.json", json={"op": "notes", "number": 2, "notes": "  Say hello  "})
+    assert r.status_code == 200 and seen[-1] == [{"op": "slide_meta", "index": 1, "notes": "Say hello"}]
+    client.post("/deck/designs/pitch.deck.json", json={"op": "notes", "number": 1, "notes": ""})
+    assert seen[-1] == [{"op": "slide_meta", "index": 0, "notes": ""}]
+    count = len(seen)
+    for bad in ({"op": "notes", "number": 0, "notes": "x"}, {"op": "notes", "number": 1}, {"op": "notes", "number": 1, "notes": "x" * 20001},
+                {"op": "add", "number": -1}, {"op": "add", "number": "2"}, {"op": "add", "title": "t" * 301}):
+        assert client.post("/deck/designs/pitch.deck.json", json=bad).status_code == 400, bad
+    assert len(seen) == count                                           # nothing was sent for any of them
+
+
 def test_new_design_route_makes_a_blank_design(tmp_path, monkeypatch):
     """Cycls's "New design": one blank frame of a size preset (or [w, h]), saved as
     designs/<name>.fig with its .png like a render, never over another design."""
@@ -2820,12 +2876,64 @@ def test_restoring_a_version_tells_the_room_to_open_the_file_again(tmp_path, mon
     assert said == [("designs/launch.fig", {"kind": "reload", "version": back["version"]})]
 
 
+def test_a_version_is_shown_as_a_picture_before_it_is_restored(tmp_path, monkeypatch):
+    """`?id=…&as=png` on a design's versions: a picture of THAT version — made by the design
+    service from the version's own bytes, not from the file as it is now — small enough for
+    the versions panel. A version that isn't there is a 404; no service, a 415."""
+    from cycls._agent import design
+    from cycls._agent.design import refresh
+    monkeypatch.setattr(refresh, "schedule", lambda *a, **k: None)
+    asked = []
+
+    async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False, page=None):
+        asked.append((fig, fmt, width, every))
+        return b"\x89PNG picture of " + fig
+    monkeypatch.setattr(design, "export", export)
+    client = _ws_routers_client(tmp_path)
+    assert client.put("/files/designs/launch.fig", content=b"ONE").status_code == 200
+    assert client.put("/files/designs/launch.fig", content=b"TWO").status_code == 200
+    [kept] = client.get("/versions/designs/launch.fig").json()["versions"]
+    r = client.get(f"/versions/designs/launch.fig?id={kept['id']}&as=png")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+    assert r.content == b"\x89PNG picture of ONE"                       # the version, not the file now
+    assert asked == [(b"ONE", "png", 640, False)]
+    assert client.get(f"/versions/designs/launch.fig?id={kept['id']}").content == b"ONE"   # its bytes, as before
+    assert client.get("/versions/designs/launch.fig?id=20200101T000000-abcdef&as=png").status_code == 404
+
+    async def down(*a, **k):
+        raise design.Unavailable("design not configured (DESIGN_URL)")
+    monkeypatch.setattr(design, "export", down)
+    assert client.get(f"/versions/designs/launch.fig?id={kept['id']}&as=png").status_code == 415
+
+
+def test_a_change_made_in_the_deck_viewer_is_the_persons_in_the_version_history(tmp_path, monkeypatch):
+    """What a slide change replaced is kept as a version. Made in the deck viewer it was
+    listed as the agent's ("Before an agent edit · Agent") — the person had done it."""
+    from cycls._agent import design
+    from cycls._agent.design import deck as decks, refresh
+    root = _seed(tmp_path, {"designs/pitch.fig": b"FIG", "designs/pitch.deck.json": _DECK_DOC})
+    monkeypatch.setattr(refresh, "schedule", lambda *a, **k: None)
+    turn = iter([b"ONE", b"TWO"])
+
+    async def apply(fig, script=None, user_id=None, ops=None, preview=False):
+        return {"fig": next(turn), "lint": [], "script": "S", "preview": None, "previews": [], "touched": [], "slides": [{}] * 2}
+    monkeypatch.setattr(design, "apply", apply)
+    client = _ws_routers_client(tmp_path)
+    assert client.post("/deck/designs/pitch.fig", json={"op": "notes", "number": 2, "notes": "Say hello"}).status_code == 200
+    [mine] = client.get("/versions/designs/pitch.fig").json()["versions"]
+    assert (mine["by"], mine["reason"], mine["intent"]) == ("user", "change", "slide 2's notes")
+    # The agent's own slide change is still the agent's.
+    asyncio.run(decks.apply_ops(root, "pitch", [{"op": "slide_move", "index": 0, "to": 1}], user_id="u"))
+    newest = client.get("/versions/designs/pitch.fig").json()["versions"][0]
+    assert (newest["by"], newest["reason"], newest["intent"]) == ("agent", "agent", "move slide 1")
+
+
 def test_a_slide_moved_in_the_deck_viewer_tells_the_room_to_open_the_file_again(tmp_path, monkeypatch):
     from cycls._agent.design import deck as decks
     from cycls._agent.design.store import version_of
     said = _room_said(monkeypatch)
 
-    async def apply_ops(root, name, ops, user_id=None, preview=False):
+    async def apply_ops(root, name, ops, user_id=None, preview=False, by="agent"):
         return {"slides": [{}, {}], "version": version_of(b"MOVED")}
     monkeypatch.setattr(decks, "apply_ops", apply_ops)
     client = _ws_routers_client(tmp_path)

@@ -55,6 +55,7 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
     designLive: f.designLive,
     listVersions: f.listVersions,
     versionBlob: f.versionBlob,
+    versionPreview: f.versionPreview,
     restoreVersion: f.restoreVersion,
     deckOp: f.deckOp,
     pollsFor: withShare ? f.pollsFor : undefined,   // a poll runs through the deck's public link

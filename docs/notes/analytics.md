@@ -157,13 +157,14 @@ Identified users also carry **person properties** (via identify): `email`,
 | `poll_opened` | a poll slide comes up while its owner presents — its live poll opens | `options` — are decks used to ask the room, not just to show it? |
 | `poll_voted` | someone in the audience votes, on the deck's public link (`?vote=1`) | `options` — votes ÷ polls opened is how many people answer |
 | `deck_exported` | a deck downloaded from the deck viewer | `format` (`pptx` / `pdf`) — which file people take away |
-| `deck_slide_changed` | the owner moved (drag), duplicated or deleted a slide in the deck viewer's grid | `op` (`move` / `duplicate` / `delete`) — do people shape decks by hand, or ask the agent? |
+| `deck_slide_changed` | the owner changed the slides in the deck viewer: moved (drag), duplicated or deleted one, added one to start from, or wrote a slide's speaker notes | `op` (`move` / `duplicate` / `delete` / `add` / `notes`) — do people shape decks by hand, or ask the agent? |
 | `design_created` | "New design" — the canvas `+`, the Files panel, or File › New design in the editor | `source` (`canvas` / `files` / `editor`), `size` (the preset or `WxH`) — do people start designs by hand, not only by asking? |
 | `design_previewed` | the Edit \| Preview switch of a design in the canvas, to Preview | — how often a design is looked at without the editor |
 | `design_exported` | an export from the design editor, written into the workspace beside the design | `format`, `files` — which formats leave the editor |
 | `design_copied` | "Save a copy" in the design editor | — do people branch designs? |
 | `design_save_conflict` | a design save refused because the file changed elsewhere (another tab, person or script), then the choice made | `choice` (`shown` / `latest` / `mine` / `copy`) — how often do edits collide, and how do people settle it? |
-| `design_version_restored` | a design restored from Version history | `reason` (what replaced the restored version: `save` / `agent` / `restore` / `keep`) — do people undo the agent? |
+| `design_version_restored` | a design restored from Version history | `reason` (what replaced the restored version: `save` / `agent` / `change` / `restore` / `keep`) — do people undo the agent? |
+| `design_version_previewed` | "Preview" on a row of Version history: that version's picture, shown before restoring | `reason` (as above) — previews ÷ restores is how often people look before going back |
 | `design_selection_attached` | "Add selection" — what's selected in an open design, attached to a message | `nodes` (how many) — do people point at the design rather than describe it? |
 
 ### Sharing loop (organic acquisition)

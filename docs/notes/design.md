@@ -1,7 +1,8 @@
 # Agent-native design for Cycls agents
 
-**Status: implemented.** A Cycls agent can **create social-media posts and slide
-decks** and show them on the canvas — with **no design engine in the agent image**.
+**Status: implemented.** A Cycls agent can **create social-media posts, slide decks
+and documents** (reports, CVs, newsletters — flowing pages, as a PDF) and show them
+on the canvas — with **no design engine in the agent image**.
 The heavy part ([OpenPencil](https://github.com/open-pencil/open-pencil), a
 headless vector engine on Skia/CanvasKit) runs **once, in a shared service**; the
 SDK ships only a thin client (`cycls/_agent/design`) and the built-in `Design`
@@ -55,7 +56,7 @@ agent's live `edit` changed it under their cursor.
    Design tool + client (httpx)             Bun + OpenPencil (headless,
         │                                    CanvasKit-WASM, no display)
         │  POST /render {spec}  ───────────▶  compile spec → Figma plugin API
-        │  POST /eval   {script}             → export png/jpg/webp/svg/pptx
+        │  POST /eval   {script}             → export png/jpg/webp/svg/pptx/pdf
         ▼                                     → return image + editable .fig
    save designs/<name>.<fmt> + .fig ◀────────  (stateless: files live in the
    open_canvas → user sees it                  agent's workspace)
@@ -272,8 +273,10 @@ model. The result both replays in an open editor (`design_command`) and opens th
 viewer (`open_canvas`) — a tool's `_ui` may be a list. Changes to one design are
 serialized (`design/deck.py` `lock`): the model calls tools in parallel, and two slide
 actions in one turn each read the same `.fig` — the later write dropped the other's
-change until they queued. The deck viewer's own drag-to-reorder, duplicate and delete
-go through `POST /deck/<deck>` and the same code.
+change until they queued. The deck viewer's own changes — drag-to-reorder, duplicate,
+delete, a slide added, a slide's notes — go through `POST /deck/<deck>` and the same
+code (`deck.apply_ops(…, by="user")`: what they replace is kept as the person's
+version, "Before a slide change: add a slide", not as an agent edit).
 
 ## Pages
 
@@ -503,7 +506,18 @@ filmstrip beside the current slide and its speaker notes, or a grid of every sli
 **Present**; **Download** — the whole deck as PowerPoint or PDF, or every slide as a
 PNG in one zip (`<name>-slide-<n>.png`; listed first for a carousel, which is posted
 as images), exported on demand; and **Edit**, which swaps in the design editor on the
-deck's `.fig`. Its content is
+deck's `.fig`. The owner also shapes the deck here, without the editor or the agent:
+drag a card in the grid to move it, **Duplicate**, **Delete**, **Add slide** (`+` in
+the toolbar: after the slide in view; "Add slide after" in a card's menu) and the
+**speaker notes**, written in the box under the stage and saved on leaving it (Escape
+leaves them as they were; the keys that page the deck stay in the box). An added slide
+is one to start from, made the way the deck's own are (`_new_slide_op`): a deck of
+layouts — its deck document has `settings` — gets a `bullets` slide in the deck's
+theme, titled "New slide" in the person's language; a hand-built deck has no theme
+to follow, so it gets a blank slide the colour of the slide before it, its title in
+a colour that shows on it. A document's pages are not changed one by one (they are
+numbered, and listed in its contents), and a shared deck is read-only: neither has
+these. Its content is
 the slide manifest from `GET /files/<deck>?as=slides` — the server resolves the
 deck document to its `.fig` (inside the workspace), asks the service's `/slides`
 for every slide as a JPEG plus its name / title / notes / transition, and caches the
@@ -697,7 +711,11 @@ Cycls tab opened, and everything it makes lands in the workspace.
   the bigger box: when the editor's box changes size by more than 15% (full screen, the
   canvas expanded over the chat) the host posts `fit`, and the editor fits the design
   again unless the person has zoomed or panned since the last fit (an editor that
-  lists the `fit` feature; before it the design stayed small in a corner). **Esc leaves
+  lists the `fit` feature; before it the design stayed small in a corner). A fit is
+  to what the editor's own bars leave of the canvas: OpenPencil fits a page to the
+  whole canvas with a margin that shrinks as it zooms out, and its toolbar floats
+  over the foot of it — in a docked pane (its narrow layout, with a drawer under the
+  toolbar) a page as tall as paper ended beneath them (the bridge's `fitPage`). **Esc leaves
   it**, as on any full-screen page, and an Exit button stays at the top middle the whole
   time — named for the first moments, then a small icon. (It was built with a keyboard
   lock that kept Esc for the editor — hold it to leave — and a button that hid after
@@ -741,8 +759,13 @@ Cycls tab opened, and everything it makes lands in the workspace.
   30 days. ⋮ › **Version history** lists them by what replaced each ("Before an agent
   edit: move slide 4"); **Restore** saves an open editor first, restores (keeping
   what it replaces — a restore is undone by restoring) and reopens it; **Open as
-  copy** makes it a new design. Routes: `GET /versions/<path>` (`?id=` one's bytes),
-  `POST /versions/<path>?restore=<id>`. `.versions` is managed by cycls: refused by
+  copy** makes it a new design. **Preview** shows a version before it is restored: a
+  row says only when it was replaced and by whom, which does not tell two saves
+  apart, so its picture — the first slide or page, 640 px wide, made by the service
+  from the version's own bytes when asked for — opens in the row, over its Restore
+  (kept while the panel is open; a version never changes, so the browser may keep it
+  too). Routes: `GET /versions/<path>` (`?id=` one's bytes, `?id=…&as=png` its
+  picture), `POST /versions/<path>?restore=<id>`. `.versions` is managed by cycls: refused by
   the files routes and the agent's tools, masked in the bash sandbox; a rename
   carries a file's history (copied, where the mount can't rename a directory — gcsfuse;
   a history that can't follow is logged and never fails the rename), a purged trash
@@ -774,8 +797,11 @@ shell (`main.ts`, `App.vue`, `WorkspaceView.vue`, `pwa.ts`, `aliases.ts`), the
 bridge (`cycls-bridge.ts` + `host.ts`), stubs aliased over upstream modules (save,
 export, tabs, menus, AI), and exact edits (`edits.json`) — each must match, and the
 upstream files they rely on are pinned by hash, so a new OpenPencil version fails
-the build until it is reviewed. The patches and build recipe live in
-[`design-editor-patch/`](design-editor-patch/) and the handoff note beside it.
+the build until it is reviewed. The patches, the build and their tests live in the
+service repo (`cycls-design/editor/`); [the hand-off note](design-editor-handoff.md)
+is the short reference for what Cycls and the editor say to each other.
+(`design-editor-patch/` beside it is a snapshot of the patches from 5 October 2026,
+from before they had a repo of their own: not what is built.)
 
 ### Together — several people in one design
 

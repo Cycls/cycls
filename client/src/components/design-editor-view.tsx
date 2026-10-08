@@ -83,6 +83,7 @@ export type DesignHost = {
   fetchVersioned?: FetchVersioned;
   listVersions?: (path: string) => Promise<DesignVersion[]>;
   versionBlob?: (path: string, id: string) => Promise<Blob>;
+  versionPreview?: (path: string, id: string) => Promise<Blob>;   // a picture of it (absent on an older server)
   restoreVersion?: (path: string, id: string) => Promise<{ version: string }>;
   // Working in one design together: the design's live room and this person's pass for
   // it — null where a design opens alone (a personal workspace, no relay) — and who

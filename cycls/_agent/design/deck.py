@@ -69,12 +69,14 @@ def read_doc(deck_path):
         return {}
 
 
-async def apply_ops(root, name, ops, user_id=None, preview=False):
+async def apply_ops(root, name, ops, user_id=None, preview=False, by="agent"):
     """Run slide `ops` (service form, 0-based) on design `name` → the service's result
     dict (fig, lint, script, preview, previews, touched, slides). The `.fig` is
     rewritten, its exports refreshed and the deck document's count updated (the
-    document is created when a single design becomes a deck). Raises FileNotFoundError
-    (no such design), design.Unavailable, RuntimeError (the op's own error)."""
+    document is created when a single design becomes a deck). What it replaced is kept
+    as a version, said to be the agent's — or, with `by="user"` (the deck viewer), a
+    person's own slide change. Raises FileNotFoundError (no such design),
+    design.Unavailable, RuntimeError (the op's own error)."""
     from cycls._agent import design
     from .store import Stale, read_fig, write_fig
     fig_path, fig_rel, deck_path, _ = paths(root, name)
@@ -85,8 +87,8 @@ async def apply_ops(root, name, ops, user_id=None, preview=False):
                 raise FileNotFoundError(fig_rel)
             r = await design.apply(data, ops=ops, preview=preview, user_id=user_id)
             try:   # the person may have saved in the editor meanwhile: apply to that, once
-                r["version"] = await write_fig(root, fig_rel, r["fig"], base=base, by="agent", reason="agent",
-                                               intent=_intent(ops))
+                r["version"] = await write_fig(root, fig_rel, r["fig"], base=base, by=by,
+                                               reason="agent" if by == "agent" else "change", intent=_intent(ops))
                 break
             except Stale:
                 if attempt == 2:

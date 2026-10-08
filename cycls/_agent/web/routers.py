@@ -695,6 +695,41 @@ async def _design_export(root, src, fmt, user_id, page=None):
     return await asyncio.to_thread(_write_design_cache, cache_dir, stem, key, ext, dst, data), name
 
 
+async def _new_slide_op(root, name, after, title, text, user_id):
+    """The deck viewer's "Add slide" as a service op: a slide to start from, after slide
+    `after` (from 1; 0: first; None: last). A deck made of layouts gets one laid out as
+    its own are — a title and a line of text in the deck's theme; a hand-built deck has
+    no theme to follow, so it gets a blank slide the colour of the slide before it, with
+    its title in a colour that shows on it. Raises FileNotFoundError, design.Unavailable,
+    ValueError (the slide couldn't be prepared)."""
+    from cycls._agent import design
+    from cycls._agent.design import deck as decks
+    from cycls._agent.tools import _norm_hex, _prepare_slide
+    fig_path, _, deck_path, _ = decks.paths(root, name)
+    if not await asyncio.to_thread(fig_path.is_file):
+        raise FileNotFoundError(fig_path.name)
+    doc = await asyncio.to_thread(decks.read_doc, deck_path)
+    title, text = (title or "").strip() or "New slide", (text or "").strip() or "Add your text"
+    if isinstance(doc.get("settings"), dict):
+        settings = doc["settings"]
+        slide = {"layout": "bullets", "title": title, "bullets": [text]}
+    else:
+        frames = await design.inspect(await asyncio.to_thread(fig_path.read_bytes), user_id=user_id)
+        near = frames[min(max((after or len(frames)) - 1, 0), len(frames) - 1)] if frames else {}
+        size = near.get("size") or doc.get("size") or [1920, 1080]
+        fill = _norm_hex(near.get("fill") or "") or "#ffffff"
+        r, g, b = (int(fill[i:i + 2], 16) for i in (1, 3, 5))
+        ink = "#ffffff" if 0.2126 * r + 0.7152 * g + 0.0722 * b < 140 else "#111111"
+        settings = {"size": size}
+        slide = {"fill": fill, "title": title, "nodes": [
+            {"type": "text", "id": "title", "x": round(size[0] * 0.08), "y": round(size[1] * 0.12), "w": round(size[0] * 0.84),
+             "size": max(24, round(size[1] * 0.07)), "weight": "Bold", "color": ink, "text": title}]}
+    slide, resolved, err = _prepare_slide(slide, settings, root)
+    if err:
+        raise ValueError(err.removeprefix("Error: "))
+    return {"op": "slide_add", **({"at": after} if after is not None else {}), "slide": slide, "deck": resolved}
+
+
 async def _design_response(root, src, as_, user_id, page=None):
     """?as=slides|pptx|pdf|images|png[&page=<name>] on a deck document or a .fig → the
     response."""
@@ -1035,9 +1070,13 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.post("/deck/{path:path}")
     async def deck_op(path: str, request: Request, ws: Workspace = ws_dep):
-        """The deck viewer's own slide changes — {op: "move" | "duplicate" | "delete",
-        number, to?} (slides from 1) on a deck under designs/ (its deck document or .fig),
-        run on the saved .fig through the design service like the agent's slide actions."""
+        """The deck viewer's own slide changes on a deck under designs/ (its deck document
+        or .fig), run on the saved .fig through the design service like the agent's slide
+        actions. Slides from 1:
+          {op: "move" | "duplicate" | "delete", number, to?}
+          {op: "add", number?, title?, text?}   a slide to start from, after slide `number`
+                                                (0: first; absent: last) → `added`: its number
+          {op: "notes", number, notes}          that slide's speaker notes ("" clears them)"""
         from cycls._agent import design
         from cycls._agent.design import deck as decks
         m = re.fullmatch(r"designs/([^/]+?)(?:\.deck\.json|\.fig)", path)
@@ -1045,13 +1084,31 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             raise HTTPException(404, "Not a deck")
         _safe_path(ws.root, path)
         body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(400, "Expected {op, number, …}")
         kind, number, to = body.get("op"), body.get("number"), body.get("to")
-        if kind not in ("move", "duplicate", "delete") or not isinstance(number, int) or number < 1 \
-                or (kind == "move" and (not isinstance(to, int) or to < 1)):
-            raise HTTPException(400, "Expected {op: move|duplicate|delete, number, to?} with slides from 1")
-        op = {"op": f"slide_{kind}", "index": number - 1, **({"to": to - 1} if kind == "move" else {})}
+        whole = lambda v, least: isinstance(v, int) and not isinstance(v, bool) and v >= least
+        words = lambda v, most: v is None or (isinstance(v, str) and len(v) <= most)
+        added = None
         try:
-            r = await decks.apply_ops(ws.root, m.group(1), [op], user_id=ws.subject)
+            if kind == "add":
+                if (number is not None and not whole(number, 0)) or not words(body.get("title"), 300) or not words(body.get("text"), 300):
+                    raise HTTPException(400, "Expected {op: add, number?, title?, text?} — `number` is the slide it comes after")
+                op = await _new_slide_op(ws.root, m.group(1), number, body.get("title"), body.get("text"), ws.subject)
+            elif kind == "notes":
+                notes = body.get("notes")
+                if not whole(number, 1) or not isinstance(notes, str) or len(notes) > 20000:
+                    raise HTTPException(400, "Expected {op: notes, number, notes} with slides from 1")
+                op = {"op": "slide_meta", "index": number - 1, "notes": notes.strip()}
+            elif kind in ("move", "duplicate", "delete") and whole(number, 1) and (kind != "move" or whole(to, 1)):
+                op = {"op": f"slide_{kind}", "index": number - 1, **({"to": to - 1} if kind == "move" else {})}
+            else:
+                raise HTTPException(400, "Expected {op: move|duplicate|delete|add|notes, number, to?} with slides from 1")
+            r = await decks.apply_ops(ws.root, m.group(1), [op], user_id=ws.subject, by="user")
+            if kind == "add":
+                added = op["at"] + 1 if "at" in op else len(r.get("slides") or [])
+        except ValueError as e:
+            raise HTTPException(422, str(e))
         except FileNotFoundError:
             raise HTTPException(404, "The deck's design file is missing")
         except design.Unavailable as e:
@@ -1062,7 +1119,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         # in the deck together open it again (this one's own editor is re-opened by the app).
         from cycls._agent.design import live
         await live.notify(ws.root, f"designs/{m.group(1)}.fig", {"kind": "reload", "version": r.get("version")})
-        return {"ok": True, "slides": len(r.get("slides") or [])}
+        return {"ok": True, "slides": len(r.get("slides") or []), **({"added": added} if added else {})}
 
     @r.post("/design/new")
     async def new_design(request: Request, ws: Workspace = ws_dep):
@@ -1193,13 +1250,24 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
     @r.get("/versions/{path:path}")
     async def list_versions(path: str, request: Request, ws: Workspace = ws_dep):
         """A design's versions, newest first: {versions: [{id, at, by, reason, intent?,
-        size}]} — or, with `?id=`, that version's bytes."""
+        size}]} — or, with `?id=`, that version's bytes; with `?id=…&as=png`, a picture
+        of it (its first slide or page, 640 px wide) to look at before restoring."""
         from cycls._agent import versions
         rel = _safe_path(ws.root, path).relative_to(Path(ws.root).resolve()).as_posix()
         if vid := request.query_params.get("id"):
             data = await asyncio.to_thread(versions.read, ws.root, rel, vid)
             if data is None:
                 raise HTTPException(404, "No such version")
+            if request.query_params.get("as") == "png":
+                from cycls._agent import design
+                try:
+                    picture = await design.export(data, fmt="png", scale=1, width=640, user_id=ws.subject)
+                except design.Unavailable as e:
+                    raise HTTPException(415, str(e))
+                except RuntimeError as e:
+                    raise HTTPException(422, str(e))
+                # (A version never changes: the browser may keep its picture.)
+                return Response(picture, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
             return Response(data, media_type="application/octet-stream", headers=_NO_CACHE)
         return {"versions": await asyncio.to_thread(versions.listing, ws.root, rel)}
 
