@@ -556,6 +556,99 @@ _DESIGN_TOOL = {
     }, "required": ["action"]}
 }
 
+# ---- Design's instructions, only when a chat designs --------------------------------
+#
+# The definition above is 29,000 characters: nearly half of every request of every
+# chat, whether it ever designs or not. With DESIGN_INSTRUCTIONS=on-demand a chat
+# carries the SHORT form below until it designs — which the person's words say, or a
+# design they point at, or the model asking for the guide (`design_wanted`). From then
+# on it is the definition above, byte for byte: a chat that designs is told exactly
+# what it is told today. The harness swaps them (harness/main.py); what the model was
+# shown when it made a call is DESIGN_LOADED, which `_exec_design` reads.
+import contextvars
+
+DESIGN_LOADED = contextvars.ContextVar("design_loaded", default=True)
+
+_DESIGN_SHORT = (
+    "Design: make and change visual work, shown to the user on the canvas — a social post, a poster, a "
+    "banner, a carousel; a slide deck (PowerPoint / PDF); a document that flows over pages (a report, a "
+    "proposal, a CV, a newsletter — as a PDF); several variants of one design; and edits to any design "
+    "already in designs/ (text, colours, layout, slides, sections). It can also take an existing PDF apart "
+    "to redesign it.\n\n"
+    "This is the SHORT form of the tool — how a design is written is not in it. Before your first use of it "
+    "in a chat, call it with {\"action\": \"guide\"}: its full instructions load into this description. Then "
+    "make the call you meant. (A call made before that is not run — it loads the instructions and asks you "
+    "to call again.)"
+)
+_GUIDE_LOADED = ("Design's instructions are loaded: this tool's description now holds them in full — how a "
+                 "design is written, deck layouts and themes, documents, edits and the rest. Read them, then "
+                 "call `design` again with what you want made. Nothing was made or changed by this call.")
+_GUIDE_NOT_RUN = "Not run — this call was made before the tool's instructions were loaded. " + _GUIDE_LOADED
+
+# What a person says when they want something designed (English and Arabic). Wide on
+# purpose: a chat that matches and never designs pays what every chat paid before; one
+# that designs without matching pays one extra call (the guide).
+_DESIGN_WORDS = re.compile(
+    r"\b(design\w*|redesign\w*|poster|flyer|banner|infographic|brochure|logo|mock-?up|thumbnail|carousel|"
+    r"slides?|deck|presentation|pitch|powerpoint|pptx|keynote|pdf|report|proposal|white ?paper|one[- ]pager|"
+    r"newsletter|cv|resume|résumé|certificate|invitation|business card|social (?:media )?post|instagram|linkedin post)\b",
+    re.I)
+_DESIGN_WORDS_AR = ("تصميم", "صمم", "صمّم", "بوستر", "ملصق", "بانر", "إنفوجرافيك", "انفوجرافيك", "بروشور", "كتيب", "شعار",
+                    "عرض تقديمي", "شرائح", "شريحة", "عرضا", "عرض ", "تقرير", "مقترح", "سيرة ذاتية", "السيرة الذاتية",
+                    "شهادة", "دعوة", "منشور", "كاروسيل", "بي دي اف", "بوربوينت", "باوربوينت")
+
+
+def design_called(messages):
+    """Has this chat called the Design tool — the guide included?"""
+    for m in messages:
+        if m.get("role") != "assistant" or not isinstance(m.get("content"), list):
+            continue
+        if any(isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "design" for b in m["content"]):
+            return True
+    return False
+
+
+def design_wanted(messages):
+    """Does this chat design? It has called the tool; or the person names a design file
+    or has part of one selected (`designs/…`); or their words ask for one. Read back from
+    the transcript each turn — as connectors are — so nothing is stored."""
+    if design_called(messages):
+        return True
+    for m in messages:
+        if m.get("role") != "user":
+            continue
+        content = m.get("content")
+        texts = [content] if isinstance(content, str) else [
+            b.get("text") or "" for b in content or [] if isinstance(b, dict) and b.get("type") == "text"]
+        for text in texts:
+            if "designs/" in text or _DESIGN_WORDS.search(text) or any(w in text for w in _DESIGN_WORDS_AR):
+                return True
+    return False
+
+
+def _design_short():
+    """The short form: the same tool by name, every parameter still there by name and
+    type (nothing the model may pass is unknown to the schema), and none of the how."""
+    props = {}
+    for key, schema in _DESIGN_TOOL["input_schema"]["properties"].items():
+        props[key] = {k: schema[k] for k in ("type", "enum", "items") if k in schema}
+    props["action"]["description"] = (
+        "guide — load this tool's full instructions (first). Then: render, edit, inspect, extract, script, "
+        "add_slide, update_slide, move_slide, duplicate_slide, delete_slide, add_section, update_section, "
+        "move_section, delete_section, update_document.")
+    return {**{k: v for k, v in _DESIGN_TOOL.items() if k not in ("description", "input_schema")},
+            "description": _DESIGN_SHORT,
+            "input_schema": {"type": "object", "properties": props, "required": ["action"]}}
+
+
+_DESIGN_TOOL_SHORT = _design_short()
+
+
+def design_tool(loaded=True):
+    """The Design tool as a chat carries it: whole, or — until it designs — short."""
+    return _DESIGN_TOOL if loaded else _DESIGN_TOOL_SHORT
+
+
 _BUILD_APP_TOOL = {
     "type": "custom",
     "name": "build_app",
@@ -2744,6 +2837,14 @@ async def _exec_design(inp, workspace):
     channels: the model reads a short ack; the client opens the render (same
     open_canvas event the Canvas tool and browser screenshots use)."""
     from cycls._agent import design
+    # The model was shown the short form of the tool (DESIGN_INSTRUCTIONS=on-demand): this
+    # call is what loads the whole of it — the guide — and nothing made blind is run.
+    asked = str(inp.get("action") or "render").lower()
+    if not DESIGN_LOADED.get():
+        return _GUIDE_LOADED if asked == "guide" else _GUIDE_NOT_RUN
+    if asked == "guide":
+        return ("Design's instructions are already loaded — they are this tool's description. Call it with "
+                "what you want made (render, edit, inspect, …). Nothing was made or changed by this call.")
     # A model may hand a large nested argument over as its JSON text: read as the object.
     inp = dict(inp)
     mended = []
