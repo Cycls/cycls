@@ -15,6 +15,7 @@ import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, 
 import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
+import { DesignPresenceRow } from "./design-presence";
 import { DesignEditorView, canFullscreen, designPage, flushDesignEditor, fullscreenDesignEditor, showDesignPage, useDesignPages, type DesignHost } from "./design-editor-view";
 import { VersionHistory } from "./version-history";
 import { DeckView, EditPreviewSwitch, PageTabs, parseDeck, type DeckOp } from "./deck-view";
@@ -1034,6 +1035,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
                 {t("edit")}
               </button>
             )}
+            {design && !previewing && <DesignPresenceRow path={file.path} />}
             {design && <EditPreviewSwitch previewing={previewing} onEdit={() => setPreviewing(false)} onPreview={() => void showPreview()} />}
             {/* In a preview the button keeps its place, unseen: the switch beside it
                 doesn't jump when the editor goes under the preview. */}

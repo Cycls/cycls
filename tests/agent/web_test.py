@@ -2791,3 +2791,45 @@ def test_renaming_a_design_takes_its_images_and_its_deck_document_with_it(tmp_pa
     assert json.loads((root / "designs/2026/summer.deck.json").read_text())["fig"] == "designs/2026/summer.fig"
     assert client.patch("/files/designs/launch-notes.txt", json={"to": "designs/notes.txt"}).status_code == 200
     assert (root / "designs/launchpad.png").is_file()
+
+
+# ---- together: a design written anew is told to the people who have it open ----
+
+def _room_said(monkeypatch):
+    from cycls._agent.design import live
+    said = []
+
+    async def notify(root, rel, body):
+        said.append((rel, body))
+        return {"ok": True, "peers": 2, "delivered": 2}
+    monkeypatch.setattr(live, "notify", notify)
+    return said
+
+
+def test_restoring_a_version_tells_the_room_to_open_the_file_again(tmp_path, monkeypatch):
+    from cycls._agent.design import refresh
+    monkeypatch.setattr(refresh, "schedule", lambda *a, **k: None)
+    said = _room_said(monkeypatch)
+    client = _ws_routers_client(tmp_path)
+    assert client.put("/files/designs/launch.fig", content=b"ONE").status_code == 200
+    two = client.put("/files/designs/launch.fig", content=b"TWO").json()["version"]
+    [kept] = client.get("/versions/designs/launch.fig").json()["versions"]
+    assert said == []                                   # an editor's own save is not news to its room
+    back = client.post(f"/versions/designs/launch.fig?restore={kept['id']}").json()
+    assert back["version"] != two
+    assert said == [("designs/launch.fig", {"kind": "reload", "version": back["version"]})]
+
+
+def test_a_slide_moved_in_the_deck_viewer_tells_the_room_to_open_the_file_again(tmp_path, monkeypatch):
+    from cycls._agent.design import deck as decks
+    from cycls._agent.design.store import version_of
+    said = _room_said(monkeypatch)
+
+    async def apply_ops(root, name, ops, user_id=None, preview=False):
+        return {"slides": [{}, {}], "version": version_of(b"MOVED")}
+    monkeypatch.setattr(decks, "apply_ops", apply_ops)
+    client = _ws_routers_client(tmp_path)
+    client.put("/files/designs/pitch.fig", content=b"DECK")
+    r = client.post("/deck/designs/pitch.fig", json={"op": "move", "number": 1, "to": 2})
+    assert r.status_code == 200
+    assert said == [("designs/pitch.fig", {"kind": "reload", "version": version_of(b"MOVED")})]

@@ -1058,6 +1058,10 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             raise HTTPException(415, str(e))
         except RuntimeError as e:
             raise HTTPException(422, str(e))
+        # The slides were changed in the file, beside any editors open on it: the people
+        # in the deck together open it again (this one's own editor is re-opened by the app).
+        from cycls._agent.design import live
+        await live.notify(ws.root, f"designs/{m.group(1)}.fig", {"kind": "reload", "version": r.get("version")})
         return {"ok": True, "slides": len(r.get("slides") or [])}
 
     @r.post("/design/new")
@@ -1150,6 +1154,28 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         _catalog_drop(ws.root)
         return {"path": rel}
 
+    @r.get("/design/live")
+    async def design_live(path: str, ws: Workspace = ws_dep, user: Any = user_dep):
+        """The live room of a design, for someone about to open it in the editor:
+        `{live: {room, url, ticket, epoch}}` — the room everyone this workspace lets in
+        meets in, the relay's address, this person's pass, and the version of the file
+        as it is now — or `{live: null}` where a design opens alone: no relay set up
+        (DESIGN_LIVE_URL), or a personal workspace, which has one person in it. Being
+        let into the workspace is what `ws_dep` already checked; the editor asks again
+        whenever it connects again (a pass lasts minutes)."""
+        from cycls._agent.design import live, store
+        src = _safe_path(ws.root, path)
+        if src.suffix.lower() != ".fig" or not src.is_file():
+            raise HTTPException(404, "No such design")
+        if not (live.configured() and user is not None and (ws.ws or "").startswith("t-")):
+            return {"live": None}
+        rel = src.relative_to(Path(ws.root).resolve()).as_posix()
+        _, version = await asyncio.to_thread(store.read_fig, ws.root, rel)
+        room = live.room_of(ws.root, rel)
+        await live.wake()   # asleep with nobody in any room: up by the time the editor connects
+        return {"live": {"room": room, "url": live.socket_url(), "ticket": live.ticket(room, user.id),
+                         "epoch": version}}
+
     @r.get("/brand")
     async def brand(ws: Workspace = ws_dep):
         """The workspace brand kit (brand/brand.yaml) for the design editor: its named
@@ -1190,6 +1216,9 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         version = await write_fig(ws.root, rel, data, by="user", reason="restore")
         _catalog_drop(ws.root)
         design_refresh.schedule(ws.root, rel, ws.subject)
+        # People who have it open together hold what it was: their room opens it again.
+        from cycls._agent.design import live
+        await live.notify(ws.root, rel, {"kind": "reload", "version": version})
         return {"ok": True, "version": version}
 
     @r.put("/files/{path:path}")

@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, cleanup, act, fireEvent, screen } from "@testing-library/react";
 import {
-  DesignEditorView, designPage, designPages, designSelection, detachDesignEditorsUnder, flushDesignEditor,
-  fullscreenDesignEditor, showDesignPage, type DesignHost,
+  DesignEditorView, designPage, designPages, designPresence, designSelection, detachDesignEditorsUnder, flushDesignEditor,
+  followDesignPeer, fullscreenDesignEditor, showDesignPage, type DesignHost,
 } from "../src/components/design-editor-view";
+import { DesignPresenceRow } from "../src/components/design-presence";
 import { ToastProvider } from "../src/lib/toast";
 
 // The editor iframe talks to its host over postMessage (protocol 2). It edits ONE
@@ -533,5 +534,325 @@ describe("DesignEditorView", () => {
     const { frame } = mount({ host: host() });
     await ready(frame());
     expect(await flushDesignEditor("designs/launch.fig", 50)).toBe(true);
+  });
+});
+
+// Working in one design together (the editor's "live" feature). Cycls decides who may
+// enter a design's room (the server's /design/live) and hands the editor a pass; the
+// editor says who else is there. One of them saves for all, so a save refused here is
+// the session's own doing — retried on the file's version, never asked about.
+describe("DesignEditorView, together", () => {
+  const ROOM = { room: "r".repeat(40), url: "wss://live.example", ticket: "t1", epoch: "v0" };
+  const live = (info: typeof ROOM | null = ROOM) => {
+    const h = versioned(() => "v1");
+    h.live = vi.fn(async () => info);
+    h.me = { id: "user_1", name: "Amal Saleh" } as never;
+    return h;
+  };
+  const BADR = { client: 7, name: "Badr", user: "user_2", color: "#00d5ff" };
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async (u: string) => ({ arrayBuffer: async () => new Uint8Array(bytes[u]).buffer })));
+    URL.revokeObjectURL = vi.fn();
+  });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+  it("a design with a room is loaded with it: the room, the pass, and who this is", async () => {
+    const h = live();
+    const { frame } = mount({ host: h });
+    const { load } = await ready(frame(), 2, ["live"]);
+    expect(h.live).toHaveBeenCalledWith("designs/launch.fig");
+    const sent = load.live as Record<string, unknown>;
+    // …and the version of the bytes it is given, not of the file a moment before or after.
+    expect(sent).toMatchObject({ room: ROOM.room, url: ROOM.url, ticket: "t1", epoch: "v1" });
+    expect(sent.user).toMatchObject({ id: "user_1", name: "Amal Saleh" });
+    expect((sent.user as { color: string }).color).toMatch(/^#[0-9a-f]{6}$/);
+  });
+
+  it("no room — a design of one's own, an editor that can't, a server that doesn't — is opened alone", async () => {
+    const none = live(null);
+    const a = mount({ host: none });
+    expect((await ready(a.frame(), 2, ["live"])).load.live).toBeUndefined();
+    cleanup();
+    const old = live();
+    const b = mount({ host: old });
+    expect((await ready(b.frame(), 2, ["pages"])).load.live).toBeUndefined();
+    expect(old.live).not.toHaveBeenCalled();
+    cleanup();
+    const failing = live();
+    failing.live = vi.fn(async () => { throw new Error("offline"); });
+    const c = mount({ host: failing });
+    const { load } = await ready(c.frame(), 2, ["live"]);
+    expect(load.type).toBe("load");
+    expect(load.live).toBeUndefined();
+  });
+
+  it("the same person is the same colour everywhere, and people differ", async () => {
+    const colour = async (id: string) => {
+      const h = live();
+      h.me = { id, name: "X" } as never;
+      const m = mount({ host: h });
+      const { load } = await ready(m.frame(), 2, ["live"]);
+      cleanup();
+      return ((load.live as { user: { color: string } }).user).color;
+    };
+    expect(await colour("user_1")).toBe(await colour("user_1"));
+    expect(new Set([await colour("user_1"), await colour("user_2"), await colour("user_3")]).size).toBeGreaterThan(1);
+  });
+
+  it("knows who else is here, and follows one of them on request", async () => {
+    const { frame } = mount({ host: live() });
+    const { post, load } = await ready(frame(), 2, ["live"]);
+    expect(designPresence("designs/launch.fig")).toBeNull();
+    const seen: unknown[] = [];
+    const onPresence = (e: Event) => seen.push((e as CustomEvent).detail);
+    window.addEventListener("cycls:design-presence", onPresence);
+    fromEditor(frame(), "presence", { doc: load.doc, saver: true, connected: true, peers: [BADR] });
+    await flush();
+    window.removeEventListener("cycls:design-presence", onPresence);
+    expect(designPresence("designs/launch.fig")).toMatchObject({ saver: true, peers: [{ client: 7, name: "Badr", color: "#00d5ff" }] });
+    expect(seen).toHaveLength(1);
+    followDesignPeer("designs/launch.fig", 7);
+    expect(post).toHaveBeenCalledWith({ target: "cycls-editor", type: "follow", client: 7 }, EDITOR);
+    followDesignPeer("designs/launch.fig", null);
+    expect(post).toHaveBeenCalledWith({ target: "cycls-editor", type: "follow", client: null }, EDITOR);
+  });
+
+  it("a pass asked for again is fetched anew and given", async () => {
+    const h = live();
+    const { frame } = mount({ host: h });
+    const { post } = await ready(frame(), 2, ["live"]);
+    (h.live as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...ROOM, ticket: "t2" });
+    fromEditor(frame(), "liveTicket", { id: "t1" });
+    await flush();
+    expect(post).toHaveBeenCalledWith({ target: "cycls-editor", type: "liveTicket", id: "t1", ticket: "t2" }, EDITOR);
+  });
+
+  const said = (frame: HTMLIFrameElement, doc: unknown, ...versions: string[]) => {
+    for (const version of versions) fromEditor(frame, "liveBase", { doc, version });
+  };
+  const save = async (frame: HTMLIFrameElement, doc: unknown, id: string) => {
+    fromEditor(frame, "saved", { doc, id, name: "launch.fig", fig: b64([7]) });
+    await flush();
+  };
+  const saves = (post: { mock: { calls: unknown[][] } }) =>
+    post.mock.calls.filter((c) => (c[0] as { type?: string }).type === "save").length;
+
+  it("the one who saves next goes on from what the room said was saved — nothing refused, nobody asked", async () => {
+    const writeFile = vi.fn().mockResolvedValue({ version: "v10" });
+    const { frame } = mount({ host: live(), writeFile });
+    const { load } = await ready(frame(), 2, ["live"]);
+    fromEditor(frame(), "presence", { doc: load.doc, saver: false, connected: true, peers: [BADR] });
+    said(frame(), load.doc, "v8", "v9");                        // Badr's editor, each time it saved
+    fromEditor(frame(), "presence", { doc: load.doc, saver: true, connected: true, peers: [] });   // he left: the saving is here
+    await save(frame(), load.doc, "s1");
+    expect(writeFile).toHaveBeenLastCalledWith("designs/launch.fig", expect.anything(), { silent: true, base: "v9" });
+  });
+
+  it("a save refused over a version the room said goes again on it; over one it never said, the person is asked — whoever is here", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const writeFile = vi.fn()
+        .mockRejectedValueOnce(stale412("v8")).mockResolvedValueOnce({ version: "v10" })
+        .mockRejectedValueOnce(stale412("x1")).mockResolvedValue({ version: "v12" });
+      const { frame } = mount({ host: live(), writeFile });
+      const { post, load } = await ready(frame(), 2, ["live"]);
+      fromEditor(frame(), "presence", { doc: load.doc, saver: false, connected: true, peers: [BADR] });
+      said(frame(), load.doc, "v8", "v9");                      // v9 was said and never written: the file stayed at v8
+      fromEditor(frame(), "presence", { doc: load.doc, saver: true, connected: true, peers: [BADR] });
+      await save(frame(), load.doc, "s1");
+      expect(writeFile).toHaveBeenLastCalledWith("designs/launch.fig", expect.anything(), { silent: true, base: "v9" });
+      expect(saves(post)).toBe(1);                              // again, at once
+      await act(async () => { vi.advanceTimersByTime(7000); });
+      expect(screen.queryByText("This design changed elsewhere")).toBeNull();
+      await save(frame(), load.doc, "s2");
+      expect(writeFile).toHaveBeenLastCalledWith("designs/launch.fig", expect.anything(), { silent: true, base: "v8" });
+      // Now someone outside the room writes the file (their editor could not reach the
+      // relay): a version nobody here said. Others being in the design does not make it theirs.
+      await save(frame(), load.doc, "s3");
+      expect(writeFile).toHaveBeenLastCalledWith("designs/launch.fig", expect.anything(), { silent: true, base: "v10" });
+      expect(saves(post)).toBe(1);
+      await act(async () => { vi.advanceTimersByTime(7000); });
+      expect(screen.getByText("This design changed elsewhere")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a save refused a moment before the room says why is not asked about: it goes when the room does", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const writeFile = vi.fn().mockRejectedValueOnce(stale412("v7")).mockResolvedValue({ version: "v8" });
+      const { frame } = mount({ host: live(), writeFile });
+      const { post, load } = await ready(frame(), 2, ["live"]);
+      fromEditor(frame(), "presence", { doc: load.doc, saver: true, connected: true, peers: [BADR] });
+      await save(frame(), load.doc, "s1");                      // an agent's edit is at v7, being made in Badr's editor
+      await act(async () => { vi.advanceTimersByTime(4000); });
+      expect(screen.queryByText("This design changed elsewhere")).toBeNull();
+      expect(saves(post)).toBe(0);
+      said(frame(), load.doc, "v7");                            // made: everyone's document has it
+      await flush();
+      expect(saves(post)).toBe(1);
+      await act(async () => { vi.advanceTimersByTime(7000); });
+      expect(screen.queryByText("This design changed elsewhere")).toBeNull();
+      await save(frame(), load.doc, "s2");
+      expect(writeFile).toHaveBeenLastCalledWith("designs/launch.fig", expect.anything(), { silent: true, base: "v7" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("who gave the room the file stands on the file; who took the room's document stands on what the room says", async () => {
+    const writeFile = vi.fn().mockResolvedValue({ version: "v2" });
+    const gave = mount({ host: live(), writeFile });
+    const one = await ready(gave.frame(), 2, ["live"]);
+    said(gave.frame(), one.load.doc, "v9");                     // heard while it was still to take the room's
+    fromEditor(gave.frame(), "loaded", { doc: one.load.doc, live: "seed" });   // …which never came: it opened the file
+    await flush();
+    await save(gave.frame(), one.load.doc, "s1");
+    expect(writeFile).toHaveBeenLastCalledWith("designs/launch.fig", expect.anything(), { silent: true, base: "v1" });
+    cleanup();
+    const took = mount({ host: live(), writeFile });
+    const two = await ready(took.frame(), 2, ["live"]);
+    said(took.frame(), two.load.doc, "v9");
+    fromEditor(took.frame(), "loaded", { doc: two.load.doc, live: "join" });
+    await flush();
+    await save(took.frame(), two.load.doc, "s2");
+    expect(writeFile).toHaveBeenLastCalledWith("designs/launch.fig", expect.anything(), { silent: true, base: "v9" });
+  });
+
+  it("an editor that ended up opening alone is not shown with the people it met on the way", async () => {
+    const { frame } = mount({ host: live() });
+    const { load } = await ready(frame(), 2, ["live"]);
+    fromEditor(frame(), "presence", { doc: load.doc, saver: false, connected: true, peers: [BADR] });
+    await flush();
+    expect(designPresence("designs/launch.fig")).not.toBeNull();
+    fromEditor(frame(), "loaded", { doc: load.doc });           // their document never came: it opened the file, alone
+    await flush();
+    expect(designPresence("designs/launch.fig")).toBeNull();
+  });
+
+  it("an edit this editor made itself is said to the room, for the one who saves", async () => {
+    const { frame } = mount({ host: live() });
+    const { post, load } = await ready(frame(), 2, ["live"]);
+    fromEditor(frame(), "presence", { doc: load.doc, saver: false, connected: true, peers: [BADR] });
+    await flush();
+    await command({ script: "S", intent: "tidy", version: "v2" });     // the room could not be told: made here
+    fromEditor(frame(), "applied", { doc: load.doc });
+    await flush();
+    expect(post).toHaveBeenCalledWith({ target: "cycls-editor", type: "liveBase", version: "v2" }, EDITOR);
+  });
+
+  it("in a room, Load the latest is for everyone: the room starts over from the file", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const writeFile = vi.fn().mockRejectedValue(stale412("x1"));
+      const { frame } = mount({ host: live(), writeFile });
+      const first = frame();
+      const { post, load } = await ready(first, 2, ["live"]);
+      fromEditor(first, "presence", { doc: load.doc, saver: true, connected: true, peers: [BADR] });
+      await save(first, load.doc, "s1");
+      await act(async () => { vi.advanceTimersByTime(7000); });
+      fireEvent.click(screen.getByText("Load the latest"));
+      await flush();
+      expect(post).toHaveBeenCalledWith({ target: "cycls-editor", type: "liveReset" }, EDITOR);
+      // The editor has to tell the room first: it is not replaced under the message.
+      expect(frame()).toBe(first);
+      fromEditor(first, "liveReload", { doc: load.doc, version: null });      // told: now the file is opened
+      await flush();
+      const second = frame();
+      expect(second).not.toBe(first);
+      await act(async () => { vi.advanceTimersByTime(3000); });
+      expect(frame()).toBe(second);                                           // once, not again when the wait runs out
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("…and an editor that never answers is not waited for long", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const writeFile = vi.fn().mockRejectedValue(stale412("x1"));
+      const { frame } = mount({ host: live(), writeFile });
+      const first = frame();
+      const { load } = await ready(first, 2, ["live"]);
+      fromEditor(first, "presence", { doc: load.doc, saver: true, connected: true, peers: [BADR] });
+      await save(first, load.doc, "s1");
+      await act(async () => { vi.advanceTimersByTime(7000); });
+      fireEvent.click(screen.getByText("Load the latest"));
+      await flush();
+      expect(frame()).toBe(first);
+      await act(async () => { vi.advanceTimersByTime(2000); });
+      expect(frame()).not.toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an agent's edit made for everyone moves the base; a file written anew is opened again", async () => {
+    const writeFile = vi.fn().mockResolvedValue({ version: "v8" });
+    const { frame } = mount({ host: live(), writeFile });
+    const first = frame();
+    const { post, load } = await ready(first, 2, ["live"]);
+    fromEditor(first, "liveAgent", { doc: load.doc, version: "v7" });
+    await flush();
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: "flush" }), EDITOR);
+    fromEditor(first, "saved", { doc: load.doc, id: "s1", name: "launch.fig", fig: b64([7]) });
+    await flush();
+    expect(writeFile).toHaveBeenLastCalledWith("designs/launch.fig", expect.anything(), { silent: true, base: "v7" });
+    fromEditor(first, "liveReload", { doc: load.doc, version: "v9" });
+    await flush();
+    expect(frame()).not.toBe(first);          // remounted on the file as it is now
+  });
+
+  it("an agent's edit that was handed to the room is not replayed here as well", async () => {
+    const { frame } = mount({ host: live() });
+    const { post, load } = await ready(frame(), 2, ["live"]);
+    fromEditor(frame(), "presence", { doc: load.doc, saver: false, connected: true, peers: [BADR] });
+    await flush();
+    await command({ script: "S", intent: "tidy", version: "v2", live: true });
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "command" }), EDITOR);
+  });
+
+  it("…but an editor that is not in the room (it opened alone) makes the edit itself", async () => {
+    const { frame } = mount({ host: live(null) });
+    const { post } = await ready(frame(), 2, ["live"]);
+    await command({ script: "S", intent: "tidy", version: "v2", live: true });
+    expect(post).toHaveBeenCalledWith({ target: "cycls-editor", type: "command", script: "S", intent: "tidy" }, EDITOR);
+  });
+
+  it("shows who is here beside the editor, and a click follows them", async () => {
+    const { frame } = mount({ host: live() });
+    const row = render(<DesignPresenceRow path="designs/launch.fig" />);
+    const { post, load } = await ready(frame(), 2, ["live"]);
+    expect(row.queryByTestId("design-presence")).toBeNull();                 // alone: nothing to show
+    const crowd = [BADR, ...[2, 3, 4, 5].map((n) => ({ client: 7 + n, name: `P${n}`, user: `user_${n + 2}`, color: "#30a46c" }))];
+    fromEditor(frame(), "presence", { doc: load.doc, saver: true, connected: true, peers: crowd });
+    await flush();
+    const badr = row.getByTitle("Follow Badr");
+    expect(badr.textContent).toBe("B");
+    expect(badr.style.borderColor).toBe("rgb(0, 213, 255)");                 // their cursor's colour
+    expect(row.getByText("+1")).toBeTruthy();                               // five people, four shown
+    fireEvent.click(badr);
+    expect(post).toHaveBeenCalledWith({ target: "cycls-editor", type: "follow", client: 7 }, EDITOR);
+    expect(row.getByText("Following Badr")).toBeTruthy();
+    fireEvent.click(row.getByTitle("Stop following Badr"));
+    expect(post).toHaveBeenCalledWith({ target: "cycls-editor", type: "follow", client: null }, EDITOR);
+    expect(row.queryByText("Following Badr")).toBeNull();
+    // The one followed leaves: nobody is followed any more.
+    fireEvent.click(row.getByTitle("Follow Badr"));
+    fromEditor(frame(), "presence", { doc: load.doc, saver: true, connected: true, peers: crowd.slice(1) });
+    await flush();
+    expect(row.queryByText("Following Badr")).toBeNull();
+    expect(row.queryByTitle("Follow Badr")).toBeNull();
+  });
+
+  it("leaving the design forgets who was in it", async () => {
+    const { frame, unmount } = mount({ host: live() });
+    const { load } = await ready(frame(), 2, ["live"]);
+    fromEditor(frame(), "presence", { doc: load.doc, saver: true, connected: true, peers: [BADR] });
+    await flush();
+    expect(designPresence("designs/launch.fig")).not.toBeNull();
+    unmount();
+    expect(designPresence("designs/launch.fig")).toBeNull();
   });
 });

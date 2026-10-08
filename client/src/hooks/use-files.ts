@@ -44,6 +44,8 @@ export type DesignVersion = { id: string; at: string; by: string; reason: string
 export type WriteOpts = { silent?: boolean; base?: string; force?: boolean };
 export type WriteFile = (path: string, data: BlobPart, opts?: boolean | WriteOpts) => Promise<{ version?: string } | void>;
 // A design's bytes (a blob URL) with the version they are.
+// A design's live room and one person's pass for it (the server's /design/live).
+export type DesignLive = { room: string; url: string; ticket: string; epoch: string };
 export type FetchVersioned = (path: string) => Promise<{ url: string; version: string }>;
 
 export function useFiles(baseUrl: string = "") {
@@ -217,6 +219,17 @@ export function useFiles(baseUrl: string = "") {
     return { url: URL.createObjectURL(await res.blob()), version: res.headers.get("X-Version") ?? "" };
   }, [api]);
 
+  // A design's live room and this person's pass for it (the server's /design/live):
+  // null where a design opens alone, or on a server without the route.
+  const designLive = useCallback(async (filePath: string) => {
+    try {
+      const res = await api(`/design/live?path=${encodeURIComponent(filePath)}`, { silent: true });
+      return ((await res.json()) as { live: DesignLive | null }).live ?? null;
+    } catch {
+      return null;
+    }
+  }, [api]);
+
   // A design's earlier versions (newest first), one's bytes, and a restore.
   const listVersions = useCallback(async (filePath: string) =>
     ((await (await api(`/versions/${encPath(filePath)}`)).json()) as { versions: DesignVersion[] }).versions, [api]);
@@ -317,7 +330,7 @@ export function useFiles(baseUrl: string = "") {
     makeLink: async () => voteUrl(await shareFile(deck, "public")),
   }), [api, shareFile]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, listVersions, versionBlob, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, designLive, listVersions, versionBlob, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

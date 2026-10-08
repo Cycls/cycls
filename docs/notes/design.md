@@ -38,10 +38,14 @@ agent's live `edit` changed it under their cursor.
 ## Non-goals
 
 - Not bundling a design engine into agent images.
-- Not multiplayer co-editing. The agent and human share the `.fig` *file*, not a
-  live session: the agent renders/edits it headlessly and over the live `edit`
-  bridge, the human hand-edits it in the embedded editor, and both persist to the
-  same workspace file. True co-editing (OpenPencil's Yjs CRDT) is a later option.
+- Not a shared session with the agent. The agent and a person share the `.fig`
+  *file*: the agent renders and edits it headlessly and over the live `edit` bridge,
+  the person hand-edits it in the embedded editor, and both persist to the same
+  workspace file. *People* in one design at once do share a live session — see
+  [Together](#together--several-people-in-one-design) — and the agent's edits are
+  handed into it.
+- Not invite links, guests, or a viewer role: people work together because a team
+  workspace lets them both in. A shared link stays read-only.
 
 ## Architecture
 
@@ -748,8 +752,9 @@ Cycls tab opened, and everything it makes lands in the workspace.
   and panels where a designer expects them — and each Arabic label reads right to
   left inside it (`unicode-bidi: plaintext`).
 - **What's gone.** The AI chat and its provider keys (Cycls has its own agent), the
-  settings dialog, the probe of a local MCP server on every load, collaboration and
-  Share, the S3 storage workspace and sync, the library manager, crash-recovery copies
+  settings dialog, the probe of a local MCP server on every load, the Share button
+  and room links (working together is Cycls's to start — below), the S3 storage
+  workspace and sync, the library manager, crash-recovery copies
   in the browser, vectorize, the Display-P3 and File-API banners, the service worker,
   the theme and language menus (Cycls sets both), the profiler and dev tools — at the
   source, desktop and the narrow (mobile) layout alike. Kept: the Code tab,
@@ -762,6 +767,96 @@ export, tabs, menus, AI), and exact edits (`edits.json`) — each must match, an
 upstream files they rely on are pinned by hash, so a new OpenPencil version fails
 the build until it is reviewed. The patches and build recipe live in
 [`design-editor-patch/`](design-editor-patch/) and the handoff note beside it.
+
+### Together — several people in one design
+
+Two or three people of a team workspace open the same design; each sees the others'
+cursors with their names, what they have selected, and their changes as they make
+them. Built on the editor's own co-editing (OpenPencil's: one shared document, a map
+a node, "awareness" for cursors and selections), which the Cycls build had switched
+off — carried by a relay Cycls runs instead of the peer-to-peer room upstream uses
+(public brokers and a public TURN server are not somewhere a team's design should
+go; the editor build fails if one is in the bundle).
+
+- **Who.** `GET /design/live?path=` (`routers.py`) answers `{live: {room, url,
+  ticket, epoch}}` for a design in a **team** workspace — the room everyone the
+  workspace lets in meets in (keyed with the secret: not guessable, not derivable
+  from the path), the relay's address, this person's pass (`design/live.py`
+  `ticket`: `{room, user, exp}` signed, ten minutes — asked for again on every
+  connection) and the file's version — and `{live: null}` for a personal workspace
+  or with no relay set up. Being let into the workspace is the only permission
+  there is; the route sits behind the same check as the files. The client puts it
+  in the editor's `load` with who this is (`host.me`, a colour from their id).
+- **The relay** (`cycls-design-live`, the service repo's `live/`). It passes bytes
+  inside a room and never reads them; it knows who is in which room and who came
+  first. One instance (rooms are in memory), HTTP/1.1 (a WebSocket). A restart
+  loses nothing — the document is in every open editor and in the file — and the
+  editors connect again by themselves, as they do when the platform cuts a long
+  connection. A connection that dies without a word (a laptop asleep) is found out
+  from both ends: the editor asks the relay "are you there", the relay asks the
+  editor, and silence is the answer.
+- **Who has the document.** A file's node ids are minted anew on every load, so two
+  people who each loaded the file would hold two different documents. The first
+  into an empty room opens the file and gives the room its document (`epoch` = the
+  version it came from); everyone after takes the document from the people in it,
+  never from the file. New nodes are numbered in a space of the person's own, so
+  two people drawing at once never mint the same id. The relay names the document
+  a room is given (`gen`), and a room that starts over forgets the name: someone
+  who comes back holding another — they were out of reach while the file was
+  written anew — is told so by it, sends nothing of their copy, and opens the file
+  again. A relay that was started again takes the first one back at their word —
+  unless it knows the file was written anew since that document was given.
+- **The layer tree.** A parent's children are the nodes that name it as their
+  parent — in the order its shared list has them, then any it does not name yet, by
+  id. Every editor settles it that way, so two people adding to one frame at the same
+  moment both keep their layer (`editor/patches/collab/yjs-sync.ts`, replacing
+  upstream's plain lists; upstream's own fix came after 0.15.1 and is far too large
+  to carry back). Two people typing in the same text at once: the last one's stands.
+- **One saver.** With everyone holding the same document, one save is enough and
+  several would refuse each other. The one who has been in the design longest
+  saves (auto-save, as before); the others don't, and ask it to when they press
+  Save. When it leaves, the next takes over and saves what it holds at once. Out
+  of reach of the others
+  for a moment (the relay restarting, a network that blinks), the one who was
+  saving goes on and the rest wait; past twenty seconds everyone is on their own,
+  and when they meet again their documents merge and one of them saves.
+- **No save overwrites what its room didn't see.** A save still names the version
+  it goes on from ("No save overwrites what it didn't see"), and the one who saves
+  next has to name what the last one wrote — which they may, only if what they
+  hold has everything in it. So every save is *said to the room* just before it is
+  written (the editor names the bytes as the server will: `sayItIsBeingSaved`,
+  `liveBase`); whoever hears it already has every change that went into it, for
+  those came down the same connection first; and whoever comes in is told the
+  line so far. The page keeps what its editor heard (`known`): a save refused over
+  a version the room said goes again on it and nobody is asked; one refused over
+  a version *nobody in the room said* is a change from outside it — someone whose
+  editor could not reach the relay, an agent's edit that never got to the room,
+  the work of the others while this person's laptop slept — and the person is
+  asked, as when alone. "Load the latest" is then for everyone (`liveReset`: the
+  room starts over from the file); alone it would only be handed the room's again.
+- **The agent.** Its `edit` (and slide actions) write the file first, as always,
+  then hand the edit to the room (`tools/__init__.py` `_to_the_room` →
+  `live.notify`): ONE editor makes it and it reaches everyone through the shared
+  document, with "Super"'s cursor drawn for all of them. The relay offers it first
+  — to the one who saves, then to whoever came next — and gives it only to an
+  editor that answers (a connection that died without a word would take the edit
+  with it), preferring one that is being looked at; an answer that comes late gets
+  nothing, so it is never made twice. The chat's own editor is told not to make it
+  again (`live: true` on `design_command`); given to nobody, it makes it itself and
+  says so to the room. An edit the editor could not make starts the room over from
+  the file, which has it. A change
+  that writes the file anew — pages added or removed, a document rendered again, a
+  version restored, a slide moved in the deck viewer — is told to the room as
+  `reload`: everyone opens the file again and the room starts over from it.
+- **Who is here.** The editor tells its page (`presence`); a row of initials ringed
+  in each person's colour sits beside Edit | Preview (`design-presence.tsx`).
+  Clicking one follows their view; again stops.
+- **Without it.** No `DESIGN_LIVE_URL`, a personal workspace, an older editor, a
+  relay that doesn't answer: the design opens alone, exactly as before.
+
+Not in this round: a drag is seen when it is dropped, not while it moves; brand
+colours and variables are each editor's own; a guest, a viewer, or a link that
+lets someone in.
 
 ## Implementation notes
 
@@ -821,6 +916,8 @@ the build until it is reviewed. The patches and build recipe live in
 |---------------------|-------------------------------------------------------------|
 | `DESIGN_URL`        | render-service base URL, e.g. `https://cycls-design.cycls.ai`. Gates the whole `Design` tool. |
 | `DESIGN_SECRET`     | shared render-service secret (Bearer). A local dev instance may run open; the deployed service requires it (its `deploy.py` refuses to deploy without one, since the render API runs caller-written scripts). |
+| `DESIGN_LIVE_URL`   | the live relay, e.g. `https://cycls-design-live.cycls.ai` — with `DESIGN_LIVE_SECRET`, people of a team workspace work in one design together. Unset → every design opens alone. |
+| `DESIGN_LIVE_SECRET`| the relay's secret (its `LIVE_SECRET`): signs room passes and lets the agent speak into a room. |
 | `DESIGN_EDITOR_URL` | the embedded editor's own origin (a static OpenPencil build). Injected into `/config` as `design_editor_url`. Unset → `.fig` files show the download card and there is no open editor for `edit` to drive; generation (`render` / `script`) is unaffected. |
 
 Unset `DESIGN_URL` and `design.configured()` is false: the `Design` tool is never

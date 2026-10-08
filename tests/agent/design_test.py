@@ -2312,3 +2312,102 @@ def test_a_long_texts_change_is_shown_where_it_is():
     # A short text is shown whole.
     short = _page_changes(page("Demand grew 18%."), page("Demand grew 21%."))
     assert short == ['page 2: "p-1" now reads "Demand grew 21%." (was "Demand grew 18%.")']
+
+
+# ---- together: an agent's change to a design people have open at once ----
+#
+# The people in a design keep one shared document in step (the live relay), and one of
+# their editors saves it. So an agent's edit must reach that document once: the tool
+# writes the file as always, then hands the edit to the room (`live.notify`) — the
+# saver's editor makes it for everyone — and tells the chat's own editor not to make it
+# again (`live: true` on the event). A change that writes the file anew is told to the
+# room as "open it again".
+
+def _fake_room(monkeypatch, peers=2):
+    from cycls._agent.design import live
+    said = []
+
+    async def notify(root, rel, body):
+        said.append((rel, body))
+        if not peers:
+            return {"ok": True, "peers": 0, "delivered": 0}
+        return {"ok": True, "peers": peers, "delivered": 1 if body["kind"] == "command" else peers}
+    monkeypatch.setattr(live, "notify", notify)
+    return said
+
+
+def test_an_edit_to_a_design_people_have_open_together_is_handed_to_their_room(tmp_path, monkeypatch):
+    from cycls._agent.design.store import version_of
+    _design(tmp_path)
+    _fake_apply(monkeypatch, compiled="COMPILED")
+    said = _fake_room(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": [{"op": "set_text", "node": "headline", "text": "Hi"}],
+                                    "intent": "retitle"}, _ws(tmp_path)))
+    assert said == [("designs/launch.fig", {"kind": "command", "script": "COMPILED", "intent": "retitle",
+                                            "version": version_of(b"EDITED-FIG")})]
+    assert out["_ui"]["live"] is True                 # the chat's own editor leaves it to the room
+    assert out["_ui"]["version"] == version_of(b"EDITED-FIG")
+
+
+def test_an_edit_to_a_design_nobody_has_open_together_is_replayed_as_before(tmp_path, monkeypatch):
+    _design(tmp_path)
+    _fake_apply(monkeypatch, compiled="COMPILED")
+    said = _fake_room(monkeypatch, peers=0)
+    out = asyncio.run(_exec_design({"action": "edit", "name": "launch", "script": "S"}, _ws(tmp_path)))
+    assert len(said) == 1 and "live" not in out["_ui"]
+    # …and with no relay at all the answer is None: nothing changes either.
+    from cycls._agent.design import live
+
+    async def nothing(root, rel, body):
+        return None
+    monkeypatch.setattr(live, "notify", nothing)
+    out = asyncio.run(_exec_design({"action": "edit", "name": "launch", "script": "S"}, _ws(tmp_path)))
+    assert "live" not in out["_ui"]
+
+
+def test_an_edit_that_changes_the_pages_tells_the_room_to_open_the_file_again(tmp_path, monkeypatch):
+    from cycls._agent.design.store import version_of
+    _design(tmp_path)
+    _fake_apply(monkeypatch, compiled="COMPILED", pages=[{"name": "Post"}, {"name": "Story"}], page="Story", started="Post")
+    said = _fake_room(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "edit", "name": "launch",
+                                    "ops": [{"op": "page_duplicate", "name": "Story"}]}, _ws(tmp_path)))
+    assert said == [("designs/launch.fig", {"kind": "reload", "version": version_of(b"EDITED-FIG")})]
+    assert out["_ui"]["reload"] is True and out["_ui"]["live"] is True
+
+
+def test_a_slide_added_to_a_deck_people_have_open_together_is_handed_to_their_room(tmp_path, monkeypatch):
+    from cycls._agent.design.store import version_of
+    _deck(tmp_path)
+    _fake_apply(monkeypatch, result=b"NEW-FIG", compiled="S", touched=[1], previews=[b"JPEG"],
+                slides=[{"name": "a"}, {"name": "b"}, {"name": "c"}, {"name": "d"}])
+    said = _fake_room(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "add_slide", "name": "pitch", "at": 2,
+                                    "slide": {"layout": "bullets", "title": "Farms", "bullets": ["Direct"]},
+                                    "intent": "add the farms slide"}, _ws(tmp_path)))
+    assert said == [("designs/pitch.fig", {"kind": "command", "script": "S", "intent": "add the farms slide",
+                                           "version": version_of(b"NEW-FIG")})]
+    command = out["_ui"][0]
+    assert command["action"] == "design_command" and command["live"] is True
+
+
+def test_a_document_rendered_again_tells_the_room_to_open_the_file_again(tmp_path, monkeypatch):
+    from cycls._agent.design.store import version_of
+    _fake_render(monkeypatch, image=b"%PDF-1", fig=b"FIG-ONE", slides=[b"a"])
+    spec = {"document": {"title": "Plan", "sections": [{"title": "One", "blocks": [{"p": "Text."}]}]}}
+    asyncio.run(_exec_design({"action": "render", "name": "plan", "spec": spec}, _ws(tmp_path)))
+    said = _fake_room(monkeypatch)
+    _fake_render(monkeypatch, image=b"%PDF-2", fig=b"FIG-TWO", slides=[b"a"])
+    out = asyncio.run(_exec_design({"action": "render", "name": "plan", "spec": spec, "replace": True}, _ws(tmp_path)))
+    assert said == [("designs/plan.fig", {"kind": "reload", "version": version_of(b"FIG-TWO")})]
+    command = out["_ui"][0]
+    assert command["action"] == "design_command" and command["reload"] is True and command["live"] is True
+
+
+def test_waking_a_relay_that_is_not_there_is_not_an_error(monkeypatch):
+    from cycls._agent.design import live
+    monkeypatch.setenv("DESIGN_LIVE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("DESIGN_LIVE_SECRET", "s3cret")
+    assert asyncio.run(live.wake()) is None
+    monkeypatch.delenv("DESIGN_LIVE_URL")
+    assert asyncio.run(live.wake()) is None                   # nothing set up: nothing rung

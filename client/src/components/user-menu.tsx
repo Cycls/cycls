@@ -6,6 +6,7 @@ import { Icon } from "./icon";
 import { WorkspacePanel, WsIcon, type WorkspacesMenu } from "./workspace-switcher";
 
 export interface UserInfo {
+  id?: string;      // who is signed in — the name on their cursor when a design is edited together
   name: string;
   email: string;
   imageUrl?: string;

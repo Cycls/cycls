@@ -25,7 +25,7 @@ import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-chat";
 import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, WriteFile } from "../hooks/use-files";
-import { designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignSelection } from "./design-editor-view";
+import { designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
 import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
@@ -95,6 +95,7 @@ export interface FilesPanelProps {
   exportDesign?: (path: string, format: "pdf" | "png", page?: string) => Promise<string>;   // a design (one page of it) as a PDF / PNG beside it
   brand?: () => Promise<BrandKit | null>;                        // the brand kit, for the design editor
   fetchVersioned?: FetchVersioned;                               // a design with its version (its saves' base)
+  designLive?: (path: string) => Promise<DesignLive | null>;     // a design's live room + this person's pass (null: it opens alone)
   listVersions?: (path: string) => Promise<DesignVersion[]>;     // a design's earlier versions
   versionBlob?: (path: string, id: string) => Promise<Blob>;
   restoreVersion?: (path: string, id: string) => Promise<{ version: string }>;
@@ -775,7 +776,9 @@ export function Chat({ chat, onShare, files, account, config }: {
     versionBlob: files.versionBlob,
     restoreVersion: files.restoreVersion,
     exportDesign: files.exportDesign,
-  } : undefined), [files, createDesign, openFileInCanvas]);
+    live: files.designLive,
+    me: account?.user.id ? { id: account.user.id, name: account.user.name || account.user.email } : undefined,
+  } : undefined), [files, createDesign, openFileInCanvas, account?.user.id, account?.user.name, account?.user.email]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z" || e.shiftKey) return;
