@@ -2766,3 +2766,14 @@ def test_the_tool_says_export_is_for_another_format_and_names_the_file_actions()
         assert action in design_tool(False)["input_schema"]["properties"]["action"]["description"]
     assert "- export {name, format" in _DESIGN_TOOL["description"] and "NOT render" in _DESIGN_TOOL["description"]
     assert {"new_name", "version"} <= set(_DESIGN_TOOL["input_schema"]["properties"])
+
+
+def test_the_tool_says_what_a_document_can_be_asked_for():
+    """Three columns, a list of figures and the PDF's own details are built in the service;
+    the model only asks for what it is told of."""
+    from cycls._agent.tools import _DESIGN_TOOL
+    text = _DESIGN_TOOL["description"]
+    assert '"columns"?: 1|2|3' in text and "3 for a dense bulletin" in text
+    assert '"figures": true lists them' in text
+    assert '"lang"' in text and "Arabic is known without" in text
+
