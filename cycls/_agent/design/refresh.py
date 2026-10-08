@@ -229,7 +229,7 @@ async def _width(path, fmt):
     """A raster's pixel width — what its re-export keeps — else None."""
     if fmt not in _RASTER:
         return None
-    from ..tools import _image_size
+    from .images import _image_size
     return (_image_size(await asyncio.to_thread(path.read_bytes)) or (None,))[0]
 
 

@@ -92,7 +92,7 @@ posted, and it gets none of the workspace messages.
 | For | Read |
 |---|---|
 | The Cycls side | `client/src/components/design-editor-view.tsx`, `design-presence.tsx`, `version-history.tsx`, `deck-view.tsx`; tests in `client/tests/design-editor-view.test.tsx` |
-| The server | `cycls/_agent/web/routers.py` (`/files`, `/versions`, `/deck`, `/design/*`), `cycls/_agent/design/` (`store.py` versions and bases, `live.py` rooms and passes, `refresh.py` exports beside a design, `deck.py` slide changes) |
+| The server | `cycls/_agent/web/routers.py` (`/files`), `cycls/_agent/web/design_routes.py` (`/versions`, `/deck`, `/design/*`, `/brand`), `cycls/_agent/design/` (`store.py` versions and bases, `live.py` rooms and passes, `refresh.py` exports beside a design, `deck.py` slide changes) |
 | The editor's patches | `cycls-design/editor/patches/` — `cycls-bridge.ts`, `host.ts`, `collab/`, `stubs/`, `edits.json` (exact edits to upstream files), `upstream.sha256` (the upstream files they rely on, pinned) |
 | The relay | `cycls-design/live/server.ts`, `live/ticket.ts`, `deploy_live.py` |
 | Why OpenPencil needs each patch | `cycls-design/docs/quirks.md` |

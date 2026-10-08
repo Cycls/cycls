@@ -61,8 +61,15 @@ cycls/
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
     ├── browser/            # cycls Browser tool — thin CDP client to a shared real-Chrome service (Steel); docs/notes/browser.md
-    ├── design/             # cycls Design tool — thin HTTP client to a shared OpenPencil service (posts, carousels, decks of layouts, slide ops in deck.py); docs/notes/design.md
-    ├── tools/              # tool schemas + execution + `Tool` rows: run/step/once/terminal/prompt (docs/notes/tool-rows.md)
+    ├── design/             # cycls Design tool, over a thin HTTP client to a shared OpenPencil service (posts, carousels, decks, documents); docs/notes/design.md
+    │   ├── tool.py         # the tool as the model is given it (and the short form a chat carries until it designs)
+    │   ├── run.py          # the executor (_exec_design): render, script, edit, inspect, extract
+    │   ├── actions.py      # slide, section and file actions; a document rendered
+    │   ├── prepare.py      # what the model wrote, made ready: spec, pages, deck, document, slide, ops (brand.py, images.py)
+    │   ├── extract.py      # a PDF taken apart to be made again; report.py — what the model is told; files.py — a design's files
+    │   └── client.py       # the service client; deck.py slide ops, store.py versions + bases, refresh.py exports beside a design, live.py rooms, stock.py photos
+    ├── paths.py            # a path a tool was given, kept inside the workspace
+    ├── tools/              # tool schemas + execution + `Tool` rows: run/step/once/terminal/prompt (docs/notes/tool-rows.md); Design is imported from design/
     ├── harness/            # the managed LLM loop and the kit a custom loop needs
     │   ├── llm.py          # cycls.LLM fluent builder (.loop(fn) swaps the loop; .price()/.context() set cost rates + window)
     │   ├── main.py         # the default loop (_run) + retry/recover + attachment ingest
@@ -72,7 +79,7 @@ cycls/
     │   ├── events.py       # typed loop events + to_ui (FE projection)
     │   ├── compact.py      # compaction — tool-result clearing, then a summary; append-only marker, file ledger (docs/notes/compaction.md)
     │   └── prompts.py      # system + compaction prompts + workspace instructions (AGENT.md)
-    └── web/                # FastAPI chat server, state routers, OG images, themes
+    └── web/                # FastAPI chat server, state routers (routers.py; a design's routes in design_routes.py, what they share in shared.py), OG images, themes
 ```
 
 ## Core Architecture
