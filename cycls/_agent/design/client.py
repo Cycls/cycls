@@ -187,7 +187,7 @@ def _decode(data):
         [int(n) for n in data["preview_of"]] if isinstance(data.get("preview_of"), list) else None)
 
 
-async def render(spec, fmt="png", scale=2, user_id=None, every=False, sheets=False, known=None):
+async def render(spec, fmt="png", scale=2, user_id=None, every=False, sheets=False, known=None, lead=None):
     """Render a declarative design spec → a Rendered. `spec` is `{size:[w,h], fill,
     nodes:[...]}`, a deck `{frames:[...]}`, or several pages `{pages:[{name, size, fill,
     nodes}]}` — one design, a variant a page (see the Design tool description);
@@ -200,6 +200,8 @@ async def render(spec, fmt="png", scale=2, user_id=None, every=False, sheets=Fal
         body["every"] = True
     if sheets:
         body["sheets"] = True
+    if lead:
+        body["lead"] = int(lead)      # how many of the first frames to read whole (4 unless said)
     if known:
         body["known"] = list(known)
     return _decode(await _post("/render", body, user_id))
@@ -214,7 +216,8 @@ async def apply(fig, script=None, user_id=None, ops=None, preview=False, page=No
     RuntimeError carrying its own error (e.g. 'no node named "cta" — this design
     has: …' or "null is not an object …"). `page` is the page it is made on (a name;
     the first when absent): the dict's `started` names it, `page` the one the edit
-    ended on (a page op may have made another) and `pages` all of them."""
+    ended on (a page op may have made another) and `pages` all of them. `changed`,
+    `added` and `resolved` name what an ops edit touched (see below)."""
     body = _paged({"fig": base64.b64encode(fig).decode()}, page)
     if ops is not None:
         body["ops"] = ops
@@ -232,7 +235,15 @@ async def apply(fig, script=None, user_id=None, ops=None, preview=False, page=No
             "previews": _b64s(data.get("previews_base64")),
             "touched": [int(i) for i in data.get("touched") or [] if isinstance(i, int)],
             "slides": [dict(s) for s in data.get("slides") or [] if isinstance(s, dict)],
-            "pages": _pages(data), "page": str(data.get("page") or ""), "started": str(data.get("started") or "")}
+            "pages": _pages(data), "page": str(data.get("page") or ""), "started": str(data.get("started") or ""),
+            # By name: the parts it changed, the parts it made, and [what was asked, the
+            # part it was] for a name that wasn't one (a text's words, an icon's icon).
+            "changed": [str(n) for n in data.get("changed") or [] if isinstance(n, str)],
+            "added": [str(n) for n in data.get("added") or [] if isinstance(n, str)],
+            "resolved": [[str(p[0]), str(p[1])] for p in data.get("resolved") or []
+                         if isinstance(p, list) and len(p) == 2],
+            # What a slide's layout has to say (a "stats" slide given six figures holds four).
+            "notes": [str(n) for n in data.get("notes") or [] if isinstance(n, str)]}
 
 
 async def outline(fig, user_id=None, page=None, full=False):

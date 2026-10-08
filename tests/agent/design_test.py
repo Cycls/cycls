@@ -249,7 +249,7 @@ def _fake_render(monkeypatch, image=b"\x89PNGrender", fig=b"FIGZ", preview=None,
 
     async def _r(spec, fmt="png", scale=2, user_id=None, every=False, **kw):
         calls.update(spec=spec, fmt=fmt, scale=scale, user_id=user_id, every=every, sheets=kw.get("sheets", False),
-                     known=list(kw.get("known") or []), renders=calls.get("renders", 0) + 1)
+                     known=list(kw.get("known") or []), renders=calls.get("renders", 0) + 1, lead=kw.get("lead"))
         return design.Rendered(image, fig, "0:6", fmt, preview, list(notes), list(lint),
                                list(previews), list(images) if every else [], list(slides), dir,
                                list(pages), list(page_images), list(preview_pages), size,
@@ -328,7 +328,7 @@ def test_script_escape_hatch(tmp_path, monkeypatch):
 
 
 def _fake_apply(monkeypatch, result=b"EDITED-FIG", error=None, compiled=None, preview=None, lint=(),
-                previews=(), touched=(), slides=(), pages=(), page="", started=""):
+                previews=(), touched=(), slides=(), pages=(), page="", started="", **names):
     """`design.apply` faked: records the call, returns the edited .fig (plus the
     compiled script, preview and lint the service sends) or raises the edit's error.
     `refresh.schedule` is captured instead of run."""
@@ -340,7 +340,8 @@ def _fake_apply(monkeypatch, result=b"EDITED-FIG", error=None, compiled=None, pr
             raise RuntimeError(error)
         return {"fig": result, "lint": list(lint), "script": compiled, "preview": preview,
                 "previews": list(previews), "touched": list(touched), "slides": list(slides),
-                "pages": list(pages), "page": page, "started": started}
+                "pages": list(pages), "page": page, "started": started,
+                **{k: list(names.get(k) or []) for k in ("changed", "added", "resolved", "notes")}}
     monkeypatch.setattr("cycls._agent.design.apply", _apply)
     scheduled = []
 
@@ -498,14 +499,27 @@ def test_deck_saves_the_file_a_deck_document_and_qas_every_slide(tmp_path, monke
     assert "All 3 slides are attached" in m[-1]["text"] and "CONSISTENT" in m[-1]["text"]
 
 
-def test_a_long_deck_attaches_its_first_twelve_slides(tmp_path, monkeypatch):
-    _fake_render(monkeypatch, image=b"PDF", previews=[b"J%d" % i for i in range(15)])
+def test_a_long_deck_is_seen_whole_twelve_slides_to_read_and_the_rest_on_contact_sheets(tmp_path, monkeypatch):
+    # Of a 20-slide deck the model was shown slides 1–12 and told "inspect lists the rest":
+    # eight slides it presented without having looked at.
+    calls = _fake_render(monkeypatch, image=b"PDF", previews=[b"J%d" % i for i in range(1, 13)],
+                         slides=[{"name": f"slide-{n}"} for n in range(1, 21)], sheets=[b"S1"], sheet_pages=[[13, 20]])
     out = asyncio.run(_exec_design({"action": "render", "name": "long", "format": "pdf",
-                                    "spec": {"frames": [{"size": "slide"}] * 15}}, _ws(tmp_path)))
+                                    "spec": {"frames": [{"size": "slide"}] * 20}}, _ws(tmp_path)))
     assert (tmp_path / "designs" / "long.pdf").read_bytes() == b"PDF"       # a PDF is a deck format too
+    assert calls["sheets"] is True and calls["lead"] == 12                   # twelve to read, as before
     m = out["_model"]
-    assert sum(b["type"] == "image" for b in m) == 12
-    assert "Slides 1–12 of 15 are attached" in m[-1]["text"]
+    assert [b["text"] for b in m if b["type"] == "text"][11:13] == ["Slide 12:", "Slides 13–20, small:"]
+    assert [base64.b64decode(b["source"]["data"]) for b in m if b["type"] == "image"][-2:] == [b"J12", b"S1"]
+    assert "Slides 1–12 are attached to read, and slides 13–20 on 1 contact sheet" in m[-1]["text"]
+    assert "inspect lists the rest" not in m[-1]["text"]
+    # A deck of twelve or fewer asks for none; a service that sends none is said as before.
+    calls = _fake_render(monkeypatch, image=b"PDF", previews=[b"J"] * 3)
+    asyncio.run(_exec_design({"action": "render", "name": "short", "format": "pdf", "spec": {"frames": [{"size": "slide"}] * 3}}, _ws(tmp_path)))
+    assert calls["sheets"] is False
+    _fake_render(monkeypatch, image=b"PDF", previews=[b"J%d" % i for i in range(15)])
+    out = asyncio.run(_exec_design({"action": "render", "name": "older", "format": "pdf", "spec": {"frames": [{"size": "slide"}] * 15}}, _ws(tmp_path)))
+    assert sum(b["type"] == "image" for b in out["_model"]) == 12 and "Slides 1–12 of 15 are attached" in out["_model"][-1]["text"]
 
 
 def test_carousel_saves_every_slide(tmp_path, monkeypatch):
@@ -1025,7 +1039,7 @@ def test_apply_posts_fig_and_script(monkeypatch):
     _mock(monkeypatch, _FakeResp(200, {"ok": True, "fig_base64": base64.b64encode(b"EDITED").decode()}))
     assert asyncio.run(design.apply(b"FIG", "t.characters='x'", user_id="u")) == \
         {"fig": b"EDITED", "lint": [], "script": None, "preview": None, "previews": [], "touched": [], "slides": [],
-         "pages": [], "page": "", "started": ""}
+         "pages": [], "page": "", "started": "", "changed": [], "added": [], "resolved": [], "notes": []}
     assert _FakeClient.last["url"] == "https://d/apply"
     assert _FakeClient.last["json"] == {"fig": base64.b64encode(b"FIG").decode(), "script": "t.characters='x'"}
     _mock(monkeypatch, _FakeResp(422, {"ok": False, "error": "null is not an object"}))
@@ -1103,6 +1117,52 @@ def test_edit_with_ops_resolves_files_and_replays_the_compiled_script(tmp_path, 
     assert out["_model"][0]["type"] == "image"                               # the edited design comes back to check
 
 
+def test_an_edit_says_by_name_what_it_changed_and_made(tmp_path, monkeypatch):
+    # A copy and an added part get names of their own, and a part can be found by what it
+    # says rather than its name: the reply gives the names, so the next edit uses them
+    # without an `inspect` in between (production: an edit that named a headline by its
+    # words failed, and was sent again after one).
+    _design(tmp_path)
+    ops = [{"op": "set_text", "node": "Night Roast", "text": "Morning Roast"}]
+    _fake_apply(monkeypatch, compiled="/*c*/", changed=["text-1", "icon-2"], added=["icon-3"],
+                resolved=[["Night Roast", "text-1"]])
+    text = _text(asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": ops}, _ws(tmp_path))))
+    assert "Changed: text-1, icon-2." in text and "Added: icon-3." in text
+    assert '"Night Roast" is named text-1' in text
+    _fake_apply(monkeypatch, compiled="/*c*/")                               # nothing to say: nothing said
+    text = _text(asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": ops}, _ws(tmp_path))))
+    assert "Changed:" not in text and "Added:" not in text and "is named" not in text
+
+
+def test_inspect_shows_a_mark_as_one_part_with_its_icon_and_colour(tmp_path, monkeypatch):
+    _design(tmp_path)
+
+    async def _outline(fig, user_id=None, page=None):
+        return {"pages": [{"name": "design", "frames": 1}], "page": "design", "frames": [
+                {"slide": 1, "name": "slide-1", "size": [1200, 900], "nodes": [
+            {"name": "icon-1", "type": "icon", "x": 40, "y": 120, "w": 64, "h": 64, "icon": "lucide:trophy", "color": "#b45309"},
+            {"name": "qr-1", "type": "qr", "x": 340, "y": 120, "w": 96, "h": 96, "color": "#000000", "opacity": 0.5},
+            {"name": "chart-1", "type": "chart", "x": 40, "y": 480, "w": 500, "h": 320, "fill": "none"}]}]}
+    monkeypatch.setattr("cycls._agent.design.outline", _outline)
+    out = asyncio.run(_exec_design({"action": "inspect", "name": "launch"}, _ws(tmp_path)))
+    assert "icon-1  icon  (40,120 64×64)  lucide:trophy  color #b45309" in out
+    assert "qr-1  qr  (340,120 96×96)  color #000000  opacity 0.5" in out
+    assert "chart-1  chart  (40,480 500×320)" in out and "fill none" not in out
+    assert "more part" not in out
+
+
+def test_inspect_says_how_many_parts_a_long_slide_has_beyond_those_it_lists(tmp_path, monkeypatch):
+    _design(tmp_path)
+
+    async def _outline(fig, user_id=None, page=None):
+        return {"pages": [{"name": "design", "frames": 1}], "page": "design", "frames": [
+                {"slide": 1, "name": "slide-1", "size": [1200, 900], "more": 57, "nodes": [
+            {"name": "rect-1", "type": "rect", "x": 0, "y": 0, "w": 10, "h": 10, "fill": "#000000"}]}]}
+    monkeypatch.setattr("cycls._agent.design.outline", _outline)
+    out = asyncio.run(_exec_design({"action": "inspect", "name": "launch"}, _ws(tmp_path)))
+    assert "… and 57 more parts of this slide are not listed" in out
+
+
 def test_edit_ops_errors_come_back_verbatim(tmp_path, monkeypatch):
     _design(tmp_path)
     _fake_apply(monkeypatch, error='op 1 (set_text nope): no node named "nope" — this design has: headline, cta')
@@ -1145,8 +1205,13 @@ def test_the_client_inspects_and_applies_ops(monkeypatch):
                                        "preview_base64": base64.b64encode(b"J").decode(), "lint": []}))
     r = asyncio.run(design.apply(b"FIG", ops=[{"op": "delete", "node": "x"}], preview=True))
     assert r == {"fig": b"E", "lint": [], "script": "S", "preview": b"J", "previews": [], "touched": [], "slides": [],
-                 "pages": [], "page": "", "started": ""}
+                 "pages": [], "page": "", "started": "", "changed": [], "added": [], "resolved": [], "notes": []}
     assert _FakeClient.last["json"] == {"fig": base64.b64encode(b"FIG").decode(), "ops": [{"op": "delete", "node": "x"}], "preview": True}
+    # What the edit changed and made, by name, and which part a name that wasn't one turned out to be.
+    _mock(monkeypatch, _FakeResp(200, {"ok": True, "fig_base64": base64.b64encode(b"E").decode(), "changed": ["text-1"],
+                                       "added": ["icon-3"], "resolved": [["Night Roast", "text-1"], "junk"]}))
+    r = asyncio.run(design.apply(b"FIG", ops=[{"op": "delete", "node": "x"}]))
+    assert (r["changed"], r["added"], r["resolved"]) == (["text-1"], ["icon-3"], [["Night Roast", "text-1"]])
 
 
 # ---- pages: a design's variants (a post, a story, a banner of one piece of work) ----
@@ -1226,7 +1291,9 @@ def test_pages_say_what_they_need(tmp_path, monkeypatch):
     assert "`pages` is a list of pages" in run({"pages": []})
     # A page's own mistakes say which page.
     assert "page 'Story': unknown size 'tall'" in run({"pages": [page("Post"), {"name": "Story", "size": "tall", "nodes": []}]})
-    assert "renders to an image" in run({"pages": [page("Post"), page("Story")]}, format="pdf")
+    # Asked for as a PDF: rendered — as its images, said — not refused for a second call.
+    as_pdf = run({"pages": [page("Post"), page("Story")]}, format="pdf")
+    assert not _text(as_pdf).startswith("Error") and "rendered as png" in _text(as_pdf)
 
 
 def test_inspect_and_edit_work_on_the_page_named(tmp_path, monkeypatch):
@@ -2411,3 +2478,149 @@ def test_waking_a_relay_that_is_not_there_is_not_an_error(monkeypatch):
     assert asyncio.run(live.wake()) is None
     monkeypatch.delenv("DESIGN_LIVE_URL")
     assert asyncio.run(live.wake()) is None                   # nothing set up: nothing rung
+
+
+# ---- shapes a model sent that were refused, and looks it was not given (production, Sep–Oct 2026) ----
+
+def test_a_slide_whose_layout_had_no_room_for_everything_says_so(tmp_path, monkeypatch):
+    # Six figures given to a "stats" slide, four drawn: said with the slide, not found out by the audience.
+    _deck(tmp_path, {"theme": "editorial", "size": [1920, 1080]})
+    left = "the slide (stats): 6 figures were given and the layout holds 4 — the last 2 were left out. Put them on a slide of their own."
+    _fake_apply(monkeypatch, result=b"NEW-FIG", compiled="S", touched=[1], previews=[b"J"], slides=[{}, {}], notes=[left])
+    out = asyncio.run(_exec_design({"action": "add_slide", "name": "pitch", "slide": {
+        "layout": "stats", "title": "Numbers", "items": [{"value": f"{n}0%", "label": "x"} for n in range(6)]}}, _ws(tmp_path)))
+    assert left in out["_model"][-1]["text"]
+
+
+def test_an_edit_of_a_deck_or_a_carousel_shows_the_slides_it_changed(tmp_path, monkeypatch):
+    # The look that came back with an edit was the first slide, whichever one it had changed.
+    _design(tmp_path)
+    ops = [{"op": "set_text", "node": "x", "text": "y", "frame": 2}]
+    _fake_apply(monkeypatch, compiled="/*c*/", preview=b"FIRST", previews=[b"S3", b"S5"], touched=[2, 4], slides=[{}] * 6)
+    m = asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": ops}, _ws(tmp_path)))["_model"]
+    assert [b["text"] for b in m if b["type"] == "text"][:2] == ["Slide 3:", "Slide 5:"]
+    assert [base64.b64decode(b["source"]["data"]) for b in m if b["type"] == "image"] == [b"S3", b"S5"]
+    assert "The slides it changed are attached" in m[-1]["text"]
+    # One frame, or the first of several: as before, one picture with nothing before it.
+    for touched, slides in (([0], [{}]), ([], [])):
+        _fake_apply(monkeypatch, compiled="/*c*/", preview=b"ONE", previews=[b"ONE"], touched=touched, slides=slides)
+        m = asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": ops}, _ws(tmp_path)))["_model"]
+        assert [b["type"] for b in m] == ["image", "text"] and "The edited design is attached" in m[-1]["text"]
+
+
+_DESCRIBED = "modern Riyadh skyline at dusk, glass towers, deep blue tones"
+
+
+def test_a_picture_described_where_a_file_goes_is_found_as_a_stock_photo(tmp_path, monkeypatch):
+    # `src` — and a slide's `image` — held a description of the picture wanted: three failed
+    # calls in one chat, and the slide was made without its picture.
+    calls = _fake_stock(monkeypatch)
+    render = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "name": "city", "spec": {"size": [1080, 1080], "nodes": [
+        {"type": "image", "src": _DESCRIBED, "x": 0, "y": 0, "w": 1080, "h": 720}]}}, _ws(tmp_path)))
+    assert calls["search"] == [("modern Riyadh skyline at dusk", "landscape")]   # what a photo search can find
+    assert render["spec"]["nodes"][0]["image"]
+    text = _text(out)
+    assert not text.startswith("Error")
+    assert "is not a file in the workspace" in text and "stock photo" in text and "Photo by Ana on Pexels" in text
+    # A deck slide's image, the same.
+    _fake_render(monkeypatch, image=b"PPTX", previews=[b"J1", b"J2"])
+    out = asyncio.run(_exec_design({"action": "render", "name": "pitch", "format": "pptx", "spec": {"deck": {"slides": [
+        {"layout": "image-right", "title": "Riyadh", "image": "a quiet street in old Jeddah"},
+        {"layout": "closing", "title": "Thanks"}]}}}, _ws(tmp_path)))
+    assert not _text(out).startswith("Error") and calls["search"][-1][0] == "a quiet street in old Jeddah"
+    # An edit that swaps a photo, too.
+    _design(tmp_path)
+    apply = _fake_apply(monkeypatch, compiled="/*c*/")[0]
+    out = asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": [
+        {"op": "replace_image", "node": "photo", "src": "coffee beans on a wooden table"}]}, _ws(tmp_path)))
+    assert not _text(out).startswith("Error") and apply["ops"][0]["image"]
+    # A file that is named and isn't there is still an error.
+    out = asyncio.run(_exec_design({"action": "render", "name": "x", "spec": {"size": [1080, 1080], "nodes": [
+        {"type": "image", "src": "attachments/riyadh skyline.jpg", "x": 0, "y": 0, "w": 100, "h": 100}]}}, _ws(tmp_path)))
+    assert out.startswith("Error") and "does not exist in the workspace" in out
+
+
+def test_a_described_picture_where_no_photos_can_be_found_says_what_src_is(tmp_path, monkeypatch):
+    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
+    _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "name": "city", "spec": {"size": [1080, 1080], "nodes": [
+        {"type": "image", "src": _DESCRIBED, "x": 0, "y": 0, "w": 1080, "h": 720}]}}, _ws(tmp_path)))
+    assert out.startswith("Error") and "describes a picture" in out and "save a photo into the workspace" in out
+
+
+def test_a_spec_that_closes_with_the_wrong_brackets_is_read_as_what_it_plainly_is(tmp_path, monkeypatch):
+    # 5,064 characters of a document written right, and one bracket wrong in the last
+    # four: refused, and all of it was written out again.
+    good = {"size": [1080, 1080], "nodes": [{"type": "text", "text": 'A "quoted" } word', "x": 10, "y": 10},
+                                           {"type": "stack", "x": 10, "y": 90, "children": [{"type": "text", "text": "In"}]}]}
+    text = json.dumps(good)
+    assert text.endswith("}]}]}")
+    for broken in (text[:-1] + "]}", text + "}", text[:-2], text[:-1] + "}}]}", text[:-3] + "}\n"):
+        calls = _fake_render(monkeypatch)
+        out = asyncio.run(_exec_design({"action": "render", "name": "x", "spec": broken}, _ws(tmp_path)))
+        assert not _text(out).startswith("Error"), broken[-12:]
+        assert calls["spec"]["nodes"][0]["text"] == 'A "quoted" } word' and calls["spec"]["nodes"][1]["children"][0]["text"] == "In"
+        assert "closing brackets" in _text(out)                              # said, so the next one is written right
+    # Wrong anywhere else — or cut off inside its content — it is refused, with where, as before.
+    calls = _fake_render(monkeypatch)
+    for broken in (text[:30] + '"' + text[30:], text[:-9], text[: text.index("In") + 1]):
+        out = asyncio.run(_exec_design({"action": "render", "name": "x", "spec": broken}, _ws(tmp_path)))
+        assert out.startswith("Error") and "isn't valid JSON" in out, broken[-12:]
+    assert "renders" not in calls
+    # Wrapped in a code fence: the object inside it.
+    calls = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "name": "x", "spec": f"```json\n{text}\n```"}, _ws(tmp_path)))
+    assert not _text(out).startswith("Error") and calls["spec"]["nodes"][0]["text"] == 'A "quoted" } word'
+
+
+def test_a_design_sent_beside_the_action_is_its_spec_and_nothing_sent_is_said_so(tmp_path, monkeypatch):
+    calls = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "name": "x", "size": [1080, 1080], "fill": "#ffffff",
+                                    "nodes": [{"type": "text", "text": "Hi", "x": 1, "y": 1}]}, _ws(tmp_path)))
+    assert not _text(out).startswith("Error")
+    assert calls["spec"]["nodes"][0]["text"] == "Hi" and calls["spec"]["size"] == [1080, 1080]
+    calls = _fake_render(monkeypatch, image=b"PPTX", previews=[b"J1"])
+    out = asyncio.run(_exec_design({"action": "render", "name": "d", "format": "pptx",
+                                    "deck": {"slides": [{"layout": "title", "title": "Brewly"}]}}, _ws(tmp_path)))
+    assert not _text(out).startswith("Error") and "deck" in calls["spec"]
+    # Nothing that could be a design: the error says what did come, not only what is wanted.
+    none = asyncio.run(_exec_design({"action": "render", "name": "x", "format": "png"}, _ws(tmp_path)))
+    assert none.startswith("Error") and "`render` needs a `spec`" in none and "this call has: action, name, format" in none
+    words = asyncio.run(_exec_design({"action": "render", "name": "x", "spec": "a poster about coffee"}, _ws(tmp_path)))
+    assert words.startswith("Error") and "`spec` came as text" in words and "a poster about coffee" in words
+    listed = asyncio.run(_exec_design({"action": "render", "name": "x", "spec": [{"type": "text", "text": "Hi"}]}, _ws(tmp_path)))
+    assert listed.startswith("Error") and "`spec` came as a list" in listed
+
+
+def test_a_gradient_written_as_a_node_is_a_glow_over_the_frame(tmp_path, monkeypatch):
+    # {"type": "radial", "center": …, "gradient": […]} among the nodes: a fill, written
+    # where a node goes. Refused as an unknown type; it plainly meant a glow.
+    calls = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "name": "x", "spec": {"size": [1080, 1080], "fill": "#0b0b0b", "nodes": [
+        {"type": "radial", "center": [0.5, 0.42], "radius": 0.55, "gradient": ["#ffd98a99", "#f2a13c00"]},
+        {"type": "text", "text": "Hi", "x": 10, "y": 10}]}}, _ws(tmp_path)))
+    assert not _text(out).startswith("Error")
+    n = calls["spec"]["nodes"][0]
+    assert n["type"] == "rect" and (n["x"], n["y"], n["w"], n["h"]) == (0, 0, 1080, 1080)
+    assert n["fill"] == {"gradient": ["#ffd98a99", "#f2a13c00"], "type": "radial", "center": [0.5, 0.42], "radius": 0.55}
+    assert "a gradient is a fill" in _text(out)
+    # A type that is nothing: refused, as before.
+    bad = asyncio.run(_exec_design({"action": "render", "name": "x", "spec": {"size": [1080, 1080], "nodes": [{"type": "sparkle"}]}}, _ws(tmp_path)))
+    assert bad.startswith("Error") and "type 'sparkle'" in bad
+
+
+def test_a_lists_items_are_read_however_they_are_written(tmp_path, monkeypatch):
+    for given in ("First point\nSecond point", [{"text": "First point"}, {"text": "Second point"}],
+                  ["- First point", "• Second point"]):
+        calls = _fake_render(monkeypatch)
+        out = asyncio.run(_exec_design({"action": "render", "name": "x", "spec": {"size": [1080, 1080], "nodes": [
+            {"type": "list", "items": given, "x": 40, "y": 40, "w": 600}]}}, _ws(tmp_path)))
+        assert not _text(out).startswith("Error"), given
+        assert calls["spec"]["nodes"][0]["items"] == ["First point", "Second point"], given
+    calls = _fake_render(monkeypatch)                                         # its own `text`, when `items` is missing
+    asyncio.run(_exec_design({"action": "render", "name": "x", "spec": {"size": [1080, 1080], "nodes": [
+        {"type": "list", "text": "One\nTwo", "x": 40, "y": 40}]}}, _ws(tmp_path)))
+    assert calls["spec"]["nodes"][0]["items"] == ["One", "Two"]
+    none = asyncio.run(_exec_design({"action": "render", "name": "x", "spec": {"size": [1080, 1080], "nodes": [{"type": "list", "x": 1, "y": 1}]}}, _ws(tmp_path)))
+    assert none.startswith("Error") and "a list needs `items`" in none

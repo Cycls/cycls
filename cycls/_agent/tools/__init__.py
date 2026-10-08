@@ -492,8 +492,11 @@ _DESIGN_TOOL = {
         "{\"op\":\"style\",\"node\":\"headline\",\"color\":\"#f5a623\",\"font\":\"Playfair Display Bold\"}, "
         "{\"op\":\"move\",\"node\":\"cta\",\"dy\":40}, {\"op\":\"add\",\"node\":{…a spec node…}}] — "
         "the full list is in the `ops` field. Ops paint, set fonts and lay out exactly as a "
-        "render does. The edit is applied to the saved design first: a node that doesn't "
-        "exist is an error listing the ones that do, and nothing changes; on success the "
+        "render does. A node is named as `inspect` lists it — an icon, an SVG, a QR code, a "
+        "list, a table and a chart are each ONE part (icon-1, qr-1, chart-1): moved, copied, "
+        "removed and recoloured whole; an icon or QR is resized with `resize`. The edit is "
+        "applied to the saved design first: names that don't exist are ONE error naming all "
+        "of them and listing the parts that do, and nothing changes; on success the "
         ".fig is saved, its image re-exported, and the edited design comes back to you to "
         "check, with a layout check. If the design is open, the user WATCHES a labeled "
         "'Super' cursor replay the change live — pass a short `intent` ('making the "
@@ -540,7 +543,7 @@ _DESIGN_TOOL = {
         "title": {"type": "string", "description": "For update_slide without `slide`: the slide's title (its name in the deck viewer)."},
         "transition": {"type": "string", "enum": ["fade", "slide", "none"], "description": "For update_slide without `slide`: how the slide enters when presented."},
         "ops": {"type": "array", "items": {"type": "object"},
-                "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?} (a stack's id moves the whole block; a node in a stack moved on its own leaves it); resize {node, w?, h?}; delete {node}; duplicate {node, dx?, dy?, id?} (in a stack, the copy is its next item); replace_image {node, src}; add {node:<spec node>, frame?}; background {fill, frame?} — the slide's OWN fill: a colour, {\"gradient\": [...]} or \"none\" (a slide isn't a node `style` can name — never cover it with a full-size rect). `frame` (slide index from 0) narrows a name to one slide. Pages: page_add {name, spec}; page_duplicate {page?, name?}; page_rename {page?, name}; page_delete {page?}."},
+                "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?} (a stack's id moves the whole block; a node in a stack moved on its own leaves it); resize {node, w?, h?}; delete {node}; duplicate {node, dx?, dy?, id?} (in a stack, the copy is its next item); replace_image {node, src}; add {node:<spec node>, frame?}; background {fill, frame?} — the slide's OWN fill: a colour, {\"gradient\": [...]} or \"none\" (never cover a slide with a full-size rect). `frame` (slide index from 0) narrows a name to one slide. Pages: page_add {name, spec}; page_duplicate {page?, name?}; page_rename {page?, name}; page_delete {page?}."},
         "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}; several variants of one design as pages {pages:[{name, size, fill, nodes}]}; a document (a report or any PDF that flows over pages) {document:{title, sections:[{title, blocks:[…]}]}}; a presentation as a deck of layouts {deck:{theme, footer?, slides:[{layout, …slots, notes}]}} (the normal way for decks); or hand-built frames {frames:[...]} (one per slide, all one size, each with optional id/title/notes/transition; export pptx or pdf, or png for a carousel); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s). Scripts may use only `figma` (and `console`): no `this`, globals, network, eval/Function or `.constructor` — anything else is refused before it runs."},
@@ -1501,6 +1504,15 @@ def _image_size(data):
     return None
 
 
+def _no_such_image(src, root):
+    """Why an image can't be used: no such file — or not a file's name at all."""
+    from cycls._agent.design import stock
+    if stock.described(src, root):
+        return (f"image {src[:60]!r} describes a picture — `src` is a file in the workspace, and stock photos "
+                f"aren't set up here to find one: save a photo into the workspace (e.g. attachments/photo.jpg) and use its path")
+    return f"image {src!r} does not exist in the workspace"
+
+
 def _place_image(n, root):
     """An image node's `src` (a workspace file) → the bytes the service draws, in
     its final box: `fit` "cover" (default) fills w×h, cropping the overflow;
@@ -1516,7 +1528,7 @@ def _place_image(n, root):
         raise ValueError(f"image src {src[:60]!r} must be a workspace file — save it into the workspace first")
     path = _resolve_path(src, root)
     if not path.is_file():
-        raise ValueError(f"image {src!r} does not exist in the workspace")
+        raise ValueError(_no_such_image(src, root))
     if (size := path.stat().st_size) > _DESIGN_IMAGE_MAX:
         raise ValueError(f"image {src!r} is {size / 2**20:.1f} MB, over the {_DESIGN_IMAGE_MAX >> 20} MB "
                          f"a design takes — save a smaller copy (longest side ~2000px) and use that")
@@ -1595,6 +1607,7 @@ def _prepare_spec(spec, brand, root=None):
     spec = json.loads(json.dumps(spec))
     frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
     filled, branded_fonts, image_bytes = 0, 0, 0
+    shapes = []                 # what was written another way and read as what it meant: said, once each
     first_size = None
     for i, fr in enumerate(frames, 1):
         if not isinstance(fr, dict):
@@ -1620,6 +1633,23 @@ def _prepare_spec(spec, brand, root=None):
             nonlocal filled, branded_fonts, image_bytes
             if n.get("type") is None and ("text" in n or "src" in n):
                 n["type"] = "text" if "text" in n else "image"
+            if n.get("type") in ("radial", "linear", "angular", "diamond") and isinstance(n.get("gradient"), list):
+                # A fill, written where a node goes: a glow (or a wash) over the frame.
+                fill = {k: n[k] for k in ("gradient", "center", "radius", "angle") if n.get(k) is not None}
+                fill["type"] = n["type"]
+                keep = {k: n[k] for k in ("id", "opacity") if n.get(k) is not None}
+                n.clear()
+                n.update({"type": "rect", "x": 0, "y": 0, "w": W, "h": H, "fill": fill, **keep})
+                shapes.append(f"A node of type \"{fill['type']}\" was read as a rect over the whole frame with that gradient as "
+                              f"its `fill` — a gradient is a fill ({{\"gradient\": […], \"type\": \"{fill['type']}\"}}), not a node.")
+            if n.get("type") == "list":
+                items = n.get("items") if n.get("items") is not None else n.pop("text", None)
+                if isinstance(items, str):
+                    items = [line for line in items.splitlines() if line.strip()]
+                if isinstance(items, list):
+                    # A point is its words: {"text": …} and a marker typed in front are read as that.
+                    items = [i["text"] if isinstance(i, dict) and isinstance(i.get("text"), str) and "runs" not in i else i for i in items]
+                    n["items"] = [re.sub(r"^\s*(?:[-–—•*·▪●]|\d{1,2}[.)])\s+", "", i).strip() if isinstance(i, str) else i for i in items]
             for k in _NUMERIC:                           # "1500" would reach the renderer as a string —
                 if k in n and n[k] is not None and _num(n[k]) is None:     # and a string y sinks the text
                     return f"Error: `{k}` must be a number, not {n[k]!r} ({json.dumps(n)[:80]})."
@@ -1701,7 +1731,7 @@ def _prepare_spec(spec, brand, root=None):
         for n in fr.get("nodes") or []:
             if isinstance(n, dict) and (err := prepare(n, True)):
                 return None, err, []
-    notes = []
+    notes = list(dict.fromkeys(shapes))
     if branded_fonts:
         notes.append(f"Brand fonts applied to {branded_fonts} text node(s) with no font "
                      f"(heading {brand['heading'] or brand['body']}, body {brand['body'] or brand['heading']}).")
@@ -1759,7 +1789,7 @@ def _image_slot(src, root):
         raise ValueError(f"image {src[:60]!r} must be a workspace file — save it into the workspace first")
     path = _resolve_path(src, root)
     if not path.is_file():
-        raise ValueError(f"image {src!r} does not exist in the workspace")
+        raise ValueError(_no_such_image(src, root))
     size = path.stat().st_size
     if path.suffix.lower() == ".svg":
         if size > _DESIGN_SVG_MAX:
@@ -2136,8 +2166,14 @@ def _outline_text(rel, frames, pages=None, page=None):
                 bits.append(f"{n.get('font')} {n.get('size')}px {n.get('color', '')}".strip())
                 if n.get("align"):
                     bits.append(f"align {n['align']}")
+            elif n.get("type") in ("icon", "svg", "qr", "line") and (n.get("icon") or n.get("color")):
+                # A mark is one part: which icon it is and its colour (what `style` sets).
+                if n.get("icon"):
+                    bits.append(n["icon"])
+                if n.get("color"):
+                    bits.append(f"color {n['color']}")
             else:
-                if n.get("fill"):
+                if n.get("fill") and n["fill"] != "none":
                     bits.append(f"fill {n['fill']}")
                 if n.get("radius"):
                     bits.append(f"radius {n['radius']}")
@@ -2146,7 +2182,59 @@ def _outline_text(rel, frames, pages=None, page=None):
             if n.get("opacity") is not None:
                 bits.append(f"opacity {n['opacity']}")
             out.append("  ".join(str(b) for b in bits if b != ""))
+        if f.get("more"):
+            out.append(f"  … and {f['more']} more parts of this slide are not listed (they are still edited by name).")
     return "\n".join(out)
+
+
+def _edit_names(r):
+    """What an ops edit touched, by name — the parts it changed, the ones it made (a copy
+    and an added part get names of their own), and which part a name that wasn't one
+    turned out to be. The next edit names them as they are, with no `inspect` between."""
+    out = ""
+    if r.get("changed"):
+        out += f" Changed: {', '.join(r['changed'][:30])}."
+    if r.get("added"):
+        out += f" Added: {', '.join(r['added'][:30])}."
+    for asked, name in (r.get("resolved") or [])[:10]:
+        out += f" {json.dumps(asked, ensure_ascii=False)} is named {name} — use that name."
+    return out
+
+
+def _mend_json_tail(text):
+    """JSON text that is right up to its last value and closed with the wrong brackets —
+    one too many, one too few, a `]` for a `}` — read as closed where its content ends.
+    → the object, or None when that is not what is wrong with it: broken anywhere else,
+    cut off inside a string or after a comma, or ending with no closing bracket at all (it
+    ran out of room, and more than brackets is missing)."""
+    body = text.rstrip()
+    tail = len(body)
+    while tail and body[tail - 1] in "]} \t\r\n":
+        tail -= 1
+    if tail == len(body):
+        return None                                           # no closing bracket at its end: cut off
+    stack, quoted, escaped = [], False, False
+    for ch in body[:tail]:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                quoted = False
+        elif ch == '"':
+            quoted = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if not stack or stack.pop() != ch:
+                return None                                   # wrong before its end
+    if quoted or not stack:
+        return None
+    try:
+        return json.loads(body[:tail] + "".join(reversed(stack)))
+    except json.JSONDecodeError:
+        return None
 
 
 def _dedupe_design_name(designs_dir, name, fmt):
@@ -2624,6 +2712,8 @@ async def _exec_slides(action, inp, workspace, name):
     count = len(r.get("slides") or [])
     ack = (f"{what}. {fig_rel} now has {count} slide{'s' if count != 1 else ''}; the deck viewer and "
            f"the exports beside it update in a few seconds." + _layout_check(r.get("lint"), "pptx"))
+    for line in r.get("notes") or []:          # what the slide's layout had no room for
+        ack += f" Note — {line}"
     for credit in credits:
         ack += f" {credit}."
     command = {"type": "ui", "action": "design_command", "path": fig_rel, "script": r.get("script"),
@@ -2656,12 +2746,23 @@ async def _exec_design(inp, workspace):
     from cycls._agent import design
     # A model may hand a large nested argument over as its JSON text: read as the object.
     inp = dict(inp)
+    mended = []
     for key in ("spec", "ops", "slide"):
         v = inp.get(key)
+        if isinstance(v, str) and (fenced := re.fullmatch(r"\s*```[a-zA-Z]*\s*(.*?)\s*```\s*", v, re.S)):
+            v = fenced.group(1)                              # a code fence around it
         if isinstance(v, str) and v.strip()[:1] in ("{", "["):
             try:
                 inp[key] = json.loads(v)
             except json.JSONDecodeError as e:
+                # Right to its last value and closed with the wrong brackets — one too many,
+                # one too few: read as closed where its content ends, and said.
+                fixed = _mend_json_tail(v)
+                if fixed is not None:
+                    inp[key] = fixed
+                    mended.append(f"`{key}` came as text that ended with the wrong closing brackets — it was read as closed "
+                                  f"where its content ends (check nothing is missing from its end). Send it as an object.")
+                    continue
                 # Said where it breaks: "needs a `spec` object" told a model nothing, and a
                 # 6,000-token document was written out again, blind.
                 at = e.pos
@@ -2675,6 +2776,11 @@ async def _exec_design(inp, workspace):
                 return (f"Error: `{key}` came as text that isn't valid JSON — {why}. Nothing was done. "
                         f"Send `{key}` again as an object, with that put right.{more}")
     action = (inp.get("action") or "render").lower()
+    # A design written beside the action, not under `spec`: it is the spec.
+    if action == "render" and inp.get("spec") is None:
+        beside = {k: inp[k] for k in ("document", "deck", "pages", "frames", "nodes", "size", "fill") if inp.get(k) is not None}
+        if any(k in beside for k in ("document", "deck", "pages", "frames", "nodes")):
+            inp["spec"] = beside
     fmt = (inp.get("format") or "png").lower()
     if fmt not in _DESIGN_EXTS:
         return f"Error: unknown format {fmt!r} (png, jpg, webp, svg, pptx)."
@@ -2744,8 +2850,10 @@ async def _exec_design(inp, workspace):
                 except design.Unavailable as e:
                     return f"Error: design unavailable — {e}"
                 except Exception as e:
+                    # (An error that lists what the design has needs no "inspect lists the nodes".)
+                    hint = "" if " has: " in str(e) else " (Design inspect lists the nodes)"
                     return (f"Error: the edit failed on {rel} — {e}. Nothing was changed; fix the "
-                            f"{'ops' if ops else 'script'} (Design inspect lists the nodes) and try again.")
+                            f"{'ops' if ops else 'script'}{hint} and try again.")
                 try:   # the person may have saved in the editor meanwhile: apply to that, once
                     version = await write_fig(workspace.root, rel, r["fig"], base=base, by="agent", reason="agent",
                                               intent=inp.get("intent"))
@@ -2779,9 +2887,24 @@ async def _exec_design(inp, workspace):
             image, on = f"designs/{name}.png etc.", ""
         ack = (f"Edit applied and saved to {rel}{on}; the image beside it ({image}) "
                f"re-exports in a few seconds. If the design is open in the editor, the Super "
-               f"cursor replays the change live there." + _layout_check(r.get("lint"), "png"))
+               f"cursor replays the change live there." + _edit_names(r) + _layout_check(r.get("lint"), "png"))
         for credit in credits:
             ack += f" {credit}."
+        # A deck or a carousel: the slides the edit changed, each said — not the first slide.
+        touched, looks = r.get("touched") or [], r.get("previews") or []
+        if len(r.get("slides") or []) > 1 and looks and len(looks) == len(touched) and touched != [0]:
+            blocks, total = [], 0
+            for i, jpg in zip(touched, looks):
+                if total + len(jpg) > _DESIGN_QA_MAX:
+                    break
+                total += len(jpg)
+                blocks += [{"type": "text", "text": f"Slide {i + 1}:"},
+                           {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                        "data": base64.b64encode(jpg).decode()}}]
+            if blocks:
+                ack += (" The slides it changed are attached — check the change landed as intended and "
+                        "nothing else moved or collides; if not, edit again.")
+                return {"_model": [*blocks, {"type": "text", "text": ack}], "_ui": ui}
         if not r.get("preview") or len(r["preview"]) > _DESIGN_QA_MAX:
             return {"_model": ack, "_ui": ui}
         ack += (" The edited design is attached — check the change landed as intended and "
@@ -2794,7 +2917,12 @@ async def _exec_design(inp, workspace):
     try:
         if action == "render":
             if not isinstance(inp.get("spec"), dict):
-                return "Error: `render` needs a `spec` object, e.g. {size:[1080,1080], fill:'#0f172a', nodes:[...]}."
+                got = inp.get("spec")
+                came = (f"this call has: {', '.join(k for k in inp if inp[k] is not None)} — no design" if got is None
+                        else f"`spec` came as text ({json.dumps(got[:60], ensure_ascii=False)}{'…' if len(got) > 60 else ''}), not an object" if isinstance(got, str)
+                        else f"`spec` came as a {'list' if isinstance(got, list) else type(got).__name__}, not an object")
+                return (f"Error: `render` needs a `spec` object, e.g. {{size:[1080,1080], fill:'#0f172a', nodes:[...]}} — {came}. "
+                        f"Put the design under `spec`: {{size, fill, nodes}}, {{deck}}, {{document}} or {{pages}}.")
             if isinstance(inp["spec"].get("document"), dict):
                 return await _render_document(inp, workspace, name)
             root = workspace.root   # reads the brand kit + any image files: off the loop
@@ -2807,21 +2935,26 @@ async def _exec_design(inp, workspace):
             spec, err, notes = await asyncio.to_thread(lambda: _prepare_spec(inp["spec"], _load_brand(root), root))
             if err:
                 return err
-            notes = [*notes, *(f"{c}." for c in credits)]
+            notes = [*mended, *notes, *(f"{c}." for c in credits)]
             if isinstance(spec.get("deck"), dict):
                 n_frames, size = len(spec["deck"]["slides"]), spec["deck"]["size"]
             elif isinstance(spec.get("pages"), list):
                 # Several pages: one design, each page's own image (never a carousel or a deck file).
                 if fmt in _DECK_EXTS:
-                    return (f"Error: a design of several pages renders to an image (png, jpg, webp, svg) — "
-                            f"each page is downloaded as PDF or PowerPoint from the canvas. Render it as png.")
+                    # Not refused for a second call: a page is an image, and that is what is made.
+                    notes.append(f"A design of several pages renders to an image a page, so it was rendered as png, not {fmt} — "
+                                 f"each page is downloaded as PDF or PowerPoint from the canvas.")
+                    fmt = "png"
                 n_frames, size = 1, None
             else:
                 frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
                 n_frames, size = len(frames), frames[0].get("size")
             # Several frames in a raster format are a carousel: every slide comes back.
-            r = await design.render(spec, fmt=fmt, scale=scale, user_id=subject,
-                                    every=n_frames > 1 and fmt not in _DECK_EXTS)
+            # Past twelve slides: twelve to read, the rest on contact sheets — all of it seen.
+            carousel = n_frames > 1 and fmt not in _DECK_EXTS
+            long = n_frames > _DESIGN_QA_SLIDES and not carousel
+            r = await design.render(spec, fmt=fmt, scale=scale, user_id=subject, every=carousel,
+                                    **({"sheets": True, "lead": _DESIGN_QA_SLIDES} if long else {}))
             notes = [*notes, *r.notes]
         elif action == "script":
             if not inp.get("script"):
@@ -2923,7 +3056,18 @@ async def _exec_design(inp, workspace):
                        {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                                                     "data": base64.b64encode(jpg).decode()}}]
         shown = len(blocks) // 2
+        sheets = []
+        for span, jpg in zip(r.sheet_pages, r.sheets):
+            if total + len(jpg) > _DESIGN_QA_MAX:
+                break
+            total += len(jpg)
+            sheets.append(span)
+            blocks += [{"type": "text", "text": f"Slides {span[0]}–{span[1]}, small:"},
+                       {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                    "data": base64.b64encode(jpg).decode()}}]
         which = (f"All {count} slides are attached" if shown == count else
+                 f"Slides 1–{shown} are attached to read, and slides {sheets[0][0]}–{sheets[-1][1]} on {len(sheets)} contact "
+                 f"sheet{'' if len(sheets) == 1 else 's'} (small — for how each is laid out, not for its words)" if sheets else
                  f"Slides 1–{shown} of {count} are attached (Design inspect lists the rest)")
         ack += (f" {which} — QA EVERY slide before you present: its headline clearly dominant; "
                 "margins ~8–10%, nothing crammed at an edge; every text legible on what's behind it; "
