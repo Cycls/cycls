@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DropdownMenu } from "./files";
+import { DesignPresenceRow } from "./design-presence";
 import { DesignEditorView, canFullscreen, flushDesignEditor, fullscreenDesignEditor, reloadDesignEditors, type DesignHost } from "./design-editor-view";
 import { PresentMode } from "./present-mode";
 import type { DeckPoll, PollApi } from "../lib/polls";
@@ -204,6 +205,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
         <div className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-xs text-muted-foreground">
           <span className="min-w-0 truncate">{fig}</span>
           <div className="flex-1" />
+          <DesignPresenceRow path={fig} />
           <EditPreviewSwitch previewing={false} onEdit={() => {}} onPreview={() => void doneEditing()} />
           {/* The deck's editor goes full screen like a design's does (a .fig open in
               the canvas has this button in its header; a deck's editor had none). */}

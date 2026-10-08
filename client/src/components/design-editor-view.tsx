@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useDarkMode } from "../hooks/use-dark-mode";
 import { useEscape } from "../hooks/use-escape";
-import type { BrandKit, DesignVersion, FetchVersioned, WriteFile } from "../hooks/use-files";
+import type { BrandKit, DesignLive, DesignVersion, FetchVersioned, WriteFile } from "../hooks/use-files";
 import { track } from "../lib/analytics";
 import { getLang, t, useLang } from "../lib/i18n";
 import { useToast } from "../lib/toast";
@@ -14,19 +14,37 @@ import { cn } from "../lib/utils";
 // which writes it into the workspace (docs/notes/design.md, "Editing").
 //
 // postMessage protocol 2 (the editor's embed bridge, cycls-design editor/patches):
-//   host → editor : load {protocol:2, doc, name, fig, brand?} · written {doc, id, ok}
+//   host → editor : load {protocol:2, doc, name, fig, brand?, live?} · written {doc, id, ok}
 //                   save · flush {id} · command {script, intent?} · theme {theme} · locale {lang}
 //                   fit (the editor's box changed size: fit the design again — feature "fit")
+//                   follow {client} · liveTicket {id, ticket} · liveBase {version}
+//                   liveReset   (feature "live", below)
 //   editor → host : ready {protocol, features?} · loaded {doc} · saved {doc, id, name, fig}
 //                   flushed {id, ok} · error · applied · commandError · selection {doc, frame, nodes}
 //                   newDesign {size?} · saveCopy {doc, name, fig} · export {doc, files}
 //                   exportAs {doc, format}  (the design as a PDF / PNG — Cycls renders it)
+//                   presence {doc, peers, saver, connected} · liveTicket {id}
+//                   liveAgent {doc, version} · liveReload {doc, version} · liveBase {doc, version}
 // Every load reads the design with its version, and its saves name it as their
 // base: a save over a newer file is refused (docs/notes/design.md, "No save
 // overwrites what it didn't see").
 // `doc` tags one load: a save carrying an older tag (the document was replaced) is
 // refused, not written over the file. An editor from before protocol 2 sends none
 // of the new messages and never waits for `written`.
+//
+// Together (feature "live"): where the workspace is a team's, the design is loaded with
+// its live room and this person's pass (`host.live`, the server's /design/live), and the
+// editor keeps one shared document with whoever else has it open. It says who they are
+// (`presence`); one editor saves for all of them. A save still names the version it
+// goes on from, and the one who saves next must name what the last one wrote: so each
+// save is said to the room as it is made (`liveBase` — whoever hears it holds
+// everything that went into it), and this page keeps what its editor heard (`known`).
+// A save refused over a version the room said goes again on it and nobody is asked;
+// one refused over a version nobody in the room said is a change from outside it —
+// the person is asked, and "Load the latest" is then for everyone (`liveReset`).
+// An agent's edit is handed to the room by the server (one editor makes it once, for
+// everyone: `liveAgent`), not replayed here; a file written anew — a re-render, a
+// restore — re-opens it for everyone (`liveReload`).
 //
 // An agent edit is applied and saved on the server BEFORE it reaches us (the Design
 // tool checks every edit headlessly), then replayed here for the live cursor. If the
@@ -66,7 +84,13 @@ export type DesignHost = {
   listVersions?: (path: string) => Promise<DesignVersion[]>;
   versionBlob?: (path: string, id: string) => Promise<Blob>;
   restoreVersion?: (path: string, id: string) => Promise<{ version: string }>;
+  // Working in one design together: the design's live room and this person's pass for
+  // it — null where a design opens alone (a personal workspace, no relay) — and who
+  // this is, for the name on their cursor.
+  live?: (path: string) => Promise<DesignLive | null>;
+  me?: { id: string; name: string };
 };
+export type { DesignLive } from "../hooks/use-files";
 
 // Every mounted editor, by the file it edits — so Cycls can have one save what's
 // unsaved before its tab closes, the file is renamed or the canvas hides, can stop
@@ -74,6 +98,7 @@ export type DesignHost = {
 type Handle = {
   flush: (ms: number) => Promise<boolean>; detach: () => () => void; fullscreen: () => void; reload: () => void;
   page: (name: string) => void;
+  follow: (client: number | null) => void;
 };
 const editors = new Map<string, Set<Handle>>();
 const under = (path: string, prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
@@ -114,6 +139,7 @@ type EditorMessage = {
   files?: { name: string; mime: string; data: string }[];
   frame?: string | null; nodes?: DesignSelection["nodes"];
   page?: string; pages?: string[];
+  peers?: DesignPeer[]; saver?: boolean; connected?: boolean; version?: string | null; live?: "seed" | "join";
 };
 
 // What the person has selected in an open design, by name (the editor's `selection`)
@@ -150,6 +176,38 @@ export function useDesignPages(path: string): DesignPages | null {
   }, [path]);
   return value;
 }
+// Who else has a design open in its editor right now (the editor's `presence`), and
+// whether this editor is the one saving for all of them. Null while nobody else could
+// be: no editor of the design is open, or it was opened alone.
+export type DesignPeer = { client: number; name: string; user: string | null; color: string | null };
+export type DesignPresence = { path: string; peers: DesignPeer[]; saver: boolean; connected: boolean };
+const presences = new Map<string, DesignPresence>();
+export const designPresence = (path: string) => presences.get(path) ?? null;
+export function useDesignPresence(path: string): DesignPresence | null {
+  const [value, setValue] = useState(() => designPresence(path));
+  useEffect(() => {
+    setValue(designPresence(path));
+    const onPresence = (e: Event) => {
+      if ((e as CustomEvent<{ path?: string }>).detail?.path === path) setValue(designPresence(path));
+    };
+    window.addEventListener("cycls:design-presence", onPresence);
+    return () => window.removeEventListener("cycls:design-presence", onPresence);
+  }, [path]);
+  return value;
+}
+// Keep this person's view in step with that one's (null: stop).
+export function followDesignPeer(path: string, client: number | null): void {
+  for (const h of editors.get(path) ?? []) h.follow(client);
+}
+// A person's colour — their cursor, the outline of what they select, the ring of their
+// avatar — from who they are, so it is the same in every design and for everyone.
+const PEER_COLORS = ["#e5484d", "#0090ff", "#30a46c", "#f5a524", "#8e4ec6", "#f76b15", "#00a2c7", "#d6409f"];
+export function peerColor(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return PEER_COLORS[h % PEER_COLORS.length];
+}
+
 // The page a design was last on, kept in this browser: it opens there again.
 const pageKey = (path: string) => `cycls:design-page:${path}`;
 const lastPage = (path: string) => { try { return localStorage.getItem(pageKey(path)) || undefined; } catch { return undefined; } };
@@ -207,6 +265,9 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   const detached = useRef(false);       // the file is being deleted: write nothing
   const flushes = useRef(new Map<string, (ok: boolean) => void>());
   const features = useRef<Set<string>>(new Set());   // what the editor does beyond protocol 2 (its `ready`)
+  const resetWait = useRef<number | null>(null);   // "Load the latest" in a room: the editor is telling the room
+  const known = useRef(new Set<string>());   // versions of the file the room's document holds, as its editors said them
+  const retried = useRef(0);            // refused saves gone again in a row, on a version the room said
   const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
   const stem = (path.split("/").pop() ?? name).replace(/\.fig$/i, "");
 
@@ -318,6 +379,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       fullscreen: enterFullscreen,
       reload: reopen,
       page: (name) => { if (features.current.has("pages")) post({ type: "page", name }); },
+      follow: (client) => { if (features.current.has("live")) post({ type: "follow", client }); },
     };
     let set = editors.get(path);
     if (!set) editors.set(path, (set = new Set()));
@@ -327,6 +389,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       if (!set!.size) {
         editors.delete(path);
         if (pageSets.delete(path)) window.dispatchEvent(new CustomEvent("cycls:design-pages", { detail: { path } }));
+        if (presences.delete(path)) window.dispatchEvent(new CustomEvent("cycls:design-presence", { detail: { path } }));
       }
     };
   }, [path, post, enterFullscreen, reopen]);
@@ -422,16 +485,26 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           try { source = await latest.current.reload(); } catch { source = null; }
         }
         readies++;
+        known.current = new Set();
+        retried.current = 0;
+        if (presences.delete(latest.current.path)) {
+          window.dispatchEvent(new CustomEvent("cycls:design-presence", { detail: { path: latest.current.path } }));
+        }
         try {
-          const [buf, brand] = await Promise.all([
+          const together = protocol.current >= 2 && features.current.has("live") && !!host?.live && !!host.me;
+          const [buf, brand, room] = await Promise.all([
             fetch(source ?? latest.current.url).then((r) => r.arrayBuffer()),
             protocol.current >= 2 && host ? host.brand().catch(() => null) : Promise.resolve(null),
+            together ? host!.live!(latest.current.path).catch(() => null) : Promise.resolve(null),
           ]);
           if (disposed) return;
+          const live = room && host?.me
+            ? { ...room, epoch: version.current ?? room.epoch,   // the version of the bytes it is given
+                user: { id: host.me.id, name: host.me.name, color: peerColor(host.me.id) } } : null;
           doc.current = `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
           const page = lastPage(latest.current.path);   // where they left it (the editor opens its first page otherwise)
           post({ type: "load", protocol: 2, doc: doc.current, name, fig: toBase64(new Uint8Array(buf)),
-                 ...(brand ? { brand } : {}), ...(page ? { page } : {}) });
+                 ...(brand ? { brand } : {}), ...(page ? { page } : {}), ...(live ? { live } : {}) });
           if (protocol.current >= 2) {
             post({ type: "theme", theme: document.body.classList.contains("dark") ? "dark" : "light" });
             post({ type: "locale", lang: getLang() });
@@ -444,6 +517,18 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       } else if (m.type === "loaded") {
         loaded = true;
         if (!disposed) setStatus("ready");
+        // Opened from the file — alone, or as the one who gives the room its document —
+        // it stands on the file it read. One that took the room's document stands on
+        // what the room says is saved (`liveBase`), which it has heard by now.
+        if (m.live !== "join" && loadedVersion.current) {
+          version.current = loadedVersion.current;
+          known.current = new Set([loadedVersion.current]);
+        }
+        // Not in a room after all (the people in it left before their document came):
+        // nobody it met on the way in is here with it.
+        if (!m.live && presences.delete(latest.current.path)) {
+          window.dispatchEvent(new CustomEvent("cycls:design-presence", { detail: { path: latest.current.path } }));
+        }
         // What it read holds every edit up to the one whose version it is; the rest replay.
         const waiting = commands.current;
         for (let i = waiting.length - 1; i >= 0; i--) {
@@ -471,13 +556,25 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           });
           if (keep) force.current = false;
           if (r && r.version && version.current !== null) version.current = r.version;
+          if (r && r.version) known.current.add(r.version);
+          retried.current = 0;
           reply(true);
           flash("saved");
         } catch (err) {
           reply(false);
           if ((err as { status?: number }).status === 412) {
             const now = await (err as { response?: Response }).response?.json().then((j) => j?.version).catch(() => undefined);
-            stale(typeof now === "string" ? now : "", m.fig);
+            if (presences.has(latest.current.path) && typeof now === "string" && now && known.current.has(now) && retried.current < 3) {
+              // In a room, and the file is at a version the room's document already holds:
+              // the one who was saving wrote it, or an agent's edit of it was made for
+              // everyone. What this editor holds has all of it — it goes again, on that.
+              // (A version nobody in the room said is a change from outside it: asked.)
+              retried.current++;
+              version.current = now;
+              post({ type: "save" });
+            } else {
+              stale(typeof now === "string" ? now : "", m.fig);
+            }
           } else {
             flash("saveerror");
           }
@@ -492,6 +589,10 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         replaying.current = null;
         if (done?.version && version.current !== null) {
           version.current = done.version;
+          known.current.add(done.version);
+          // In a room, everyone's document has the edit now (it was made in the one they
+          // share): the one who saves is told which version of the file that is.
+          if (presences.has(latest.current.path)) post({ type: "liveBase", version: done.version });
           post({ type: "flush", id: `v${done.version}` });
         }
         pump();
@@ -509,6 +610,48 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         pageSets.set(now.path, now);
         keepPage(now.path, now.pages.length > 1 && now.page !== now.pages[0] ? now.page : null);
         window.dispatchEvent(new CustomEvent("cycls:design-pages", { detail: now }));
+      } else if (m.type === "presence" && Array.isArray(m.peers)) {
+        if (m.doc && m.doc !== doc.current) return;
+        const now: DesignPresence = {
+          path: latest.current.path, saver: m.saver === true, connected: m.connected !== false,
+          peers: m.peers.filter((p) => p && typeof p.client === "number").map((p) => ({
+            client: p.client, name: typeof p.name === "string" ? p.name : "",
+            user: typeof p.user === "string" ? p.user : null, color: typeof p.color === "string" ? p.color : null })),
+        };
+        presences.set(now.path, now);
+        window.dispatchEvent(new CustomEvent("cycls:design-presence", { detail: now }));
+      } else if (m.type === "liveTicket" && typeof m.id === "string") {
+        // The editor is connecting again (a long connection was cut): a new pass.
+        const room = await host?.live?.(latest.current.path).catch(() => null);
+        if (room && !disposed) post({ type: "liveTicket", id: m.id, ticket: room.ticket });
+      } else if (m.type === "liveBase" && typeof m.version === "string" && m.version) {
+        // The room's document holds this version of the file: the one who saves is
+        // writing it, or an agent's edit of it was made in the document they share.
+        // When the saving comes to this editor it goes on from there — and a save
+        // refused over it a moment ago goes now.
+        if (m.doc && m.doc !== doc.current) return;
+        known.current.add(m.version);
+        if (version.current !== null && !presences.get(latest.current.path)?.saver) version.current = m.version;
+        if (pending.current?.version === m.version) {
+          window.clearTimeout(pending.current.timer);
+          pending.current = null;
+          version.current = m.version;
+          post({ type: "save" });
+        }
+      } else if (m.type === "liveAgent") {
+        // An agent's edit was made here for everyone: the file is at its version, and
+        // what this editor holds — the edit and all — is saved on from it.
+        if (m.doc && m.doc !== doc.current) return;
+        if (pending.current) { window.clearTimeout(pending.current.timer); pending.current = null; }
+        if (typeof m.version === "string" && m.version) known.current.add(m.version);
+        if (typeof m.version === "string" && m.version && version.current !== null) version.current = m.version;
+        post({ type: "flush", id: `a${Date.now().toString(36)}` });
+      } else if (m.type === "liveReload") {
+        // The file was written anew (a re-render, a restore, a slide moved): open it again.
+        if (m.doc && m.doc !== doc.current) return;
+        if (pending.current) { window.clearTimeout(pending.current.timer); pending.current = null; }
+        if (resetWait.current) { window.clearTimeout(resetWait.current); resetWait.current = null; }
+        reopen();
       } else if (m.type === "commandError") {
         // The live replay of an agent edit failed; the saved file already holds the
         // edit. Re-open the editor on it (a fresh fetch — `url` may predate the edit).
@@ -553,15 +696,19 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           if (disposed || replaying.current || commands.current.length) return;
           setConflict({ version: now, fig });
           track("design_save_conflict", { choice: "shown" });
-        }, 3000),
+        }, presences.has(latest.current.path) ? 6000 : 3000),   // a room says why a little later: the edit is made first
       };
     };
 
     // The agent edits an open design live: chat.tsx dispatches this when its
     // Design tool fires a `design_command`; it replays here, one at a time.
     const onCommand = (e: Event) => {
-      const d = (e as CustomEvent).detail as { path?: string; script?: string; intent?: string; version?: string; page?: string; reload?: boolean };
+      const d = (e as CustomEvent).detail as { path?: string; script?: string; intent?: string; version?: string; page?: string; reload?: boolean; live?: boolean };
       if (!d || d.path !== latest.current.path || typeof d.script !== "string") return;
+      // People are in this design together and the server handed the edit to their room:
+      // one editor makes it for all of them (it reaches this one through the shared
+      // document), so replaying it here would make it twice.
+      if (d.live && features.current.has("live") && presences.has(latest.current.path)) return;
       if (spoke && protocol.current < 2) {   // an editor from before the protocol never says `applied`
         post({ type: "command", script: d.script, intent: d.intent });
         return;
@@ -590,6 +737,8 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       disposed = true;
       if (pending.current) window.clearTimeout(pending.current.timer);
       pending.current = null;
+      if (resetWait.current) window.clearTimeout(resetWait.current);
+      resetWait.current = null;
       window.removeEventListener("message", onMessage);
       window.removeEventListener("cycls:design-command", onCommand as EventListener);
     };
@@ -618,6 +767,17 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         toast.error(t("copyFailed"));
         return;   // keep this editor's work: nothing was saved anywhere
       }
+    }
+    // In a room the document is everyone's: taking the file's is for all of them, and
+    // the room starts over from it (alone, this editor would only be handed the room's
+    // again). The editor tells the room, then says `liveReload` — which is when the file
+    // is opened here; replaced under the message, it would have told nobody. One that
+    // says nothing is not waited for long.
+    if (presences.has(latest.current.path)) {
+      post({ type: "liveReset" });
+      if (resetWait.current) window.clearTimeout(resetWait.current);
+      resetWait.current = window.setTimeout(() => { resetWait.current = null; reopen(); }, 1500);
+      return;
     }
     reopen();   // this design, as it is now
   };

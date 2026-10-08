@@ -2532,6 +2532,29 @@ def _prepare_slide(slide, settings, root):
     return deck.pop("slides")[0], deck, None
 
 
+async def _to_the_room(root, rel, ui):
+    """An agent's change to a design, for the people who have it open together.
+
+    They keep one shared document in step and one of their editors saves it
+    (docs/notes/design.md, "Together"), so the change must reach that document once:
+    its script is handed to their room, where the saver's editor makes it for everyone —
+    or, when the change wrote the file anew (pages added or removed), the room is told
+    to open it again. `ui` is the `design_command` event the chat's own editor gets;
+    when the room took the change it is marked `live`, and that editor leaves it to
+    the room instead of making it a second time. Nobody in the room, or no relay: the
+    event goes as it always did."""
+    from cycls._agent.design import live
+    if ui.get("reload") or not ui.get("script"):
+        body = {"kind": "reload", "version": ui.get("version")}
+    else:
+        body = {"kind": "command", "script": ui["script"], "version": ui.get("version"),
+                **({"intent": ui["intent"]} if ui.get("intent") else {}),
+                **({"page": ui["page"]} if ui.get("page") else {})}
+    said = await live.notify(root, rel, body)
+    if said and said.get("delivered"):
+        ui["live"] = True
+
+
 async def _exec_slides(action, inp, workspace, name):
     """A deck's slide actions — add / update (or its notes, title, transition) / move /
     duplicate / delete — run on the saved .fig through the service, like `edit`
@@ -2607,6 +2630,7 @@ async def _exec_slides(action, inp, workspace, name):
                "version": r.get("version")}   # what the file is now — an open editor's saves go on from it
     if intent := inp.get("intent"):
         command["intent"] = str(intent)[:80]
+    await _to_the_room(root, fig_rel, command)   # people in the deck together get it once, from their room
     # Replayed live in an open editor, and the deck (re)opened in the viewer so the
     # user sees the change even when it wasn't showing.
     ui = [command, {"type": "ui", "action": "open_canvas", "path": f"designs/{name}.deck.json", "name": f"{name}.deck.json"}]
@@ -2745,6 +2769,7 @@ async def _exec_design(inp, workspace):
             ui["reload"], ui["page"] = True, ended
         if intent := inp.get("intent"):
             ui["intent"] = str(intent)[:80]   # shown on the live "Super" cursor
+        await _to_the_room(workspace.root, rel, ui)   # people in the design together get it once, from their room
         if len(pages) > 1:
             place = next((n for n, p in enumerate(pages, 1) if p["name"] == ended), 1)
             image = f"designs/{refresh.page_file(name, place, 'png')}"
@@ -3113,7 +3138,9 @@ async def _render_document(inp, workspace, name):
     ack += _layout_check(r.lint, "pptx")
     ui = {"type": "ui", "action": "open_canvas", "path": deck_rel, "name": f"{name}.deck.json"}
     if replacing:      # what is open shows the new pages: the viewer fetches them again, an editor re-opens the file
-        ui = [{"type": "ui", "action": "design_command", "path": fig_rel, "script": "", "version": version, "reload": True}, ui]
+        again = {"type": "ui", "action": "design_command", "path": fig_rel, "script": "", "version": version, "reload": True}
+        await _to_the_room(workspace.root, fig_rel, again)   # and so do the people who have it open together
+        ui = [again, ui]
     blocks, total, held = [], 0, []
     numbers = r.preview_of if r.preview_of is not None else range(1, len(r.previews) + 1)
     for n, jpg in list(zip(numbers, r.previews))[:_DESIGN_QA_SLIDES]:

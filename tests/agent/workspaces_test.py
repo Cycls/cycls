@@ -897,3 +897,110 @@ def test_the_shared_shelf_is_still_shared_with_workspaces_off(tmp_path):
     client.put("/apps/hr/data/policy", json="v1", headers={"X-Test-User": "user_1"})
     assert client.get("/apps/hr/data/policy",
                       headers={"X-Test-User": "user_2"}).json()["value"] == "v1"
+
+
+# ---------------------------------------------------------------------------
+# Working in one design together — who gets a pass to its live room
+# ---------------------------------------------------------------------------
+
+def _live_env(monkeypatch):
+    """A relay set up — and woken without the network: → the list of times it was rung."""
+    monkeypatch.setenv("DESIGN_LIVE_URL", "https://live.example.test")
+    monkeypatch.setenv("DESIGN_LIVE_SECRET", "s3cret")
+    rung = []
+
+    async def wake():
+        rung.append(1)
+    monkeypatch.setattr("cycls._agent.design.live.wake", wake, raising=False)
+    return rung
+
+
+def _pass_of(ticket, secret="s3cret"):
+    """What a pass says, once its signature is checked the way the relay checks it."""
+    import base64, hashlib, hmac
+    body, _, mac = ticket.rpartition(".")
+    assert hmac.compare_digest(mac, hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest())
+    return json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+
+
+def test_members_of_a_team_workspace_meet_in_one_room_for_a_design(tmp_path, monkeypatch):
+    import time
+    _live_env(monkeypatch)
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    client.put(f"/workspaces/{ws_id}/members/user_2", json={"role": "editor"})
+    h1, h2 = {"X-Workspace": ws_id}, {"X-Workspace": ws_id, "X-Test-User": "user_2"}
+    assert client.put("/files/designs/launch.fig", content=b"FIG", headers=h1).status_code == 200
+    assert client.put("/files/designs/other.fig", content=b"OTHER", headers=h1).status_code == 200
+
+    one = client.get("/design/live", params={"path": "designs/launch.fig"}, headers=h1).json()["live"]
+    two = client.get("/design/live", params={"path": "designs/launch.fig"}, headers=h2).json()["live"]
+    assert one["room"] == two["room"] and len(one["room"]) >= 32          # the same room, by a name nobody can guess
+    assert "launch" not in one["room"] and ws_id not in one["room"]
+    assert one["url"] == two["url"] == "wss://live.example.test"
+    assert one["epoch"] == two["epoch"] == client.get("/files/designs/launch.fig", headers=h1).headers["x-version"]
+    # each pass is that person's, for that room, for a short while
+    p1, p2 = _pass_of(one["ticket"]), _pass_of(two["ticket"])
+    assert (p1["user"], p2["user"]) == ("user_1", "user_2")
+    assert p1["room"] == p2["room"] == one["room"]
+    assert time.time() < p1["exp"] <= time.time() + 3600
+    # another design is another room
+    other = client.get("/design/live", params={"path": "designs/other.fig"}, headers=h1).json()["live"]
+    assert other["room"] != one["room"]
+
+
+def test_the_relay_is_woken_before_a_room_is_handed_out(tmp_path, monkeypatch):
+    # The relay sleeps when nobody is in any room, and an editor gives it only a few
+    # seconds to answer before it opens the design alone — so Cycls rings first, and
+    # the first person of the morning still meets the second.
+    rung = _live_env(monkeypatch)
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    h = {"X-Workspace": ws_id}
+    assert client.put("/files/designs/launch.fig", content=b"FIG", headers=h).status_code == 200
+    assert client.put("/files/designs/mine.fig", content=b"MINE").status_code == 200
+    assert client.get("/design/live", params={"path": "designs/launch.fig"}, headers=h).json()["live"]
+    assert rung == [1]
+    assert client.get("/design/live", params={"path": "designs/mine.fig"}).json() == {"live": None}
+    assert rung == [1]                                        # a design that opens alone rings nobody
+
+
+def test_no_pass_for_someone_the_workspace_does_not_let_in(tmp_path, monkeypatch):
+    _live_env(monkeypatch)
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    client.put("/files/designs/launch.fig", content=b"FIG", headers={"X-Workspace": ws_id})
+    for who in ("user_2", "outsider"):      # same org but not a member; another org
+        r = client.get("/design/live", params={"path": "designs/launch.fig"},
+                       headers={"X-Workspace": ws_id, "X-Test-User": who})
+        assert r.status_code == 404, who
+
+
+def test_a_design_of_ones_own_or_one_with_no_relay_is_opened_alone(tmp_path, monkeypatch):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    client.put("/files/designs/launch.fig", content=b"FIG", headers={"X-Workspace": ws_id})
+    client.put("/files/designs/mine.fig", content=b"FIG")
+    # no relay set up: nobody is offered a room
+    assert client.get("/design/live", params={"path": "designs/launch.fig"},
+                      headers={"X-Workspace": ws_id}).json() == {"live": None}
+    _live_env(monkeypatch)
+    # a personal workspace has one person in it
+    assert client.get("/design/live", params={"path": "designs/mine.fig"}).json() == {"live": None}
+    # and a room is for a design that is there
+    assert client.get("/design/live", params={"path": "designs/nope.fig"},
+                      headers={"X-Workspace": ws_id}).status_code == 404
+    assert client.get("/design/live", params={"path": "../../etc/passwd"},
+                      headers={"X-Workspace": ws_id}).status_code in (400, 403, 404)
+
+
+def test_the_same_design_name_in_two_workspaces_is_two_rooms(tmp_path, monkeypatch):
+    _live_env(monkeypatch)
+    client = _client(tmp_path)
+    a, b = _mk_team(client, "Research"), _mk_team(client, "Marketing")
+    rooms = []
+    for ws_id in (a, b):
+        client.put("/files/designs/launch.fig", content=b"FIG", headers={"X-Workspace": ws_id})
+        rooms.append(client.get("/design/live", params={"path": "designs/launch.fig"},
+                                headers={"X-Workspace": ws_id}).json()["live"]["room"])
+    assert rooms[0] != rooms[1]

@@ -52,6 +52,7 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
     exportDesign: f.exportDesign,
     brand: f.brand,
     fetchVersioned: f.fetchVersioned,
+    designLive: f.designLive,
     listVersions: f.listVersions,
     versionBlob: f.versionBlob,
     restoreVersion: f.restoreVersion,
@@ -200,6 +201,7 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
 
   const account: AccountInfo = {
     user: {
+      id: user?.id,
       name: user?.fullName || user?.firstName || "",
       email: user?.primaryEmailAddress?.emailAddress || "",
       imageUrl: user?.imageUrl,
