@@ -37,6 +37,11 @@ from ..design.actions import (_BLOCK_KINDS, _DOCUMENT_ACTIONS, _FILE_ACTIONS, _S
     _edits_hold, _edits_since_render, _exec_design_file, _exec_document, _exec_slides, _render_document,
     _sections_text, _seen_pages, _to_the_room)
 from ..design.run import _design_step, _exec_design
+# The Video tool lives in cycls/_agent/video: the client to the cycls-video service, the tool as the
+# model is given it (short until a chat uses it; tools/ondemand.py swaps in the whole form), and
+# the executor.
+from ..video.tool import VIDEO_PROMPT, video_tool
+from ..video.run import _exec_video, _video_step
 
 TRASH_MOUNT, SHIMS_MOUNT = "/workspace-trash", "/opt/cycls-bin"   # created by the image (Agent._base_run)
 
@@ -410,6 +415,13 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
             from cycls._agent import design as _design
             if _design.configured():
                 tools.append(_DESIGN_TOOL)
+        elif name == "Video":
+            # Offered short — the contract joins it on first use (tools/ondemand.py) — and only when
+            # the cycls-video service is configured (VIDEO_URL). Who may use it (VIDEO_ORGS) is
+            # decided per run, where the organisation is known (harness/main.py).
+            from cycls._agent import video as _video
+            if _video.configured():
+                tools.append(video_tool(False))
         else:
             tools += _BUILTINS.get(name, [])
     tools += [_normalize_tool(t) for t in (custom or [])]
@@ -1028,6 +1040,9 @@ _TOOLS = {
                        interrupted="The page is still open but may have moved; re-read it "
                                    "before acting on any element ref."),
     "design":     Tool(lambda inp, ws, **_: _exec_design(inp, ws), _design_step),
+    "video":      Tool(lambda inp, ws, ctx=None, **_: _exec_video(inp, ws, ctx), _video_step, prompt=VIDEO_PROMPT,
+                       interrupted="The composition is saved as it was. A render that was started keeps running "
+                                   "on the service: call render again with the same name to collect it."),
     "bash":       Tool(_run_bash,
                        lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
     "read":       Tool(lambda inp, ws, **_: _exec_read(inp, ws.root),

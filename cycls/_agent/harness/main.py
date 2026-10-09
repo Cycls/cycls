@@ -20,6 +20,8 @@ from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, interrupted_note, register_labels, detailed, excerpt, app_catalog, ToolContext
 from ..design.tool import DESIGN_LOADED, design_called, design_tool, design_wanted
+from ..tools import ondemand
+from ..video.client import offered as video_offered
 from ..tools import skills as skills_mod
 
 
@@ -282,6 +284,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     modes = await state.settings_db(workspace).get("tools", {}) if getattr(workspace, "subject", None) else {}
     if off := {_SETTINGS_NAME[k] for k, v in modes.items() if v == "never" and k in _SETTINGS_NAME}:
         allowed_tools = [t for t in allowed_tools if t not in off]
+    # The video service's URL alone does not switch Video on: an agent that admits anyone who signs
+    # in offers it only to the organisations on VIDEO_ORGS (cycls/_agent/video/client.py).
+    if "Video" in allowed_tools and not video_offered(workspace):
+        allowed_tools = [t for t in allowed_tools if t != "Video"]
     ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes)
     incoming = context.messages.raw[-1]
     content = await _ingest(incoming.get("content", ""), workspace.root, vision)
@@ -325,6 +331,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             if t is design_tool(True):
                 tools_list[i], design_loaded = design_tool(False), False
     DESIGN_LOADED.set(design_loaded)
+    # Video is short in every request until the chat uses it; its contract joins it then (ondemand).
+    demand = await ondemand.start(tools_list, messages)
     if skill_catalog and not any(t.get("name") == "skill" for t in tools_list):
         tools_list.append(skills_mod.SKILL_TOOL)
     owners = {}   # tool name -> the OAuth2 it acts with, for the audit line
@@ -442,6 +450,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     tools_list[i] = design_tool(True)
             design_loaded = True
             DESIGN_LOADED.set(True)
+        ondemand.advance(demand, tools_list, messages)
         return dict(system=system_text, tools=tools_list, mcp_servers=mcp_servers, thinking=thinking, extra_body=extra_body)
 
     def compacted(tier, reason, tokens, ok=True):
@@ -501,6 +510,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     if isinstance(ev, Turn): turn = ev
                     else:
                         if isinstance(ev, str): partial_text += ev
+                        elif isinstance(ev, dict) and ev.get("type") == "step" and ev.get("tool_name"):
+                            ondemand.begun(demand, ev["tool_name"], ctx)   # Video warms its GPU here
                         yield ev
             except (GeneratorExit, asyncio.CancelledError):
                 if partial_text:
