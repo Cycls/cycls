@@ -379,6 +379,10 @@ export function useChat(baseUrl: string = "") {
               const item: Part = JSON.parse(data);
               const type = item.type;
 
+              // The loop's keep-alive while a tool runs: not a part. Taken as one, it ended the
+              // live tool row after 15 s, so a long call (a render) looked finished while it ran.
+              if (type === "ping") continue;
+
               // Capture chat_id from server, don't add as part
               if (type === "chat_id" && item.chat_id) {
                 // The server knows whether this account had any chat before —

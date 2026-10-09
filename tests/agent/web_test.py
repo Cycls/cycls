@@ -2961,3 +2961,49 @@ def test_the_design_routes_are_a_router_of_their_own(tmp_path):
     client = _ws_routers_client(tmp_path)
     assert client.get("/brand").json() == {"brand": None}
     assert client.get("/versions/designs/none.fig").json() == {"versions": []}
+
+
+def test_a_shared_composition_is_a_download_never_played(tmp_path):
+    """A file share of a Video composition serves its bytes as a download, whatever `as` says:
+    never as a page on this origin, never through the video service for someone else."""
+    from cycls._app.db import workspace
+
+    svc, user, client = _share_test_app(tmp_path)
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    (ws.root / "videos").mkdir(parents=True, exist_ok=True)
+    (ws.root / "videos" / "reel.video.html").write_text("<html><script>steal()</script></html>")
+    token = client.post("/share", json={"path": "file/videos/reel.video.html"}).json()["token"]
+    for q in ("", "?as=player"):
+        r = client.get(f"/share/user_test/{token}/file/videos/reel.video.html{q}")
+        assert r.status_code == 200 and r.content == b"<html><script>steal()</script></html>"
+        assert r.headers["content-type"] == "application/octet-stream"
+        assert "attachment" in r.headers["content-disposition"]
+
+
+def test_files_serve_a_composition_as_the_player(tmp_path, monkeypatch):
+    """GET /files/<x>.video.html?as=player answers 200 with the page or why there is none; the
+    plain route still serves the source, and the listing names the kind."""
+    from types import SimpleNamespace
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+    from cycls._app.auth import User
+    from cycls._app.db import workspace
+    from cycls._agent.web.routers import install_routers
+
+    user = User(id="user_test")
+    stub = SimpleNamespace(prod=False, _auth_provider=None, config=SimpleNamespace(workspaces=None, max_upload=512))
+    fapp = FastAPI()
+    install_routers(stub, fapp, Depends(lambda: user), tmp_path, f"file://{tmp_path}")
+    client = TestClient(fapp)
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    (ws.root / "videos").mkdir(parents=True, exist_ok=True)
+    (ws.root / "videos" / "reel.video.html").write_text("<html><head></head><body>x</body></html>")
+    monkeypatch.delenv("VIDEO_URL", raising=False)
+    r = client.get("/files/videos/reel.video.html?as=player")
+    assert r.status_code == 200 and r.json()["html"] is None and "not configured" in r.json()["reason"]
+    assert r.json()["render"] == {"path": "videos/reel.mp4", "exists": False}
+    raw = client.get("/files/videos/reel.video.html")
+    assert raw.status_code == 200 and b"<body>x</body>" in raw.content    # the source itself
+    listing = client.get("/files", params={"path": "videos"}).json()
+    rows = listing if isinstance(listing, list) else listing.get("files") or listing.get("entries") or []
+    assert any(e.get("name") == "reel.video.html" and e.get("kind") == "composition" for e in rows), listing

@@ -11,7 +11,7 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, isDeck, is3d, codeLang, extTint, tintTile, tintLabel, tileExt, saveBlob, DESIGN_PRESETS } from "./canvas-utils";
+import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, isDeck, isComposition, is3d, codeLang, extTint, tintTile, tintLabel, tileExt, saveBlob, DESIGN_PRESETS } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
@@ -35,6 +35,7 @@ import { t, getLang } from "../lib/i18n";
 export const fileKind = (file: { path: string; name: string }) => file.path || file.name;
 
 const MdEditor = lazy(() => import("./md-editor"));
+const CompositionView = lazy(() => import("./composition-view"));
 // A document's image paths are relative to its folder, as markdown means them; agents sometimes
 // write them from the workspace root, so that is the fallback. Silent: a miss beside it is normal.
 export const mediaResolver = (docPath: string, openFile: (path: string, silent?: boolean) => Promise<string>) => {
@@ -91,8 +92,11 @@ export function useFileContent(
     // fetch their raw bytes (a blob URL) for the native renderer; other office
     // files fetch the server's PDF render.
     // A design deck fetches its slide manifest (the design service renders it).
+    // A Video composition fetches the page the video service builds of it (always a JSON answer).
     const load = isDeck(kind) || (designAsPictures && isDesignEditor(kind))
       ? readFile(`${file.path}?as=slides`, true)
+      : isComposition(kind)
+      ? readFile(`${file.path}?as=player`, true)
       : isMd(kind) || isHtml(kind) || codeLang(kind) != null
       ? readFile(file.path, file.writable)
       : isPresentation(kind)
@@ -345,7 +349,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
     // A failed Office conversion / render (service down, unconvertible, parse
     // error) degrades to the download card rather than a dead error — same as an
     // unrenderable file.
-    if (isOffice(fileKind(file)) || isDocx(fileKind(file)) || isPresentation(fileKind(file)) || isDeck(fileKind(file)) || isDesignEditor(fileKind(file)))
+    if (isOffice(fileKind(file)) || isDocx(fileKind(file)) || isPresentation(fileKind(file)) || isDeck(fileKind(file)) || isDesignEditor(fileKind(file)) || isComposition(fileKind(file)))
       return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Couldn't load this file.</div>;
   }
@@ -357,6 +361,16 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
                 designEditorUrl={shared ? undefined : designEditorUrl} designHost={shared ? undefined : designHost} onReload={onReload}
                 onSlideOp={shared || !deckOp ? undefined : (op) => deckOp(file.path, op)}
                 pollsFor={shared ? undefined : pollsFor} />
+    ) : null;
+  }
+  // A Video composition → the sandboxed player (composition-view.tsx), never the page itself. On a
+  // shared page it is a download: the share route will not serve it to be played.
+  if (isComposition(fileKind(file))) {
+    if (shared) return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
+    return content ? (
+      <Suspense fallback={<LoadingBar />}>
+        <CompositionView data={content} name={file.name} openFile={openFile} onDownload={onDownload} />
+      </Suspense>
     ) : null;
   }
   if (isHtml(fileKind(file))) {
@@ -881,6 +895,14 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   const [bump, setBump] = useState(0);   // a document asked to refetch itself (a deck was edited)
   const { content, setContent, error } = useFileContent(file, readFile, openFile, (reloadKey ?? 0) + bump, !designEditorUrl);
   const onReload = useCallback(() => setBump((n) => n + 1), []);
+  // The agent changed this file mid-turn (a Video edit): fetch it again now, not when the turn ends.
+  useEffect(() => {
+    const onRefresh = (e: Event) => {
+      if ((e as CustomEvent<{ path?: string }>).detail?.path === file.path) setBump((n) => n + 1);
+    };
+    window.addEventListener("cycls:canvas-refresh", onRefresh);
+    return () => window.removeEventListener("cycls:canvas-refresh", onRefresh);
+  }, [file.path]);
   const resolveMedia = useMemo(() => mediaResolver(file.path, openFile), [file.path, openFile]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -1052,7 +1074,8 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
               const items = [
                 ...(onShareFile ? [{ label: t("share"), onClick: () => setShareOpen(true) }] : []),
                 ...(isText && content != null ? [{ label: copied ? t("copied") : t("copy"), onClick: copy }] : []),
-                ...(isHtml(fileKind(file)) && content != null
+                // Not a composition: as a page in its own tab its script would run on this origin.
+                ...(isHtml(fileKind(file)) && !isComposition(fileKind(file)) && content != null
                   ? [{ label: t("openInTab"), onClick: openInTab }] : []),
                 ...(md ? [{ label: t("exportPdf"), onClick: () => window.print() }] : []),
                 ...(isDesignEditor(fileKind(file)) && designEditorUrl && designHost?.listVersions

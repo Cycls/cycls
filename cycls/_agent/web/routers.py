@@ -21,6 +21,7 @@ from cycls._agent.logs import log
 from cycls._agent.tools import tool_step, detailed, excerpt
 from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, resolve_path
 from cycls._agent.web.design_routes import _DESIGN_AS, _design_doc, _design_response, design_router
+from cycls._agent.web.video_routes import _composition, _video_response
 
 DEFAULT_MAX_UPLOAD_MB = 512   # per-file upload cap when not configured
 
@@ -384,6 +385,8 @@ _PUBLIC = ("name", "path", "type", "size", "modified", "kind")
 def _kind(name):
     if name.lower().endswith(".deck.json"):
         return "deck"                      # a design deck's document: the deck viewer
+    if _composition(name):
+        return "composition"               # a Video composition: the player (?as=player), not a page
     return _KIND_BY_EXT.get(name.rpartition(".")[2].lower() if "." in name else "", "opaque")
 
 
@@ -751,6 +754,9 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         if request.query_params.get("as") in _DESIGN_AS and _design_doc(file_path.name):
             return await _design_response(ws.root, file_path, request.query_params["as"], ws.subject,
                                           request.query_params.get("page"))
+        # A Video composition plays from the page the video service builds of it (video_routes.py).
+        if request.query_params.get("as") == "player" and _composition(file_path.name):
+            return JSONResponse(await _video_response(ws.root, file_path, ws.subject), headers=_NO_CACHE)
         # ?as=slides previews a presentation as a slide viewer — a JSON manifest
         # of per-slide PNG data-URIs (office-render /v1/render). The canvas shows
         # the deck slide-by-slide rather than as a flat PDF.
@@ -1370,6 +1376,16 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
                 raise HTTPException(404, "File not found")
             return await _design_response(ws_owner.root, target, as_, ws_owner.subject,
                                           request.query_params.get("page"))
+        # A shared composition is a download: never run as a page on this origin, never sent
+        # through the video service for someone else. To share a video, share its MP4.
+        if _composition(file_path):
+            try:
+                target = resolve_path(ws_owner.root, file_path)
+            except ValueError:
+                raise HTTPException(403, "Path traversal denied")
+            if not target.is_file():
+                raise HTTPException(404, "File not found")
+            return FileResponse(target, filename=target.name, media_type="application/octet-stream", headers=_NO_CACHE)
         if as_ in ("slides", "pdf") and office.convertible(file_path):
             try:
                 target = resolve_path(ws_owner.root, file_path)

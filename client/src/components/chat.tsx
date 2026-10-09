@@ -403,6 +403,10 @@ export function Chat({ chat, onShare, files, account, config }: {
           reload: ev.reload === true,                                         // its pages changed: re-open, don't replay
         } }));
         track("ui_action", { action: "design_command" });
+      } else if (ev.action === "refresh_canvas" && typeof ev.path === "string") {
+        // The agent changed a file that may be open (a Video edit): its view fetches it again now.
+        window.dispatchEvent(new CustomEvent("cycls:canvas-refresh", { detail: { path: ev.path } }));
+        track("ui_action", { action: "refresh_canvas" });
       } else if (ev.action === "suggest" && typeof ev.text === "string") {
         if (followUpsEnabled()) {
           setFollowUp(ev.text);

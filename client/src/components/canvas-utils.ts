@@ -66,8 +66,13 @@ export const DESIGN_PRESETS = [
 // design service renders them — not from the JSON itself, so it's checked before
 // the code path would claim it as .json.
 export const isDeck = (name: string) => name.toLowerCase().endsWith(".deck.json");
+// A Video composition (videos/<name>.video.html) plays in a sandboxed player from the page the
+// video service builds of it (?as=player): as a raw page it is a blank frame. Checked before
+// the html path would claim it, as a deck is before json.
+export const isComposition = (name: string) => name.toLowerCase().endsWith(".video.html");
 // The label on a file's extension tile ("deck" for a deck document, not "json").
-export const tileExt = (name: string) => (isDeck(name) ? "deck" : name.includes(".") ? name.split(".").pop() || "" : "");
+export const tileExt = (name: string) =>
+  (isDeck(name) ? "deck" : isComposition(name) ? "video" : name.includes(".") ? name.split(".").pop() || "" : "");
 
 export const is3d = (name: string) => ["glb", "gltf"].includes(ext(name));
 
@@ -82,7 +87,8 @@ const TINTS: Record<string, string> = {
   glb: "#af52de", gltf: "#af52de",
   fig: "#af52de",
 };
-export const extTint = (name: string): string | undefined => (isDeck(name) ? TINTS.fig : TINTS[ext(name)]);
+export const extTint = (name: string): string | undefined =>
+  (isDeck(name) ? TINTS.fig : isComposition(name) ? TINTS.mp4 : TINTS[ext(name)]);
 // Wash + label styles for an extension tile; undefined → neutral (bg-secondary).
 export const tintTile = (name: string) => {
   const c = extTint(name);
@@ -117,7 +123,7 @@ export const codeLang = (name: string): string | null => {
 // for servers predating it and for files not yet listed (mid-upload rows).
 export const isRenderable = (name: string, kind?: string) =>
   kind ? kind !== "opaque"
-       : isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || isDocx(name) || isPresentation(name) || isOffice(name) || isDesignEditor(name) || isDeck(name) || is3d(name) || codeLang(name) != null;
+       : isComposition(name) || isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || isDocx(name) || isPresentation(name) || isOffice(name) || isDesignEditor(name) || isDeck(name) || is3d(name) || codeLang(name) != null;
 
 // Deliverable target of a live edit step — from the finished label or the
 // streamed partial-JSON args. Helper scripts never open the canvas.
@@ -125,7 +131,8 @@ const WORKING_EXTS = new Set(["html", "htm", "md", "markdown", "csv", "tsv"]);
 
 export function editWorkingPath(step?: string, args?: string): string | null {
   const path = step || args?.match(/"path"\s*:\s*"([^"\\]+)"/)?.[1] || "";
-  return path && WORKING_EXTS.has(ext(path)) ? path : null;
+  // A composition is the Video tool's to open once it has checked it — not a page to preview half-written.
+  return path && WORKING_EXTS.has(ext(path)) && !isComposition(path) ? path : null;
 }
 
 // Trigger a name-preserving download from an authed blob URL. A bare blob URL
