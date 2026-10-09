@@ -449,6 +449,31 @@ Unset `DESIGN_URL` and the tool simply isn't offered — no crash, like the offi
 fallback. The render service is a small Bun + OpenPencil app in its own repo
 (`cycls-design`). Details: [docs/notes/design.md](notes/design.md).
 
+
+### Video (reels, explainers, animated decks)
+
+Let an agent **make short videos that move** — reels and stories, explainers, announcements,
+animated stats, a deck turned into a video — and show them on the canvas, with no video engine in
+the image. The agent writes a video as one HTML composition (the HyperFrames format, animated with
+the Web Animations API); a shared service on Modal GPUs checks it, shows the model its frames and
+renders the MP4. Silent and generated for now: no footage or sound.
+
+```python
+llm = cycls.LLM().model(...).max_tokens(64_000).allowed_tools(["Editor", "Canvas", "Video"])
+```
+```
+VIDEO_URL=https://<workspace>--cycls-video-web.modal.run   # the deployed service
+VIDEO_SECRET=<the service key>
+VIDEO_ORGS=org_123,org_456                                 # who may use it; "*" for everyone
+```
+
+The model calls one `video` tool: `guide` first (its instructions load into the tool, and a GPU
+starts warming), then `write {name, html}`, `edit {name, changes}`, `look {name, at}`,
+`render {name}` and `restore {name}`. A save comes back with lint errors to fix, or with the
+browser check and one sheet of frames labelled with their times; the composition plays live on
+the canvas in a sandboxed player and refreshes as the agent edits it; `render` writes
+`videos/<name>.mp4` and opens it. See `docs/notes/video.md`.
+
 ### Apple IAP entitlements
 
 For agents that sell subscriptions through Apple In-App Purchase, `.iap(...)`
@@ -497,7 +522,7 @@ async for ev in llm.run(context=context):
 | `.system(str)` | System prompt |
 | `.tools(list)` | Custom tool JSON schemas |
 | `.on(name, fn, label=)` | Register async handler for a custom tool; `label` (input → str) renders the step line in the UI, like `Bash(command)`; the default is the input's first string value |
-| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `Browser`, `Design`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user. `Browser` and `Design` are offered only when their service is configured (see below) |
+| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `Browser`, `Design`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user. `Browser`, `Design` and `Video` are offered only when their service is configured (see below) |
 | `.instructions(path)` | Workspace instructions file auto-loaded into the system prompt (default `AGENT.md`; `None` disables) |
 | `.skills(*dirs)` | Ship skills with the agent (dirs of `<name>/SKILL.md` folders; `None` disables skills) |
 | `.context(n)` | Model context window in tokens; sets when compaction kicks in (default 1M; set it for smaller models) |
