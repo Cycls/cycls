@@ -14,7 +14,7 @@ import contextvars
 # harness swaps it in after this call), None when no harness swaps it (a custom loop): then `guide`
 # answers with the instructions themselves.
 VIDEO_LOADED = contextvars.ContextVar("video_loaded", default=None)
-ACTIONS = ("guide", "write", "edit", "look", "render", "restore")
+ACTIONS = ("guide", "write", "edit", "template", "look", "render", "restore")
 
 _PURPOSE = (
     "Video: make short videos that move — explainers, reels and stories, announcements, animated stats and "
@@ -33,6 +33,7 @@ _ACTIONS_TEXT = """ACTIONS
 - guide: load these instructions (done) and start the renderer; lists the formats, fonts and the videos already here.
 - write {name, html}: save the whole composition as videos/<name>.video.html and check it. Or {name, path} to adopt a composition you wrote with the editor. Saved even when the checks find errors.
 - edit {name, changes: [{old, new, all?}]}: exact find and replace in the saved composition; every change applies or none does. Same checks as write. Prefer it to rewriting the whole file.
+- template {name, template, vars}: make the composition from one of the templates above with your words, numbers and images (the brand kit fills the colours and fonts you leave out), then the same checks as write.
 - look {name, at?: [seconds], zoom?}: the frames at those times (up to 9), zoom a CSS selector or "x,y,w,h" to look closely. With no times, the file on disk is checked again.
 - render {name, quality?: "final" | "draft"}: the MP4, videos/<name>.mp4, opened for the user. Refused while the checks report errors. It takes a minute or two; if the reply says it is still rendering, call render again to collect it — never start over.
 - restore {name}: put back the version before the last save.
@@ -43,7 +44,7 @@ A reply shows lint errors with their fixes, or the browser check and ONE sheet o
 def _schema():
     return {"type": "object", "properties": {
         "action": {"type": "string", "enum": list(ACTIONS),
-                   "description": "guide (first), write, edit, look, render, restore."},
+                   "description": "guide (first), write, edit, template, look, render, restore."},
         "name": {"type": "string",
                  "description": "The video's name: videos/<name>.video.html, rendered to videos/<name>.mp4. "
                                 "Lowercase words and hyphens, e.g. launch-reel."},
@@ -56,6 +57,8 @@ def _schema():
                         "new": {"type": "string"},
                         "all": {"type": "boolean", "description": "Replace every occurrence."}},
                         "required": ["old", "new"]}},
+        "template": {"type": "string", "description": "template: which template (they are listed in the instructions)."},
+        "vars": {"type": "object", "description": "template: its variables, as the instructions list them."},
         "at": {"type": "array", "items": {"type": "number"},
                "description": "look: times in seconds, up to 9."},
         "zoom": {"type": "string", "description": "look: a CSS selector or x,y,w,h to look at closely."},

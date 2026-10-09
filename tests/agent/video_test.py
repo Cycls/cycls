@@ -134,8 +134,15 @@ def test_a_deploy_swap_is_retried_only_where_a_repeat_changes_nothing(monkeypatc
     calls.clear()
     _transport(monkeypatch, flaky)
     with pytest.raises(video.Unavailable):
-        asyncio.run(video.compile(_ws(tmp_path), "<html></html>"))   # not idempotent: one try
+        asyncio.run(video.submit(_ws(tmp_path), "render", "<html></html>"))   # no key: a repeat could be a second job
     assert len(calls) == 1
+    calls.clear()
+    _transport(monkeypatch, lambda r: (calls.append(1), httpx.Response(500, text="Internal Server Error"))[1]
+               if len(calls) < 2 else httpx.Response(200, json={"ok": True, "findings": []}))
+    assert asyncio.run(video.compile(_ws(tmp_path), "<html></html>"))["ok"] is True   # a bare 500 is the platform's
+    _transport(monkeypatch, lambda r: httpx.Response(500, json={"error": "The composition could not be prepared."}))
+    with pytest.raises(RuntimeError, match="could not be prepared"):
+        asyncio.run(video.compile(_ws(tmp_path), "<html></html>"))                   # the door's own: not retried
 
 
 def test_wait_returns_pending_when_its_budget_ends(monkeypatch, tmp_path):
@@ -287,12 +294,19 @@ class FakeService:
     """Stands in for the client's functions: what the executor sent, and what the door answers."""
 
     def __init__(self, monkeypatch):
-        self.submitted, self.polls, self.refuse, self.state = [], [], None, "done"
+        self.submitted, self.polls, self.refuse, self.state, self.filled = [], [], None, "done", []
         self.result = {"state": "done", "kind": "review", "findings": [], "sheet": SHEET}
         monkeypatch.setattr(video, "submit", self.submit)
+        monkeypatch.setattr(video, "fill_template", self.fill)
         monkeypatch.setattr(video, "wait", self.wait)
         monkeypatch.setattr(video, "fetch", self.fetch)
         monkeypatch.setattr(video, "warm", lambda ws=None: asyncio.sleep(0, result={}))
+
+    async def fill(self, ws, template, variables):
+        self.filled.append((template, variables))
+        if template == "nope":
+            raise video.Refused("no template 'nope'", [])
+        return COMP.replace("Hi", variables.get("title", "Hi"))
 
     async def submit(self, ws, kind, html, images=None, files=None, *, params=None, key=None):
         self.submitted.append({"kind": kind, "html": html, "images": images, "params": params, "key": key})
@@ -541,3 +555,22 @@ def test_the_player_route_builds_once_and_says_why_when_it_cannot(monkeypatch, t
     monkeypatch.setattr(video, "compile", away)
     f.write_text(COMP.replace("Hi", "Away"), encoding="utf-8")
     assert "paused" in asyncio.run(_video_response(tmp_path, f, "org1:u"))["reason"]
+
+
+def test_a_template_is_filled_with_the_brand_kit_for_what_was_left_out(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    (tmp_path / "brand").mkdir()
+    (tmp_path / "brand" / "brand.yaml").write_text(
+        'primary_color: "#0c2340"\nfont_heading: "Playfair Display"\nfont_body: "Brand Sans"\n', encoding="utf-8")
+    out = _run({"action": "template", "name": "q3", "template": "stats-reel",
+                "vars": {"title": "Q3", "accent": "#ff0000"}}, _ws(tmp_path))
+    template, sent = svc.filled[0]
+    assert template == "stats-reel" and sent["accent"] == "#ff0000"           # the model's own choice wins
+    assert sent["heading_font"] == "Playfair Display" and "body_font" not in sent   # not in the catalogue: left out
+    assert (tmp_path / "videos" / "q3.video.html").read_text().count("Q3") == 1
+    assert "Made videos/q3.video.html from the stats-reel template" in out["_model"][-1]["text"]
+    assert svc.submitted[-1]["kind"] == "review" and svc.submitted[-1]["key"]
+    bad = _run({"action": "template", "name": "x", "template": "nope", "vars": {}}, _ws(tmp_path))
+    assert bad.startswith("Error: the template was not filled") and not (tmp_path / "videos" / "x.video.html").exists()
