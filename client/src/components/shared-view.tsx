@@ -3,7 +3,7 @@ import { MessageBubble } from "./message";
 import { CyclsLogo } from "./cycls-logo";
 import { Icon, IconButton } from "./icon";
 import { useFileContent, CanvasDoc, type CanvasFile } from "./canvas";
-import { isHtml, isRenderable, saveBlob, extTint } from "./canvas-utils";
+import { isHtml, isComposition, isRenderable, saveBlob, extTint } from "./canvas-utils";
 import type { Message } from "../hooks/use-chat";
 import { useMediaQuery } from "../hooks/use-media-query";
 import { t } from "../lib/i18n";
@@ -240,7 +240,7 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
   const path = active;
   const name = path.split("/").pop() || path;
   const file = useMemo<CanvasFile>(() => ({ path, name }), [path, name]);
-  const renderable = isRenderable(name);
+  const renderable = isRenderable(name) && !isComposition(name);   // a shared composition is a download
   const shareBase = window.location.pathname.replace("/shared/", "/share/");
   const shareQuery = window.location.search;   // carries ?ws= for team-minted shares
 
@@ -297,7 +297,7 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
             );
           })}
         </div>
-        {isHtml(name) && content != null && (
+        {isHtml(name) && !isComposition(name) && content != null && (
           <button
             onClick={openInTab}
             className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer"
@@ -355,7 +355,7 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
 function SharedFile({ share, getToken }: { share: FileShare; getToken?: () => Promise<string | null> }) {
   const name = share.path.split("/").pop() || share.path;
   const file = useMemo<CanvasFile>(() => ({ path: share.path, name }), [share.path, name]);
-  const renderable = isRenderable(name);
+  const renderable = isRenderable(name) && !isComposition(name);   // a shared composition is a download
   // `?ws=` names the workspace that minted the share — without it the server
   // has to guess, and a share from a team workspace isn't found at all.
   const shareBase = window.location.pathname.replace("/shared/", "/share/") ;  // /share/{user}/{token}
@@ -395,7 +395,7 @@ function SharedFile({ share, getToken }: { share: FileShare; getToken?: () => Pr
           <div className="flex items-center gap-2 border-b border-border px-4 sm:px-6 py-3">
             <span className="min-w-0 truncate text-sm font-medium text-foreground">{name}</span>
             <div className="flex-1" />
-            {isHtml(name) && content != null && (
+            {isHtml(name) && !isComposition(name) && content != null && (
               <button
                 onClick={openInTab}
                 className="flex items-center gap-1.5 rounded-lg px-2.5 h-8 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"

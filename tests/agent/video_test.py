@@ -346,6 +346,9 @@ def test_write_saves_checks_and_shows_one_sheet(monkeypatch, tmp_path):
     text = model[-1]["text"]
     assert "Saved videos/launch-reel.video.html" in text and "Lint clean (10 s, 1080x1920)" in text
     assert files.mine(tmp_path, "chat-1", "launch-reel")
+    assert out["_ui"] == [{"type": "ui", "action": "open_canvas", "path": "videos/launch-reel.video.html",
+                           "name": "launch-reel.video.html"},
+                          {"type": "ui", "action": "refresh_canvas", "path": "videos/launch-reel.video.html"}]
 
 
 def test_a_call_before_the_guide_is_run_and_says_so(monkeypatch, tmp_path):
@@ -364,8 +367,11 @@ def test_lint_errors_come_back_and_the_file_is_kept(monkeypatch, tmp_path):
                    "fixHint": "Use Inter"}]
     VIDEO_LOADED.set(True)
     out = _run({"action": "write", "name": "a", "html": COMP}, _ws(tmp_path))
-    assert isinstance(out, str) and "Lint: 1 error" in out and "line 3" in out and "Fix: Use Inter" in out
+    text = out["_model"]
+    assert "Lint: 1 error" in text and "line 3" in text and "Fix: Use Inter" in text
     assert (tmp_path / "videos" / "a.video.html").exists()
+    # not opened while it has errors to fix; refreshed where it is already open
+    assert out["_ui"] == [{"type": "ui", "action": "refresh_canvas", "path": "videos/a.video.html"}]
 
 
 def test_a_name_from_before_this_chat_is_never_written_over(monkeypatch, tmp_path):
@@ -453,7 +459,8 @@ def test_restore_puts_back_the_version_before_the_last_save(monkeypatch, tmp_pat
     _run({"action": "write", "name": "v", "html": COMP}, _ws(tmp_path))
     _run({"action": "write", "name": "v", "html": COMP.replace("Hi", "Bye")}, _ws(tmp_path))
     out = _run({"action": "restore", "name": "v"}, _ws(tmp_path))
-    assert out.startswith("Restored") and "Hi" in (tmp_path / "videos" / "v.video.html").read_text()
+    assert out["_model"].startswith("Restored") and "Hi" in (tmp_path / "videos" / "v.video.html").read_text()
+    assert out["_ui"] == [{"type": "ui", "action": "refresh_canvas", "path": "videos/v.video.html"}]
 
 
 def test_bad_calls(monkeypatch, tmp_path):
@@ -485,3 +492,52 @@ def test_the_service_being_away_is_one_sentence(monkeypatch, tmp_path):
 def test_step_label():
     assert vrun._video_step({"action": "render", "name": "reel"}) == {"tool_name": "Video", "step": "render reel"}
     assert vrun._video_step({}) == {"tool_name": "Video", "step": ""}
+
+
+# ---- the composition on the canvas (web/video_routes.py) ----------------------------------------
+
+def test_a_composition_is_its_own_kind():
+    from cycls._agent.web.routers import _kind
+    assert _kind("videos/reel.video.html") == "composition" and _kind("page.html") == "html"
+    assert _kind("videos/reel.mp4") == "video"
+
+
+def test_the_player_route_builds_once_and_says_why_when_it_cannot(monkeypatch, tmp_path):
+    from cycls._agent.web.video_routes import _video_response
+    (tmp_path / "videos").mkdir()
+    f = tmp_path / "videos" / "r.video.html"
+    f.write_text(COMP, encoding="utf-8")
+    out = asyncio.run(_video_response(tmp_path, f, "org1:u"))
+    assert out["html"] is None and "not configured" in out["reason"]
+    assert out["render"] == {"path": "videos/r.mp4", "exists": False}
+    _on(monkeypatch)
+    built = []
+
+    async def compile_(ws, html, images=None, files=None, *, preview=False):
+        built.append(preview)
+        return {"preview": "<!doctype html><html><head></head><body>PLAYER</body></html>", "findings": []}
+
+    monkeypatch.setattr(video, "compile", compile_)
+    out = asyncio.run(_video_response(tmp_path, f, "org1:u"))
+    assert "PLAYER" in out["html"] and out["reason"] is None and built == [True]
+    (tmp_path / "videos" / "r.mp4").write_bytes(b"mp4")
+    again = asyncio.run(_video_response(tmp_path, f, "org1:u"))
+    assert again["html"] == out["html"] and built == [True] and again["render"]["exists"] is True   # from the cache
+    f.write_text(COMP.replace("Hi", "Changed"), encoding="utf-8")
+    asyncio.run(_video_response(tmp_path, f, "org1:u"))
+    assert built == [True, True]                                                                    # an edit is a new page
+
+    async def errors(ws, html, images=None, files=None, *, preview=False):
+        return {"preview": None, "findings": [{"severity": "error", "code": "x"}]}
+
+    monkeypatch.setattr(video, "compile", errors)
+    f.write_text(COMP.replace("Hi", "Broken"), encoding="utf-8")
+    out = asyncio.run(_video_response(tmp_path, f, "org1:u"))
+    assert out["html"] is None and "1 error to fix" in out["reason"]
+
+    async def away(*a, **k):
+        raise video.Unavailable("the video service is paused")
+
+    monkeypatch.setattr(video, "compile", away)
+    f.write_text(COMP.replace("Hi", "Away"), encoding="utf-8")
+    assert "paused" in asyncio.run(_video_response(tmp_path, f, "org1:u"))["reason"]

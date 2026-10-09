@@ -98,29 +98,31 @@ def _root_text(root_info):
     return f"{d:g} s, {w}x{h}" if d and w and h else ""
 
 
-async def _check(workspace, root, rel, html, *, kind="review", params=None, budget=None):
+async def _check(workspace, root, rel, html, *, kind="review", params=None, budget=None, again=True):
     """Lint at the door, then (when clean) the browser check and a sheet, or the frames asked for.
-    → (text, sheet blocks)."""
+    → (text, sheet blocks, lint passed)."""
     from cycls._agent import video
 
     images, image_files, problems = media.collect(html, root)
     if problems:
-        return "The images could not all be sent:\n" + "\n".join(f"- {p}" for p in problems), []
+        return "The images could not all be sent:\n" + "\n".join(f"- {p}" for p in problems), [], False
     try:
         job = await video.submit(workspace, kind, html, images, image_files, params=params)
     except video.Refused as e:
         text = report.findings_text(e.findings, title="Lint")
-        return (text or str(e)) + "\nFix them with `edit`; the file is saved as it is.", []
+        return (text or str(e)) + "\nFix them with `edit`; the file is saved as it is.", [], False
     shape = _root_text(job.get("root"))
     head = f"Lint clean ({shape})." if shape else "Lint clean."
     r = await video.wait(workspace, job["token"], budget or BUDGET["check"])
     state = r.get("state")
+    if state == "gone" and again:   # the service restarted under the job: ask once more
+        return await _check(workspace, root, rel, html, kind=kind, params=params, budget=budget, again=False)
     if state == "pending":
         what = "the frames" if kind == "look" else "the browser check and the frames"
         return (f"{head} The renderer is still starting or busy, so {what} are not ready yet (about "
-                f"{r.get('eta_s', 60)} s more). Call `look` for them."), []
+                f"{r.get('eta_s', 60)} s more). Call `look` for them."), [], True
     if state != "done":
-        return f"{head} The check could not run: {r.get('error') or state}.", []
+        return f"{head} The check could not run: {r.get('error') or state}.", [], True
     parts = [head]
     if kind == "review":
         if r.get("browser_skipped") or r.get("not_ready"):
@@ -134,7 +136,16 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
     blocks = report.sheet_blocks(r.get("sheet"), times, rel)
     if blocks:
         parts.append(report.LOOK_AT_IT)
-    return "\n".join(parts), blocks
+    return "\n".join(parts), blocks, True
+
+
+def _shown(rel, name, clean):
+    """What the canvas is told after a save: refresh the composition wherever it is open, and open
+    it once it lints clean (with errors it would only show why it cannot play)."""
+    ui = [{"type": "ui", "action": "refresh_canvas", "path": rel}]
+    if clean:
+        ui.insert(0, {"type": "ui", "action": "open_canvas", "path": rel, "name": f"{name}.video.html"})
+    return ui
 
 
 def _result(text, blocks, note="", ui=None):
@@ -268,9 +279,9 @@ async def _exec_video(inp, workspace, ctx=None):
             if len(html.encode("utf-8")) > MAX_HTML:
                 return _err(f"the composition is over {MAX_HTML:,} bytes; keep it to the scenes and their animations.")
             name, rel, named = await _save(root, chat, name, html, "video-write")
-            text, blocks = await _check(workspace, root, rel, html)
+            text, blocks, clean = await _check(workspace, root, rel, html)
             kb = len(html.encode("utf-8")) / 1024
-            return _result(f"Saved {rel} ({kb:.1f} KB).{named}\n{text}", blocks, note)
+            return _result(f"Saved {rel} ({kb:.1f} KB).{named}\n{text}", blocks, note, _shown(rel, name, clean))
 
         if action == "edit":
             changes = _read_changes(inp.get("changes"))
@@ -288,8 +299,9 @@ async def _exec_video(inp, workspace, ctx=None):
                     return _err(why)
                 await write_fig(root, rel, new.encode("utf-8"), by="agent", reason="video-edit")
             files.remember(root, chat, name)
-            text, blocks = await _check(workspace, root, rel, new)
-            return _result(f"Edited {rel} ({len(changes)} change{'s' if len(changes) != 1 else ''}).\n{text}", blocks, note)
+            text, blocks, clean = await _check(workspace, root, rel, new)
+            return _result(f"Edited {rel} ({len(changes)} change{'s' if len(changes) != 1 else ''}).\n{text}", blocks,
+                           note, _shown(rel, name, clean))
 
         if action == "look":
             try:
@@ -303,9 +315,9 @@ async def _exec_video(inp, workspace, ctx=None):
                 if not isinstance(at, list) or not all(isinstance(t, (int, float)) for t in at):
                     return _err("at: a list of times in seconds.")
                 params = {"at": [float(t) for t in at][:9], "zoom": str(inp.get("zoom") or "")[:200]}
-                text, blocks = await _check(workspace, root, rel, html, kind="look", params=params, budget=BUDGET["look"])
+                text, blocks, _ = await _check(workspace, root, rel, html, kind="look", params=params, budget=BUDGET["look"])
             else:
-                text, blocks = await _check(workspace, root, rel, html, budget=BUDGET["look"])
+                text, blocks, _ = await _check(workspace, root, rel, html, budget=BUDGET["look"])
             return _result(text, blocks, note)
 
         if action == "render":
@@ -326,7 +338,8 @@ async def _exec_video(inp, workspace, ctx=None):
                 return _err("that version could not be read.")
             async with lock(root / rel):
                 await write_fig(root, rel, data, by="agent", reason="restore")
-            return f"Restored {rel} to the version from {history[0]['at'][:19]} UTC. Call `look` to see it." + note
+            return _result(f"Restored {rel} to the version from {history[0]['at'][:19]} UTC. Call `look` to see it.", [],
+                           note, [{"type": "ui", "action": "refresh_canvas", "path": rel}])
     except video.Unavailable as e:
         return _err(f"Video is unavailable: {e}")
     except RuntimeError as e:
