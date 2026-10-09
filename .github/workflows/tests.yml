@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - feat/agent-design
+      - feat/agent-video
   pull_request:
     branches:
       - main

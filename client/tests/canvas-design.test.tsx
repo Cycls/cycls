@@ -356,7 +356,7 @@ describe("designs in the canvas", () => {
   });
 
   it("the sizes are the server's presets", () => {
-    const py = readFileSync(join(__dirname, "../../cycls/_agent/tools/__init__.py"), "utf8");
+    const py = readFileSync(join(__dirname, "../../cycls/_agent/design/prepare.py"), "utf8");
     const block = py.slice(py.indexOf("_DESIGN_SIZES = {"), py.indexOf("}", py.indexOf("_DESIGN_SIZES = {")));
     const server = Object.fromEntries([...block.matchAll(/"([a-z0-9-]+)": \[(\d+), (\d+)\]/g)].map((m) => [m[1], [+m[2], +m[3]]]));
     for (const p of DESIGN_PRESETS) expect(server[p.key], p.key).toEqual([...p.size]);
