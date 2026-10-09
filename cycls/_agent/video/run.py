@@ -106,8 +106,11 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
     images, image_files, problems = media.collect(html, root)
     if problems:
         return "The images could not all be sent:\n" + "\n".join(f"- {p}" for p in problems), [], False
+    # Keyed, so a retry after a dropped connection is the same job, not a second one.
+    key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|{kind}|{_sha(html, image_files)}|"
+                         f"{json.dumps(params or {}, sort_keys=True)}".encode()).hexdigest()
     try:
-        job = await video.submit(workspace, kind, html, images, image_files, params=params)
+        job = await video.submit(workspace, kind, html, images, image_files, params=params, key=key)
     except video.Refused as e:
         text = report.findings_text(e.findings, title="Lint")
         return (text or str(e)) + "\nFix them with `edit`; the file is saved as it is.", [], False
@@ -146,6 +149,28 @@ def _shown(rel, name, clean):
     if clean:
         ui.insert(0, {"type": "ui", "action": "open_canvas", "path": rel, "name": f"{name}.video.html"})
     return ui
+
+
+def _with_brand(root, template, given):
+    """The workspace brand kit for the colours and fonts the model left out: the template's own
+    defaults stay where the kit says nothing, or names a font the catalogue lacks."""
+    from ..design.brand import _load_brand
+    from .contract import cached
+    from .fallback import FALLBACK
+
+    brand = _load_brand(root) or {}
+    if not brand:
+        return given
+    c = cached() or FALLBACK
+    fonts = {f["family"] for f in c.get("fonts") or []}
+    takes = next((t["vars"] for t in (cached() or {}).get("templates") or [] if t.get("id") == template), None)
+    out = dict(given)
+    for var, value in (("accent", brand.get("accent") or brand.get("primary")),
+                       ("heading_font", brand.get("heading") if brand.get("heading") in fonts else None),
+                       ("body_font", brand.get("body") if brand.get("body") in fonts else None)):
+        if value and var not in out and (takes is None or var in takes):
+            out[var] = value
+    return out
 
 
 def _result(text, blocks, note="", ui=None):
@@ -282,6 +307,25 @@ async def _exec_video(inp, workspace, ctx=None):
             text, blocks, clean = await _check(workspace, root, rel, html)
             kb = len(html.encode("utf-8")) / 1024
             return _result(f"Saved {rel} ({kb:.1f} KB).{named}\n{text}", blocks, note, _shown(rel, name, clean))
+
+        if action == "template":
+            which = inp.get("template")
+            given = inp.get("vars")
+            if isinstance(given, str):
+                try:
+                    given = json.loads(given)
+                except ValueError:
+                    return _err("vars must be an object of the template's variables.")
+            if not isinstance(which, str) or not which.strip():
+                return _err("template needs template (its name) and vars.")
+            try:
+                html = await video.fill_template(workspace, which.strip(), _with_brand(root, which, given or {}))
+            except video.Refused as e:
+                return _err(f"the template was not filled: {e}. Nothing was saved.")
+            name, rel, named = await _save(root, chat, name, html, "video-template")
+            text, blocks, clean = await _check(workspace, root, rel, html)
+            return _result(f"Made {rel} from the {which} template ({len(html) / 1024:.1f} KB).{named} It is an ordinary "
+                           f"composition now: change it with `edit`.\n{text}", blocks, note, _shown(rel, name, clean))
 
         if action == "edit":
             changes = _read_changes(inp.get("changes"))

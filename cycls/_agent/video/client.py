@@ -110,7 +110,9 @@ async def _request(method, path, *, workspace=None, retry=False, timeout=_TIMEOU
             continue
         except httpx.HTTPError as e:
             raise Unavailable(f"the video service is unreachable: {type(e).__name__}") from e
-        if resp.status_code in (502, 503, 504) and not _ours(resp):
+        # The platform's own failures, not the door's (which carry {"error"}): a request that met a
+        # container as it stopped came back as a bare 500 after half a minute (2026-10-10).
+        if resp.status_code in (500, 502, 503, 504) and not _ours(resp):
             gone = RuntimeError(f"video service {resp.status_code} (no answer from the service itself)")
             continue
         break
@@ -153,6 +155,18 @@ async def get_contract(etag=None):
     return {**resp.json(), "etag": resp.headers.get("etag")}
 
 
+async def fill_template(workspace, template, variables):
+    """A template filled with the model's variables → the composition's HTML, or Refused saying what
+    to change."""
+    resp = await _request("POST", "/v1/templates/fill", workspace=workspace, retry=True,
+                          json={"template": template, "vars": variables}, timeout=httpx.Timeout(60.0, connect=15.0))
+    if resp.status_code == 422:
+        raise Refused((_body(resp) or {}).get("error") or "the variables do not fit the template", [])
+    if resp.status_code != 200:
+        raise _error(resp)
+    return resp.json()["html"]
+
+
 async def warm(workspace=None):
     """Ask for a renderer to start. Never raises: warming is a hint."""
     try:
@@ -172,7 +186,7 @@ def _parts(meta, files):
 async def compile(workspace, html, images=None, files=None, *, preview=False):
     """Prepare and lint on CPU; with `preview`, the page the canvas plays."""
     meta = {"html": html, "images": images or {}, "preview": preview}
-    resp = await _request("POST", "/v1/compile", workspace=workspace, files=_parts(meta, files),
+    resp = await _request("POST", "/v1/compile", workspace=workspace, retry=True, files=_parts(meta, files),
                           timeout=httpx.Timeout(120.0, connect=15.0))
     if resp.status_code != 200:
         raise _error(resp)

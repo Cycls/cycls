@@ -88,3 +88,17 @@ def test_write_then_render_through_the_tool(tmp_path):
     mp4 = (tmp_path / "videos" / "live-check.mp4").read_bytes()
     assert mp4[4:8] == b"ftyp" and len(mp4) > 10_000
     assert out["_ui"]["path"] == "videos/live-check.mp4"
+
+
+def test_a_template_through_the_tool(tmp_path):
+    """The contract lists the templates; one filled by the service, saved, checked."""
+    c = asyncio.run(contract.get(30))
+    assert "stats-reel" in c["text"]
+    VIDEO_LOADED.set(True)
+    ctx = types.SimpleNamespace(chat_id="live-chat-2")
+    out = asyncio.run(vrun._exec_video({"action": "template", "name": "q3", "template": "stats-reel", "vars": {
+        "title": "Q3 in numbers", "stats": [{"value": 42, "suffix": "%", "label": "more chats answered"}],
+        "closing": "Onwards."}}, _ws(tmp_path), ctx))
+    assert isinstance(out, dict), out
+    assert "from the stats-reel template" in out["_model"][-1]["text"] and "Lint clean" in out["_model"][-1]["text"]
+    assert "Q3 in numbers" in (tmp_path / "videos" / "q3.video.html").read_text(encoding="utf-8")
