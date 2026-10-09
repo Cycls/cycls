@@ -61,6 +61,10 @@ cycls/
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
     ├── browser/            # cycls Browser tool — thin CDP client to a shared real-Chrome service (Steel); docs/notes/browser.md
+    ├── video/              # cycls Video tool, over a thin client to the cycls-video service on Modal GPUs (HyperFrames compositions → MP4); docs/notes/video.md
+    │   ├── client.py       # the door's API (contract, warm, compile, jobs, long-poll, the MP4 streamed to disk)
+    │   ├── contract.py     # the signed contract, verified (fallback.py: the built-in copy); tool.py — short and whole forms
+    │   └── run.py          # the executor (guide, write, edit, look, render, restore); files.py, media.py, report.py
     ├── design/             # cycls Design tool, over a thin HTTP client to a shared design service (posts, carousels, decks, documents); docs/notes/design.md
     │   ├── tool.py         # the tool as the model is given it (and the short form a chat carries until it designs)
     │   ├── skill.py        # the tool's own skills (skills/*.md: design-direction, graphic-design, deck-design, document-design), loaded by `skill`
@@ -71,7 +75,7 @@ cycls/
     │   ├── client.py       # the service client; deck.py slide ops, store.py versions + bases, refresh.py exports beside a design, live.py rooms, stock.py photos, assets.py the media library
     │   └── comments.py     # what people pin on a design — threads kept by the workspace (`.comments`), where a pin is now; docs/notes/design.md "Comments"
     ├── paths.py            # a path a tool was given, kept inside the workspace
-    ├── tools/              # tool schemas + execution + `Tool` rows: run/step/once/terminal/prompt (docs/notes/tool-rows.md); Design is imported from design/
+    ├── tools/              # tool schemas + execution + `Tool` rows: run/step/once/terminal/prompt (docs/notes/tool-rows.md); Design and Video are imported from their packages; ondemand.py swaps a tool's whole form in on first use
     ├── harness/            # the managed LLM loop and the kit a custom loop needs
     │   ├── llm.py          # cycls.LLM fluent builder (.loop(fn) swaps the loop; .price()/.context() set cost rates + window)
     │   ├── main.py         # the default loop (_run) + retry/recover + attachment ingest
@@ -81,7 +85,7 @@ cycls/
     │   ├── events.py       # typed loop events + to_ui (FE projection)
     │   ├── compact.py      # compaction — tool-result clearing, then a summary; append-only marker, file ledger (docs/notes/compaction.md)
     │   └── prompts.py      # system + compaction prompts + workspace instructions (AGENT.md)
-    └── web/                # FastAPI chat server, state routers (routers.py; a design's routes in design_routes.py, what they share in shared.py), OG images, themes
+    └── web/                # FastAPI chat server, state routers (routers.py; a design's routes in design_routes.py, a composition's ?as=player in video_routes.py, what they share in shared.py), OG images, themes
 ```
 
 ## Core Architecture
@@ -152,6 +156,7 @@ tests/
 │   ├── browser_test.py          # Browser tool: client config/providers, steel session parse, executor dispatch, gating
 │   ├── design_test.py           # Design tool: client, spec/deck prep (images, brand theme), decks + carousels, slide actions, refresh, gating, its skills (every example goes through)
 │   ├── design_comments_test.py  # comments on a design: the workspace's record, the routes, rename/trash, the agent's `comments`
+│   ├── video_test.py            # Video tool: client, signed contract, short/whole forms + the ondemand seam, executor, ?as=player
 │   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
 │   ├── events_test.py           # to_ui wire shapes for the typed events
 │   ├── pdf_test.py              # PDF page parsing
