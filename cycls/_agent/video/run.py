@@ -1,5 +1,6 @@
 """The Video tool's executor. `_exec_video(inp, workspace, ctx)` reads a call and makes it:
-guide, write, edit, look, render, restore. Registered in cycls/_agent/tools as the `video` tool.
+guide, write, edit, template, look, render, restore, and for sound voice and music. Registered in
+cycls/_agent/tools as the `video` tool.
 
 The SDK owns the schema, the argument checks, every write to the workspace and the report; the
 service owns the contract, the checks, the frames, the preview and the render.
@@ -21,7 +22,7 @@ from .tool import ACTIONS, VIDEO_LOADED
 
 # How long a call waits for the service before it answers anyway. The harness has no per-tool
 # limit, so the client keeps its own: a save with its frames, a look, a render.
-BUDGET = {"check": 300, "look": 180, "render": 900}
+BUDGET = {"check": 300, "look": 180, "render": 900, "voice": 300}
 MAX_HTML = 400_000
 
 _LOADED_NOTE = ("\n\nVideo's full instructions were not loaded when you made this call; they are now in this tool's "
@@ -71,11 +72,22 @@ def apply_changes(html, changes):
     return out, None
 
 
-def _sha(html, images_files):
+def _sha(html, images_files, words=None):
+    """What makes two jobs the same: the composition, the files it sends (hashed names carry their
+    bytes), and the word timings its captions and ducking are made from."""
     h = hashlib.sha256(html.encode("utf-8"))
     for name in sorted(images_files):
         h.update(name.encode())
+    if words:
+        h.update(json.dumps(words, sort_keys=True).encode("utf-8"))
     return h.hexdigest()
+
+
+def _media(html, root):
+    """The images and audio a composition names, ready to send. → (images, audio, files, words, problems)."""
+    images, image_files, problems = media.collect(html, root)
+    audio, audio_files, words, more = media.collect_audio(html, root)
+    return images, audio, {**image_files, **audio_files}, words, problems + more
 
 
 async def _save(root, chat, name, html, reason):
@@ -103,23 +115,28 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
     → (text, sheet blocks, lint passed)."""
     from cycls._agent import video
 
-    images, image_files, problems = media.collect(html, root)
+    images, audio, sent, words, problems = _media(html, root)
     if problems:
-        return "The images could not all be sent:\n" + "\n".join(f"- {p}" for p in problems), [], False
+        return "The images and sound could not all be sent:\n" + "\n".join(f"- {p}" for p in problems), [], False
     # Keyed, so a retry after a dropped connection is the same job, not a second one.
-    key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|{kind}|{_sha(html, image_files)}|"
+    key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|{kind}|{_sha(html, sent, words)}|"
                          f"{json.dumps(params or {}, sort_keys=True)}".encode()).hexdigest()
     try:
-        job = await video.submit(workspace, kind, html, images, image_files, params=params, key=key)
+        job = await video.submit(workspace, kind, html, images, sent, params=params, key=key, audio=audio, words=words)
     except video.Refused as e:
         text = report.findings_text(e.findings, title="Lint")
-        return (text or str(e)) + "\nFix them with `edit`; the file is saved as it is.", [], False
+        sound = report.sound_text(e.sound)
+        return ((text or str(e)) + ("\n" + sound if sound else "")
+                + "\nFix them with `edit`; the file is saved as it is."), [], False
     except video.OverAllowance as e:
         # Said only after lint passed: the file is good to preview; frames and the MP4 wait.
         return (f"Lint clean. {e} The file is saved and its preview works; the browser check, frames and "
                 "the MP4 wait until then — tell the person so."), [], True
     shape = _root_text(job.get("root"))
     head = f"Lint clean ({shape})." if shape else "Lint clean."
+    sound = report.sound_text(job.get("sound"))
+    if sound:
+        head += "\n" + sound
     r = await video.wait(workspace, job["token"], budget or BUDGET["check"])
     state = r.get("state")
     if state == "gone" and again:   # the service restarted under the job: ask once more
@@ -215,10 +232,10 @@ async def _render(workspace, root, chat, name, quality):
         html = (root / rel).read_text(encoding="utf-8")
     except FileNotFoundError:
         return _err(f"there is no {rel} to render; `write` it first.")
-    images, image_files, problems = media.collect(html, root)
+    images, audio, sent, words, problems = _media(html, root)
     if problems:
-        return _err("the images could not all be sent:\n" + "\n".join(f"- {p}" for p in problems))
-    sha = _sha(html, image_files)
+        return _err("the images and sound could not all be sent:\n" + "\n".join(f"- {p}" for p in problems))
+    sha = _sha(html, sent, words)
     pending = files.render_pending(root, chat, name)
     collected = bool(pending and pending.get("sha") == sha and pending.get("quality") == quality)
     if collected:
@@ -226,7 +243,8 @@ async def _render(workspace, root, chat, name, quality):
     else:
         key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|{name}|{sha}|{quality}".encode()).hexdigest()
         try:
-            job = await video.submit(workspace, "render", html, images, image_files, params={"quality": quality}, key=key)
+            job = await video.submit(workspace, "render", html, images, sent, params={"quality": quality}, key=key,
+                                     audio=audio, words=words)
         except video.Refused as e:
             return report.findings_text(e.findings, title="Not rendered — lint") + "\nFix them with `edit`, then render."
         token = job["token"]
@@ -267,9 +285,88 @@ async def _render(workspace, root, chat, name, quality):
             "(after a reload, and in a shared chat).")
     if target != name:
         text += f" It is named {target}.mp4 because {name}.mp4 was already here and is not this chat's render."
+    if v.get("audio"):
+        text += " " + report.audio_facts(v["audio"])
     if v.get("faults"):
         text += f" (The renderer noted: {', '.join(v['faults'])}.)"
     return {"_model": text, "_ui": {"type": "ui", "action": "open_canvas", "path": rel_mp4, "name": f"{target}.mp4"}}
+
+
+async def _voice(workspace, root, chat, name, text, voice_id, language):
+    """A voice-over: read on the organisation's GPU, saved as videos/voice/<name>.m4a and its word
+    timings. The same name, script and voice again is the same take, not a second job."""
+    from cycls._agent import video
+
+    if not isinstance(text, str) or not text.strip():
+        return _err("voice needs text: the script to read aloud.")
+    voice_id = voice_id or "default"
+    rel, words_rel = files.voice_audio(name), files.voice_words(name)
+    try:
+        old = json.loads((root / words_rel).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        old = None
+    if old and old.get("text") == text and old.get("voice") == voice_id and (root / rel).is_file():
+        return report.voice_text(old, rel, reused=True, voice_id=voice_id)
+    key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|voice|{name}|{voice_id}|{language}|{text}".encode()).hexdigest()
+    pending = files.voice_pending(root, chat, name)
+    if pending and pending.get("key") == key:
+        token = pending["token"]
+    else:
+        try:
+            job = await video.voice(workspace, text, language=language, voice_id=voice_id, key=key)
+        except video.Refused as e:
+            return _err(f"the voice-over was not made: {e}")
+        token = job["token"]
+        files.voice_started(root, chat, name, token, key)
+    r = await video.wait(workspace, token, BUDGET["voice"])
+    if r.get("state") == "pending":
+        return (f"Still reading {name} aloud (about {r.get('eta_s', 30)} s more; the first voice-over of a session also "
+                "loads the voice). Call voice again with the same name and text to collect it.")
+    if r.get("state") != "done":
+        files.voice_done(root, chat, name)
+        return _err(f"the voice-over failed: {r.get('error') or r.get('state')}.")
+    tmp = root / ".tmp" / (chat or "video")
+    dest = tmp / f"{name}.m4a.part"
+    await video.fetch(workspace, token, dest, tmp, what="audio")
+    data = dest.read_bytes()
+    dest.unlink(missing_ok=True)
+    words = r.get("words") or {}
+    async with lock(root / rel):
+        await write_fig(root, rel, data, by="agent", reason="video-voice")
+        await write_fig(root, words_rel, json.dumps(words, ensure_ascii=False, indent=1).encode("utf-8"),
+                        by="agent", reason="video-voice")
+    files.voice_done(root, chat, name)
+    return report.voice_text(words, rel, warnings=r.get("warnings") or [], voice_id=voice_id)
+
+
+def _music(query):
+    """The library's tracks that fit the words asked for (all of them when none), from the signed
+    contract's data."""
+    from .fallback import FALLBACK
+
+    c = contract_mod.cached() or {}
+    tracks = (c.get("data") or FALLBACK.get("data") or {}).get("music") or []
+    if not tracks:
+        return "The music library is not available yet: make this video without music, or with an audio file of the person's."
+    words = [w for w in str(query or "").lower().replace(",", " ").split() if w]
+    def score(t):
+        hay = " ".join([t.get("title", ""), t.get("desc", ""), " ".join(t.get("mood") or []), t.get("energy", "")]).lower()
+        return sum(1 for w in words if w in hay)
+    picked = sorted(tracks, key=lambda t: -score(t)) if words else tracks
+    if words and not any(score(t) for t in picked):
+        picked = tracks
+    lines = [f"Library tracks{' for ' + repr(query) if words else ''} (use one as src=\"music:<id>\"; music only "
+             "when the person wants it):"]
+    for t in picked[:8]:
+        bits = [", ".join(t.get("mood") or []), f"{t['bpm']} bpm" if t.get("bpm") else "", f"{int(t.get('duration', 0)) // 60}:"
+                f"{int(t.get('duration', 0)) % 60:02d}" if t.get("duration") else ""]
+        line = f"- {t['id']}: {t.get('title', '')} — {'; '.join(b for b in bits if b)}"
+        if t.get("desc"):
+            line += f". {t['desc']}"
+        if t.get("starts") and len(t["starts"]) > 1:
+            line += f" Good places to start (data-media-start): {', '.join(str(s) for s in t['starts'])} s."
+        lines.append(line)
+    return "\n".join(lines)
 
 
 async def _exec_video(inp, workspace, ctx=None):
@@ -288,6 +385,8 @@ async def _exec_video(inp, workspace, ctx=None):
     try:
         if action == "guide":
             return await _guide(workspace, root, loaded)
+        if action == "music":
+            return _music(inp.get("query") or inp.get("mood")) + note
         name = files.clean_name(inp.get("name"))
         if not name:
             return _err("name is required: the video's name, e.g. launch-reel.")
@@ -311,6 +410,14 @@ async def _exec_video(inp, workspace, ctx=None):
             text, blocks, clean = await _check(workspace, root, rel, html)
             kb = len(html.encode("utf-8")) / 1024
             return _result(f"Saved {rel} ({kb:.1f} KB).{named}\n{text}", blocks, note, _shown(rel, name, clean))
+
+        if action == "voice":
+            language = inp.get("language")
+            if language not in (None, "", "ar", "en"):
+                return _err("language: ar or en, or leave it out to have it found.")
+            voice_id = inp.get("voice") or "default"
+            out = await _voice(workspace, root, chat, name, inp.get("text"), voice_id, language or None)
+            return out + note if isinstance(out, str) else out
 
         if action == "template":
             which = inp.get("template")

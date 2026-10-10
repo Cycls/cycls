@@ -27,7 +27,7 @@ from pathlib import Path
 
 import httpx
 
-PROTO = 1
+PROTO = 2          # 2: sound (audio files with word timings, voice-overs, the sound map)
 _TIMEOUT = httpx.Timeout(60.0, connect=15.0)
 _WAIT = 25                  # seconds the door holds a poll open; it never holds one longer than 30
 # A deploy of the service swaps its containers under requests in flight: a dropped connection or a
@@ -49,9 +49,10 @@ class OverAllowance(Unavailable):
 class Refused(RuntimeError):
     """The door refused a job before any GPU work: the composition has errors to fix first."""
 
-    def __init__(self, message, findings):
+    def __init__(self, message, findings, sound=None):
         super().__init__(message)
         self.findings = findings
+        self.sound = sound
 
 
 def configured():
@@ -188,9 +189,9 @@ def _parts(meta, files):
     return parts
 
 
-async def compile(workspace, html, images=None, files=None, *, preview=False):
+async def compile(workspace, html, images=None, files=None, *, preview=False, audio=None, words=None):
     """Prepare and lint on CPU; with `preview`, the page the canvas plays."""
-    meta = {"html": html, "images": images or {}, "preview": preview}
+    meta = {"html": html, "images": images or {}, "preview": preview, "audio": audio or {}, "words": words or {}}
     resp = await _request("POST", "/v1/compile", workspace=workspace, retry=True, files=_parts(meta, files),
                           timeout=httpx.Timeout(120.0, connect=15.0))
     if resp.status_code != 200:
@@ -198,15 +199,32 @@ async def compile(workspace, html, images=None, files=None, *, preview=False):
     return resp.json()
 
 
-async def submit(workspace, kind, html, images=None, files=None, *, params=None, key=None):
-    """Start a review, look or render. → {token, eta_s, times}. A repeated `key` returns the same job."""
-    meta = {"kind": kind, "html": html, "images": images or {}, "params": params or {}}
+async def submit(workspace, kind, html, images=None, files=None, *, params=None, key=None, audio=None, words=None):
+    """Start a review, look or render. → {token, eta_s, times, sound}. A repeated `key` returns the same job."""
+    meta = {"kind": kind, "html": html, "images": images or {}, "params": params or {}, "audio": audio or {},
+            "words": words or {}}
     headers = {"Idempotency-Key": key} if key else {}
     resp = await _request("POST", "/v1/jobs", workspace=workspace, retry=bool(key), files=_parts(meta, files),
                           headers=headers, timeout=httpx.Timeout(120.0, connect=15.0))
     if resp.status_code == 422:
         data = _body(resp) or {}
-        raise Refused(data.get("error") or "the composition has errors", data.get("findings") or [])
+        raise Refused(data.get("error") or "the composition has errors", data.get("findings") or [], data.get("sound"))
+    if resp.status_code == 429 and _ours(resp):
+        raise OverAllowance(_body(resp)["error"])
+    if resp.status_code != 200:
+        raise _error(resp)
+    return resp.json()
+
+
+async def voice(workspace, text, *, language=None, voice_id=None, key=None):
+    """Start a voice-over: the script read aloud on the organisation's GPU. → {token, eta_s}.
+    Refused (with the reason) when the script is empty or too long, or the voice unknown."""
+    meta = {"kind": "voice", "voice": {"text": text, "language": language, "voice": voice_id or "default"}}
+    headers = {"Idempotency-Key": key} if key else {}
+    resp = await _request("POST", "/v1/jobs", workspace=workspace, retry=bool(key), files=_parts(meta, {}),
+                          headers=headers, timeout=httpx.Timeout(60.0, connect=15.0))
+    if resp.status_code == 422:
+        raise Refused((_body(resp) or {}).get("error") or "the script was refused", [])
     if resp.status_code == 429 and _ours(resp):
         raise OverAllowance(_body(resp)["error"])
     if resp.status_code != 200:
@@ -235,16 +253,16 @@ async def wait(workspace, token, budget):
             return r
 
 
-async def fetch(workspace, token, dest, scratch):
-    """Stream a finished render to `dest`, by way of a temp file in `scratch` that never outlives
-    the call. → bytes written."""
+async def fetch(workspace, token, dest, scratch, what="video"):
+    """Stream a finished render (or, with what="audio", a voice-over) to `dest`, by way of a temp
+    file in `scratch` that never outlives the call. → bytes written."""
     scratch = Path(scratch)
     scratch.mkdir(parents=True, exist_ok=True)
     tmp = scratch / f"video-{uuid.uuid4().hex}.part"
     try:
         size = 0
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=15.0), follow_redirects=False) as client:
-            async with client.stream("GET", _url(f"/v1/jobs/{token}/video"), headers=_headers(workspace)) as resp:
+            async with client.stream("GET", _url(f"/v1/jobs/{token}/{what}"), headers=_headers(workspace)) as resp:
                 if resp.status_code != 200:
                     await resp.aread()
                     raise _error(resp)

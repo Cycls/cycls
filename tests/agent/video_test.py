@@ -15,6 +15,7 @@ from cycls._agent import video
 from cycls._agent.tools import ondemand
 from cycls._agent.video import client, contract, files, media
 from cycls._agent.video import run as vrun
+from cycls._agent.video.fallback import FALLBACK
 from cycls._agent.video.tool import VIDEO_LOADED, video_called, video_tool
 
 
@@ -75,7 +76,7 @@ def test_headers_carry_the_key_and_hashes_never_the_names(monkeypatch, tmp_path)
     seen = _transport(monkeypatch, lambda r: httpx.Response(200, json={"started": True}))
     asyncio.run(video.warm(_ws(tmp_path)))
     h = seen[0].headers
-    assert h["x-video-key"] == "k" * 40 and h["x-video-proto"] == "1"
+    assert h["x-video-key"] == "k" * 40 and h["x-video-proto"] == "2"
     assert "org1" not in h["x-video-tenant"] and len(h["x-video-tenant"]) == 32
     assert h["x-video-user"] != h["x-video-tenant"]
     assert str(seen[0].url) == "https://video.test/v1/warm"
@@ -215,7 +216,7 @@ def test_contract_get_verifies_caches_and_falls_back(monkeypatch):
 
     monkeypatch.setattr(video, "get_contract", forged)
     c = asyncio.run(contract.get(5))
-    assert c["version"] == "v1" and "did not verify" in c["fallback"] and "composition" in c["text"]
+    assert c["version"] == FALLBACK["version"] and "did not verify" in c["fallback"] and "composition" in c["text"]
     contract.reset()
 
     async def slow(etag=None):
@@ -309,8 +310,9 @@ class FakeService:
             raise video.Refused("no template 'nope'", [])
         return COMP.replace("Hi", variables.get("title", "Hi"))
 
-    async def submit(self, ws, kind, html, images=None, files=None, *, params=None, key=None):
-        self.submitted.append({"kind": kind, "html": html, "images": images, "params": params, "key": key})
+    async def submit(self, ws, kind, html, images=None, files=None, *, params=None, key=None, audio=None, words=None):
+        self.submitted.append({"kind": kind, "html": html, "images": images, "params": params, "key": key,
+                               "audio": audio, "words": words, "files": files})
         if self.refuse:
             raise video.Refused("fix first", self.refuse)
         if self.over:
@@ -322,9 +324,9 @@ class FakeService:
         self.polls.append(token)
         return self.result if self.state == "done" else {"state": self.state, "eta_s": 40}
 
-    async def fetch(self, ws, token, dest, scratch):
+    async def fetch(self, ws, token, dest, scratch, what="video"):
         Path(dest).parent.mkdir(parents=True, exist_ok=True)
-        Path(dest).write_bytes(b"MP4:" + token.encode())
+        Path(dest).write_bytes((b"MP4:" if what == "video" else b"M4A:") + token.encode())
         return 8
 
 
@@ -555,7 +557,7 @@ def test_the_player_route_builds_once_and_says_why_when_it_cannot(monkeypatch, t
     _on(monkeypatch)
     built = []
 
-    async def compile_(ws, html, images=None, files=None, *, preview=False):
+    async def compile_(ws, html, images=None, files=None, *, preview=False, audio=None, words=None):
         built.append(preview)
         return {"preview": "<!doctype html><html><head></head><body>PLAYER</body></html>", "findings": []}
 
@@ -569,7 +571,7 @@ def test_the_player_route_builds_once_and_says_why_when_it_cannot(monkeypatch, t
     asyncio.run(_video_response(tmp_path, f, "org1:u"))
     assert built == [True, True]                                                                    # an edit is a new page
 
-    async def errors(ws, html, images=None, files=None, *, preview=False):
+    async def errors(ws, html, images=None, files=None, *, preview=False, audio=None, words=None):
         return {"preview": None, "findings": [{"severity": "error", "code": "x"}]}
 
     monkeypatch.setattr(video, "compile", errors)
@@ -613,3 +615,166 @@ def test_the_player_route_takes_an_unresolved_root(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     out = asyncio.run(_video_response(Path("ws"), f.resolve(), "org1:u"))
     assert out["render"]["path"] == "videos/r.mp4"
+
+
+# ---- sound (protocol 2) ------------------------------------------------------------------------
+
+WORDS = {"version": 1, "kind": "voice", "language": "en", "voice": "default", "duration": 3.2, "text": "Hello there. Make one.",
+         "sentences": [{"i": 0, "start": 0.05, "end": 1.2, "text": "Hello there."}, {"i": 1, "start": 1.5, "end": 3.0, "text": "Make one."}],
+         "words": [{"text": "Hello", "start": 0.05, "end": 0.5, "score": 0.9}, {"text": "there.", "start": 0.55, "end": 1.2, "score": 0.9},
+                   {"text": "Make", "start": 1.5, "end": 1.9, "score": 0.9}, {"text": "one.", "start": 2.0, "end": 3.0, "score": 0.9}]}
+SOUND = {"tracks": [{"id": "vo", "kind": "voice", "src": "videos/voice/hi.m4a", "start": 0.5, "end": 3.7, "media_start": 0, "volume": 1},
+                    {"id": "bed", "kind": "music", "music": "calm-01", "start": 0, "end": 10, "media_start": 0, "volume": 0.35,
+                     "ducked_by": ["vo"], "fade_out": 1}],
+         "speech": [{"track": "vo", "start": 0.55, "end": 1.7, "text": "Hello there."}],
+         "notes": ['#s2 starts at 0.8 s, inside "there." (0.55–1.2 s)']}
+VOICED = COMP.replace('<div id="root" data-composition-id="main">',
+                      '<div id="root" data-composition-id="main"><audio id="vo" data-start="0.5" src="videos/voice/hi.m4a"></audio>'
+                      '<audio id="bed" data-start="0" src="music:calm-01" data-duck="vo"></audio>')
+
+
+def _voice_files(root):
+    (root / "videos" / "voice").mkdir(parents=True, exist_ok=True)
+    (root / "videos" / "voice" / "hi.m4a").write_bytes(b"\x00\x00\x00\x20ftypM4A audio")
+    (root / "videos" / "voice" / "hi.words.json").write_text(json.dumps(WORDS), encoding="utf-8")
+
+
+def _text(out):
+    m = out["_model"] if isinstance(out, dict) else out
+    return m if isinstance(m, str) else m[-1]["text"]
+
+
+def test_media_collects_audio_with_its_word_timings_and_leaves_library_music_to_the_service(tmp_path):
+    _voice_files(tmp_path)
+    audio, files_, words, errors = media.collect_audio(VOICED, tmp_path)
+    assert list(audio) == ["videos/voice/hi.m4a"] and errors == []
+    hashed = audio["videos/voice/hi.m4a"]
+    assert hashed.endswith(".m4a") and files_[hashed].startswith(b"\x00\x00\x00\x20ftyp")
+    assert words[hashed]["sentences"][0]["text"] == "Hello there."
+    (tmp_path / "videos" / "voice" / "hi.m4a").write_bytes(b"x" * (media.MAX_AUDIO_BYTES + 1))
+    _, _, _, errors = media.collect_audio(VOICED, tmp_path)
+    assert "at most 10 MB" in errors[0]
+
+
+def test_a_check_sends_the_sound_and_the_reply_carries_the_sound_map(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    _voice_files(tmp_path)
+    original = svc.submit
+
+    async def submit(*a, **k):
+        job = await original(*a, **k)
+        return {**job, "sound": SOUND}
+    monkeypatch.setattr(video, "submit", submit)
+    out = _run({"action": "write", "name": "hi", "html": VOICED}, _ws(tmp_path))
+    sent = svc.submitted[0]
+    assert list(sent["audio"]) == ["videos/voice/hi.m4a"] and list(sent["words"]) == [sent["audio"]["videos/voice/hi.m4a"]]
+    assert sent["audio"]["videos/voice/hi.m4a"] in sent["files"]
+    text = _text(out)
+    assert "Sound map:" in text and "bed (music calm-01): 0–10 s, level 0.35, dips under vo" in text
+    assert 'Spoken: 0.55–1.7 "Hello there."' in text and "Note: #s2 starts at 0.8 s" in text
+
+
+def test_lint_errors_with_sound_show_the_sound_map_too(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+
+    async def refuse(*a, **k):
+        raise video.Refused("fix first", [{"severity": "error", "code": "voice_cut_off", "message": "The voice runs past the end."}], SOUND)
+    monkeypatch.setattr(video, "submit", refuse)
+    text = _text(_run({"action": "write", "name": "hi", "html": VOICED}, _ws(tmp_path)))
+    assert "voice_cut_off" in text and "Sound map:" in text
+
+
+class FakeVoice:
+    def __init__(self, monkeypatch):
+        self.calls = []
+        monkeypatch.setattr(video, "voice", self.voice)
+
+    async def voice(self, ws, text, *, language=None, voice_id=None, key=None):
+        self.calls.append({"text": text, "language": language, "voice": voice_id, "key": key})
+        return {"token": f"v{len(self.calls)}", "eta_s": 30}
+
+
+def test_a_voice_over_is_made_saved_with_its_words_and_said_with_the_lines_to_use(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    fv = FakeVoice(monkeypatch)
+    svc.result = {"state": "done", "kind": "voice", "words": WORDS, "audio": {"bytes": 20, "duration": 3.2}, "warnings": []}
+    out = _run({"action": "voice", "name": "hi", "text": "Hello there. Make one."}, _ws(tmp_path))
+    assert fv.calls[0]["text"] == "Hello there. Make one." and fv.calls[0]["voice"] == "default"
+    assert (tmp_path / "videos" / "voice" / "hi.m4a").read_bytes() == b"M4A:v1"
+    assert json.loads((tmp_path / "videos" / "voice" / "hi.words.json").read_text(encoding="utf-8"))["duration"] == 3.2
+    assert "Made videos/voice/hi.m4a (3.2 s, voice default)" in out
+    assert "- 0.05–1.2: Hello there." in out and '<audio id="vo" src="videos/voice/hi.m4a" data-start="0.5">' in out
+    assert 'data-captions="vo"' in out
+    again = _run({"action": "voice", "name": "hi", "text": "Hello there. Make one."}, _ws(tmp_path))
+    assert len(fv.calls) == 1 and again.startswith("Already made")                 # the same take, not a second job
+    _run({"action": "voice", "name": "hi", "text": "A new script.", "voice": "saudi"}, _ws(tmp_path))
+    assert len(fv.calls) == 2 and fv.calls[1]["voice"] == "saudi"
+
+
+def test_a_voice_over_still_reading_is_collected_by_the_next_call(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    fv = FakeVoice(monkeypatch)
+    svc.state = "pending"
+    out = _run({"action": "voice", "name": "hi", "text": "Hello there."}, _ws(tmp_path))
+    assert "Still reading hi aloud" in out
+    svc.state = "done"
+    svc.result = {"state": "done", "kind": "voice", "words": {**WORDS, "text": "Hello there."}, "warnings": []}
+    _run({"action": "voice", "name": "hi", "text": "Hello there."}, _ws(tmp_path))
+    assert len(fv.calls) == 1 and svc.polls == ["v1", "v1"]                        # collected, not paid for twice
+
+
+def test_a_script_the_door_refuses_says_why(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+
+    async def refuse(*a, **k):
+        raise video.Refused("The script is 2,000 characters; a voice-over is at most 1,400. Split it.", [])
+    monkeypatch.setattr(video, "voice", refuse)
+    out = _run({"action": "voice", "name": "hi", "text": "x" * 2000}, _ws(tmp_path))
+    assert out.startswith("Error: the voice-over was not made") and "Split it" in out
+    assert _run({"action": "voice", "name": "hi", "text": "  "}, _ws(tmp_path)).startswith("Error: voice needs text")
+    assert "language" in _run({"action": "voice", "name": "hi", "text": "Hi", "language": "fr"}, _ws(tmp_path))
+
+
+def test_music_lists_the_library_from_the_signed_contract(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+    library = [{"id": "calm-01", "title": "Morning", "mood": ["calm"], "bpm": 72, "duration": 150, "desc": "soft piano", "starts": [0, 48]},
+               {"id": "up-02", "title": "Go", "mood": ["upbeat"], "bpm": 124, "duration": 140, "desc": "bright synths"}]
+    monkeypatch.setattr(contract, "cached", lambda: {"data": {"music": library}})
+    out = _run({"action": "music", "query": "calm piano"}, _ws(tmp_path))
+    assert out.index("calm-01") < out.index("up-02") and 'src="music:<id>"' in out and "48" in out
+    monkeypatch.setattr(contract, "cached", lambda: {"data": {"music": []}})
+    assert "not available yet" in _run({"action": "music"}, _ws(tmp_path))
+
+
+def test_a_render_says_how_loud_it_came_out(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    _voice_files(tmp_path)
+    (tmp_path / "videos" / "hi.video.html").write_text(VOICED, encoding="utf-8")
+    svc.result = {"state": "done", "kind": "render", "video": {"duration": 10.0, "stream": {"width": 1080, "height": 1920},
+                  "audio": {"codec": "aac", "lufs": -18.9, "peak_dbtp": -1.0}, "faults": []}}
+    out = _run({"action": "render", "name": "hi"}, _ws(tmp_path))
+    assert "Sound: -18.9 LUFS, peak -1.0 dB." in out["_model"]
+    assert svc.submitted[0]["audio"] and svc.submitted[0]["words"]
+
+
+def test_a_v2_contract_signs_its_data_and_a_changed_list_does_not_verify(monkeypatch):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    key = Ed25519PrivateKey.generate()
+    pub = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    monkeypatch.setattr(contract, "PUBLIC_KEYS", {"test": base64.b64encode(pub).decode()})
+    data = {"voices": [{"id": "default"}], "music": [{"id": "calm-01"}]}
+    text = "SOUND rules."
+    env = {"version": "v2", "key_id": "test", "sha256": hashlib.sha256(text.encode()).hexdigest(), "text": text, "data": data,
+           "signature": base64.b64encode(key.sign(contract._message("test", "v2", text, data))).decode()}
+    assert contract.verify(env)
+    assert not contract.verify({**env, "data": {**data, "music": [{"id": "someone-elses"}]}})
+    assert not contract.verify({k: v for k, v in env.items() if k != "data"})
