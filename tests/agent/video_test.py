@@ -295,6 +295,7 @@ class FakeService:
 
     def __init__(self, monkeypatch):
         self.submitted, self.polls, self.refuse, self.state, self.filled = [], [], None, "done", []
+        self.over = None
         self.result = {"state": "done", "kind": "review", "findings": [], "sheet": SHEET}
         monkeypatch.setattr(video, "submit", self.submit)
         monkeypatch.setattr(video, "fill_template", self.fill)
@@ -312,6 +313,8 @@ class FakeService:
         self.submitted.append({"kind": kind, "html": html, "images": images, "params": params, "key": key})
         if self.refuse:
             raise video.Refused("fix first", self.refuse)
+        if self.over:
+            raise video.OverAllowance(self.over)
         return {"token": f"tok{len(self.submitted)}", "times": (params or {}).get("at") or [0.5, 1.5],
                 "root": {"duration": 10, "width": 1080, "height": 1920}}
 
@@ -452,6 +455,31 @@ def test_a_render_cut_off_is_collected_not_paid_for_twice(monkeypatch, tmp_path)
     _run({"action": "render", "name": "r"}, _ws(tmp_path))
     assert (tmp_path / "videos" / "r.mp4").read_bytes() == b"MP4:tok3"
     assert list((tmp_path / ".trash").glob("*/data/videos/r.mp4"))
+
+
+OVER = "This organisation has used today's video allowance (4 GPU hours); it starts again at midnight UTC."
+
+
+def test_over_the_allowance_a_write_is_saved_and_shown_and_a_render_says_why(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    svc.over = OVER
+    VIDEO_LOADED.set(True)
+    out = _run({"action": "write", "name": "m", "html": COMP}, _ws(tmp_path))
+    text = out["_model"] if isinstance(out["_model"], str) else out["_model"][-1]["text"]   # no sheet: just text
+    assert (tmp_path / "videos" / "m.video.html").exists()
+    assert "Lint clean. This organisation has used today's video allowance" in text and "preview works" in text
+    assert out["_ui"][0]["action"] == "open_canvas"            # lint passed: the preview opens
+    out = _run({"action": "render", "name": "m"}, _ws(tmp_path))
+    assert out.startswith("Error: Video is unavailable: This organisation has used")
+    assert not (tmp_path / "videos" / "m.mp4").exists()
+
+
+def test_a_429_from_the_door_is_over_the_allowance(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    _transport(monkeypatch, lambda r: httpx.Response(429, json={"error": OVER, "allowance": True}))
+    with pytest.raises(video.OverAllowance, match="midnight UTC"):
+        asyncio.run(video.submit(_ws(tmp_path), "render", "<html>ok</html>"))
 
 
 def test_render_never_overwrites_an_mp4_it_did_not_make(monkeypatch, tmp_path):

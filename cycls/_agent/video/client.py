@@ -41,6 +41,11 @@ class Unavailable(RuntimeError):
     """The service is not configured, unreachable, paused, or refused the key."""
 
 
+class OverAllowance(Unavailable):
+    """Today's GPU allowance is used up (the organisation's or the person's). The door says so only
+    after lint passed: a preview still works, frames and renders wait until midnight UTC."""
+
+
 class Refused(RuntimeError):
     """The door refused a job before any GPU work: the composition has errors to fix first."""
 
@@ -202,6 +207,8 @@ async def submit(workspace, kind, html, images=None, files=None, *, params=None,
     if resp.status_code == 422:
         data = _body(resp) or {}
         raise Refused(data.get("error") or "the composition has errors", data.get("findings") or [])
+    if resp.status_code == 429 and _ours(resp):
+        raise OverAllowance(_body(resp)["error"])
     if resp.status_code != 200:
         raise _error(resp)
     return resp.json()

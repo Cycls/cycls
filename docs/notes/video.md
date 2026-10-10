@@ -139,8 +139,22 @@ generator that says it started, then sends its report and sheet, then the MP4 in
 and the door holds each job as a live call. The door is a single container keeping its jobs; a
 door restart loses the jobs in flight and the SDK asks once more.
 
+**One organisation per GPU container.** The renderer is `Renderer(slot, gen)`, each pair a pool of
+at most one container; the door gives each organisation one of two slots, and its jobs queue on
+its own container. A slot passes to another organisation only after the door has stopped its
+container and moved its generation on, so no container serves two. Containers also retire after
+50 jobs or on a capture-mode fault.
+
+**The ledger and the allowances.** The door charges GPU seconds per organisation and per person
+per day — each job and the idle tail after a container's last one, as Modal bills them — and
+checks the daily allowances (4 GPU hours an organisation, 1 a person, settable in the service's
+settings Dict) after lint and before any GPU work. Over them a clean composition gets a 429 with
+one sentence: the client raises `OverAllowance` (an `Unavailable`), a save stays saved and opens
+in the canvas with lint passed (its preview needs no GPU), and a render says why it did not run.
+`GET /v1/ledger?day=YYYY-MM-DD` sums a day.
+
 Routes the SDK calls (all need `X-Video-Key`; the SDK also sends a hashed tenant and user):
-`GET /health`, `GET /v1/contract`, `POST /v1/warm`, `POST /v1/compile`, `POST /v1/jobs`,
+`GET /health`, `GET /v1/contract`, `POST /v1/warm`, `POST /v1/compile`, `POST /v1/jobs` (422 lint, 429 allowance),
 `GET /v1/jobs/{token}?wait=25`, `GET /v1/jobs/{token}/video`. Requests carry a JSON `meta` part
 and the images under hashed ASCII names; nothing waits more than 30 s.
 

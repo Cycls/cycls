@@ -114,6 +114,10 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
     except video.Refused as e:
         text = report.findings_text(e.findings, title="Lint")
         return (text or str(e)) + "\nFix them with `edit`; the file is saved as it is.", [], False
+    except video.OverAllowance as e:
+        # Said only after lint passed: the file is good to preview; frames and the MP4 wait.
+        return (f"Lint clean. {e} The file is saved and its preview works; the browser check, frames and "
+                "the MP4 wait until then — tell the person so."), [], True
     shape = _root_text(job.get("root"))
     head = f"Lint clean ({shape})." if shape else "Lint clean."
     r = await video.wait(workspace, job["token"], budget or BUDGET["check"])
