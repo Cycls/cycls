@@ -574,3 +574,14 @@ def test_a_template_is_filled_with_the_brand_kit_for_what_was_left_out(monkeypat
     assert svc.submitted[-1]["kind"] == "review" and svc.submitted[-1]["key"]
     bad = _run({"action": "template", "name": "x", "template": "nope", "vars": {}}, _ws(tmp_path))
     assert bad.startswith("Error: the template was not filled") and not (tmp_path / "videos" / "x.video.html").exists()
+
+
+def test_the_player_route_takes_an_unresolved_root(monkeypatch, tmp_path):
+    """The files route passes a resolved file and the workspace root as it is configured."""
+    from cycls._agent.web.video_routes import _video_response
+    (tmp_path / "ws" / "videos").mkdir(parents=True)
+    f = tmp_path / "ws" / "videos" / "r.video.html"
+    f.write_text(COMP, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    out = asyncio.run(_video_response(Path("ws"), f.resolve(), "org1:u"))
+    assert out["render"]["path"] == "videos/r.mp4"
