@@ -45,7 +45,7 @@ English and Arabic) went to Video's guide and "a poster" to Design; "animate thi
 with a `read` of the deck. Shown a sheet with a counter stuck at 0 and Arabic letters broken
 apart, K3 named both in two of three runs and fixed the Arabic in the third.
 
-## Sound (protocol 2; on the dev service, not yet in production)
+## Sound (protocol 2; in production on super-dev since 2026-10-10, revision `super-dev-00066-t44`, SDK `91f07aac`)
 
 Version 2 adds a voice-over and music. The SDK speaks protocol 2 (`X-Video-Proto: 2`); the service
 answers protocol 1 exactly as before and serves each agent the contract for its protocol, so the
