@@ -45,6 +45,29 @@ English and Arabic) went to Video's guide and "a poster" to Design; "animate thi
 with a `read` of the deck. Shown a sheet with a counter stuck at 0 and Arabic letters broken
 apart, K3 named both in two of three runs and fixed the Arabic in the third.
 
+## Sound (protocol 2; on the dev service, not yet in production)
+
+Version 2 adds a voice-over and music. The SDK speaks protocol 2 (`X-Video-Proto: 2`); the service
+answers protocol 1 exactly as before and serves each agent the contract for its protocol, so the
+production agent is taught nothing it cannot make until it runs this SDK.
+
+- `voice {name, text, voice?, language?}`: the script is read aloud on the organisation's GPU (Chatterbox
+  Multilingual V3, or NAMAA's Saudi voice for `voice: "saudi"`; chosen by a blind listening test, docs in
+  cycls-video `docs/quirks.md`). Numbers, money and dates are read out in words; every word is timed by the
+  service's aligner. Saved as `videos/voice/<name>.m4a` and `<name>.words.json` (versioned through
+  `write_fig`). The reply gives each sentence's times, the word timeline and the `<audio>` and captions lines
+  to use. The same name, script and voice is the same take; a take cut off is collected by the next call
+  (the sidecar keeps its token).
+- `music {query?}`: the library's tracks from the signed contract's data (CC0, chosen by the user), each used
+  as `src="music:<id>"`. Music only when the person asks.
+- Every check and render sends the composition's audio files and their word timings (`media.collect_audio`)
+  and its key covers them; every reply carries the sound map (`report.sound_text`): the tracks, when each
+  sentence is spoken, and notes such as a scene starting inside a word. A render reply adds the MP4's
+  loudness and peak.
+- The service expands `data-duck` (music dips under the voice) and `data-captions` (a captions box filled
+  from the voice's words, line by line, on its clock), and gives music a length, a fade and a level. The
+  preview plays one mixed track kept in step with the player; the canvas needs no change (proof P1).
+
 ## The tool
 
 | Action | Input | What comes back |

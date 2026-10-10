@@ -60,16 +60,20 @@ async def _video_response(root, file_path, subject):
         out["reason"] = "Video is not configured here."
         return out
     images, image_files, problems = await asyncio.to_thread(media.collect, html, root)
+    audio, audio_files, words, more = await asyncio.to_thread(media.collect_audio, html, root)
+    problems += more
     if problems:
         out["reason"] = problems[0]
         return out
     stat = {}
-    for path in images:
+    for path in [*images, *audio]:
         try:
             st = (root / path).stat() if not path.startswith("../") else None
-            stat[path] = f"{st.st_mtime_ns}-{st.st_size}" if st else images[path]
+            stat[path] = f"{st.st_mtime_ns}-{st.st_size}" if st else (images.get(path) or audio.get(path))
         except OSError:
-            stat[path] = images[path]
+            stat[path] = images.get(path) or audio.get(path)
+    for hashed, w in words.items():
+        stat[f"words:{hashed}"] = hashlib.sha256(json.dumps(w, sort_keys=True).encode("utf-8")).hexdigest()[:16]
     from cycls._agent.video import contract
     bundle = (contract.cached() or {}).get("bundle") or ""
     cache = root / _VIDEO_CACHE
@@ -82,7 +86,7 @@ async def _video_response(root, file_path, subject):
             pass
     ws = types.SimpleNamespace(subject=subject)
     try:
-        r = await video.compile(ws, html, images, image_files, preview=True)
+        r = await video.compile(ws, html, images, {**image_files, **audio_files}, preview=True, audio=audio, words=words)
     except video.Unavailable as e:
         out["reason"] = f"The video service is unavailable: {e}"
         return out

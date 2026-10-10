@@ -56,6 +56,72 @@ LOOK_AT_IT = ("Look at the sheet before you go on: every word on screen readable
               "fix it with `edit`, or `look` at the moment more closely.")
 
 
+def _t(x):
+    return f"{x:.2f}".rstrip("0").rstrip(".") if isinstance(x, (int, float)) else "?"
+
+
+def sound_text(sound):
+    """The sound map, as the model reads it in place of hearing: the tracks, when each sentence is
+    spoken, and the notes (a scene starting inside a word). '' for a silent video."""
+    if not sound or not sound.get("tracks"):
+        return ""
+    lines = ["Sound map:"]
+    for t in sound["tracks"]:
+        what = f"music {t['music']}" if t.get("music") else f"{t.get('kind', 'audio')}, {t.get('src')}"
+        bits = [f"{_t(t.get('start'))}–{_t(t.get('end'))} s" if t.get("end") is not None else f"from {_t(t.get('start'))} s"]
+        if t.get("media_start"):
+            bits.append(f"from {_t(t['media_start'])} s into its file")
+        if t.get("volume", 1) != 1:
+            bits.append(f"level {_t(t['volume'])}")
+        if t.get("ducked_by"):
+            bits.append(f"dips under {', '.join(t['ducked_by'])}")
+        if t.get("fade_out"):
+            bits.append(f"fades out over its last {_t(t['fade_out'])} s")
+        lines.append(f"- {t.get('id') or '(no id)'} ({what}): {', '.join(bits)}")
+    speech = sound.get("speech") or []
+    if speech:
+        lines.append("Spoken: " + " · ".join(f"{_t(s['start'])}–{_t(s['end'])} \"{s['text'][:80]}\"" for s in speech[:20]))
+    for n in sound.get("notes") or []:
+        lines.append(f"Note: {n}.")
+    return "\n".join(lines)
+
+
+def voice_text(words, rel, *, warnings=(), reused=False, voice_id="default"):
+    """A voice-over's reply: the file, its length, when each sentence and word is spoken, and the
+    lines to put in the composition."""
+    name = rel.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    head = (f"{'Already made' if reused else 'Made'} {rel} ({_t(words.get('duration'))} s, voice {voice_id}); "
+            f"its word timings are in {rel.rsplit('.', 1)[0]}.words.json.")
+    lines = [head, "Sentences (seconds into the voice-over):"]
+    for s in words.get("sentences") or []:
+        lines.append(f"- {_t(s['start'])}–{_t(s['end'])}: {s['text']}")
+    w = words.get("words") or []
+    if w:
+        lines.append("Words: " + " ".join(f"{_t(x['start'])} {x['text']}" for x in w[:160]) + (" …" if len(w) > 160 else ""))
+    untimed = [x["text"] for x in w if x.get("untimed")]
+    if untimed:
+        lines.append(f"Not timed exactly (they share the gap around them): {' '.join(untimed[:12])}.")
+    for x in warnings or []:
+        lines.append(f"Warning: {x}")
+    lines.append(
+        f"Put it in the composition (data-start = when the voice begins in the video; add that to the times above):\n"
+        f"  <audio id=\"vo\" src=\"{rel}\" data-start=\"0.5\"></audio>\n"
+        f"Captions, at the root: <div class=\"cap\" data-captions=\"vo\" data-cap-style=\"phrase\"></div> "
+        f"(or \"word\"). Start scenes between sentences, and make the video at least "
+        f"{_t((words.get('duration') or 0) + 1.0)} s long with the voice starting at 0.5 s.")
+    if name:
+        lines.append(f"To change the script, call voice again with name {name}: the old take is kept as a version.")
+    return "\n".join(lines)
+
+
+def audio_facts(a):
+    """A render's sound, measured: loudness and peak."""
+    if not a:
+        return ""
+    bits = [f"{a['lufs']:.1f} LUFS" if a.get("lufs") is not None else "", f"peak {a['peak_dbtp']:.1f} dB" if a.get("peak_dbtp") is not None else ""]
+    return "Sound: " + ", ".join(b for b in bits if b) + "." if any(bits) else "Sound: present."
+
+
 def clip(text):
     return text if len(text) <= MAX_TEXT else text[:MAX_TEXT] + "\n…"
 

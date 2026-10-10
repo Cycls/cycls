@@ -7,11 +7,15 @@ deploying the service. A contract change ships with the service and needs no age
 
 Fetched with a 10-minute process cache. A turn start waits for it at most 4 s, then carries on
 while a background fetch fills the cache; `guide` waits up to 30 s. When none can be had, or none
-verifies, the built-in copy of contract v1 (fallback.py) is used and the reply says so.
+verifies, the built-in copy (fallback.py) is used and the reply says so.
+
+From contract v2 (protocol 2, sound) the envelope also carries data, signed with the text: the
+voices and the music library, which the `music` action searches without the model reading it.
 """
 import asyncio
 import base64
 import hashlib
+import json
 import time
 
 from .fallback import FALLBACK
@@ -27,9 +31,13 @@ _cache = {"at": 0.0, "value": None, "etag": None}
 _task = None
 
 
-def _message(key_id, version, text):
+def _message(key_id, version, text, data=None):
     sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    return b"\n".join([_PREFIX, key_id.encode(), version.encode(), sha.encode()])
+    parts = [_PREFIX, key_id.encode(), version.encode(), sha.encode()]
+    if data is not None:
+        canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        parts.append(hashlib.sha256(canonical).hexdigest().encode())
+    return b"\n".join(parts)
 
 
 def verify(env):
@@ -43,7 +51,7 @@ def verify(env):
         key = Ed25519PublicKey.from_public_bytes(base64.b64decode(PUBLIC_KEYS[env["key_id"]]))
         if hashlib.sha256(env["text"].encode("utf-8")).hexdigest() != env["sha256"]:
             return False
-        key.verify(base64.b64decode(env["signature"]), _message(env["key_id"], env["version"], env["text"]))
+        key.verify(base64.b64decode(env["signature"]), _message(env["key_id"], env["version"], env["text"], env.get("data")))
         return True
     except (KeyError, TypeError, ValueError, InvalidSignature):
         return False
@@ -51,7 +59,7 @@ def verify(env):
 
 def _fallback(reason):
     return {"text": FALLBACK["text"], "version": FALLBACK["version"], "formats": FALLBACK["formats"],
-            "fonts": FALLBACK["fonts"], "limits": FALLBACK["limits"], "fallback": reason}
+            "fonts": FALLBACK["fonts"], "limits": FALLBACK["limits"], "data": FALLBACK.get("data") or {}, "fallback": reason}
 
 
 async def _fetch():
@@ -68,7 +76,7 @@ async def _fetch():
         return None, "the service's contract did not verify"
     value = {"text": env["text"], "version": env["version"], "formats": body.get("formats") or FALLBACK["formats"],
              "fonts": body.get("fonts") or FALLBACK["fonts"], "limits": body.get("limits") or FALLBACK["limits"],
-             "bundle": body.get("bundle")}
+             "bundle": body.get("bundle"), "data": env.get("data") or {}, "templates": body.get("templates") or []}
     _cache.update(at=time.monotonic(), value=value, etag=body.get("etag"))
     return value, None
 

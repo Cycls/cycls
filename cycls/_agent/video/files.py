@@ -40,6 +40,18 @@ def mp4(name):
     return f"{DIR}/{name}.mp4"
 
 
+# A voice-over: videos/voice/<name>.m4a, and its word timings beside it.
+VOICE_DIR = f"{DIR}/voice"
+
+
+def voice_audio(name):
+    return f"{VOICE_DIR}/{name}.m4a"
+
+
+def voice_words(name):
+    return f"{VOICE_DIR}/{name}.words.json"
+
+
 def _sidecar_path(root, chat_id):
     return Path(root) / SIDECAR / f"{re.sub(r'[^A-Za-z0-9_-]', '_', chat_id or 'none')}.json"
 
@@ -99,6 +111,22 @@ def render_done(root, chat_id, name, sha):
     data.setdefault("rendered", {})[name] = {"sha": sha, "at": time.time()}
     save(root, chat_id, data)
     return entry
+
+
+def voice_started(root, chat_id, name, token, key):
+    data = load(root, chat_id)
+    data.setdefault("voices", {})[name] = {"token": token, "key": key, "at": time.time()}
+    save(root, chat_id, data)
+
+
+def voice_pending(root, chat_id, name):
+    return (load(root, chat_id).get("voices") or {}).get(name)
+
+
+def voice_done(root, chat_id, name):
+    data = load(root, chat_id)
+    (data.get("voices") or {}).pop(name, None)
+    save(root, chat_id, data)
 
 
 def rendered_by_me(root, chat_id, name):

@@ -70,3 +70,56 @@ def collect(html, root, base_dir="videos"):
         images[path] = hashed
         files[hashed] = data
     return images, files, errors
+
+
+# Sound (protocol 2): the <audio> a composition names by workspace path (a voice-over the tool made,
+# or a file of the person's), each with its word timings when it has them (the voice action writes
+# <name>.words.json beside <name>.m4a). Library music is named music:<id> and is the service's own.
+AUDIO_TYPES = {"m4a", "mp3", "wav"}
+MAX_AUDIO_BYTES = 10 * 1024 * 1024
+MAX_AUDIO = 8
+_AUDIO_TAG = re.compile(r"<audio\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*>", re.I)
+_SRC = re.compile(r"\ssrc\s*=\s*([\"'])([^\"']*)\1", re.I)
+
+
+def collect_audio(html, root, base_dir="videos"):
+    """→ (audio {path as written: hashed name}, files {hashed name: bytes}, words {hashed name: words JSON}, errors)."""
+    import json
+
+    audio, files, words, errors = {}, {}, {}, []
+    for tag in _AUDIO_TAG.finditer(html):
+        m = _SRC.search(tag.group(0))
+        path = _local(m.group(2)) if m else None
+        if path is None or path in audio:
+            continue
+        rel = posixpath.normpath(posixpath.join(base_dir, path)) if path.startswith("../") else path
+        ext = rel.rsplit(".", 1)[-1].lower() if "." in rel else ""
+        if ext not in AUDIO_TYPES:
+            continue   # the service names what it cannot use
+        try:
+            full = _resolve_path(rel, root)
+        except ValueError as e:
+            errors.append(f"{path}: {e}")
+            continue
+        if not full.is_file():
+            continue
+        data = full.read_bytes()
+        if len(data) > MAX_AUDIO_BYTES:
+            errors.append(f"{path} is {len(data) / 1048576:.1f} MB; an audio file in a video is at most 10 MB. Use a "
+                          "shorter clip, or AAC or MP3 at 128 kbps.")
+            continue
+        if len(audio) >= MAX_AUDIO:
+            errors.append(f"A video has at most {MAX_AUDIO} audio files.")
+            break
+        hashed = hashlib.sha256(data).hexdigest()[:32] + "." + ext
+        audio[path] = hashed
+        files[hashed] = data
+        sidecar = full.with_name(full.name.rsplit(".", 1)[0] + ".words.json")
+        if sidecar.is_file():
+            try:
+                w = json.loads(sidecar.read_text(encoding="utf-8"))
+                if isinstance(w, dict) and isinstance(w.get("words"), list):
+                    words[hashed] = w
+            except ValueError:
+                errors.append(f"{sidecar.name} is not readable word timings; make the voice-over again.")
+    return audio, files, words, errors
