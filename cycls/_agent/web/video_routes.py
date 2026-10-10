@@ -46,7 +46,10 @@ async def _video_response(root, file_path, subject):
     from cycls._agent.design.store import version_of
     from cycls._agent.video import media
 
-    root = Path(root)
+    # The files route hands over a resolved path; the root may come relative or unresolved
+    # (`\workspace\local` on Windows): resolve both before one is cut from the other.
+    root = Path(root).resolve()
+    file_path = Path(file_path).resolve()
     rel = file_path.relative_to(root).as_posix()
     data = await asyncio.to_thread(file_path.read_bytes)
     html = data.decode("utf-8", "replace")
