@@ -1,6 +1,8 @@
 # Video for Cycls agents
 
-**Status: built on `feat/agent-video`, running against the dev service; not in production.**
+**Status: on `feat/agent-video`; in production on super-dev since 2026-10-10 (revision
+`super-dev-00065-rwh`, SDK `a8f2cd1b`) for one organisation, against the production service
+`https://cycls--cycls-video-web.modal.run`.**
 A Cycls agent can make **short videos that move** — explainers, reels and stories,
 announcements, animated stats, a deck or a design turned into a video, with on-screen text and
 captions — and show them on the canvas, with **no video engine in the agent image**. The engine
