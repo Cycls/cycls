@@ -103,12 +103,18 @@ def voice_text(words, rel, *, warnings=(), reused=False, voice_id="default"):
         lines.append(f"Not timed exactly (they share the gap around them): {' '.join(untimed[:12])}.")
     for x in warnings or []:
         lines.append(f"Warning: {x}")
+    d = words.get("duration") or 0
+    wps = len(w) / d if d else 0
     lines.append(
-        f"Put it in the composition (data-start = when the voice begins in the video; add that to the times above):\n"
+        f"Put it in the composition once (data-start = when the voice begins in the video; add that to the times above):\n"
         f"  <audio id=\"vo\" src=\"{rel}\" data-start=\"0.5\"></audio>\n"
         f"Captions, at the root: <div class=\"cap\" data-captions=\"vo\" data-cap-style=\"phrase\"></div> "
-        f"(or \"word\"). Start scenes between sentences, and make the video at least "
-        f"{_t((words.get('duration') or 0) + 1.0)} s long with the voice starting at 0.5 s.")
+        f"(or \"word\"). Start scenes between sentences.")
+    lines.append(
+        f"Length: this take is {_t(d)} s ({wps:.1f} words a second), so the video should end about 1 s after it: "
+        f"data-duration {_t(round(d + 1.5, 1))} with the voice at 0.5 s. A longer video needs a longer script — about "
+        f"{max(1, round(wps))} more words for each extra second — read again with voice; otherwise the picture runs on "
+        f"with nothing to hear, unless music plays under all of it.")
     if name:
         lines.append(f"To change the script, call voice again with name {name}: the old take is kept as a version.")
     return "\n".join(lines)
