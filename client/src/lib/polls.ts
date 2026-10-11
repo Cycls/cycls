@@ -26,7 +26,7 @@ export interface PollTally {
 // What present mode can do with a deck's polls (the owner's; a shared deck has none).
 export interface PollApi {
   open(slide: number, poll: DeckPoll): Promise<{ session: string }>;
-  close(): Promise<void>;
+  close(session: string): Promise<void>;
   results(session: string): Promise<PollTally>;
   joinUrl(): Promise<string | null>;   // the deck's public link, for voting — if it has one
   makeLink(): Promise<string>;         // make one (the presenter's click)

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { percents, qrPath, type DeckPoll, type PollApi, type PollTally } from "../lib/polls";
 import { track } from "../lib/analytics";
 import { t } from "../lib/i18n";
@@ -9,18 +9,16 @@ import { t } from "../lib/i18n";
 // it again from zero (R in present mode).
 export function useLivePoll(api: PollApi | undefined, poll: DeckPoll | null | undefined, slide: number, restart: number) {
   const [tally, setTally] = useState<PollTally | null>(null);
+  const queue = useRef<Promise<unknown>>(Promise.resolve());   // opens and closes reach the server in order
   useEffect(() => {
     setTally(null);
     if (!api || !poll) return;
     let cancelled = false, timer = 0;
+    const opened: Promise<string | null> = queue.current.then(() => api.open(slide, poll).then((r) => r.session, () => null));
+    queue.current = opened;
     (async () => {
-      let session: string;
-      try {
-        session = (await api.open(slide, poll)).session;
-      } catch {
-        return;                                          // couldn't open: the slide stays as drawn
-      }
-      if (cancelled) return;
+      const session = await opened;
+      if (!session || cancelled) return;                 // couldn't open: the slide stays as drawn
       track("poll_opened", { options: poll.options.length });
       const tick = async () => {
         try {
@@ -34,7 +32,7 @@ export function useLivePoll(api: PollApi | undefined, poll: DeckPoll | null | un
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
-      api.close().catch(() => {});
+      queue.current = opened.then((session) => { if (session) return api.close(session).catch(() => {}); });
     };
   }, [api, poll, slide, restart]);
   return tally;

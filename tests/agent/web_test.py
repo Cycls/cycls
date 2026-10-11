@@ -2805,6 +2805,28 @@ def test_a_vote_is_checked(tmp_path):
     assert client.post("/polls", json={"deck": "../etc/x.deck.json", "question": "Q?", "options": ["A", "B"]}).status_code == 400
 
 
+def test_a_late_close_leaves_a_newer_poll_open(tmp_path, monkeypatch):
+    from cycls._app.db import DB
+    client, base = _poll_setup(tmp_path)
+    deck = {"deck": "designs/pitch.deck.json", "question": "Q?", "options": ["A", "B"]}
+    first = client.post("/polls", json=deck).json()["session"]
+    second = client.post("/polls", json=deck).json()["session"]
+    client.post("/polls/close", json={"deck": deck["deck"], "session": first})   # a restart's close, landing after its open
+    assert client.get(base).json()["session"] == second and client.get(base).json()["open"]
+    read = DB.get_gen
+
+    async def opened_meanwhile(self, key, default=None):   # a poll opens between the close's read and its write
+        got = await read(self, key, default)
+        await self.put(key, {**got[0], "session": "newer"})
+        return got
+    with monkeypatch.context() as m:
+        m.setattr(DB, "get_gen", opened_meanwhile)
+        client.post("/polls/close", json={"deck": deck["deck"], "session": second})
+    assert client.get(base).json()["session"] == "newer" and client.get(base).json()["open"]
+    client.post("/polls/close", json={"deck": deck["deck"], "session": "newer"})
+    assert client.get(base).json() == {"open": False}
+
+
 def test_polls_only_through_a_deck_share_its_audience_can_see(tmp_path):
     client, base = _poll_setup(tmp_path, path="file/notes.md")
     assert client.get(base).status_code == 404                                           # not a deck

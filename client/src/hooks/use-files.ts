@@ -333,7 +333,7 @@ export function useFiles(baseUrl: string = "") {
   const pollsFor = useCallback((deck: string): PollApi => ({
     open: async (slide, poll) =>
       (await api("/polls", { method: "POST", json: { deck, slide, question: poll.question, options: poll.options } })).json(),
-    close: async () => { await api("/polls/close", { method: "POST", json: { deck }, silent: true }); },
+    close: async (session) => { await api("/polls/close", { method: "POST", json: { deck, session }, silent: true }); },
     results: async (session) =>
       (await api(`/polls/results?deck=${encodeURIComponent(deck)}&session=${encodeURIComponent(session)}`, { silent: true })).json(),
     joinUrl: async () => {

@@ -52,10 +52,24 @@ describe("a poll slide, presented by its owner", () => {
     const bars = screen.getAllByTestId("poll-bar").map((g) => g.querySelector("rect")!.getAttribute("style") ?? "");
     expect(bars[0]).toContain("scaleX(0.25)");
     expect(bars[1]).toContain("scaleX(0.75)");
-    key("r");                                                         // restart: a fresh session
+    key("r");                                                         // restart: the old session closes, then a fresh one opens
     await waitFor(() => expect(api.open).toHaveBeenCalledTimes(2));
+    expect(api.close).toHaveBeenCalledWith("s1");
+    expect(api.close.mock.invocationCallOrder[0]).toBeLessThan(api.open.mock.invocationCallOrder[1]);
     key("ArrowLeft");
-    await waitFor(() => expect(api.close).toHaveBeenCalled());
+    await waitFor(() => expect(api.close).toHaveBeenCalledTimes(2));
+  });
+
+  it("a poll that opens after its slide has gone is closed, and not followed", async () => {
+    const api = fakeApi();
+    let opened!: (v: { session: string }) => void;
+    api.open.mockImplementationOnce(() => new Promise((r) => { opened = r; }));
+    render(<PresentMode deck={{ slides: ["data:b", "data:a"], polls: [poll, null] }} onClose={() => {}} polls={api} />);
+    await waitFor(() => expect(api.open).toHaveBeenCalledOnce());
+    key("ArrowRight");
+    await act(async () => opened({ session: "late" }));
+    await waitFor(() => expect(api.close).toHaveBeenCalledWith("late"));
+    expect(api.results).not.toHaveBeenCalled();
   });
 
   it("offers to make the public link, then shows the join QR", async () => {

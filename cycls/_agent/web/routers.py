@@ -1533,10 +1533,15 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.post("/polls/close")
     async def close_poll(request: Request, ws: Workspace = ws_dep):
-        deck = _poll_deck((await request.json()).get("deck"))
-        current = await DB(ws).get(f"{_poll_key(deck)}/current")
-        if current and current.get("open"):
-            await DB(ws).put(f"{_poll_key(deck)}/current", {**current, "open": False})
+        """Close the poll `session` names — never one opened since, which a late close would end."""
+        data = await request.json()
+        key = f"{_poll_key(_poll_deck(data.get('deck')))}/current"
+        current, gen = await DB(ws).get_gen(key)
+        if current and current.get("open") and data.get("session") in (None, current.get("session")):
+            try:
+                await DB(ws).put(key, {**current, "open": False}, gen=gen)
+            except Conflict:
+                pass   # a poll opened meanwhile: it stays open
         return {"ok": True}
 
     @r.get("/polls/results")
