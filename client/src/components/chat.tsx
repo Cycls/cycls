@@ -25,7 +25,7 @@ import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-chat";
 import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, WriteFile } from "../hooks/use-files";
-import { designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
+import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
 import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
@@ -396,12 +396,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       } else if (ev.action === "design_command" && typeof ev.path === "string" && typeof ev.script === "string") {
         // The agent is editing an OPEN design live — forward the script to that
         // .fig's embedded editor (DesignEditorView listens for this and relays it).
-        window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: {
-          path: ev.path, script: ev.script, intent: typeof ev.intent === "string" ? ev.intent : undefined,
-          version: typeof ev.version === "string" ? ev.version : undefined,   // the file as the agent saved it
-          page: typeof ev.page === "string" ? ev.page : undefined,            // the page it is made on
-          reload: ev.reload === true,                                         // its pages changed: re-open, don't replay
-        } }));
+        window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: designCommandDetail(ev) }));
         track("ui_action", { action: "design_command" });
       } else if (ev.action === "suggest" && typeof ev.text === "string") {
         if (followUpsEnabled()) {

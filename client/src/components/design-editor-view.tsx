@@ -177,6 +177,17 @@ export function useDesignPages(path: string): DesignPages | null {
   }, [path]);
   return value;
 }
+// What an agent's edit of a design (its `design_command` event) tells the editors that
+// have it open: the script to replay, the file's version once it is made, the page it is
+// made on, `reload` when the pages themselves changed — and `live` when the room of
+// people in the design took the edit, so no editor here makes it a second time.
+export type DesignCommand = { path: string; script: string; intent?: string; version?: string; page?: string; reload: boolean; live: boolean };
+export function designCommandDetail(ev: Record<string, unknown>): DesignCommand {
+  const words = (v: unknown) => (typeof v === "string" ? v : undefined);
+  return { path: String(ev.path), script: String(ev.script), intent: words(ev.intent), version: words(ev.version),
+           page: words(ev.page), reload: ev.reload === true, live: ev.live === true };
+}
+
 // Who else has a design open in its editor right now (the editor's `presence`), and
 // whether this editor is the one saving for all of them. Null while nobody else could
 // be: no editor of the design is open, or it was opened alone.

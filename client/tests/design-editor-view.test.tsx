@@ -813,6 +813,24 @@ describe("DesignEditorView, together", () => {
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "command" }), EDITOR);
   });
 
+  it("the chat tells the editor the room took the edit — as the server told the chat", async () => {
+    // The server marks the event `live`, and the editor reads it; the chat, which carries
+    // it from one to the other, left it out — so the edit was made a second time, by the
+    // editor of whoever asked for it, on the document everyone shares.
+    const { designCommandDetail } = await import("../src/components/design-editor-view");
+    const said = designCommandDetail({ action: "design_command", path: "designs/launch.fig", script: "S", intent: "tidy",
+                                       version: "v2", page: "Story", live: true });
+    expect(said).toEqual({ path: "designs/launch.fig", script: "S", intent: "tidy", version: "v2", page: "Story", reload: false, live: true });
+    expect(designCommandDetail({ path: "designs/launch.fig", script: "S" }))
+      .toEqual({ path: "designs/launch.fig", script: "S", intent: undefined, version: undefined, page: undefined, reload: false, live: false });
+    const { frame } = mount({ host: live() });
+    const { post, load } = await ready(frame(), 2, ["live"]);
+    fromEditor(frame(), "presence", { doc: load.doc, saver: false, connected: true, peers: [BADR] });
+    await flush();
+    await command(said);
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "command" }), EDITOR);
+  });
+
   it("…but an editor that is not in the room (it opened alone) makes the edit itself", async () => {
     const { frame } = mount({ host: live(null) });
     const { post } = await ready(frame(), 2, ["live"]);
