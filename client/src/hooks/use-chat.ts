@@ -30,7 +30,7 @@ export interface Part {
   ok?: boolean; // false when the tool call errored (refetch projection)
   id?: string;       // tool-call id — threads ToolStart → step_arg → final step
   args?: string;     // accumulated tool-call input (partial JSON), for the live preview
-  at?: number;       // when this step first appeared in this tab (not stored) — its elapsed time
+  at?: number;       // when this tab first saw the step (not stored), for its elapsed time
   connector?: string; // a connector's tool: the name whose logo heads the call block
   icon?: string;     // a custom tool's own image, from `.on(icon=…)`
   result?: string;   // a connector call's outcome, bounded — the block's Response
@@ -49,7 +49,6 @@ export interface Part {
 }
 
 export type UIAction = { action: string } & Record<string, unknown>;
-// `selection`: what the person selected in an open design, attached with "Add selection".
 export type SendExtra = { approvals?: string[]; connectors?: string[]; selection?: DesignSelection };
 export type UIHandler = (ev: UIAction) => void;
 
@@ -96,7 +95,7 @@ export interface AppConfig {
   design_editor_url?: string;   // base URL of the embedded design editor for .fig files (env DESIGN_EDITOR_URL)
 }
 
-// How `retry` names the message it re-sends to the server: the sha256 of its text.
+// How `retry` names the message it drops on the server.
 async function sha256Hex(text: string): Promise<string | null> {
   try {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
@@ -332,7 +331,6 @@ export function useChat(baseUrl: string = "") {
         const url = chatIdRef.current
           ? `${baseUrl}/chat?id=${encodeURIComponent(chatIdRef.current)}`
           : `${baseUrl}/chat`;
-        // (With the user's headers; a 401 from a token gone stale in a background tab is asked once more.)
         const response = await fetchAuthed(url, {
           method: "POST",
           headers,
@@ -604,17 +602,14 @@ export function useChat(baseUrl: string = "") {
     [isStreaming, baseUrl, authHeaders],
   );
 
-  // Send a failed turn's message again. A stopped or failed run keeps that message on
-  // the server, so it is dropped there first — or the resend stores it a second time
-  // and a reload shows it twice. `expect` names the message: the server drops that
-  // turn and no other, so a request that never arrived costs the chat nothing.
+  // The server kept the failed turn's message: drop it first or a reload shows it twice.
+  // `expect` names it, so a request that never arrived drops nothing.
   const retry = useCallback(async () => {
     if (isStreaming) return;
     const msgs = messagesRef.current;
     let i = msgs.length - 1;
     while (i >= 0 && msgs[i].role !== "user") i--;
-    // A turn that failed on the server ends its stream cleanly, which clears the stored
-    // request — the message is then the last one the person sent.
+    // A server-side failure ends the stream cleanly and clears the stored request.
     const request = lastRequestRef.current
       ?? (i >= 0 ? { text: msgs[i].content, attachments: msgs[i].attachments, origin: "retry", selection: msgs[i].selection } : null);
     if (!request) return;
@@ -624,12 +619,11 @@ export function useChat(baseUrl: string = "") {
       if (expect) {
         try {
           await api(`/chats/${encodeURIComponent(chatIdRef.current)}/last-exchange?expect=${expect}`, { method: "DELETE" });
-        } catch { return; }   // api() has toasted why (the chat is still working, no connection)
+        } catch { return; }   // api() has toasted why
       }
     }
     track("message_retried", { chat_id: chatIdRef.current });
-    // Off the screen too — send() puts the message and a fresh reply back. A silent
-    // send (an approval) has no bubble of its own: only the failed reply goes.
+    // send() puts the message back; a silent send (an approval) has no bubble, so only the reply goes.
     const shown = i >= 0 && msgs[i].content === text && origin !== "confirm";
     setMessages(shown ? msgs.slice(0, i) : msgs[msgs.length - 1]?.role === "assistant" ? msgs.slice(0, -1) : msgs);
     setTimeout(() => send(text, attachments, origin, selection ? { selection } : undefined), 0);

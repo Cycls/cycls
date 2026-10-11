@@ -7,11 +7,8 @@ import { track } from "../lib/analytics";
 import { t, timeAgo } from "../lib/i18n";
 import { cn } from "../lib/utils";
 
-// Comments on a design, as they are seen and written (lib/comments.ts keeps them):
-// pins over a slide's picture, each opening its thread beside it; a click on the slide
-// that pins a new one; the list of every thread; and the two buttons that turn these on.
-// A pin is a point of the SLIDE — in its own pixels — so it sits on the same spot of the
-// design however large the picture is drawn, here and in the editor.
+// Comment UI for a design (state in lib/comments.ts). A pin is a point in the slide's own
+// pixels, so it stays put at any scale, here and in the editor.
 
 type Comments = NonNullable<ReturnType<typeof useComments>>;
 
@@ -33,8 +30,7 @@ function Avatar({ c, author, className }: { c: Comments; author: CommentAuthor; 
   );
 }
 
-// Words being written: a new comment, a reply, a comment being changed. Enter sends
-// them (Shift+Enter is a new line); typing here is typing — no key reaches the deck.
+// Enter sends, Shift+Enter is a new line; keys stop here so none reach the deck.
 function Writer({ placeholder, start = "", focus, onSend, onCancel }: {
   placeholder: string;
   start?: string;
@@ -51,7 +47,7 @@ function Writer({ placeholder, start = "", focus, onSend, onCancel }: {
     try {
       await onSend(words);
       setText("");
-    } catch { /* the toast said why; the words stay to send again */ } finally {
+    } catch { /* the toast said why; the text stays */ } finally {
       setBusy(false);
     }
   };
@@ -74,8 +70,7 @@ function Writer({ placeholder, start = "", focus, onSend, onCancel }: {
   );
 }
 
-// One thing said in a thread: who, when, the words — and, for its author, the way to
-// change or remove it.
+// One comment or reply; its author can edit or delete it.
 function Said({ c, author, text, at, edited, onEdit, onDelete }: {
   c: Comments;
   author: CommentAuthor;
@@ -158,11 +153,9 @@ function ThreadCard({ c, thread }: { c: Comments; thread: CommentThread }) {
   );
 }
 
-const PIN = 28;   // a pin's size on the page; its tip — the point it marks — is its bottom-left corner
+const PIN = 28;   // px; its tip, the point it marks, is the bottom-left corner
 
-// Where a card `w`×`h` goes for the pin at `at` in a layer `within`: beside the pin — to
-// its right, else its left — and where the layer is too narrow for either, under it
-// (over it, with no room below). Never on the pin, and never past the layer's edges.
+// A card beside the pin: right, else left, else below (above if no room), inside `within`.
 export function beside(at: { x: number; y: number }, card: { w: number; h: number }, within: { w: number; h: number }) {
   const gap = 8, edge = 8;
   const clamp = (v: number, most: number) => Math.max(edge, Math.min(v, Math.max(edge, most)));
@@ -185,8 +178,7 @@ function Beside({ at, within, children }: { at: { x: number; y: number }; within
     setPos((was) => (was && Math.abs(was.left - left) < 0.5 && Math.abs(was.top - top) < 0.5 ? was : { left, top }));
   });
   return (
-    // Unseen until it is placed — but never `visibility: hidden`: a browser will not focus
-    // what is hidden, and the box inside takes the keys the moment it opens.
+    // Opacity 0 until placed, not `visibility: hidden`, which would block the autofocus.
     <div ref={ref} style={{ left: pos?.left ?? 0, top: pos?.top ?? 0, opacity: pos ? undefined : 0 }}
          onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}
          className="pointer-events-auto absolute z-20 w-72 max-w-[calc(100%-16px)] overflow-hidden rounded-xl border border-border bg-background text-start shadow-xl">
@@ -195,9 +187,7 @@ function Beside({ at, within, children }: { at: { x: number; y: number }; within
   );
 }
 
-// Whatever is open on a design — the comment being written, or a thread — as a card
-// beside the point `at` of a layer `within`: where the design is drawn by something
-// else (the editor draws its own pins, and says where the open one is).
+// The open draft or thread as a card at `at`, for a design drawn elsewhere (the editor).
 export function OpenComment({ path, at, within }: { path: string; at: { x: number; y: number }; within: { w: number; h: number } }) {
   const c = useComments(path);
   if (!c) return null;
@@ -216,9 +206,7 @@ export function OpenComment({ path, at, within }: { path: string; at: { x: numbe
   return thread ? <Beside at={at} within={within}><ThreadCard c={c} thread={thread} /></Beside> : null;
 }
 
-// What the editor is given to draw: the pins of the page it shows — each on the slide it
-// is on now, by that slide's place — comment mode, the pin that is open, and the comment
-// being written. (The editor has no names or threads: a pin is a spot, a letter, a colour.)
+// The editor's `comments` message: the pins of its page (a spot, a letter, a colour; no threads).
 export type EditorPin = { id: string; frame: number; x: number; y: number; label: string; color: string; image?: string; dim?: boolean };
 export function editorComments(c: Comments, names: string[], page: string | undefined, pages: string[]) {
   const pins: EditorPin[] = [];
@@ -238,8 +226,7 @@ export function editorComments(c: Comments, names: string[], page: string | unde
 
 type Box = { left: number; top: number; width: number; height: number; w: number; h: number };
 
-// The picture's box inside the layer over it, in the layer's pixels: a slide is drawn
-// as large as fits, so its picture is rarely the whole of the stage it sits on.
+// The picture's box in the layer's pixels: a slide drawn to fit rarely fills its stage.
 function usePictureBox(picture: RefObject<HTMLImageElement | null>, layer: RefObject<HTMLDivElement | null>, on: boolean): Box | null {
   const [box, setBox] = useState<Box | null>(null);
   useLayoutEffect(() => {
@@ -265,14 +252,12 @@ function usePictureBox(picture: RefObject<HTMLImageElement | null>, layer: RefOb
   return box;
 }
 
-// The pins of one slide, over its picture. Lives in the picture's own (positioned)
-// container, which it covers; only what it draws takes the pointer, so the slide under
-// it is still paged, presented and scrolled as before.
+// One slide's pins over its picture; only what it draws takes the pointer.
 export function CommentLayer({ path, picture, size, frame, names, page, pages = [] }: {
-  path: string;                                  // the design (.fig) these comments are of
-  picture: RefObject<HTMLImageElement | null>;   // the slide's picture
+  path: string;                                  // the design (.fig)
+  picture: RefObject<HTMLImageElement | null>;
   size?: number[];                               // the slide's own size, in its pixels
-  frame: number;                                 // which slide of the page this is, from 0
+  frame: number;                                 // the slide's index on the page
   names: string[];                               // the page's slides by name, in order
   page?: string;
   pages?: string[];
@@ -296,7 +281,6 @@ export function CommentLayer({ path, picture, size, frame, names, page, pages = 
   return (
     <div ref={layer} className="pointer-events-none absolute inset-0" data-testid="comment-layer" dir="ltr">
       {c.adding && box && (
-        // Comment mode: the slide takes the click, and the click is where the pin goes.
         <div data-testid="comment-target" title={t("commentHint")} className="pointer-events-auto absolute cursor-crosshair"
              style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
              onDoubleClick={(e) => e.stopPropagation()}
@@ -342,7 +326,7 @@ export function CommentLayer({ path, picture, size, frame, names, page, pages = 
   );
 }
 
-// How many open comments each slide of a page has (a filmstrip's and a grid's marks).
+// Open comments per slide, for the filmstrip's and grid's badges.
 export function useCommentCounts(path: string | undefined, names: string[], page?: string, pages: string[] = []): number[] {
   const c = useComments(path);
   const counts = names.map(() => 0);
@@ -353,11 +337,10 @@ export function useCommentCounts(path: string | undefined, names: string[], page
   return counts;
 }
 
-// The two buttons: Comment — a click on the design then pins one — and the list.
 export function CommentButtons({ path, onComment, onList, className }: {
   path: string;
-  onComment?: (adding: boolean) => void;   // comment mode was switched (to show the design where it is pinned on)
-  onList?: () => void;                     // the list was asked for
+  onComment?: (adding: boolean) => void;   // comment mode toggled (the caller may switch to the preview)
+  onList?: () => void;
   className?: string;
 }) {
   const c = useComments(path);
@@ -390,8 +373,7 @@ export function CommentButtons({ path, onComment, onList, className }: {
   );
 }
 
-// Every thread of the design, open or resolved: a sheet over the design's right side
-// (as its version history is). A row goes to its slide and opens the thread there.
+// Every thread, open or resolved, in a side sheet; a row opens its thread on its slide.
 export function CommentsList({ path, names, page, pages = [], paper, onGo, onPage: goToPage }: {
   path: string;
   names: string[];                       // the slides of the page in view, by name
@@ -425,7 +407,7 @@ export function CommentsList({ path, names, page, pages = [], paper, onGo, onPag
     c.store.set({ active: thread.id, draft: null, listing: false });
   };
   const ask = () => {
-    // The agent reads them with its Design tool: the words go to the composer, to be sent or changed.
+    // Prefills the composer; the agent reads the comments with its Design tool.
     window.dispatchEvent(new CustomEvent("cycls:compose", { detail: { text: t("commentsAskText").replace("{path}", path) } }));
     track("design_comments_asked", { open: opened.length });
     close();

@@ -3,10 +3,7 @@ import { followDesignPeer, useDesignPresence, type DesignPeer } from "./design-e
 import { t } from "../lib/i18n";
 import { cn } from "../lib/utils";
 
-// Who else has this design open in its editor right now — a row of their initials,
-// each ringed in the colour of their cursor, beside the Edit | Preview switch. Clicking
-// one keeps this person's view in step with theirs (again to stop). Nothing is shown
-// while nobody else is in the design.
+// Others in this design's editor; clicking one follows their view.
 const SHOWN = 4;
 const initial = (name: string) => (name.trim()[0] ?? "?").toUpperCase();
 
@@ -15,7 +12,7 @@ export function DesignPresenceRow({ path }: { path: string }) {
   const [following, setFollowing] = useState<number | null>(null);
   const peers = presence?.peers ?? [];
   const followed = peers.find((p) => p.client === following) ?? null;
-  // The one followed left the design: there is nobody to follow.
+  // The one followed left.
   useEffect(() => {
     if (following !== null && !followed) setFollowing(null);
   }, [following, followed]);

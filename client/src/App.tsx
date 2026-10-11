@@ -147,7 +147,7 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
 
   // Render-time, not an effect — child mount-effects fire requests before
   // parent effects would register the token getter.
-  // (`fresh`: a token fetched now — what a request refused with a 401 is asked again with.)
+  // `fresh` skips the cache, for the retry after a 401.
   const token = (fresh?: boolean) => getToken(fresh ? { skipCache: true } : undefined);
   chat.setGetToken(token);
   files.setGetToken(token);

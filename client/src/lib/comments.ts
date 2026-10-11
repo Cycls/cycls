@@ -1,21 +1,16 @@
 import { createContext, useContext, useEffect, useSyncExternalStore } from "react";
 
-// Comments on a design (cycls/_agent/design/comments.py): a pin on a spot of a slide,
-// and the thread under it. The workspace keeps them, so everyone it lets in reads and
-// answers the same ones; nothing is pushed to a browser, so an open design asks again
-// every few seconds, naming the version it has — and is told "unchanged" nearly always.
-//
-// One store a design, shared by whatever shows it — the slide's pins, the list, the
-// buttons in the header, the editor — so they agree on what is open and ask once.
+// Design comments (cycls/_agent/design/comments.py). Nothing is pushed: an open design polls
+// with its version and is nearly always told "unchanged". One store per design, shared by
+// every view of it, so they agree on what is open and poll once.
 
 export interface CommentAuthor { id: string; name: string; image?: string; agent?: boolean }
 export interface CommentReply { id: string; author: CommentAuthor; text: string; at: string; edited?: string }
-// Where a pin is: a slide — its place on the page from 0, and its name, which outlives
-// a reorder — and a point on it, in the slide's own pixels.
+// A slide (index, and name, which survives a reorder) and a point in its own pixels.
 export interface CommentSpot { page?: string; frame: number; frame_name?: string; x: number; y: number }
 export interface CommentThread extends CommentSpot {
   id: string;
-  n: number;                    // its number in the design: given once, never again
+  n: number;                    // its number in the design, never reused
   author: CommentAuthor;
   text: string;
   at: string;
@@ -39,17 +34,12 @@ export interface CommentsApi {
   add: (path: string, body: CommentSpot & { text: string } & Named) => Promise<{ thread: CommentThread }>;
   change: (path: string, id: string, body: CommentChange & Named) => Promise<{ thread: CommentThread | null }>;
 }
-// What a page of the app gives its designs to comment with: the routes, who this is
-// (their name is the browser's — the server knows only an id), and the agent's name.
+// `me.name` comes from the browser: the server knows only an id.
 export interface CommentsHost { api: CommentsApi; me?: { id: string; name: string; image?: string }; agent?: string }
 export const CommentsContext = createContext<CommentsHost | null>(null);
 
-// Which of a page's slides — `names`, in order — a thread is on now, from 0, or null
-// when its slide is gone. A slide's name is given once and kept, so the name finds the
-// slide wherever it is now — and a name no slide has is a slide that was deleted, not
-// whichever slide took its place. A page of one slide has everything pinned on it; a
-// thread that names no slide, or a name several share, goes by the place. (As the
-// server's `comments.place`.)
+// The slide a thread is on now, or null if deleted (as the server's `comments.place`). Names
+// outlive reorders, so an unknown name is a deleted slide; no name, or a shared one, uses the index.
 export function placeOf(thread: Pick<CommentThread, "frame" | "frame_name">, names: string[]): number | null {
   const { frame, frame_name: name } = thread;
   if (names.length === 1) return 0;
@@ -61,8 +51,7 @@ export function placeOf(thread: Pick<CommentThread, "frame" | "frame_name">, nam
   return frame >= 0 && frame < names.length ? frame : null;
 }
 
-// The threads pinned on `page` of a design whose pages are `pages`, in order. A design
-// of one page has them all — its page renamed is still its page.
+// A one-page design has every thread: its page renamed is still its page.
 export function onPage(threads: CommentThread[], page: string | undefined, pages: string[]): CommentThread[] {
   if (pages.length <= 1) return threads;
   return threads.filter((t) => (t.page || pages[0]) === (page || pages[0]));
@@ -73,10 +62,10 @@ export interface CommentsState {
   version: string;
   loaded: boolean;
   me?: string;                  // this person's id, as the server has it
-  adding: boolean;              // a click on the slide pins a new comment
-  listing: boolean;             // the list of threads is open
+  adding: boolean;              // comment mode: a click on the slide pins a new comment
+  listing: boolean;
   showResolved: boolean;
-  active: string | null;        // the thread that is open
+  active: string | null;
   draft: CommentSpot | null;    // where a comment being written will be pinned
 }
 
@@ -104,8 +93,7 @@ export class CommentStore {
     for (const listener of this.listeners) listener();
   }
 
-  // Something on the page shows this design's comments: ask now, then keep asking while
-  // it does and the tab is looked at.
+  // Poll while anything shows this design and the tab is visible.
   watch = () => {
     if (++this.watchers === 1) {
       void this.refresh();
@@ -123,7 +111,7 @@ export class CommentStore {
   };
 
   private onSeen = () => { if (document.visibilityState !== "hidden") void this.refresh(); };
-  // The agent just changed this design: it may have answered a comment on its way.
+  // An agent edit may have answered a comment.
   private onCommand = (e: Event) => {
     if ((e as CustomEvent<{ path?: string }>).detail?.path === this.path) void this.refresh();
   };
@@ -139,7 +127,7 @@ export class CommentStore {
         const here = new Set(got.threads.map((t) => t.id));
         this.set({ threads: got.threads, version: got.version, me: got.me, loaded: true,
                    active: this.state.active && here.has(this.state.active) ? this.state.active : null });
-      } catch { /* out of reach for a moment: what is shown stays, and it asks again */ } finally {
+      } catch { /* offline for a moment: keep what's shown */ } finally {
         this.asking = null;
       }
     })();
@@ -151,9 +139,8 @@ export class CommentStore {
     return me ? { name: me.name, ...(me.image ? { image: me.image } : {}) } : {};
   }
 
-  // What the server answered is shown at once; the list is then asked for whole, with
-  // the version this page had before — so a teammate's change made meanwhile isn't
-  // skipped by taking the newer version on the strength of one thread.
+  // Show the answer now, then refetch with the old version: taking the new one from a
+  // single thread would skip a teammate's change made meanwhile.
   private took(thread: CommentThread | null, id: string) {
     const rest = this.state.threads.filter((t) => t.id !== (thread?.id ?? id));
     this.set({ threads: thread ? [...rest, thread].sort((a, b) => a.n - b.n) : rest,
@@ -173,7 +160,6 @@ export class CommentStore {
     this.took(thread, id);
   }
 
-  // Start a new comment at `spot`: whatever was open closes.
   pin(spot: CommentSpot) { this.set({ draft: spot, active: null }); }
   open(id: string | null) { this.set({ active: id, draft: null }); }
 }
@@ -185,14 +171,13 @@ export function commentStore(path: string, host: CommentsHost): CommentStore {
   store.host = host;
   return store;
 }
-// (For tests: every design starts with nothing known.)
+// For tests.
 export function forgetComments() { stores.clear(); }
 
 const nothing = () => () => {};
 const none = () => START;
 
-// A design's comments, where the page can comment (null where it can't — a shared
-// page, a deployment signed out). `path` is the design's `.fig`.
+// null where the page can't comment (a shared page, signed out).
 export function useComments(path: string | undefined): (CommentsState & { store: CommentStore; host: CommentsHost }) | null {
   const host = useContext(CommentsContext);
   const store = path && host ? commentStore(path, host) : null;

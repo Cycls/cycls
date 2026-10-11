@@ -7,31 +7,14 @@ import { t } from "../lib/i18n";
 import type { DeckPoll, PollApi, PollTally } from "../lib/polls";
 import { PollOverlay, useLivePoll } from "./poll-overlay";
 
-// Presents a deck full screen: one slide at a time, each entering with its own
-// transition (fade / slide / none), click or the keyboard to move on.
-//
-// It's a portal on document.body — the canvas pane is overflow-hidden inside a
-// transformed drawer, which would clip a fixed element — and it asks for real
-// fullscreen (a browser may refuse; it then fills the window). While it's up it
-// owns the keyboard: a capture-phase listener on window takes every key before
-// anything underneath, so chat's global Escape (which closes the whole canvas)
-// never sees the Escape that ends the presentation.
-//
-//   → ↓ Space PageDown Enter   next          ← ↑ PageUp Backspace   previous
-//   Home / End                 first / last  N   speaker notes       G   grid
-//   P                          presenter view (current + next slide, notes, timer)
-//   R                          restart a poll slide's poll
-//   Esc                        leave (or close the grid)
-//
-// A poll slide runs live when the deck's owner presents (`polls`): its poll opens,
-// the audience votes through the deck's public link, and the bars fill (poll-overlay).
+// A portal on body: the canvas's transformed, overflow-hidden drawer would clip a fixed element.
 
 export interface PresentDeck {
   slides: string[];          // image URLs (data: URIs from the slide manifest)
   notes?: string[];
   titles?: string[];
   transitions?: string[];    // per slide: "fade" | "slide" | "none" (default fade)
-  polls?: (DeckPoll | null)[];   // per slide: its live poll, if it's a poll slide
+  polls?: (DeckPoll | null)[];   // per slide: a poll slide's live poll
 }
 
 type Kind = "fade" | "slide" | "none";
@@ -40,7 +23,7 @@ const kindOf = (deck: PresentDeck, i: number): Kind => {
   return k === "slide" || k === "none" ? k : "fade";
 };
 
-// A slide enters by its own transition; `dir` is +1 going forward, -1 back.
+// `dir` is +1 going forward, -1 back.
 const variants = {
   enter: ({ kind, dir }: { kind: Kind; dir: number }) =>
     kind === "slide" ? { x: `${dir * 100}%`, opacity: 1 } : { x: 0, opacity: kind === "fade" ? 0 : 1 },
@@ -50,7 +33,7 @@ const variants = {
 };
 const timing = (kind: Kind) => ({ duration: kind === "none" ? 0 : kind === "slide" ? 0.45 : 0.35, ease: "easeOut" as const });
 
-// `onClose` gets the slide it ended on, so the viewer underneath can land there.
+// `onClose` gets the last slide, so the viewer underneath lands there.
 export function PresentMode({ deck, start = 0, onClose, polls }: {
   deck: PresentDeck;
   start?: number;
@@ -76,7 +59,7 @@ export function PresentMode({ deck, start = 0, onClose, polls }: {
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
-  // A poll slide, live: open while it shows; its join link is the deck's public one.
+  // Voters join a poll slide's live poll through the deck's public link.
   const [restart, setRestart] = useState(0);
   const livePoll = polls && !ended ? deck.polls?.[index] ?? null : null;
   const tally = useLivePoll(polls, livePoll, index, restart);
@@ -134,8 +117,7 @@ export function PresentMode({ deck, start = 0, onClose, polls }: {
     setPresenterTick((n) => n + 1);
   }, []);
 
-  // Back to fullscreen after the presenter window took it away — only from a key or a
-  // click on this page (a browser grants fullscreen to a gesture, not to a timer).
+  // Only from a key or click here: a browser grants fullscreen to a gesture, not a timer.
   const regainFullscreen = useCallback(() => {
     if (!refull.current || document.fullscreenElement) return;
     refull.current = false;
@@ -143,8 +125,7 @@ export function PresentMode({ deck, start = 0, onClose, polls }: {
   }, []);
 
   const onKey = useCallback((e: KeyboardEvent) => {
-    // Present mode is modal: nothing underneath gets the key (chat's Escape
-    // closes the canvas; the slide viewer's own keys would page it twice).
+    // Modal: chat's Escape would close the canvas, the viewer's own keys would page twice.
     e.stopPropagation();
     e.stopImmediatePropagation();
     const k = e.key;
@@ -165,7 +146,7 @@ export function PresentMode({ deck, start = 0, onClose, polls }: {
       forward();
       return;
     }
-    // Back is its own step: from the end screen it returns to the last slide, not past it.
+    // Back from the end screen returns to the last slide, not past it.
     if (k === "Backspace" || k === "ArrowLeft" || k === "ArrowUp" || k === "PageUp") { e.preventDefault(); back(); return; }
     const to = slideKeyTarget(k, state.current.index, count);
     if (to != null) { e.preventDefault(); go(to); }
@@ -181,10 +162,7 @@ export function PresentMode({ deck, start = 0, onClose, polls }: {
     return () => window.removeEventListener("keydown", listener, true);
   }, []);
 
-  // Real fullscreen when the browser allows it; leaving it (the browser's own Esc)
-  // leaves present mode too — except when opening the presenter window is what took
-  // it away (Chrome drops fullscreen for a new window): the show goes on, windowed,
-  // until the next key or click here.
+  // Leaving fullscreen leaves present mode, unless the presenter popup took it (Chrome does for a new window).
   useEffect(() => {
     const onChange = () => {
       if (document.fullscreenElement) wasFull.current = true;
@@ -199,14 +177,12 @@ export function PresentMode({ deck, start = 0, onClose, polls }: {
     return () => document.removeEventListener("fullscreenchange", onChange);
   }, [close]);
 
-  // The controls fade after a moment of stillness; a mouse move brings them back.
   useEffect(() => {
     if (!chrome) return;
     const id = window.setTimeout(() => setChrome(false), 2500);
     return () => window.clearTimeout(id);
   }, [chrome, index]);
 
-  // The presenter window follows the deck; it closes with present mode.
   useEffect(() => {
     const p = presenter.current;
     if (!p || p.win.closed) return;
@@ -295,9 +271,7 @@ export function PresentMode({ deck, start = 0, onClose, polls }: {
   );
 }
 
-// The presenter's own window: the slide now showing, the next one, the notes, and
-// a timer. Rendered from the presenting page into the popup (a React root of its
-// own, so its clicks work) — plain inline styles, since the popup has none of ours.
+// Rendered into the popup by its own React root (so clicks work); inline styles, as the popup has none of ours.
 function PresenterView({ deck, index, ended, startedAt, onPrev, onNext, poll, tally }: {
   deck: PresentDeck; index: number; ended: boolean; startedAt: number; onPrev: () => void; onNext: () => void;
   poll?: DeckPoll | null; tally?: PollTally | null;

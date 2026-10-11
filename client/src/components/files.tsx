@@ -541,8 +541,7 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
         {loading && entries.length === 0 ? (
           <LoadingBar />
         ) : (
-          // A container: the size and date columns show by the panel's own width, not
-          // the window's — docked beside the canvas it is narrow, and the name needs the room.
+          // Columns follow the panel's width, not the window's: docked beside the canvas it is narrow.
           <div className="@container divide-y divide-border">
             {/* Back row — move drop-target */}
             {path && (

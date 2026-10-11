@@ -1,6 +1,5 @@
-"""The Design tool's executor. `_exec_design(inp, workspace)` reads a call and makes it:
-render, script, edit, inspect, extract — and hands the slide, section and file actions to
-actions.py. Registered in cycls/_agent/tools as the `design` tool."""
+"""The Design tool's executor: render, script, edit, inspect and extract here; slide, section,
+file and comment actions in actions.py."""
 import asyncio, base64, json, os, pathlib, re
 from ..paths import _safe_filename
 from .tool import DESIGN_LOADED, _GUIDE_LOADED, _GUIDE_NOT_RUN
@@ -15,20 +14,16 @@ from .actions import (_DOCUMENT_ACTIONS, _FILE_ACTIONS, _SLIDE_ACTIONS, _comment
 
 
 async def _exec_design(inp, workspace):
-    """Render a design via the shared cycls-design service, save the image + the
-    editable `.fig` into the workspace, and open the image on the canvas. Two
-    channels: the model reads a short ack; the client opens the render (same
-    open_canvas event the Canvas tool and browser screenshots use)."""
+    """Run one Design call → `_model` (the ack the model reads) and `_ui` (what the canvas opens)."""
     from cycls._agent import design
-    # The model was shown the short form of the tool (DESIGN_INSTRUCTIONS=on-demand): this
-    # call is what loads the whole of it — the guide — and nothing made blind is run.
+    # the model saw only the short form: this call loads the full one, and runs nothing made blind
     asked = str(inp.get("action") or "render").lower()
     if not DESIGN_LOADED.get():
         return _GUIDE_LOADED if asked == "guide" else _GUIDE_NOT_RUN
     if asked == "guide":
         return ("Design's instructions are already loaded — they are this tool's description. Call it with "
                 "what you want made (render, edit, inspect, …). Nothing was made or changed by this call.")
-    # A model may hand a large nested argument over as its JSON text: read as the object.
+    # a large nested argument may arrive as its JSON text
     inp = dict(inp)
     mended = []
     for key in ("spec", "ops", "slide"):
@@ -39,19 +34,15 @@ async def _exec_design(inp, workspace):
             try:
                 inp[key] = json.loads(v)
             except json.JSONDecodeError as e:
-                # Right to its last value and closed with the wrong brackets — one too many,
-                # one too few: read as closed where its content ends, and said.
                 fixed = _mend_json_tail(v)
                 if fixed is not None:
                     inp[key] = fixed
                     mended.append(f"`{key}` came as text that ended with the wrong closing brackets — it was read as closed "
                                   f"where its content ends (check nothing is missing from its end). Send it as an object.")
                     continue
-                # Said where it breaks: "needs a `spec` object" told a model nothing, and a
-                # 6,000-token document was written out again, blind.
+                # say where it breaks, so the model fixes it rather than rewriting it blind
                 at = e.pos
                 near = v[max(0, at - 60):at + 40].replace("\n", " ")
-                # (Cut short: it stops where more was expected, or inside a string that never closes.)
                 cut = at >= len(v.rstrip()) - 1 or e.msg.startswith("Unterminated string")
                 why = ("it is cut off before its end — the call ran out of room" if cut else
                        f"{e.msg} at character {at} of {len(v)}, near: …{near}… (most often a quote left unescaped inside a string, or a line break in one)")
@@ -60,7 +51,7 @@ async def _exec_design(inp, workspace):
                 return (f"Error: `{key}` came as text that isn't valid JSON — {why}. Nothing was done. "
                         f"Send `{key}` again as an object, with that put right.{more}")
     action = (inp.get("action") or "render").lower()
-    # A design written beside the action, not under `spec`: it is the spec.
+    # a design written beside `spec` rather than under it
     if action == "render" and inp.get("spec") is None:
         beside = {k: inp[k] for k in ("document", "deck", "pages", "frames", "nodes", "size", "fill") if inp.get(k) is not None}
         if any(k in beside for k in ("document", "deck", "pages", "frames", "nodes")):
@@ -69,14 +60,8 @@ async def _exec_design(inp, workspace):
     if fmt not in _DESIGN_EXTS:
         return f"Error: unknown format {fmt!r} (png, jpg, webp, svg, pptx)."
     scale = inp.get("scale") or 2
-    # Base name only, no extension the model may have tacked on.
     name = _safe_filename(inp.get("name") or "design", "design").rsplit(".", 1)[0] or "design"
     subject = getattr(workspace, "subject", None)
-    # `edit` changes a saved design. The service runs the script on the .fig first —
-    # the editor's own plugin API, headless — so a script that throws is the model's
-    # error now (it used to fail silently inside the browser), and a success is saved
-    # and re-exported whether or not an editor is open. Then a UI event replays the
-    # same script in the live editor, where the user watches the Super cursor make it.
     if action in _SLIDE_ACTIONS:
         return await _exec_slides(action, inp, workspace, name)
     if action in _DOCUMENT_ACTIONS:
@@ -95,8 +80,7 @@ async def _exec_design(inp, workspace):
         if not fig_path.is_file():
             return (f"Error: {rel} doesn't exist — `{action}` works on a design you rendered; "
                     f"`render` creates one.")
-    # `inspect` lists a design's frames and their named nodes — what `edit` ops name.
-    page = str(inp.get("page") or "").strip() or None      # the page an inspect / edit is about
+    page = str(inp.get("page") or "").strip() or None
     if action == "inspect":
         try:
             o = await design.outline(await asyncio.to_thread(fig_path.read_bytes), user_id=subject, page=page)
@@ -105,16 +89,12 @@ async def _exec_design(inp, workspace):
         except Exception as e:
             return f"Error: couldn't inspect {rel} — {e}"
         text = _outline_text(rel, o["frames"], o["pages"], o["page"])
-        if pinned := await _comments_note(workspace, rel, o):    # what people said about this page, and on what
+        if pinned := await _comments_note(workspace, rel, o):
             text += "\n\n" + pinned
         doc = await asyncio.to_thread(_document_source, workspace.root, name)
         return f"{_sections_text(name, doc)}\n\n{text}" if doc else text
-    # `edit` changes a saved design: named `ops` (the normal way) or a raw `script`.
-    # The service applies it to the .fig first — the editor's own plugin API, headless
-    # — so an edit that fails is the model's error now (it used to fail silently in
-    # the browser), and a success is saved and re-exported whether or not an editor is
-    # open. Then a UI event replays the same script in the live editor, where the user
-    # watches the Super cursor make it. The model gets the result back to check.
+    # The service applies an edit to the .fig headless first, so a failure reaches the model and a
+    # success is saved with or without an open editor; the UI event then replays it live there.
     if action == "edit":
         script, ops = inp.get("script"), inp.get("ops")
         if not ops and not script:
@@ -140,11 +120,11 @@ async def _exec_design(inp, workspace):
                 except design.Unavailable as e:
                     return f"Error: design unavailable — {e}"
                 except Exception as e:
-                    # (An error that lists what the design has needs no "inspect lists the nodes".)
+                    # a service error with " has: " already lists the nodes
                     hint = "" if " has: " in str(e) else " (Design inspect lists the nodes)"
                     return (f"Error: the edit failed on {rel} — {e}. Nothing was changed; fix the "
                             f"{'ops' if ops else 'script'}{hint} and try again.")
-                try:   # the person may have saved in the editor meanwhile: apply to that, once
+                try:   # a save in the editor meanwhile: apply to that, once
                     version = await write_fig(workspace.root, rel, r["fig"], base=base, by="agent", reason="agent",
                                               intent=inp.get("intent"))
                     break
@@ -155,19 +135,18 @@ async def _exec_design(inp, workspace):
         from cycls._agent.design import refresh
         pages, ended = r.get("pages") or [], r.get("page") or ""
         made_page = any(isinstance(op, dict) and op.get("op") in ("page_add", "page_duplicate") for op in ops or [])
-        # The image beside it follows — or is made; a page an edit made gets its own.
+        # re-export the image beside it; a page the edit made gets its own
         refresh.schedule(workspace.root, rel, subject, ensure=True, pages=made_page)
         ui = {"type": "ui", "action": "design_command", "path": rel, "script": r.get("script") or script,
-              "version": version}   # what the file is now — an open editor's saves go on from it
+              "version": version}   # an open editor's later saves base on this version
         if len(pages) > 1 or made_page:
-            ui["page"] = r.get("started") or ""   # the page it is made on: an open editor shows it first
+            ui["page"] = r.get("started") or ""   # an open editor shows this page first
         if any(isinstance(op, dict) and str(op.get("op") or "").startswith("page_") for op in ops or []):
-            # Pages added, copied, renamed or removed: an open editor re-opens the saved
-            # file on the page the edit ended on — page surgery isn't replayed live.
+            # page ops aren't replayed live: the editor reloads on the page the edit ended on
             ui["reload"], ui["page"] = True, ended
         if intent := inp.get("intent"):
             ui["intent"] = str(intent)[:80]   # shown on the live "Super" cursor
-        await _to_the_room(workspace.root, rel, ui)   # people in the design together get it once, from their room
+        await _to_the_room(workspace.root, rel, ui)
         if len(pages) > 1:
             place = next((n for n, p in enumerate(pages, 1) if p["name"] == ended), 1)
             image = f"designs/{refresh.page_file(name, place, 'png')}"
@@ -180,7 +159,7 @@ async def _exec_design(inp, workspace):
                f"cursor replays the change live there." + _edit_names(r) + _layout_check(r.get("lint"), "png"))
         for credit in credits:
             ack += f" {credit}."
-        # A deck or a carousel: the slides the edit changed, each said — not the first slide.
+        # a deck or carousel: show the slides the edit changed, not slide 1
         touched, looks = r.get("touched") or [], r.get("previews") or []
         if len(r.get("slides") or []) > 1 and looks and len(looks) == len(touched) and touched != [0]:
             blocks, total = [], 0
@@ -216,8 +195,7 @@ async def _exec_design(inp, workspace):
             if isinstance(inp["spec"].get("document"), dict):
                 return await _render_document(inp, workspace, name)
             root = workspace.root   # reads the brand kit + any image files: off the loop
-            # Photos named rather than saved — {"stock": "coffee beans"} — are found and
-            # saved to the workspace first, so the spec below sees ordinary files.
+            # {"stock": …} photos are saved first, so the spec sees ordinary files
             from cycls._agent.design import stock
             credits, err = await stock.resolve(inp["spec"], root)
             if err:
@@ -229,9 +207,7 @@ async def _exec_design(inp, workspace):
             if isinstance(spec.get("deck"), dict):
                 n_frames, size = len(spec["deck"]["slides"]), spec["deck"]["size"]
             elif isinstance(spec.get("pages"), list):
-                # Several pages: one design, each page's own image (never a carousel or a deck file).
-                if fmt in _DECK_EXTS:
-                    # Not refused for a second call: a page is an image, and that is what is made.
+                if fmt in _DECK_EXTS:   # a page is an image: rendered as png, not refused
                     notes.append(f"A design of several pages renders to an image a page, so it was rendered as png, not {fmt} — "
                                  f"each page is downloaded as PDF or PowerPoint from the canvas.")
                     fmt = "png"
@@ -239,8 +215,7 @@ async def _exec_design(inp, workspace):
             else:
                 frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
                 n_frames, size = len(frames), frames[0].get("size")
-            # Several frames in a raster format are a carousel: every slide comes back.
-            # Past twelve slides: twelve to read, the rest on contact sheets — all of it seen.
+            # several raster frames = a carousel; a long deck's rest come back on contact sheets
             carousel = n_frames > 1 and fmt not in _DECK_EXTS
             long = n_frames > _DESIGN_QA_SLIDES and not carousel
             r = await design.render(spec, fmt=fmt, scale=scale, user_id=subject, every=carousel,
@@ -261,14 +236,12 @@ async def _exec_design(inp, workspace):
         return await _save_pages(r, name, fmt, workspace, notes)
     count = max(len(r.previews), len(r.slides), 1)
 
-    # Never clobber an earlier design: if this base name is taken, bump it
-    # (launch → launch-2 → …). To CHANGE an existing design, the model uses `edit`.
+    # never clobber an earlier design: launch → launch-2 → …
     requested = name
     name = _dedupe_design_name(pathlib.Path(workspace.root) / "designs", name, fmt)
     root = pathlib.Path(workspace.root)
     (root / "designs").mkdir(parents=True, exist_ok=True)
     if len(r.images) > 1:
-        # A carousel: one image per slide, <name>-slide-N (what gets posted, in order).
         saved = [f"designs/{name}-slide-{n}.{fmt}" for n in range(1, len(r.images) + 1)]
         for rel_n, data in zip(saved, r.images):
             await asyncio.to_thread((root / rel_n).write_bytes, data)
@@ -276,13 +249,10 @@ async def _exec_design(inp, workspace):
     else:
         saved = [rel := f"designs/{name}.{fmt}"]
         await asyncio.to_thread((root / rel).write_bytes, image)
-    # The .fig is the durable, editable source of truth (opened by a drag-editor
-    # later); saved beside the render but not itself shown on the canvas.
-    fig_rel = f"designs/{name}.fig"
+    fig_rel = f"designs/{name}.fig"   # the editable source of truth
     await asyncio.to_thread((root / fig_rel).write_bytes, fig)
     if count > 1:
-        # A deck (or carousel) gets its deck document: what the canvas opens to show
-        # and present it. The slides' titles, notes and transitions live in the .fig.
+        # the deck document the viewer opens; titles, notes and transitions live in the .fig
         deck = {"type": "cycls.deck", "version": 1, "fig": fig_rel, "size": size,
                 "slides": count, "exports": saved}
         if action == "render" and isinstance(spec.get("deck"), dict):
@@ -301,17 +271,10 @@ async def _exec_design(inp, workspace):
         what = f"Deck saved ({rel}, {count} slides, {kb} KB{note})"
     else:
         what = f"Design saved ({rel}, {kb} KB{note})"
-    # Open the EDITABLE .fig in the in-canvas editor by default — the user came to
-    # DESIGN, so every render lands them in a live editor they can refine, not a flat
-    # PNG. The image is still saved (for download/sharing). Fall back to opening the
-    # image only where no editor is wired up (DESIGN_EDITOR_URL unset).
+    # open the editable .fig in the editor; the image only when none is wired up
     editor = bool(os.environ.get("DESIGN_EDITOR_URL"))
     if count > 1:
-        # A deck (or carousel) opens in the deck viewer: its slides, Present, the
-        # downloads, and Edit into the editor.
         deck_rel = f"designs/{name}.deck.json"
-        # Said plainly, because the reply used to tell the person it was "open in the
-        # design editor": a carousel opens here too, and is downloaded as its images.
         downloads = "its images (a .zip), PowerPoint or PDF" if len(saved) > 1 else "PowerPoint, PDF or its images"
         ack = (f"{what}. It's OPEN in the deck viewer ({deck_rel}) — say \"the deck viewer\", not the "
                f"design editor. There the user can page through it, Present it full screen (with the "
@@ -330,11 +293,8 @@ async def _exec_design(inp, workspace):
     for line in notes:
         ack += " " + line
     ack += _layout_check(lint, fmt if count == 1 else "pptx")
-    # Show the model its own render, so it QAs what it made before the user judges
-    # it — a check the spec alone can't give (hierarchy, overlap, legibility, typos).
-    # The service's small @1x JPEG previews when it sent them — one per slide for a
-    # deck (a photo-heavy @2x PNG runs several MB; a PPTX isn't an image) — else the
-    # render itself if it's a raster within `read`'s bound; otherwise the ack alone.
+    # The model QAs its own render: the @1x JPEG previews (a @2x PNG runs MBs; a PPTX isn't
+    # an image), else the raster itself within _DESIGN_QA_MAX, else the ack alone.
     fix = "Design edit (the same design — don't re-render)"
     if count > 1 and r.previews:
         blocks, total = [], 0

@@ -67,9 +67,7 @@ export const StepDot = ({ live, toolName, step, ok }: { live?: boolean; toolName
   );
 };
 
-// What a tool call is being given, while the model is still writing it: the text of
-// the value it's on (a slide's headline, a file's latest line). A deck's input streams
-// for minutes — with only the tool's name on screen that read as stuck.
+// The string value a streaming tool input is on, so a minutes-long input doesn't look stuck.
 export function writingNow(args?: string): string {
   if (!args) return "";
   const tail = args.slice(-400);
@@ -85,7 +83,6 @@ export function writingNow(args?: string): string {
   return text.replace(/\s+/g, " ").trim().slice(-80);
 }
 
-// Seconds a live step has been going — shown once it's long enough to wonder about.
 function useElapsed(at: number | undefined, live: boolean | undefined): string | null {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -111,7 +108,7 @@ export const StepPart = memo(function StepPart({
   toolName?: string;
   isStreaming?: boolean;
   ok?: boolean;
-  args?: string;   // the call's input so far (partial JSON) — a live row previews it until its label arrives
+  args?: string;   // partial JSON input, previewed until the label arrives
   at?: number;     // when the step appeared
 }) {
   const elapsed = useElapsed(at, isStreaming);

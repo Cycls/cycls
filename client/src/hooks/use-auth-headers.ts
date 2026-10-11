@@ -24,11 +24,8 @@ async function headersNow(fresh = false): Promise<Record<string, string>> {
   return h;
 }
 
-// A request that carries the signed-in user's headers. A 401 is asked once more with a
-// token fetched afresh: in a tab left in the background the browser throttles the
-// token's refresh, the cached one goes stale, and the first request on coming back
-// failed — "Connection error: HTTP 401" — for no reason the person could see. The
-// request must be one that can be sent twice (a string or FormData body, not a stream).
+// A 401 retries once with a fresh token: a background tab's throttled refresh leaves the cached one stale.
+// The body must be sendable twice (a string or FormData, not a stream).
 export async function fetchAuthed(url: string, init: RequestInit = {}): Promise<Response> {
   const send = async (fresh: boolean) =>
     fetch(url, { ...init, headers: { ...(await headersNow(fresh)), ...(init.headers as Record<string, string> | undefined) } });

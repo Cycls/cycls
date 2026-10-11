@@ -1,5 +1,4 @@
-"""A PDF taken apart for a design (the tool's `extract` action): its text and tables by
-page, its pictures, and a page or a figure drawn for the model to look at or reuse."""
+"""The Design tool's `extract` action: a PDF's text, tables and pictures, or one page drawn."""
 import asyncio, base64, json, pathlib, re
 from ..paths import _resolve_path
 from .images import _DESIGN_IMAGE_MAX, _DESIGN_QA_MAX, _image_size
@@ -17,24 +16,20 @@ async def _run_tool(*argv, timeout=60):
 
 
 _PDF_TEXT_PAGE = 5000       # characters of one page's text handed to the model
-_PDF_TEXT_ALL = 16000       # …and of one reply: with what follows it, under the 20,000 at which a reply is filed (spill.SPILL_AT)
+_PDF_TEXT_ALL = 16000       # …and of one reply, under spill.SPILL_AT (20,000)
 _PDF_PICTURES = 30          # pictures kept
 _PDF_PICTURE_MIN = 200      # px on its shorter side: smaller is an icon or a rule
 _PDF_TABLE_ROWS = 40        # rows of one page's tables shown as they are laid out
 _PDF_LOOK_DPI = 100         # a page drawn for the model to look at
 _PDF_CUT_DPI = 200          # …and a figure cut out of one, to be used again
-# Letters saved as the glyphs they were drawn with: Latin ligatures (ﬁ), and Arabic in its
-# presentation forms (ﻟ ﺎ ﻋ) — what a PDF made from Word often holds instead of the letters.
+# ligatures and Arabic presentation forms: glyphs a Word-made PDF often holds instead of letters
 _SHAPED = re.compile("[\ufb00-\ufb06\ufb50-\ufdff\ufe70-\ufeff]+")
 _SHAPED_ARABIC = re.compile("[\ufb50-\ufdff\ufe70-\ufeff]")
 _DIRECTION_MARKS = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")     # what pdftotext wraps right-to-left text in
 
 
 def _laid_out_tables(page):
-    """The rows of a page's tables, from its text as laid out (`pdftotext -layout`): runs of
-    lines that are three or more cells apart, two of them figures — each row's cells joined
-    by " | ". Reading order keeps a paragraph whole and takes a table apart cell by cell;
-    this is the other half."""
+    """A page's table rows from its `pdftotext -layout` text, cells joined by " | " (reading order splits them)."""
     cells = lambda line: [c for c in re.split(r"\s{2,}", line.strip()) if c]
     figure = lambda c: (len(c) <= 16 and bool(re.search(r"\d", c))) or c in ("-", "–", "—")
     lines = page.split("\n")
@@ -58,14 +53,8 @@ def _laid_out_tables(page):
 
 
 async def _pdf_parts(inp, workspace, name):
-    """An existing PDF taken apart to be made again as a document: its text, page by
-    page, and its pictures saved into designs/<name>-assets/ (poppler: pdftotext,
-    pdfimages). The model reads this, then renders a `document` that uses them.
-
-    The words are read in reading order — "as laid out" set a two-column page's columns
-    side by side on every line — and a page's tables are added from the laid-out reading,
-    which alone keeps a row together. With `page`, one page is drawn to look at, and with
-    `area` a figure is cut out of it (`_pdf_page`)."""
+    """A PDF's text by page (reading order; tables from the layout) and its pictures saved to
+    designs/<name>-assets/, via poppler. With `page`, `_pdf_page`."""
     import hashlib, tempfile, unicodedata
     src = inp.get("path") or inp.get("src")
     if not isinstance(src, str) or not src.strip():
@@ -80,7 +69,7 @@ async def _pdf_parts(inp, workspace, name):
         return f"Error: {src} isn't a PDF — `extract` reads a PDF's text and pictures."
     if inp.get("page") is not None:
         return await _pdf_page(inp, workspace, name, path, src)
-    # `pages`: reading on — a long PDF's text comes a reply's worth at a time.
+    # `pages`: reading on, a reply's worth at a time
     span = None
     if inp.get("pages") is not None:
         v, m = inp["pages"], None
@@ -115,7 +104,7 @@ async def _pdf_parts(inp, workspace, name):
         scan = not any(pages)
         shape = float(paper[1]) / float(paper[2]) if scan and paper and float(paper[2]) else None
         with tempfile.TemporaryDirectory() as tmp:
-            if not span:                                  # (reading on: its pictures were taken the first time)
+            if not span:                                  # reading on: pictures were saved the first time
                 await _run_tool("pdfimages", "-all", str(path), str(pathlib.Path(tmp) / "img"), timeout=120)
             found = sorted(pathlib.Path(tmp).iterdir())
 
@@ -162,7 +151,6 @@ async def _pdf_parts(inp, workspace, name):
             continue
         shown = page[:_PDF_TEXT_PAGE]
         rows = tables[n - first] if n - first < len(tables) else []
-        # A reply's worth: the model reads what is here, and asks for the pages after it.
         if total and total + len(shown) + sum(map(len, rows)) > _PDF_TEXT_ALL:
             lines.append(f"\n(Pages {n}–{end} are not shown here: extract {{\"path\": {json.dumps(src, ensure_ascii=False)}, "
                          f"\"pages\": \"{n}-{end}\"}} reads on.)")
@@ -172,7 +160,7 @@ async def _pdf_parts(inp, workspace, name):
         lines.append(f"\nPage {n}:\n{shown}" + (" […]" if len(page) > len(shown) else ""))
         if rows:
             lines.append("Its tables, as they are laid out:\n" + "\n".join(rows))
-    if span and held:      # its first line names the pages it holds, not the range that was asked for
+    if span and held:      # name the pages held, not the range asked for
         lines[0] = f"{src} — pages {held[0]}–{held[-1]} of {count}." if held[-1] > held[0] else f"{src} — page {held[0]} of {count}."
     if span:
         if shaped > 20:
@@ -198,9 +186,7 @@ async def _pdf_parts(inp, workspace, name):
 
 
 async def _pdf_page(inp, workspace, name, path, src):
-    """One page of a PDF drawn for the model to look at — or, with `area`, that part of it
-    cut out and saved to designs/<name>-assets/figure-<n>.png: a chart or a diagram that is
-    drawn in the PDF (so not among its pictures), to be used again in the redesign."""
+    """One PDF page drawn to look at, or with `area` a drawn figure cut out to designs/<name>-assets/."""
     import tempfile
     page, area = inp.get("page"), inp.get("area")
     how = "`area` is [left, top, width, height], each a part of the page from 0 to 1 — e.g. [0.1, 0.25, 0.8, 0.3]"

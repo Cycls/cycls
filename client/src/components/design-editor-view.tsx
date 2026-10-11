@@ -10,53 +10,27 @@ import { getLang, t, useLang } from "../lib/i18n";
 import { useToast } from "../lib/toast";
 import { cn } from "../lib/utils";
 
-// Renders a `.fig` on the canvas as the embedded design editor — an iframe on
-// its OWN origin (the deployed editor), editing ONE design of the workspace: the
-// file this view was opened on. Every save goes back to that file; everything that
-// would make another document — a new design, a copy, an export — comes to Cycls,
-// which writes it into the workspace (docs/notes/design.md, "Editing").
+// A `.fig` in the embedded design editor, an iframe on its own origin that edits only
+// this file; new documents (new design, copy, export) are written by Cycls (docs/notes/design.md).
 //
-// postMessage protocol 2 (the editor's embed bridge, cycls-design editor/patches):
-//   host → editor : load {protocol:2, doc, name, fig, brand?, live?} · written {doc, id, ok}
-//                   save · flush {id} · command {script, intent?} · theme {theme} · locale {lang}
-//                   fit (the editor's box changed size: fit the design again — feature "fit")
-//                   follow {client} · liveTicket {id, ticket} · liveBase {version}
-//                   comments {pins, adding, active, draft, me} (feature "comments": the pins of
-//                   the page in view, drawn on the design — the editor answers with frames,
-//                   commentAt, commentOpen, commentPlace, commentEscape)
-//                   liveReset   (feature "live", below)
-//   editor → host : ready {protocol, features?} · loaded {doc} · saved {doc, id, name, fig}
-//                   flushed {id, ok} · error · applied · commandError · selection {doc, frame, nodes}
-//                   newDesign {size?} · saveCopy {doc, name, fig} · export {doc, files}
-//                   exportAs {doc, format}  (the design as a PDF / PNG — Cycls renders it)
-//                   presence {doc, peers, saver, connected} · liveTicket {id}
-//                   liveAgent {doc, version} · liveReload {doc, version} · liveBase {doc, version}
-// Every load reads the design with its version, and its saves name it as their
-// base: a save over a newer file is refused (docs/notes/design.md, "No save
-// overwrites what it didn't see").
-// `doc` tags one load: a save carrying an older tag (the document was replaced) is
-// refused, not written over the file. An editor from before protocol 2 sends none
-// of the new messages and never waits for `written`.
-//
-// Together (feature "live"): where the workspace is a team's, the design is loaded with
-// its live room and this person's pass (`host.live`, the server's /design/live), and the
-// editor keeps one shared document with whoever else has it open. It says who they are
-// (`presence`); one editor saves for all of them. A save still names the version it
-// goes on from, and the one who saves next must name what the last one wrote: so each
-// save is said to the room as it is made (`liveBase` — whoever hears it holds
-// everything that went into it), and this page keeps what its editor heard (`known`).
-// A save refused over a version the room said goes again on it and nobody is asked;
-// one refused over a version nobody in the room said is a change from outside it —
-// the person is asked, and "Load the latest" is then for everyone (`liveReset`).
-// An agent's edit is handed to the room by the server (one editor makes it once, for
-// everyone: `liveAgent`), not replayed here; a file written anew — a re-render, a
-// restore — re-opens it for everyone (`liveReload`).
-//
-// An agent edit is applied and saved on the server BEFORE it reaches us (the Design
-// tool checks every edit headlessly), then replayed here for the live cursor. If the
-// replay fails (`commandError`) the saved file already has the edit, so we re-open
-// the editor on it — never leave a stale document that a later auto-save would
-// write back over the agent's change.
+// postMessage protocol 2 (cycls-design editor/patches):
+//   host → editor:
+//     load {protocol:2, doc, name, fig, brand?, page?, live?} · written {doc, id, ok}
+//     save · flush {id} · command {script, intent?, page?} · theme {theme} · locale {lang}
+//     page {name} (feature "pages") · fit (feature "fit")
+//     comments {pins, adding, active, draft, me} (feature "comments")
+//     follow {client} · liveTicket {id, ticket} · liveBase {version} · liveReset (feature "live")
+//   editor → host:
+//     ready {protocol, features?} · loaded {doc, live?} · saved {doc, id, name, fig} · flushed {id, ok}
+//     error · applied · commandError · selection {doc, frame, nodes}
+//     pages {doc, page, pages} · frames {doc, page, frames}
+//     commentAt {doc, page?, frame, frame_name?, x, y} · commentOpen {id} · commentPlace {id, at, box} · commentEscape
+//     newDesign {size?} · saveCopy {doc, name, fig} · export {doc, files} · exportAs {doc, format}
+//     presence {doc, peers, saver, connected} · liveTicket {id}
+//     liveAgent {doc, version} · liveReload {doc, version} · liveBase {doc, version}
+// `doc` tags one load: a save from an older load is refused. Saves name the version they
+// stand on as their base, so a save over a newer file is refused. An editor before
+// protocol 2 sends none of the new messages and never waits for `written`.
 
 function toBase64(bytes: Uint8Array): string {
   let s = "";
@@ -72,36 +46,28 @@ function fromBase64(b64: string): Uint8Array {
   return out;
 }
 
-// What Cycls does for the editor: make a new design and open it in its own tab,
-// write a new file beside this one (never over one — the server picks a free
-// name), read the brand kit, open a file, refresh the Files panel.
+// What Cycls does for the editor. `writeNew` never overwrites: the server picks a free name.
 export type DesignHost = {
   newDesign: (size?: [number, number]) => Promise<void>;
   writeNew: (path: string, data: BlobPart) => Promise<string>;
   brand: () => Promise<BrandKit | null>;
   openInCanvas: (path: string) => void;
   refreshFiles?: () => void;
-  // The design as a file beside it (the design service renders it) → its path. `page`
-  // is the page exported, by name (the first when absent).
+  // Rendered beside the design by the design service → its path; `page` defaults to the first.
   exportDesign?: (path: string, format: "pdf" | "png", page?: string) => Promise<string>;
-  // A design with its version, which its saves name as their base (design/store.py),
-  // and its earlier versions — absent on an older server or a shared view.
+  // Versioned reads and history: absent on an older server or a shared view.
   fetchVersioned?: FetchVersioned;
   listVersions?: (path: string) => Promise<DesignVersion[]>;
   versionBlob?: (path: string, id: string) => Promise<Blob>;
-  versionPreview?: (path: string, id: string) => Promise<Blob>;   // a picture of it (absent on an older server)
+  versionPreview?: (path: string, id: string) => Promise<Blob>;
   restoreVersion?: (path: string, id: string) => Promise<{ version: string }>;
-  // Working in one design together: the design's live room and this person's pass for
-  // it — null where a design opens alone (a personal workspace, no relay) — and who
-  // this is, for the name on their cursor.
+  // The design's live room and pass (null: it opens alone), and who this is, for their cursor.
   live?: (path: string) => Promise<DesignLive | null>;
   me?: { id: string; name: string };
 };
 export type { DesignLive } from "../hooks/use-files";
 
-// Every mounted editor, by the file it edits — so Cycls can have one save what's
-// unsaved before its tab closes, the file is renamed or the canvas hides, can stop
-// one from writing a file that is being deleted, and can open one full screen.
+// Mounted editors by path: flushed before a close, rename or hide; detached during a delete.
 type Handle = {
   flush: (ms: number) => Promise<boolean>; detach: () => () => void; fullscreen: () => void; reload: () => void;
   page: (name: string) => void;
@@ -118,24 +84,22 @@ export const flushDesignEditorsUnder = (prefix: string, ms = 5000) =>
   Promise.all(handlesUnder(prefix).map((h) => h.flush(ms))).then((oks) => oks.every(Boolean));
 export const flushAllDesignEditors = (ms = 1500) =>
   Promise.all(handlesUnder(null).map((h) => h.flush(ms))).then((oks) => oks.every(Boolean));
-// → re-attach (the delete failed): until then, their saves aren't written.
+// Returns re-attach (the delete failed); saves are dropped until then.
 export function detachDesignEditorsUnder(prefix: string): () => void {
   const undo = handlesUnder(prefix).map((h) => h.detach());
   return () => undo.forEach((f) => f());
 }
-// The editor of `path`, full screen: the whole screen for designing, the same iframe
-// (nothing reloads, saves go on). Called from a click — the browser asks for one.
+// Call from a click: the browser only grants full screen to a user gesture.
 export function fullscreenDesignEditor(path: string): void {
   [...(editors.get(path) ?? [])].pop()?.fullscreen();
 }
 export const canFullscreen = () => typeof document !== "undefined" && document.fullscreenEnabled === true;
-// Re-open the editors of `path` on the file as saved now — after a restore, or a
-// slide change made beside them (the deck viewer's own).
+// Re-open on the saved file: after a restore, or a slide change made in the deck viewer.
 export function reloadDesignEditors(path: string): void {
   for (const h of editors.get(path) ?? []) h.reload();
 }
 
-// What an export may write into the workspace, by the type the editor gives it.
+// The only types an editor export may write into the workspace.
 const EXPORT_TYPES: Record<string, string> = {
   "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/svg+xml": "svg", "application/pdf": "pdf",
 };
@@ -151,25 +115,19 @@ type EditorMessage = {
   at?: { x: number; y: number } | null; box?: { w: number; h: number };
 };
 
-// What the person has selected in an open design, by name (the editor's `selection`)
-// — what "Add selection" attaches to a message. The latest, per design. `page` is the
-// page they are on, when the design has several.
+// The latest selection per design: what "Add selection" attaches to a message.
 export type DesignSelection = { path: string; frame: string | null; nodes: { name: string; type: string; text?: string }[]; page?: string };
 const selections = new Map<string, DesignSelection>();
 export const designSelection = (path: string) => selections.get(path) ?? null;
 
-// A design's pages — its variants: a post, a story, a banner of one piece of work — as
-// its open editor has them, and the one in view (the editor's `pages`). It is what a
-// preview shows and a download exports. Absent while no editor of the design is open.
+// A design's pages (its variants) and the one in view; null while no editor of it is open.
 export type DesignPages = { path: string; page: string; pages: string[] };
 const pageSets = new Map<string, DesignPages>();
 export const designPages = (path: string) => pageSets.get(path) ?? null;
-// The page in view, when the design has more than one (else undefined: the design is its page).
 export const designPage = (path: string) => {
   const p = pageSets.get(path);
   return p && p.pages.length > 1 ? p.page : undefined;
 };
-// Show `page` in the editors of `path` (a preview's tabs: Edit comes back on that page).
 export function showDesignPage(path: string, page: string): void {
   for (const h of editors.get(path) ?? []) h.page(page);
 }
@@ -185,10 +143,7 @@ export function useDesignPages(path: string): DesignPages | null {
   }, [path]);
   return value;
 }
-// What an agent's edit of a design (its `design_command` event) tells the editors that
-// have it open: the script to replay, the file's version once it is made, the page it is
-// made on, `reload` when the pages themselves changed — and `live` when the room of
-// people in the design took the edit, so no editor here makes it a second time.
+// A `design_command` event. `reload`: the pages changed; `live`: the room already took it.
 export type DesignCommand = { path: string; script: string; intent?: string; version?: string; page?: string; reload: boolean; live: boolean };
 export function designCommandDetail(ev: Record<string, unknown>): DesignCommand {
   const words = (v: unknown) => (typeof v === "string" ? v : undefined);
@@ -196,9 +151,7 @@ export function designCommandDetail(ev: Record<string, unknown>): DesignCommand 
            page: words(ev.page), reload: ev.reload === true, live: ev.live === true };
 }
 
-// Who else has a design open in its editor right now (the editor's `presence`), and
-// whether this editor is the one saving for all of them. Null while nobody else could
-// be: no editor of the design is open, or it was opened alone.
+// Who else is in the design, and whether this editor saves for the room; null when alone.
 export type DesignPeer = { client: number; name: string; user: string | null; color: string | null };
 export type DesignPresence = { path: string; peers: DesignPeer[]; saver: boolean; connected: boolean };
 const presences = new Map<string, DesignPresence>();
@@ -215,19 +168,17 @@ export function useDesignPresence(path: string): DesignPresence | null {
   }, [path]);
   return value;
 }
-// Keep this person's view in step with that one's (null: stop).
+// null stops following.
 export function followDesignPeer(path: string, client: number | null): void {
   for (const h of editors.get(path) ?? []) h.follow(client);
 }
-export { peerColor };   // (lib/people.ts: a comment's pin is its author's colour too)
+export { peerColor };
 
-// The slides of the page a design's editor shows — name and size, in order (the editor's
-// `frames`) — and whether that editor draws comments. A comment finds its slide by name.
+// The slides of the page in view, in order; a comment finds its slide by name.
 export type DesignFrames = { path: string; page: string; frames: { name: string; w: number; h: number }[] };
 const frameSets = new Map<string, DesignFrames>();
 const commenting = new Set<string>();
-// Whether an editor of `path` is open that pins comments on the design itself (one from
-// before it does not: comments are then pinned on the design's preview).
+// An older editor can't draw pins: comments then go on the design's preview.
 export const designEditorComments = (path: string) => commenting.has(path);
 export function useDesignFrames(path: string): DesignFrames | null {
   const [value, setValue] = useState(() => frameSets.get(path) ?? null);
@@ -242,7 +193,7 @@ export function useDesignFrames(path: string): DesignFrames | null {
   return value;
 }
 
-// The page a design was last on, kept in this browser: it opens there again.
+// The page a design was last on, so it reopens there.
 const pageKey = (path: string) => `cycls:design-page:${path}`;
 const lastPage = (path: string) => { try { return localStorage.getItem(pageKey(path)) || undefined; } catch { return undefined; } };
 function keepPage(path: string, page: string | null) {
@@ -252,17 +203,16 @@ function keepPage(path: string, page: string | null) {
   } catch { /* no storage: it opens on its first page */ }
 }
 
-// An agent edit to replay in the editor: its script, the cursor's label, the design's
-// version once the server saved it, and the page it is made on.
+// An agent edit to replay: `intent` labels the cursor, `version` is the file's after it.
 type Command = { script: string; intent?: string; version?: string; page?: string };
 
 export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload, host }: {
-  url: string;        // blob URL of the .fig bytes (already fetched, authed) — used when there's no host.fetchVersioned
+  url: string;        // blob URL of the .fig, used when there's no host.fetchVersioned
   path: string;       // workspace path to write edits back to
   name: string;
   editorUrl: string;  // base URL of the deployed editor (config.design_editor_url)
   writeFile: WriteFile;
-  reload?: () => Promise<string>;   // a FRESH blob URL of the saved .fig (re-open after a failed replay)
+  reload?: () => Promise<string>;   // a fresh blob URL of the saved .fig
   host?: DesignHost;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -273,8 +223,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   const sourceRef = useRef<string | null>(null);      // what the next `ready` loads, if not `url`
   const [status, setStatus] = useState<"loading" | "ready" | "saved" | "error" | "saveerror">("loading");
   const [copyOf, setCopyOf] = useState<{ fig: string } | null>(null);
-  // A save refused because the design changed elsewhere (not by an agent edit landing
-  // here): the person decides, and saves wait meanwhile. `fig` is the refused save.
+  // A save refused over a change made elsewhere; saves wait while the person decides.
   const [conflict, setConflict] = useState<{ version: string; fig: string } | null>(null);
   const conflictRef = useRef(conflict);
   conflictRef.current = conflict;
@@ -282,11 +231,11 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   const lang = useLang();
   const toast = useToast();
   const base = editorUrl.replace(/\/+$/, "");
-  // The theme and language at first load; later changes go to the editor live (`theme`, `locale`).
+  // Fixed at first load so the iframe never reloads; later changes are posted live.
   const [src] = useState(() => `${base}/?embed=cycls&theme=${dark ? "dark" : "light"}&lang=${lang}`);
-  const version = useRef<string | null>(null);        // the version the editor's document stands on: its saves' base
+  const version = useRef<string | null>(null);        // the base version of the editor's saves
   const loadedVersion = useRef<string | null>(null);  // the version this load read
-  const commands = useRef<Command[]>([]);             // agent edits waiting to replay, one at a time
+  const commands = useRef<Command[]>([]);             // agent edits waiting to replay
   const replaying = useRef<Command | null>(null);
   const editorLoaded = useRef(false);                 // the editor has this load's document open (`loaded`)
   const pending = useRef<{ version: string; timer: number } | null>(null);   // a 412 an agent edit may yet explain
@@ -295,14 +244,14 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   const origin = (() => { try { const u = new URL(editorUrl, window.location.href); return /^https?:$/.test(u.protocol) ? u.origin : null; } catch { return null; } })();
   const latest = useRef({ url, path, writeFile, reload, host, toast });
   latest.current = { url, path, writeFile, reload, host, toast };
-  const protocol = useRef(0);           // the editor's: 2, or 0 for one from before the protocol
+  const protocol = useRef(0);           // 2, or 0 for a pre-protocol editor
   const doc = useRef("");               // the current load's tag
   const detached = useRef(false);       // the file is being deleted: write nothing
   const flushes = useRef(new Map<string, (ok: boolean) => void>());
-  const features = useRef<Set<string>>(new Set());   // what the editor does beyond protocol 2 (its `ready`)
+  const features = useRef<Set<string>>(new Set());   // from the editor's `ready`
   const resetWait = useRef<number | null>(null);   // "Load the latest" in a room: the editor is telling the room
-  const known = useRef(new Set<string>());   // versions of the file the room's document holds, as its editors said them
-  const retried = useRef(0);            // refused saves gone again in a row, on a version the room said
+  const known = useRef(new Set<string>());   // file versions the room's document holds (`liveBase`)
+  const retried = useRef(0);            // consecutive 412 retries on a version the room holds
   const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
   const stem = (path.split("/").pop() ?? name).replace(/\.fig$/i, "");
 
@@ -310,10 +259,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
     if (origin) frameRef.current?.contentWindow?.postMessage({ target: "cycls-editor", ...msg }, origin);
   }, [origin]);
 
-  // Comments (lib/comments.ts), in an editor that draws them: it is given the pins of the
-  // page it shows; it says where a click of comment mode landed, which pin was clicked,
-  // and where the open pin is on screen — the card beside it is this page's, laid over
-  // the editor.
+  // The editor draws the pins; the open card is ours, laid over the editor.
   const comments = useComments(path);
   const commentsRef = useRef(comments);
   commentsRef.current = comments;
@@ -333,7 +279,6 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   useEscape(() => commentsRef.current?.store.set({ active: null, draft: null }), cardOpen);
   useEscape(() => commentsRef.current?.store.set({ adding: false }), !!comments?.adding && pinsOn && !cardOpen);
 
-  // Light/dark and the language follow Cycls, live.
   useEffect(() => {
     if (protocol.current >= 2) post({ type: "theme", theme: dark ? "dark" : "light" });
   }, [dark, post]);
@@ -341,10 +286,8 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
     if (protocol.current >= 2) post({ type: "locale", lang });
   }, [lang, post]);
 
-  // One agent edit replays at a time; the next goes once the editor says `applied`.
-  // One the editor loaded already (its version is what it read) is in the document.
-  // None goes before the editor has the document open: an edit that arrived while it
-  // was still loading got `commandError: no document is open`, and a whole reload.
+  // One edit at a time, the next on `applied`; skip ones already in the loaded file. None
+  // before `loaded`: the editor would answer `commandError` and force a reload.
   const pump = useCallback(() => {
     if (replaying.current || !editorLoaded.current) return;
     let next = commands.current.shift();
@@ -354,7 +297,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
     post({ type: "command", script: next.script, intent: next.intent, ...(next.page ? { page: next.page } : {}) });
   }, [post]);
 
-  // Re-open the editor on the saved file (a fresh fetch, with its version).
+  // Re-open on the saved file (a fresh fetch, with its version).
   const reopen = useCallback(() => {
     commands.current = [];
     replaying.current = null;
@@ -363,10 +306,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
     setFrameKey((k) => k + 1);
   }, []);
 
-  // Full screen is the editor's box, not the page: the iframe stays where it is.
-  // Esc leaves it, as on any full-screen page. (It used to be kept for the editor with
-  // a keyboard lock — hold Esc to leave — and the Exit button hid after a moment: in
-  // practice there was no way out.)
+  // Full screen is the editor's box, not the page, so the iframe doesn't reload.
   const enterFullscreen = useCallback(() => {
     const box = boxRef.current;
     if (!box?.requestFullscreen || document.fullscreenElement) return;
@@ -374,8 +314,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       frameRef.current?.focus();   // keys go to the editor, not the button left behind
     }).catch(() => {});
   }, []);
-  // What opens in another canvas tab (a new design, a copy, an export) isn't seen
-  // under a full-screen editor, so it leaves full screen first.
+  // Anything opened in another canvas tab would be hidden under full screen.
   const leaveFullscreen = useCallback(async () => {
     if (boxRef.current && document.fullscreenElement === boxRef.current) await document.exitFullscreen().catch(() => {});
   }, []);
@@ -395,9 +334,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
     };
   }, []);
 
-  // A much bigger or smaller editor — full screen, the canvas expanded over the chat —
-  // fits the design to it again. (The editor does, unless the person has set their own
-  // view; it stayed small in a corner, at the docked zoom.)
+  // Refit the design when the box changes size a lot (full screen, canvas expanded).
   useEffect(() => {
     const box = boxRef.current;
     if (!box || typeof ResizeObserver === "undefined") return;
@@ -419,7 +356,6 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
     return () => { observer.disconnect(); window.clearTimeout(timer); };
   }, [post]);
 
-  // This editor in the registry, for Cycls's flushes, deletes and full screen.
   useEffect(() => {
     const handle: Handle = {
       flush: (ms) => {
@@ -458,10 +394,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   useEffect(() => {
     let disposed = false;
     let readies = 0;
-    // Once the editor reports the doc loaded, it's live and editable. A later
-    // "error" is a background hiccup (e.g. an auto-save blip), NOT a broken editor —
-    // so it must not latch the scary permanent "Editor error". Only a failure
-    // BEFORE load is a real, sticky error.
+    // After `loaded`, an `error` is a transient save blip, not a broken editor.
     let loaded = false;
     let spoke = false;    // the editor has said `ready`: its protocol is known
     const flash = (s: "saved" | "saveerror") => {
@@ -493,15 +426,13 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       }
     };
 
-    // "Export › PDF" in the editor: Cycls renders it — the design service, so its fonts
-    // and its Arabic are as in every other export; the editor's own PDF embeds no fonts —
-    // and writes it beside the design, like the editor's other exports.
+    // Rendered by the design service: the editor's own PDF embeds no fonts.
     const exportAs = async (format: "pdf" | "png") => {
       const { host, toast, path } = latest.current;
       if (!host?.exportDesign) return;
       try {
         await flushDesignEditor(path, 3000);   // what's unsaved is in the export
-        const page = designPage(path);            // the page in view, on a design of several
+        const page = designPage(path);
         const written = await (page ? host.exportDesign(path, format, page) : host.exportDesign(path, format));
         track("design_exported", { format, files: 1 });
         host.refreshFiles?.();
@@ -531,8 +462,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         editorLoaded.current = false;   // ones that arrive from here wait until it is open
         spoke = true;
         if (protocol.current >= 2 && host?.fetchVersioned) {
-          // Every load reads the file afresh, with its version: what its saves name as
-          // their base, so a save over a newer file is refused (design/store.py).
+          // Read afresh with its version: the base its saves name (design/store.py).
           if (source) URL.revokeObjectURL(source);
           try {
             const got = await host.fetchVersioned(latest.current.path);
@@ -543,8 +473,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
             return;
           }
         } else if (!source && readies > 0 && latest.current.reload) {
-          // The first load has the bytes this view fetched; a later one (the editor
-          // reloaded itself) reads the file again, for what's saved now.
+          // A later `ready` (the editor reloaded itself) reads the saved file again.
           try { source = await latest.current.reload(); } catch { source = null; }
         }
         readies++;
@@ -565,7 +494,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
             ? { ...room, epoch: version.current ?? room.epoch,   // the version of the bytes it is given
                 user: { id: host.me.id, name: host.me.name, color: peerColor(host.me.id) } } : null;
           doc.current = `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-          const page = lastPage(latest.current.path);   // where they left it (the editor opens its first page otherwise)
+          const page = lastPage(latest.current.path);   // where they left it
           post({ type: "load", protocol: 2, doc: doc.current, name, fig: toBase64(new Uint8Array(buf)),
                  ...(brand ? { brand } : {}), ...(page ? { page } : {}), ...(live ? { live } : {}) });
           if (protocol.current >= 2) {
@@ -580,19 +509,16 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       } else if (m.type === "loaded") {
         loaded = true;
         if (!disposed) setStatus("ready");
-        // Opened from the file — alone, or as the one who gives the room its document —
-        // it stands on the file it read. One that took the room's document stands on
-        // what the room says is saved (`liveBase`), which it has heard by now.
+        // A `join` took the room's document: its base comes from `liveBase`, not the file read.
         if (m.live !== "join" && loadedVersion.current) {
           version.current = loadedVersion.current;
           known.current = new Set([loadedVersion.current]);
         }
-        // Not in a room after all (the people in it left before their document came):
-        // nobody it met on the way in is here with it.
+        // Not in a room after all (everyone left before it joined): drop stale presence.
         if (!m.live && presences.delete(latest.current.path)) {
           window.dispatchEvent(new CustomEvent("cycls:design-presence", { detail: { path: latest.current.path } }));
         }
-        // What it read holds every edit up to the one whose version it is; the rest replay.
+        // Drop queued edits up to the one the loaded file already holds.
         const waiting = commands.current;
         for (let i = waiting.length - 1; i >= 0; i--) {
           if (waiting[i].version && waiting[i].version === loadedVersion.current) { waiting.splice(0, i + 1); break; }
@@ -604,14 +530,13 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         }
         pump();
       } else if (m.type === "frames" && Array.isArray(m.frames)) {
-        // The slides of the page in view — by name: what finds a comment's slide.
         if (m.doc && m.doc !== doc.current) return;
         const now: DesignFrames = { path: latest.current.path, page: typeof m.page === "string" ? m.page : "",
                                     frames: m.frames.filter((f) => f && typeof f.name === "string") };
         frameSets.set(now.path, now);
         window.dispatchEvent(new CustomEvent("cycls:design-frames", { detail: now }));
       } else if (m.type === "commentAt" && typeof m.frame === "number" && typeof m.x === "number" && typeof m.y === "number") {
-        // A click on a slide, in comment mode: a comment is being written there.
+        // A comment-mode click on a slide: start a draft there.
         if (m.doc && m.doc !== doc.current) return;
         commentsRef.current?.store.pin({ ...(m.page ? { page: m.page } : {}), frame: m.frame,
                                          ...(m.frame_name ? { frame_name: m.frame_name } : {}), x: m.x, y: m.y });
@@ -621,24 +546,23 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       } else if (m.type === "commentPlace" && typeof m.id === "string" && m.box) {
         if (!disposed) setPlace({ id: m.id, at: m.at ?? null, box: m.box });
       } else if (m.type === "commentEscape") {
-        // Escape pressed inside the editor: the card closes first, then comment mode ends.
+        // Escape in the editor: close the card first, then comment mode.
         const c = commentsRef.current;
         if (c) c.store.set(c.active !== null || c.draft !== null ? { active: null, draft: null } : { adding: false });
       } else if (m.type === "saved" && typeof m.fig === "string") {
         const reply = (ok: boolean) => post({ type: "written", doc: m.doc, id: m.id, ok });
-        // A save from a document since replaced, or of a file being deleted: not written.
+        // A save from a replaced load, or of a file being deleted, is dropped.
         if ((m.doc && m.doc !== doc.current) || detached.current) {
           reply(false);
           return;
         }
-        if (conflictRef.current) {   // the person is deciding: nothing is written meanwhile
+        if (conflictRef.current) {   // the person is deciding the conflict
           reply(false);
           return;
         }
         const keep = force.current;
         try {
-          // Cast: TS 5.7 types Uint8Array as Uint8Array<ArrayBufferLike>, which
-          // doesn't structurally match BlobPart's ArrayBufferView<ArrayBuffer>.
+          // Cast: TS 5.7's Uint8Array<ArrayBufferLike> isn't a BlobPart.
           const r = await latest.current.writeFile(latest.current.path, fromBase64(m.fig) as unknown as BlobPart, {
             silent: true, ...(version.current ? { base: version.current } : {}), ...(keep ? { force: true } : {}),
           });
@@ -653,10 +577,8 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           if ((err as { status?: number }).status === 412) {
             const now = await (err as { response?: Response }).response?.json().then((j) => j?.version).catch(() => undefined);
             if (presences.has(latest.current.path) && typeof now === "string" && now && known.current.has(now) && retried.current < 3) {
-              // In a room, and the file is at a version the room's document already holds:
-              // the one who was saving wrote it, or an agent's edit of it was made for
-              // everyone. What this editor holds has all of it — it goes again, on that.
-              // (A version nobody in the room said is a change from outside it: asked.)
+              // The room's document already holds that version: save again on it. An
+              // unknown version is a change from outside the room: ask.
               retried.current++;
               version.current = now;
               post({ type: "save" });
@@ -671,15 +593,12 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         flushes.current.get(m.id)?.(m.ok === true);
         flushes.current.delete(m.id);
       } else if (m.type === "applied") {
-        // An agent edit is in the document now: saves go on from its version, and one
-        // refused while it replayed goes now.
+        // Saves go on from the edit's version; the flush resends one refused meanwhile.
         const done = replaying.current;
         replaying.current = null;
         if (done?.version && version.current !== null) {
           version.current = done.version;
           known.current.add(done.version);
-          // In a room, everyone's document has the edit now (it was made in the one they
-          // share): the one who saves is told which version of the file that is.
           if (presences.has(latest.current.path)) post({ type: "liveBase", version: done.version });
           post({ type: "flush", id: `v${done.version}` });
         }
@@ -692,7 +611,6 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         else selections.delete(sel.path);
         window.dispatchEvent(new CustomEvent("cycls:design-selection", { detail: sel }));
       } else if (m.type === "pages" && Array.isArray(m.pages) && typeof m.page === "string") {
-        // The design's pages and the one in view, whenever either changes.
         if (m.doc && m.doc !== doc.current) return;
         const now: DesignPages = { path: latest.current.path, page: m.page, pages: m.pages.filter((p) => typeof p === "string") };
         pageSets.set(now.path, now);
@@ -709,14 +627,11 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         presences.set(now.path, now);
         window.dispatchEvent(new CustomEvent("cycls:design-presence", { detail: now }));
       } else if (m.type === "liveTicket" && typeof m.id === "string") {
-        // The editor is connecting again (a long connection was cut): a new pass.
+        // The editor is reconnecting: it needs a fresh ticket.
         const room = await host?.live?.(latest.current.path).catch(() => null);
         if (room && !disposed) post({ type: "liveTicket", id: m.id, ticket: room.ticket });
       } else if (m.type === "liveBase" && typeof m.version === "string" && m.version) {
-        // The room's document holds this version of the file: the one who saves is
-        // writing it, or an agent's edit of it was made in the document they share.
-        // When the saving comes to this editor it goes on from there — and a save
-        // refused over it a moment ago goes now.
+        // The room holds this version: base on it if not the saver, and resend a save refused over it.
         if (m.doc && m.doc !== doc.current) return;
         known.current.add(m.version);
         if (version.current !== null && !presences.get(latest.current.path)?.saver) version.current = m.version;
@@ -727,22 +642,20 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           post({ type: "save" });
         }
       } else if (m.type === "liveAgent") {
-        // An agent's edit was made here for everyone: the file is at its version, and
-        // what this editor holds — the edit and all — is saved on from it.
+        // The server handed an agent edit to the room: base on its version and save.
         if (m.doc && m.doc !== doc.current) return;
         if (pending.current) { window.clearTimeout(pending.current.timer); pending.current = null; }
         if (typeof m.version === "string" && m.version) known.current.add(m.version);
         if (typeof m.version === "string" && m.version && version.current !== null) version.current = m.version;
         post({ type: "flush", id: `a${Date.now().toString(36)}` });
       } else if (m.type === "liveReload") {
-        // The file was written anew (a re-render, a restore, a slide moved): open it again.
+        // The file was rewritten (re-render, restore, slide moved): reopen.
         if (m.doc && m.doc !== doc.current) return;
         if (pending.current) { window.clearTimeout(pending.current.timer); pending.current = null; }
         if (resetWait.current) { window.clearTimeout(resetWait.current); resetWait.current = null; }
         reopen();
       } else if (m.type === "commandError") {
-        // The live replay of an agent edit failed; the saved file already holds the
-        // edit. Re-open the editor on it (a fresh fetch — `url` may predate the edit).
+        // The server already saved the edit: reopen on a fresh fetch, or an auto-save would undo it.
         commands.current = [];
         replaying.current = null;
         editorLoaded.current = false;
@@ -755,9 +668,6 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         setStatus("loading");
         setFrameKey((k) => k + 1);
       } else if (m.type === "error") {
-        // Pre-load: the editor genuinely failed to open → sticky "Editor error".
-        // Post-load: a background blip (e.g. an auto-save) → transient, then the
-        // live editor stays up.
         if (!disposed) loaded ? flash("saveerror") : setStatus("error");
       } else if (m.type === "newDesign" && host) {
         await leaveFullscreen();
@@ -770,10 +680,8 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         setCopyOf({ fig: m.fig });
       }
     };
-    // A save refused as stale. While an agent edit is landing here that's expected —
-    // it saved the file first — and the save goes again once the edit is applied.
-    // Otherwise the design changed elsewhere; the agent's event may still be on its
-    // way (it travels apart from the save's answer), so give it a moment first.
+    // A 412 during an agent replay is expected (it resends on `applied`). Otherwise wait:
+    // the agent's event may arrive after the 412.
     const stale = (now: string, fig: string) => {
       if (replaying.current || commands.current.length) return;
       if (pending.current) window.clearTimeout(pending.current.timer);
@@ -784,26 +692,22 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           if (disposed || replaying.current || commands.current.length) return;
           setConflict({ version: now, fig });
           track("design_save_conflict", { choice: "shown" });
-        }, presences.has(latest.current.path) ? 6000 : 3000),   // a room says why a little later: the edit is made first
+        }, presences.has(latest.current.path) ? 6000 : 3000),   // a room's explanation comes later
       };
     };
 
-    // The agent edits an open design live: chat.tsx dispatches this when its
-    // Design tool fires a `design_command`; it replays here, one at a time.
+    // From chat.tsx, on a `design_command` event.
     const onCommand = (e: Event) => {
       const d = (e as CustomEvent).detail as { path?: string; script?: string; intent?: string; version?: string; page?: string; reload?: boolean; live?: boolean };
       if (!d || d.path !== latest.current.path || typeof d.script !== "string") return;
-      // People are in this design together and the server handed the edit to their room:
-      // one editor makes it for all of them (it reaches this one through the shared
-      // document), so replaying it here would make it twice.
+      // The room applies it once for everyone; replaying here would apply it twice.
       if (d.live && features.current.has("live") && presences.has(latest.current.path)) return;
       if (spoke && protocol.current < 2) {   // an editor from before the protocol never says `applied`
         post({ type: "command", script: d.script, intent: d.intent });
         return;
       }
       if (d.reload) {
-        // The edit changed the pages themselves (one added, copied, renamed, removed).
-        // The server has saved it: open that file, on the page the edit ended on.
+        // The pages changed: reopen the saved file on the edit's page.
         if (pending.current) window.clearTimeout(pending.current.timer);
         pending.current = null;
         keepPage(latest.current.path, d.page || null);
@@ -832,7 +736,6 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
     };
   }, [origin, post, name, dir, stem, frameKey, leaveFullscreen, pump, reopen]);
 
-  // The conflict's three ways out.
   const resolve = async (choice: "latest" | "mine" | "copy") => {
     const c = conflictRef.current;
     if (!c) return;
@@ -853,21 +756,18 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         toast.info(t("savedCopy").replace("{name}", written.split("/").pop() ?? written));
       } catch {
         toast.error(t("copyFailed"));
-        return;   // keep this editor's work: nothing was saved anywhere
+        return;   // nothing was saved: keep this editor's work
       }
     }
-    // In a room the document is everyone's: taking the file's is for all of them, and
-    // the room starts over from it (alone, this editor would only be handed the room's
-    // again). The editor tells the room, then says `liveReload` — which is when the file
-    // is opened here; replaced under the message, it would have told nobody. One that
-    // says nothing is not waited for long.
+    // In a room the reset is for everyone: wait for the editor's `liveReload` (reopening
+    // first would cut its message to the room), but not for long.
     if (presences.has(latest.current.path)) {
       post({ type: "liveReset" });
       if (resetWait.current) window.clearTimeout(resetWait.current);
       resetWait.current = window.setTimeout(() => { resetWait.current = null; reopen(); }, 1500);
       return;
     }
-    reopen();   // this design, as it is now
+    reopen();
   };
 
   const saveCopy = async (copyName: string) => {
@@ -889,12 +789,9 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   return (
     // `data-toasts`: Cycls's toasts show inside it while it's full screen.
     <div ref={boxRef} data-toasts="" className="relative h-full w-full bg-background">
-      {/* Own-origin editor iframe (not sandboxed): the app needs its full
-          capabilities — CanvasKit, workers, storage — on its real origin. */}
+      {/* Not sandboxed: the editor needs CanvasKit, workers and storage on its own origin. */}
       <iframe key={frameKey} ref={frameRef} src={src} title={name} className="h-full w-full border-0" />
-      {/* The card of the comment that is open, beside its pin: the pin is the editor's,
-          drawn on the design, and it says where that is. The editor fills this box, so
-          its pixels are the box's. */}
+      {/* The open comment's card, at the pin the editor reports (editor pixels are box pixels). */}
       {comments && pinsOn && place?.at && place.id === (comments.draft ? "draft" : comments.active) && (
         <div className="pointer-events-none absolute inset-0 z-10" data-testid="editor-comment">
           <OpenComment path={path} at={place.at} within={place.box} />
@@ -903,9 +800,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       {pinsOn && <CommentsList path={path} names={names} page={pagesNow?.page} pages={pagesNow?.pages}
                                onPage={(page) => showDesignPage(path, page)} />}
       {full && (
-        // The way out, in view for as long as it's full screen: named for the first
-        // moments, then a small button at the top middle. The iframe keeps every other
-        // pointer event.
+        // Always visible in full screen: labelled at first, then a small button.
         <button
           onClick={() => void leaveFullscreen()}
           aria-label={t("exitFullScreen")}
@@ -938,11 +833,10 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   );
 }
 
-// The design changed elsewhere — another tab, another person, a script — while this
-// editor had unsaved work: which one stands. Nothing is written until they choose.
+// The design changed elsewhere while this editor had unsaved work: nothing is written until they choose.
 function ConflictDialog({ canCopy, onChoose }: { canCopy: boolean; onChoose: (c: "latest" | "mine" | "copy") => void }) {
   const choice = "w-full cursor-pointer rounded-md px-3 py-2 text-start text-xs hover:bg-secondary";
-  useEscape(() => {});   // it wants an answer: Escape doesn't dismiss it, nor close the canvas under it
+  useEscape(() => {});   // Escape neither dismisses it nor closes the canvas under it
   return (
     <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true"
          aria-labelledby="design-conflict-title">
@@ -970,7 +864,6 @@ function ConflictDialog({ canCopy, onChoose }: { canCopy: boolean; onChoose: (c:
   );
 }
 
-// "Save a copy": the copy's name, then Cycls writes it beside the design and opens it.
 function SaveCopyDialog({ initial, onCancel, onSave }: {
   initial: string;
   onCancel: () => void;

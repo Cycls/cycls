@@ -1,14 +1,9 @@
-"""The Design tool as the model is given it: its definition — what each action takes and
-how a spec is written — and the short form a chat carries until it designs
+"""The Design tool's definition, and the short form a chat carries until it designs
 (`DESIGN_INSTRUCTIONS=on-demand`). The executor is run.py."""
 import contextvars, re
 
 
-# Visual design (social posts + slides), backed by the shared cycls-design
-# service (see cycls/_agent/design). Enabled by "Design" in allowed_tools, but
-# only offered when the service is configured — else silently absent, like an
-# unconfigured office-render. The model describes a design as a spec; the service
-# renders it to an image (shown on the canvas) plus an editable .fig source.
+# offered only when the design service is configured — else silently absent
 _DESIGN_TOOL = {
     "type": "custom",
     "name": "design",
@@ -335,15 +330,10 @@ _DESIGN_TOOL = {
     }, "required": ["action"]}
 }
 
-# ---- Design's instructions, only when a chat designs --------------------------------
-#
-# The definition above is 29,000 characters: nearly half of every request of every
-# chat, whether it ever designs or not. With DESIGN_INSTRUCTIONS=on-demand a chat
-# carries the SHORT form below until it designs — which the person's words say, or a
-# design they point at, or the model asking for the guide (`design_wanted`). From then
-# on it is the definition above, byte for byte: a chat that designs is told exactly
-# what it is told today. The harness swaps them (harness/main.py); what the model was
-# shown when it made a call is DESIGN_LOADED, which `_exec_design` reads.
+# ---- On-demand instructions ----
+# The definition is ~29k chars; with DESIGN_INSTRUCTIONS=on-demand a chat carries the short form
+# until `design_wanted`, then the full one byte for byte (swapped in harness/main.py).
+# DESIGN_LOADED is which form the model saw; `_exec_design` reads it.
 
 DESIGN_LOADED = contextvars.ContextVar("design_loaded", default=True)
 
@@ -363,9 +353,7 @@ _GUIDE_LOADED = ("Design's instructions are loaded: this tool's description now 
                  "call `design` again with what you want made. Nothing was made or changed by this call.")
 _GUIDE_NOT_RUN = "Not run — this call was made before the tool's instructions were loaded. " + _GUIDE_LOADED
 
-# What a person says when they want something designed (English and Arabic). Wide on
-# purpose: a chat that matches and never designs pays what every chat paid before; one
-# that designs without matching pays one extra call (the guide).
+# wide on purpose: a false match costs the full definition, a miss one extra `guide` call
 _DESIGN_WORDS = re.compile(
     r"\b(design\w*|redesign\w*|poster|flyer|banner|infographic|brochure|logo|mock-?up|thumbnail|carousel|"
     r"slides?|deck|presentation|pitch|powerpoint|pptx|keynote|pdf|report|proposal|white ?paper|one[- ]pager|"
@@ -387,9 +375,7 @@ def design_called(messages):
 
 
 def design_wanted(messages):
-    """Does this chat design? It has called the tool; or the person names a design file
-    or has part of one selected (`designs/…`); or their words ask for one. Read back from
-    the transcript each turn — as connectors are — so nothing is stored."""
+    """Does this chat design? A Design call, a `designs/` path, or design words in the transcript."""
     if design_called(messages):
         return True
     for m in messages:
@@ -405,8 +391,7 @@ def design_wanted(messages):
 
 
 def _design_short():
-    """The short form: the same tool by name, every parameter still there by name and
-    type (nothing the model may pass is unknown to the schema), and none of the how."""
+    """The short form: every parameter kept by name and type, so no call is unknown to the schema."""
     props = {}
     for key, schema in _DESIGN_TOOL["input_schema"]["properties"].items():
         props[key] = {k: schema[k] for k in ("type", "enum", "items") if k in schema}

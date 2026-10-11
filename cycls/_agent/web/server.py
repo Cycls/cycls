@@ -55,9 +55,7 @@ class Config(BaseModel):
         (internal mount path) and the raw examples mapping (the FE reads the
         resolved cards from /examples) stay server-side."""
         data = self.model_dump(exclude={"cms", "volume", "examples"})
-        # The .fig design editor is a deployment concern (a static app on its own
-        # origin), wired by env like OFFICE_RENDER_URL / BROWSER_URL. Unset → the
-        # FE never renders the editor and .fig shows the download card.
+        # the .fig editor, a static app on its own origin; unset → .fig shows the download card
         if url := os.environ.get("DESIGN_EDITOR_URL"):
             data["design_editor_url"] = url
         return data
@@ -286,9 +284,7 @@ class Messages(list):
         return self._raw
 
 def _clean_selection(raw):
-    """The person's "Add selection" — what they selected in an open design, by name:
-    {path: a .fig in the workspace, frame, nodes: [{name, type, text?}], page?: the page
-    they are on, when the design has several} — capped, or None when it isn't one."""
+    """A design selection {path: a workspace .fig, frame, nodes: [{name, type, text?}], page?}, capped; else None."""
     if not isinstance(raw, dict):
         return None
     path = raw.get("path")

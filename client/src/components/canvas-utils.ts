@@ -44,14 +44,11 @@ const OFFICE_EXTS = new Set([
 ]);
 export const isOffice = (name: string) => OFFICE_EXTS.has(ext(name));
 
-// Design files (.fig) open in an embedded editor iframe on its own
-// origin (the human edits the same design the agent renders). Only when a
-// design-editor URL is configured — otherwise CanvasDoc shows the download card.
+// .fig opens in the design editor when one is configured, else the download card.
 const DESIGN_EXTS = new Set(["fig"]);
 export const isDesignEditor = (name: string) => DESIGN_EXTS.has(ext(name));
 
-// "New design" sizes — the server's presets (cycls/_agent/tools _DESIGN_SIZES),
-// named for the menu (i18n keys). The server makes the design; this only offers them.
+// Mirrors the server's presets (cycls/_agent/tools _DESIGN_SIZES); `label` is an i18n key.
 export const DESIGN_PRESETS = [
   { key: "square", label: "designSquare", size: [1080, 1080] },
   { key: "post-portrait", label: "designPortrait", size: [1080, 1350] },
@@ -61,12 +58,9 @@ export const DESIGN_PRESETS = [
   { key: "a4-poster", label: "designA4", size: [1240, 1754] },
 ] as const;
 
-// A design deck's document (designs/<name>.deck.json, written by a multi-slide
-// Design render) opens the deck viewer. Its slides come from ?as=slides — the
-// design service renders them — not from the JSON itself, so it's checked before
-// the code path would claim it as .json.
+// designs/<name>.deck.json opens the deck viewer: check it before the .json code path.
 export const isDeck = (name: string) => name.toLowerCase().endsWith(".deck.json");
-// The label on a file's extension tile ("deck" for a deck document, not "json").
+// "deck", not "json", on a deck's extension tile.
 export const tileExt = (name: string) => (isDeck(name) ? "deck" : name.includes(".") ? name.split(".").pop() || "" : "");
 
 export const is3d = (name: string) => ["glb", "gltf"].includes(ext(name));

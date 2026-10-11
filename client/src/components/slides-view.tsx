@@ -11,7 +11,7 @@ interface SlideManifest { count: number; slides: string[] }
 // office-render service produced). `data` is that JSON, fetched authed (works
 // for owned files and token-scoped shares alike). Arrow keys / clicking a
 // thumbnail move between slides; the images are pre-rendered by LibreOffice, so
-// RTL decks come through already shaped. Present shows it full screen.
+// RTL decks come through already shaped.
 export function SlidesView({ data }: { data: string }) {
   const manifest = useMemo<SlideManifest | null>(() => {
     try { return JSON.parse(data); } catch { return null; }

@@ -1,25 +1,5 @@
-"""Design generation for Cycls agents, via a shared headless design service.
-
-Agents produce social-media posts and slides WITHOUT shipping a design engine:
-the heavy engine (headless, on Bun/CanvasKit) runs in ONE shared
-service — cycls-design — and this module is a thin HTTP client. Same split as
-office-render and the browser tool: the SDK ships the client, the service is
-deployed once.
-
-Configured by env an agent sets to use the service:
-  DESIGN_URL     the service base URL (e.g. https://cycls-design.cycls.ai)
-Optional:
-  DESIGN_SECRET  shared service secret (Bearer) — set by a deployed service,
-                 omitted for a local open dev instance.
-
-If DESIGN_URL is unset the feature is simply off: `configured()` is False and the
-`Design` tool is never offered, so the agent degrades to "designing isn't
-configured" instead of crashing — exactly the office-render behaviour.
-
-The service is stateless: it takes a spec (or a raw script) and returns the
-rendered image plus the editable `.fig` source. State (the saved files) lives in
-the calling agent's workspace, so there is nothing to keep in sync here.
-"""
+"""Thin HTTP client to the shared, stateless design service (cycls-design), like office-render.
+DESIGN_URL turns it on (unset: no Design tool); DESIGN_SECRET is the optional Bearer secret."""
 import asyncio
 import base64
 import os
@@ -27,31 +7,20 @@ from typing import NamedTuple
 
 import httpx
 
-# A render shells the CanvasKit engine on the service; give it headroom, but
-# well under a page-timeout so a hung service surfaces as an error, not a stall.
 _TIMEOUT = 240  # seconds — a whole deck (PPTX / PDF) may take a few minutes
 
 
-# A deploy of the service is not a failed render. For a few minutes after one, its
-# instances are swapped under the requests in flight: a connection is dropped with no
-# answer, or refused, or the platform's front end answers 502 / 503 for a service that
-# isn't there yet. The same request a moment later is served — so it is made again,
-# twice at most. (The service keeps no state: a request made twice changes nothing.)
-# Not tried again: a timeout — a render that takes too long would take as long again —
-# and anything the service itself answered.
+# a service deploy drops or 502s in-flight requests; retry those (stateless), never a timeout or a real answer
 _RETRY_WAITS = (1, 3)       # seconds before the second and the third try
 _GONE = (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)
 
 
 class Unavailable(RuntimeError):
-    """Raised when the design service is unreachable or not configured, so the
-    caller degrades gracefully instead of a hard error."""
+    """The design service is unreachable or not configured; callers degrade instead of failing."""
 
 
 def configured():
-    """Wired when a service URL is set. The secret is optional (a local dev
-    instance may run open); a deployed service sets one and rejects calls without
-    it, surfaced as `Unavailable` at call time."""
+    """Wired when DESIGN_URL is set; DESIGN_SECRET is optional."""
     return bool(os.environ.get("DESIGN_URL"))
 
 
@@ -93,9 +62,7 @@ async def _post(path, body, user_id=None):
     if resp.status_code == 401:
         raise Unavailable("design service rejected the secret (DESIGN_SECRET)")
     if resp.status_code != 200 or not (isinstance(data, dict) and data.get("ok")):
-        # A well-formed failure carries {ok:false,error}; anything else is raw. A
-        # request over the size cap can be refused by the platform's front end
-        # before the service sees it (no JSON), so that one is named here too.
+        # the platform's front end may refuse a request (413/429) before the service sees it: no JSON
         detail = data.get("error") if isinstance(data, dict) else None
         if not detail and resp.status_code == 413:
             detail = "the design request is too large — use smaller or fewer images"
@@ -106,26 +73,9 @@ async def _post(path, body, user_id=None):
 
 
 class Rendered(NamedTuple):
-    """A render. `image` is the output — a deck's whole file for pptx / pdf, else the
-    first frame; `images` every frame in the format when asked (a carousel). `fig`
-    is the editable source. `preview` / `previews` are small @1x JPEGs of the first /
-    every frame — what the agent looks at to QA it (None / [] from a service that
-    predates them). `notes` are what the service changed to make it render (a font
-    swapped for its open twin, a weight the family lacks, a headline shrunk to fit) —
-    lines for the agent's ack. `lint` is the layout check: [{frame, node, issue, fix}].
-    `slides` is each frame's deck metadata: [{name, title?, notes?, transition?}].
-    `dir` is a deck of layouts' direction ("ltr" / "rtl"), which its bilingual slides
-    follow — kept so a later slide op lays out the same way (None for anything else).
-    `pages` is the design's pages — its variants — in order: [{name, frames}]; with more
-    than one, `page_images` is each page's own image (its first frame) and
-    `preview_pages` whose page each of `previews` is. `size` is a document's paper,
-    [W, H] in pixels (None for anything else). `sheets` are contact sheets — a long
-    document's pages past its previews, twelve to a JPEG — and `sheet_pages` the
-    [first, last] page each one holds ([] unless asked for, and past twelve pages).
-    `hashes` is each frame's fingerprint — the same for a frame that looks the same —
-    to send as `known` with the next render of the design; then `preview_of` is the
-    frames (from 1) that differ, which `previews` are of ([] = none; None when the
-    service showed all of it: nothing was known, or most of it changed)."""
+    """A render. `image` is the output (pptx/pdf: the whole deck, else the first frame), `fig` the editable
+    source, `preview`/`previews` @1x JPEGs for QA, `lint` [{frame, node, issue, fix}], `pages` [{name, frames}].
+    `hashes` are frame fingerprints to send back as `known`; `preview_of` is then the differing frames (None: all)."""
     image: bytes
     fig: bytes
     frame_id: object
@@ -188,13 +138,8 @@ def _decode(data):
 
 
 async def render(spec, fmt="png", scale=2, user_id=None, every=False, sheets=False, known=None, lead=None):
-    """Render a declarative design spec → a Rendered. `spec` is `{size:[w,h], fill,
-    nodes:[...]}`, a deck `{frames:[...]}`, or several pages `{pages:[{name, size, fill,
-    nodes}]}` — one design, a variant a page (see the Design tool description);
-    `every` asks for every frame in a raster `fmt` (a carousel's slides); `sheets` asks,
-    past twelve frames, for previews of the first four and the rest on contact sheets;
-    `known` — the fingerprints of the frames already seen (an earlier render's `hashes`)
-    — asks for previews of the frames that differ only."""
+    """Render a spec (`{size, fill, nodes}`, `{frames}` or `{pages}`) → a Rendered. `every`: every frame
+    in a raster `fmt`; `sheets`: contact sheets past twelve frames; `known`: previews of changed frames only."""
     body = {"spec": spec, "format": fmt, "scale": scale, "preview": True}
     if every:
         body["every"] = True
@@ -208,16 +153,8 @@ async def render(spec, fmt="png", scale=2, user_id=None, every=False, sheets=Fal
 
 
 async def apply(fig, script=None, user_id=None, ops=None, preview=False, page=None):
-    """Edit a saved `.fig` (bytes) with the editor's own plugin API, headless — by
-    `ops` (named operations: set_text, style, move, …) or a raw plugin-API `script` →
-    a dict: `fig` (the edited document), `lint` (the layout check of the result),
-    `script` (for ops, the compiled script the live editor replays; else None) and
-    `preview` (a @1x JPEG of the first frame, when asked). A failing edit raises
-    RuntimeError carrying its own error (e.g. 'no node named "cta" — this design
-    has: …' or "null is not an object …"). `page` is the page it is made on (a name;
-    the first when absent): the dict's `started` names it, `page` the one the edit
-    ended on (a page op may have made another) and `pages` all of them. `changed`,
-    `added` and `resolved` name what an ops edit touched (see below)."""
+    """Edit a `.fig` headless by `ops` or a raw plugin-API `script` → {fig, lint, script, preview, …};
+    `script` is what the live editor replays. A failing edit raises RuntimeError with the service's error."""
     body = _paged({"fig": base64.b64encode(fig).decode()}, page)
     if ops is not None:
         body["ops"] = ops
@@ -230,29 +167,21 @@ async def apply(fig, script=None, user_id=None, ops=None, preview=False, page=No
             "lint": [dict(i) for i in data.get("lint") or [] if isinstance(i, dict)],
             "script": data.get("script"),
             "preview": base64.b64decode(data["preview_base64"]) if data.get("preview_base64") else None,
-            # The slides the edit touched (0-based) and their previews; every slide's
-            # metadata after it (its count is the deck's).
             "previews": _b64s(data.get("previews_base64")),
             "touched": [int(i) for i in data.get("touched") or [] if isinstance(i, int)],
             "slides": [dict(s) for s in data.get("slides") or [] if isinstance(s, dict)],
             "pages": _pages(data), "page": str(data.get("page") or ""), "started": str(data.get("started") or ""),
-            # By name: the parts it changed, the parts it made, and [what was asked, the
-            # part it was] for a name that wasn't one (a text's words, an icon's icon).
+            # resolved: [what was asked, the part it was] for a name that wasn't one
             "changed": [str(n) for n in data.get("changed") or [] if isinstance(n, str)],
             "added": [str(n) for n in data.get("added") or [] if isinstance(n, str)],
             "resolved": [[str(p[0]), str(p[1])] for p in data.get("resolved") or []
                          if isinstance(p, list) and len(p) == 2],
-            # What a slide's layout has to say (a "stats" slide given six figures holds four).
             "notes": [str(n) for n in data.get("notes") or [] if isinstance(n, str)]}
 
 
 async def outline(fig, user_id=None, page=None, full=False):
-    """One page of a saved `.fig` → {"frames": [{slide, name, size, fill?, nodes: [{name,
-    type, x, y, w, h, text?, font?, size?, color?, fill?, radius?, …}]}], "pages":
-    [{name, frames}], "page": its name} — the page's frames and their nodes by name,
-    measured, for edits that name nodes which exist. `page` is a name or a place from
-    0; the first when absent. `full`: every text whole, not its first lines — to compare
-    two saves of a design word for word."""
+    """One page of a `.fig` → {frames: [{slide, name, size, nodes}], pages, page}: nodes by name, measured.
+    `full`: every text whole, not its first lines."""
     data = await _post("/inspect", _paged({"fig": base64.b64encode(fig).decode(), **({"full": True} if full else {})}, page), user_id)
     return {"frames": data.get("frames") or [], "pages": _pages(data), "page": str(data.get("page") or "")}
 
@@ -263,11 +192,8 @@ async def inspect(fig, user_id=None, page=None):
 
 
 async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False, page=None):
-    """Re-export an edited `.fig` (bytes) → image bytes (pptx / pdf: the whole deck).
-    `width`, the old image's pixel width, keeps its resolution (the service derives
-    the scale from it). `every` → a list: every frame in `fmt` (a carousel's slides),
-    `width` being the first one's. `page` is the page exported — a name, or a place
-    from 0; the first when absent."""
+    """Re-export a `.fig` → image bytes (pptx/pdf: the whole deck). `width` (the old image's) keeps its
+    resolution; `every` → a list of every frame."""
     data = await _export(fig, fmt, scale, width, user_id, every, page)
     if every:
         return _b64s(data.get("images_base64"))
@@ -275,8 +201,7 @@ async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False,
 
 
 async def export_page(fig, page, fmt="png", scale=2, width=None, user_id=None):
-    """One page of a design as `fmt` → (bytes, the design's pages [{name, frames}], that
-    page's name). A page that isn't there is a RuntimeError naming the ones that are."""
+    """One page as `fmt` → (bytes, pages, its name); a missing page raises RuntimeError naming the rest."""
     data = await _export(fig, fmt, scale, width, user_id, False, page)
     return base64.b64decode(data["image_base64"]), _pages(data), str(data.get("page") or "")
 
@@ -291,16 +216,12 @@ async def _export(fig, fmt, scale, width, user_id, every, page):
 
 
 async def evaluate(script, fmt="png", scale=2, user_id=None):
-    """Escape hatch: run a raw Figma plugin-API script (it must log
-    `__FRAME__<id>`) → a Rendered."""
+    """Escape hatch: run a raw plugin-API script (it must log `__FRAME__<id>`) → a Rendered."""
     return _decode(await _post("/eval", {"script": script, "format": fmt, "scale": scale, "preview": True}, user_id))
 
 
 async def slides(fig, scale=1, fmt="jpg", user_id=None, page=None):
-    """A saved deck (`.fig` bytes), slide by slide → {"images": [bytes], "sizes":
-    [[w, h]], "meta": [{name, title?, notes?, transition?}], "pages": [{name, frames}],
-    "page": its name} — what the deck viewer shows and presents: one page's slides
-    (`page`, a name or a place from 0; the first when absent)."""
+    """One page of a deck, slide by slide → {images, sizes, meta, format, pages, page}, for the deck viewer."""
     body = _paged({"fig": base64.b64encode(fig).decode(), "scale": scale, "format": fmt}, page)
     data = await _post("/slides", body, user_id)
     return {"images": _b64s(data.get("slides")),

@@ -63,7 +63,7 @@ export function useFileContent(
   readFile: (p: string, silent?: boolean) => Promise<string>,
   openFile: (p: string, silent?: boolean) => Promise<string>,
   reloadKey: number = 0,   // bump to re-fetch: the agent rewrote the file
-  designAsPictures: boolean = false,   // no editor to open a .fig in (a shared page): fetch its slide manifest
+  designAsPictures: boolean = false,   // no .fig editor (a shared page): fetch its slide manifest
 ) {
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState(false);
@@ -91,7 +91,7 @@ export function useFileContent(
     // Presentations fetch the slide manifest as text; .docx and spreadsheets
     // fetch their raw bytes (a blob URL) for the native renderer; other office
     // files fetch the server's PDF render.
-    // A design deck fetches its slide manifest (the design service renders it).
+    // Decks and editor-less designs fetch their slide manifest.
     const load = isDeck(kind) || (designAsPictures && isDesignEditor(kind))
       ? readFile(`${file.path}?as=slides`, true)
       : isMd(kind) || isHtml(kind) || codeLang(kind) != null
@@ -100,8 +100,7 @@ export function useFileContent(
       ? readFile(`${file.path}?as=slides`, true)
       : (isOffice(kind) ? openFile(`${file.path}?as=pdf`, true) : openFile(file.path))
           .then((url) => { blobUrl = url; return url; });
-    // A success clears an earlier failure (a one-off 401 mid-turn used to leave the
-    // error card up for good); a failed REFETCH keeps what's already shown.
+    // A success clears an earlier failure; a failed refetch keeps what's shown.
     load.then((v) => { if (!cancelled) { setContent(v); setError(false); loaded.current = true; } })
         .catch((e) => { if (!cancelled) { if (file.writable && e?.status === 404) setContent(""); else if (!loaded.current) setError(true); } });
     return () => { cancelled = true; if (blobUrl) URL.revokeObjectURL(blobUrl); };
@@ -243,12 +242,9 @@ function NoPreviewCard({ file, onDownload, onShare }: {
   );
 }
 
-// `&page=<name>` for a design request — nothing for a design of one page.
 const pageQuery = (page?: string) => (page ? `&page=${encodeURIComponent(page)}` : "");
 
-// A design without its editor around it — a preview, a shared page — a PAGE at a time:
-// its pages to pick from (when it has several), then that page as its picture, or
-// (several frames) its slides. `data` is a slide manifest of one of its pages.
+// A design without its editor (a preview, a shared page), one page at a time.
 function DesignPages({ file, data, readFile, openFile, downloads, tabs = true, onPage, onReload, onSlideOp }: {
   file: CanvasFile;
   data: string;
@@ -256,7 +252,7 @@ function DesignPages({ file, data, readFile, openFile, downloads, tabs = true, o
   readFile?: (path: string, silent?: boolean) => Promise<string>;   // fetches another page (none: the one given)
   openFile?: (path: string, silent?: boolean) => Promise<string>;
   downloads?: boolean;                 // the picture's own Download buttons (where no menu has them)
-  onPage?: (page: string) => void;     // another page was picked
+  onPage?: (page: string) => void;
   onReload?: () => void;
   onSlideOp?: (op: DeckOp) => Promise<void>;
 }) {
@@ -283,7 +279,7 @@ function DesignPages({ file, data, readFile, openFile, downloads, tabs = true, o
       {tabs && several && readFile && <PageTabs pages={pages.map((p) => p.name)} page={want ?? page ?? ""} onPick={(name) => void pick(name)} />}
       <div className="min-h-0 flex-1">
         {deck.count > 1
-          // Slide changes are the first page's (a deck is one page): on another, the slides are looked at.
+          // Slide ops apply only to the first page (a deck is one page).
           ? <DeckView data={shown} path={file.path} openFile={openFile} onReload={onReload}
                       onSlideOp={!page || page === pages[0]?.name ? onSlideOp : undefined}
                       onPage={readFile ? (name) => void pick(name) : undefined} />
@@ -297,17 +293,15 @@ function DesignPages({ file, data, readFile, openFile, downloads, tabs = true, o
   );
 }
 
-// A single design where there's no editor to open it in — a shared page, or a
-// deployment without one: its picture, and the image to keep. `page` is the page it
-// is, on a design of several.
+// A one-frame design with no editor: its picture and downloads.
 function DesignPicture({ file, src, openFile, page, size, name, pages, onPage }: {
   file: CanvasFile;
   src: string;
   openFile?: (path: string, silent?: boolean) => Promise<string>;
   page?: string;
-  size?: number[];                     // the frame's own size: a comment is pinned to a point of it
-  name?: string;                       // the frame's name
-  pages?: string[];                    // the design's pages, by name
+  size?: number[];                     // the frame's own size: comments pin in its pixels
+  name?: string;
+  pages?: string[];
   onPage?: (page: string) => void;     // show another page (a comment is on it)
 }) {
   const picture = useRef<HTMLImageElement>(null);
@@ -318,7 +312,7 @@ function DesignPicture({ file, src, openFile, page, size, name, pages, onPage }:
   return (
     <div className="relative flex h-full items-center justify-center overflow-auto bg-secondary/40 p-4">
       <img ref={picture} src={src} alt={file.name} data-testid="design-picture" className="max-h-full max-w-full object-contain shadow-sm" />
-      {/* What people pinned on it — and the way to pin one — where this page can comment. */}
+      {/* Comments, where this page can comment. */}
       <CommentLayer path={file.path} picture={picture} size={size} frame={0} names={names} page={page} pages={pages} />
       <CommentButtons path={file.path} className="absolute end-3 top-3 z-10 rounded-lg border border-border bg-background/90 p-0.5 shadow backdrop-blur" />
       <CommentsList path={file.path} names={names} page={page} pages={pages} onPage={onPage} />
@@ -347,7 +341,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   designEditorUrl?: string;   // when set, .fig opens the embedded editor
-  designHost?: DesignHost;    // what the editor asks of Cycls: new designs, copies, exports, the brand kit
+  designHost?: DesignHost;
   reloadFile?: () => Promise<string>;   // fresh blob URL of this file (the .fig editor re-opens on it)
   onReload?: () => void;      // refetch this document (a deck whose slides changed)
   onDownload?: () => void;
@@ -363,8 +357,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
       return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Couldn't load this file.</div>;
   }
-  // A design deck → the deck viewer (slides, notes, Present, downloads; Edit into
-  // the design editor for the owner). `content` is its slide manifest.
+  // A design deck → the deck viewer; `content` is its slide manifest.
   if (isDeck(fileKind(file))) {
     return content ? (
       <DeckView data={content} path={file.path} openFile={openFile} writeFile={shared ? undefined : writeFile}
@@ -386,11 +379,8 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   if (isPresentation(fileKind(file))) {
     return content ? <SlidesView data={content} /> : null;
   }
-  // A .fig → the embedded editor on its own origin, so the human edits
-  // the same design the agent renders headlessly. Needs a configured editor URL
-  // (config.design_editor_url) + the fetched bytes. Without one — a shared page —
-  // `content` is the design's slide manifest, and it shows as what it looks like: one
-  // picture, or (several frames) the read-only deck viewer.
+  // A .fig → the embedded editor when one is configured; else `content` is its slide
+  // manifest, shown read-only.
   if (isDesignEditor(fileKind(file))) {
     if (content && designEditorUrl) {
       return <DesignEditorView url={content} path={file.path} name={file.name}
@@ -508,17 +498,16 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;   // an app's live call to a connector API
   org?: { id: string; name: string } | null;   // lets the share dialog offer the org audience
   onShareFile?: (path: string, audience: string) => Promise<string>;
-  shareLinks?: ShareLinks;   // a file's existing share links (the Share popover shows one instead of making another)
+  shareLinks?: ShareLinks;   // existing links: the Share popover shows one instead of making another
   railWidth?: number;   // pane docked to our right; the drag must account for it
   reloadKey?: number;  // bump to re-fetch the open document
   designEditorUrl?: string;   // embedded .fig editor base URL (config.design_editor_url)
-  designHost?: DesignHost;    // what the design editor asks of Cycls (new designs, copies, exports, brand)
+  designHost?: DesignHost;
   onNewDesign?: (preset: string) => void;   // "New design" in the + menu
 }) {
   const file = hidden ? null : tabs.find((f) => f.path === active) ?? tabs[tabs.length - 1] ?? null;
-  // A design editor left behind — its tab switched away from or closed — stays
-  // mounted, hidden, until it has saved what's unsaved (flushDesignEditor), then
-  // goes. Noted while rendering (not in an effect), so it never leaves the tree.
+  // A design editor left behind stays mounted, hidden, until it has flushed. Noted
+  // during render, not in an effect, so it never leaves the tree.
   const [draining, setDraining] = useState<CanvasFile[]>([]);
   const [shown, setShown] = useState<CanvasFile | null>(file);
   if ((file?.path ?? null) !== (shown?.path ?? null)) {
@@ -538,8 +527,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
       });
     }
   }, [draining]);
-  // A design closed beside other tabs drains (above). The last tab takes the canvas
-  // with it, leaving nothing mounted to drain, so its editor saves first.
+  // The last tab unmounts the canvas, leaving nothing to drain: flush before closing.
   const closeTab = (path: string) => {
     if (tabs.length === 1 && designEditorUrl) void flushDesignEditor(path, 1500).then(() => onCloseTab(path));
     else onCloseTab(path);
@@ -756,8 +744,7 @@ function CanvasWorking({ name }: { name: string }) {
 }
 
 // The menu is position:fixed from the button's rect so the pane's
-// overflow-hidden can't clip it — and kept inside the window: the + sits at the
-// end of the tab strip, often less than the menu's width from the edge.
+// overflow-hidden can't clip it, and clamped to the window (the + sits near its edge).
 const ADD_MENU_W = 288;   // w-72
 export const addMenuLeft = (buttonLeft: number, viewport: number) =>
   Math.max(8, Math.min(buttonLeft, viewport - ADD_MENU_W - 8));
@@ -917,23 +904,17 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // A design's preview: what it looks like without the editor around it — its picture,
-  // or (several frames) the slides with Present. The editor stays mounted underneath,
-  // so switching back is at once and nothing reloads.
+  // A design's preview: what it looks like without the editor around it.
   const design = isDesignEditor(fileKind(file)) && !!designEditorUrl;
   const [previewing, setPreviewing] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);     // its slide manifest
   const [previewFailed, setPreviewFailed] = useState(false);
-  // The design's pages, as its open editor has them: with several, they are tabs above
-  // the design — in the editor and in its preview alike.
+  // With several pages, they are tabs above the design, in the editor and the preview alike.
   const pagesInfo = useDesignPages(file.path);
   const several = design && !!pagesInfo && pagesInfo.pages.length > 1;
-  // The page a preview is of — the one in view in the editor when it opened, then the
-  // one picked (a design of one page has none to name).
   const previewPage = useRef<string | undefined>(undefined);
   const [shownPage, setShownPage] = useState<string | undefined>(undefined);
-  // `page`: the page to show — none is the first page. (No default from the ref: asking
-  // for the first page after a named one failed must not ask for the named one again.)
+  // No default from the ref: falling back to the first page must not retry the failed one.
   const loadPreview = useCallback(async (page: string | undefined) => {
     previewPage.current = page;
     setShownPage(page);
@@ -945,7 +926,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
       setPreviewFailed(true);
     }
   }, [readFile, file.path]);
-  // A tab: the editor goes to that page (so Edit is on it), and a preview shows it.
+  // The editor follows too, so Edit comes back on that page.
   const pickPage = (page: string) => {
     showDesignPage(file.path, page);
     if (previewing) void loadPreview(page);
@@ -958,7 +939,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
     await flushDesignEditor(file.path, 3000);   // what's unsaved is in the preview
     await loadPreview(designPage(file.path));
   };
-  useEffect(() => {   // an agent edit while previewing: the server has saved it — show it
+  useEffect(() => {   // an agent edit while previewing is already saved: show it
     if (!previewing) return;
     const onCommand = (e: Event) => {
       if ((e as CustomEvent<{ path?: string }>).detail?.path === file.path) void loadPreview(previewPage.current);
@@ -968,9 +949,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   }, [previewing, file.path, loadPreview]);
 
   const download = () => openFile(file.path).then((url) => saveBlob(url, file.path.split('/').pop() || file.name)).catch(() => {});
-  // A design as what it's used as: its picture or a PDF, rendered by the design service
-  // from the saved file — so an open editor saves first.
-  // On a design of several pages it is the page in view — the preview's, else the editor's.
+  // Rendered from the saved file by the design service, so the editor flushes first.
   const downloadDesignAs = async (as: "png" | "pdf") => {
     await flushDesignEditor(file.path, 3000);
     track("design_exported", { format: as, files: 1 });
@@ -1050,14 +1029,12 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
               </button>
             )}
             {design && !previewing && <DesignPresenceRow path={file.path} />}
-            {/* An editor that pins comments on the design shows them itself; with one from
-                before it does, they are pinned on the design's preview. */}
+            {/* An older editor can't draw pins: comment on the preview instead. */}
             {design && !previewing && <CommentButtons path={file.path}
                                                       onComment={(adding) => { if (adding && !designEditorComments(file.path)) void showPreview(); }}
                                                       onList={() => { if (!designEditorComments(file.path)) void showPreview(); }} />}
             {design && <EditPreviewSwitch previewing={previewing} onEdit={() => setPreviewing(false)} onPreview={() => void showPreview()} />}
-            {/* In a preview the button keeps its place, unseen: the switch beside it
-                doesn't jump when the editor goes under the preview. */}
+            {/* Invisible, not removed, in a preview so the switch beside it doesn't jump. */}
             {design && canFullscreen() && (
               <button onClick={() => fullscreenDesignEditor(file.path)} className={cn(headerBtn, previewing && "invisible")}
                       disabled={previewing} aria-hidden={previewing || undefined} tabIndex={previewing ? -1 : undefined}
@@ -1134,8 +1111,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
           </div>
         ) : (
           <>
-            {/* Under a preview the editor stays mounted (hidden, out of reach): it keeps
-                its state and its saves, and Edit is back at once. */}
+            {/* Hidden, not unmounted, under a preview: it keeps its state and saves. */}
             <div className={previewing ? "invisible absolute inset-0" : "h-full"} inert={previewing} aria-hidden={previewing || undefined}>
               <CanvasDoc file={file} content={content} error={error} readFile={readFile} openFile={openFile} resolveMedia={resolveMedia} writeFile={writeFile} deckOp={deckOp} pollsFor={pollsFor} listFolders={listFolders}
                          fetchConnector={fetchConnector}
@@ -1149,8 +1125,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
                 <div className="absolute inset-0 bg-background" data-testid="design-preview">
                   {previewFailed || (preview != null && !pictures?.count && !((pictures?.pages?.length ?? 0) > 1)) ? <NoPreviewCard file={file} onDownload={download} />
                     : !pictures ? <LoadingBar />
-                    // A page at a time; the page picked is the editor's too, so Edit comes back on it.
-                    // The ⋮ menu has the downloads: nothing over the picture.
+                    // Picking a page moves the editor too; downloads live in the ⋮ menu.
                     : <DesignPages file={file} data={preview!} readFile={readFile} openFile={openFile} tabs={!several}
                                    onPage={(page) => { previewPage.current = page; setShownPage(page); showDesignPage(file.path, page); }}
                                    onReload={() => void loadPreview(previewPage.current)}

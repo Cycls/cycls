@@ -4,11 +4,7 @@ import { track } from "../lib/analytics";
 import { t } from "../lib/i18n";
 import { cn } from "../lib/utils";
 
-// The audience's side of a live poll: a phone on the deck's public link with
-// `?vote=1` (the QR the presenter shows). It follows whatever poll the presenter has
-// open — checked every 2 s, so it moves to the next question by itself — votes once
-// per poll (the phone keeps a random voter id; the server takes one vote per id), and
-// then shows how the room is voting.
+// A phone on the deck's public link (`?vote=1`): follows the presenter's open poll; one vote per voter id.
 
 type OpenPoll = { open: true; session: string; question: string; options: string[]; slide?: number };
 type Poll = OpenPoll | { open: false };
@@ -49,7 +45,6 @@ export function AudienceView() {
   const [sending, setSending] = useState(false);
   const [gone, setGone] = useState(false);          // not a deck link any more (revoked, never was)
 
-  // Follow the presenter: whatever poll is open now.
   useEffect(() => {
     let cancelled = false, timer = 0;
     const tick = async () => {
@@ -71,7 +66,6 @@ export function AudienceView() {
     setVoted(session ? votedIn(session) : null);
   }, [session]);
 
-  // Once this phone has voted: the room's votes, every 3 s.
   useEffect(() => {
     if (!session || voted == null) return;
     let cancelled = false, timer = 0;

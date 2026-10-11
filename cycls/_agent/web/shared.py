@@ -1,6 +1,4 @@
-"""What the route modules share: the header that makes a browser ask again, a path kept
-inside the workspace (and the 403 a route answers when it is not), and a name for a new
-file that overwrites nothing."""
+"""What the route modules share: no-cache headers, workspace path safety, a free file name."""
 import unicodedata
 from pathlib import Path
 from fastapi import HTTPException
@@ -40,11 +38,7 @@ def _safe_path(workspace, rel):
 
 
 def _free_rel(root, rel):
-    """A name for a new file at `rel` that overwrites nothing: `rel` itself, else
-    `<stem>-2`, `-3`, … It's free when no file has it and it isn't an image the design
-    refresh keeps beside a .fig (that would be overwritten by the next re-export); a
-    .fig under designs/ also keeps clear of another design's images and deck, as a
-    fresh render does (`_dedupe_design_name`)."""
+    """A name for a new file that overwrites nothing (`rel`, else `<stem>-2`, …), clear of images a re-export replaces."""
     from cycls._agent.design.files import _dedupe_design_name
     path = Path(rel)
     root = Path(root)

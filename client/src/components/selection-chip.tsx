@@ -2,9 +2,7 @@ import type { DesignSelection } from "./design-editor-view";
 import { Icon } from "./icon";
 import { t } from "../lib/i18n";
 
-// What the person selected in a design, attached to a message ("Add selection"): the
-// file and the nodes by name. In the composer it can be removed; in a sent message
-// it says what "this" meant.
+// A design selection attached to a message: the file and the nodes by name.
 export function selectionLabel(sel: DesignSelection): string {
   const file = sel.path.split("/").pop() ?? sel.path;
   const names = sel.nodes.map((n) => n.name);

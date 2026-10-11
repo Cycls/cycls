@@ -129,11 +129,9 @@ SELECTED = "[Selected in "
 
 
 def _with_selection(content, sel):
-    """The person's "Add selection" — what they selected in an open design, by name — as
-    its own text block the model reads (the chat shows it as a chip, not this line)."""
+    """The person's design selection as a text block for the model (the chat shows a chip)."""
     def node(n):
         return f'{n["name"]} ({n["type"]})' + (f' "{n["text"]}"' if n.get("text") else "")
-    # A design of several pages says which one they are on (the tool's `page`).
     where = (sel["path"] + (f' page {json.dumps(sel["page"], ensure_ascii=False)}' if sel.get("page") else "")
              + (f' › {sel["frame"]}' if sel.get("frame") else ""))
     line = f"{SELECTED}{where}: " + ", ".join(node(n) for n in sel["nodes"]) + "]"
@@ -147,8 +145,7 @@ def _shape(block, out, ok, handlers, mcp_names):
     the same content without yielding — you cannot yield while unwinding."""
     name = block["name"]
     if ok and isinstance(out, dict) and "_model" in out:
-        # Two channels: `_model` lands in tool_result, `_ui` goes to the client — one
-        # event, or a list of them (a deck change replays live AND opens the deck).
+        # Two channels: `_model` lands in tool_result, `_ui` (one event or a list) goes to the client.
         ui = out.get("_ui")
         return out["_model"], [{**e, "id": block["id"]} for e in (ui if isinstance(ui, list) else [ui] if ui else [])], False
     if ok and isinstance(out, dict) and out.get("type") == "ui":
@@ -244,8 +241,7 @@ def _retry_delay(attempt, error=None):
 async def _stream_with_retry(provider, **kw):
     """`provider.stream` with exponential backoff on overload / rate-limit.
     A stream that fails after some deltas re-emits them on retry — accepted;
-    stored history isn't touched until the turn completes. The attempts share one
-    step id, so the person sees one line counting up rather than a row per attempt."""
+    stored history isn't touched until the turn completes. Attempts share one step id."""
     attempt, notice = 0, f"retry-{uuid.uuid4().hex[:8]}"
     while True:
         try:
@@ -316,9 +312,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         log("warn", user=user, chat_id=session.chat_id,
                  message=f"native web search unavailable on {vendor}/* — use .web_search('brave') or an anthropic model")
     tools_list = build_tools(allowed_tools, tools or [], vendor=vendor, web_search=web_search)
-    # Design's instructions are nearly half of every request. On demand, a chat carries a short
-    # form of the tool until it designs — read back from the transcript, as connectors are —
-    # and the whole of it from then on (tools `design_wanted`; swapped mid-turn in `request`).
+    # Design's text is nearly half of every request: on demand, a short form until the chat designs
     design_loaded = True
     if os.environ.get("DESIGN_INSTRUCTIONS") == "on-demand" and not design_wanted(messages):
         for i, t in enumerate(tools_list):

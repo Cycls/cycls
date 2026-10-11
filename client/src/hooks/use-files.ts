@@ -29,22 +29,20 @@ const APPS_DIR = "apps";
 const hideApps = (dir: string, list: FileEntry[]) =>
   dir === "" ? list.filter((e) => !(e.type === "directory" && e.name === APPS_DIR)) : list;
 
-// A workspace path in a URL: each segment encoded — a name may hold #, ?, % or
-// spaces — and a query the caller adds (`?as=slides`, `?download`) kept as it is.
+// Each segment encoded (names may hold #, ?, %); a caller's `?as=` / `?download` query kept.
 export function encPath(path: string): string {
   const q = path.search(/\?(as|download)(=|&|$)/);
   const [bare, query] = q >= 0 ? [path.slice(0, q), path.slice(q)] : [path, ""];
   return bare.split("/").map(encodeURIComponent).join("/") + query;
 }
 
-// The workspace brand kit (brand/brand.yaml) as the design editor takes it.
+// brand/brand.yaml, as the design editor takes it.
 export type BrandKit = { colors?: Record<string, string>; fonts?: { heading?: string | null; body?: string | null } };
-// One of a design's earlier versions (cycls/_agent/versions.py): who replaced it, and why.
+// A design's earlier version (cycls/_agent/versions.py).
 export type DesignVersion = { id: string; at: string; by: string; reason: string; intent?: string; size: number };
-// A write that may name the version it started from (a design's save), and what it wrote.
+// `base`: the version a design's save started from.
 export type WriteOpts = { silent?: boolean; base?: string; force?: boolean };
 export type WriteFile = (path: string, data: BlobPart, opts?: boolean | WriteOpts) => Promise<{ version?: string } | void>;
-// A design's bytes (a blob URL) with the version they are.
 // A design's live room and one person's pass for it (the server's /design/live).
 export type DesignLive = { room: string; url: string; ticket: string; epoch: string };
 export type FetchVersioned = (path: string) => Promise<{ url: string; version: string }>;
@@ -195,10 +193,7 @@ export function useFiles(baseUrl: string = "") {
     return res.json();
   }, [baseUrl, authHeaders]);
 
-  // Overwrite a workspace file from the canvas. Accepts text OR binary (a
-  // Uint8Array / ArrayBuffer / Blob) — the design editor writes raw .fig bytes. A
-  // design's save names the version it started from (`base`): the server refuses it
-  // (412, carrying the version now) when the file changed since; `force` writes anyway.
+  // Text or binary (the design editor writes .fig bytes). A stale `base` gets a 412; `force` writes anyway.
   const writeFile = useCallback(async (filePath: string, data: BlobPart,
                                        opts: boolean | { silent?: boolean; base?: string; force?: boolean } = false) => {
     const { silent = false, base, force } = typeof opts === "boolean" ? { silent: opts } : opts;
@@ -214,13 +209,12 @@ export function useFiles(baseUrl: string = "") {
     }
   }, [api]);
 
-  // A design, fetched with its version (X-Version) — what its saves name as their base.
+  // X-Version is what the design's saves name as `base`.
   const fetchVersioned = useCallback(async (filePath: string) => {
     const res = await api(`/files/${encPath(filePath)}`, { silent: true });
     return { url: URL.createObjectURL(await res.blob()), version: res.headers.get("X-Version") ?? "" };
   }, [api]);
 
-  // A design's live room and this person's pass for it (the server's /design/live):
   // null where a design opens alone, or on a server without the route.
   const designLive = useCallback(async (filePath: string) => {
     try {
@@ -231,38 +225,36 @@ export function useFiles(baseUrl: string = "") {
     }
   }, [api]);
 
-  // A design's earlier versions (newest first), one's bytes, and a restore.
+  // Newest first.
   const listVersions = useCallback(async (filePath: string) =>
     ((await (await api(`/versions/${encPath(filePath)}`)).json()) as { versions: DesignVersion[] }).versions, [api]);
   const versionBlob = useCallback(async (filePath: string, id: string) =>
     (await api(`/versions/${encPath(filePath)}?id=${encodeURIComponent(id)}`)).blob(), [api]);
-  // What that version looks like: a picture of it (its first slide or page), to look at before restoring.
+  // A picture of the version's first slide or page.
   const versionPreview = useCallback(async (filePath: string, id: string) =>
     (await api(`/versions/${encPath(filePath)}?id=${encodeURIComponent(id)}&as=png`, { silent: true })).blob(), [api]);
   const restoreVersion = useCallback(async (filePath: string, id: string) =>
     (await (await api(`/versions/${encPath(filePath)}?restore=${encodeURIComponent(id)}`, { method: "POST" })).json()) as { version: string },
   [api]);
 
-  // A NEW file at `filePath`, never over one: the server takes the next free name
-  // (…-2, -3) and says which. What the design editor exports and copies.
+  // Never overwrites: the server takes the next free name (…-2, -3) and returns it.
   const writeNew = useCallback(async (filePath: string, data: BlobPart) => {
     const r = await (await api(`/files/${encPath(filePath)}?dedupe=1`, { method: "PUT", body: new Blob([data]) })).json();
     return (r as { path?: string }).path ?? filePath;
   }, [api]);
 
-  // "New design": a blank design of a size preset (or [w, h]) in designs/ → its path.
+  // A blank design in designs/, of a size preset or [w, h].
   const newDesign = useCallback(async (body: { name?: string; size?: string | [number, number]; background?: string } = {}) => {
     return (await (await api("/design/new", { method: "POST", json: body })).json()) as { path: string; name: string; size: [number, number] };
   }, [api]);
 
-  // A design as a file beside it — designs/<name>.pdf — rendered by the design service:
-  // the editor's File › Export › PDF.
+  // Rendered by the design service to a file beside the design.
   const exportDesign = useCallback(async (filePath: string, format: "pdf" | "png", page?: string) => {
     const json = { path: filePath, format, ...(page ? { page } : {}) };
     return ((await (await api("/design/export", { method: "POST", json })).json()) as { path: string }).path;
   }, [api]);
 
-  // The brand kit for the design editor (null without one, or on a server without the route).
+  // null without a kit, or on a server without the route.
   const brand = useCallback(async (): Promise<BrandKit | null> => {
     try {
       return ((await (await api("/brand", { silent: true })).json()) as { brand: BrandKit | null }).brand;
@@ -271,14 +263,12 @@ export function useFiles(baseUrl: string = "") {
     }
   }, [api]);
 
-  // A deck viewer's own slide change — move / duplicate / delete, a slide added, a slide's
-  // notes; slides from 1 — run on the deck's .fig by the server (POST /deck/<deck document or .fig>).
+  // Run on the deck's .fig by the server; slide numbers are 1-based.
   const deckOp = useCallback(async (deckPath: string, body: { op: string; number?: number; to?: number; title?: string; text?: string; notes?: string }) => {
     await api(`/deck/${encPath(deckPath)}`, { method: "POST", json: body });
   }, [api]);
 
-  // What people pinned on a design (lib/comments.ts): its threads — asked again with the
-  // version this page has, quietly, every few seconds — a new one, and a change to one.
+  // Design comment threads (lib/comments.ts); `list` is polled quietly with the page's version.
   const comments = useMemo<CommentsApi>(() => ({
     list: async (design, version) =>
       (await api(`/comments/${encPath(design)}${version ? `?v=${encodeURIComponent(version)}` : ""}`, { silent: true })).json(),
@@ -328,8 +318,7 @@ export function useFiles(baseUrl: string = "") {
     return `${window.location.origin}${url}`;
   }, [api]);
 
-  // A presented deck's live polls (POST /polls …) and the link its audience votes
-  // through: the deck's public share (an existing one, or one the presenter makes).
+  // The audience votes through the deck's public share, existing or made by the presenter.
   const pollsFor = useCallback((deck: string): PollApi => ({
     open: async (slide, poll) =>
       (await api("/polls", { method: "POST", json: { deck, slide, question: poll.question, options: poll.options } })).json(),

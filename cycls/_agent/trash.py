@@ -106,8 +106,7 @@ def restore(ws, tid):
 
 
 def _forget_versions(ws, meta):
-    """A file gone for good takes its design history (cycls/_agent/versions.py) with it,
-    unless a file is back at its path."""
+    """A file gone for good takes its design history with it, unless a file is back at its path."""
     if not meta or meta.get("kind") != "file" or not meta.get("path"):
         return
     try:

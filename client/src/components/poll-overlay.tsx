@@ -3,10 +3,7 @@ import { percents, qrPath, type DeckPoll, type PollApi, type PollTally } from ".
 import { track } from "../lib/analytics";
 import { t } from "../lib/i18n";
 
-// A poll slide, live: while it's showing, the poll is open (a fresh session) and its
-// tally is fetched every 1.5 s — the server runs on several instances, so there's
-// nothing to push from; when the slide goes, the poll closes. `restart` bumps to open
-// it again from zero (R in present mode).
+// Open while the slide shows, polled since the server runs on several instances (nothing to push from).
 export function useLivePoll(api: PollApi | undefined, poll: DeckPoll | null | undefined, slide: number, restart: number) {
   const [tally, setTally] = useState<PollTally | null>(null);
   const queue = useRef<Promise<unknown>>(Promise.resolve());   // opens and closes reach the server in order
@@ -38,11 +35,7 @@ export function useLivePoll(api: PollApi | undefined, poll: DeckPoll | null | un
   return tally;
 }
 
-// Drawn over the slide in its own coordinates (the slide image is object-contain in
-// the same box, and so is this SVG — they line up at any window size): each option's
-// track fills with its share, the share and count sit at the track's far end, the
-// join QR fills the slide's join card, and the vote count goes under it. Without a
-// public link yet, the card offers to make one.
+// In the slide's own coordinates: the image and this SVG are both contained in one box, so they line up at any size.
 export function PollOverlay({ poll, tally, joinUrl, onMakeLink }: {
   poll: DeckPoll;
   tally: PollTally | null;

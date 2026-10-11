@@ -1,6 +1,5 @@
-"""The tool's actions beyond a plain render: a deck's slides, a document's sections, the
-file itself (export, rename, copy, delete, versions), and a document rendered — which is
-held when its pages were changed by hand since. `_exec_design` (run.py) hands each the call."""
+"""Design actions beyond a plain render: a deck's slides, a document's sections and render,
+comments, and the file itself (export, rename, duplicate, delete, versions). Called from run.py."""
 import asyncio, base64, json, os, pathlib
 from .. import trash
 from ..paths import _safe_filename
@@ -40,10 +39,7 @@ def _sections_text(name, doc):
 
 
 async def _exec_document(action, inp, workspace, name):
-    """A document's own changes — a section added, rewritten, moved or removed; its title,
-    look or cover changed — made on the source kept in its deck document, then rendered
-    again in place (the earlier pages kept as a version). The model sends the part that
-    changes, not the whole document; nothing is saved unless the render succeeds."""
+    """A section or document-level change, made on the kept source and re-rendered in place."""
     doc = await asyncio.to_thread(_document_source, workspace.root, name)
     if doc is None:
         return (f"Error: designs/{name}.deck.json isn't a document — `{action}` works on a document you rendered "
@@ -97,16 +93,8 @@ async def _exec_document(action, inp, workspace, name):
 
 
 async def _to_the_room(root, rel, ui):
-    """An agent's change to a design, for the people who have it open together.
-
-    They keep one shared document in step and one of their editors saves it
-    (docs/notes/design.md, "Together"), so the change must reach that document once:
-    its script is handed to their room, where the saver's editor makes it for everyone —
-    or, when the change wrote the file anew (pages added or removed), the room is told
-    to open it again. `ui` is the `design_command` event the chat's own editor gets;
-    when the room took the change it is marked `live`, and that editor leaves it to
-    the room instead of making it a second time. Nobody in the room, or no relay: the
-    event goes as it always did."""
+    """Hand an agent's change to the design's live room (docs/notes/design.md, "Together") so it
+    is made once; marks `ui` `live` when delivered, and the chat's own editor then skips it."""
     from cycls._agent.design import live
     if ui.get("reload") or not ui.get("script"):
         body = {"kind": "reload", "version": ui.get("version")}
@@ -120,9 +108,7 @@ async def _to_the_room(root, rel, ui):
 
 
 async def _comments_follow(workspace, what, *args):
-    """A design's comments go where it goes (design/comments.py: move, shelve). The file
-    has already moved, so comments that stay behind fail nothing; a workspace with no
-    store to reach has none."""
+    """Move or shelve a design's comments with it; best-effort, the file has already moved."""
     from . import comments
     if not comments.usable(workspace):
         return
@@ -134,9 +120,7 @@ async def _comments_follow(workspace, what, *args):
 
 
 async def _comments_note(workspace, rel, outline):
-    """What `inspect` adds about a design's comments: the open ones on the page it shows.
-    "" when there are none, no store to read them from, or they couldn't be read — an
-    outline is never held up by them."""
+    """The open comments on the page `inspect` shows; "" when none or unreadable."""
     from . import comments
     from .report import _comments_on_page
     if not comments.usable(workspace):
@@ -150,9 +134,7 @@ async def _comments_note(workspace, rel, outline):
 
 
 async def _exec_comments(inp, workspace, name):
-    """`comments`: what people pinned on a design — listed; or, with `number`, one of
-    them answered (`reply`) and closed or opened again (`resolve`). The agent writes as
-    itself: its replies are marked as an agent's."""
+    """List a design's comments, or reply to / resolve / reopen one by `number`, as the agent."""
     from . import comments
     from .report import _comments_listing
     rel = f"designs/{name}.fig"
@@ -194,9 +176,7 @@ async def _exec_comments(inp, workspace, name):
 
 
 async def _exec_slides(action, inp, workspace, name):
-    """A deck's slide actions — add / update (or its notes, title, transition) / move /
-    duplicate / delete — run on the saved .fig through the service, like `edit`
-    (design/deck.py). Slides are numbered from 1 here, as the user counts them."""
+    """A deck's slide actions, run on the saved .fig through the service; slides number from 1."""
     from cycls._agent import design
     from cycls._agent.design import deck as decks
     root, subject = workspace.root, getattr(workspace, "subject", None)
@@ -204,8 +184,7 @@ async def _exec_slides(action, inp, workspace, name):
     if not fig_path.is_file():
         return f"Error: {fig_rel} doesn't exist — slide actions work on a deck you rendered."
     doc = await asyncio.to_thread(decks.read_doc, deck_path)
-    # A slide's photos may be named, not saved yet: {"stock": "…"} → a workspace file.
-    credits = []
+    credits = []   # {"stock": "…"} photos → saved workspace files
     if isinstance(inp.get("slide"), dict):
         from cycls._agent.design import stock
         credits, err = await stock.resolve(inp["slide"], root)
@@ -267,12 +246,11 @@ async def _exec_slides(action, inp, workspace, name):
     for credit in credits:
         ack += f" {credit}."
     command = {"type": "ui", "action": "design_command", "path": fig_rel, "script": r.get("script"),
-               "version": r.get("version")}   # what the file is now — an open editor's saves go on from it
+               "version": r.get("version")}   # an open editor's later saves base on this version
     if intent := inp.get("intent"):
         command["intent"] = str(intent)[:80]
-    await _to_the_room(root, fig_rel, command)   # people in the deck together get it once, from their room
-    # Replayed live in an open editor, and the deck (re)opened in the viewer so the
-    # user sees the change even when it wasn't showing.
+    await _to_the_room(root, fig_rel, command)
+    # (re)open the deck so the change shows even when it wasn't open
     ui = [command, {"type": "ui", "action": "open_canvas", "path": f"designs/{name}.deck.json", "name": f"{name}.deck.json"}]
     blocks, total = [], 0
     for i, jpg in zip(r.get("touched") or [], r.get("previews") or []):
@@ -292,10 +270,8 @@ _FILE_ACTIONS = ("export", "rename", "duplicate", "delete", "versions", "restore
 
 
 async def _exec_design_file(action, inp, workspace, name):
-    """A saved design as another file (`export`), and a design as a file: `rename`,
-    `duplicate`, `delete`, `versions`, `restore`. All of them work on designs/<name>.fig
-    as it is saved — nothing is rendered again — and what is kept beside it (its images,
-    slides, deck document: design/refresh.py `beside`) goes with it."""
+    """File actions on the saved designs/<name>.fig, never re-rendered; what is kept beside it
+    (refresh.beside) goes with it."""
     from cycls._agent import design, trash, versions
     from cycls._agent.design import refresh
     root, subject = pathlib.Path(workspace.root), getattr(workspace, "subject", None)
@@ -355,8 +331,8 @@ async def _exec_design_file(action, inp, workspace, name):
             return f"Error: {new_rel} is already a design — choose another `new_name`. Nothing was changed."
         if action == "rename":
             await asyncio.to_thread(fig_path.rename, root / new_rel)
-            await asyncio.to_thread(versions.move, str(root), rel, new_rel)          # its history goes with it
-            await _comments_follow(workspace, "move", rel, new_rel)                  # …and what was said about it
+            await asyncio.to_thread(versions.move, str(root), rel, new_rel)
+            await _comments_follow(workspace, "move", rel, new_rel)
         else:
             await asyncio.to_thread(lambda: (root / new_rel).write_bytes(fig_path.read_bytes()))
         went = await asyncio.to_thread(refresh.follow, str(root), rel, new_rel, action == "duplicate")
@@ -378,7 +354,7 @@ async def _exec_design_file(action, inp, workspace, name):
                 gone.append(f.name)
             except (OSError, ValueError) as e:
                 return f"Error: couldn't delete {f.name} — {e}. Moved to the trash so far: {', '.join(gone) or 'nothing'}."
-            if f == fig_path:   # its comments wait in the trash with it: a new design of this name starts with none
+            if f == fig_path:   # so a new design of this name starts with no comments
                 await _comments_follow(workspace, "shelve", rel, meta["id"])
         return (f"Moved {rel} to the trash{f' with what was kept beside it ({len(gone) - 1} more files)' if len(gone) > 1 else ''}. "
                 f"The user can restore it from Files › Trash; tell them so. Nothing else was deleted.")
@@ -418,17 +394,15 @@ async def _exec_design_file(action, inp, workspace, name):
     async with lock(fig_path):
         version = await write_fig(str(root), rel, data, by="agent", reason="restore")
     refresh.schedule(str(root), rel, subject, ensure=True)
-    await live.notify(str(root), rel, {"kind": "reload", "version": version})       # people in it open it again
+    await live.notify(str(root), rel, {"kind": "reload", "version": version})
     return {"_model": (f"Restored {rel} to its version {vid}. What it was a moment ago is kept as a version too (`versions`), so this "
                        f"can be undone. Its image re-exports in a few seconds; an open editor opens it again."),
             "_ui": {"type": "ui", "action": "design_command", "path": rel, "script": "", "reload": True, "version": version}}
 
 
 async def _edits_since_render(workspace, name):
-    """What was changed on a document's pages after it was last rendered — by hand in the
-    editor, or by an `edit` — and so is not in its source. None: nothing was (or the
-    document was rendered before its pages were kept, and it can't be told). A list:
-    lines saying what — empty when only that it changed is known."""
+    """Page changes since a document's last render (by hand or `edit`), not in its source: None if
+    none or unknowable, else lines saying what — empty when only that it changed is known."""
     from cycls._agent import design
     from cycls._agent.design.store import version_of
     root = pathlib.Path(workspace.root)
@@ -457,7 +431,7 @@ async def _edits_since_render(workspace, name):
         after = (await design.outline(current, user_id=subject, full=True))["frames"]
     except Exception:
         return []
-    # (The editor may save a file again without changing a thing: its bytes differ, its pages don't.)
+    # an editor re-save changes the bytes, not the pages
     return _page_changes(before, after) or None
 
 
@@ -472,8 +446,7 @@ def _edits_hold(name, changes):
 
 
 def _seen_pages(deck_path):
-    """The fingerprints of a document's pages as last rendered (kept in its deck document) —
-    what the model has looked at — or [] when there are none to go by."""
+    """Hashes of a document's pages as last rendered (what the model has seen), or []."""
     try:
         hashes = json.loads(deck_path.read_text(encoding="utf-8")).get("hashes")
     except (OSError, ValueError, AttributeError):
@@ -482,11 +455,8 @@ def _seen_pages(deck_path):
 
 
 async def _render_document(inp, workspace, name):
-    """A document (a report, a proposal — anything that flows over paper pages): rendered
-    by the service to a PDF and its editable pages, saved as designs/<name>.pdf / .fig
-    with a deck document (kind "document") that opens the page viewer; every page comes
-    back to the model to QA. `replace` re-renders the same document — its earlier .fig
-    kept as a version — instead of taking a new name."""
+    """Render a document to designs/<name>.pdf / .fig plus a "document" deck file, pages back for QA.
+    `replace` re-renders under the same name, keeping the earlier .fig as a version."""
     from cycls._agent import design
     from cycls._agent.design import stock
     from cycls._agent.design.deck import lock
@@ -495,21 +465,19 @@ async def _render_document(inp, workspace, name):
     root, subject = pathlib.Path(workspace.root), getattr(workspace, "subject", None)
     designs = root / "designs"
     replacing = inp.get("replace") is True and (designs / f"{name}.fig").is_file() and (designs / f"{name}.deck.json").is_file()
-    # Pages edited since the last render aren't in the source: they are not laid out again
-    # without a word (the model folds what it can into what it sends, and says so).
+    # hand edits since the last render aren't in the source: held until discard_edits
     edited = await _edits_since_render(workspace, name) if replacing else None
     if edited is not None and inp.get("discard_edits") is not True:
         return _edits_hold(name, edited)
     credits, err = await stock.resolve(inp["spec"], workspace.root)
     if err:
         return err
-    source = json.loads(json.dumps(inp["spec"]["document"]))       # as it was written (a stock photo: the file it became)
+    source = json.loads(json.dumps(inp["spec"]["document"]))       # as written, stock photos resolved
     spec, err, notes = await asyncio.to_thread(lambda: _prepare_document(inp["spec"], _load_brand(workspace.root), workspace.root))
     if err:
         return err
     try:
-        # Rendered again: the pages the model has seen (their fingerprints, kept with the
-        # document) are said, and only the ones that differ come back to be looked at.
+        # a re-render sends the seen page hashes; only changed pages come back
         known = await asyncio.to_thread(_seen_pages, designs / f"{name}.deck.json") if replacing else []
         r = await design.render(spec, fmt="pdf", scale=2, user_id=subject, sheets=True, known=known)
     except design.Unavailable as e:
@@ -533,7 +501,7 @@ async def _render_document(inp, workspace, name):
         await asyncio.to_thread((root / fig_rel).write_bytes, r.fig)
     await asyncio.to_thread((root / pdf_rel).write_bytes, r.image)
 
-    def keep_rendered():                                           # its pages as rendered: what a later change is told against
+    def keep_rendered():                                           # what _edits_since_render diffs against
         try:
             copy = _rendered_copy(root, fig_rel)
             copy.parent.mkdir(parents=True, exist_ok=True)
@@ -560,9 +528,9 @@ async def _render_document(inp, workspace, name):
         ack += " " + line
     ack += _layout_check(r.lint, "pptx")
     ui = {"type": "ui", "action": "open_canvas", "path": deck_rel, "name": f"{name}.deck.json"}
-    if replacing:      # what is open shows the new pages: the viewer fetches them again, an editor re-opens the file
+    if replacing:      # an open viewer refetches, an open editor reloads
         again = {"type": "ui", "action": "design_command", "path": fig_rel, "script": "", "version": version, "reload": True}
-        await _to_the_room(workspace.root, fig_rel, again)   # and so do the people who have it open together
+        await _to_the_room(workspace.root, fig_rel, again)
         ui = [again, ui]
     blocks, total, held = [], 0, []
     numbers = r.preview_of if r.preview_of is not None else range(1, len(r.previews) + 1)
@@ -575,7 +543,7 @@ async def _render_document(inp, workspace, name):
                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                                                 "data": base64.b64encode(jpg).decode()}}]
     if r.preview_of is not None:
-        # Rendered again: the pages that differ from what the model last saw, and no others.
+        # a re-render: only the pages that changed
         if not held:
             return {"_model": ack + " No page changed from the last render: there is nothing to look at again.", "_ui": ui}
         rest = count - len(held)
@@ -589,7 +557,7 @@ async def _render_document(inp, workspace, name):
     if not blocks:
         return {"_model": ack, "_ui": ui}
     shown = len(blocks) // 2
-    # A long document: the pages after those, twelve to a contact sheet — all of it is seen.
+    # the remaining pages on contact sheets, twelve a sheet
     sheets = []
     for pages, jpg in zip(r.sheet_pages, r.sheets):
         if total + len(jpg) > _DESIGN_QA_MAX:

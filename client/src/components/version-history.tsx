@@ -6,14 +6,8 @@ import { useToast } from "../lib/toast";
 import { useEscape } from "../hooks/use-escape";
 import { flushDesignEditor, reloadDesignEditors, type DesignHost } from "./design-editor-view";
 
-// A design's earlier versions (cycls/_agent/versions.py): each is what a save, an
-// agent's edit or a restore replaced. Restore brings one back (what's there now is
-// kept as a version too, so a restore is undone by restoring); Open as copy makes it
-// a new design beside this one. Preview shows what a version looks like first — a row
-// says only when it was replaced and by whom, which doesn't tell two saves apart: its
-// picture (the first slide or page) is made when asked for, and kept while the panel is open.
+// A design's earlier versions (cycls/_agent/versions.py). A restore is itself kept as a version, so it can be undone.
 
-// What replaced it, as the row says it.
 function whatReplacedIt(v: DesignVersion): string {
   if (v.reason === "agent") return v.intent ? t("versionBeforeAgentIntent").replace("{intent}", v.intent) : t("versionBeforeAgent");
   if (v.reason === "change" && v.intent) return t("versionBeforeChangeIntent").replace("{intent}", v.intent);   // the deck viewer's own
@@ -25,7 +19,7 @@ function whatReplacedIt(v: DesignVersion): string {
 export function VersionHistory({ path, host, onClose }: { path: string; host: DesignHost; onClose: () => void }) {
   const [rows, setRows] = useState<DesignVersion[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  // A version's picture: its blob URL once made, "loading" on its way, "failed" when it couldn't be.
+  // A version's picture: its blob URL, "loading" or "failed".
   const [pictures, setPictures] = useState<Record<string, string>>({});
   const [shown, setShown] = useState<string | null>(null);
   const made = useRef<string[]>([]);

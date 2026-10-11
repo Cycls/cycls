@@ -13,10 +13,7 @@ from ..logs import log
 from ..state import _exec_database, app_shelf, apps_db
 from .. import credentials, spill, trash
 from ..paths import _TMP_ERROR, _resolve_path, _safe_filename
-# The Design tool lives in cycls/_agent/design: what the model is given (tool.py), what it
-# wrote made ready for the service (prepare.py, brand.py, images.py), and what it does
-# (run.py — the executor — actions.py, extract.py, files.py, report.py). Its names are
-# imported back here, where they used to be defined: `cycls._agent.tools` still has them all.
+# the Design tool lives in cycls/_agent/design; its names are re-exported here
 from ..design.tool import (DESIGN_LOADED, _DESIGN_SHORT, _DESIGN_TOOL, _DESIGN_TOOL_SHORT, _DESIGN_WORDS,
     _DESIGN_WORDS_AR, _GUIDE_LOADED, _GUIDE_NOT_RUN, _design_short, design_called, design_tool, design_wanted)
 from ..design.brand import (_BRAND_COLOR_KEYS, _HEX, _brand_palette, _contrast, _first_color, _load_brand,
@@ -405,8 +402,7 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
             if _browser.configured():
                 tools.append(_BROWSER_TOOL)
         elif name == "Design":
-            # Same gate as Browser: only offered when the cycls-design service is
-            # configured (DESIGN_URL), else silently absent.
+            # like Browser: offered only when the service is configured (DESIGN_URL)
             from cycls._agent import design as _design
             if _design.configured():
                 tools.append(_DESIGN_TOOL)
@@ -434,8 +430,8 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
           .tmpfs("/workspace/.db")        # cycls state (chat, shares); editor blocks via _resolve_path
           .tmpfs("/workspace/.database")  # agent KV store; same blocking
           .tmpfs("/workspace/.trash")
-          .tmpfs("/workspace/.versions")   # a design's earlier versions (cycls/_agent/versions.py)
-          .tmpfs("/workspace/.comments")   # what people said about a design (cycls/_agent/design/comments.py)
+          .tmpfs("/workspace/.versions")   # design versions
+          .tmpfs("/workspace/.comments")   # design comments
           .tmpfs(f"/workspace/{credentials.USER}")
           .tmpfs(f"/workspace/{credentials.SHARED}")
           .tmpfs("/workspace/.settings")  # the person's tool settings: bash must not grant itself "allow"

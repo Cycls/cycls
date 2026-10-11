@@ -1,13 +1,10 @@
-"""What the tool tells the model about a design: its outline (`inspect`), which parts an
-edit touched, how two saves of a design differ, and the layout check's findings in words."""
+"""What the Design tool tells the model: outlines, edits, comments, page changes, the layout check."""
 import json
 from .prepare import _num
 
 
 def _outline_text(rel, frames, pages=None, page=None):
-    """A design's outline (from the service's inspect) as compact lines for the model:
-    each frame, then each node — name, type, box, and its text/font/colour or fill. A
-    design of several `pages` says which one this is, and names the others."""
+    """A design's outline as compact lines for the model: each frame, then each node."""
     several = pages and len(pages) > 1
     where = f"{rel} — page {json.dumps(page, ensure_ascii=False)}" if several else rel
     others = ""
@@ -27,7 +24,7 @@ def _outline_text(rel, frames, pages=None, page=None):
             notes = str(f["notes"])
             out.append(f"  notes: {json.dumps(notes[:300] + ('…' if len(notes) > 300 else ''), ensure_ascii=False)}")
         if f.get("source"):
-            # A layout slide as it was asked for — what update_slide re-sends, changed.
+            # what update_slide re-sends, changed
             source = str(f["source"])
             out.append(f"  layout source: {source[:1500]}{' …' if len(source) > 1500 else ''}")
         for n in f.get("nodes") or []:
@@ -41,7 +38,6 @@ def _outline_text(rel, frames, pages=None, page=None):
                 if n.get("align"):
                     bits.append(f"align {n['align']}")
             elif n.get("type") in ("icon", "svg", "qr", "line") and (n.get("icon") or n.get("color")):
-                # A mark is one part: which icon it is and its colour (what `style` sets).
                 if n.get("icon"):
                     bits.append(n["icon"])
                 if n.get("color"):
@@ -62,9 +58,7 @@ def _outline_text(rel, frames, pages=None, page=None):
 
 
 def _edit_names(r):
-    """What an ops edit touched, by name — the parts it changed, the ones it made (a copy
-    and an added part get names of their own), and which part a name that wasn't one
-    turned out to be. The next edit names them as they are, with no `inspect` between."""
+    """What an ops edit touched, by name, so the next edit needs no `inspect` between."""
     out = ""
     if r.get("changed"):
         out += f" Changed: {', '.join(r['changed'][:30])}."
@@ -95,9 +89,7 @@ def _thread_said(t, replies=1):
 
 
 def _comments_on_page(threads, frames):
-    """The open comments on the page `inspect` shows, each where it is now: the slide —
-    by its name, so a slide that was moved keeps its comments — and the part of it the
-    pin sits on, read from the same outline. "" when there are none."""
+    """The open comments on the page `inspect` shows, placed by slide name (moves keep them); "" if none."""
     from .comments import node_at, place
     names = [f.get("name") or "" for f in frames]
     lines = []
@@ -117,8 +109,7 @@ def _comments_on_page(threads, frames):
 
 
 def _comments_listing(rel, threads):
-    """Every comment on a design, for the `comments` action: the open ones whole, then
-    the resolved ones in a line each."""
+    """Every comment on a design for the `comments` action: open ones whole, resolved ones a line each."""
     def where(t):
         page = f"page {json.dumps(t['page'], ensure_ascii=False)}, " if t.get("page") else ""
         name = f" {json.dumps(t['frame_name'], ensure_ascii=False)}" if t.get("frame_name") else ""
@@ -144,12 +135,9 @@ _OUTLINE_STYLE = ("font", "size", "color", "fill", "radius", "stroke", "rotation
 
 
 def _page_changes(before, after):
-    """Two outlines of a document's pages — as rendered, and as they are now — → what
-    was changed, a line a page: a text's new wording, the nodes moved or restyled, the
-    ones added and removed."""
+    """A document's pages as rendered vs now → what was changed, a line a page."""
     def pair(new, old):
-        """A text's wording now and before, each shown from just ahead of where they part
-        (a long paragraph changed near its end is not its opening twice)."""
+        """A text's wording now and before, each shown from just ahead of where they part."""
         same = next((i for i, (x, y) in enumerate(zip(new, old)) if x != y), min(len(new), len(old)))
         start = max(0, same - 60) if max(len(new), len(old)) > 300 else 0
         start = new.rfind(" ", 0, start) + 1 if start else 0
@@ -190,8 +178,7 @@ def _page_changes(before, after):
 
 
 def _layout_check(lint, fmt):
-    """The service's layout check of a render, as one line for the ack: what's
-    wrong, where, and the fix — the mechanical backstop to the model's own look."""
+    """The service's layout check of a render, as one line for the ack."""
     if not lint:
         return " Layout check: clean."
     slide = fmt == "pptx" or any(i.get("frame") for i in lint)

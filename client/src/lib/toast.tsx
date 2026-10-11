@@ -15,8 +15,7 @@ const ToastContext = createContext<{ show: (kind: Kind, text: string, opts?: { a
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const counter = useRef(0);
-  // Full screen shows only the full-screen element, so a toast goes inside one that
-  // asks for them (`data-toasts`, the design editor) — else it wouldn't be seen.
+  // Fullscreen hides everything outside its element, so toasts go inside one marked `data-toasts`.
   const [into, setInto] = useState<Element | null>(null);
   useEffect(() => {
     const onChange = () => {

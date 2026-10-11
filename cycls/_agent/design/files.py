@@ -1,6 +1,4 @@
-"""A design's files in the workspace: the formats it is saved as, a name not yet taken,
-the designs that are there, a document's pages kept as they were rendered, and the pages
-of a render written out."""
+"""A design's files in the workspace: formats, free names, and a render's pages written out."""
 import asyncio, base64, json, os, pathlib
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES
 from .report import _layout_check
@@ -12,11 +10,7 @@ _DECK_EXTS = ("pptx", "pdf")
 
 
 def _dedupe_design_name(designs_dir, name, fmt):
-    """A base name whose `<name>.<fmt>` and `<name>.fig` are both free under
-    `designs_dir`, so a fresh render never overwrites an existing design:
-    `launch`, else `launch-2`, `launch-3`, … The render output and its `.fig`
-    stay paired under one base. (`edit` targets an existing design — it does not
-    dedupe.)"""
+    """A free base name (`launch`, `launch-2`, …) so a fresh render never overwrites a design."""
     def taken(base):
         return any((designs_dir / f).exists() for f in
                    (f"{base}.{fmt}", f"{base}.fig", f"{base}-slide-1.{fmt}", f"{base}.deck.json"))
@@ -41,16 +35,13 @@ async def _write_beside(path, data):
 
 
 def _rendered_copy(root, fig_rel):
-    """Where a document's .fig is kept as it was rendered — to tell, later, what was
-    changed on its pages by hand."""
+    """A document's .fig as rendered, to tell later what was changed by hand."""
     import hashlib
     return pathlib.Path(root) / ".cache" / "design" / f"{hashlib.sha1(fig_rel.encode('utf-8')).hexdigest()[:16]}.rendered.fig"
 
 
 async def _save_pages(r, name, fmt, workspace, notes):
-    """A render of several pages, saved: the one `.fig`, and each page's image —
-    `<name>.<fmt>` the first, `<name>-page-<n>.<fmt>` the others (design/refresh.py
-    keeps them in step). It opens in the editor on its first page."""
+    """Save a multi-page render: one `.fig` and an image per page (refresh.py keeps them in step)."""
     from cycls._agent.design.refresh import page_file
     requested = name
     root = pathlib.Path(workspace.root)

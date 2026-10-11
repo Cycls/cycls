@@ -3,7 +3,7 @@ import { t } from "../lib/i18n";
 import { Popover } from "./popover";
 import { Icon, Spinner } from "./icon";
 
-// A link already made for something ("chat/<id>" / "file/<path>"), and taking it back.
+// Existing links to "chat/<id>" or "file/<path>", and revoking one.
 export interface ShareLink { token: string; url: string; audience?: string }
 export interface ShareLinks {
   find: (path: string) => Promise<ShareLink[]>;
@@ -14,9 +14,7 @@ const absolute = (url: string) => (/^https?:/.test(url) ? url : `${window.locati
 
 // Mounted only while open (parent conditionally renders it), so the form
 // state resets to fresh each time the dialog is opened.
-//
-// With `path` + `links` it first looks for the links this thing already has: one made
-// earlier is shown (copy it, or remove it) instead of offering to make another.
+// With `path` + `links`, an existing link is shown instead of making another.
 export function ShareDialog({ onClose, mode = "chat", subtitle = "", org, onShare, onManageShares, path, links }: {
   onClose: () => void;
   mode?: "chat" | "file";

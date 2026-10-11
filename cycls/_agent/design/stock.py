@@ -1,16 +1,5 @@
-"""Stock photos for Design.
-
-Anywhere a design takes an image — an image node's `src`, a deck slide's `image`, a
-team member's `photo`, an edit's `replace_image` — the model may name a photo to
-find instead of a file: `"stock": "coffee beans on wood"`. The SDK searches Pexels,
-saves the photo in the workspace (attachments/stock/…), and puts that path in as
-`src`, so the rest of the pipeline sees an ordinary workspace file: the same size
-caps, EXIF handling and fitting, and the photo stays in the workspace for the next
-edit. The photographer is credited in the ack.
-
-Configured by `PEXELS_API_KEY` (the agent process's environment). Without it, a
-`stock` field is an error telling the model to save a photo into the workspace.
-"""
+"""Stock photos for Design: a `"stock": "<query>"` anywhere an image goes is searched on Pexels,
+saved under attachments/stock/ and put in as `src`. Needs PEXELS_API_KEY."""
 import asyncio
 import hashlib
 import json
@@ -65,8 +54,7 @@ def _slug(text):
 
 
 async def _photo(root, query, orientation, pick):
-    """(workspace path, credit) for the `pick`-th Pexels result for `query` — found
-    once and remembered per workspace (attachments/stock/.index.json)."""
+    """(workspace path, credit) for the `pick`-th Pexels result for `query`, cached in .index.json."""
     folder = Path(root) / DIR
     index_path = folder / ".index.json"
     key = f"{query.strip().lower()}|{orientation or ''}|{pick}"
@@ -103,10 +91,7 @@ _FILE = re.compile(r"\.[A-Za-z0-9]{2,5}$")
 
 
 def described(src, root):
-    """Is `src` a description of a picture rather than a file's name? Several words, no
-    extension, no folder — and no such file. (`src`, a slide's `image`, held "modern
-    Riyadh skyline at dusk, glass towers": the picture the model wanted, where the name
-    of a file goes.)"""
+    """Whether `src` describes a picture rather than names a file: several words, no extension, no such file."""
     if not isinstance(src, str):
         return False
     s = src.strip()
@@ -124,9 +109,7 @@ def _query(text):
 
 
 async def resolve(obj, root):
-    """Every `"stock": "<query>"` in a spec, deck, slide or ops list → `"src": "<path>"`,
-    in place. A picture DESCRIBED where a file goes (`described`) is looked for the same
-    way, and said. → (credits and notes for the ack, error or None)."""
+    """Every `"stock"` (or `described` src) in `obj` → `"src": "<path>"`, in place → (ack notes, error or None)."""
     found, told = [], []
 
     def describe(v):

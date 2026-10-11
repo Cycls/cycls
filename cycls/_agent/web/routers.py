@@ -284,13 +284,8 @@ def chats_router(ws_dep):
     async def truncate_last_exchange(chat_id: str, expect: Optional[str] = None, ws: Workspace = ws_dep):
         """Drop the last user turn and everything after it — the persistence
         half of `regenerate`. The FE then re-sends the same message, so the
-        run that follows is an ordinary send.
-
-        `?expect=<sha256 of the message's text>` is `retry`'s form: a failed or stopped
-        turn is dropped before its message is sent again, so the chat keeps it once. It
-        only ever drops that turn — not a turn with other text, and not one that ended
-        well (the failed request never arrived; the exchange before it stays) — and
-        says `{ok: false}` when it dropped nothing."""
+        run that follows is an ordinary send. `?expect=<sha256 of its text>` (retry)
+        drops only that turn, and not one that ended well; else `{ok: false}`."""
         if (await state.get_meta(ws, chat_id)) is None:
             raise HTTPException(status_code=404, detail="Chat not found")
         # This is the one route that still deletes and renumbers every turn file.
@@ -335,11 +330,9 @@ _CATALOG_WORKSPACES = 8   # workspaces one instance keeps warm
 # what bounds both.
 _CATALOG_TTL = 5.0        # how long a walk is reused, from when it ended
 _CATALOG_WAIT = 0.5       # how long a reader waits for a re-walk before taking the last one
-_CATALOG_SLOW = 2.0       # a walk slower than this is logged, with where its entries are
+_CATALOG_SLOW = 2.0       # a walk slower than this is logged
 
-# str(root) -> {tree: (entries, truncated) | None, began, ended, dropped, walk: Task | None}.
-# `began` / `dropped` are ticks of one counter: a tree is current only when its walk
-# began after the last write here.
+# str(root) -> {tree, began, ended, dropped, walk}; a tree is current only if began > dropped (`_tick`s)
 _catalog = {}
 _tick = itertools.count(1)
 
@@ -558,14 +551,9 @@ def _catalog_walk(key, root, slot):
 
 
 async def _catalog_get(root, fresh=False):
-    """The workspace tree — every file and folder — from a walk cached per workspace.
-
-    A walk is reused for _CATALOG_TTL after it ends. Past that, or after a write
-    here, the tree is walked again: the reader waits _CATALOG_WAIT for it, and if it
-    takes longer is handed the last tree while the new one finishes behind it — a
-    large workspace on the gcsfuse mount takes 30–40 s to walk, and a search must
-    not. `fresh` waits for a walk begun after the call, however long. Readers
-    arriving mid-walk join it instead of starting their own."""
+    """The workspace tree from a walk cached per workspace for _CATALOG_TTL. Past that or after
+    a write, a reader waits _CATALOG_WAIT for the re-walk, then takes the last tree (a large
+    gcsfuse workspace takes 30–40 s to walk). `fresh` waits for a walk begun after the call."""
     key = str(root)
     slot = _catalog_slot(key)
     last = slot["tree"]
@@ -584,16 +572,14 @@ async def _catalog_get(root, fresh=False):
 
 
 def _catalog_warm(root):
-    """A workspace's first walk, begun in the background by its first folder listing —
-    so the search that follows finds a tree instead of waiting for one."""
+    """Start a workspace's first walk on its first folder listing, so a search finds a tree."""
     key = str(root)
     if key not in _catalog:
         _catalog_walk(key, root, _catalog_slot(key))
 
 
 def _catalog_drop(root):
-    """A write happened under `root`: its cached tree is out of date. The tree stays
-    (the next reader may be handed it while the re-walk runs). Resolves the root as
+    """Mark `root`'s tree stale (still served while it re-walks). Resolves the root as
     `_catalog_get` does; a mismatched key would silently never invalidate."""
     if slot := _catalog.get(str(Path(root).resolve())):
         slot["dropped"] = next(_tick)
@@ -670,9 +656,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         return datetime.fromtimestamp(t, tz=timezone.utc).isoformat() if t else ""
 
     def _scandir_slice(target, root):
-        """One folder, read from the folder: its files, and its subfolders with their
-        times (each a scan of that subfolder — a few at a time, a list call apiece on
-        the gcsfuse mount)."""
+        """One folder, read from the folder; subfolder times are scanned in parallel (a list call each on gcsfuse)."""
         out, dirs = [], []
         for entry in os.scandir(target):
             if entry.name.startswith(".") or Path(entry.path).relative_to(root).as_posix().lower() == "agent.md":
@@ -705,13 +689,11 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
     async def list_files(request: Request, response: Response, ws: Workspace = ws_dep):
         """One folder, the whole tree, or a search across it.
 
-        One folder is read from that folder, so it is always current and costs what
-        the folder costs — never a walk of the workspace. `search=q` backs the
+        One folder is read from the folder itself, never a walk. `search=q` backs the
         @-picker and returns files only; `recursive=1` still returns the flat tree,
-        so clients predating `search` keep working. Both come from the cached walk
-        (`_catalog_get`), where `fresh=1` waits for a new one — for right after a
-        client's own write, which another instance may have handled, and right after
-        an agent turn.
+        so clients predating `search` keep working. Both come from the cached walk,
+        where `fresh=1` waits for a new one — for right after a client's own write,
+        which another instance may have handled, and right after an agent turn.
         """
         q = request.query_params
         root = Path(ws.root).resolve()
@@ -746,8 +728,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             return _zip_dir(file_path)   # folders download as <name>.zip
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
-        # A design deck (its deck document or its .fig): ?as=slides is the deck
-        # viewer's manifest, ?as=pptx / ?as=pdf the whole deck, exported on demand.
+        # a design deck (its deck document or .fig): ?as=slides|pptx|pdf|images|png
         if request.query_params.get("as") in _DESIGN_AS and _design_doc(file_path.name):
             return await _design_response(ws.root, file_path, request.query_params["as"], ws.subject,
                                           request.query_params.get("page"))
@@ -772,8 +753,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         if request.query_params.get("download") is not None:
             return FileResponse(file_path, filename=file_path.name, headers=_NO_CACHE)
         if file_path.suffix.lower() == ".fig":
-            # A design comes with its version, from the very bytes served: what a save
-            # names as its base (design/store.py) — a save over a newer file is refused.
+            # X-Version of the very bytes served: what a save names as its `base` (design/store.py)
             from cycls._agent.design.store import version_of
             data = await asyncio.to_thread(file_path.read_bytes)
             return Response(data, media_type="application/octet-stream",
@@ -785,13 +765,8 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         """Streams the raw body to a .part temp, then renames. No File(...)
         param — that reads the whole body before auth runs, so uploads longer
         than the JWT lifetime 401 at the end. Multipart kept for old clients.
-        `?dedupe=1` writes a new file instead of replacing one — the name, or the
-        next free one (`_free_rel`); the reply's `path` says which.
-
-        A design (`.fig`) is written through `design.store.write_fig`: what it replaces
-        is kept as a version, and `?base=<version>` (what `GET` served as X-Version)
-        must still be current — else 412 {detail, version}, nothing written. `?force=1`
-        writes anyway ("keep mine"). The reply carries the new `version`."""
+        `?dedupe=1` writes to the next free name (the reply's `path`). A `.fig` goes through
+        `write_fig`: `?base=<X-Version>` must be current, else 412; `?force=1` overrides."""
         dedupe = request.query_params.get("dedupe") is not None
         if dedupe:
             _safe_path(ws.root, path)
@@ -844,9 +819,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
                 return JSONResponse(status_code=412, content={
                     "detail": "This design changed since it was opened.", "version": e.current})
         _catalog_drop(ws.root)
-        # The design editor saves an edited designs/<name>.fig here; re-export the
-        # image beside it so a download (or the agent) never gets the pre-edit one.
-        # A new design (a copy, a version opened as one) has none yet: it gets its .png.
+        # re-export the images beside an edited design; a new one (`dedupe`) gets its .png
         design_refresh.schedule(ws.root, rel, ws.subject, ensure=dedupe)
         return reply
 
@@ -929,10 +902,10 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             from cycls._agent import versions
             try:
                 await asyncio.to_thread(versions.move, ws.root, Path(rel).as_posix(), Path(dst).as_posix())
-            except OSError as e:   # the file has moved: its history staying behind must not fail the rename
+            except OSError as e:   # never fail a rename that already happened
                 log("warn", message=f"history of {rel} did not follow it to {dst}: {type(e).__name__}: {e}")
             if dest.suffix.lower() == ".fig" and Path(rel).suffix.lower() == ".fig":
-                # …and so does what is kept beside it: its images, its PDF, its deck document.
+                # …and the files kept beside it
                 from cycls._agent.design import refresh
                 try:
                     await asyncio.to_thread(refresh.follow, ws.root, Path(rel).as_posix(), Path(dst).as_posix())
@@ -969,9 +942,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         return {"ok": True, "trash_id": meta["id"], "kind": meta["kind"]}
 
     async def _comments(ws, what, *args):
-        """A design's comments go where it goes (cycls/_agent/design/comments.py: move,
-        shelve, unshelve, drop). The file has already moved: its comments staying behind
-        is logged, and never fails what was asked."""
+        """A design's comments follow it (comments.py: move, shelve, unshelve, drop); a failure only logs."""
         from cycls._agent.design import comments
         try:
             await getattr(comments, what)(ws, *args)
@@ -1184,15 +1155,10 @@ def apps_router(cycls_app, ws_dep, user_dep, volume, base):
 
 # ---- Live polls (a deck's poll slides, run in present mode) ----
 #
-# The presenter opens a slide's poll; the audience votes on their phones through the
-# deck's public share link; the presenter's screen polls the tally. The server runs
-# on several instances, so nothing is pushed or held in memory: each vote is its own
-# record, written create-only (one per voter per session — a second is a 409), and
-# the tally is one listing of a session's votes, cached for a second so a room full
-# of phones doesn't list once each. Polls live beside the deck's share row — the
-# presenter's own store, which the share route reaches as the link's owner.
+# Several instances, so nothing lives in memory: each vote is a create-only record (a second
+# is a 409), the tally one listing cached for a second. Polls live in the presenter's store.
 
-POLL_VOTES_PER_MINUTE = 1000   # per address, per instance: a hall on one Wi-Fi is one address; bounds a runaway, not a determined voter
+POLL_VOTES_PER_MINUTE = 1000   # per address per instance: a hall on one Wi-Fi is one address
 _poll_hits = {}
 _poll_tallies = {}           # (store, deck, session) → (monotonic time, tally)
 
@@ -1377,8 +1343,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         # editable). Same convert+cache path as get_file, over the owner's
         # workspace. Presentations get the slide viewer; everything else, PDF.
         as_ = request.query_params.get("as")
-        # A shared deck presents and downloads like the owner's (the share covers
-        # the deck document; the .fig it names stays inside the owner's workspace).
+        # a shared deck presents like the owner's; the .fig it names stays in the owner's workspace
         if as_ in _DESIGN_AS and _design_doc(file_path):
             try:
                 target = resolve_path(ws_owner.root, file_path)

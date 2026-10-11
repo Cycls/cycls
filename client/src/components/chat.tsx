@@ -69,7 +69,6 @@ export interface AccountInfo {
   workspaces?: WorkspacesMenu;
 }
 
-// A path or anything inside it (a folder renamed or deleted takes its files along).
 const isUnder = (path: string, prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
 
 export interface FilesPanelProps {
@@ -91,20 +90,20 @@ export interface FilesPanelProps {
   onOpenFile: (path: string) => Promise<string>;
   readFile: (path: string) => Promise<string>;
   writeFile: WriteFile;   // binary too — the .fig editor writes raw bytes
-  writeNew?: (path: string, data: BlobPart) => Promise<string>;  // a NEW file (next free name) → its path: design exports, copies
+  writeNew?: (path: string, data: BlobPart) => Promise<string>;  // never overwrites: the server picks a free name
   newDesign?: (body: { name?: string; size?: string | [number, number]; background?: string }) => Promise<{ path: string; name: string; size: [number, number] }>;
-  exportDesign?: (path: string, format: "pdf" | "png", page?: string) => Promise<string>;   // a design (one page of it) as a PDF / PNG beside it
-  brand?: () => Promise<BrandKit | null>;                        // the brand kit, for the design editor
+  exportDesign?: (path: string, format: "pdf" | "png", page?: string) => Promise<string>;   // a PDF / PNG beside the design
+  brand?: () => Promise<BrandKit | null>;                        // for the design editor
   fetchVersioned?: FetchVersioned;                               // a design with its version (its saves' base)
   designLive?: (path: string) => Promise<DesignLive | null>;     // a design's live room + this person's pass (null: it opens alone)
-  listVersions?: (path: string) => Promise<DesignVersion[]>;     // a design's earlier versions
+  listVersions?: (path: string) => Promise<DesignVersion[]>;
   versionBlob?: (path: string, id: string) => Promise<Blob>;
-  versionPreview?: (path: string, id: string) => Promise<Blob>;  // a picture of that version
+  versionPreview?: (path: string, id: string) => Promise<Blob>;
   restoreVersion?: (path: string, id: string) => Promise<{ version: string }>;
-  onNewDesign?: () => void;                                      // the Files panel's "New design"
+  onNewDesign?: () => void;
   deckOp?: (path: string, body: DeckOp) => Promise<void>;       // the deck viewer's slide moves / copies / deletes
   pollsFor?: (deck: string) => PollApi;                         // live polls when the owner presents a deck
-  comments?: CommentsApi;                                       // what people pin on a design, and answer
+  comments?: CommentsApi;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
@@ -281,8 +280,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   const [canvasTabs, setCanvasTabs] = useState<CanvasFile[]>([]);
   const [canvasActive, setCanvasActive] = useState<string | null>(null);
   const [canvasHidden, setCanvasHidden] = useState(false);
-  // "Add selection": the visible design's latest selection (its editor reports it),
-  // and the one attached to the message being written.
+  // "Add selection": the visible design's selection, and the one attached to the draft.
   const activeDesign = canvasHidden ? null : (canvasActive ?? canvasTabs[canvasTabs.length - 1]?.path ?? null);
   const [designSel, setDesignSel] = useState<DesignSelection | null>(null);
   const [attachedSel, setAttachedSel] = useState<DesignSelection | null>(null);
@@ -328,8 +326,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     setCanvasTabs((tabs) => tabs.filter((f) => f.path !== path));
     setCanvasActive((a) => (a === path ? null : a));
   }, []);
-  // Hiding the canvas or closing all its tabs unmounts every design editor: each
-  // saves what's unsaved first (a clean one answers at once).
+  // Hiding or closing the canvas unmounts its design editors: flush them first.
   const hideCanvas = useCallback(() => { void flushAllDesignEditors(1500).then(() => setCanvasHidden(true)); }, []);
   const closeAllCanvas = useCallback(() => {
     void flushAllDesignEditors(1500).then(() => { setCanvasTabs([]); setCanvasActive(null); setRightExpanded(false); });
@@ -396,8 +393,7 @@ export function Chat({ chat, onShare, files, account, config }: {
         if (app) openApp(app);
         else openFileInCanvas(ev.path, typeof ev.name === "string" ? ev.name : undefined);
       } else if (ev.action === "design_command" && typeof ev.path === "string" && typeof ev.script === "string") {
-        // The agent is editing an OPEN design live — forward the script to that
-        // .fig's embedded editor (DesignEditorView listens for this and relays it).
+        // A live agent edit of an open design: DesignEditorView replays it.
         window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: designCommandDetail(ev) }));
         track("ui_action", { action: "design_command" });
       } else if (ev.action === "suggest" && typeof ev.text === "string") {
@@ -554,8 +550,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       return;
     }
     heldRef.current = false;
-    // With a selection attached, its design's unsaved work is saved first, so the
-    // agent reads the design the person is looking at.
+    // Save the selected design first, so the agent reads what the person sees.
     const go = () => { onSend(text, sendAttachments, origin, extra); setTimeout(() => scrollToBottom(), 0); };
     if (selection) void flushDesignEditor(selection.path, 1500).then(go);
     else go();
@@ -727,9 +722,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     if (r && r.trash_id) trashed(r.trash_id, r.kind, path.split("/").pop() || path);
     return r;
   }, [files, trashed]);
-  // A file (or folder) open in the canvas, deleted: its design editors stop writing
-  // first — a save landing after the delete would bring the file back — then its
-  // tabs close. Renamed or moved: its editors save, then its tabs follow it.
+  // Detach editors before a delete (a late save would bring the file back); flush before a rename.
   const deleteFromFiles = useCallback(async (path: string) => {
     const reattach = detachDesignEditorsUnder(path);
     try {
@@ -750,8 +743,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       ? { ...f, path: moved(f.path), name: moved(f.path).split("/").pop() || f.name } : f)));
     setCanvasActive((a) => (a ? moved(a) : a));
   }, [files]);
-  // "New design": a blank design in designs/, opened in its own tab — from the
-  // canvas +, the Files panel, or File › New design in the editor.
+  // A blank design in designs/, opened in its own tab.
   const createDesign = useCallback(async (size: string | [number, number] | undefined, source: "canvas" | "files" | "editor") => {
     if (!files?.newDesign) return;
     try {
@@ -778,15 +770,14 @@ export function Chat({ chat, onShare, files, account, config }: {
     live: files.designLive,
     me: account?.user.id ? { id: account.user.id, name: account.user.name || account.user.email } : undefined,
   } : undefined), [files, createDesign, openFileInCanvas, account?.user.id, account?.user.name, account?.user.email]);
-  // Comments on a design: the routes, who this is (the server knows an id, the browser a
-  // name), and what the agent is called. An app with no sign-in has one person, unnamed.
+  // Comment authors' names come from here: the server knows only an id.
   const commentsApi = files?.comments;
   const commentsHost = useMemo<CommentsHost | null>(() => (commentsApi ? {
     api: commentsApi,
     me: account?.user.id ? { id: account.user.id, name: account.user.name || account.user.email, image: account.user.imageUrl } : undefined,
-    agent: meta?.name || name,   // what the agent is called here: "Super"
+    agent: meta?.name || name,
   } : null), [commentsApi, account?.user.id, account?.user.name, account?.user.email, account?.user.imageUrl, meta?.name, name]);
-  // Words handed to the composer from elsewhere on the page (a design's comments: "address them").
+  // Text handed to the composer from elsewhere on the page (a design's comments list).
   useEffect(() => {
     const onCompose = (e: Event) => {
       const text = (e as CustomEvent<{ text?: string }>).detail?.text;
@@ -858,15 +849,13 @@ export function Chat({ chat, onShare, files, account, config }: {
     setRightExpanded(false);
     setRailIcons(false);
   };
-  // The links a chat or a file already has: the Share popover shows one instead of
-  // offering to make another.
+  // Existing links, so the Share popover shows one instead of making another.
   const shareLinks = useMemo<ShareLinks>(() => ({
     find: async (path) => ((await onListShares()) as (ShareLink & { path?: string })[])
       .filter((s) => s.path === path && s.token && s.url),
     revoke: (token) => onDeleteShare(token),
   }), [onListShares, onDeleteShare]);
-  // Escape closes the side pane — when nothing in it took the key: an open menu,
-  // popover or dialog closes itself first (useEscape), a field cancels its own edit.
+  // Escape closes the side pane only when nothing inside it handled the key (useEscape).
   useEscapeFallback(closeRight, rightOpen);
 
   const openRight = () => {

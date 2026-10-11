@@ -1,9 +1,6 @@
 import { useEffect, useRef } from "react";
 
-// Escape closes one thing: the layer opened last — a menu, a popover, a dialog — and
-// nothing under it. Each open layer registers here; one capture-phase listener hands
-// the key to the newest and stops it there, so neither the layers beneath nor the
-// page's own Escape (chat's closes the whole canvas pane) see it.
+// Escape closes only the newest layer; capture phase hides it from layers beneath and chat's canvas Escape.
 const layers: { current: () => void }[] = [];
 let listening = false;
 
@@ -32,9 +29,7 @@ export function useEscape(onEscape: () => void, open = true) {
   }, [open]);
 }
 
-// The page's own Escape: what it does when nothing else took the key. A field or a
-// list that uses Escape says so with `preventDefault` — and this looks only after
-// every listener has run, so it doesn't matter which of them was added first.
+// Runs when nothing took the key (`preventDefault`); deferred, so listener order doesn't matter.
 export function useEscapeFallback(onEscape: () => void, active = true) {
   const handler = useRef(onEscape);
   handler.current = onEscape;

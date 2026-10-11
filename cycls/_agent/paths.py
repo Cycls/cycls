@@ -1,5 +1,4 @@
-"""A path a tool was given, as a path inside the workspace — or the reason it isn't one.
-Shared by every tool that reads or writes files (cycls/_agent/tools, cycls/_agent/design)."""
+"""A tool's path resolved inside the workspace, shared by cycls/_agent/tools and cycls/_agent/design."""
 import os, pathlib
 from . import credentials
 

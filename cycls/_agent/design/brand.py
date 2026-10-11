@@ -1,5 +1,4 @@
-"""Colours, and the workspace's brand kit, for a design: a hex read as one, the kit's
-colours and fonts, and which ink reads on which ground."""
+"""Colours and the workspace brand kit for a design."""
 import pathlib, re
 
 
@@ -15,12 +14,8 @@ def _norm_hex(c):
 
 
 def _load_brand(root):
-    """The workspace brand kit — `brand/brand.yaml`, written by the brand-kit skill —
-    as {primary, accent, heading, body} (any may be None), or None when there is no
-    kit or it names neither a hex primary nor a font. Reads the flat keys
-    (`primary_color: "#0c2340"`, `font_heading: "Playfair Display"`) and the older
-    nested ones (`colors:` / `  primary: …`, `fonts:` / `  heading: …`) with a
-    pattern, not a YAML parser — the SDK carries no YAML dependency."""
+    """`brand/brand.yaml` as {primary, accent, heading, body}, or None without a primary or a font.
+    Flat and nested keys are matched by pattern: the SDK carries no YAML dependency."""
     try:
         text = (pathlib.Path(root) / "brand" / "brand.yaml").read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -46,10 +41,7 @@ _BRAND_COLOR_KEYS = ("primary", "secondary", "accent", "background", "text", "ne
 
 
 def _brand_palette(root):
-    """The brand kit's named colours for the design editor's Brand variables —
-    {primary, secondary, accent, background, text, neutral}, each only when
-    `brand/brand.yaml` gives it a hex, flat (`secondary_color: "#…"`) or nested under
-    `colors:`. Unlike `_load_brand`, nothing is inferred (no accent from primary)."""
+    """The kit's named colours for the editor's Brand variables; unlike `_load_brand`, nothing is inferred."""
     try:
         text = (pathlib.Path(root) / "brand" / "brand.yaml").read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):

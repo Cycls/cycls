@@ -1,6 +1,4 @@
-"""Design generation for Cycls agents — a thin client to the shared cycls-design
-service. The SDK ships this client; the service is deployed
-once. See docs/notes/design.md."""
+"""Design generation — a thin client to the shared cycls-design service. See docs/notes/design.md."""
 from .client import (Rendered, Unavailable, apply, configured, evaluate, export, export_page, inspect, outline,
                      render, slides)
 

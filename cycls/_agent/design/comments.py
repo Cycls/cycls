@@ -1,29 +1,6 @@
-"""Comments on a design — a pin on a spot of a slide, and the thread under it
-(docs/notes/design.md, "Comments").
-
-Kept by Cycls beside the workspace, not in the `.fig`: a comment is then no save of the
-design (no version kept, no image exported again, nothing for the one who saves to
-refuse), it is there where there is no editor — a preview, a deck's slides, a document's
-pages — and a design rendered again from its source keeps what was said about it.
-
-One record a design, in the workspace's own shelf (`.comments` — a person's `.db` is
-theirs alone, and a teammate would never see what was written there): {path, born, rev,
-seq, threads}. Every change reads it, changes it and writes it back only if nobody wrote
-in between (`gen`), so two people commenting at the same moment both land; the server
-runs on several instances and none of them holds anything. `version` — `<born>.<rev>` —
-is what a browser names when it asks again, to be told nothing changed.
-
-A thread: {id, n, page?, frame, frame_name?, x, y, author, text, at, updated, edited?,
-resolved, resolved_by?, resolved_at?, replies: [{id, author, text, at, edited?}]}. `n` is
-its number in the design, given once (`seq`) and never again, so "comment 3" stays
-comment 3 after comment 1 is removed. Where it is pinned is a slide — its place on the
-page from 0, and its name, which is what finds it again (`place`) — and a point on it
-in the slide's own pixels. A node's id is no anchor: the `.fig` numbers its nodes anew on
-every save.
-
-The record is filed under its design's path, as its versions are: it follows a rename
-(`move`), goes to the trash with the design and comes back with it (`shelve` /
-`unshelve`), and ends when the trash entry does (`drop`)."""
+"""Comment threads pinned on a design's slides (docs/notes/design.md, "Comments"). Kept in the
+workspace's shared `.comments` shelf, not the .fig, so a comment is no save; one record per design,
+written only if unchanged since read (`gen`) — the server runs on several instances."""
 import hashlib, math, secrets
 from datetime import datetime, timezone
 
@@ -52,8 +29,7 @@ def usable(ws):
 
 
 def db(ws):
-    """The workspace's shelf of comments: the org is the target, so `workspace()` adds no
-    person to the path and everyone the workspace lets in reads the same records."""
+    """The workspace's comment shelf, keyed by org (no person in the path) so every member shares it."""
     return DB(workspace(ws.subject.partition(":")[0], ws.volume, base=ws.base, slot=SLOT, ws=ws.ws))
 
 
@@ -71,7 +47,7 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def version_of(doc):
+def version_of(doc):   # `<born>.<rev>`: what a browser sends back to be told nothing changed
     return f"{doc['born']}.{doc['rev']}" if doc else "0"
 
 
@@ -85,12 +61,8 @@ def open_threads(doc):
 
 
 def place(thread, names):
-    """Which of a page's slides — `names`, in order — a thread is on now, from 0, or None
-    when its slide is gone. A slide's name is given once and kept (the design service
-    never renames one: a slide moved or rebuilt is still `slide-3`), so the name finds
-    the slide wherever it is now, and a name no slide has is a slide that was deleted —
-    not whichever slide took its place. A page of one slide has everything pinned on
-    it; a thread that names no slide, or a name several share, goes by the place."""
+    """The index in `names` of the slide a thread is on now, or None if it was deleted. The service
+    never renames a slide, so the name finds it after a move; no name or a shared one goes by place."""
     at, name = thread.get("frame", 0), thread.get("frame_name")
     if len(names) == 1:
         return 0
@@ -104,17 +76,14 @@ def place(thread, names):
 
 
 def on_page(threads, page, pages):
-    """The threads pinned on `page` of a design whose pages are named `pages`, in order.
-    A design of one page has them all — its page renamed is still its page; with
-    several, a thread is on the page it names (the first, when it names none)."""
+    """Threads on `page`: all for a one-page design, else those naming it (none named = the first)."""
     if len(pages or []) <= 1:
         return list(threads)
     return [t for t in threads if (t.get("page") or pages[0]) == page]
 
 
 def node_at(nodes, x, y):
-    """The part of a slide a point is on — an outline's `nodes` are in paint order, so
-    the last whose box holds the point is the one on top there — or None."""
+    """The topmost outline node under a point (`nodes` are in paint order), or None."""
     for n in reversed(nodes or []):
         try:
             if n["x"] <= x <= n["x"] + n["w"] and n["y"] <= y <= n["y"] + n["h"]:
@@ -147,7 +116,7 @@ def _words(raw, most):
 
 
 def _spot(at):
-    """Where a pin is: {page?, frame, frame_name?, x, y}, checked."""
+    """Where a pin is: {page?, frame, frame_name?, x, y}, checked; never a node id (renumbered on save)."""
     at = at if isinstance(at, dict) else {}
     frame = at.get("frame")
     if not isinstance(frame, int) or isinstance(frame, bool) or not 0 <= frame < 1000:
@@ -167,8 +136,7 @@ def _spot(at):
 
 
 def author(user_id, name=None, image=None, agent=False):
-    """Who wrote it: the id is the signed-in person's (never the request's), the name
-    what the browser calls them."""
+    """Who wrote it: the signed-in person's id (never the request's) and the browser's name for them."""
     who = {"id": str(user_id), "name": _words(name, NAME_MAX) or ("Super" if agent else "Someone")}
     if isinstance(image, str) and image.startswith("https://") and len(image) <= 600:
         who["image"] = image
@@ -180,8 +148,7 @@ def author(user_id, name=None, image=None, agent=False):
 # ---- changing a design's record ----
 
 async def _update(ws, rel, change):
-    """Read the record, let `change(doc)` alter it, and write it back if nobody wrote in
-    between — else again, on what they wrote. → (what `change` returned, the version)."""
+    """Apply `change(doc)`; write back unless someone wrote in between, else retry → (result, version)."""
     store, key = db(ws), _key(rel)
     for _ in range(_TRIES):
         doc, gen = await store.get_gen(key)
@@ -219,7 +186,7 @@ async def add(ws, rel, who, text, at):
     def change(doc):
         if len(open_threads(doc)) >= THREADS_MAX:
             raise Refused(f"This design has {THREADS_MAX} open comments — resolve some first.", 409)
-        doc["seq"] = int(doc.get("seq") or 0) + 1
+        doc["seq"] = int(doc.get("seq") or 0) + 1   # `n` is never reused: comment 3 stays 3
         now = _now()
         thread = {"id": secrets.token_hex(5), "n": doc["seq"], **spot, "author": who, "text": text,
                   "at": now, "updated": now, "resolved": False, "replies": []}
@@ -230,10 +197,8 @@ async def add(ws, rel, who, text, at):
 
 
 async def change(ws, rel, tid, op, who, body=None):
-    """One change to thread `tid` by `who`: reply {text} · resolve · reopen · edit {text,
-    reply?} · delete {reply?} · move {frame, x, y, page?, frame_name?}. Anyone the
-    workspace lets in answers, resolves and reopens; the words and the pin are their
-    author's. → (the thread — None once it is deleted — and the version)."""
+    """One op on thread `tid`: reply, resolve, reopen (anyone) or edit, delete, move (author only)
+    → (the thread, None once deleted; the version)."""
     body = body if isinstance(body, dict) else {}
     if op not in ("reply", "resolve", "reopen", "edit", "delete", "move"):
         raise Refused("`op` is reply, resolve, reopen, edit, delete or move.")
@@ -292,8 +257,7 @@ def _reopen(thread):
 # ---- the design renamed, deleted, brought back ----
 
 async def _carry(ws, src, dst, rel=None):
-    """The record at key `src` becomes the one at `dst` — and whatever was left at `dst`
-    by a design that is gone does not become this one's."""
+    """Move the record at key `src` to `dst`, clearing any stale record left at `dst`."""
     store = db(ws)
     doc = await store.get(src)
     await store.delete(dst)
@@ -310,13 +274,12 @@ async def move(ws, src, dst):
 
 
 async def shelve(ws, rel, tid):
-    """A design moved to the trash takes its comments along, under its trash entry — a
-    new design given the same name starts with none."""
+    """A trashed design's comments go under its trash entry; a new one of that name starts with none."""
     await _carry(ws, _key(rel), _shelf(tid))
 
 
 async def unshelve(ws, tid, rel):
-    """…and they come back with it, to wherever it was restored."""
+    """A restored design's comments come back with it."""
     await _carry(ws, _shelf(tid), _key(rel), rel)
 
 

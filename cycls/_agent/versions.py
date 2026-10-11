@@ -1,16 +1,6 @@
-"""Earlier versions of a design, kept as it's overwritten (docs/notes/design.md).
-
-A snapshot is the bytes a write is about to replace, kept at
-`.versions/<path>/<id>`; `.versions/<path>/index.json` lists them —
-[{id, at, by, reason, intent?, size}], oldest first — so showing the history is one
-read. The editor's autosaves keep one at most every GAP seconds (an editing
-session's starting point, then its progress); an agent edit, a restore and a "keep
-mine" overwrite always keep one. The newest KEEP per file stay, none older than
-TTL_DAYS. Ids are the trash's (`trash.new_id`).
-
-`.versions` is managed by cycls: the files routes and the agent's tools refuse it,
-and it is masked in the bash sandbox (as `.trash` is).
-"""
+"""Earlier versions of a design, kept as it's overwritten: `.versions/<path>/<id>` plus an index.json.
+The newest KEEP per file stay, none older than TTL_DAYS. Managed by cycls: refused by the routes and tools,
+masked in the sandbox."""
 import json
 import re
 import shutil
@@ -58,8 +48,7 @@ def _sweep(d, entries):
 
 
 def snapshot(root, rel, data, *, by, reason, intent=None, always=False):
-    """Keep `data` — what's at `rel` before it's overwritten — as a version. An autosave
-    (`always` False) keeps one at most every GAP seconds per file. → the id, or None."""
+    """Keep `data`, what `rel` held before a write, as a version → its id; None for an autosave within GAP."""
     key = (str(Path(root)), rel)
     now = time.time()
     if not always and now - _last.get(key, 0) < GAP:
@@ -94,8 +83,7 @@ def read(root, rel, vid):
 
 
 def move(root, src, dst):
-    """A renamed file keeps its history. The history is a directory, and the gcsfuse
-    workspace mount can't rename one (EMFILE) — `shutil.move` falls back to copy + delete."""
+    """A renamed file keeps its history; gcsfuse can't rename a directory (EMFILE), so shutil.move copies."""
     s, d = _dir(root, src), _dir(root, dst)
     if s.is_dir() and not d.exists():
         d.parent.mkdir(parents=True, exist_ok=True)

@@ -1,15 +1,12 @@
-"""What the model wrote, made ready for the service: a spec and its pages, a deck of
-layouts, a document, a slide, an edit's ops — sizes named, numbers read, images placed,
-the brand applied. Every `_prepare_*` returns what to send, or an error the model can act on."""
+"""The model's specs, decks, documents, slides and edit ops made ready for the design service.
+Every `_prepare_*` returns what to send, or an error the model can act on."""
 import json, pathlib, re
 from ..paths import _resolve_path
 from .brand import _HEX, _contrast, _first_color, _load_brand, _norm_hex, _readable_on
 from .images import _BRAND_LOGOS, _DESIGN_IMAGES_MAX, _DESIGN_SVG_MAX, _image_slot, _place_image
 
 
-# Named sizes a spec may pass as `size` instead of [W, H], so a common format is
-# never guessed or mis-sized. The A4 poster is 150dpi — the default @2x render
-# lands it at print-quality 300dpi.
+# preset `size` names; a4-poster is 150dpi, so the default @2x render prints at 300dpi
 _DESIGN_SIZES = {
     "square": [1080, 1080], "post-portrait": [1080, 1350],
     "story": [1080, 1920], "reel": [1080, 1920],
@@ -33,9 +30,7 @@ def _num(v):
 
 
 def _frame_size(fr):
-    """A frame's [W, H] from whatever shape the model gave it — [W, H], a preset
-    name, "1080x1920", {w, h}, or width/height keys on the frame — else the
-    renderer's own 1080² default. Raises ValueError for anything else."""
+    """A frame's [W, H] from any shape the model gave it (default 1080²); ValueError otherwise."""
     s = fr.get("size")
     if s is None and "width" in fr and "height" in fr:
         s = [fr.pop("width"), fr.pop("height")]
@@ -56,14 +51,8 @@ def _frame_size(fr):
 
 
 def _prepare_spec(spec, brand, root=None):
-    """The spec the service renders, made safe to draw: preset sizes resolved to
-    [W, H]; a node with `text` but no `type` typed as text (the renderer silently
-    drops an untyped node); fonts mapped onto Inter; image `src` files read from the
-    workspace under `root` and placed (see _place_image); with a brand kit, a frame
-    `fill` left out becomes the brand primary and a shape `fill` the accent; text
-    with no colour gets white or near-black against its frame. Never overrides a
-    colour the model set. A copy — the model's input stays as written. Returns
-    (spec, error, notes), notes being lines for the model's ack."""
+    """A spec made safe to render — sizes resolved, untyped nodes typed (the renderer drops them),
+    images placed, brand defaults filled, never over a colour set — on a copy → (spec, error, notes)."""
     if isinstance(spec.get("deck"), dict):
         return _prepare_deck(spec, brand, root)
     if spec.get("pages") is not None:
@@ -72,7 +61,7 @@ def _prepare_spec(spec, brand, root=None):
     spec = json.loads(json.dumps(spec))
     frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
     filled, branded_fonts, image_bytes = 0, 0, 0
-    shapes = []                 # what was written another way and read as what it meant: said, once each
+    shapes = []                 # notes on nodes reinterpreted, once each
     first_size = None
     for i, fr in enumerate(frames, 1):
         if not isinstance(fr, dict):
@@ -81,8 +70,7 @@ def _prepare_spec(spec, brand, root=None):
             fr["size"] = W, H = _frame_size(fr)
         except ValueError as e:
             return None, f"Error: {e}.", []
-        # A deck is one size: PowerPoint takes the first slide's size for the whole
-        # file and letterboxes the rest.
+        # PowerPoint takes slide 1's size for the whole file and letterboxes the rest
         if first_size is None:
             first_size = [W, H]
         elif [W, H] != first_size:
@@ -99,7 +87,7 @@ def _prepare_spec(spec, brand, root=None):
             if n.get("type") is None and ("text" in n or "src" in n):
                 n["type"] = "text" if "text" in n else "image"
             if n.get("type") in ("radial", "linear", "angular", "diamond") and isinstance(n.get("gradient"), list):
-                # A fill, written where a node goes: a glow (or a wash) over the frame.
+                # a gradient written as a node: a full-frame rect with that fill
                 fill = {k: n[k] for k in ("gradient", "center", "radius", "angle") if n.get(k) is not None}
                 fill["type"] = n["type"]
                 keep = {k: n[k] for k in ("id", "opacity") if n.get(k) is not None}
@@ -112,18 +100,16 @@ def _prepare_spec(spec, brand, root=None):
                 if isinstance(items, str):
                     items = [line for line in items.splitlines() if line.strip()]
                 if isinstance(items, list):
-                    # A point is its words: {"text": …} and a marker typed in front are read as that.
+                    # {"text": …} items and typed bullet markers → plain strings
                     items = [i["text"] if isinstance(i, dict) and isinstance(i.get("text"), str) and "runs" not in i else i for i in items]
                     n["items"] = [re.sub(r"^\s*(?:[-–—•*·▪●]|\d{1,2}[.)])\s+", "", i).strip() if isinstance(i, str) else i for i in items]
-            for k in _NUMERIC:                           # "1500" would reach the renderer as a string —
-                if k in n and n[k] is not None and _num(n[k]) is None:     # and a string y sinks the text
+            for k in _NUMERIC:                           # a string "1500" as y sinks the text
+                if k in n and n[k] is not None and _num(n[k]) is None:
                     return f"Error: `{k}` must be a number, not {n[k]!r} ({json.dumps(n)[:80]})."
                 if k in n and n[k] is not None:
                     n[k] = _num(n[k])
             if n.get("type") == "text":
-                # Fonts go to the service as written — it resolves any Google Font
-                # (and says what it swapped). A brand kit's fonts fill in where the spec
-                # named none: the heading face for display sizes, the body face below.
+                # the service resolves fonts; a brand kit fills unset ones (heading ≥48px, else body)
                 if brand and n.get("font") is None:
                     face = brand["heading"] if (n.get("size") or 32) >= 48 else brand["body"]
                     face = face or brand["heading"] or brand["body"]
@@ -133,7 +119,7 @@ def _prepare_spec(spec, brand, root=None):
                     n["color"] = _readable_on(bg)
             elif n.get("type") in ("rect", "ellipse", "line"):
                 if n.get("fill") is None and n.get("color") is not None:
-                    n["fill"] = n.pop("color")          # a shape draws `fill` only — as text reads either
+                    n["fill"] = n.pop("color")          # a shape draws only `fill`
                 if brand and brand["accent"] and n.get("fill") is None and not n.get("stroke"):
                     n["fill"], filled = brand["accent"], filled + 1
             elif n.get("type") == "image":
@@ -165,7 +151,6 @@ def _prepare_spec(spec, brand, root=None):
                     return "Error: a chart needs `data`: {labels:[…], series:[{name, values:[…]}]}."
                 if kind == "table" and not isinstance(n.get("rows"), list):
                     return "Error: a table needs `rows` (a list of rows, each a list of cells) and usually `columns`."
-                # Marks and text-bearing nodes read on their background like text does.
                 if bg and n.get("color") is None and kind != "svg":
                     n["color"] = _readable_on(bg)
                 if brand and n.get("font") is None and kind in ("list", "chart", "table") and brand["body"]:
@@ -183,9 +168,7 @@ def _prepare_spec(spec, brand, root=None):
                 return (f"Error: a node has type {n.get('type')!r} ({json.dumps(n)[:80]}) — "
                         f"every node needs a `type`: text, rect, ellipse, line, image, stack, list, "
                         f"table, chart, icon, svg or qr.")
-            # Content placed wholly outside the frame is a layout built for another size:
-            # the renderer would clamp every such text box to the edge, piling it up.
-            # (A stack places its children itself.)
+            # outside the frame = laid out for another size; the renderer would pile it on the edge
             if top and n["type"] not in ("rect", "ellipse", "line") and ((n.get("x") or 0) >= W or (n.get("y") or 0) >= H):
                 what = repr(n.get("text"))[:40] if n["type"] == "text" else f"a{'n' if n['type'] == 'image' else ''} {n['type']}"
                 return (f"Error: {what} starts at ({n.get('x') or 0}, {n.get('y') or 0}), outside the "
@@ -210,8 +193,7 @@ def _prepare_spec(spec, brand, root=None):
 
 
 def _prepare_pages(spec, brand, root):
-    """A design of several pages — its variants — each prepared as a design of its own
-    (its own size; a carousel's frames one size). → (spec, error, notes)."""
+    """A design of several pages, each prepared as a design of its own → (spec, error, notes)."""
     pages = spec.get("pages")
     if not isinstance(pages, list) or not pages:
         return None, ('Error: `pages` is a list of pages, each a design with a name: '
@@ -241,9 +223,7 @@ _DECK_THEMES = ("minimal-light", "minimal-dark", "bold-gradient", "editorial", "
 
 
 def _brand_theme(brand):
-    """The deck theme a brand kit makes, on the minimal-light base: the primary as the
-    hero (title, section and closing slides), the accent for highlights — swapped for
-    the primary where it wouldn't read as text on white — and the brand's fonts."""
+    """A minimal-light deck theme from a brand kit: primary hero, accent legible on white, its fonts."""
     primary, accent = brand.get("primary"), brand.get("accent") or brand.get("primary")
     theme = {"base": "minimal-light", "name": "brand"}
     hero_text = None
@@ -263,12 +243,8 @@ def _brand_theme(brand):
 
 
 def _prepare_deck(spec, brand, root):
-    """A deck of layouts — {deck: {theme, slides: [{layout, …}]}} — made ready for the
-    service, which lays it out (cycls-design layouts.js): the size resolved; image slots
-    (a slide's `image`, a team member's `photo`, the deck's `logo` and footer logo) read
-    from the workspace; theme "brand" — or no theme, when the workspace has a brand kit —
-    built from the brand kit, with brand/logo.* as the deck logo; a custom slide's
-    `nodes` prepared like a single design's. → (spec, error, notes)."""
+    """A deck of layouts made ready for the service (cycls-design layouts.js): size resolved, image
+    slots read, the brand kit as theme when there is one → (spec, error, notes)."""
     spec = json.loads(json.dumps(spec))
     deck = spec["deck"]
     slides = deck.get("slides")
@@ -329,7 +305,7 @@ def _prepare_deck(spec, brand, root):
 _PAPER = {"a4": [1240, 1754], "letter": [1275, 1650], "a5": [874, 1240], "a3": [1754, 2480]}   # px at 150 dpi
 
 
-_SHEET_ROWS = 2000      # rows read from a spreadsheet for a chart or a table
+_SHEET_ROWS = 2000      # max rows read from a spreadsheet
 
 
 def _number(text):
@@ -352,8 +328,7 @@ def _number(text):
 
 
 def _sheet(src, root, sheet=None):
-    """A workspace spreadsheet — .csv / .tsv, or .xlsx (its first sheet, or `sheet`) —
-    → (columns, rows): the first row names the columns. Raises ValueError with the fix."""
+    """A workspace .csv / .tsv / .xlsx → (columns, rows, cell); ValueError with the fix."""
     if not isinstance(src, str) or not src.strip():
         raise ValueError('`from` is a workspace spreadsheet, e.g. "data/sales.csv"')
     path = _resolve_path(src, root)
@@ -389,10 +364,7 @@ def _sheet(src, root, sheet=None):
 
 
 def _block_data(b, root):
-    """A chart or a table that names its data — {"from": "data/sales.csv", …} — filled
-    from that file: a chart's `x` (the column of labels; the first when not said) and `y`
-    (the columns of numbers; every one when not said), a table's `columns` (a choice, in
-    order) and `limit`. Raises ValueError with the fix."""
+    """Fill a chart or table block that names a spreadsheet (`from`); ValueError with the fix."""
     chart, table = b.get("chart"), b.get("table")
     if isinstance(chart, dict) and chart.get("from"):
         columns, rows, cell = _sheet(chart["from"], root, chart.get("sheet"))
@@ -434,12 +406,8 @@ def _block_data(b, root):
 
 
 def _prepare_document(spec, brand, root):
-    """A document — {document: {title, sections: [{title, blocks: […]}]}} — made ready for
-    the service, which designs and paginates it (cycls-design document.js / flow.js):
-    every image (the cover's, the logo, an `image` block's, wherever it sits) read from
-    the workspace; theme "brand" — or no theme, when the workspace has a brand kit —
-    built from the kit, with brand/logo.* as the logo; hand-built `nodes` and `pages`
-    prepared like a single design's. → (spec, error, notes)."""
+    """A document made ready for the service (cycls-design document.js / flow.js): images read,
+    the brand kit as theme when there is one, hand-built nodes prepared → (spec, error, notes)."""
     spec = json.loads(json.dumps(spec))
     doc = spec["document"]
     sections = doc.get("sections")
@@ -480,7 +448,7 @@ def _prepare_document(spec, brand, root):
             b["columns"] = [[block(x) for x in col] if isinstance(col, list) else block(col) for col in b["columns"]]
         if isinstance(b.get("nodes"), list):
             b["nodes"] = nodes_of(b["nodes"], [100000, 100000])
-        _block_data(b, root)                                  # a chart / a table read from a spreadsheet
+        _block_data(b, root)
         return b
 
     theme = doc.get("theme")
@@ -522,9 +490,8 @@ _OP_NUMERIC = ("x", "y", "dx", "dy", "w", "h", "size", "radius", "opacity", "let
 
 
 def _prepare_ops(ops, root):
-    """Edit ops made safe to send: numbers the model quoted become numbers; a
-    replace_image `src` (a workspace file) becomes the image bytes; an `add`ed node
-    goes through the render path (types, numbers, image files). → (ops, error)."""
+    """Edit ops made safe to send: numbers read, replace_image files placed, added nodes and pages
+    prepared as a render's are → (ops, error)."""
     if not isinstance(ops, list):
         return None, "Error: `ops` must be a list of operations."
     ops = json.loads(json.dumps(ops))
@@ -551,7 +518,6 @@ def _prepare_ops(ops, root):
                 return None, err.replace("Error: ", f"Error: op {k}: ", 1)
             op["node"] = spec["nodes"][0]
         elif op["op"] == "page_add":
-            # A new page is a design: prepared as a render's is (sizes, brand, images).
             if not isinstance(op.get("spec"), dict) or op["spec"].get("deck") or op["spec"].get("pages"):
                 return None, (f"Error: op {k}: `page_add` needs `spec` — the page's design, "
                               f"{{size, fill, nodes}} (or a carousel's {{frames}}).")
@@ -563,17 +529,14 @@ def _prepare_ops(ops, root):
 
 
 def _mend_json_tail(text):
-    """JSON text that is right up to its last value and closed with the wrong brackets —
-    one too many, one too few, a `]` for a `}` — read as closed where its content ends.
-    → the object, or None when that is not what is wrong with it: broken anywhere else,
-    cut off inside a string or after a comma, or ending with no closing bracket at all (it
-    ran out of room, and more than brackets is missing)."""
+    """JSON valid up to its last value but closed with the wrong brackets → the object, re-closed;
+    None if anything else is wrong (broken earlier, or cut off with no closing bracket)."""
     body = text.rstrip()
     tail = len(body)
     while tail and body[tail - 1] in "]} \t\r\n":
         tail -= 1
     if tail == len(body):
-        return None                                           # no closing bracket at its end: cut off
+        return None                                           # no closing bracket: truncated
     stack, quoted, escaped = [], False, False
     for ch in body[:tail]:
         if quoted:
@@ -589,7 +552,7 @@ def _mend_json_tail(text):
             stack.append("}" if ch == "{" else "]")
         elif ch in "}]":
             if not stack or stack.pop() != ch:
-                return None                                   # wrong before its end
+                return None                                   # mismatched before the tail
     if quoted or not stack:
         return None
     try:
@@ -599,8 +562,7 @@ def _mend_json_tail(text):
 
 
 def _prepare_slide(slide, settings, root):
-    """A new or rebuilt slide, made ready the way a deck's slides are (_prepare_deck):
-    → (slide, the deck settings with their images resolved, error)."""
+    """One slide prepared as a deck's are → (slide, deck settings with images resolved, error)."""
     if not isinstance(slide, dict) or not (slide.get("layout") or isinstance(slide.get("nodes"), list)):
         return None, None, ('Error: `slide` is a layout slide ({"layout": "bullets", "title": …, "bullets": […]}) '
                             'or a hand-built one ({"nodes": […], "fill"?}).')

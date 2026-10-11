@@ -14,28 +14,15 @@ import { track } from "../lib/analytics";
 import { t } from "../lib/i18n";
 import { cn } from "../lib/utils";
 
-// A design deck on the canvas — what a multi-slide Design render opens. `data` is
-// the deck's slide manifest (?as=slides on its deck document or .fig — rendered by
-// the design service, cached by the server):
-//   { count, slides: [data-URI], sizes, names, titles, notes, transitions, fig }
-// Two ways to look at it — a filmstrip beside the current slide (with its speaker
-// notes), or a grid of every slide — plus Present (full screen, present-mode.tsx),
-// the whole deck as PowerPoint or PDF, and Edit, which swaps in the design editor
-// on the deck's .fig (the same editor a single design opens in).
-//
-// An agent `edit` of this deck is applied and saved on the server before its UI
-// event arrives; while the deck (not the editor) is showing, that event just means
-// "the slides changed" — refetch the manifest.
+// A multi-slide design on the canvas. `data` is its slide manifest (?as=slides on the deck or .fig).
 
-// A deck viewer's own slide change (slides from 1): reorder by drag, duplicate, delete;
-// a slide to start from, added after slide `number`; a slide's speaker notes.
+// Slide numbers are 1-based.
 export type DeckOp =
   | { op: "move" | "duplicate" | "delete"; number: number; to?: number }
   | { op: "add"; number?: number; title?: string; text?: string }
   | { op: "notes"; number: number; notes: string };
 
-// A slide's speaker notes, to write: saved on leaving the box when they changed (Escape
-// leaves them as they were). Typing here is typing — the keys that page the deck stay in the box.
+// Saved on blur, reverted on Escape. Keys stay in the box so typing doesn't page the deck.
 function NotesBox({ value, onSave }: { value: string; onSave: (notes: string) => void }) {
   const [draft, setDraft] = useState(value);
   const left = useRef(false);
@@ -68,14 +55,11 @@ export interface DeckManifest {
   transitions?: string[];
   polls?: (DeckPoll | null)[];   // a poll slide's live poll
   fig?: string;
-  // The design's pages — its variants — and the one these slides are (a manifest is one page).
-  pages?: { name: string; frames: number }[];
+  pages?: { name: string; frames: number }[];   // the design's pages (variants); a manifest is one of them
   page?: string;
-  // "document": paper pages that text flows over (a report) — read and downloaded as a PDF.
-  kind?: string;
+  kind?: string;   // "document": flowing paper pages, like a report
 }
 
-// A design's pages, to pick one: what a preview shows, a page at a time.
 export function PageTabs({ pages, page, onPick }: { pages: string[]; page: string; onPick: (page: string) => void }) {
   return (
     <div role="tablist" aria-label={t("pages")} data-testid="design-pages"
@@ -101,9 +85,6 @@ export function parseDeck(data: string): DeckManifest | null {
   }
 }
 
-// Edit | Preview for a design: the editor, or what it looks like without the editor
-// around it. One control wherever a design is open — a deck in the viewer, a design in
-// the canvas — so it is always the same switch.
 export function EditPreviewSwitch({ previewing, onEdit, onPreview }: {
   previewing: boolean;
   onEdit: () => void;
@@ -151,13 +132,12 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
   useEscape(() => setConfirmDelete(null), confirmDelete !== null);
   const railRef = useRef<HTMLDivElement>(null);
   const fig = deck?.fig;
-  // A document's pages are numbered and listed in its contents: they aren't moved or removed one by one.
+  // A document's pages are numbered in its contents: no per-page edits.
   const onSlideOp = deck?.kind === "document" ? undefined : changeSlides;
   const name = baseName(fig || path);
   const canEdit = !!(designEditorUrl && writeFile && openFile && fig);
   const hasNotes = !!deck?.notes?.some((n) => n && n.trim());
-  // What people pinned on this design (lib/comments.ts) — where the page can comment. A
-  // pin names its slide, so it is found again after the slides are reordered.
+  // A comment pin names its slide, so it is found again after a reorder.
   const picture = useRef<HTMLImageElement>(null);
   const names = useMemo(() => Array.from({ length: count }, (_, i) => deck?.names?.[i] ?? ""), [deck, count]);
   const pageNames = useMemo(() => (deck?.pages ?? []).map((p) => p.name), [deck]);
@@ -167,19 +147,18 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
 
   useEffect(() => { if (count) track("deck_opened", { slides: count }); }, [path, count > 0]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Keep the current thumbnail in view while paging.
   useEffect(() => {
     railRef.current?.querySelector(`[data-slide="${nav.active}"]`)?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
   }, [nav.active]);
 
-  // The slide that was added is the one in view, once the deck has it.
+  // Go to an added slide once the refetched deck has it.
   useEffect(() => {
     if (goTo == null || goTo >= count) return;
     nav.go(goTo);
     setGoTo(null);
   }, [goTo, count]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  // An agent edit of this deck landed (the server already saved it): new slides.
+  // An agent edit is saved server-side before its event arrives: just refetch.
   useEffect(() => {
     if (!fig || !onReload || editing) return;
     const onCommand = (e: Event) => {
@@ -200,13 +179,12 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
   const download = (format: "pptx" | "pdf" | "images") => {
     if (!openFile) return;
     track("deck_exported", { format });
-    // One page of several: that page's slides, in a file named for it.
+    // A multi-page design exports only the page on screen.
     const page = deck.pages && deck.pages.length > 1 ? deck.page : undefined;
     openFile(`${path}?as=${format}${page ? `&page=${encodeURIComponent(page)}` : ""}`)
       .then((url) => saveBlob(url, `${name}${page ? `-${page}` : ""}.${format === "images" ? "zip" : format}`)).catch(() => {});
   };
-  // A carousel (square or portrait slides) is posted as images: they come first. A
-  // document is a PDF before it is anything else.
+  // A document lists PDF first; a carousel (square or portrait) lists images first.
   const [w, h] = deck.sizes?.[0] ?? [16, 9];
   const paper = deck.kind === "document";
   const images = { label: t("imagesZip"), onClick: () => download("images") };
@@ -222,9 +200,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
     if (!canEdit || !fig) return;
     try { setEditing(await openFile!(fig)); } catch { /* the toast already said why */ }
   };
-  // A slide change runs on the deck's .fig on the server; then the slides are fetched
-  // again. An editor open on that .fig elsewhere saves first and reopens after, so its
-  // next save isn't taken for someone else's change.
+  // An editor open on this .fig saves first and reloads after, so its next save doesn't undo the change.
   const slideOp = async (op: DeckOp) => {
     if (!onSlideOp || busy) return;
     setBusy(true);
@@ -239,7 +215,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
       setBusy(false);
     }
   };
-  // Done: the editor saves what's unsaved first, so the slides reload with it.
+  // Flush first so the reloaded slides carry unsaved edits.
   const doneEditing = async () => {
     if (fig) await flushDesignEditor(fig, 5000);
     if (editing) URL.revokeObjectURL(editing);
@@ -254,12 +230,10 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
           <span className="min-w-0 truncate">{fig}</span>
           <div className="flex-1" />
           <DesignPresenceRow path={fig} />
-          {/* (An editor from before it pins comments: they are on the slides, back in the viewer.) */}
+          {/* An editor that can't pin comments sends them back to the viewer's slides. */}
           <CommentButtons path={fig} onComment={(adding) => { if (adding && !designEditorComments(fig)) void doneEditing(); }}
                           onList={() => { if (!designEditorComments(fig)) void doneEditing(); }} />
           <EditPreviewSwitch previewing={false} onEdit={() => {}} onPreview={() => void doneEditing()} />
-          {/* The deck's editor goes full screen like a design's does (a .fig open in
-              the canvas has this button in its header; a deck's editor had none). */}
           {canFullscreen() && (
             <button onClick={() => fullscreenDesignEditor(fig)} aria-label={t("fullScreen")} title={t("fullScreen")}
                     className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer">
@@ -277,7 +251,6 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
     );
   }
 
-  // A slide to start from, after slide `after` (from 1): the deck's own kind of slide, titled so it reads as new.
   const addSlide = (after: number) => void slideOp({ op: "add", number: after, title: t("newSlideTitle"), text: t("newSlideText") });
   const tool = "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors cursor-pointer";
   const note = deck.notes?.[nav.active]?.trim();
@@ -285,7 +258,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
   return (
     <div className="relative flex h-full flex-col outline-none" tabIndex={0} data-testid="deck-view"
          onKeyDown={(e) => {
-           // C: comment mode — the next click on the slide pins a comment.
+           // C toggles comment mode: the next click on the slide pins one.
            if (comments && e.key.toLowerCase() === "c" && !e.metaKey && !e.ctrlKey && !e.altKey) {
              e.preventDefault();
              setMode("stage");
@@ -340,7 +313,6 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
             {deck.slides.map((src, i) => (
-              // The owner drags a card onto another to move it there.
               <div key={i} data-testid="grid-slide" draggable={!!onSlideOp && !busy}
                    onDragStart={(e) => { setDrag(i); e.dataTransfer.effectAllowed = "move"; }}
                    onDragOver={(e) => { if (drag != null) { e.preventDefault(); setOver(i); } }}
@@ -426,7 +398,6 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
                 </div>
               )}
             </div>
-            {/* The owner writes them here; anyone else reads them (when the deck has any). */}
             {onSlideOp ? (
               <div className="max-h-32 shrink-0 overflow-y-auto border-t border-border px-4 py-2 text-xs">
                 <div className="mb-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">{t("speakerNotes")}</div>

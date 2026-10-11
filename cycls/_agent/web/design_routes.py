@@ -1,12 +1,5 @@
-"""Designs, as the app is served them and as it changes them.
-
-The helpers turn a saved design into what a viewer needs — its slides, its exports, each
-cached against the `.fig` it was made from — and `design_router` holds the routes that
-act on a design: a deck's slides changed in the viewer (/deck), a new design, an export
-written beside it, the live room of a design open together (/design/*), the workspace's
-brand kit (/brand), a design's earlier versions (/versions) and what is said about it
-(/comments). A design's own bytes are read and saved by the files routes (routers.py),
-which ask these helpers for `?as=…`."""
+"""Design routes (/deck, /design/*, /brand, /versions, /comments), and the cached slide and export
+renders the files routes serve for `?as=…`."""
 import asyncio, base64, hashlib, json, re, shutil, tempfile, unicodedata, uuid, zipfile
 from pathlib import Path
 from typing import Any
@@ -19,18 +12,7 @@ from cycls._agent.design import refresh as design_refresh
 from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, resolve_path
 
 
-# Designs as decks. A multi-frame render writes `designs/<name>.deck.json` (the deck
-# document) beside its `.fig`; either one previews slide by slide (?as=slides — a
-# manifest the deck viewer shows and presents) and exports the whole deck on demand
-# (?as=pptx / ?as=pdf, or ?as=images: every slide as a PNG, zipped — what a carousel
-# is posted from; ?as=png: the first frame, a single design's picture), through the
-# cycls-design service. Cached like the office
-# renders, keyed by the .fig's path + mtime + size — so an edit (the editor's
-# auto-save, an agent's `edit`) is a fresh render.
-#
-# A design's PAGES are its variants (a post, a story, a banner of one piece of work),
-# and each of these is ONE page: `&page=<its name>`, the first when absent. The slides
-# manifest lists them all (`pages: [{name, frames}]`) and says which it is (`page`).
+# renders of one page (`&page=`, else the first), cached by the .fig's path + mtime + size
 _DESIGN_CACHE = ".cache/design"
 
 
@@ -53,8 +35,7 @@ def _page_label(page):
 
 
 def _design_error(e):
-    """A design-service failure → the HTTP error: a page that isn't there is the
-    caller's (it was renamed or removed), anything else the service's."""
+    """A design-service failure → 404 for a page that isn't there, else 502."""
     missing = str(e).startswith("there is no page")
     return HTTPException(404 if missing else 502, str(e) if missing else f"Couldn't render the design: {e}")
 
@@ -66,8 +47,7 @@ def _design_doc(name):
 
 
 def _design_file_name(name):
-    """A new design's file name: NFC, no folders or `.fig`, letters (any script),
-    digits, spaces, `-_.()` — else `untitled`."""
+    """A new design's file name: NFC, no folders or `.fig`, word characters and `-_.() `, else `untitled`."""
     name = unicodedata.normalize("NFC", str(name or "")).replace("\\", "/").rsplit("/", 1)[-1]
     name = re.sub(r"\.fig$", "", name.strip(), flags=re.I)
     name = re.sub(r"[^\w\-. ()]+", "-", name).strip(" .-")[:60].strip(" .-")
@@ -75,9 +55,7 @@ def _design_file_name(name):
 
 
 def _deck_fig(root, src):
-    """The .fig behind `src` — itself, or the one its deck document names (a
-    workspace path that must stay inside the workspace) — and the deck's size when
-    the document states it. Raises FileNotFoundError / ValueError."""
+    """(the .fig behind `src`, itself or the one its deck document names; the deck's size or None)."""
     if src.name.lower().endswith(".fig"):
         return src, None
     try:
@@ -110,9 +88,8 @@ def _poll_of(raw):
 
 
 async def _design_slides(root, src, user_id, page=None):
-    """A cached slide render of one page of a design — {count, slides: [data-URI
-    JPEGs], sizes, names, titles, notes, transitions, fig, pages, page}. Raises
-    design.Unavailable (no service), FileNotFoundError / ValueError (not a deck)."""
+    """A cached slide manifest of one page of a design → its path. Raises design.Unavailable,
+    FileNotFoundError, ValueError."""
     from cycls._agent import design
     root = Path(root).resolve()
     fig, size = await asyncio.to_thread(_deck_fig, root, src)
@@ -124,8 +101,7 @@ async def _design_slides(root, src, user_id, page=None):
             kind = str(json.loads(await asyncio.to_thread(src.read_text, "utf-8")).get("kind") or "")
         except (OSError, ValueError, AttributeError):
             kind = ""
-    # (Asked for through its deck document, the manifest carries the kind: cached apart
-    # from the same slides asked for through the .fig.)
+    # via a deck document the manifest carries its kind, so it's cached apart from the .fig's
     dst = cache_dir / f"{stem}-{key}{_page_tag(page)}{'-' + kind if kind in ('document',) else ''}.slides.json"
     if dst.exists():
         return dst
@@ -152,8 +128,7 @@ async def _design_slides(root, src, user_id, page=None):
 
 
 def _write_design_cache(cache_dir, stem, key, ext, dst, data):
-    """Write one cached render of a design. What an older save of the design left goes;
-    the same save's other renders — its other pages — stay."""
+    """Write one cached render; an older save's renders go, this save's other pages stay."""
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
         for old in cache_dir.glob(f"{stem}-*.{ext}"):
@@ -182,10 +157,7 @@ def _zip_slides(stem, pngs):
 
 
 async def _design_export(root, src, fmt, user_id, page=None):
-    """One page of the design behind `src` as `fmt` (pptx / pdf: its whole deck; images:
-    a zip of every slide's PNG; `png`: its first frame) — cached → (path, the download
-    name). `page` is the page's name; the first when absent. Same errors as
-    _design_slides."""
+    """One page of the design behind `src` as `fmt` (images: a zip of slide PNGs), cached → (path, download name)."""
     from cycls._agent import design
     root = Path(root).resolve()
     fig, _ = await asyncio.to_thread(_deck_fig, root, src)
@@ -206,12 +178,8 @@ async def _design_export(root, src, fmt, user_id, page=None):
 
 
 async def _new_slide_op(root, name, after, title, text, user_id):
-    """The deck viewer's "Add slide" as a service op: a slide to start from, after slide
-    `after` (from 1; 0: first; None: last). A deck made of layouts gets one laid out as
-    its own are — a title and a line of text in the deck's theme; a hand-built deck has
-    no theme to follow, so it gets a blank slide the colour of the slide before it, with
-    its title in a colour that shows on it. Raises FileNotFoundError, design.Unavailable,
-    ValueError (the slide couldn't be prepared)."""
+    """The deck viewer's "Add slide" as a service op, after slide `after` (from 1; 0: first; None: last):
+    themed for a deck of layouts, else a blank in the previous slide's colour."""
     from cycls._agent import design
     from cycls._agent.design import deck as decks
     from cycls._agent.design.brand import _norm_hex
@@ -242,8 +210,7 @@ async def _new_slide_op(root, name, after, title, text, user_id):
 
 
 async def _design_response(root, src, as_, user_id, page=None):
-    """?as=slides|pptx|pdf|images|png[&page=<name>] on a deck document or a .fig → the
-    response."""
+    """?as=slides|pptx|pdf|images|png[&page=<name>] on a deck document or a .fig → the response."""
     from cycls._agent import design
     page = _page_param(page)
     try:
@@ -263,19 +230,15 @@ async def _design_response(root, src, as_, user_id, page=None):
 
 
 def design_router(ws_dep, user_dep, changed):
-    """The routes that act on a design. `changed(root)` tells the files catalog that
-    something was written under a workspace root."""
+    """The routes that act on a design; `changed(root)` tells the files catalog a root was written."""
     r = APIRouter()
 
     @r.post("/deck/{path:path}")
     async def deck_op(path: str, request: Request, ws: Workspace = ws_dep):
-        """The deck viewer's own slide changes on a deck under designs/ (its deck document
-        or .fig), run on the saved .fig through the design service like the agent's slide
-        actions. Slides from 1:
+        """The deck viewer's slide changes, run on the saved .fig like the agent's. Slides from 1:
           {op: "move" | "duplicate" | "delete", number, to?}
-          {op: "add", number?, title?, text?}   a slide to start from, after slide `number`
-                                                (0: first; absent: last) → `added`: its number
-          {op: "notes", number, notes}          that slide's speaker notes ("" clears them)"""
+          {op: "add", number?, title?, text?}   after `number` (0: first; absent: last) → `added`
+          {op: "notes", number, notes}"""
         from cycls._agent import design
         from cycls._agent.design import deck as decks
         m = re.fullmatch(r"designs/([^/]+?)(?:\.deck\.json|\.fig)", path)
@@ -314,19 +277,14 @@ def design_router(ws_dep, user_dep, changed):
             raise HTTPException(415, str(e))
         except RuntimeError as e:
             raise HTTPException(422, str(e))
-        # The slides were changed in the file, beside any editors open on it: the people
-        # in the deck together open it again (this one's own editor is re-opened by the app).
+        # editors open on it reload (this one's own is re-opened by the app)
         from cycls._agent.design import live
         await live.notify(ws.root, f"designs/{m.group(1)}.fig", {"kind": "reload", "version": r.get("version")})
         return {"ok": True, "slides": len(r.get("slides") or []), **({"added": added} if added else {})}
 
     @r.post("/design/new")
     async def new_design(request: Request, ws: Workspace = ws_dep):
-        """A blank design in the workspace — Cycls's "New design" (the canvas +, the
-        Files panel, File › New design in the editor). {name?, size?: a preset
-        ("square", "story", …) or [w, h], background?: "#hex"} → one frame, saved as
-        designs/<name>.fig with its .png beside it, like a rendered design: the editor
-        opens it, the refresh keeps the image current, the agent edits it by name."""
+        """A blank design: {name?, size?: a preset or [w, h], background?} → designs/<name>.fig with its .png."""
         from cycls._agent import design
         from cycls._agent.design.brand import _norm_hex
         from cycls._agent.design.files import _dedupe_design_name
@@ -368,14 +326,8 @@ def design_router(ws_dep, user_dep, changed):
 
     @r.post("/design/export")
     async def export_design(request: Request, ws: Workspace = ws_dep):
-        """A design as a file beside it — `{path, format: "pdf" | "png", page?}` →
-        `{path}`: the editor's File › Export › PDF. Rendered by the design service (the
-        export behind `?as=`: every slide of the page, with its own fonts), not in the
-        browser, where the editor's PDF embeds no fonts. Under designs/ it is
-        `<name>.<format>`, the design's own image — replaced, and kept in step by the
-        refresh from then on; anywhere else it takes a free name, never a file that's
-        there. `page` names the page exported (the first when absent): a later page is
-        `<name>-page-<its place>.<format>`, kept in step the same way."""
+        """The editor's File › Export: `{path, format: pdf|png, page?}` → `{path}`, rendered by the service
+        (the browser's PDF embeds no fonts). Under designs/ it is the design's own image, kept in step."""
         from cycls._agent import design
         body = await request.json()
         fmt = str(body.get("format") or "pdf")
@@ -414,13 +366,8 @@ def design_router(ws_dep, user_dep, changed):
 
     @r.get("/design/live")
     async def design_live(path: str, ws: Workspace = ws_dep, user: Any = user_dep):
-        """The live room of a design, for someone about to open it in the editor:
-        `{live: {room, url, ticket, epoch}}` — the room everyone this workspace lets in
-        meets in, the relay's address, this person's pass, and the version of the file
-        as it is now — or `{live: null}` where a design opens alone: no relay set up
-        (DESIGN_LIVE_URL), or a personal workspace, which has one person in it. Being
-        let into the workspace is what `ws_dep` already checked; the editor asks again
-        whenever it connects again (a pass lasts minutes)."""
+        """A design's live room: `{live: {room, url, ticket, epoch}}`, or `{live: null}` with no relay
+        or in a personal workspace. `ws_dep` is the access check."""
         from cycls._agent.design import live, store
         src = _safe_path(ws.root, path)
         if src.suffix.lower() != ".fig" or not src.is_file():
@@ -430,14 +377,13 @@ def design_router(ws_dep, user_dep, changed):
         rel = src.relative_to(Path(ws.root).resolve()).as_posix()
         _, version = await asyncio.to_thread(store.read_fig, ws.root, rel)
         room = live.room_of(ws.root, rel)
-        await live.wake()   # asleep with nobody in any room: up by the time the editor connects
+        await live.wake()   # up by the time the editor connects
         return {"live": {"room": room, "url": live.socket_url(), "ticket": live.ticket(room, user.id),
                          "epoch": version}}
 
     @r.get("/brand")
     async def brand(ws: Workspace = ws_dep):
-        """The workspace brand kit (brand/brand.yaml) for the design editor: its named
-        colours (the Brand variables) and fonts, or null when there's no kit."""
+        """The workspace brand kit's colours and fonts for the design editor, or null."""
         from cycls._agent.design.brand import _brand_palette, _load_brand
         colors = await asyncio.to_thread(_brand_palette, ws.root)
         kit = await asyncio.to_thread(_load_brand, ws.root) or {}
@@ -450,9 +396,7 @@ def design_router(ws_dep, user_dep, changed):
 
     @r.get("/versions/{path:path}")
     async def list_versions(path: str, request: Request, ws: Workspace = ws_dep):
-        """A design's versions, newest first: {versions: [{id, at, by, reason, intent?,
-        size}]} — or, with `?id=`, that version's bytes; with `?id=…&as=png`, a picture
-        of it (its first slide or page, 640 px wide) to look at before restoring."""
+        """A design's versions, newest first; `?id=` that version's bytes, `&as=png` a 640px picture of it."""
         from cycls._agent import versions
         rel = _safe_path(ws.root, path).relative_to(Path(ws.root).resolve()).as_posix()
         if vid := request.query_params.get("id"):
@@ -467,15 +411,14 @@ def design_router(ws_dep, user_dep, changed):
                     raise HTTPException(415, str(e))
                 except RuntimeError as e:
                     raise HTTPException(422, str(e))
-                # (A version never changes: the browser may keep its picture.)
+                # a version never changes
                 return Response(picture, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
             return Response(data, media_type="application/octet-stream", headers=_NO_CACHE)
         return {"versions": await asyncio.to_thread(versions.listing, ws.root, rel)}
 
     @r.post("/versions/{path:path}")
     async def restore_version(path: str, request: Request, ws: Workspace = ws_dep):
-        """`?restore=<id>`: the design becomes that version again. What it was is kept
-        as a version first, so a restore is undone by restoring. → {ok, version}"""
+        """`?restore=<id>`: the design becomes that version again (what it was is kept) → {ok, version}."""
         from cycls._agent import versions
         from cycls._agent.design.store import write_fig
         rel = _safe_path(ws.root, path).relative_to(Path(ws.root).resolve()).as_posix()
@@ -485,7 +428,7 @@ def design_router(ws_dep, user_dep, changed):
         version = await write_fig(ws.root, rel, data, by="user", reason="restore")
         changed(ws.root)
         design_refresh.schedule(ws.root, rel, ws.subject)
-        # People who have it open together hold what it was: their room opens it again.
+        # its live room reloads
         from cycls._agent.design import live
         await live.notify(ws.root, rel, {"kind": "reload", "version": version})
         return {"ok": True, "version": version}
@@ -493,8 +436,7 @@ def design_router(ws_dep, user_dep, changed):
     # ---- Comments on a design (cycls/_agent/design/comments.py) ----
 
     def _commented(ws, path):
-        """The design a comments request is about → its `.fig`'s workspace path. A deck
-        document's comments are its design's: one conversation, whichever was opened."""
+        """The `.fig` a comments request is about; a deck document's comments are its design's."""
         root = Path(ws.root).resolve()
         src = _safe_path(root, path)
         if not _design_doc(src.name) or not src.is_file():
@@ -514,9 +456,7 @@ def design_router(ws_dep, user_dep, changed):
 
     @r.get("/comments/{path:path}")
     async def list_comments(path: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
-        """A design's comment threads, by number: {threads, version, me}. Asked again
-        with `?v=<version>` it answers {unchanged, version} — what an open design does
-        every few seconds, since nothing is pushed to a browser outside a chat turn."""
+        """A design's threads: {threads, version, me}; polled with `?v=<version>` → {unchanged, version}."""
         from cycls._agent import state
         rel = await asyncio.to_thread(_commented, ws, path)
         doc, version = await comments.read(ws, rel)
@@ -527,10 +467,8 @@ def design_router(ws_dep, user_dep, changed):
 
     @r.post("/comments/{path:path}")
     async def comment(path: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
-        """A new thread — {text, frame, x, y, page?, frame_name?, name?}: pinned at (x, y)
-        of slide `frame` (from 0), in the slide's own pixels — or, with `?id=<thread>`,
-        one change to it: {op: reply | resolve | reopen | edit | delete | move, …}.
-        → {thread, version}; the thread is null once it is deleted."""
+        """A new thread {text, frame (from 0), x, y (slide pixels), page?, frame_name?, name?}, or with `?id=`
+        a change {op: reply|resolve|reopen|edit|delete|move, …} → {thread (null once deleted), version}."""
         rel = await asyncio.to_thread(_commented, ws, path)
         try:
             body = await request.json()

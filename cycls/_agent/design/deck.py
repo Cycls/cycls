@@ -1,18 +1,5 @@
-"""Slide operations on a design deck — add, update, move, duplicate, delete, notes —
-shared by the Design tool's slide actions and the deck viewer's own reorder /
-duplicate / delete (the `/deck` route).
-
-A deck is `designs/<name>.fig` (the slides, each with its notes, transition, title
-and — for a deck of layouts — its layout source, as plugin data) plus the deck
-document `designs/<name>.deck.json` beside it: `{type, version, fig, size, slides,
-exports, settings?}`. `settings` — the theme, size, footer and logo a deck of layouts
-was made with, image slots kept as their workspace paths — is what a new or updated
-slide is laid out with, so it matches the rest.
-
-Every op runs on the saved `.fig` through the service (`/apply`, the same plugin API
-the live editor replays), is written back atomically, re-exported beside it
-(`refresh`), and the deck document's slide count follows.
-"""
+"""Slide ops on a deck, shared by the Design tool and the deck viewer's `/deck` route. A deck is
+`designs/<name>.fig` plus `<name>.deck.json`, whose `settings` lay out new slides to match the rest."""
 import asyncio
 import json
 from pathlib import Path
@@ -24,16 +11,13 @@ _locks = {}
 
 
 def lock(fig_path):
-    """One change at a time per design file. The model calls tools in parallel — a
-    move_slide and an update_slide in one turn each read the same .fig, and the later
-    write silently dropped the other's change. Every read → apply → write holds this."""
+    """One read → apply → write at a time per design file: the model calls tools in parallel."""
     key = (id(asyncio.get_running_loop()), str(Path(fig_path).resolve()))   # a lock belongs to one loop
     return _locks.setdefault(key, asyncio.Lock())
 
 
 def settings_of(deck):
-    """A deck of layouts' settings as the deck document keeps them: every image slot
-    (a resolved {image|svg, src}) back to its workspace path."""
+    """A deck's settings as the deck document keeps them: image slots back to workspace paths."""
     def strip(v):
         if isinstance(v, dict):
             if (isinstance(v.get("image"), str) or isinstance(v.get("svg"), str)) and "type" not in v:
@@ -70,13 +54,8 @@ def read_doc(deck_path):
 
 
 async def apply_ops(root, name, ops, user_id=None, preview=False, by="agent"):
-    """Run slide `ops` (service form, 0-based) on design `name` → the service's result
-    dict (fig, lint, script, preview, previews, touched, slides). The `.fig` is
-    rewritten, its exports refreshed and the deck document's count updated (the
-    document is created when a single design becomes a deck). What it replaced is kept
-    as a version, said to be the agent's — or, with `by="user"` (the deck viewer), a
-    person's own slide change. Raises FileNotFoundError (no such design),
-    design.Unavailable, RuntimeError (the op's own error)."""
+    """Run slide `ops` (service form, 0-based) on design `name` → the service's result; the .fig,
+    its exports and the deck document follow. Raises FileNotFoundError, design.Unavailable, RuntimeError."""
     from cycls._agent import design
     from .store import Stale, read_fig, write_fig
     fig_path, fig_rel, deck_path, _ = paths(root, name)
@@ -86,7 +65,7 @@ async def apply_ops(root, name, ops, user_id=None, preview=False, by="agent"):
             if data is None:
                 raise FileNotFoundError(fig_rel)
             r = await design.apply(data, ops=ops, preview=preview, user_id=user_id)
-            try:   # the person may have saved in the editor meanwhile: apply to that, once
+            try:   # an editor save may land meanwhile: apply to that, once
                 r["version"] = await write_fig(root, fig_rel, r["fig"], base=base, by=by,
                                                reason="agent" if by == "agent" else "change", intent=_intent(ops))
                 break

@@ -1,9 +1,6 @@
 import { encode } from "uqr";
 
-// Live polls in a deck (a Design `poll` slide). The service keeps where the slide
-// draws each option's track and the join card; present mode fills those tracks with
-// the audience's votes and puts the join QR in the card. The audience votes on
-// their phones through the deck's public share link, with `?vote=1`.
+// A Design `poll` slide: the service says where its tracks and join card are; present mode fills them.
 
 export interface DeckPoll {
   question: string;
@@ -23,7 +20,7 @@ export interface PollTally {
   total: number;
 }
 
-// What present mode can do with a deck's polls (the owner's; a shared deck has none).
+// The owner's; a shared deck has none.
 export interface PollApi {
   open(slide: number, poll: DeckPoll): Promise<{ session: string }>;
   close(session: string): Promise<void>;
@@ -32,15 +29,13 @@ export interface PollApi {
   makeLink(): Promise<string>;         // make one (the presenter's click)
 }
 
-// A share link → the audience's voting page.
 export function voteUrl(shareUrl: string): string {
   const u = new URL(shareUrl, window.location.origin);
   u.searchParams.set("vote", "1");
   return u.toString();
 }
 
-// A QR code's dark modules as one SVG path, `size` square with a 2-module quiet zone
-// (the service's qrPath, the same encoder).
+// The service's qrPath, same encoder: `size` square with a 2-module quiet zone.
 export function qrPath(text: string, size: number): string {
   const { data } = encode(String(text), { ecc: "M", border: 0 });
   const n = data.length, q = 2, cell = size / (n + 2 * q);
@@ -55,7 +50,6 @@ export function qrPath(text: string, size: number): string {
   return d;
 }
 
-// Shares of each option, whole percents (0 when nobody has voted).
 export function percents(counts: number[]): number[] {
   const total = counts.reduce((a, b) => a + b, 0);
   return counts.map((c) => (total ? Math.round((c / total) * 100) : 0));

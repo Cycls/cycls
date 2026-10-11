@@ -1,32 +1,5 @@
-"""Keep a design's exported image in step with its editable `.fig`.
-
-A render saves `designs/<name>.<fmt>` beside `designs/<name>.fig`. After that the
-`.fig` is the one that changes — the editor auto-saves it on every edit, the
-person's or the agent's live `Design(edit)` — and the image beside it would go
-stale: a download, a `read`, or a bash `cp` into an email or a deck would all get
-the pre-edit design. So a `.fig` saved under `designs/` schedules a re-export of
-the images already beside it, through the same headless service that made them.
-
-A deck's `.pptx` / `.pdf` is the whole deck (its notes and transitions ride in the
-`.fig`); a carousel's slides (`<name>-slide-1.png`, `-slide-2.png`, …) are
-re-exported together, and a slide deleted since loses its old image.
-
-A design of several pages — its variants — keeps its first page as `<name>.<fmt>` and
-the others as `<name>-page-2.<fmt>`, `-page-3`, …, by their place: once a design has
-any of those images they follow its pages (a page added gets one, a page removed loses
-its own), and a page's `.pdf` / `.pptx` — made when someone asked for one — is
-re-exported where it is.
-
-A design with no image at all — a copy made in the editor, a version opened as a
-copy — is asked for with `ensure`: it gets `<name>.png`, so Files shows what it is
-and the agent's "the image beside it" is true. A deck or a carousel already has its
-own files beside it and is left as it is.
-
-Debounced per file: the editor saves in bursts while someone drags things around,
-and each save restarts the wait, so only the last state is exported. A save that
-lands mid-export cancels it — the newer `.fig` wins. Best effort: a failure logs
-and leaves the old image; nothing here can fail the save itself.
-"""
+"""Keep the images beside a design's `.fig` in step with it: each save under designs/ schedules a
+debounced re-export, and a newer save cancels a running one. Best effort: a failure only logs."""
 import asyncio
 from pathlib import Path
 
@@ -45,16 +18,12 @@ _pages = set()                                # (root, rel) to leave with an ima
 
 
 def page_file(stem, place, fmt):
-    """The file a page's image is kept in beside `<stem>.fig`: the first page (place 1)
-    is the design's own `<stem>.<fmt>`, the others `<stem>-page-<place>.<fmt>`."""
+    """A page's image beside `<stem>.fig`: `<stem>.<fmt>` for the first, `<stem>-page-<place>.<fmt>` after."""
     return f"{stem}.{fmt}" if place <= 1 else f"{stem}-page-{place}.{fmt}"
 
 
 def managed(root, rel):
-    """Whether `rel` is one of the images this keeps beside a design —
-    `designs/…/<stem>.<fmt>`, `<stem>-slide-<n>.<fmt>` or `<stem>-page-<n>.<fmt>` next
-    to an existing `<stem>.fig` — so a file written there would be replaced by the next
-    re-export. (A new file — an export from the editor — takes another name.)"""
+    """Whether `rel` is an image kept beside a design's `.fig`, which the next re-export replaces."""
     rel = rel.replace("\\", "/").lstrip("/")
     if not rel.startswith("designs/"):
         return False
@@ -70,9 +39,7 @@ def managed(root, rel):
 
 
 def beside(root, rel):
-    """What is kept beside the design `rel` (its .fig): its image in each format, its
-    slides' and pages' images, its deck document → [(file, what follows the design's name
-    in the file's: ".png", "-slide-2.png", ".deck.json")]."""
+    """What is kept beside design `rel` → [(file, its tail after the name: ".png", "-slide-2.png", ".deck.json")]."""
     fig = Path(root) / rel
     found = []
     if not fig.parent.is_dir():
@@ -98,10 +65,7 @@ def beside(root, rel):
 
 
 def follow(root, old_rel, new_rel, copy=False):
-    """A design renamed or moved: what is kept beside its .fig goes with it — its image
-    in each format, its slides' and pages' images, its deck document (whose paths are
-    written anew). A file already at the new name is left as it is. → the files moved.
-    `copy`: a design copied — they are copied, and the original's stay."""
+    """Move (or `copy`) what is kept beside a renamed design, never over an existing file → the files moved."""
     import json, shutil
     root = Path(root)
     old, new = root / old_rel, root / new_rel
@@ -131,10 +95,8 @@ def follow(root, old_rel, new_rel, copy=False):
 
 
 def schedule(root, rel, user_id=None, ensure=False, pages=False):
-    """Re-export the images beside `rel` (a `designs/*.fig` just written under
-    workspace `root`) once its saves go quiet; with `ensure`, a design that has none
-    gets `<name>.png`; with `pages`, every page after the first gets its image (an
-    agent just made one). A no-op without the service."""
+    """Re-export the images beside `rel` once its saves go quiet. `ensure`: an imageless design
+    gets `<name>.png`; `pages`: every page gets its image."""
     rel = rel.replace("\\", "/").lstrip("/")
     if not (configured() and rel.startswith("designs/") and rel.endswith(".fig")):
         return
@@ -189,11 +151,7 @@ async def _refresh(key, user_id):
 
 
 async def _refresh_pages(fig_path, fig, ensure, user_id):
-    """The images of the pages after the first, `<stem>-page-<n>.<fmt>`: in a format
-    that has any (or png, with `ensure`), every page's — one added since gets its own;
-    a page's .pdf / .pptx only where there is one. A file whose page is gone goes.
-    They are drawn at the design's own scale (its `<stem>.<fmt>` against its first
-    frame) — a page's place changes, so the file there may have been another page's."""
+    """Images of the pages after the first, at the design's own scale; a removed page's file goes."""
     stem = fig_path.stem
     held = {}                                                  # fmt -> the places with a file
     pattern = re.compile(re.escape(stem) + r"-page-(\d+)\.(\w+)")

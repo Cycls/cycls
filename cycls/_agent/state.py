@@ -354,8 +354,7 @@ def _is_plain_user(msg):
 
 
 def user_text(msg):
-    """What the person typed in a user turn: its text, without the line a design
-    selection adds for the model (kept beside it as `selection`)."""
+    """What the person typed in a user turn, without the line a design selection adds."""
     c = msg.get("content")
     if isinstance(c, str):
         return c
@@ -368,10 +367,9 @@ async def truncate_last_exchange(workspace, chat_id, expect=None):
     user content, or None when there was nothing to remove.
 
     Backs `regenerate`: the caller re-sends the same message, so the run that
-    follows is an ordinary send — the loop needs no special case. And `retry`,
-    which names the message it is about to re-send — `expect`, the sha256 of its
-    text: a failed request may never have arrived, and then the last exchange here
-    is the one before it, which stays.
+    follows is an ordinary send — the loop needs no special case. And `retry`:
+    `expect` is the sha256 of the text it re-sends; another last turn stays (the
+    failed request may never have arrived).
 
     Two invariants make this the only safe shape of deletion here:
       * Turn files are `{turn:06d}` and `Session._saved` is `len(messages)`, so
@@ -504,7 +502,7 @@ class Session:
             msg["internal"] = True
         if attachments:
             msg["attachments"] = attachments
-        if selection:   # the design selection the person attached — the chat shows it as a chip
+        if selection:   # the chat shows it as a chip
             msg["selection"] = selection
         self.messages.append(msg)
         # Before the meta touch: a turn with no index is recoverable (the next

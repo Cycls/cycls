@@ -1,20 +1,15 @@
-"""The pictures of a design: a workspace image placed in a spec — its size, its turn,
-its bytes — an image slot of a layout, and the bounds on what is sent to the service and
-shown to the model."""
+"""A design's pictures: workspace images placed in a spec or a layout's slot, and the size bounds."""
 import base64, struct
 from ..paths import _resolve_path
 
 
-# A render the model sees, to QA before presenting it — bounded like `read`.
+# renders the model QAs, bounded like `read`
 _DESIGN_QA_TYPES = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}
 _DESIGN_QA_MAX = 3 * 1024 * 1024
 _DESIGN_QA_SLIDES = 12             # a deck's slides the model QAs, in order
 
 
-# An image node's bytes ride to the stateless service as base64 inside the spec —
-# bounded so a request stays under the platform's 32 MiB (base64 adds a third). The
-# service fits each photo to its box (cover-crop, at most 2× the box) before it's
-# drawn, so the .fig stays light however big the original.
+# images ride to the service as base64 (+1/3): a request must stay under the platform's 32 MiB
 _DESIGN_IMAGE_MAX = 15 * 1024 * 1024
 _DESIGN_IMAGES_MAX = 20 * 1024 * 1024
 _DESIGN_SVG_MAX = 200 * 1024
@@ -52,9 +47,7 @@ def _jpeg_size(data):
 
 
 def _image_size(data):
-    """(width, height) of a PNG / JPEG / WebP / GIF as the renderer DRAWS it — a
-    JPEG's EXIF quarter-turn (orientation 5–8) swaps the two, since the renderer
-    honours it — else None (an SVG included)."""
+    """(width, height) of a PNG/JPEG/WebP/GIF as drawn (EXIF orientation 5–8 swaps them), else None."""
     if data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR":
         return struct.unpack(">II", data[16:24])
     if data[:6] in (b"GIF87a", b"GIF89a"):
@@ -85,12 +78,8 @@ def _no_such_image(src, root):
 
 
 def _place_image(n, root):
-    """An image node's `src` (a workspace file) → the bytes the service draws, in
-    its final box: `fit` "cover" (default) fills w×h, cropping the overflow;
-    "contain" shrinks the box to the image's aspect and centres it (the renderer's
-    own FIT distorts). Give w, h or both — a missing one follows the image's
-    aspect. Rewrites the node in place; returns the byte count. Raises ValueError
-    with the fix."""
+    """An image node's `src` → its bytes in their final box (`fit` cover or contain; the renderer's FIT
+    distorts), in place → the byte count. Raises ValueError with the fix."""
     src = n.get("src")
     if not isinstance(src, str) or not src.strip():
         raise ValueError("an image node needs `src` — a workspace file, e.g. attachments/photo.jpg — "
@@ -126,9 +115,7 @@ _BRAND_LOGOS = ("logo.svg", "logo.png", "logo.webp", "logo.jpg", "logo.jpeg")
 
 
 def _image_slot(src, root):
-    """A deck's image slot — a workspace path, or {src, focus} — → what the service
-    draws: {image: base64, src[, focus]} for a PNG / JPEG / WebP / GIF, or {svg, src}.
-    → (slot, bytes read). Raises ValueError with the fix."""
+    """A deck's image slot (a path, or {src, focus}) → ({image|svg, src, …}, bytes read). Raises ValueError."""
     focus = None
     if isinstance(src, dict):
         focus, src = src.get("focus"), src.get("src")

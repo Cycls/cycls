@@ -280,8 +280,7 @@ export function InputBox({
         )}
       </AnimatePresence>
 
-      {/* A design's selection: "Add selection" while one is open with something selected;
-          once attached, a chip the message carries. */}
+      {/* Design selection chip, or "Add selection" */}
       {(selection || onAddSelection) && (
         <div className="flex flex-wrap items-center gap-2 px-3 pt-3" onClick={(e) => e.stopPropagation()}>
           {selection ? (

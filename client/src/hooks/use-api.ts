@@ -29,10 +29,9 @@ export function useApi(baseUrl: string = "") {
       headers["Content-Type"] = "application/json";
       body = JSON.stringify(json);
     }
-    // (The user's headers are added there — and a 401 from a stale token asked once more.)
     const res = await fetchAuthed(`${baseUrl}${path}`, { ...rest, headers, body });
     if (!res.ok) {
-      // `response`: for a caller whose failure carries an answer (a stale save's 412 says the version now).
+      // `response`: a failure can carry an answer (a stale save's 412 names the current version).
       const err = new Error(`HTTP ${res.status}`) as Error & { status: number; response: Response };
       err.status = res.status;
       err.response = res.clone();
