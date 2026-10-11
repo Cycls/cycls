@@ -135,6 +135,23 @@ describe("DesignEditorView", () => {
     expect(writeFile).not.toHaveBeenCalled();
   });
 
+  it("posts to its editor's origin only; an editor URL with no web origin is posted nothing", async () => {
+    const { frame, unmount } = mount();
+    const { post } = await ready(frame());
+    expect(post.mock.calls.length).toBeGreaterThan(0);
+    expect(post.mock.calls.every((c) => c[1] === EDITOR)).toBe(true);
+    unmount();
+    const other = render(<DesignEditorView url="blob:orig" path="designs/launch.fig" name="launch.fig" editorUrl="ftp://ed.example"
+                                           writeFile={vi.fn(async () => {})} />);
+    const f = other.container.querySelector("iframe")!;
+    const spy = vi.spyOn(f.contentWindow!, "postMessage");
+    window.dispatchEvent(new MessageEvent("message", { origin: "ftp://ed.example", source: f.contentWindow,
+                                                       data: { source: "cycls-editor", type: "ready", protocol: 2 } }));
+    await flush();
+    await flush();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it("protocol 2: tags each load, writes its saves to the file, and confirms them", async () => {
     const h = host();
     const { frame, writeFile } = mount({ host: h });

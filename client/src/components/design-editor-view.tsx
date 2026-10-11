@@ -291,7 +291,8 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   const editorLoaded = useRef(false);                 // the editor has this load's document open (`loaded`)
   const pending = useRef<{ version: string; timer: number } | null>(null);   // a 412 an agent edit may yet explain
   const force = useRef(false);                        // "keep mine": the next save writes over the newer file
-  const origin = (() => { try { return new URL(editorUrl).origin; } catch { return "*"; } })();
+  // Never "*": the design and the live ticket go to the editor's origin or nowhere.
+  const origin = (() => { try { const u = new URL(editorUrl, window.location.href); return /^https?:$/.test(u.protocol) ? u.origin : null; } catch { return null; } })();
   const latest = useRef({ url, path, writeFile, reload, host, toast });
   latest.current = { url, path, writeFile, reload, host, toast };
   const protocol = useRef(0);           // the editor's: 2, or 0 for one from before the protocol
@@ -305,8 +306,9 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
   const stem = (path.split("/").pop() ?? name).replace(/\.fig$/i, "");
 
-  const post = useCallback((msg: Record<string, unknown>) =>
-    frameRef.current?.contentWindow?.postMessage({ target: "cycls-editor", ...msg }, origin), [origin]);
+  const post = useCallback((msg: Record<string, unknown>) => {
+    if (origin) frameRef.current?.contentWindow?.postMessage({ target: "cycls-editor", ...msg }, origin);
+  }, [origin]);
 
   // Comments (lib/comments.ts), in an editor that draws them: it is given the pins of the
   // page it shows; it says where a click of comment mode landed, which pin was clicked,
@@ -512,7 +514,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
 
     const onMessage = async (e: MessageEvent) => {
       if (!frameRef.current || e.source !== frameRef.current.contentWindow) return;   // this editor only
-      if (origin !== "*" && e.origin !== origin) return;
+      if (e.origin !== origin) return;
       const m = e.data as EditorMessage;
       if (!m || m.source !== "cycls-editor") return;
       const { host, toast } = latest.current;
