@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDarkMode } from "../hooks/use-dark-mode";
 import { useEscape } from "../hooks/use-escape";
 import type { BrandKit, DesignLive, DesignVersion, FetchVersioned, WriteFile } from "../hooks/use-files";
 import { track } from "../lib/analytics";
+import { useComments } from "../lib/comments";
+import { peerColor } from "../lib/people";
+import { CommentsList, OpenComment, editorComments } from "./comments";
 import { getLang, t, useLang } from "../lib/i18n";
 import { useToast } from "../lib/toast";
 import { cn } from "../lib/utils";
@@ -18,6 +21,9 @@ import { cn } from "../lib/utils";
 //                   save · flush {id} · command {script, intent?} · theme {theme} · locale {lang}
 //                   fit (the editor's box changed size: fit the design again — feature "fit")
 //                   follow {client} · liveTicket {id, ticket} · liveBase {version}
+//                   comments {pins, adding, active, draft, me} (feature "comments": the pins of
+//                   the page in view, drawn on the design — the editor answers with frames,
+//                   commentAt, commentOpen, commentPlace, commentEscape)
 //                   liveReset   (feature "live", below)
 //   editor → host : ready {protocol, features?} · loaded {doc} · saved {doc, id, name, fig}
 //                   flushed {id, ok} · error · applied · commandError · selection {doc, frame, nodes}
@@ -141,6 +147,8 @@ type EditorMessage = {
   frame?: string | null; nodes?: DesignSelection["nodes"];
   page?: string; pages?: string[];
   peers?: DesignPeer[]; saver?: boolean; connected?: boolean; version?: string | null; live?: "seed" | "join";
+  frames?: { name: string; w: number; h: number }[]; frame_name?: string; x?: number; y?: number;
+  at?: { x: number; y: number } | null; box?: { w: number; h: number };
 };
 
 // What the person has selected in an open design, by name (the editor's `selection`)
@@ -211,13 +219,27 @@ export function useDesignPresence(path: string): DesignPresence | null {
 export function followDesignPeer(path: string, client: number | null): void {
   for (const h of editors.get(path) ?? []) h.follow(client);
 }
-// A person's colour — their cursor, the outline of what they select, the ring of their
-// avatar — from who they are, so it is the same in every design and for everyone.
-const PEER_COLORS = ["#e5484d", "#0090ff", "#30a46c", "#f5a524", "#8e4ec6", "#f76b15", "#00a2c7", "#d6409f"];
-export function peerColor(id: string): string {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return PEER_COLORS[h % PEER_COLORS.length];
+export { peerColor };   // (lib/people.ts: a comment's pin is its author's colour too)
+
+// The slides of the page a design's editor shows — name and size, in order (the editor's
+// `frames`) — and whether that editor draws comments. A comment finds its slide by name.
+export type DesignFrames = { path: string; page: string; frames: { name: string; w: number; h: number }[] };
+const frameSets = new Map<string, DesignFrames>();
+const commenting = new Set<string>();
+// Whether an editor of `path` is open that pins comments on the design itself (one from
+// before it does not: comments are then pinned on the design's preview).
+export const designEditorComments = (path: string) => commenting.has(path);
+export function useDesignFrames(path: string): DesignFrames | null {
+  const [value, setValue] = useState(() => frameSets.get(path) ?? null);
+  useEffect(() => {
+    setValue(frameSets.get(path) ?? null);
+    const onFrames = (e: Event) => {
+      if ((e as CustomEvent<{ path?: string }>).detail?.path === path) setValue(frameSets.get(path) ?? null);
+    };
+    window.addEventListener("cycls:design-frames", onFrames);
+    return () => window.removeEventListener("cycls:design-frames", onFrames);
+  }, [path]);
+  return value;
 }
 
 // The page a design was last on, kept in this browser: it opens there again.
@@ -285,6 +307,29 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
 
   const post = useCallback((msg: Record<string, unknown>) =>
     frameRef.current?.contentWindow?.postMessage({ target: "cycls-editor", ...msg }, origin), [origin]);
+
+  // Comments (lib/comments.ts), in an editor that draws them: it is given the pins of the
+  // page it shows; it says where a click of comment mode landed, which pin was clicked,
+  // and where the open pin is on screen — the card beside it is this page's, laid over
+  // the editor.
+  const comments = useComments(path);
+  const commentsRef = useRef(comments);
+  commentsRef.current = comments;
+  const pagesNow = useDesignPages(path);
+  const framesNow = useDesignFrames(path);
+  const [pinsOn, setPinsOn] = useState(false);   // this load's editor draws comments, and has its document open
+  const [place, setPlace] = useState<{ id: string; at: { x: number; y: number } | null; box: { w: number; h: number } } | null>(null);
+  const names = useMemo(() => (framesNow?.frames ?? []).map((f) => f.name), [framesNow]);
+  const drawing = useMemo(
+    () => (comments && pinsOn ? editorComments(comments, names, pagesNow?.page, pagesNow?.pages ?? []) : null),
+    [comments?.threads, comments?.adding, comments?.active, comments?.draft, comments?.host, pinsOn, names, pagesNow],   // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  useEffect(() => {
+    if (drawing) post({ type: "comments", ...drawing });
+  }, [drawing, post]);
+  const cardOpen = !!comments && pinsOn && (comments.active !== null || comments.draft !== null);
+  useEscape(() => commentsRef.current?.store.set({ active: null, draft: null }), cardOpen);
+  useEscape(() => commentsRef.current?.store.set({ adding: false }), !!comments?.adding && pinsOn && !cardOpen);
 
   // Light/dark and the language follow Cycls, live.
   useEffect(() => {
@@ -401,6 +446,8 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       if (!set!.size) {
         editors.delete(path);
         if (pageSets.delete(path)) window.dispatchEvent(new CustomEvent("cycls:design-pages", { detail: { path } }));
+        commenting.delete(path);
+        if (frameSets.delete(path)) window.dispatchEvent(new CustomEvent("cycls:design-frames", { detail: { path } }));
         if (presences.delete(path)) window.dispatchEvent(new CustomEvent("cycls:design-presence", { detail: { path } }));
       }
     };
@@ -472,6 +519,8 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       if (m.type === "ready") {
         protocol.current = typeof m.protocol === "number" ? m.protocol : 0;
         features.current = new Set(Array.isArray(m.features) ? m.features : []);
+        commenting.delete(latest.current.path);
+        if (!disposed) { setPinsOn(false); setPlace(null); }
         let source = sourceRef.current;
         sourceRef.current = null;
         version.current = loadedVersion.current = null;
@@ -547,7 +596,32 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           if (waiting[i].version && waiting[i].version === loadedVersion.current) { waiting.splice(0, i + 1); break; }
         }
         editorLoaded.current = true;
+        if (features.current.has("comments")) {
+          commenting.add(latest.current.path);
+          if (!disposed) setPinsOn(true);
+        }
         pump();
+      } else if (m.type === "frames" && Array.isArray(m.frames)) {
+        // The slides of the page in view — by name: what finds a comment's slide.
+        if (m.doc && m.doc !== doc.current) return;
+        const now: DesignFrames = { path: latest.current.path, page: typeof m.page === "string" ? m.page : "",
+                                    frames: m.frames.filter((f) => f && typeof f.name === "string") };
+        frameSets.set(now.path, now);
+        window.dispatchEvent(new CustomEvent("cycls:design-frames", { detail: now }));
+      } else if (m.type === "commentAt" && typeof m.frame === "number" && typeof m.x === "number" && typeof m.y === "number") {
+        // A click on a slide, in comment mode: a comment is being written there.
+        if (m.doc && m.doc !== doc.current) return;
+        commentsRef.current?.store.pin({ ...(m.page ? { page: m.page } : {}), frame: m.frame,
+                                         ...(m.frame_name ? { frame_name: m.frame_name } : {}), x: m.x, y: m.y });
+      } else if (m.type === "commentOpen" && typeof m.id === "string") {
+        const c = commentsRef.current;
+        c?.store.open(c.active === m.id ? null : m.id);
+      } else if (m.type === "commentPlace" && typeof m.id === "string" && m.box) {
+        if (!disposed) setPlace({ id: m.id, at: m.at ?? null, box: m.box });
+      } else if (m.type === "commentEscape") {
+        // Escape pressed inside the editor: the card closes first, then comment mode ends.
+        const c = commentsRef.current;
+        if (c) c.store.set(c.active !== null || c.draft !== null ? { active: null, draft: null } : { adding: false });
       } else if (m.type === "saved" && typeof m.fig === "string") {
         const reply = (ok: boolean) => post({ type: "written", doc: m.doc, id: m.id, ok });
         // A save from a document since replaced, or of a file being deleted: not written.
@@ -816,6 +890,16 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       {/* Own-origin editor iframe (not sandboxed): the app needs its full
           capabilities — CanvasKit, workers, storage — on its real origin. */}
       <iframe key={frameKey} ref={frameRef} src={src} title={name} className="h-full w-full border-0" />
+      {/* The card of the comment that is open, beside its pin: the pin is the editor's,
+          drawn on the design, and it says where that is. The editor fills this box, so
+          its pixels are the box's. */}
+      {comments && pinsOn && place?.at && place.id === (comments.draft ? "draft" : comments.active) && (
+        <div className="pointer-events-none absolute inset-0 z-10" data-testid="editor-comment">
+          <OpenComment path={path} at={place.at} within={place.box} />
+        </div>
+      )}
+      {pinsOn && <CommentsList path={path} names={names} page={pagesNow?.page} pages={pagesNow?.pages}
+                               onPage={(page) => showDesignPage(path, page)} />}
       {full && (
         // The way out, in view for as long as it's full screen: named for the first
         // moments, then a small button at the top middle. The iframe keeps every other

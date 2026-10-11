@@ -16,7 +16,7 @@ import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { DesignPresenceRow } from "./design-presence";
-import { DesignEditorView, canFullscreen, designPage, flushDesignEditor, fullscreenDesignEditor, showDesignPage, useDesignPages, type DesignHost } from "./design-editor-view";
+import { DesignEditorView, canFullscreen, designEditorComments, designPage, flushDesignEditor, fullscreenDesignEditor, showDesignPage, useDesignPages, type DesignHost } from "./design-editor-view";
 import { VersionHistory } from "./version-history";
 import { CommentButtons, CommentLayer, CommentsList } from "./comments";
 import { DeckView, EditPreviewSwitch, PageTabs, parseDeck, type DeckOp } from "./deck-view";
@@ -1050,9 +1050,11 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
               </button>
             )}
             {design && !previewing && <DesignPresenceRow path={file.path} />}
-            {/* Comments are pinned on what the design looks like: from the editor, they open its preview. */}
-            {design && !previewing && <CommentButtons path={file.path} onComment={(adding) => { if (adding) void showPreview(); }}
-                                                      onList={() => void showPreview()} />}
+            {/* An editor that pins comments on the design shows them itself; with one from
+                before it does, they are pinned on the design's preview. */}
+            {design && !previewing && <CommentButtons path={file.path}
+                                                      onComment={(adding) => { if (adding && !designEditorComments(file.path)) void showPreview(); }}
+                                                      onList={() => { if (!designEditorComments(file.path)) void showPreview(); }} />}
             {design && <EditPreviewSwitch previewing={previewing} onEdit={() => setPreviewing(false)} onPreview={() => void showPreview()} />}
             {/* In a preview the button keeps its place, unseen: the switch beside it
                 doesn't jump when the editor goes under the preview. */}

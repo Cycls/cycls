@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DropdownMenu } from "./files";
 import { DesignPresenceRow } from "./design-presence";
-import { DesignEditorView, canFullscreen, flushDesignEditor, fullscreenDesignEditor, reloadDesignEditors, type DesignHost } from "./design-editor-view";
+import { DesignEditorView, canFullscreen, designEditorComments, flushDesignEditor, fullscreenDesignEditor, reloadDesignEditors, type DesignHost } from "./design-editor-view";
 import { PresentMode } from "./present-mode";
 import { CommentButtons, CommentLayer, CommentsList, useCommentCounts } from "./comments";
 import { useComments } from "../lib/comments";
@@ -254,6 +254,9 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
           <span className="min-w-0 truncate">{fig}</span>
           <div className="flex-1" />
           <DesignPresenceRow path={fig} />
+          {/* (An editor from before it pins comments: they are on the slides, back in the viewer.) */}
+          <CommentButtons path={fig} onComment={(adding) => { if (adding && !designEditorComments(fig)) void doneEditing(); }}
+                          onList={() => { if (!designEditorComments(fig)) void doneEditing(); }} />
           <EditPreviewSwitch previewing={false} onEdit={() => {}} onPreview={() => void doneEditing()} />
           {/* The deck's editor goes full screen like a design's does (a .fig open in
               the canvas has this button in its header; a deck's editor had none). */}

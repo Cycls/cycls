@@ -950,10 +950,27 @@ and resolves (`comments`), so "address the comments on the deck" is one request.
   its thread beside it — under it where the pane is too narrow for both, never on it;
   the list (`CommentsList`) goes to a thread's slide and opens it. A deck's toolbar, a
   single design's preview and a document's pages all have them; the filmstrip and the
-  grid mark the slides with open comments. From the editor, Comment opens the preview —
-  the editor has no pins yet. A shared page has none: there is nobody to comment as.
-  Escape closes the comment being written, then comment mode, and never reaches the
-  canvas (`useEscape`).
+  grid mark the slides with open comments. A shared page has none: there is nobody to
+  comment as. Escape closes the comment being written, then comment mode, and never
+  reaches the canvas (`useEscape`).
+- **In the editor** (cycls-design `editor/patches/comments.ts`; feature `comments`).
+  The editor is another origin: the app cannot see where the design is on its canvas,
+  and a layer of the app's over the frame would trail every pan. So the pins are the
+  editor's — elements of its page over the canvas, as the names beside cursors are,
+  placed again on every repaint (a hand-tool pan and a page switch raise no
+  `viewport:changed`) — and everything else stays Cycls's. The app gives the editor
+  what to draw (`comments`: the page's pins, each on the slide it is on *now* — the
+  editor says its slides by name, `frames`, and `placeOf` finds each thread's —
+  comment mode, the open pin, the comment being written); the editor says where a
+  click of comment mode landed (`commentAt`: taken before the canvas hears it, so it
+  selects and draws nothing; moving, scrolling and pinching still reach the design),
+  which pin was clicked (`commentOpen`), where the open pin is on screen
+  (`commentPlace`) and that Escape was pressed (`commentEscape`). The card is the same
+  component as over a slide's picture, laid over the frame beside that point
+  (`OpenComment`) — inside the box that goes full screen. A thread picked from the list
+  whose pin is out of view is brought into it. With an editor from before it draws
+  comments (`designEditorComments` false), Comment and the list open the design's
+  preview instead. The editor keeps nothing: pinning a comment saves no file.
 - **The agent.** `inspect` ends with the open comments of the page it shows, each where
   it is now and on what — `#1 slide 2 on headline — Sara: "Make it bigger" · 1 reply`:
   the part under the pin is read from the same outline (`comments.node_at`: the last
@@ -969,10 +986,11 @@ and resolves (`comments`), so "address the comments on the deck" is one request.
   put (`unshelve`); purged, they go (`drop`). Not carried: a folder moved or deleted
   whole, and a bash `rm` or `mv` of a `.fig` — as with a design's versions.
 
-Not in this round: comments inside the editor (stage two), a PDF that is not a design
+Not in this round: a PDF that is not a design
 (the app shows one in the browser's own viewer, which gives nothing to pin on), people
 who only have a share link, mentions and notifications, a pin dragged to another spot
-(the route takes `move`; the app has no handle for it yet).
+(the route takes `move`; the app has no handle for it yet). In the editor's split view
+the pins are drawn for its first pane, as the cursor names are.
 
 ## Where the code is
 
