@@ -1192,7 +1192,7 @@ def apps_router(cycls_app, ws_dep, user_dep, volume, base):
 # of phones doesn't list once each. Polls live beside the deck's share row — the
 # presenter's own store, which the share route reaches as the link's owner.
 
-POLL_VOTES_PER_MINUTE = 20   # per address, per instance — bounds a runaway, not a determined voter
+POLL_VOTES_PER_MINUTE = 1000   # per address, per instance: a hall on one Wi-Fi is one address; bounds a runaway, not a determined voter
 _poll_hits = {}
 _poll_tallies = {}           # (store, deck, session) → (monotonic time, tally)
 
