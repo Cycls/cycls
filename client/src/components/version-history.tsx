@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { DesignVersion } from "../hooks/use-files";
 import { track } from "../lib/analytics";
-import { getLang, t } from "../lib/i18n";
+import { t, timeAgo as ago } from "../lib/i18n";
 import { useToast } from "../lib/toast";
 import { useEscape } from "../hooks/use-escape";
 import { flushDesignEditor, reloadDesignEditors, type DesignHost } from "./design-editor-view";
@@ -12,16 +12,6 @@ import { flushDesignEditor, reloadDesignEditors, type DesignHost } from "./desig
 // a new design beside this one. Preview shows what a version looks like first — a row
 // says only when it was replaced and by whom, which doesn't tell two saves apart: its
 // picture (the first slide or page) is made when asked for, and kept while the panel is open.
-
-function ago(iso: string): string {
-  const s = (Date.parse(iso) - Date.now()) / 1000;
-  const rtf = new Intl.RelativeTimeFormat(getLang(), { numeric: "auto" });
-  const abs = Math.abs(s);
-  if (abs < 60) return rtf.format(0, "second");
-  if (abs < 3600) return rtf.format(Math.round(s / 60), "minute");
-  if (abs < 86400) return rtf.format(Math.round(s / 3600), "hour");
-  return rtf.format(Math.round(s / 86400), "day");
-}
 
 // What replaced it, as the row says it.
 function whatReplacedIt(v: DesignVersion): string {

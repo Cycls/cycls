@@ -254,6 +254,12 @@ _DESIGN_TOOL = {
         "trash, where the user can restore it · versions {name} — its earlier versions (every edit and save "
         "keeps one) · restore {name, version} — go back to one (what it is now is kept as a version). What is "
         "kept beside a design — its images, slides, deck — goes with it.\n"
+        "- comments {name} — what the people working on a design pinned on it: each comment's number, the "
+        "slide and point it is on, who wrote it, the replies. With `number`: answer it (`reply`: your words) "
+        "and/or close it (`resolve`: true; false opens it again). `inspect` lists the open ones of a page, "
+        "each with the part it sits on. Asked to address the comments: read them, make each change (`edit`, "
+        "or a slide / section action), then reply saying what you did and resolve it — one that needs the "
+        "person's decision gets a reply and stays open.\n"
         "- edit {ops, name, page?, intent?} — change a design you rendered (designs/<name>.fig) with "
         "named operations, applied in order: "
         "[{\"op\":\"set_text\",\"node\":\"headline\",\"text\":\"New\"}, "
@@ -294,8 +300,8 @@ _DESIGN_TOOL = {
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["render", "script", "edit", "inspect", "add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide",
                                               "add_section", "update_section", "move_section", "delete_section", "update_document", "extract",
-                                              "export", "rename", "duplicate", "delete", "versions", "restore"],
-                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes; a document's sections), `edit` it (checked, saved, replayed live in the editor), change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide, change a document: add_section / update_section / move_section / delete_section / update_document, `extract` an existing PDF's text and pictures, `export` a saved design as another file, or handle a design as a file: rename / duplicate / delete / versions / restore."},
+                                              "export", "rename", "duplicate", "delete", "versions", "restore", "comments"],
+                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes; a document's sections), `edit` it (checked, saved, replayed live in the editor), change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide, change a document: add_section / update_section / move_section / delete_section / update_document, `extract` an existing PDF's text and pictures, `export` a saved design as another file, handle a design as a file: rename / duplicate / delete / versions / restore, or read and answer the `comments` people pinned on it."},
         "new_name": {"type": "string", "description": "For `rename`: the design's new name. For `duplicate`: the copy's name (default <name>-copy)."},
         "version": {"type": ["string", "integer"], "description": "For `restore`: the version to go back to — its id from `versions`, or its place there (1 = the newest)."},
         "section": {"type": "object", "description": "For add_section / update_section: the section {title, blocks: […]}. update_section takes just the keys that change — {blocks} rewrites it, {title} renames it."},
@@ -307,7 +313,9 @@ _DESIGN_TOOL = {
         "replace": {"type": "boolean", "description": "For `render` of a document: re-render it under the SAME name (after changing its content) instead of making a new one; the earlier version is kept in its history."},
         "discard_edits": {"type": "boolean", "description": "For a document's re-render (`replace`, or a section action) after the tool said its pages were edited by hand since the last render: true once those edits are accounted for — their wording put into what you send, the user told what can't be kept."},
         "slide": {"type": "object", "description": "For add_slide / update_slide: the slide — a layout slide {layout, …slots, notes?} laid out with the deck's own theme and footer, or a hand-built one {nodes, fill?}. update_slide replaces the slide whole: start from its `source` in inspect and change what you need."},
-        "number": {"type": "integer", "description": "For update_slide / move_slide / duplicate_slide / delete_slide: the slide's number, from 1. For update_section / move_section / delete_section: the section's."},
+        "number": {"type": "integer", "description": "For update_slide / move_slide / duplicate_slide / delete_slide: the slide's number, from 1. For update_section / move_section / delete_section: the section's. For `comments`: the comment's (its #)."},
+        "reply": {"type": "string", "description": "For `comments` with `number`: your answer to that comment — what you changed, or what you need to know."},
+        "resolve": {"type": "boolean", "description": "For `comments` with `number`: true closes the comment (its change is made), false opens it again."},
         "to": {"type": "integer", "description": "For move_slide / move_section: the position it moves to, from 1."},
         "at": {"type": "integer", "description": "For add_slide / add_section: the position of the new one, from 1 (default: the end)."},
         "notes": {"type": "string", "description": "For update_slide without `slide`: the slide's new speaker notes (also `title`, `transition`)."},
@@ -405,7 +413,7 @@ def _design_short():
     props["action"]["description"] = (
         "guide — load this tool's full instructions (first). Then: render, edit, inspect, extract, script, "
         "add_slide, update_slide, move_slide, duplicate_slide, delete_slide, add_section, update_section, "
-        "move_section, delete_section, update_document, export, rename, duplicate, delete, versions, restore.")
+        "move_section, delete_section, update_document, export, rename, duplicate, delete, versions, restore, comments.")
     return {**{k: v for k, v in _DESIGN_TOOL.items() if k not in ("description", "input_schema")},
             "description": _DESIGN_SHORT,
             "input_schema": {"type": "object", "properties": props, "required": ["action"]}}

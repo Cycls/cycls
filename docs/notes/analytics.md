@@ -166,6 +166,10 @@ Identified users also carry **person properties** (via identify): `email`,
 | `design_version_restored` | a design restored from Version history | `reason` (what replaced the restored version: `save` / `agent` / `change` / `restore` / `keep`) — do people undo the agent? |
 | `design_version_previewed` | "Preview" on a row of Version history: that version's picture, shown before restoring | `reason` (as above) — previews ÷ restores is how often people look before going back |
 | `design_selection_attached` | "Add selection" — what's selected in an open design, attached to a message | `nodes` (how many) — do people point at the design rather than describe it? |
+| `design_comment_added` | a comment pinned on a design — a click on a slide in comment mode, then its words posted | — do people review designs here? |
+| `design_comment_replied` | a reply posted under a comment | — replies ÷ comments is how much of a conversation a pin becomes |
+| `design_comment_resolved` | a comment resolved, or opened again, from its thread | `resolved` (`true` / `false`) — are comments closed, or left |
+| `design_comments_asked` | "Ask the agent to address them" in a design's list of comments: the request put in the composer | `open` (how many were open) — do comments go to the agent, or are they worked by hand? |
 
 ### Sharing loop (organic acquisition)
 

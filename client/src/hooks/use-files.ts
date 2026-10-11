@@ -1,6 +1,7 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { zip } from "fflate";
 import { voteUrl, type PollApi } from "../lib/polls";
+import type { CommentsApi } from "../lib/comments";
 import { useApi } from "./use-api";
 import { track } from "../lib/analytics";
 import type { TrashRow } from "../components/trash-view";
@@ -276,6 +277,16 @@ export function useFiles(baseUrl: string = "") {
     await api(`/deck/${encPath(deckPath)}`, { method: "POST", json: body });
   }, [api]);
 
+  // What people pinned on a design (lib/comments.ts): its threads — asked again with the
+  // version this page has, quietly, every few seconds — a new one, and a change to one.
+  const comments = useMemo<CommentsApi>(() => ({
+    list: async (design, version) =>
+      (await api(`/comments/${encPath(design)}${version ? `?v=${encodeURIComponent(version)}` : ""}`, { silent: true })).json(),
+    add: async (design, body) => (await api(`/comments/${encPath(design)}`, { method: "POST", json: body })).json(),
+    change: async (design, id, body) =>
+      (await api(`/comments/${encPath(design)}?id=${encodeURIComponent(id)}`, { method: "POST", json: body })).json(),
+  }), [api]);
+
   // Backs the composer's @-picker. The server matches, ranks and caps, so this
   // and the mobile client can't disagree about what a query means; `recursive=1`
   // rides along so a server predating `search` still returns a tree we can
@@ -333,7 +344,7 @@ export function useFiles(baseUrl: string = "") {
     makeLink: async () => voteUrl(await shareFile(deck, "public")),
   }), [api, shareFile]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, designLive, listVersions, versionBlob, versionPreview, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, designLive, listVersions, versionBlob, versionPreview, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, comments, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates
