@@ -185,7 +185,9 @@ function Beside({ at, within, children }: { at: { x: number; y: number }; within
     setPos((was) => (was && Math.abs(was.left - left) < 0.5 && Math.abs(was.top - top) < 0.5 ? was : { left, top }));
   });
   return (
-    <div ref={ref} style={{ left: pos?.left ?? 0, top: pos?.top ?? 0, visibility: pos ? undefined : "hidden" }}
+    // Unseen until it is placed — but never `visibility: hidden`: a browser will not focus
+    // what is hidden, and the box inside takes the keys the moment it opens.
+    <div ref={ref} style={{ left: pos?.left ?? 0, top: pos?.top ?? 0, opacity: pos ? undefined : 0 }}
          onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}
          className="pointer-events-auto absolute z-20 w-72 max-w-[calc(100%-16px)] overflow-hidden rounded-xl border border-border bg-background text-start shadow-xl">
       {children}
@@ -449,7 +451,9 @@ export function CommentsList({ path, names, page, pages = [], paper, onGo, onPag
         <div className="flex-1 overflow-y-auto p-2">
           {!c.loaded && <div className="p-3 text-xs text-muted-foreground">{t("loading")}</div>}
           {c.loaded && rows.length === 0 && (
-            <div className="p-3 text-xs leading-relaxed text-muted-foreground">{t(tab === "open" ? "commentsNone" : "commentsNoneResolved")}</div>
+            <div className="p-3 text-xs leading-relaxed text-muted-foreground">
+              {t(tab === "resolved" ? "commentsNoneResolved" : closed.length ? "commentsNoneOpen" : "commentsNone")}
+            </div>
           )}
           {rows.map((thread) => (
             <button key={thread.id} onClick={() => pick(thread)} data-testid="comment-row"

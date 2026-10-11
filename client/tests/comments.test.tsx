@@ -201,6 +201,26 @@ describe("pins on a deck's slides", () => {
     expect(screen.getByTestId("comment-thread").textContent).toContain("Make the headline bigger");   // and open, to go on
   });
 
+  it("the box to write in takes the keys as it opens: it is never hidden at that moment", async () => {
+    // A browser will not focus what is `visibility: hidden` — and the card was, until it
+    // had been measured and placed. Seen on production: the click pinned the comment, the
+    // box opened unfocused, and what was typed went to the deck (a space paged it, a "c"
+    // left comment mode).
+    const hiddenAtFocus: boolean[] = [];
+    vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement) {
+      let hidden = false;
+      for (let el: HTMLElement | null = this; el; el = el.parentElement) if (el.style.visibility === "hidden") hidden = true;
+      if (this.tagName === "TEXTAREA") hiddenAtFocus.push(hidden);
+    });
+    const { api } = server([thread()]);
+    render(deck(api));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Add a comment" }));
+    fireEvent.click(screen.getByTestId("comment-target"), { clientX: 300, clientY: 200 });
+    expect(screen.getByTestId("comment-new")).toBeTruthy();
+    expect(hiddenAtFocus).toEqual([false]);
+  });
+
   it("a comment on one page of several says which page", async () => {
     const { api } = server();
     render(deck(api, manifest(2, { pages: [{ name: "Post", frames: 2 }, { name: "Story", frames: 2 }], page: "Story" })));
@@ -324,6 +344,15 @@ describe("the list", () => {
     fireEvent.click(screen.getByTestId("comments-open"));
     fireEvent.click(screen.getByRole("button", { name: /^Resolved/ }));
     expect(screen.getAllByTestId("comment-row").map((r) => r.textContent)).toEqual([expect.stringContaining("done with")]);
+  });
+
+  it("says there are none open — not that there are none — when the rest are resolved", async () => {
+    const { api } = server([thread({ resolved: true })]);
+    render(deck(api));
+    await settle();
+    fireEvent.click(screen.getByTestId("comments-open"));
+    expect(screen.getByTestId("comments-list").textContent).toContain("No open comments.");
+    expect(screen.getByTestId("comments-list").textContent).not.toContain("No comments yet");
   });
 
   it("hands the open comments to the agent: words in the composer, to send or change", async () => {
