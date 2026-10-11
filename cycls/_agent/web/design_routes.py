@@ -4,8 +4,9 @@ The helpers turn a saved design into what a viewer needs — its slides, its exp
 cached against the `.fig` it was made from — and `design_router` holds the routes that
 act on a design: a deck's slides changed in the viewer (/deck), a new design, an export
 written beside it, the live room of a design open together (/design/*), the workspace's
-brand kit (/brand) and a design's earlier versions (/versions). A design's own bytes are
-read and saved by the files routes (routers.py), which ask these helpers for `?as=…`."""
+brand kit (/brand), a design's earlier versions (/versions) and what is said about it
+(/comments). A design's own bytes are read and saved by the files routes (routers.py),
+which ask these helpers for `?as=…`."""
 import asyncio, base64, hashlib, json, re, shutil, tempfile, unicodedata, uuid, zipfile
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 
 from cycls._app.db import Workspace
+from cycls._agent.design import comments
 from cycls._agent.design import refresh as design_refresh
 from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, resolve_path
 
@@ -487,5 +489,63 @@ def design_router(ws_dep, user_dep, changed):
         from cycls._agent.design import live
         await live.notify(ws.root, rel, {"kind": "reload", "version": version})
         return {"ok": True, "version": version}
+
+    # ---- Comments on a design (cycls/_agent/design/comments.py) ----
+
+    def _commented(ws, path):
+        """The design a comments request is about → its `.fig`'s workspace path. A deck
+        document's comments are its design's: one conversation, whichever was opened."""
+        root = Path(ws.root).resolve()
+        src = _safe_path(root, path)
+        if not _design_doc(src.name) or not src.is_file():
+            raise HTTPException(404, "No such design")
+        try:
+            fig, _ = _deck_fig(root, src)
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(404, "No such design")
+        return fig.relative_to(root).as_posix()
+
+    def _commenter(ws, user, body):
+        """Who is writing: the signed-in person, under the name their browser has for them."""
+        from cycls._agent import state
+        return comments.author(getattr(user, "id", None) or state.actor_of(ws.subject),
+                               body.get("name") or getattr(user, "name", None),
+                               getattr(user, "image_url", None) or body.get("image"))
+
+    @r.get("/comments/{path:path}")
+    async def list_comments(path: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        """A design's comment threads, by number: {threads, version, me}. Asked again
+        with `?v=<version>` it answers {unchanged, version} — what an open design does
+        every few seconds, since nothing is pushed to a browser outside a chat turn."""
+        from cycls._agent import state
+        rel = await asyncio.to_thread(_commented, ws, path)
+        doc, version = await comments.read(ws, rel)
+        if request.query_params.get("v") == version:
+            return {"unchanged": True, "version": version}
+        return {"threads": comments.shown(doc), "version": version,
+                "me": getattr(user, "id", None) or state.actor_of(ws.subject)}
+
+    @r.post("/comments/{path:path}")
+    async def comment(path: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        """A new thread — {text, frame, x, y, page?, frame_name?, name?}: pinned at (x, y)
+        of slide `frame` (from 0), in the slide's own pixels — or, with `?id=<thread>`,
+        one change to it: {op: reply | resolve | reopen | edit | delete | move, …}.
+        → {thread, version}; the thread is null once it is deleted."""
+        rel = await asyncio.to_thread(_commented, ws, path)
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            raise HTTPException(400, "Expected {text, frame, x, y} or {op, …}")
+        who = _commenter(ws, user, body)
+        try:
+            if tid := request.query_params.get("id"):
+                thread, version = await comments.change(ws, rel, tid, str(body.get("op") or ""), who, body)
+            else:
+                thread, version = await comments.add(ws, rel, who, body.get("text"), body)
+        except comments.Refused as e:
+            raise HTTPException(e.status, str(e))
+        return {"thread": thread, "version": version}
 
     return r

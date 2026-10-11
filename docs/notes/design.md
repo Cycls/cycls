@@ -893,6 +893,105 @@ Not in this round: a drag is seen when it is dropped, not while it moves; brand
 colours and variables are each editor's own; a guest, a viewer, or a link that
 lets someone in.
 
+### Comments — pins on a design
+
+Anyone the workspace lets in says what they think of a design where they mean it: a pin
+on a spot of a slide, a thread under it — replies, resolve and reopen, the words changed
+or removed by their author — and a list of every thread. The agent reads them, answers
+and resolves (`comments`), so "address the comments on the deck" is one request.
+
+- **Kept by Cycls, not in the `.fig`** (`cycls/_agent/design/comments.py`). OpenPencil
+  grew comments of its own a day before this was built (upstream #981: threads as plugin
+  data on the document, so they travel in the file). Not taken: there a comment is a
+  save of the design — a version kept, the image exported again, one more thing for the
+  one who saves to hand over; it exists only inside the editor, and most of where a
+  design is looked at has none (a preview, a deck's slides, a document's pages); a
+  document rendered again from its source would drop every one; and it is 222 commits
+  past the editor's pin. The shape is kept close to theirs (a thread, its replies,
+  resolved, where it is pinned) so the two can be mapped if the pin moves.
+- **One record a design, in the workspace's own shelf** (`.comments`, per workspace and
+  not per person — a person's `.db` is theirs alone, which is why polls and shares are
+  invisible to a teammate). Every change reads the record and writes it back only if
+  nobody wrote in between (`gen`), and tries again on what they wrote: two people
+  commenting at one moment both land, on a server of several instances that hold
+  nothing. `.comments` is managed like `.versions`: refused by the files routes and the
+  agent's file tools, masked in the bash sandbox.
+- **Where a pin is.** `{page?, frame, frame_name, x, y}`: the slide — its place on the
+  page and its name — and a point in the slide's own pixels, so it is the same spot
+  however large the picture is drawn. A node's id is no anchor (a `.fig` numbers its
+  nodes anew on every save). The name finds the slide (`comments.place`, `placeOf` in the
+  client): the service names a slide once (`slide-3`, or its `id`) and never renames it —
+  moved, it keeps its name, and so its comments; rebuilt by `update_slide`, it keeps its
+  name; a copy is `<name>-copy`. A name no slide has is a slide that was deleted: the
+  thread stays in the list ("Its slide was removed") and is on no slide — not on
+  whichever took its place. A design of one page has all its threads whatever its page
+  is called now; so has a page of one slide.
+- **The routes** (`web/design_routes.py`). `GET /comments/<design>` → `{threads,
+  version, me}`; asked again with `?v=<version>` → `{unchanged, version}`. `POST
+  /comments/<design>` `{text, frame, x, y, page?, frame_name?, name?}` pins one; with
+  `?id=<thread>`, `{op: reply | resolve | reopen | edit | delete | move, …}` changes it.
+  A deck document's comments are its `.fig`'s: one conversation, whichever was opened.
+  The author's id is the signed-in person's, never the request's; their name is what
+  the browser calls them (the server has no directory of names). Anyone in the
+  workspace answers, resolves and reopens — an answer reopens a resolved thread; the
+  words and the pin are their author's. A thread keeps its number for good (`n`: "#3"
+  is #3 after #1 is removed).
+- **Nothing is pushed.** Outside a chat turn the server has no way to reach a browser,
+  so an open design asks every five seconds, naming the version it has, and is told
+  "unchanged" nearly always (`CommentStore`, `client/src/lib/comments.ts`): one read of
+  one record. It asks at once when the tab is looked at again and when an agent edit
+  lands. What a person writes shows at once from the route's answer, and the list is
+  then read whole *from the version the page had* — taking the newer version on the
+  strength of one thread would skip what a teammate wrote in between.
+- **In the app** (`client/src/components/comments.tsx`). One store a design, shared by
+  whatever shows it. Pins lie over the slide's picture (`CommentLayer`: the layer
+  measures where the picture sits on its stage and places each pin in the slide's
+  pixels); **Comment** (or `C`) makes the next click on the slide pin one; a pin opens
+  its thread beside it — under it where the pane is too narrow for both, never on it;
+  the list (`CommentsList`) goes to a thread's slide and opens it. A deck's toolbar, a
+  single design's preview and a document's pages all have them; the filmstrip and the
+  grid mark the slides with open comments. A shared page has none: there is nobody to
+  comment as. Escape closes the comment being written, then comment mode, and never
+  reaches the canvas (`useEscape`).
+- **In the editor** (cycls-design `editor/patches/comments.ts`; feature `comments`).
+  The editor is another origin: the app cannot see where the design is on its canvas,
+  and a layer of the app's over the frame would trail every pan. So the pins are the
+  editor's — elements of its page over the canvas, as the names beside cursors are,
+  placed again on every repaint (a hand-tool pan and a page switch raise no
+  `viewport:changed`) — and everything else stays Cycls's. The app gives the editor
+  what to draw (`comments`: the page's pins, each on the slide it is on *now* — the
+  editor says its slides by name, `frames`, and `placeOf` finds each thread's —
+  comment mode, the open pin, the comment being written); the editor says where a
+  click of comment mode landed (`commentAt`: taken before the canvas hears it, so it
+  selects and draws nothing; moving, scrolling and pinching still reach the design),
+  which pin was clicked (`commentOpen`), where the open pin is on screen
+  (`commentPlace`) and that Escape was pressed (`commentEscape`). The card is the same
+  component as over a slide's picture, laid over the frame beside that point
+  (`OpenComment`) — inside the box that goes full screen. A thread picked from the list
+  whose pin is out of view is brought into it. With an editor from before it draws
+  comments (`designEditorComments` false), Comment and the list open the design's
+  preview instead. The editor keeps nothing: pinning a comment saves no file.
+- **The agent.** `inspect` ends with the open comments of the page it shows, each where
+  it is now and on what — `#1 slide 2 on headline — Sara: "Make it bigger" · 1 reply`:
+  the part under the pin is read from the same outline (`comments.node_at`: the last
+  node in paint order whose box holds the point), so the model is told what the person
+  pointed at, not a coordinate. `comments {name}` lists them whole with the resolved
+  ones; with `number` it answers (`reply`) and closes or reopens (`resolve`), as itself
+  (`author.agent`; the app shows the agent's own name). "Ask … to address them" in the
+  list puts the request in the composer (`cycls:compose`), to be sent or changed.
+- **Where the design goes, they go.** Filed under the design's path, as its versions
+  are. A rename carries them (`move` — the files route's and the agent's). A design
+  moved to the trash takes them along under its trash entry (`shelve`), so a new design
+  given the same name starts with none; restored, they come back to wherever it was
+  put (`unshelve`); purged, they go (`drop`). Not carried: a folder moved or deleted
+  whole, and a bash `rm` or `mv` of a `.fig` — as with a design's versions.
+
+Not in this round: a PDF that is not a design
+(the app shows one in the browser's own viewer, which gives nothing to pin on), people
+who only have a share link, mentions and notifications, a pin dragged to another spot
+(the route takes `move`; the app has no handle for it yet). In the editor's split view
+the pins are drawn for its first pane, as the cursor names are.
+
 ## Where the code is
 
 The Design tool was written into `cycls/_agent/tools/__init__.py` (it grew to two thirds
@@ -909,10 +1008,11 @@ every name is still importable from where it used to be.
 | `report.py` · `files.py` | What the model is told (the outline, what an edit touched, the layout check) · a design's files (a free name, the pages of a render written out). |
 | `client.py` | The HTTP client to the service — what `from cycls._agent import design` gives. |
 | `deck.py` · `store.py` · `refresh.py` · `live.py` · `stock.py` | Slide ops on a saved deck · versions and the base a save names · the exports kept beside a design · rooms and passes · stock photos. |
+| `comments.py` | What people pinned on a design: the record, its changes, where a pin is now, and where the record goes when the design does. |
 
 `cycls/_agent/web/design_routes.py` holds a design as the app is served it (its slides
 and exports, cached against the `.fig`) and `design_router`: `/deck`, `/design/*`,
-`/brand`, `/versions`. The files routes stay in `routers.py` and ask it for `?as=…`;
+`/brand`, `/versions`, `/comments`. The files routes stay in `routers.py` and ask it for `?as=…`;
 what both need (a path kept inside the workspace, a free name, the no-cache header) is
 `web/shared.py`. A path as a *tool* was given it is `cycls/_agent/paths.py`.
 

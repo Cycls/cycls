@@ -454,6 +454,29 @@ const translations = {
     designKeepMineHint: "Save your version over it. The other stays in Version history.",
     designSaveMineAsCopy: "Save mine as a copy",
     designSaveMineAsCopyHint: "Keep both: yours becomes a new design; this one opens as it is now.",
+    comments: "Comments",
+    comment: "Comment",
+    addComment: "Add a comment",
+    commentHint: "Click where you want to comment",
+    commentReply: "Reply",
+    commentPost: "Post",
+    commentResolve: "Resolve",
+    commentResolved: "Resolved",
+    commentReopen: "Reopen",
+    commentResolvedBy: "Resolved by {name}",
+    commentEdited: "edited",
+    commentsOpen: "Open",
+    commentsNone: "No comments yet. Turn on Comment, then click the design where you want to say something.",
+    commentsNoneResolved: "Nothing resolved yet.",
+    commentOnSlide: "Slide {n}",
+    commentOnPage: "Page {n}",
+    commentSlideGone: "Its slide was removed",
+    commentPageGone: "Its page was removed",
+    commentOneReply: "1 reply",
+    commentReplies: "{n} replies",
+    commentsAsk: "Ask {agent} to address them",
+    commentsTheAgent: "the agent",
+    commentsAskText: "Address the open comments on {path}",
     versionHistory: "Version history",
     versionNone: "No earlier versions yet. One is kept as the design changes.",
     versionSaved: "Saved version",
@@ -933,6 +956,29 @@ const translations = {
     designKeepMineHint: "احفظ نسختك فوقه. تبقى الأخرى في سجل النسخ.",
     designSaveMineAsCopy: "حفظ نسختي كنسخة منفصلة",
     designSaveMineAsCopyHint: "احتفظ بالاثنين: تصبح نسختك تصميمًا جديدًا ويُفتح هذا كما هو الآن.",
+    comments: "التعليقات",
+    comment: "تعليق",
+    addComment: "أضف تعليقًا",
+    commentHint: "انقر حيث تريد التعليق",
+    commentReply: "ردّ",
+    commentPost: "نشر",
+    commentResolve: "حلّ",
+    commentResolved: "محلولة",
+    commentReopen: "إعادة فتح",
+    commentResolvedBy: "حلّها {name}",
+    commentEdited: "معدّل",
+    commentsOpen: "مفتوحة",
+    commentsNone: "لا تعليقات بعد. فعّل «تعليق» ثم انقر على التصميم حيث تريد أن تقول شيئًا.",
+    commentsNoneResolved: "لم يُحلّ شيء بعد.",
+    commentOnSlide: "الشريحة {n}",
+    commentOnPage: "الصفحة {n}",
+    commentSlideGone: "حُذفت شريحته",
+    commentPageGone: "حُذفت صفحته",
+    commentOneReply: "ردّ واحد",
+    commentReplies: "{n} ردود",
+    commentsAsk: "اطلب من {agent} معالجتها",
+    commentsTheAgent: "الوكيل",
+    commentsAskText: "عالج التعليقات المفتوحة على {path}",
     versionHistory: "سجل النسخ",
     versionNone: "لا توجد نسخ سابقة بعد. تُحفظ نسخة كلما تغيّر التصميم.",
     versionSaved: "نسخة محفوظة",
@@ -982,6 +1028,17 @@ export function t(key: keyof typeof translations.en): string {
 // the model wrote in the user's language, not the browser's.
 export function tIn(lang: Lang, key: keyof typeof translations.en): string {
   return translations[lang][key];
+}
+
+// How long ago, in the UI's language: "just now", "5 minutes ago", "yesterday".
+export function timeAgo(iso: string): string {
+  const s = (Date.parse(iso) - Date.now()) / 1000;
+  const rtf = new Intl.RelativeTimeFormat(getLang(), { numeric: "auto" });
+  const abs = Math.abs(s);
+  if (abs < 60) return rtf.format(0, "second");
+  if (abs < 3600) return rtf.format(Math.round(s / 60), "minute");
+  if (abs < 86400) return rtf.format(Math.round(s / 3600), "hour");
+  return rtf.format(Math.round(s / 86400), "day");
 }
 
 // The server's own step lines, in the UI's language.

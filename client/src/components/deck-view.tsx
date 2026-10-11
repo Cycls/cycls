@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DropdownMenu } from "./files";
 import { DesignPresenceRow } from "./design-presence";
-import { DesignEditorView, canFullscreen, flushDesignEditor, fullscreenDesignEditor, reloadDesignEditors, type DesignHost } from "./design-editor-view";
+import { DesignEditorView, canFullscreen, designEditorComments, flushDesignEditor, fullscreenDesignEditor, reloadDesignEditors, type DesignHost } from "./design-editor-view";
 import { PresentMode } from "./present-mode";
+import { CommentButtons, CommentLayer, CommentsList, useCommentCounts } from "./comments";
+import { useComments } from "../lib/comments";
 import type { DeckPoll, PollApi } from "../lib/polls";
 import type { WriteFile } from "../hooks/use-files";
 import { saveBlob } from "./canvas-utils";
@@ -119,7 +121,7 @@ export function EditPreviewSwitch({ previewing, onEdit, onPreview }: {
 
 const baseName = (path: string) => (path.split("/").pop() || path).replace(/\.deck\.json$|\.fig$/i, "");
 
-export function DeckView({ data, path, openFile, writeFile, designEditorUrl, designHost, onReload, onSlideOp: changeSlides, pollsFor }: {
+export function DeckView({ data, path, openFile, writeFile, designEditorUrl, designHost, onReload, onSlideOp: changeSlides, pollsFor, onPage }: {
   data: string;
   path: string;                 // the deck document (or .fig) this manifest is of
   openFile?: (path: string, silent?: boolean) => Promise<string>;   // authed blob URL: downloads, the editor's .fig
@@ -129,6 +131,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
   onReload?: () => void;        // refetch the manifest (the deck was edited)
   onSlideOp?: (op: DeckOp) => Promise<void>;   // the owner reorders / duplicates / deletes in the grid
   pollsFor?: (deck: string) => PollApi;        // the owner's: poll slides run live when presented
+  onPage?: (page: string) => void;             // show another page of the design (a comment is on it)
 }) {
   const deck = useMemo(() => parseDeck(data), [data]);
   const count = deck?.count ?? 0;
@@ -153,6 +156,14 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
   const name = baseName(fig || path);
   const canEdit = !!(designEditorUrl && writeFile && openFile && fig);
   const hasNotes = !!deck?.notes?.some((n) => n && n.trim());
+  // What people pinned on this design (lib/comments.ts) — where the page can comment. A
+  // pin names its slide, so it is found again after the slides are reordered.
+  const picture = useRef<HTMLImageElement>(null);
+  const names = useMemo(() => Array.from({ length: count }, (_, i) => deck?.names?.[i] ?? ""), [deck, count]);
+  const pageNames = useMemo(() => (deck?.pages ?? []).map((p) => p.name), [deck]);
+  const page = deck?.page || undefined;
+  const comments = useComments(fig);
+  const pinned = useCommentCounts(fig, names, page, pageNames);
 
   useEffect(() => { if (count) track("deck_opened", { slides: count }); }, [path, count > 0]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -243,6 +254,9 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
           <span className="min-w-0 truncate">{fig}</span>
           <div className="flex-1" />
           <DesignPresenceRow path={fig} />
+          {/* (An editor from before it pins comments: they are on the slides, back in the viewer.) */}
+          <CommentButtons path={fig} onComment={(adding) => { if (adding && !designEditorComments(fig)) void doneEditing(); }}
+                          onList={() => { if (!designEditorComments(fig)) void doneEditing(); }} />
           <EditPreviewSwitch previewing={false} onEdit={() => {}} onPreview={() => void doneEditing()} />
           {/* The deck's editor goes full screen like a design's does (a .fig open in
               the canvas has this button in its header; a deck's editor had none). */}
@@ -269,8 +283,17 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
   const note = deck.notes?.[nav.active]?.trim();
 
   return (
-    <div className="flex h-full flex-col outline-none" tabIndex={0} data-testid="deck-view"
-         onKeyDown={(e) => { if (mode === "stage") nav.onKey(e); }}>
+    <div className="relative flex h-full flex-col outline-none" tabIndex={0} data-testid="deck-view"
+         onKeyDown={(e) => {
+           // C: comment mode — the next click on the slide pins a comment.
+           if (comments && e.key.toLowerCase() === "c" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+             e.preventDefault();
+             setMode("stage");
+             comments.store.set({ adding: !comments.adding, draft: null });
+             return;
+           }
+           if (mode === "stage") nav.onKey(e);
+         }}>
       {/* Toolbar */}
       <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-1.5">
         <div className="flex rounded-lg bg-secondary p-0.5">
@@ -294,6 +317,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
         )}
         {busy && <span className="ml-2 text-xs text-muted-foreground">{t("saving")}</span>}
         <div className="flex-1" />
+        {fig && <CommentButtons path={fig} onComment={(adding) => { if (adding) setMode("stage"); }} />}
         {openFile && (
           <div className="relative">
             <button onClick={() => setMenuOpen((o) => !o)} className={cn(tool, "text-muted-foreground hover:bg-secondary/80 hover:text-foreground")}>
@@ -335,6 +359,7 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
                   <span className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-muted-foreground">
                     <span className="tabular-nums">{i + 1}</span>
                     {deck.titles?.[i] && <span className="min-w-0 truncate" dir="auto">{deck.titles[i]}</span>}
+                    {pinned[i] > 0 && <span className="ml-auto shrink-0 rounded-full bg-red-500 px-1.5 text-[10px] font-semibold text-white tabular-nums" data-testid="slide-comments">{pinned[i]}</span>}
                   </span>
                 </button>
                 {onSlideOp && (
@@ -377,8 +402,11 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
                         className={cn("flex w-full items-start gap-1 rounded-md transition-colors cursor-pointer",
                                       i === nav.active ? "text-foreground" : "text-muted-foreground")}>
                   <span className="w-3 shrink-0 pt-0.5 text-right text-[10px] tabular-nums">{i + 1}</span>
-                  <img src={src} alt={`Slide ${i + 1}`} loading="lazy"
-                       className={cn("min-w-0 flex-1 rounded border", i === nav.active ? "border-primary ring-1 ring-primary" : "border-border hover:border-muted-foreground")} />
+                  <span className="relative min-w-0 flex-1">
+                    <img src={src} alt={`Slide ${i + 1}`} loading="lazy"
+                         className={cn("block w-full rounded border", i === nav.active ? "border-primary ring-1 ring-primary" : "border-border hover:border-muted-foreground")} />
+                    {pinned[i] > 0 && <span className="absolute -right-1 -top-1 size-2.5 rounded-full border border-background bg-red-500" data-testid="slide-comments" />}
+                  </span>
                 </button>
               ))}
             </div>
@@ -386,8 +414,10 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
           {/* Stage + notes */}
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="relative flex min-h-0 flex-1 items-center justify-center bg-neutral-200 p-4 dark:bg-neutral-800">
-              <img src={deck.slides[nav.active]} alt={deck.titles?.[nav.active] || `Slide ${nav.active + 1}`}
+              <img ref={picture} src={deck.slides[nav.active]} alt={deck.titles?.[nav.active] || `Slide ${nav.active + 1}`}
                    className="max-h-full max-w-full object-contain shadow-lg" onDoubleClick={() => present(nav.active)} />
+              {fig && <CommentLayer path={fig} picture={picture} size={deck.sizes?.[nav.active]} frame={nav.active}
+                                    names={names} page={page} pages={pageNames} />}
               {count > 1 && (
                 <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-background/85 px-1.5 py-0.5 text-xs text-muted-foreground shadow backdrop-blur">
                   <button onClick={() => nav.go(nav.active - 1)} className="rounded-full px-1.5 hover:text-foreground cursor-pointer" aria-label={t("previous")}>‹</button>
@@ -414,6 +444,9 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
           </div>
         </div>
       )}
+
+      {fig && <CommentsList path={fig} names={names} page={page} pages={pageNames} paper={paper} onPage={onPage}
+                            onGo={(i) => { setMode("stage"); nav.go(i); }} />}
 
       {presenting != null && (
         <PresentMode deck={deck} start={presenting} onClose={(last) => { setPresenting(null); nav.go(last); }} polls={polls} />

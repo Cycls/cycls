@@ -10,8 +10,8 @@ from .prepare import _mend_json_tail, _prepare_ops, _prepare_spec
 from .extract import _pdf_parts
 from .report import _edit_names, _layout_check, _outline_text
 from .files import _DECK_EXTS, _DESIGN_EXTS, _dedupe_design_name, _save_pages
-from .actions import (_DOCUMENT_ACTIONS, _FILE_ACTIONS, _SLIDE_ACTIONS, _document_source, _exec_design_file,
-    _exec_document, _exec_slides, _render_document, _sections_text, _to_the_room)
+from .actions import (_DOCUMENT_ACTIONS, _FILE_ACTIONS, _SLIDE_ACTIONS, _comments_note, _document_source, _exec_comments,
+    _exec_design_file, _exec_document, _exec_slides, _render_document, _sections_text, _to_the_room)
 
 
 async def _exec_design(inp, workspace):
@@ -87,6 +87,8 @@ async def _exec_design(inp, workspace):
         return await _pdf_parts(inp, workspace, name)
     if action in _FILE_ACTIONS:
         return await _exec_design_file(action, inp, workspace, name)
+    if action == "comments":
+        return await _exec_comments(inp, workspace, name)
     if action in ("edit", "inspect"):
         rel = f"designs/{name}.fig"
         fig_path = pathlib.Path(workspace.root) / rel
@@ -103,6 +105,8 @@ async def _exec_design(inp, workspace):
         except Exception as e:
             return f"Error: couldn't inspect {rel} — {e}"
         text = _outline_text(rel, o["frames"], o["pages"], o["page"])
+        if pinned := await _comments_note(workspace, rel, o):    # what people said about this page, and on what
+            text += "\n\n" + pinned
         doc = await asyncio.to_thread(_document_source, workspace.root, name)
         return f"{_sections_text(name, doc)}\n\n{text}" if doc else text
     # `edit` changes a saved design: named `ops` (the normal way) or a raw `script`.

@@ -944,6 +944,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
                     await asyncio.to_thread(refresh.follow, ws.root, Path(rel).as_posix(), Path(dst).as_posix())
                 except OSError as e:
                     log("warn", message=f"the files beside {rel} did not follow it to {dst}: {type(e).__name__}: {e}")
+                await _comments(ws, "move", Path(rel).as_posix(), Path(dst).as_posix())   # …and what was said about it
         if was_app and trash.kind_of(dst, True) == "app":
             await _move_app_data(ws, rel.split("/")[1], dst.split("/")[1])
         _catalog_drop(ws.root)
@@ -968,8 +969,20 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         if trash.owned_by_app(rel) and not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can delete apps")
         meta = await asyncio.to_thread(trash.trash_path, ws.root, rel, "user")
+        if meta["kind"] == "file" and rel.lower().endswith(".fig"):
+            await _comments(ws, "shelve", Path(rel).as_posix(), meta["id"])   # a new design of that name starts with none
         _catalog_drop(ws.root)
         return {"ok": True, "trash_id": meta["id"], "kind": meta["kind"]}
+
+    async def _comments(ws, what, *args):
+        """A design's comments go where it goes (cycls/_agent/design/comments.py: move,
+        shelve, unshelve, drop). The file has already moved: its comments staying behind
+        is logged, and never fails what was asked."""
+        from cycls._agent.design import comments
+        try:
+            await getattr(comments, what)(ws, *args)
+        except Exception as e:
+            log("warn", message=f"comments did not {what} {args}: {type(e).__name__}: {e}")
 
     async def _move_app_data(ws, old, new):
         """Renaming an app renames its shelf: the slug is the only thing joining them."""
@@ -1030,6 +1043,8 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             path = await asyncio.to_thread(trash.restore, ws.root, tid)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Not found")
+        if path.lower().endswith(".fig"):
+            await _comments(ws, "unshelve", tid, Path(path).as_posix())
         _catalog_drop(ws.root)
         return {"ok": True, "path": path}
 
@@ -1046,13 +1061,16 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Not found")
         await _drop_app_data(ws, [meta])
+        await _comments(ws, "drop", [tid])
         return {"ok": True}
 
     @r.delete("/trash")
     async def empty_trash(ws: Workspace = ws_dep, user: Any = user_dep):
         if not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can delete forever")
-        await _drop_app_data(ws, await asyncio.to_thread(trash.empty, ws.root))
+        gone = await asyncio.to_thread(trash.empty, ws.root)
+        await _drop_app_data(ws, gone)
+        await _comments(ws, "drop", [m["id"] for m in gone if m.get("id")])
         for c in await _trashed_chats(ws):
             await state.delete_chat(ws, c["chat_id"])
         return {"ok": True}

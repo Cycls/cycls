@@ -1,4 +1,5 @@
 import type { PollApi } from "../lib/polls";
+import { CommentsContext, type CommentsApi, type CommentsHost } from "../lib/comments";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { motion, LayoutGroup, AnimatePresence, useMotionValue, useSpring, useTransform, useReducedMotion, type MotionValue } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
@@ -25,7 +26,7 @@ import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-chat";
 import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, WriteFile } from "../hooks/use-files";
-import { designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
+import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
 import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
@@ -103,6 +104,7 @@ export interface FilesPanelProps {
   onNewDesign?: () => void;                                      // the Files panel's "New design"
   deckOp?: (path: string, body: DeckOp) => Promise<void>;       // the deck viewer's slide moves / copies / deletes
   pollsFor?: (deck: string) => PollApi;                         // live polls when the owner presents a deck
+  comments?: CommentsApi;                                       // what people pin on a design, and answer
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
@@ -396,12 +398,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       } else if (ev.action === "design_command" && typeof ev.path === "string" && typeof ev.script === "string") {
         // The agent is editing an OPEN design live — forward the script to that
         // .fig's embedded editor (DesignEditorView listens for this and relays it).
-        window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: {
-          path: ev.path, script: ev.script, intent: typeof ev.intent === "string" ? ev.intent : undefined,
-          version: typeof ev.version === "string" ? ev.version : undefined,   // the file as the agent saved it
-          page: typeof ev.page === "string" ? ev.page : undefined,            // the page it is made on
-          reload: ev.reload === true,                                         // its pages changed: re-open, don't replay
-        } }));
+        window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: designCommandDetail(ev) }));
         track("ui_action", { action: "design_command" });
       } else if (ev.action === "refresh_canvas" && typeof ev.path === "string") {
         // The agent changed a file that may be open (a Video edit): its view fetches it again now.
@@ -785,6 +782,25 @@ export function Chat({ chat, onShare, files, account, config }: {
     live: files.designLive,
     me: account?.user.id ? { id: account.user.id, name: account.user.name || account.user.email } : undefined,
   } : undefined), [files, createDesign, openFileInCanvas, account?.user.id, account?.user.name, account?.user.email]);
+  // Comments on a design: the routes, who this is (the server knows an id, the browser a
+  // name), and what the agent is called. An app with no sign-in has one person, unnamed.
+  const commentsApi = files?.comments;
+  const commentsHost = useMemo<CommentsHost | null>(() => (commentsApi ? {
+    api: commentsApi,
+    me: account?.user.id ? { id: account.user.id, name: account.user.name || account.user.email, image: account.user.imageUrl } : undefined,
+    agent: meta?.name || name,   // what the agent is called here: "Super"
+  } : null), [commentsApi, account?.user.id, account?.user.name, account?.user.email, account?.user.imageUrl, meta?.name, name]);
+  // Words handed to the composer from elsewhere on the page (a design's comments: "address them").
+  useEffect(() => {
+    const onCompose = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: string }>).detail?.text;
+      if (typeof text !== "string" || !text) return;
+      setInput((cur) => (cur.trim() ? `${cur.trimEnd()} ${text}` : text));
+      textareaRef.current?.focus();
+    };
+    window.addEventListener("cycls:compose", onCompose);
+    return () => window.removeEventListener("cycls:compose", onCompose);
+  }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z" || e.shiftKey) return;
@@ -1285,6 +1301,7 @@ export function Chat({ chat, onShare, files, account, config }: {
         isDesktop && rightExpanded && "min-w-0 flex-1",
       )}>
       {files && (
+        <CommentsContext.Provider value={commentsHost}>
         <Canvas
           working={workingPaths}
           tabs={canvasTabs}
@@ -1320,6 +1337,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           designHost={designHost}
           onNewDesign={(preset) => void createDesign(preset, "canvas")}
         />
+        </CommentsContext.Provider>
       )}
       {/* Chats / Files / Apps / Shares — docked on desktop, overlay on a phone */}
       <AnimatePresence initial={false}>

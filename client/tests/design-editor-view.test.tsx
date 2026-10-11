@@ -5,6 +5,8 @@ import {
   followDesignPeer, fullscreenDesignEditor, showDesignPage, type DesignHost,
 } from "../src/components/design-editor-view";
 import { DesignPresenceRow } from "../src/components/design-presence";
+import { designEditorComments } from "../src/components/design-editor-view";
+import { CommentsContext, commentStore, forgetComments, type CommentThread, type CommentsApi, type CommentsHost } from "../src/lib/comments";
 import { ToastProvider } from "../src/lib/toast";
 
 // The editor iframe talks to its host over postMessage (protocol 2). It edits ONE
@@ -813,6 +815,24 @@ describe("DesignEditorView, together", () => {
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "command" }), EDITOR);
   });
 
+  it("the chat tells the editor the room took the edit — as the server told the chat", async () => {
+    // The server marks the event `live`, and the editor reads it; the chat, which carries
+    // it from one to the other, left it out — so the edit was made a second time, by the
+    // editor of whoever asked for it, on the document everyone shares.
+    const { designCommandDetail } = await import("../src/components/design-editor-view");
+    const said = designCommandDetail({ action: "design_command", path: "designs/launch.fig", script: "S", intent: "tidy",
+                                       version: "v2", page: "Story", live: true });
+    expect(said).toEqual({ path: "designs/launch.fig", script: "S", intent: "tidy", version: "v2", page: "Story", reload: false, live: true });
+    expect(designCommandDetail({ path: "designs/launch.fig", script: "S" }))
+      .toEqual({ path: "designs/launch.fig", script: "S", intent: undefined, version: undefined, page: undefined, reload: false, live: false });
+    const { frame } = mount({ host: live() });
+    const { post, load } = await ready(frame(), 2, ["live"]);
+    fromEditor(frame(), "presence", { doc: load.doc, saver: false, connected: true, peers: [BADR] });
+    await flush();
+    await command(said);
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "command" }), EDITOR);
+  });
+
   it("…but an editor that is not in the room (it opened alone) makes the edit itself", async () => {
     const { frame } = mount({ host: live(null) });
     const { post } = await ready(frame(), 2, ["live"]);
@@ -854,5 +874,115 @@ describe("DesignEditorView, together", () => {
     expect(designPresence("designs/launch.fig")).not.toBeNull();
     unmount();
     expect(designPresence("designs/launch.fig")).toBeNull();
+  });
+});
+
+describe("DesignEditorView, comments", () => {
+  // Comments are Cycls's (lib/comments.ts); an editor that says "comments" draws their
+  // pins on the design and takes the click of comment mode. The card is this page's.
+  const PATH = "designs/launch.fig";
+  const OMAR = { id: "user_2", name: "Omar" }, SARA = { id: "user_1", name: "Sara" };
+  const thread = (over: Partial<CommentThread>): CommentThread => ({
+    id: "t1", n: 1, frame: 0, frame_name: "cover", x: 100, y: 50, author: OMAR, text: "Make it bigger",
+    at: "2026-10-11T10:00:00+00:00", updated: "2026-10-11T10:00:00+00:00", resolved: false, replies: [], ...over });
+  const THREADS = [thread({}), thread({ id: "t2", n: 2, frame: 1, frame_name: "agenda", x: 7, y: 9, author: SARA }),
+                   thread({ id: "t3", n: 3, resolved: true })];
+  let api: CommentsApi & { add: ReturnType<typeof vi.fn> };
+  let commentsHost: CommentsHost;
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async (u: string) => ({ arrayBuffer: async () => new Uint8Array(bytes[u]).buffer })));
+    URL.revokeObjectURL = vi.fn();
+    let kept = THREADS;   // what the workspace has: a comment added is in the next list
+    api = {
+      list: vi.fn(async () => ({ threads: kept, version: String(kept.length), me: SARA.id })),
+      add: vi.fn(async (_p: string, body: Record<string, unknown>) => {
+        const { text, page, frame, frame_name, x, y } = body as Partial<CommentThread>;
+        const made = thread({ id: "t9", n: 9, text, page, frame, frame_name, x, y, author: SARA });
+        kept = [...kept, made];
+        return { thread: made };
+      }),
+      change: vi.fn(async () => ({ thread: null })),
+    } as never;
+    commentsHost = { api, me: SARA };
+  });
+  afterEach(() => { cleanup(); forgetComments(); vi.unstubAllGlobals(); });
+
+  const open = async (features: string[]) => {
+    const utils = render(
+      <CommentsContext.Provider value={commentsHost}>
+        <DesignEditorView url="blob:orig" path={PATH} name="launch.fig" editorUrl={EDITOR} writeFile={vi.fn(async () => {})} />
+      </CommentsContext.Provider>);
+    const frame = utils.container.querySelector("iframe")!;
+    const { post, load } = await ready(frame, 2, features);
+    // The slides were reordered since the comments were pinned: the cover is slide 2 now.
+    fromEditor(frame, "pages", { doc: load.doc, page: "Page 1", pages: ["Page 1"] });
+    fromEditor(frame, "frames", { doc: load.doc, page: "Page 1", frames: [{ name: "agenda", w: 800, h: 600 }, { name: "cover", w: 800, h: 600 }] });
+    await flush();
+    const said = () => post.mock.calls.map((c) => c[0] as Record<string, unknown>).filter((m) => m.type === "comments");
+    return { frame, post, load, said, last: () => said().at(-1)! };
+  };
+
+  it("an editor that pins comments is given the pins of the page it shows, each on its slide as it is now", async () => {
+    const { last } = await open(["comments"]);
+    expect(designEditorComments(PATH)).toBe(true);
+    expect(last()).toMatchObject({ target: "cycls-editor", type: "comments", adding: false, active: null, draft: null, me: { label: "S" } });
+    expect(last().pins).toEqual([                                    // not the resolved one
+      { id: "t1", frame: 1, x: 100, y: 50, label: "O", color: expect.stringMatching(/^#[0-9a-f]{6}$/) },
+      { id: "t2", frame: 0, x: 7, y: 9, label: "S", color: expect.stringMatching(/^#[0-9a-f]{6}$/) },
+    ]);
+  });
+
+  it("…and an editor from before it does is given nothing, and says so to the app", async () => {
+    const { said } = await open(["pages"]);
+    expect(said()).toEqual([]);
+    expect(designEditorComments(PATH)).toBe(false);                  // Comment then opens the design's preview
+  });
+
+  it("a click in comment mode starts a comment on that spot; its card lies beside the pin the editor drew", async () => {
+    const { frame, load, last } = await open(["comments"]);
+    act(() => commentStore(PATH, commentsHost).set({ adding: true }));
+    expect(last().adding).toBe(true);
+    fromEditor(frame, "commentAt", { doc: load.doc, page: "Page 1", frame: 1, frame_name: "cover", x: 200, y: 300 });
+    await flush();
+    expect(last().draft).toEqual({ frame: 1, x: 200, y: 300 });      // the editor draws the pin of the comment being written
+    expect(screen.queryByTestId("editor-comment")).toBeNull();        // …and the card waits to be told where that is
+    fromEditor(frame, "commentPlace", { doc: load.doc, id: "draft", at: { x: 320, y: 240 }, box: { w: 1000, h: 700 } });
+    await flush();
+    const box = screen.getByPlaceholderText("Add a comment");
+    fireEvent.change(box, { target: { value: "Swap the photo" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    await flush();
+    expect(api.add).toHaveBeenCalledWith(PATH, { page: "Page 1", frame: 1, frame_name: "cover", x: 200, y: 300, text: "Swap the photo", name: "Sara" });
+    expect(last()).toMatchObject({ draft: null, active: "t9" });      // posted: the new pin is the open one
+    expect((last().pins as { id: string }[]).map((p) => p.id)).toContain("t9");
+  });
+
+  it("a pin clicked in the editor opens its thread; Escape in the editor closes it, then leaves comment mode", async () => {
+    const { frame, load, last } = await open(["comments"]);
+    fromEditor(frame, "commentOpen", { doc: load.doc, id: "t1" });
+    await flush();
+    expect(last().active).toBe("t1");
+    fromEditor(frame, "commentPlace", { doc: load.doc, id: "t1", at: { x: 300, y: 200 }, box: { w: 1000, h: 700 } });
+    await flush();
+    expect(screen.getByTestId("comment-thread").textContent).toContain("Make it bigger");
+    // The pin scrolled out of view: its card goes with it.
+    fromEditor(frame, "commentPlace", { doc: load.doc, id: "t1", at: null, box: { w: 1000, h: 700 } });
+    await flush();
+    expect(screen.queryByTestId("comment-thread")).toBeNull();
+    act(() => commentStore(PATH, commentsHost).set({ adding: true }));
+    fromEditor(frame, "commentEscape", { doc: load.doc });
+    await flush();
+    expect(last()).toMatchObject({ active: null, adding: true });     // first the thread
+    fromEditor(frame, "commentEscape", { doc: load.doc });
+    await flush();
+    expect(last().adding).toBe(false);                                // then comment mode
+  });
+
+  it("a card is not shown for a pin the editor placed before another was opened", async () => {
+    const { frame, load } = await open(["comments"]);
+    fromEditor(frame, "commentOpen", { doc: load.doc, id: "t2" });
+    fromEditor(frame, "commentPlace", { doc: load.doc, id: "t1", at: { x: 300, y: 200 }, box: { w: 1000, h: 700 } });   // a stale place
+    await flush();
+    expect(screen.queryByTestId("comment-thread")).toBeNull();
   });
 });

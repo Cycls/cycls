@@ -119,6 +119,80 @@ async def _to_the_room(root, rel, ui):
         ui["live"] = True
 
 
+async def _comments_follow(workspace, what, *args):
+    """A design's comments go where it goes (design/comments.py: move, shelve). The file
+    has already moved, so comments that stay behind fail nothing; a workspace with no
+    store to reach has none."""
+    from . import comments
+    if not comments.usable(workspace):
+        return
+    try:
+        await getattr(comments, what)(workspace, *args)
+    except Exception as e:
+        from ..logs import log
+        log("warn", message=f"comments did not {what} {args}: {type(e).__name__}: {e}")
+
+
+async def _comments_note(workspace, rel, outline):
+    """What `inspect` adds about a design's comments: the open ones on the page it shows.
+    "" when there are none, no store to read them from, or they couldn't be read — an
+    outline is never held up by them."""
+    from . import comments
+    from .report import _comments_on_page
+    if not comments.usable(workspace):
+        return ""
+    try:
+        doc, _ = await comments.read(workspace, rel)
+    except Exception:
+        return ""
+    pages = [p.get("name") for p in outline.get("pages") or []]
+    return _comments_on_page(comments.on_page(comments.open_threads(doc), outline.get("page"), pages), outline.get("frames") or [])
+
+
+async def _exec_comments(inp, workspace, name):
+    """`comments`: what people pinned on a design — listed; or, with `number`, one of
+    them answered (`reply`) and closed or opened again (`resolve`). The agent writes as
+    itself: its replies are marked as an agent's."""
+    from . import comments
+    from .report import _comments_listing
+    rel = f"designs/{name}.fig"
+    if not (pathlib.Path(workspace.root) / rel).is_file():
+        return f"Error: {rel} doesn't exist — `comments` are on a design that is saved. The designs here: {_designs_there(pathlib.Path(workspace.root))}."
+    if not comments.usable(workspace):
+        return "Error: comments aren't kept in this workspace."
+    try:
+        doc, _ = await comments.read(workspace, rel)
+    except Exception as e:
+        return f"Error: couldn't read the comments on {rel} — {e}"
+    threads = comments.shown(doc)
+    number, reply, resolve = inp.get("number"), inp.get("reply"), inp.get("resolve")
+    if number is None:
+        if reply is not None or resolve is not None:
+            return "Error: `reply` and `resolve` are for one comment — pass its `number` (the # in the list)."
+        return _comments_listing(rel, threads)
+    thread = next((t for t in threads if t.get("n") == number), None)
+    if thread is None:
+        have = ", ".join(f"#{t['n']}" for t in threads) or "none"
+        return f"Error: {rel} has no comment #{number} — it has {have}. Nothing was changed."
+    if not (isinstance(reply, str) and reply.strip()) and not isinstance(resolve, bool):
+        return (f"Error: nothing to do to comment #{number} — pass `reply` (your answer) and/or `resolve` "
+                f"(true closes it, false opens it again). Without `number`, `comments` lists them.")
+    me, did = comments.author("agent", agent=True), []
+    try:
+        if isinstance(reply, str) and reply.strip():
+            await comments.change(workspace, rel, thread["id"], "reply", me, {"text": reply})
+            did.append("replied to")
+        if isinstance(resolve, bool):
+            await comments.change(workspace, rel, thread["id"], "resolve" if resolve else "reopen", me)
+            did.append("resolved" if resolve else "reopened")
+    except comments.Refused as e:
+        return f"Error: {e}" + (f" (Already done: {did[0]} it.)" if did else "")
+    left = len([t for t in threads if not t.get("resolved") and t.get("n") != number]) + (0 if resolve else 1)
+    said = " and ".join(did)
+    return (f"{said[0].upper()}{said[1:]} comment #{number} on {rel}. The people working on it see that in the design. "
+            f"{left} comment{'s' if left != 1 else ''} still open.")
+
+
 async def _exec_slides(action, inp, workspace, name):
     """A deck's slide actions — add / update (or its notes, title, transition) / move /
     duplicate / delete — run on the saved .fig through the service, like `edit`
@@ -282,6 +356,7 @@ async def _exec_design_file(action, inp, workspace, name):
         if action == "rename":
             await asyncio.to_thread(fig_path.rename, root / new_rel)
             await asyncio.to_thread(versions.move, str(root), rel, new_rel)          # its history goes with it
+            await _comments_follow(workspace, "move", rel, new_rel)                  # …and what was said about it
         else:
             await asyncio.to_thread(lambda: (root / new_rel).write_bytes(fig_path.read_bytes()))
         went = await asyncio.to_thread(refresh.follow, str(root), rel, new_rel, action == "duplicate")
@@ -299,10 +374,12 @@ async def _exec_design_file(action, inp, workspace, name):
         gone = []
         for f in files:
             try:
-                await asyncio.to_thread(trash.trash_path, str(root), f.relative_to(root).as_posix(), "agent", "delete")
+                meta = await asyncio.to_thread(trash.trash_path, str(root), f.relative_to(root).as_posix(), "agent", "delete")
                 gone.append(f.name)
             except (OSError, ValueError) as e:
                 return f"Error: couldn't delete {f.name} — {e}. Moved to the trash so far: {', '.join(gone) or 'nothing'}."
+            if f == fig_path:   # its comments wait in the trash with it: a new design of this name starts with none
+                await _comments_follow(workspace, "shelve", rel, meta["id"])
         return (f"Moved {rel} to the trash{f' with what was kept beside it ({len(gone) - 1} more files)' if len(gone) > 1 else ''}. "
                 f"The user can restore it from Files › Trash; tell them so. Nothing else was deleted.")
 

@@ -16,8 +16,9 @@ import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { DesignPresenceRow } from "./design-presence";
-import { DesignEditorView, canFullscreen, designPage, flushDesignEditor, fullscreenDesignEditor, showDesignPage, useDesignPages, type DesignHost } from "./design-editor-view";
+import { DesignEditorView, canFullscreen, designEditorComments, designPage, flushDesignEditor, fullscreenDesignEditor, showDesignPage, useDesignPages, type DesignHost } from "./design-editor-view";
 import { VersionHistory } from "./version-history";
+import { CommentButtons, CommentLayer, CommentsList } from "./comments";
 import { DeckView, EditPreviewSwitch, PageTabs, parseDeck, type DeckOp } from "./deck-view";
 import type { ShareLinks } from "./share-dialog";
 import type { PollApi } from "../lib/polls";
@@ -288,9 +289,12 @@ function DesignPages({ file, data, readFile, openFile, downloads, tabs = true, o
         {deck.count > 1
           // Slide changes are the first page's (a deck is one page): on another, the slides are looked at.
           ? <DeckView data={shown} path={file.path} openFile={openFile} onReload={onReload}
-                      onSlideOp={!page || page === pages[0]?.name ? onSlideOp : undefined} />
+                      onSlideOp={!page || page === pages[0]?.name ? onSlideOp : undefined}
+                      onPage={readFile ? (name) => void pick(name) : undefined} />
           : deck.count === 1
-            ? <DesignPicture file={file} src={deck.slides[0]} openFile={downloads ? openFile : undefined} page={page} />
+            ? <DesignPicture file={file} src={deck.slides[0]} openFile={downloads ? openFile : undefined} page={page}
+                             size={deck.sizes?.[0]} name={deck.names?.[0]} pages={pages.map((p) => p.name)}
+                             onPage={readFile ? (name) => void pick(name) : undefined} />
             : <div className="flex h-full items-center justify-center text-sm text-muted-foreground" data-testid="page-empty">{t("pageEmpty")}</div>}
       </div>
     </div>
@@ -300,18 +304,28 @@ function DesignPages({ file, data, readFile, openFile, downloads, tabs = true, o
 // A single design where there's no editor to open it in — a shared page, or a
 // deployment without one: its picture, and the image to keep. `page` is the page it
 // is, on a design of several.
-function DesignPicture({ file, src, openFile, page }: {
+function DesignPicture({ file, src, openFile, page, size, name, pages, onPage }: {
   file: CanvasFile;
   src: string;
   openFile?: (path: string, silent?: boolean) => Promise<string>;
   page?: string;
+  size?: number[];                     // the frame's own size: a comment is pinned to a point of it
+  name?: string;                       // the frame's name
+  pages?: string[];                    // the design's pages, by name
+  onPage?: (page: string) => void;     // show another page (a comment is on it)
 }) {
+  const picture = useRef<HTMLImageElement>(null);
+  const names = useMemo(() => [name ?? ""], [name]);
   const stem = file.name.replace(/\.fig$/i, "") + (page ? `-${page}` : "");
   const save = (as: "png" | "pdf") => openFile?.(`${file.path}?as=${as}${pageQuery(page)}`).then((url) => saveBlob(url, `${stem}.${as}`)).catch(() => {});
   const pill = "cursor-pointer rounded-full border border-border bg-background/90 px-4 py-2 text-xs font-medium text-foreground shadow-lg backdrop-blur transition-colors hover:bg-secondary";
   return (
     <div className="relative flex h-full items-center justify-center overflow-auto bg-secondary/40 p-4">
-      <img src={src} alt={file.name} data-testid="design-picture" className="max-h-full max-w-full object-contain shadow-sm" />
+      <img ref={picture} src={src} alt={file.name} data-testid="design-picture" className="max-h-full max-w-full object-contain shadow-sm" />
+      {/* What people pinned on it — and the way to pin one — where this page can comment. */}
+      <CommentLayer path={file.path} picture={picture} size={size} frame={0} names={names} page={page} pages={pages} />
+      <CommentButtons path={file.path} className="absolute end-3 top-3 z-10 rounded-lg border border-border bg-background/90 p-0.5 shadow backdrop-blur" />
+      <CommentsList path={file.path} names={names} page={page} pages={pages} onPage={onPage} />
       {openFile && (
         <div className="absolute bottom-4 end-4 flex gap-2">
           <button onClick={() => save("png")} className={pill}>{t("downloadImage")}</button>
@@ -1058,6 +1072,11 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
               </button>
             )}
             {design && !previewing && <DesignPresenceRow path={file.path} />}
+            {/* An editor that pins comments on the design shows them itself; with one from
+                before it does, they are pinned on the design's preview. */}
+            {design && !previewing && <CommentButtons path={file.path}
+                                                      onComment={(adding) => { if (adding && !designEditorComments(file.path)) void showPreview(); }}
+                                                      onList={() => { if (!designEditorComments(file.path)) void showPreview(); }} />}
             {design && <EditPreviewSwitch previewing={previewing} onEdit={() => setPreviewing(false)} onPreview={() => void showPreview()} />}
             {/* In a preview the button keeps its place, unseen: the switch beside it
                 doesn't jump when the editor goes under the preview. */}

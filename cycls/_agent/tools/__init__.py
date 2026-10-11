@@ -447,6 +447,7 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
           .tmpfs("/workspace/.database")  # agent KV store; same blocking
           .tmpfs("/workspace/.trash")
           .tmpfs("/workspace/.versions")   # a design's earlier versions (cycls/_agent/versions.py)
+          .tmpfs("/workspace/.comments")   # what people said about a design (cycls/_agent/design/comments.py)
           .tmpfs(f"/workspace/{credentials.USER}")
           .tmpfs(f"/workspace/{credentials.SHARED}")
           .tmpfs("/workspace/.settings")  # the person's tool settings: bash must not grant itself "allow"
