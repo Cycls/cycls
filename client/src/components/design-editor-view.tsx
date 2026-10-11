@@ -10,7 +10,7 @@ import { getLang, t, useLang } from "../lib/i18n";
 import { useToast } from "../lib/toast";
 import { cn } from "../lib/utils";
 
-// Renders a `.fig` on the canvas as the embedded OpenPencil editor — an iframe on
+// Renders a `.fig` on the canvas as the embedded design editor — an iframe on
 // its OWN origin (the deployed editor), editing ONE design of the workspace: the
 // file this view was opened on. Every save goes back to that file; everything that
 // would make another document — a new design, a copy, an export — comes to Cycls,

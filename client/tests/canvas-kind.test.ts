@@ -35,7 +35,7 @@ describe("fileKind", () => {
   });
 });
 
-// A `.fig` opens the embedded OpenPencil editor (keyed off the path, like every
+// A `.fig` opens the embedded design editor (keyed off the path, like every
 // other renderer). CanvasDoc only mounts it when a design-editor URL is
 // configured; either way the file must count as renderable so the pane opens.
 describe("isDesignEditor", () => {

@@ -228,7 +228,7 @@ _DESIGN_TOOL = {
         "the PDF is not among its pictures: extract {path, page: N} shows that page, and with "
         "\"area\": [left, top, width, height] (parts of the page, 0 to 1) cuts the figure out and saves it. "
         "A scan, or text the reply says can't be trusted, is read from its pages the same way.\n"
-        "- script {script, name, format?} — escape hatch: a raw OpenPencil / Figma "
+        "- script {script, name, format?} — escape hatch: a raw Figma "
         "plugin-API script for what the spec can't express. It MUST end with "
         "`console.log('__FRAME__'+frame.id)` naming the frame to export.\n"
         "- Change a DECK's slides (name = the deck): add_slide {name, slide, at?} · update_slide {name, "

@@ -44,7 +44,7 @@ const OFFICE_EXTS = new Set([
 ]);
 export const isOffice = (name: string) => OFFICE_EXTS.has(ext(name));
 
-// OpenPencil design files (.fig) open in an embedded editor iframe on its own
+// Design files (.fig) open in an embedded editor iframe on its own
 // origin (the human edits the same design the agent renders). Only when a
 // design-editor URL is configured — otherwise CanvasDoc shows the download card.
 const DESIGN_EXTS = new Set(["fig"]);

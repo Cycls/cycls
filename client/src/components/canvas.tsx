@@ -386,7 +386,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   if (isPresentation(fileKind(file))) {
     return content ? <SlidesView data={content} /> : null;
   }
-  // OpenPencil .fig → the embedded editor on its own origin, so the human edits
+  // A .fig → the embedded editor on its own origin, so the human edits
   // the same design the agent renders headlessly. Needs a configured editor URL
   // (config.design_editor_url) + the fetched bytes. Without one — a shared page —
   // `content` is the design's slide manifest, and it shows as what it looks like: one

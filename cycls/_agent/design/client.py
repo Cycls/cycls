@@ -1,7 +1,7 @@
 """Design generation for Cycls agents, via a shared headless design service.
 
 Agents produce social-media posts and slides WITHOUT shipping a design engine:
-the heavy engine (OpenPencil, headless on Bun/CanvasKit) runs in ONE shared
+the heavy engine (headless, on Bun/CanvasKit) runs in ONE shared
 service — cycls-design — and this module is a thin HTTP client. Same split as
 office-render and the browser tool: the SDK ships the client, the service is
 deployed once.
@@ -291,7 +291,7 @@ async def _export(fig, fmt, scale, width, user_id, every, page):
 
 
 async def evaluate(script, fmt="png", scale=2, user_id=None):
-    """Escape hatch: run a raw OpenPencil/Figma-API script (it must log
+    """Escape hatch: run a raw Figma plugin-API script (it must log
     `__FRAME__<id>`) → a Rendered."""
     return _decode(await _post("/eval", {"script": script, "format": fmt, "scale": scale, "preview": True}, user_id))
 

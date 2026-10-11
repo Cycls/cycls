@@ -93,7 +93,7 @@ export interface AppConfig {
   explore?: { slug: string; title: string; title_ar?: string; description: string; description_ar?: string; icon_svg?: string; link: string }[] | null;
   examples_enabled?: boolean;   // curated example gallery on the empty screen (cards from GET /examples)
   workspaces?: string | null;   // multi-workspace mode: null off, else team-create policy ("member"|"admin")
-  design_editor_url?: string;   // base URL of the embedded OpenPencil editor for .fig files (env DESIGN_EDITOR_URL)
+  design_editor_url?: string;   // base URL of the embedded design editor for .fig files (env DESIGN_EDITOR_URL)
 }
 
 // How `retry` names the message it re-sends to the server: the sha256 of its text.

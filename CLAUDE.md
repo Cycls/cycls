@@ -61,7 +61,7 @@ cycls/
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
     ├── browser/            # cycls Browser tool — thin CDP client to a shared real-Chrome service (Steel); docs/notes/browser.md
-    ├── design/             # cycls Design tool, over a thin HTTP client to a shared OpenPencil service (posts, carousels, decks, documents); docs/notes/design.md
+    ├── design/             # cycls Design tool, over a thin HTTP client to a shared design service (posts, carousels, decks, documents); docs/notes/design.md
     │   ├── tool.py         # the tool as the model is given it (and the short form a chat carries until it designs)
     │   ├── run.py          # the executor (_exec_design): render, script, edit, inspect, extract
     │   ├── actions.py      # slide, section and file actions; a document rendered

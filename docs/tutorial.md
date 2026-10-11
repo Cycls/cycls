@@ -365,7 +365,7 @@ python browser_service.py        # → https://cycls-browser.cycls.ai
 
 Let an agent **create graphics and presentations** — social posts, stories, posters,
 carousels and slide decks — and show them on the canvas, with no design engine in the
-image. The agent describes a design as JSON; a shared service (OpenPencil, headless)
+image. The agent describes a design as JSON; a shared headless service
 renders it to an image, a real `.pptx` or a `.pdf`, plus an editable `.fig` source. Same
 split as browser/office: the SDK ships only the client and the built-in `Design` tool.
 
@@ -437,7 +437,7 @@ and saved by the service first. A deck's structure changes with `add_slide`,
 `update_slide`, `move_slide`, `duplicate_slide` and `delete_slide` — a new slide takes
 the deck's theme and footer, and page numbers follow. A raw plugin-API `script` stays
 as the escape hatch. With `DESIGN_EDITOR_URL` set, a `.fig` opens as the full
-OpenPencil editor on the canvas, the human edits the same design, and the agent's
+design editor on the canvas, the human edits the same design, and the agent's
 edits replay live there (a "Super" cursor). Exports beside a `.fig` re-export
 whenever it changes. The editor edits that one file and saves every change back to
 it; **New design** (the canvas `+`, the Files panel, File › New design) makes a blank
@@ -446,7 +446,7 @@ in the workspace beside the design. The workspace brand kit shows up in the edit
 a **Brand** variable collection, with its fonts loaded.
 
 Unset `DESIGN_URL` and the tool simply isn't offered — no crash, like the office
-fallback. The render service is a small Bun + OpenPencil app in its own repo
+fallback. The render service is a small Bun app in its own repo
 (`cycls-design`). Details: [docs/notes/design.md](notes/design.md).
 
 ### Apple IAP entitlements

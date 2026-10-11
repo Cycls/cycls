@@ -374,7 +374,7 @@ _KINDS = (
                   "rb", "go", "rs", "java", "c", "h", "cc", "cpp", "cs", "php", "swift", "kt",
                   "sql", "yaml", "yml", "toml", "css", "scss", "less", "xml", "ipynb"}),
     ("text",     {"txt", "text", "log", "env", "conf", "cfg", "ini"}),
-    ("design",   {"fig"}),                 # an OpenPencil design: the in-canvas editor
+    ("design",   {"fig"}),                 # a design: the in-canvas editor
 )
 _KIND_BY_EXT = {ext: kind for kind, exts in _KINDS for ext in exts}
 _SORTS = ("name", "size", "modified", "type")
