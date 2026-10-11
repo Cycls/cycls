@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { DropdownMenu } from "./files";
-import { peerColor } from "./design-editor-view";
+import { peerColor } from "../lib/people";
 import { useEscape } from "../hooks/use-escape";
 import { onPage, placeOf, useComments, type CommentAuthor, type CommentThread } from "../lib/comments";
 import { track } from "../lib/analytics";
@@ -191,6 +191,47 @@ function Beside({ at, within, children }: { at: { x: number; y: number }; within
       {children}
     </div>
   );
+}
+
+// Whatever is open on a design — the comment being written, or a thread — as a card
+// beside the point `at` of a layer `within`: where the design is drawn by something
+// else (the editor draws its own pins, and says where the open one is).
+export function OpenComment({ path, at, within }: { path: string; at: { x: number; y: number }; within: { w: number; h: number } }) {
+  const c = useComments(path);
+  if (!c) return null;
+  const draft = c.draft;
+  const thread = c.active ? c.threads.find((t) => t.id === c.active) : null;
+  if (draft) {
+    return (
+      <Beside at={at} within={within}>
+        <div className="p-2" data-testid="comment-new">
+          <Writer placeholder={t("addComment")} focus onCancel={() => c.store.set({ draft: null })}
+                  onSend={async (text) => { await c.store.add(draft, text); track("design_comment_added", {}); }} />
+        </div>
+      </Beside>
+    );
+  }
+  return thread ? <Beside at={at} within={within}><ThreadCard c={c} thread={thread} /></Beside> : null;
+}
+
+// What the editor is given to draw: the pins of the page it shows — each on the slide it
+// is on now, by that slide's place — comment mode, the pin that is open, and the comment
+// being written. (The editor has no names or threads: a pin is a spot, a letter, a colour.)
+export type EditorPin = { id: string; frame: number; x: number; y: number; label: string; color: string; image?: string; dim?: boolean };
+export function editorComments(c: Comments, names: string[], page: string | undefined, pages: string[]) {
+  const pins: EditorPin[] = [];
+  for (const thread of onPage(c.threads, page, pages)) {
+    const frame = placeOf(thread, names);
+    if (frame === null || (thread.resolved && thread.id !== c.active)) continue;
+    const agent = !!thread.author.agent;
+    pins.push({ id: thread.id, frame, x: thread.x, y: thread.y, label: initial(nameOf(c, thread.author)),
+                color: agent ? "#111827" : peerColor(thread.author.id),
+                ...(thread.author.image && !agent ? { image: thread.author.image } : {}), ...(thread.resolved ? { dim: true } : {}) });
+  }
+  const draft = c.draft && (pages.length <= 1 || (c.draft.page ?? pages[0]) === (page ?? pages[0])) ? c.draft : null;
+  return { pins, adding: c.adding, active: pins.some((p) => p.id === c.active) ? c.active : null,
+           draft: draft ? { frame: draft.frame, x: draft.x, y: draft.y } : null,
+           me: { label: initial(c.host.me?.name ?? "+"), color: c.host.me ? peerColor(c.host.me.id) : "#111827" } };
 }
 
 type Box = { left: number; top: number; width: number; height: number; w: number; h: number };

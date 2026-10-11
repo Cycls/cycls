@@ -48,12 +48,13 @@ Cycls → editor:
 | `fit` | The editor's box changed size: fit the design again, unless the person has zoomed or panned since the last fit. |
 | `follow {client}` | Keep this person's view in step with that one's (`null`: stop). |
 | `liveTicket {id, ticket}` · `liveBase {version}` · `liveReset` | A fresh pass for the room; "this document holds that version of the file"; "this person took the file over what the room holds — everyone opens it again". |
+| `comments {pins, adding, active, draft, me}` | What people pinned on the page in view (`pins: [{id, frame, x, y, label, color, image?, dim?}]` — a slide by its place and a point in its pixels), whether comment mode is on, the pin that is open, the comment being written. The editor draws them on the design; it has no threads (feature `comments`). |
 
 Editor → Cycls:
 
 | Message | Meaning |
 |---|---|
-| `ready {protocol: 2, features}` | The editor is up. `features` lists what it does beyond the base protocol — `selection`, `lang`, `fit`, `pages`, `live` — so Cycls offers only what this build supports. |
+| `ready {protocol: 2, features}` | The editor is up. `features` lists what it does beyond the base protocol — `selection`, `lang`, `fit`, `pages`, `live`, `comments` — so Cycls offers only what this build supports. |
 | `loaded {doc, name, live?}` | The document is open (`live: "seed" \| "join"`: it gave the room the file's document, or took the room's). |
 | `saved {doc, id, name, fig}` | Bytes to write to the workspace; answered with `written`. |
 | `flushed {id, ok}` · `applied {doc}` · `commandError {doc, message}` · `error {doc?, message}` | Answers and failures. |
@@ -61,6 +62,9 @@ Editor → Cycls:
 | `selection {doc, frame, nodes}` · `pages {doc, page, pages}` | What is selected; the design's pages and the one in view. |
 | `presence {doc, peers, saver, connected}` | Who else has the design open, and whether this editor is the one saving for them. |
 | `liveTicket {id}` · `liveAgent {doc, version}` · `liveReload {doc, version}` · `liveBase {doc, version}` | Asks and news from the room. |
+| `frames {doc, page, frames: [{name, w, h}]}` | The slides of the page in view, in order, whenever they change: a comment finds its slide by name. |
+| `commentAt {doc, page, frame, frame_name, x, y}` · `commentOpen {doc, id}` | A click on a slide in comment mode (it selects nothing); a pin was clicked. |
+| `commentPlace {doc, id, at, box}` · `commentEscape {doc}` | Where the open pin (or `"draft"`) is in the editor's pixels — `null` out of view — so Cycls lays its card beside it; Escape pressed in the editor while a card is open or comment mode is on. |
 
 An older Cycls app sends `load` without `protocol`: its saves count as done once
 posted, and it gets none of the workspace messages.
