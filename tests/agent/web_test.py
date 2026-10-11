@@ -2951,7 +2951,8 @@ def test_the_design_routes_are_a_router_of_their_own(tmp_path):
     from cycls._agent.web import design_routes, routers, shared
     paths = lambda router: {route.path for route in router.routes}
     design = paths(design_routes.design_router(Depends(lambda: None), Depends(lambda: None), lambda root: None))
-    assert design == {"/deck/{path:path}", "/design/new", "/design/export", "/design/live", "/brand", "/versions/{path:path}"}
+    assert design == {"/deck/{path:path}", "/design/new", "/design/export", "/design/live", "/brand", "/versions/{path:path}",
+                      "/comments/{path:path}"}
     from types import SimpleNamespace
     files = paths(routers.files_router(SimpleNamespace(config=None), Depends(lambda: None), Depends(lambda: None), tmp_path, ""))
     assert not design & files and "/files/{path:path}" in files

@@ -1,4 +1,5 @@
 import type { PollApi } from "../lib/polls";
+import { CommentsContext, type CommentsApi, type CommentsHost } from "../lib/comments";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { motion, LayoutGroup, AnimatePresence, useMotionValue, useSpring, useTransform, useReducedMotion, type MotionValue } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
@@ -103,6 +104,7 @@ export interface FilesPanelProps {
   onNewDesign?: () => void;                                      // the Files panel's "New design"
   deckOp?: (path: string, body: DeckOp) => Promise<void>;       // the deck viewer's slide moves / copies / deletes
   pollsFor?: (deck: string) => PollApi;                         // live polls when the owner presents a deck
+  comments?: CommentsApi;                                       // what people pin on a design, and answer
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
@@ -776,6 +778,25 @@ export function Chat({ chat, onShare, files, account, config }: {
     live: files.designLive,
     me: account?.user.id ? { id: account.user.id, name: account.user.name || account.user.email } : undefined,
   } : undefined), [files, createDesign, openFileInCanvas, account?.user.id, account?.user.name, account?.user.email]);
+  // Comments on a design: the routes, who this is (the server knows an id, the browser a
+  // name), and what the agent is called. An app with no sign-in has one person, unnamed.
+  const commentsApi = files?.comments;
+  const commentsHost = useMemo<CommentsHost | null>(() => (commentsApi ? {
+    api: commentsApi,
+    me: account?.user.id ? { id: account.user.id, name: account.user.name || account.user.email, image: account.user.imageUrl } : undefined,
+    agent: meta?.name || name,   // what the agent is called here: "Super"
+  } : null), [commentsApi, account?.user.id, account?.user.name, account?.user.email, account?.user.imageUrl, meta?.name, name]);
+  // Words handed to the composer from elsewhere on the page (a design's comments: "address them").
+  useEffect(() => {
+    const onCompose = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: string }>).detail?.text;
+      if (typeof text !== "string" || !text) return;
+      setInput((cur) => (cur.trim() ? `${cur.trimEnd()} ${text}` : text));
+      textareaRef.current?.focus();
+    };
+    window.addEventListener("cycls:compose", onCompose);
+    return () => window.removeEventListener("cycls:compose", onCompose);
+  }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z" || e.shiftKey) return;
@@ -1276,6 +1297,7 @@ export function Chat({ chat, onShare, files, account, config }: {
         isDesktop && rightExpanded && "min-w-0 flex-1",
       )}>
       {files && (
+        <CommentsContext.Provider value={commentsHost}>
         <Canvas
           working={workingPaths}
           tabs={canvasTabs}
@@ -1311,6 +1333,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           designHost={designHost}
           onNewDesign={(preset) => void createDesign(preset, "canvas")}
         />
+        </CommentsContext.Provider>
       )}
       {/* Chats / Files / Apps / Shares — docked on desktop, overlay on a phone */}
       <AnimatePresence initial={false}>

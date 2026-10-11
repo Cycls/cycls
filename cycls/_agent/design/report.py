@@ -75,6 +75,71 @@ def _edit_names(r):
     return out
 
 
+def _said(text, most=300):
+    """A comment's words on one line, in quotes."""
+    text = " ".join(str(text or "").split())
+    return json.dumps(text[:most] + ("…" if len(text) > most else ""), ensure_ascii=False)
+
+
+def _thread_said(t, replies=1):
+    """`Sara: "…"` and what was answered: the last `replies` of them (0: only how many)."""
+    who = lambda a: (a or {}).get("name") or "Someone"
+    out = f"{who(t.get('author'))}: {_said(t.get('text'))}"
+    answers = t.get("replies") or []
+    if answers:
+        out += f" · {len(answers)} repl{'y' if len(answers) == 1 else 'ies'}"
+        shown = answers[-replies:] if replies else []
+        if shown:
+            out += (", last " if len(answers) > len(shown) else ": ") + "; ".join(f"{who(r.get('author'))}: {_said(r.get('text'), 200)}" for r in shown)
+    return out
+
+
+def _comments_on_page(threads, frames):
+    """The open comments on the page `inspect` shows, each where it is now: the slide —
+    by its name, so a slide that was moved keeps its comments — and the part of it the
+    pin sits on, read from the same outline. "" when there are none."""
+    from .comments import node_at, place
+    names = [f.get("name") or "" for f in frames]
+    lines = []
+    for t in threads:
+        at = place(t, names)
+        if at is None:
+            where = "a slide that is gone"
+        else:
+            node = node_at(frames[at].get("nodes"), t.get("x", 0), t.get("y", 0))
+            where = f"slide {frames[at].get('slide', at + 1)}" + (f" on {node.get('name')}" if node and node.get("name") else "")
+        lines.append(f"  #{t.get('n')} {where} — {_thread_said(t)}")
+    if not lines:
+        return ""
+    n = len(lines)
+    return (f"{n} open comment{'s' if n != 1 else ''} pinned on this page by the people working on it "
+            f"(`comments` lists them whole, answers and resolves them):\n" + "\n".join(lines))
+
+
+def _comments_listing(rel, threads):
+    """Every comment on a design, for the `comments` action: the open ones whole, then
+    the resolved ones in a line each."""
+    def where(t):
+        page = f"page {json.dumps(t['page'], ensure_ascii=False)}, " if t.get("page") else ""
+        name = f" {json.dumps(t['frame_name'], ensure_ascii=False)}" if t.get("frame_name") else ""
+        return f"{page}slide {int(t.get('frame') or 0) + 1}{name} at ({round(t.get('x', 0))}, {round(t.get('y', 0))})"
+    if not threads:
+        return f"{rel} has no comments."
+    opened = [t for t in threads if not t.get("resolved")]
+    closed = [t for t in threads if t.get("resolved")]
+    out = [f"{rel} — {len(opened)} open comment{'s' if len(opened) != 1 else ''}, {len(closed)} resolved."]
+    for t in opened:
+        out.append(f"#{t.get('n')} {where(t)}, {str(t.get('at') or '')[:10]} — {_thread_said(t, replies=20)}")
+    if closed:
+        out.append("Resolved:")
+        out += [f"  #{t.get('n')} {where(t)} — {_thread_said(t, replies=0)}" for t in closed[-20:]]
+    if opened:
+        out.append("A slide's number is where the comment was pinned; `inspect` shows each open one on the slide and the part it "
+                   "sits on now. Answer one with {\"action\": \"comments\", \"name\": …, \"number\": <its #>, \"reply\": \"…\"} and close "
+                   "it with \"resolve\": true — after the change it asks for is made.")
+    return "\n".join(out)
+
+
 _OUTLINE_STYLE = ("font", "size", "color", "fill", "radius", "stroke", "rotation", "opacity", "align")
 
 

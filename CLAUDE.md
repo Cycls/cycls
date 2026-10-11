@@ -67,7 +67,8 @@ cycls/
     │   ├── actions.py      # slide, section and file actions; a document rendered
     │   ├── prepare.py      # what the model wrote, made ready: spec, pages, deck, document, slide, ops (brand.py, images.py)
     │   ├── extract.py      # a PDF taken apart to be made again; report.py — what the model is told; files.py — a design's files
-    │   └── client.py       # the service client; deck.py slide ops, store.py versions + bases, refresh.py exports beside a design, live.py rooms, stock.py photos
+    │   ├── client.py       # the service client; deck.py slide ops, store.py versions + bases, refresh.py exports beside a design, live.py rooms, stock.py photos
+    │   └── comments.py     # what people pin on a design — threads kept by the workspace (`.comments`), where a pin is now; docs/notes/design.md "Comments"
     ├── paths.py            # a path a tool was given, kept inside the workspace
     ├── tools/              # tool schemas + execution + `Tool` rows: run/step/once/terminal/prompt (docs/notes/tool-rows.md); Design is imported from design/
     ├── harness/            # the managed LLM loop and the kit a custom loop needs
@@ -149,6 +150,7 @@ tests/
 │   ├── harness_test.py          # build_tools, web search/fetch, cost math, _resolve_path, LLM builder
 │   ├── browser_test.py          # Browser tool: client config/providers, steel session parse, executor dispatch, gating
 │   ├── design_test.py           # Design tool: client, spec/deck prep (images, brand theme), decks + carousels, slide actions, refresh, gating
+│   ├── design_comments_test.py  # comments on a design: the workspace's record, the routes, rename/trash, the agent's `comments`
 │   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
 │   ├── events_test.py           # to_ui wire shapes for the typed events
 │   ├── pdf_test.py              # PDF page parsing
