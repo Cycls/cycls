@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { appScope, inScope, canWrite, attachBridge, MSG, MAX_WRITE_BYTES, overWriteLimit, APP_COMMAND_EVENT, MAX_ENGINE_BYTES } from "../src/components/app-bridge";
+import { appScope, inScope, canWrite, attachBridge, MSG, MAX_WRITE_BYTES, overWriteLimit, APP_COMMAND_EVENT, MAX_ENGINE_BYTES, sendAppCommand } from "../src/components/app-bridge";
 
 const APP = "apps/burnup/index.html";
 const scope = appScope(APP)!;
@@ -466,6 +466,59 @@ describe("cycls:engine / cycls:ask / pushed commands (Studio)", () => {
     window.dispatchEvent(new CustomEvent(APP_COMMAND_EVENT, { detail: { path: "*", command: { type: "turn_end" } } }));
     await new Promise((r) => setTimeout(r, 30));
     expect(got).toEqual([{ type: MSG.command, command: { n: 2 } }, { type: MSG.command, command: { type: "turn_end" } }]);
+    transfers.forEach((p) => p.close());
+  });
+
+  it("holds a command for an app still starting, and hands it over on the channel it keeps", async () => {
+    // A .blend clicked in Files: the Studio's tab is only now mounting. The command waits,
+    // and goes down the port the shim adopted (its `linked`), not the last one minted.
+    const other = "apps/held/index.html";
+    sendAppCommand(other, { type: "open_file", path: "a.blend" }, { hold: true });
+    sendAppCommand(other, { type: "turn_end" });                        // not held: an app that isn't open misses it
+    const posted: unknown[] = [], transfers: MessagePort[] = [];
+    const contentWindow = { postMessage: (m: unknown, _o: string, t?: MessagePort[]) => { posted.push(m); if (t) transfers.push(...t); } };
+    stop = attachBridge({ frame: { contentWindow } as unknown as HTMLIFrameElement, appPath: other, readFile: async () => "" });
+    send(contentWindow, { type: MSG.ready });
+    send(contentWindow, { type: MSG.ready });
+    await settle();
+    const got: unknown[][] = [[], []];
+    transfers.forEach((p, i) => { p.onmessage = (e) => got[i].push(e.data); });
+    sendAppCommand(other, { type: "open_file", path: "b.blend" }, { hold: true });   // channel minted, not yet kept
+    await new Promise((r) => setTimeout(r, 30));
+    expect(got).toEqual([[], []]);
+    transfers[0].postMessage({ type: MSG.linked });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(got).toEqual([[{ type: MSG.command, command: { type: "open_file", path: "a.blend" } },
+                          { type: MSG.command, command: { type: "open_file", path: "b.blend" } }], []]);
+    // Up: a held command goes straight down, and nothing is kept for a second delivery.
+    sendAppCommand(other, { type: "open_file", path: "c.blend" }, { hold: true });
+    transfers[0].postMessage({ type: MSG.linked });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(got[0].slice(2)).toEqual([{ type: MSG.command, command: { type: "open_file", path: "c.blend" } }]);
+    transfers.forEach((p) => p.close());
+  });
+
+  it("a document that replaces the app's gets what is held next, not the one it replaced", async () => {
+    // The frame reloaded (a new bundle): the old channel is dead, and a command sent while the
+    // new document is still announcing itself waits for the channel that one keeps.
+    const other = "apps/fresh/index.html";
+    const transfers: MessagePort[] = [];
+    const contentWindow = { postMessage: (_m: unknown, _o: string, t?: MessagePort[]) => { if (t) transfers.push(...t); } };
+    stop = attachBridge({ frame: { contentWindow } as unknown as HTMLIFrameElement, appPath: other, readFile: async () => "" });
+    send(contentWindow, { type: MSG.ready });
+    await settle();
+    const old: unknown[] = [], next: unknown[] = [];
+    transfers[0].onmessage = (e) => old.push(e.data);
+    transfers[0].postMessage({ type: MSG.linked });
+    await new Promise((r) => setTimeout(r, 30));
+    send(contentWindow, { type: MSG.ready });                           // the new document announces
+    await settle();
+    sendAppCommand(other, { type: "open_file", path: "a.blend" }, { hold: true });
+    transfers[1].onmessage = (e) => next.push(e.data);
+    transfers[1].postMessage({ type: MSG.linked });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(old).toEqual([]);
+    expect(next).toEqual([{ type: MSG.command, command: { type: "open_file", path: "a.blend" } }]);
     transfers.forEach((p) => p.close());
   });
 

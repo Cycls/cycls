@@ -1,11 +1,12 @@
 import type { PollApi } from "../lib/polls";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { flushSync } from "react-dom";
 import { motion, LayoutGroup, AnimatePresence, useMotionValue, useSpring, useTransform, useReducedMotion, type MotionValue } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
 import { Canvas, type CanvasFile } from "./canvas";
-import { editWorkingPath, ext } from "./canvas-utils";
+import { editWorkingPath, ext, isRenderable, opensWith } from "./canvas-utils";
 import { AppsPanel } from "./apps-panel";
 import { TrashView, type TrashRow } from "./trash-view";
 import { useApps, type AppInfo } from "../hooks/use-apps";
@@ -28,7 +29,7 @@ import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, WriteFile } fr
 import { designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignSelection } from "./design-editor-view";
 import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
 import { track } from "../lib/analytics";
-import { APP_COMMAND_EVENT } from "./app-bridge";
+import { sendAppCommand } from "./app-bridge";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
 import { useToast } from "../lib/toast";
 import { useSpeechRecognition } from "../hooks/use-speech";
@@ -105,6 +106,9 @@ export interface FilesPanelProps {
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   appEngine?: (slug: string, op: string, payload: Record<string, unknown>) => Promise<unknown>;
+  // A file an extension's app opens: the app made ready, and what to hand it (null: no app takes it).
+  openWith?: (path: string) => Promise<{ app: string; name: string; command?: unknown; changed?: boolean } | null>;
+  opens?: Record<string, string>;   // config.opens — which files those are, for the Files panel
   searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
   listFolders: () => Promise<{ name: string; path: string }[]>;
   onShareFile?: (path: string, audience: string) => Promise<string>;
@@ -296,12 +300,21 @@ export function Chat({ chat, onShare, files, account, config }: {
   const [rightExpanded, setRightExpanded] = useState(false);
   const isDesktop = useMediaQuery("(min-width: 1024px)");
 
-  const openFileInCanvas = useCallback((path: string, name?: string, ident?: Partial<CanvasFile>) => {
+  const showInCanvas = useCallback((path: string, name?: string, ident?: Partial<CanvasFile>) => {
     setCanvasTabs((tabs) => (tabs.some((f) => f.path === path) ? tabs
       : [...tabs, { ...ident, path, name: name || path.split("/").pop() || path }]));
     setCanvasActive(path);
     setCanvasHidden(false);
   }, []);
+  // A file an extension's app opens (config.opens — a .blend, in the Studio) goes to that
+  // app; a tab of its own is what's left when no app takes it. (`openInApp` is set below,
+  // once the apps and the files it needs exist.)
+  const opens = config?.opens;
+  const openInApp = useRef<(path: string) => Promise<boolean>>(async () => false);
+  const openFileInCanvas = useCallback((path: string, name?: string, ident?: Partial<CanvasFile>) => {
+    if (!opensWith(path, opens) || isRenderable(path)) return showInCanvas(path, name, ident);
+    void openInApp.current(path).then((taken) => { if (!taken) showInCanvas(path, name, ident); });
+  }, [showInCanvas, opens]);
 
   // A deliverable being written opens the canvas in a working state — the
   // path arrives in the live edit step's streamed args. Desktop only.
@@ -337,10 +350,10 @@ export function Chat({ chat, onShare, files, account, config }: {
   const appsRef = useRef<AppInfo[]>([]);
   useEffect(() => { appsRef.current = apps; }, [apps]);
   const openApp = useCallback((app: AppInfo) => {
-    openFileInCanvas(app.entry, app.name, {
+    showInCanvas(app.entry, app.name, {
       icon: app.icon, iconSrc: app.iconSrc, letter: app.letter,
     });
-  }, [openFileInCanvas]);
+  }, [showInCanvas]);
   const { width: panelWidth, startResize, resizing: railResizing } = usePaneWidth("cycls_rail_width", 320, 240, 80, 0,
     () => canvasShowing && setRailIcons(true), 0.5);
   const [shareOpen, setShareOpen] = useState(false);
@@ -439,7 +452,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       } else if (ev.action === "app_command" && typeof ev.path === "string") {
         // A tool changed an app's data: tell that app, if it's open (the bridge holding
         // its port forwards this; a closed app reads fresh when it next opens).
-        window.dispatchEvent(new CustomEvent(APP_COMMAND_EVENT, { detail: { path: ev.path, command: ev.command } }));
+        sendAppCommand(ev.path, ev.command);
       } else if (ev.action === "compacted") {
         track("context_compacted", { tier: ev.tier, reason: ev.reason, tokens: ev.tokens, ok: ev.ok });
       } else {
@@ -838,8 +851,30 @@ export function Chat({ chat, onShare, files, account, config }: {
     setReloadKey((k) => k + 1);
     // Every open app hears that a turn ended, so it can re-read data the agent
     // changed with edit or bash — changes no tool pushed.
-    window.dispatchEvent(new CustomEvent(APP_COMMAND_EVENT, { detail: { path: "*", command: { type: "turn_end" } } }));
+    sendAppCommand("*", { type: "turn_end" });
   }, [isStreaming]);
+  // The other half of `openFileInCanvas`: the server makes the app ready (the Studio
+  // installs itself into a workspace that never had it) and says what to hand it. The
+  // command is held for an app still starting. A tab still on the bundle that was just
+  // replaced is closed first — its document wouldn't know the command — and opens anew.
+  openInApp.current = async (path: string) => {
+    if (!files?.openWith) return false;
+    let made;
+    try {
+      made = await files.openWith(path);
+    } catch (e) {
+      toastError((e as Error).message);
+      return true;                                   // refused, in the extension's words: no download card on top
+    }
+    if (!made) return false;
+    let app = appsRef.current.find((a) => a.entry === made.app);
+    if (!app || made.changed) app = (await refreshApps()).find((a) => a.entry === made.app) ?? app;
+    if (made.changed) flushSync(() => closeCanvasTab(made.app));
+    if (made.command != null) sendAppCommand(made.app, made.command, { hold: true });
+    if (app) openApp(app); else showInCanvas(made.app, made.name);
+    track("app_file_opened", { app: made.name, kind: ext(path) });
+    return true;
+  };
   // An app pre-fills the composer; the person decides whether to send it.
   // An app asking to open a file it made (Studio's render history) — stable, as every
   // bridge callback must be (a changed one re-attaches the bridge and kills the port).
@@ -1441,7 +1476,8 @@ export function Chat({ chat, onShare, files, account, config }: {
               {!railIconsOnly && (<div className="relative flex min-h-0 flex-1 flex-col">{filesTab === "files" && files ? (
                 <Files {...files} shareLinks={shareLinks} onDelete={deleteFromFiles} onRename={renameFromFiles}
                        onNewDesign={config?.design_editor_url && files.newDesign ? () => void createDesign("square", "files") : undefined}
-                       onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
+                       onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload}
+                       opens={opens} />
               ) : filesTab === "apps" ? (
                 <AppsPanel
                   apps={apps}

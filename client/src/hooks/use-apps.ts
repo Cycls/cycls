@@ -76,40 +76,42 @@ export function useApps(baseUrl: string = "") {
   const { api } = useApi(baseUrl);
   const blobs = useRef<string[]>([]);
 
-  const refresh = useCallback(async () => {
+  // Resolves to the apps it found, for a caller that can't wait for the next render.
+  const refresh = useCallback(async (): Promise<AppInfo[]> => {
     const stale = blobs.current;
     blobs.current = [];
     try {
       const res = await api(`/files?path=${APPS_DIR}`);
       if (!res.ok) {
         setApps([]);
-        return;
+        return [];
       }
       const entries = (await res.json()) as { name: string; type: string }[];
       const slugs = entries
         .filter((e) => e.type === "directory" && !e.name.startsWith("."))
         .map((e) => e.name)
         .sort();
-      setApps(
-        await Promise.all(
-          slugs.map(async (slug) => {
-            const r = await api(`/files/${APPS_DIR}/${slug}/app.json`).catch(() => null);
-            const app = parseManifest(slug, r && r.ok ? await r.text() : null);
-            if (!app.iconFile) return app;
-            try {
-              const img = await api(`/files/${encPath(app.iconFile)}`);
-              if (!img.ok) return app;
-              const url = URL.createObjectURL(await img.blob());
-              blobs.current.push(url);
-              return { ...app, iconSrc: url };
-            } catch {
-              return app;   // a missing icon falls back to the letter
-            }
-          }),
-        ),
+      const found = await Promise.all(
+        slugs.map(async (slug) => {
+          const r = await api(`/files/${APPS_DIR}/${slug}/app.json`).catch(() => null);
+          const app = parseManifest(slug, r && r.ok ? await r.text() : null);
+          if (!app.iconFile) return app;
+          try {
+            const img = await api(`/files/${encPath(app.iconFile)}`);
+            if (!img.ok) return app;
+            const url = URL.createObjectURL(await img.blob());
+            blobs.current.push(url);
+            return { ...app, iconSrc: url };
+          } catch {
+            return app;   // a missing icon falls back to the letter
+          }
+        }),
       );
+      setApps(found);
+      return found;
     } catch {
       setApps([]);
+      return [];
     } finally {
       setLoading(false);
       stale.forEach(URL.revokeObjectURL);

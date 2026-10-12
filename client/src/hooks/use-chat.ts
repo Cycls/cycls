@@ -94,6 +94,7 @@ export interface AppConfig {
   examples_enabled?: boolean;   // curated example gallery on the empty screen (cards from GET /examples)
   workspaces?: string | null;   // multi-workspace mode: null off, else team-create policy ("member"|"admin")
   design_editor_url?: string;   // base URL of the embedded OpenPencil editor for .fig files (env DESIGN_EDITOR_URL)
+  opens?: Record<string, string>;   // files an extension's app opens, by extension: {"blend": "Studio"}
 }
 
 // How `retry` names the message it re-sends to the server: the sha256 of its text.

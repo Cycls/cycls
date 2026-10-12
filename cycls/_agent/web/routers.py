@@ -442,6 +442,15 @@ def _public(entry):
     return {k: entry[k] for k in _PUBLIC}
 
 
+def app_opens():
+    """{a file's extension: the extension whose app opens it} — what `Extension.opens` claims
+    of the files no canvas shows. The client reads it from /config and opens such a file
+    through POST /apps/open, where it used to download it."""
+    from .. import extension
+    return {suffix: who for suffix, who in extension.openers().items()
+            if suffix and suffix not in _KIND_BY_EXT}
+
+
 # Converted-PDF cache for the Office preview. Hidden (dot-prefixed) so the
 # catalog walk skips it, keyed by source path+mtime+size so a rewritten source
 # is a fresh entry and prior renders of the same file are swept on the miss.
@@ -1512,6 +1521,36 @@ def apps_router(cycls_app, ws_dep, user_dep, volume, base):
             return
         if not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(403, "Only workspace admins can write this app's shared data")
+
+    @r.post("/apps/open")
+    async def open_with(request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        """A file an extension's app opens (`app_opens`), opened: the extension makes its
+        app ready and names it, with what to hand it. The client puts that app on the
+        canvas and passes the command on — the file's path is in it."""
+        from .. import extension
+        try:
+            path = (await request.json()).get("path")
+        except Exception:
+            path = None
+        if not isinstance(path, str) or not path:
+            raise HTTPException(400, "path required")
+        ext = extension.opener(path) if path.rpartition(".")[2].lower() in app_opens() else None
+        try:
+            target = extension.resolve_path(path, ws.root)
+        except ValueError:
+            target = None
+        if ext is None or target is None or not target.is_file():
+            raise HTTPException(404, "Not found")
+        rel = target.relative_to(Path(ws.root).resolve()).as_posix()
+        try:
+            out = await ext.open(ws, rel)
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        app = out.get("app") if isinstance(out, dict) else None
+        if not isinstance(app, str) or not re.fullmatch(r"apps/[^/\\]+/index\.html", app):
+            raise HTTPException(404, "Not found")
+        log("app_open", user=user, extension=ext.name, kind=rel.rpartition(".")[2].lower())
+        return {"app": app, "name": ext.name, "command": out.get("command"), "changed": bool(out.get("changed"))}
 
     @r.get("/apps/{slug}/data")
     async def list_data(slug: str, prefix: str = "", who: str = "", limit: int = APP_LIST_MAX,

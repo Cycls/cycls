@@ -166,6 +166,7 @@ Identified users also carry **person properties** (via identify): `email`,
 | `design_version_restored` | a design restored from Version history | `reason` (what replaced the restored version: `save` / `agent` / `restore` / `keep`) — do people undo the agent? |
 | `design_selection_attached` | "Add selection" — what's selected in an open design, attached to a message | `nodes` (how many) — do people point at the design rather than describe it? |
 | `app_ask` | an open app pre-fills the composer (`cycls.ask`) — never sent for the person | `chars` — do apps hand work back to the chat? |
+| `app_file_opened` | a file an extension's app opens (a `.blend`, in the Studio), opened from Files or the canvas — it used to download | `app` (the extension), `kind` (the file's extension) — do people open their files in the app, or only reach it through chat? |
 
 ### Sharing loop (organic acquisition)
 

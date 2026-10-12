@@ -276,6 +276,14 @@ none is Studio-specific in the bridge.
   broadcasts `{path: "*", command: {type: "turn_end"}}`, so any app can re-read what `edit` or
   `bash` changed under it. The shim buffers up to 50 commands until a handler registers; the
   function returns an unsubscribe.
+
+  An app that isn't open misses a push, and reads its data fresh when it starts. A command that
+  must not be missed is sent held — `sendAppCommand(path, command, {hold: true})` — and waits
+  (a minute at most, ten deep) for the app's channel: this is how a file opened from Files
+  reaches an app that the same click is only now opening ([extensions.md](extensions.md), *A
+  file its app opens*). The channel is the one the document kept: the shim answers the port it
+  adopted with `cycls:linked`, since the host may have minted several, and a document that
+  announces itself again (the frame reloaded) is waited for afresh.
 - **`cycls.engine(op, payload)`** — a host relay to `POST /apps/<slug>/engine` with the viewer's
   JWT, for an app that needs a service. The bridge checks `op` against `/^[a-z_]{1,32}$/`, wants a
   plain object and caps it at 2 MB; the route — an extension's ([extensions.md](extensions.md)) —

@@ -24,6 +24,8 @@ class Extension:
     def configured(self): ...        # False: tools left out, routes unmounted (an env var unset)
     def tools(self): ...             # {tool name: (schema, Tool)}
     def router(self, workspace, user): ...   # an APIRouter, or None
+    def opens(self): ...             # the files its app opens: ("blend",)
+    async def open(self, workspace, path): ...   # {"app", "command", "changed"?}
 ```
 
 - **`tools()`** maps a tool name to the schema the model sees (Anthropic shape:
@@ -38,6 +40,42 @@ class Extension:
   routes a literal path (`/apps/studio/engine`, not `/apps/{slug}/engine`): a pattern would
   shadow another extension's routes.
 - **`configured()`** is read when the server is built (routes) and on every run (tools).
+- **`opens()`** and **`open()`** are the next section.
+
+## A file its app opens
+
+A file no canvas shows used to download when someone opened it in Files. An extension whose app
+reads that kind of file claims it, and the file opens in the app (a `.blend`, in the Studio).
+
+```python
+def opens(self):
+    return ("blend",)                       # extensions, lower case, no dot
+
+async def open(self, workspace, path):      # path: the file, inside the workspace
+    await install(workspace)                # the app may not be in this workspace yet
+    return {"app": "apps/studio/index.html",
+            "command": {"type": "open_file", "path": path},
+            "changed": installed_or_upgraded}
+```
+
+- **What can be claimed.** Only a kind the canvas has no viewer for (`app_opens()` in
+  `web/routers.py` drops the rest): an extension can't take `.pdf` or `.glb` away from their
+  viewers. The first extension to claim a kind keeps it. An unconfigured one claims nothing.
+- **How the browser knows.** `/config` carries `opens: {"blend": "Studio"}`. The Files panel
+  opens such a file instead of downloading it, and so does every other way a file reaches the
+  canvas (`openFileInCanvas` in `chat.tsx`).
+- **The call.** `POST /apps/open {path}` resolves the path as the tools do, finds the extension
+  and awaits `open(workspace, path)`. It answers `{app, name, command, changed}`; `app` must be
+  an `apps/<slug>/index.html`. A `ValueError` from `open` is a 409 whose line the person is
+  shown; anything the extension doesn't take is a 404, and the file gets a tab of its own, with
+  the download card, as before.
+- **What the host does.** It puts the app on the canvas and hands it `command` through
+  `cycls.onCommand`, held until the app's channel is up ([apps.md](apps.md), *Pushed into*). With
+  `changed`, a tab still showing the bundle that was replaced is closed first and opened anew:
+  the document in it wouldn't know the command.
+- **What opening means is the app's.** The SDK only delivers the path. The Studio holds one
+  scene, so it asks before it replaces one someone made, and does the work through its own
+  route.
 
 ## How it's wired
 
@@ -77,4 +115,4 @@ An app talks back through the bridge verbs in [apps.md](apps.md): `cycls.engine`
 extension's route, `cycls.onCommand` receives the tool's `app_command` events, `cycls.ask` hands
 work back to the chat.
 
-Tests: `tests/agent/extension_test.py`.
+Tests: `tests/agent/extension_test.py`; the held command in `client/tests/app-bridge.test.ts`.

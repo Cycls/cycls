@@ -82,6 +82,11 @@ export const tileExt = (name: string) => (isDeck(name) ? "deck" : name.includes(
 
 export const is3d = (name: string) => ["glb", "gltf"].includes(ext(name));
 
+// The extension whose app opens this file (config.opens — a .blend, in the Studio), if
+// one does. Such a file opens in that app; no canvas of ours shows it.
+export const opensWith = (name: string, opens?: Record<string, string> | null): string | undefined =>
+  (opens && name.includes(".") ? opens[ext(name)] : undefined);
+
 // Per-filetype accent — faint tile wash + label color for extension tiles.
 const TINTS: Record<string, string> = {
   pdf: "#ff3b30", doc: "#2b7fff", docx: "#2b7fff", txt: "#8e8e93", md: "#8e8e93", rtf: "#8e8e93",

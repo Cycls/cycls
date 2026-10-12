@@ -188,6 +188,24 @@ export function useFiles(baseUrl: string = "") {
     return res.json();
   }, [baseUrl]);
 
+  // A file an extension's app opens (a .blend, in the Studio): the server makes the app
+  // ready and names it, with what to hand it. null when no app takes the file; a refusal
+  // the extension worded is thrown for the caller to show.
+  const openWith = useCallback(async (filePath: string) => {
+    const res = await fetchAuthed(`${baseUrl}/apps/open`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: filePath }),
+    });
+    if (res.status === 409) {
+      let detail = "";
+      try { detail = (await res.json()).detail ?? ""; } catch { /* not JSON */ }
+      throw new Error(detail || `HTTP ${res.status}`);
+    }
+    if (!res.ok) return null;
+    return (await res.json()) as { app: string; name: string; command?: unknown; changed?: boolean };
+  }, [baseUrl]);
+
   // An app's rows. Raw fetch, like the connector relay: a 403 from the role gate
   // is an answer the app renders, not a toast over someone's dashboard.
   const appData = useCallback(async (slug: string, op: Record<string, unknown>) => {
@@ -336,7 +354,7 @@ export function useFiles(baseUrl: string = "") {
     makeLink: async () => voteUrl(await shareFile(deck, "public")),
   }), [api, shareFile]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, listVersions, versionBlob, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, fetchConnector, appData, appEngine, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, listVersions, versionBlob, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, fetchConnector, appData, appEngine, openWith, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

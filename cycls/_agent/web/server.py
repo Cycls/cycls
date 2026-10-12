@@ -60,6 +60,11 @@ class Config(BaseModel):
         # FE never renders the editor and .fig shows the download card.
         if url := os.environ.get("DESIGN_EDITOR_URL"):
             data["design_editor_url"] = url
+        # The files an extension's app opens ({"blend": "Studio"}): the FE opens one in that
+        # app, where it would have offered a download.
+        from .routers import app_opens
+        if opens := app_opens():
+            data["opens"] = opens
         return data
 
     @property

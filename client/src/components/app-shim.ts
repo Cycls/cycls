@@ -81,6 +81,9 @@ const SHIM = `<script>(function(){
     if (!link && e.ports && e.ports[0]) {
       link = e.ports[0];
       link.onmessage = function(ev){ receive(ev.data); };
+      // Says which channel this document kept (the host may have minted several), so
+      // what the host was holding for this app can come down it.
+      link.postMessage({ type: 'cycls:linked' });
     }
     receive(e.data);
   });

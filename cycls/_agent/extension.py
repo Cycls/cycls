@@ -7,7 +7,8 @@
 
 Declared once, on the agent's Web: the server mounts the extension's routes and every
 `LLM.run()` of the agent offers its tools — unless it isn't configured, or the person
-switched it off in Settings (its `name` in `disabled_tools`). Its tools are rows like the
+switched it off in Settings (its `name` in `disabled_tools`). A file its app opens
+(`opens()`) opens in that app from Files, where it used to download. Its tools are rows like the
 builtins' (`Tool`: step line, guidance, interrupted note, once/terminal), so the loop treats
 them the same. The helpers below are what such a tool or route needs from a workspace,
 so an extension never reaches into the SDK's internals. docs/notes/extensions.md
@@ -28,7 +29,15 @@ class Extension:
     `router(workspace, user)` returns an APIRouter (or None); `workspace` and `user` are
     FastAPI dependencies for the request's workspace (the x-workspace header honoured)
     and its signed-in user. `configured()` False leaves the tools out and the routes
-    unmounted — an env var it needs is unset, say."""
+    unmounted — an env var it needs is unset, say.
+
+    `opens()` names the files its app opens — extensions, lower case, no dot (`("blend",)`).
+    Only a file no canvas shows can be claimed. A person who opens one gets the app instead
+    of a download: `open(workspace, path)` makes the app ready and returns
+    `{"app": "apps/<slug>/index.html", "command": {...}}` — the app to put on the canvas and
+    what to hand it (`cycls.onCommand`), the file's workspace path in it; `"changed": True`
+    when that made a new bundle, so a tab still showing the old one loads it first. Raise
+    ValueError with a line for the person to refuse."""
     name = ""
 
     def configured(self):
@@ -38,6 +47,12 @@ class Extension:
         return {}
 
     def router(self, workspace, user):
+        return None
+
+    def opens(self):
+        return ()
+
+    async def open(self, workspace, path):
         return None
 
 
@@ -74,6 +89,26 @@ def schemas(name):
     if ext is None or not ext.configured():
         return []
     return [schema for schema, _ in ext.tools().values()]
+
+
+def _suffix(name):
+    return name.rpartition(".")[2].lower() if "." in name else ""
+
+
+def openers():
+    """{a file's extension: the name of the configured extension whose app opens it} —
+    the first registered wins."""
+    out = {}
+    for ext in _registered.values():
+        if ext.configured():
+            for suffix in ext.opens():
+                out.setdefault(str(suffix).lower().lstrip("."), ext.name)
+    return out
+
+
+def opener(name):
+    """The extension whose app opens a file of this name, or None."""
+    return _registered.get(openers().get(_suffix(name)))
 
 
 # ---- What a tool or a route needs from the workspace ----

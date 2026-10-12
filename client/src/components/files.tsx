@@ -5,7 +5,7 @@ import { t, useLang, getLang } from "../lib/i18n";
 import { LoadingBar } from "./loading-bar";
 import { Icon, Spinner } from "./icon";
 import { ShareDialog } from "./share-dialog";
-import { isRenderable, saveBlob, tintTile, tintLabel, tileExt } from "./canvas-utils";
+import { isRenderable, opensWith, saveBlob, tintTile, tintLabel, tileExt } from "./canvas-utils";
 import { useToast } from "../lib/toast";
 import { useEscape } from "../hooks/use-escape";
 import type { FilesPanelProps } from "./chat";
@@ -221,7 +221,7 @@ type SortKey = "name" | "size" | "modified" | "type";
 
 const fileExt = (name: string) => (name.includes(".") ? name.split(".").pop()!.toLowerCase() : "");
 
-export function Files({ entries, path, loading, onNavigate, onReload, onUpload, onUploadBatch, onMkdir, onRename, onDelete, onOpenFile, onShareFile, shareLinks, onOpenInCanvas, onNewDesign, listFolders, maxUpload, org }: FilesPanelProps) {
+export function Files({ entries, path, loading, onNavigate, onReload, onUpload, onUploadBatch, onMkdir, onRename, onDelete, onOpenFile, onShareFile, shareLinks, onOpenInCanvas, onNewDesign, listFolders, maxUpload, opens, org }: FilesPanelProps) {
   useLang();
   const { error: toastError } = useToast();
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
@@ -357,7 +357,8 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
   const open = (name: string, isDir: boolean, kind?: string) => {
     const ep = fullPath(name);
     if (isDir) return navigate(ep);
-    if (isRenderable(name, kind) && onOpenInCanvas) return onOpenInCanvas(ep, name);
+    // What a canvas shows, and what an extension's app opens (a .blend, in the Studio).
+    if ((isRenderable(name, kind) || opensWith(name, opens)) && onOpenInCanvas) return onOpenInCanvas(ep, name);
     onOpenFile(ep).then((url) => saveBlob(url, name));
   };
 

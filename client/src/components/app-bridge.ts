@@ -21,11 +21,28 @@ export const MSG = {
   ask: "cycls:ask",
   askResult: "cycls:ask:result",
   command: "cycls:command",
+  linked: "cycls:linked",
 } as const;
 
 // The window event the chat raises for a tool's `app_command`; the bridge that
 // holds the matching app's port forwards it. `path: "*"` reaches every open app.
 export const APP_COMMAND_EVENT = "cycls:app-command";
+
+// A command for an app that isn't up yet (a file handed to an app as it opens) waits
+// here for its channel — a minute at most: an app that never came up mustn't be told
+// about that file the next time someone opens it.
+const HELD_MS = 60_000;
+const held = new Map<string, { command: unknown; at: number }[]>();
+
+// Tell an app something: a tool's push, a turn that ended, a file to open. An app that
+// isn't open misses it, and reads its data fresh when it starts — unless `hold`, which
+// keeps the command for the app's next channel.
+export function sendAppCommand(path: string, command: unknown, opts: { hold?: boolean } = {}) {
+  const detail = { path, command, hold: !!opts.hold, taken: false };
+  window.dispatchEvent(new CustomEvent(APP_COMMAND_EVENT, { detail }));
+  if (detail.taken || !opts.hold || path === "*") return;
+  held.set(path, [...(held.get(path) ?? []).slice(-9), { command, at: Date.now() }]);
+}
 
 export const MAX_ENGINE_BYTES = 16_000_000;     // a Studio scene of thousands of objects is a few MB
 export const MAX_ASK_CHARS = 1000;
@@ -135,7 +152,22 @@ export function attachBridge({
   // channel its request came in on, and `port` is whichever channel the app last spoke on.
   let port: MessagePort | null = null;
   const ports = new Set<MessagePort>();
+  // The channel the app has spoken on — the one its shim kept, so a command sent there
+  // arrives. Null while a document is still announcing itself.
+  let live: MessagePort | null = null;
   let lastAsk = 0;
+
+  function heard(on: MessagePort) {
+    port = on;
+    if (live === on) return;
+    live = on;
+    const waiting = held.get(appPath);
+    if (!waiting) return;
+    held.delete(appPath);
+    for (const h of waiting) {
+      if (Date.now() - h.at < HELD_MS) on.postMessage({ type: MSG.command, command: h.command });
+    }
+  }
 
   async function handle(raw: unknown, via?: MessagePort) {
     const msg = raw as {
@@ -276,7 +308,8 @@ export function attachBridge({
       const mine = ch.port1;
       ports.add(mine);
       port = mine;
-      mine.onmessage = (ev) => { port = mine; void handle(ev.data, mine); };
+      live = null;          // only a document with no channel announces: the last one is gone
+      mine.onmessage = (ev) => { heard(mine); void handle(ev.data, mine); };
       frame.contentWindow.postMessage(
         { type: MSG.init, path: appPath, scope, canWrite: !!writeFile, ...context }, "*", [ch.port2]);
       return;
@@ -285,11 +318,16 @@ export function attachBridge({
   }
 
   // A tool's push for this app (or for every app). Only a port carries it: with no
-  // channel yet the app reads its data fresh when it starts, so nothing is lost.
+  // channel yet the app reads its data fresh when it starts, so nothing is lost — and a
+  // command that must not be (`hold`) is left for `sendAppCommand` to keep.
   function onCommand(e: Event) {
-    const d = (e as CustomEvent<{ path?: unknown; command?: unknown }>).detail;
-    if (!d || (d.path !== "*" && d.path !== appPath) || !port) return;
-    port.postMessage({ type: MSG.command, command: d.command });
+    const d = (e as CustomEvent<{ path?: unknown; command?: unknown; hold?: boolean; taken?: boolean }>).detail;
+    if (!d || (d.path !== "*" && d.path !== appPath)) return;
+    if (d.hold && !live) return;
+    const to = live ?? port;
+    if (!to) return;
+    to.postMessage({ type: MSG.command, command: d.command });
+    if (live) d.taken = true;
   }
 
   window.addEventListener("message", onWindow);
@@ -299,6 +337,6 @@ export function attachBridge({
     window.removeEventListener(APP_COMMAND_EVENT, onCommand);
     ports.forEach((p) => p.close());
     ports.clear();
-    port = null;
+    port = live = null;
   };
 }

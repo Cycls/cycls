@@ -38,6 +38,15 @@ class Lamp(cycls.Extension):
             return {"state": p.read_text() if p.exists() else None, "user": who}
         return r
 
+    def opens(self):
+        return ("lamp", "PDF")                                    # a pdf is the canvas's own: not claimed
+
+    async def open(self, workspace, path):
+        if path.endswith("broken.lamp"):
+            raise ValueError("that lamp is broken")
+        (workspace.root / "apps/lamp").mkdir(parents=True, exist_ok=True)
+        return {"app": "apps/lamp/index.html", "command": {"type": "open_file", "path": path}}
+
 
 @pytest.fixture(autouse=True)
 def clean():
@@ -140,6 +149,68 @@ def test_server_registers_and_mounts(tmp_path):
     app = FastAPI()
     routers.install_routers(_Off(), app, Depends(user), tmp_path, f"file://{tmp_path}")
     assert "/apps/lamp/state" not in app.openapi()["paths"]
+
+
+def test_a_file_its_app_opens(tmp_path):
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+    from cycls._agent.web import routers
+
+    class _App:
+        config = None
+        connectors = None
+        extensions = [Lamp()]
+
+    def user():
+        return cycls.User(id="u1")
+    app = FastAPI()
+    routers.install_routers(_App(), app, Depends(user), tmp_path, f"file://{tmp_path}")
+    assert extension.openers() == {"lamp": "Lamp", "pdf": "Lamp"} and extension.opener("a/Desk.LAMP").name == "Lamp"
+    assert extension.opener("notes.txt") is None and extension.opener("lamp") is None
+    root = workspace(cycls.User(id="u1"), tmp_path, base=f"file://{tmp_path}").root
+    (root / "models").mkdir(parents=True)
+    for name in ("desk.lamp", "broken.lamp", "paper.pdf", "notes.bin"):
+        (root / "models" / name).write_text("x")
+    c = TestClient(app)
+
+    # The browser is told which files open in an app: those no canvas shows. A pdf stays the canvas's.
+    from cycls._agent.web.server import Config
+    assert routers.app_opens() == {"lamp": "Lamp"} and Config().public()["opens"] == {"lamp": "Lamp"}
+
+    r = c.post("/apps/open", json={"path": "models/desk.lamp"})
+    assert r.status_code == 200 and r.json() == {
+        "app": "apps/lamp/index.html", "name": "Lamp", "changed": False,
+        "command": {"type": "open_file", "path": "models/desk.lamp"}}
+    assert (root / "apps/lamp").is_dir()
+    assert c.post("/apps/open", json={"path": "models/broken.lamp"}).json() == {"detail": "that lamp is broken"}
+    for path in ("models/notes.bin", "models/paper.pdf", "models/gone.lamp", "../desk.lamp", ""):
+        assert c.post("/apps/open", json={"path": path}).status_code in (400, 404), path
+
+    # Switched off (unconfigured), it claims nothing.
+    _App.extensions[0].on = False
+    assert extension.openers() == {} and "opens" not in Config().public()
+    assert c.post("/apps/open", json={"path": "models/desk.lamp"}).status_code == 404
+
+
+def test_an_app_it_names_is_an_app(tmp_path):
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+    from cycls._agent.web import routers
+
+    class Elsewhere(Lamp):
+        async def open(self, workspace, path):
+            return {"app": "AGENT.md", "command": {}}
+
+    class _App:
+        config = None
+        connectors = None
+        extensions = [Elsewhere()]
+    app = FastAPI()
+    routers.install_routers(_App(), app, Depends(lambda: cycls.User(id="u1")), tmp_path, f"file://{tmp_path}")
+    root = workspace(cycls.User(id="u1"), tmp_path, base=f"file://{tmp_path}").root
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "desk.lamp").write_text("x")
+    assert TestClient(app).post("/apps/open", json={"path": "desk.lamp"}).status_code == 404
 
 
 def test_build_app_leaves_an_extensions_app_alone(tmp_path):
