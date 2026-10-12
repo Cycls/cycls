@@ -106,9 +106,10 @@ event filters by them):
 | `language` | `"en"` \| `"ar"` — updates on toggle |
 
 Identified users also carry **person properties** (via identify): `email`,
-`name`, `first_name`, `last_name`, `avatar_url`, `created_at`, `plan_name`,
-`plan_status`, `plan_amount`, `plan_period`, `plan_period_end`,
-`plan_canceled_at`, `is_paid`, `org_id`, `org_name`, `language`.
+`name`, `first_name`, `last_name`, `avatar_url`, `created_at`, `user_plan`, `user_is_paid`,
+`org_plan`, `org_is_paid`, `org_id`, `org_name`, `language`. The plans are the token's plan claim,
+which is the active workspace's: `u:…` sets the `user_` pair, `o:…` the `org_` pair, so each keeps
+its last value while the other is active. Paid is any plan but `u:free_user` / `o:free_org`.
 
 ---
 
@@ -207,7 +208,6 @@ Identified users also carry **person properties** (via identify): `email`,
 | `checkout_start` | checkout clicked | `plan_name`, `plan_id`, `billing_period`, `value` (what the chosen period charges, Clerk's minor units ÷ 100 — annual is the annual total), `currency` (from Clerk), `payer_type`, `is_free`, `previous_plan` when switching plans |
 | `purchase` | Clerk confirms a **paid** checkout — a free plan is not revenue and never purchases | same, + `transaction_id` |
 | `plan_manage_clicked` | manage-subscription | |
-| `subscription_cancelled` / `subscription_resumed` | `canceledAt` appears or clears on the Clerk subscription while the page is open (the Manage drawer); baseline is the first loaded subscription, so an old cancellation never re-fires. Clerk webhooks would be the complete source — a cancellation from Clerk's hosted pages or support is invisible here | `plan_name`, `plan_period` |
 
 ### Voice, settings, misc
 
@@ -698,7 +698,7 @@ ORDER BY 3 DESC
 A useful starter dashboard per agent:
 
 - Trend: DAU (unique `message_sent` senders)
-- Trend: messages per day, broken down by `is_paid` person property
+- Trend: messages per day, broken down by `user_is_paid` and `org_is_paid`
 - Funnel: `sign_up_start` → `sign_up` → `first_agent_use` → `artifact_completed` (first time for user)
 - Funnel: `plan_modal_opened` → `checkout_start` → `purchase`
 - Rates: `followup_accepted`/`ui_action{suggest}`, `ask_answered`/`ui_action{ask}`

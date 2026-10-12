@@ -113,7 +113,7 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
   const files = useFiles();
   useRefreshOnTurnEnd(files, chat.isStreaming);
   const ws = useWorkspaces();
-  const { getToken, signOut, isLoaded: authLoaded } = useAuth();
+  const { getToken, signOut, isLoaded: authLoaded, sessionClaims } = useAuth();
   const clerk = useClerk();
   const { organization, membership, memberships } = useOrganization(
     workspace ? { memberships: { infinite: true } } : {});
@@ -122,14 +122,6 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
   const lang = useLang();
 
   const subItem = subscription?.subscriptionItems?.[0];
-  const subSummary = subItem ? {
-    planName: subItem.plan.name,
-    status: subItem.status,
-    amount: subItem.amount,
-    planPeriod: subItem.planPeriod,
-    periodEnd: subItem.periodEnd,
-    canceledAt: subItem.canceledAt,
-  } : undefined;
   const orgSummary = organization ? {
     id: organization.id,
     name: organization.name,
@@ -140,9 +132,9 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
   usePostHogIdentify(
     !!config?.analytics?.length,
     user,
-    subSummary,
     orgSummary,
     lang,
+    sessionClaims?.pla as string | undefined,   // the token's plan claim
   );
 
   // Render-time, not an effect — child mount-effects fire requests before
