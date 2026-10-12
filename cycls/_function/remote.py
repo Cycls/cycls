@@ -73,12 +73,14 @@ def check(scope):
     return None
 
 async def read(receive):
-    body, more = b"", True
+    # Joined once at the end: `body += ...` copies everything received so far with each
+    # message, so a big request took time with the square of its size.
+    parts, more = [], True
     while more:
         msg = await receive()
-        body += msg.get("body", b"")
+        parts.append(msg.get("body", b""))
         more = msg.get("more_body", False)
-    return body
+    return b"".join(parts)
 ''' + f"\nBARE_LOGS = {BARE_LOGS!r}\n" + '''
 def boot(asgi):
     from hypercorn.asyncio import serve
@@ -256,25 +258,37 @@ def _consume(name, r):
     """Relay a framed response: `o` frames are the call's live stdout,
     `r` is the pickled result, `e` a remote traceback."""
     import cloudpickle
-    result, buf, need = _MISSING, b"", None
-    for chunk in r.iter_bytes(8192):
-        buf += chunk
-        while True:
-            if need is None:
-                if len(buf) < 5:
-                    break
-                kind, need, buf = buf[:1], int.from_bytes(buf[1:5], "big"), buf[5:]
-            if len(buf) < need:
-                break
-            data, buf = buf[:need], buf[need:]
-            need = None
-            if kind == b"o":
-                sys.stdout.write(data.decode(errors="replace"))
-                sys.stdout.flush()
-            elif kind == b"e":
-                raise RemoteError(f"{name}: {data.decode(errors='replace')[:2000]}", status=500)
-            else:
-                result = cloudpickle.loads(data)
+    result, chunks, rest = _MISSING, r.iter_bytes(1 << 16), b""
+
+    def pull(n):
+        """The stream's next n bytes, or None when it ends first. A frame's chunks are kept
+        apart and joined once: growing one bytes object chunk by chunk copies everything
+        received so far each time, and a reply took time with the square of its size
+        (32 MB over a minute, 100 MB nine)."""
+        nonlocal rest
+        parts, got = [rest], len(rest)
+        while got < n:
+            chunk = next(chunks, None)
+            if chunk is None:
+                return None
+            parts.append(chunk)
+            got += len(chunk)
+        last = parts[-1]
+        cut = len(last) - (got - n)
+        parts[-1], rest = last[:cut], last[cut:]
+        return b"".join(parts)
+
+    while (head := pull(5)) is not None:
+        kind, data = head[:1], pull(int.from_bytes(head[1:], "big"))
+        if data is None:
+            break
+        if kind == b"o":
+            sys.stdout.write(data.decode(errors="replace"))
+            sys.stdout.flush()
+        elif kind == b"e":
+            raise RemoteError(f"{name}: {data.decode(errors='replace')[:2000]}", status=500)
+        else:
+            result = cloudpickle.loads(data)
     if result is _MISSING:
         raise RemoteError(f"{name}: stream ended without a result", status=502)
     return result

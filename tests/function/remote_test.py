@@ -24,7 +24,7 @@ def _free_port():
 def _start_shim(tmp, func, name):
     (tmp / "function.pkl").write_bytes(
         cloudpickle.dumps((func, token_for(API_KEY, name))))
-    (tmp / "shim.py").write_text(REMOTE_PY)
+    (tmp / "shim.py").write_text(REMOTE_PY, encoding="utf-8")   # it holds a dash: the platform default is not UTF-8 everywhere
 
     port = _free_port()
     proc = subprocess.Popen(
@@ -38,7 +38,7 @@ def _start_shim(tmp, func, name):
         try:
             httpx.get(url, timeout=1)
             break
-        except httpx.ConnectError:
+        except (httpx.ConnectError, httpx.ConnectTimeout):   # Windows waits the second out, where others refuse at once
             if proc.poll() is not None:
                 raise RuntimeError("shim died on startup")
             time.sleep(0.1)
@@ -259,3 +259,62 @@ def test_bare_logs_is_module_level():
     """App._serve imports this at container boot — template text alone doesn't count."""
     from cycls._function.remote import BARE_LOGS
     assert "hypercorn.access" in BARE_LOGS["loggers"]
+
+
+# ---- A reply, read frame by frame — whatever the chunks it arrives in ----
+
+class _Reply:
+    """What `_consume` is handed: the stream, in chunks of a given size."""
+    def __init__(self, data, size):
+        self.data, self.size = data, size
+
+    def iter_bytes(self, _wanted=None):
+        return (self.data[i:i + self.size] for i in range(0, len(self.data), self.size))
+
+
+def _frame(kind, data):
+    return kind + len(data).to_bytes(4, "big") + data
+
+
+def test_consume_reads_frames_across_any_chunking(capsys):
+    from cycls._function.remote import _consume
+    result = {"mesh": os.urandom(70_000), "n": 3}
+    stream = (_frame(b"o", "قراءة\n".encode()) + _frame(b"o", b"") + _frame(b"o", b"second\n")
+              + _frame(b"r", cloudpickle.dumps(result)))
+    for size in (1, 3, 5, 4096, 1 << 16, len(stream)):        # a frame's header split, a chunk holding two frames
+        assert _consume("x", _Reply(stream, size)) == result
+    assert capsys.readouterr().out == "قراءة\nsecond\n" * 6   # the remote prints, in order, once per read
+
+
+def test_consume_says_what_went_wrong():
+    from cycls._function.remote import _consume
+    with pytest.raises(RemoteError, match="x: Traceback: boom") as e:
+        _consume("x", _Reply(_frame(b"o", b"") + _frame(b"e", b"Traceback: boom"), 7))
+    assert e.value.status == 500
+    whole = _frame(b"r", cloudpickle.dumps(list(range(1000))))
+    for cut in (0, 3, 5, len(whole) - 1):                       # nothing, half a header, a header, half a result
+        with pytest.raises(RemoteError, match="ended without a result") as e:
+            _consume("x", _Reply(whole[:cut], 64))
+        assert e.value.status == 502
+
+
+@pytest.fixture(scope="module")
+def echo_url(tmp_path_factory):
+    def echo(data):
+        return data
+
+    url, proc = _start_shim(tmp_path_factory.mktemp("echo"), echo, "echo")
+    yield url
+    proc.terminate()
+    proc.wait(timeout=5)
+
+
+def test_a_big_payload_crosses_in_time_with_its_size(echo_url):
+    # Both ends used to grow one bytes object as the bytes arrived, which copies everything
+    # received so far each time: 24 MB each way took over half a minute, 100 MB nine. Read
+    # in one join, it is about a second — the bound leaves a slow machine plenty of room.
+    data = os.urandom(24_000_000)
+    fn = remote("echo", url=echo_url, api_key=API_KEY, timeout=120)
+    started = time.perf_counter()
+    assert fn(data) == data
+    assert time.perf_counter() - started < 15
