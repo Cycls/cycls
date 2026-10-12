@@ -70,6 +70,8 @@ web = (
     # .analytics(cycls.PostHog(), cycls.GTM("GTM-PVCPD38W",
     #     events=["sign_up_start", "sign_up", "first_agent_use", "checkout_start", "purchase"]))
     .affiliate("059168")  # Rewardful referral tracking
+    .mobile_app(ios="https://apps.apple.com/app/cycls/id6802279454",   # phones get a banner to the store
+                android="https://play.google.com/store/apps/details?id=com.cycls.app")
     .title("The agent for getting things done")
     # .theme("default")   # "default" or "dev"
     # .suggestions(True)  # show starter prompts on the empty chat

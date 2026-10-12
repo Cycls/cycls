@@ -88,6 +88,7 @@ export interface AppConfig {
   notifications?: { provider: string; [k: string]: unknown }[] | null;   // push plugins
   suggestions?: boolean;
   affiliate?: string;
+  mobile_app?: { ios?: string; android?: string } | null;   // store links for the phone banner
   max_upload?: number;   // per-file upload cap in MB
   explore_enabled?: boolean;
   explore?: { slug: string; title: string; title_ar?: string; description: string; description_ar?: string; icon_svg?: string; link: string }[] | null;

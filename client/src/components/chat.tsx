@@ -41,6 +41,7 @@ import { ExamplesGallery } from "./examples";
 import { AskCard, type AskQuestion } from "./ask-card";
 import { Surfaces } from "./surfaces";
 import { SurveyStrip, useSurvey } from "./survey-strip";
+import { AppBanner } from "./app-banner";
 import type { DeckOp } from "./deck-view";
 
 export interface PassAgent {
@@ -1009,6 +1010,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           </div>
         </div>
       </header>
+      <AppBanner />
       <Surfaces config={config ?? null} ready={turnsDone > 0} active={!isStreaming && !ask && !hushed} />
 
       {/* Explore agents dropdown */}

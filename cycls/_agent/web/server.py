@@ -33,6 +33,7 @@ class Config(BaseModel):
     pk: Optional[str] = None
     one_tap: bool = False             # Google One Tap on the signed-out page
     affiliate: Optional[str] = None   # affiliate/referral provider key (e.g. Rewardful)
+    mobile_app: Optional[dict] = None # {ios, android} store links — the phone banner
     max_upload: int = 512             # per-file upload cap in MB
     workspaces: Optional[str] = None  # multi-workspace mode: None off, else team-create policy ("member"|"admin")
     volume: str = "/workspace"
@@ -539,6 +540,11 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                        (("accent", c.get("primary_dark") or c.get("primary")),
                         ("secondary", c.get("secondary_dark") or c.get("secondary"))) if v)
         _head += f"<style>:root{{{light}}}.dark{{{dark}}}</style>"
+    if m := re.search(r"/id(\d+)", (config.mobile_app or {}).get("ios", "")):
+        _head += f'<meta name="apple-itunes-app" content="app-id={m.group(1)}" />'   # Safari's own banner
+    _android = (config.mobile_app or {}).get("android", "")
+    if _play := re.search(r"[?&]id=([\w.]+)", _android):
+        _head += '<link rel="manifest" href="/manifest.webmanifest" />'   # Chrome's install sheet for the Play app
     if config.head:
         _head += config.head
 
@@ -622,6 +628,16 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
             f'<url><loc>{request.base_url}</loc></url></urlset>',
             media_type="application/xml")
+
+    if _play:
+        @app.get("/manifest.webmanifest")
+        async def manifest():
+            icons = [{"src": f"/app-icon-{n}.png", "sizes": f"{n}x{n}", "type": "image/png"} for n in (192, 512)]
+            return FastAPIResponse(json.dumps({
+                "name": V["og_title"], "short_name": V["og_title"], "start_url": "/", "icons": icons,
+                "prefer_related_applications": True,
+                "related_applications": [{"platform": "play", "id": _play.group(1), "url": _android}],
+            }), media_type="application/manifest+json")
 
     if config.favicon and not config.favicon.startswith(("http", "data:")):
         @app.get("/favicon.svg")

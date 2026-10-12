@@ -1554,6 +1554,41 @@ def test_web_builder_brand_and_explore():
         Web().brand(logo="missing/logo.svg")
 
 
+def test_mobile_app_links_reach_the_page(tmp_path):
+    import cycls
+    from fastapi.testclient import TestClient
+
+    ios = "https://apps.apple.com/app/cycls/id6802279454"
+    play = "https://play.google.com/store/apps/details?id=com.cycls.app"
+
+    def page(**links):
+        @cycls.agent(web=cycls.Web().mobile_app(**links), volumes={"/workspace": cycls.Volume("test-chats")})
+        async def my_agent(context):
+            yield "hi"
+        my_agent.config.public_path = _seo_theme(tmp_path)
+        return TestClient(web(lambda context: iter(()), my_agent.config))
+
+    both = page(ios=ios, android=play)
+    html = both.get("/").text
+    assert f'"mobile_app": {{"ios": "{ios}", "android": "{play}"}}' in html
+    # each platform's own way first: Safari's banner, and Chrome's install sheet from the manifest
+    assert '<meta name="apple-itunes-app" content="app-id=6802279454" />' in html
+    assert '<link rel="manifest" href="/manifest.webmanifest" />' in html
+    m = both.get("/manifest.webmanifest")
+    assert m.headers["content-type"].startswith("application/manifest+json")
+    assert m.json()["prefer_related_applications"] is True
+    assert m.json()["related_applications"] == [{"platform": "play", "id": "com.cycls.app", "url": play}]
+    assert [i["sizes"] for i in m.json()["icons"]] == ["192x192", "512x512"]
+
+    ios_only = page(ios=ios)
+    assert "manifest" not in ios_only.get("/").text
+    assert ios_only.get("/manifest.webmanifest").status_code == 404
+
+    assert cycls.Web().mobile_app()._mobile_app is None
+    with pytest.raises(ValueError, match="store link"):
+        cycls.Web().mobile_app(android="com.cycls.app")
+
+
 # ---- Files: catalog cache, @-search, kind, sort ----
 
 def _seed(tmp_path, tree):

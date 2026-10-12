@@ -291,6 +291,7 @@ web = (
 | `.head(html)` | Append raw HTML to `<head>` for site verification or custom meta. Repeatable |
 | `.suggestions(on=True)` | Show prompt-starter suggestions on the empty-chat screen. Off by default |
 | `.affiliate(api_key)` | Affiliate/referral tracking (e.g. a Rewardful key); the FE loads the tracker and reports conversions on checkout |
+| `.mobile_app(ios=, android=)` | Store links for the Cycls app. Each browser's own way comes first: the App Store link adds Apple's `apple-itunes-app` tag, so Safari shows its banner, and the Play link adds a web manifest naming the app, so Open on Android Chrome brings up Google's install sheet. Everywhere else (Chrome on iPhone, in-app browsers) a glass bar under the header, as wide as the composer, links to the store. Dismissing it or tapping Open rests it for two weeks. Off when unset |
 | `.max_upload(mb)` | Per-file upload cap in MB (default 512). Enforced server-side, pre-checked client-side |
 | `.analytics(bool)` | Enable usage metrics |
 | `.notifications(cycls.OneSignal(app_id))` | Web push as a plugin; the permission card is ours, the trigger is a PostHog flag (docs/notes/engagement.md) |

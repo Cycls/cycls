@@ -3,6 +3,7 @@ import { InputBox } from "./input-box";
 import { ExamplesGallery } from "./examples";
 import { EmptyHero, Suggestions } from "./chat";
 import { CyclsLogo } from "./cycls-logo";
+import { AppBanner } from "./app-banner";
 import { IconButton } from "./icon";
 import type { AppConfig } from "../hooks/use-chat";
 import { useLang, setLang, t } from "../lib/i18n";
@@ -77,6 +78,7 @@ export function PublicHome({ config, onSignIn }: {
           </div>
         </div>
       </header>
+      <AppBanner />
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-5xl flex-col items-center px-6 pb-16">
