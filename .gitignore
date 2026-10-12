@@ -29,3 +29,6 @@ mj/
 *.tsbuildinfo
 uv.lock
 examples/agent/super_new.py
+
+# local working notes, never committed
+/notes/
