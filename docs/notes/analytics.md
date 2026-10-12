@@ -216,6 +216,10 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 `theme_changed` · `language_changed` · `explore_opened` /
 `explore_agent_clicked` · `source_opened` · `user_signed_out`
 
+`mic_permission_denied` is any mic that couldn't start; `reason` says which — `NotAllowedError`
+(refused), `NotFoundError` (no mic), `NotSupportedError` (no format it can record). The recording
+format is whichever the browser has: mp4 on Safari and Chrome, webm on Firefox.
+
 ---
 
 ## The mobile client

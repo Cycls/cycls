@@ -8,6 +8,7 @@ import { ConnectorIcon, Switch, connectorLabel, type Connector } from "./connect
 
 export type MentionHit = { name: string; path: string; connector?: Connector };
 import { AttachmentBody } from "./attachment-body";
+import { LiveWaveform } from "./live-waveform";
 import { extTint } from "./canvas-utils";
 import type { Attachment } from "../hooks/use-chat";
 import type { DesignSelection } from "./design-editor-view";
@@ -61,6 +62,7 @@ export function InputBox({
   onRemoveFile,
   listening,
   transcribing,
+  micAnalyser,
   startMic,
   stopMic,
   cancelMic,
@@ -94,6 +96,7 @@ export function InputBox({
   onRemoveSelection?: () => void;
   listening: boolean;
   transcribing: boolean;
+  micAnalyser?: AnalyserNode | null;   // the mic's live level while recording
   startMic: () => void;
   stopMic: () => void;
   cancelMic: () => void;
@@ -384,6 +387,19 @@ export function InputBox({
             {getLang() === "en" ? "عربي" : "En"}
           </button>
         </div>
+        {voice && listening ? (
+          <div className="flex min-w-0 flex-1 items-center justify-end gap-2 ps-3">
+            {micAnalyser && <LiveWaveform analyser={micAnalyser} className="h-8 min-w-0 max-w-56 flex-1 text-foreground" />}
+            <button type="button" onClick={(e) => { e.stopPropagation(); cancelMic(); }} aria-label="Discard recording"
+                    className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-border text-foreground transition hover:bg-secondary">
+              <Icon name="x" />
+            </button>
+            <button type="button" onClick={(e) => { e.stopPropagation(); stopMic(); }} aria-label="Done recording"
+                    className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-border bg-secondary text-foreground transition hover:opacity-80">
+              <Icon name="check" />
+            </button>
+          </div>
+        ) : (
         <div className="flex items-center gap-1">
           {voice && <MicButton listening={listening} transcribing={transcribing} disabled={isStreaming} onStart={startMic} onStop={stopMic} onCancel={cancelMic} />}
           {/* A filled composer stays sendable mid-run — the message queues and
@@ -414,6 +430,7 @@ export function InputBox({
             </button>
           )}
         </div>
+        )}
       </div>
     </motion.div>
   );

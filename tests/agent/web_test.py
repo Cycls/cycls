@@ -784,6 +784,23 @@ def test_validator_rejects_query_token(tmp_path):
     assert r.status_code == 401
 
 
+def test_transcribe_keeps_the_recording_format(monkeypatch):
+    """Firefox records webm: forwarded as voice.m4a it was named for a format it isn't."""
+    import httpx
+    from fastapi.testclient import TestClient
+    sent = []
+
+    async def post(self, url, **kw):
+        sent.append(kw["files"]["file"][0])
+        return httpx.Response(200, json={"text": "hi"})
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    client = TestClient(web(lambda context: iter(()), Config(public_path=THEME_PATH, auth=False)))
+    for upload in ("voice.webm", "voice.ogg", "audio.m4a", "voice.exe", "blob"):
+        assert client.post("/transcribe", files={"file": (upload, b"x" * 2000, "audio/webm")}).json() == {"text": "hi"}
+    assert sent == ["voice.webm", "voice.ogg", "voice.m4a", "voice.m4a", "voice.m4a"]
+
+
 def test_sync_agent_function():
     """Tests that sync generator functions work with web app."""
     print("\n--- Running test: test_sync_agent_function ---")

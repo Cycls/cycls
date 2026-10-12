@@ -468,11 +468,14 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         if not file:
             raise HTTPException(status_code=400, detail="No audio file")
         audio_bytes = await file.read()
+        # OpenAI reads the format off the name: Firefox records webm, Safari and Chrome m4a.
+        ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+        name = f"voice.{ext}" if ext in ("m4a", "mp4", "webm", "ogg", "mp3", "wav") else "voice.m4a"
         async with httpx.AsyncClient() as client:
             r = await client.post(
                 "https://api.openai.com/v1/audio/transcriptions",
                 headers={"Authorization": f"Bearer {api_key}"},
-                files={"file": ("voice.m4a", audio_bytes, file.content_type or "audio/mp4")},
+                files={"file": (name, audio_bytes, file.content_type or "audio/mp4")},
                 data={"model": "gpt-4o-transcribe"},
                 timeout=30,
             )

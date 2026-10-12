@@ -444,7 +444,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       textareaRef.current?.blur();
     }
   }, []);
-  const { listening, transcribing, start: startMic, stop: stopMic, cancel: cancelMic } = useSpeechRecognition({ onEnd: onSpeechEnd, authHeaders });
+  const { listening, transcribing, analyser: micAnalyser, start: startMic, stop: stopMic, cancel: cancelMic } = useSpeechRecognition({ onEnd: onSpeechEnd, authHeaders });
 
   // Reset sidebar data when org changes
   useEffect(() => {
@@ -871,7 +871,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     onOpenFiles: files ? () => openPanel("files") : undefined,
     attachments,
     onRemoveFile: removeFile,
-    listening, transcribing, startMic, stopMic, cancelMic, voice,
+    listening, transcribing, micAnalyser, startMic, stopMic, cancelMic, voice,
     onFilesAdded: handleFilesAdded,
     onMentionSearch: account || searchFiles ? searchMentions : undefined,
     connectors: connectors?.filter((c) => c.connected),
