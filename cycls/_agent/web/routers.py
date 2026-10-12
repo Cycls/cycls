@@ -257,6 +257,9 @@ def chats_router(ws_dep):
         ui = to_ui_messages(turns)
         return {**meta, "messages": ui, "run": run, "next": end,
                 **({"run_started": row.get("started")} if run == "running" and row else {}),
+                # Why a run didn't finish: its reason, or "lost" when its heartbeat stopped (the container died).
+                **({"run_reason": row.get("reason") or ("lost" if row.get("status") == "running" else None),
+                    "run_error": row.get("error_id")} if run in ("failed", "interrupted") and row else {}),
                 "open": ui[-1]["role"] if ui else None,
                 **({"reset": True} if reset else {})}
 

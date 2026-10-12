@@ -321,7 +321,11 @@ refusal all shipped; the takeover is the remaining piece.
   agent with no opinion about what happens next. Push, email, a webhook, a row in
   a table, nothing: the deployment decides. The loop also logs it for the fleet
   view. Fires on every terminal status, not just `done` — "it finished" and "it
-  stopped early" are both things a deployment may want to act on.
+  stopped early" are both things a deployment may want to act on. A run that
+  didn't finish carries why: `reason` (`error`, `budget`, `shutdown`, `stopped`)
+  and, for a crash, `error_id` — the reference the person was shown in the chat,
+  and the key to the `error` log row with the stack. The poll returns them as
+  `run_reason` / `run_error` (`lost` when the heartbeat stopped: the container died).
 
 Its own object because `index.json` is the wrong home three times over:
 `put_meta` hands the whole meta dict to the object store's custom-metadata
@@ -388,9 +392,13 @@ a live run record along with the rest of the meta.
   becomes "how long the browser stayed attached" — emit it when the poll sees
   status leave `running`, or tag it attached/detached. And `409` is not
   `message_failed`, whose alert fires above 2%: left alone, the rollout trips its
-  own alarm. One new event, `stream_broken`, carries the error name,
-  `visibilityState`, `navigator.onLine`, seconds since the last byte and run
-  duration — that is how we learn the cause per user instead of guessing.
+  own alarm. Shipped first as `stream_broken` on every stream end without the end
+  marker (2026-09-15); retired 2026-10-12, because for a detached run a dropped
+  connection is the normal case, not a failure — 85% of its mid-run cases were
+  runs that finished `done`. What counts now is the run's outcome: `run_failed`
+  (`status`, `reason`, `error_id`) when it ends `failed` or `interrupted`, seen on
+  the stream or found by the poll, and the poll reports an ending once — only for a
+  run it saw running or whose stream dropped ([analytics.md](analytics.md)).
 
 ### 5. Cloud
 
@@ -454,7 +462,7 @@ mostly unnecessary.
    the chat list, card rebuilt from the transcript, stop endpoint, no aborts on
    navigation, Web Lock, and the analytics moves.
 4. **Cloud**: `cpu_idle`, memory, concurrency as deploy fields. Enable on
-   a dev deployment, watch `stream_broken`, the cut count and memory for a few
+   a dev deployment, watch `run_failed`, the cut count and memory for a few
    days, then production.
 5. **Lease takeover**: a stale heartbeat lets the next container resume the run
    from its checkpoint instead of waiting for the user to press Continue. Sized as

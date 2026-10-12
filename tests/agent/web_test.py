@@ -2732,6 +2732,65 @@ def test_a_finished_run_stamps_its_record_and_fires_the_hook(tmp_path):
     assert fired[0]["chat_id"] == "c1" and "ms" in fired[0]
 
 
+def test_a_crash_carries_one_reference_from_the_person_to_the_error_log(tmp_path, capsys):
+    """The reference the person sees is the key to the stack trace: on the callout,
+    the run record, the run log line and the hook — and a failed run says why."""
+    from cycls._agent.web.server import Run, _supervise, encoder
+    from cycls._app.db import workspace as mkws
+    from cycls._agent import state
+
+    ws = mkws("tenant", tmp_path, base=f"file://{tmp_path}")
+    fired, shown = [], []
+
+    async def go():
+        async def boom():
+            yield {"type": "text", "text": "partial"}
+            raise RuntimeError("provider went away")
+        runs, key = {}, ("ws", "c1")
+        run = Run(detach=True, workspace=ws, chat_id="c1", user=None)
+        runs[key] = run
+
+        async def watch():
+            async for chunk in encoder(boom(), chat_id="c1", run=run):
+                if "error_id" in chunk: shown.append(json.loads(chunk[6:]))
+                yield chunk
+        run.task = asyncio.create_task(_supervise(run, watch(), runs, key, fired.append))
+        await asyncio.wait({run.task}, timeout=2)
+        return await state.get_run(ws, "c1")
+
+    row = asyncio.run(go())
+    ref = shown[0]["error_id"]
+    assert shown[0]["type"] == "callout" and f"`{ref}`" in shown[0]["callout"]
+    assert row["status"] == "failed" and row["reason"] == "error" and row["error_id"] == ref
+    assert fired[0]["error_id"] == ref
+    runs_logged = [json.loads(l) for l in capsys.readouterr().out.splitlines() if '"level": "run"' in l]
+    assert runs_logged[-1]["error_id"] == ref and runs_logged[-1]["reason"] == "error"
+
+
+def test_the_poll_says_why_a_run_did_not_finish(tmp_path):
+    import asyncio
+    from datetime import datetime, timezone
+    from cycls._agent import state
+    from cycls._app.db import workspace
+    from cycls._app.auth import User
+
+    client = _ws_routers_client(tmp_path)
+    ws = workspace(User(id="user_1", org_id="org_1"), tmp_path, base=f"file://{tmp_path}", ws="u-user_1")
+    now = datetime.now(timezone.utc).isoformat()
+    long_ago = "2026-01-01T00:00:00+00:00"
+    for chat, row in (("failed", {"status": "failed", "reason": "error", "error_id": "abc123", "heartbeat": now}),
+                      ("budget", {"status": "interrupted", "reason": "budget", "heartbeat": now}),
+                      ("lost", {"status": "running", "heartbeat": long_ago}),
+                      ("done", {"status": "done", "heartbeat": now})):
+        client.put(f"/chats/{chat}", json={"title": chat})
+        asyncio.run(state.put_run(ws, chat, row))
+    got = lambda chat: {k: v for k, v in client.get(f"/chats/{chat}").json().items() if k.startswith("run")}
+    assert got("failed") == {"run": "failed", "run_reason": "error", "run_error": "abc123"}
+    assert got("budget") == {"run": "interrupted", "run_reason": "budget", "run_error": None}
+    assert got("lost") == {"run": "interrupted", "run_reason": "lost", "run_error": None}   # the container died
+    assert got("done") == {"run": "done"}
+
+
 def test_a_hook_that_raises_never_reaches_the_run(tmp_path):
     from cycls._agent.web.server import Run, _supervise
     from cycls._app.db import workspace as mkws

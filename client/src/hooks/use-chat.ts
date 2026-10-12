@@ -38,6 +38,7 @@ export interface Part {
   status?: string;
   callout?: string;
   style?: string;
+  error_id?: string;   // a run that crashed: the reference it showed, and the key to the server's error log
   title?: string;
   src?: string;
   alt?: string;
@@ -198,10 +199,14 @@ export function useChat(baseUrl: string = "") {
 
   // Watch a run we are not streaming. The run outlives its request, so a stream
   // that ended is not a turn that ended — only the record says that.
-  const pollRun = useCallback(async (id: string) => {
+  // `dropped`: this tab's stream for the run ended early, so its ending is this tab's to report.
+  const pollRun = useCallback(async (id: string, dropped = false) => {
     if (pollingRef.current) return;
     pollingRef.current = true;
     const view = viewRef.current;
+    // An ending is reported once: a run this poll saw running, or one whose stream just dropped —
+    // never the last run's status, which every refocus of a finished chat reads again.
+    let ours = dropped;
     try {
       for (;;) {
         if (viewRef.current !== view) return;
@@ -215,10 +220,14 @@ export function useChat(baseUrl: string = "") {
         setRunStatus(data.run ?? null);
         setRunStartedAt(data.run_started ?? null);
         if (data.run !== "running") {
-          // The run's real ending, for a turn this tab was not attached to.
-          if (data.run) track("turn_completed", { chat_id: id, status: data.run, detached: true });
+          if (data.run && ours) {
+            track("turn_completed", { chat_id: id, status: data.run, detached: true });
+            if (data.run === "failed" || data.run === "interrupted")
+              track("run_failed", { chat_id: id, status: data.run, reason: data.run_reason, error_id: data.run_error, via: "poll" });
+          }
           return;
         }
+        ours = true;
         await new Promise((r) => setTimeout(r, 2000));
       }
     } catch {
@@ -298,7 +307,7 @@ export function useChat(baseUrl: string = "") {
 
       let receivedData = false;
       let sawDone = false;   // the server's end marker; its absence means the run may live on
-      let lastByteAt = Date.now();
+      let crashed: string | undefined;   // the run failed while this tab watched: the reference it was shown
 
       const doFetch = async () => {
         const controller = new AbortController();
@@ -362,7 +371,6 @@ export function useChat(baseUrl: string = "") {
           const { done, value } = await reader.read();
           if (done) break;
           receivedData = true;
-          lastByteAt = Date.now();
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
@@ -376,6 +384,7 @@ export function useChat(baseUrl: string = "") {
             try {
               const item: Part = JSON.parse(data);
               const type = item.type;
+              if (type === "callout" && item.error_id) crashed = item.error_id;
 
               // Capture chat_id from server, don't add as part
               if (type === "chat_id" && item.chat_id) {
@@ -554,7 +563,7 @@ export function useChat(baseUrl: string = "") {
         // is the only thing that knows which. Also covers a clean-looking read
         // that simply ran out, which is what a parked tab produces.
         cursorRef.current = null;   // nothing advanced it while streaming
-        if (!sawDone && chatIdRef.current && mine()) void pollRun(chatIdRef.current);
+        if (!sawDone && chatIdRef.current && mine()) void pollRun(chatIdRef.current, receivedData);
         const stopped = !!abortRef.current?.signal.aborted;
         setAttached(false);
         abortRef.current = null;
@@ -584,16 +593,8 @@ export function useChat(baseUrl: string = "") {
             detached: false,
           });
         }
-        if (!sawDone) {
-          track("stream_broken", {
-            chat_id: chatIdRef.current,
-            reason: stopped ? "stopped" : "ended_without_done",
-            visibility: document.visibilityState,
-            online: navigator.onLine,
-            seconds_since_byte: Math.round((Date.now() - lastByteAt) / 1000),
-            run_seconds: Math.round((Date.now() - sentAt) / 1000),
-          });
-        }
+        if (sawDone && crashed)
+          track("run_failed", { chat_id: chatIdRef.current, status: "failed", reason: "error", error_id: crashed, via: "stream" });
       }
     },
     // `messages` is read via messagesRef inside; keeping it out of deps

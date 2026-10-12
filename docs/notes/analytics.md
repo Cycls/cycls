@@ -132,11 +132,11 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 
 | event | fires when | key props / question |
 |---|---|---|
-| `turn_completed` | the run ends — from the stream when it carried the turn to the end, otherwise from the poll (`detached: true`, `status`) | `tools` {name: count}, `tool_calls`, `duration_s`, `produced_artifact`, `errored`, `stopped`, `origin` — the shape of the work, without per-tool-call volume |
+| `turn_completed` | the run ends — from the stream when it carried the turn to the end (`detached: false`), otherwise from the poll (`detached: true`, `status`). Once per run: the poll reports only a run it saw running or one whose stream just dropped | `tools` {name: count}, `tool_calls`, `duration_s`, `produced_artifact`, `errored`, `stopped`, `origin` — the shape of the work, without per-tool-call volume. **2026-09-21 → 2026-10-12, web:** the poll re-reported the last run on every refocus of a finished chat (detached `done` ran ~10 per chat), so turn counts in that window are ~2.7× high — use `detached = false` there |
 | `context_compacted` | the loop compacted the chat's context — its `ui` event `compacted` ([compaction.md](compaction.md)) | `tier` (1 old tool results stubbed, 2 summarized), `reason` (`trigger` / `cold` / `overflow`), `tokens` (the prompt that set it off), `ok` (false when the summary failed and old turns were dropped). The server logs the same as a `compaction` row, which also covers runs no client watched |
 | `generation_stopped` | user hits stop mid-stream | impatience / runaway signal |
 | `message_retried` / `message_regenerated` / `message_failed` | recovery paths | friction |
-| `stream_broken` | the stream ended without the server's end marker | `reason`, `visibility`, `online`, `seconds_since_byte`, `run_seconds` — why connections drop, per user. The run itself is unaffected; the client polls |
+| `run_failed` | a run ended `failed` or `interrupted` — seen live (`via: stream`) or found by the poll after the stream dropped (`via: poll`); once per run | `status`, `reason` (`error`; `budget` — the 45-minute cap; `shutdown`; `lost` — its heartbeat stopped, the container died), `error_id` — the reference the person was shown, and the `error_id` of the server's `error` log row with the stack. The real error rate; a dropped connection is not one (below) |
 | `run_busy` | send refused with 409 — the chat already has a run | a second tab, or a run whose disconnect the server hasn't noticed. Not `message_failed`: it would trip that event's alert |
 | `message_queued` / `queued_message_sent` / `queued_message_edited` / `queued_message_dropped` | composing while the agent works | does queueing get used? |
 | `chat_loaded` / `chat_cleared` / `chat_renamed` / `chat_favorited` / `chat_deleted` | sidebar chat ops | retention behavior |
@@ -209,6 +209,15 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `purchase` | Clerk confirms a **paid** checkout — a free plan is not revenue and never purchases | same, + `transaction_id` |
 | `plan_manage_clicked` | manage-subscription | |
 
+**A dropped connection is not an error.** A run outlives its request ([runs.md](runs.md)): a
+parked tab, a locked phone or a network switch ends the stream, the server finishes the run, and
+the poll catches up — a `turn_completed` with `detached: true`, not a failure. `stream_broken`
+(web 2026-09-15 → 2026-10-12) fired on every stream end without the end marker, so it counted
+Stop, requests that failed before a byte (already `message_failed` / `run_busy`) and background
+tabs; of its mid-run cases, 85% were runs that finished `done`. Retired on the web; the app
+still sends it until it moves to `run_failed`. Every run's outcome, watched or not, is the
+server's `run` log row — `status`, `reason`, `error_id`, `ms` — and that is the complete count.
+
 ### Voice, settings, misc
 
 `mic_started` / `mic_stopped` / `mic_cancelled` / `mic_transcribed` /
@@ -230,14 +239,14 @@ of these today against the web's ~88 — the gap is surfaces it does not have
 yet (shares, trash, examples, surveys, announcements), not a second vocabulary.
 
 **Same name, same fact.** `message_sent` (with `origin` and `is_new_chat`),
-`turn_completed`, `stream_broken`, `run_busy`, `generation_stopped`,
+`turn_completed`, `run_busy`, `generation_stopped`,
 `ui_action`, `ask_answered` / `ask_dismissed`, `confirm_approved` /
 `confirm_dismissed`, `connector_*`, `artifact_completed`, `paywall_shown`,
 `purchase`, `client_crashed`, `notification_prompt_shown` / `_answered`,
 `file_uploaded` / `file_upload_failed`, `chat_deleted` / `chat_renamed` /
 `chat_favorited`, `theme_changed`, `language_changed`, `approve_mode_changed`,
 `mic_started` / `mic_permission_denied` / `mic_transcription_failed`,
-`user_signed_out`.
+`user_signed_out`. The app still sends `stream_broken`, retired on the web for `run_failed` (above).
 
 **Deviations, and why.**
 
