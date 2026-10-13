@@ -1009,6 +1009,13 @@ def test_stock_footage_is_fetched_once_credited_and_lists_the_other_results(monk
     assert rel2 == "videos/footage/waves-at-sunset-12.mp4"
     with pytest.raises(ValueError, match="unexpected video host"):                  # only ever Pexels' own hosts
         asyncio.run(real_download("https://evil.example/x.mp4", tmp_path / "x.mp4"))
+    # A clip that trickles in is given up on, and leaves nothing behind.
+    _transport(monkeypatch, lambda request: httpx.Response(200, content=b"x" * 5000))
+    assert asyncio.run(real_download("https://videos.pexels.com/video-files/1/a.mp4", tmp_path / "ok.mp4")) == 5000
+    monkeypatch.setattr(stock, "FETCH_BUDGET_S", -1)
+    with pytest.raises(ValueError, match="taking too long"):
+        asyncio.run(real_download("https://videos.pexels.com/video-files/1/a.mp4", tmp_path / "slow.mp4"))
+    assert not (tmp_path / "slow.mp4").exists() and not list(tmp_path.glob(".slow.mp4*"))
 
 
 def test_the_player_route_sends_the_clips_and_keeps_only_pages_in_bounds(monkeypatch, tmp_path):
