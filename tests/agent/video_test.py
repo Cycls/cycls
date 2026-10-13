@@ -1047,3 +1047,12 @@ def test_the_player_route_sends_the_clips_and_keeps_only_pages_in_bounds(monkeyp
         video_routes._store(cache, f"{i:032x}", {"html": "x", "reason": None})
     pages = [p for p in cache.glob("*.json") if len(p.stem) == 32]
     assert len(pages) == 2 and (cache / "chat-1.json").exists() and (cache / "clips.json").exists()
+
+
+def test_a_clip_whose_sound_track_is_empty_is_told_as_silent():
+    # A stock clip came back "with sound at -70 LUFS" (dev, 2026-10-13): a track with nothing on it.
+    from cycls._agent.video import report
+
+    text = report.footage_text("videos/footage/sea.mp4", {**INFO, "has_audio": False, "silent_track": True, "transcript": None,
+                                                         "lufs": -70.0, "source": {}})
+    assert "(40 s, 1920x1080, its sound track is silent)" in text and "with sound" not in text and "LUFS" not in text

@@ -140,7 +140,7 @@ def footage_text(rel, info, *, words_rel=None, reused=False, credit=None):
     """A clip made ready, as the model reads it in place of watching: what the clip is, where its
     shots change, what is said in it and when, and the lines that put a piece of it in a video."""
     d, w, h = info.get("duration"), info.get("width"), info.get("height")
-    sound = "no sound"
+    sound = "its sound track is silent" if info.get("silent_track") else "no sound"
     if info.get("has_audio"):
         sound = "with sound" + (f" at {info['lufs']:.0f} LUFS" if isinstance(info.get("lufs"), (int, float)) else "")
     lines = [f"{'Already made ready' if reused else 'Made ready'}: {rel} ({_t(d)} s, {w}x{h}, {sound})."]
