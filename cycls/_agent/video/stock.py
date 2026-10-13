@@ -19,6 +19,7 @@ DIR = "videos/footage"
 MAX_BYTES = 200 * 1024 * 1024
 MAX_SECONDS = 120
 RESULTS = 6
+FETCH_BUDGET_S = 180      # a clip that is not here by then is given up on: the call says so, and the model picks again
 
 
 def configured():
@@ -36,8 +37,13 @@ async def _search(query, orientation, per_page):
 
 
 async def _download(url, dest):
-    """Stream a clip to `dest`, refusing a host that is not Pexels' and a file past MAX_BYTES."""
+    """Stream a clip to `dest`, refusing a host that is not Pexels', a file past MAX_BYTES, and a
+    download still going after FETCH_BUDGET_S (each read has its own timeout, so a slow link would
+    otherwise hold the turn for as long as it kept trickling: 4.4 MB took 320 s once, 2026-10-13)."""
+    import time
+
     import httpx
+    deadline = time.monotonic() + FETCH_BUDGET_S
     host = httpx.URL(url).host or ""
     if not url.startswith("https://") or not (host == "pexels.com" or host.endswith(".pexels.com")):
         raise ValueError(f"unexpected video host {host!r}")
@@ -54,6 +60,8 @@ async def _download(url, dest):
                         size += len(chunk)
                         if size > MAX_BYTES:
                             raise ValueError("that stock clip is too large; pick another")
+                        if time.monotonic() > deadline:
+                            raise ValueError("that stock clip is taking too long to fetch; try again, or pick another")
                         f.write(chunk)
         tmp.replace(dest)
     finally:
@@ -112,7 +120,8 @@ async def find(root, query, *, orientation=None, pick=0):
     v = videos[pick]
     rel = f"{DIR}/{_slug(query)}-{v.get('id')}.mp4"
     await _download(_file(v)["link"], Path(root) / rel)
-    credit = f"Video by {(v.get('user') or {}).get('name') or 'unknown'} on Pexels ({v.get('url') or 'pexels.com'})."
+    by = " ".join(str((v.get("user") or {}).get("name") or "unknown").split())
+    credit = f"Video by {by} on Pexels ({v.get('url') or 'pexels.com'})."
     others = [_line(i, x) for i, x in enumerate(videos) if i != pick]
     index[key] = {"path": rel, "credit": credit, "others": others}
     folder.mkdir(parents=True, exist_ok=True)
