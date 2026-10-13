@@ -186,6 +186,48 @@ an error asking for a smaller copy. A round avatar is a square image with
 `nodes`, with a gradient scrim and explicitly light text over it (the automatic
 text colour only knows the frame's fill).
 
+**The media library.** A third way to bring a picture: name one the design service
+keeps — `"asset": "paper texture"` (a few plain words) or `"asset":
+"texture/ambientcg/paper006"` (an id), wherever `src` or `stock` goes. The library is a
+read-only volume on the service (`cycls-media-assets`, its `v1/` set: textures,
+patterns, 3D emoji and icons, illustrations, museum ornament, each a row of
+`catalog.json` with its kind, tags, size, colours and licence), so every agent that
+has Design has it and nothing is configured here. `{"action": "assets", "query"?,
+"kind"?}` lists what it holds (ids, sizes, colours, tags) and makes nothing.
+`design/assets.py` resolves a named asset the way `stock.py` resolves a photo: one
+`POST /assets` to the service for the row and the bytes, saved to
+`attachments/assets/<id>.<ext>` and remembered in `attachments/assets/.index.json`,
+the path put in as `src` — everything after sees an ordinary workspace file, and a
+document's stored source keeps that path. What the asset IS decides the node: a
+texture, an emoji, an icon or a museum picture is an `image` (a cut-out one defaults
+to `fit: "contain"`), an illustration an `svg`, a pattern a `pattern` — a node written
+as another of the three is read as the one its asset is; `asset` on anything else, and
+a pattern in a layout's picture slot or a `replace_image`, are errors naming the fix.
+The ack says which asset words resolved to, the credit when the licence asks one
+(Hero Patterns, CC BY), and that a picture drawn past 1.6× its own pixels will look
+soft (the 3D emoji are 256 px).
+
+What it holds (3,779 files, 1.4 GB, since 2026-10-13): 1,412 textures at 2K (Poly
+Haven, ambientCG — a designer's cut of each: paper, cloth, leather, marble, plaster,
+concrete, wood, metal, and a short shelf of ground and stone), 87 patterns (Hero
+Patterns, the one source that asks a credit), 1,595 3D emoji (Microsoft Fluent — every
+emoji it draws, a person in the default skin tone), 480 3D icons (3dicons' 120 objects
+in four finishes: `rocket`, `rocket-clay`, `rocket-gradient`, `rocket-premium`), 125
+illustrations (Open Peeps, Open Doodles) and 80 museum pieces (The Met's Islamic art,
+each looked at; nothing written, nothing of the Qur'an). Words are matched by the
+service (`src/assets.ts` there): the most words found, then where — the kind, a title,
+a tag — then the fuller title, then the catalogue's own order, which puts the likeliest
+first. Two things follow for the model, and the tool says both: a material alone can
+name an emoji (`"wood"` is the log emoji; `"wood texture"` is the texture), and a
+finish is a word (`"rocket clay"`).
+
+A **`pattern`** node — `{type: "pattern", asset | src | svg, color?, opacity?, scale?,
+x?, y?, w?, h?}` — is one SVG tile the service repeats over the node's box and hands
+on as an image (`prepare.ts`, drawn once with CanvasKit at up to 2 px a design px), so
+every export and the editor see a picture. With no box it covers the frame; with no
+`color` it takes white or near-black, whichever reads on the frame's fill; with no
+`opacity`, 0.12 — it is finish behind the text. Added by an edit it needs `w` and `h`.
+
 **Self-QA.** Every render comes back to the model as an image beside the ack,
 with a short rubric — headline dominant, ~8–10% margins, legible text, nothing
 overlapping or cut off, exact copy, on-brand — and the instruction to fix anything
@@ -1007,7 +1049,7 @@ every name is still importable from where it used to be.
 | `extract.py` | A PDF taken apart to be made again as a document. |
 | `report.py` · `files.py` | What the model is told (the outline, what an edit touched, the layout check) · a design's files (a free name, the pages of a render written out). |
 | `client.py` | The HTTP client to the service — what `from cycls._agent import design` gives. |
-| `deck.py` · `store.py` · `refresh.py` · `live.py` · `stock.py` | Slide ops on a saved deck · versions and the base a save names · the exports kept beside a design · rooms and passes · stock photos. |
+| `deck.py` · `store.py` · `refresh.py` · `live.py` · `stock.py` · `assets.py` | Slide ops on a saved deck · versions and the base a save names · the exports kept beside a design · rooms and passes · stock photos · the media library (a named asset fetched and placed; the `assets` listing). |
 | `comments.py` | What people pinned on a design: the record, its changes, where a pin is now, and where the record goes when the design does. |
 
 `cycls/_agent/web/design_routes.py` holds a design as the app is served it (its slides
@@ -1164,6 +1206,7 @@ client. It's a Bun HTTP server wrapping the OpenPencil headless CLI:
 - `POST /inspect { fig }` — the outline: frames (with title / notes / transition) and named nodes
 - `POST /export { fig, format?, scale?, width?, every? }` — re-export an edited `.fig`
 - `POST /slides { fig, scale?, format? }` — every slide's image, size and metadata (the deck viewer)
+- `POST /assets { q?, kind?, limit? }` — what the media library holds, by words; `{ id, pick?, kind? }` — one asset's row and its bytes
 
 A render returns `{ ok, frameId, frames, format, image_base64, fig_base64, slides,
 lint, notes? }` plus `preview_base64` / `previews_base64` (a @1x JPEG of the first /

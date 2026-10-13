@@ -130,6 +130,28 @@ def _prepare_spec(spec, brand, root=None):
                 if image_bytes > _DESIGN_IMAGES_MAX:
                     return (f"Error: the design's images total over {_DESIGN_IMAGES_MAX >> 20} MB — "
                             f"use smaller copies (longest side ~2000px).")
+            elif n.get("type") == "pattern":
+                # One SVG tile, which the service repeats over the node's box — the whole
+                # frame when it gives none — in one ink, faint unless it says otherwise.
+                if n.get("src") and not n.get("svg"):
+                    path = _resolve_path(str(n.pop("src")), root)
+                    if not path.is_file() or path.suffix.lower() != ".svg":
+                        return f"Error: a pattern's `src` must be an .svg tile in the workspace ({json.dumps(n)[:80]})."
+                    if path.stat().st_size > _DESIGN_SVG_MAX:
+                        return f"Error: {path.name} is over {_DESIGN_SVG_MAX >> 10} KB — use a simpler tile."
+                    n["svg"] = path.read_text(encoding="utf-8", errors="replace")
+                if not (isinstance(n.get("svg"), str) and "<svg" in n["svg"]):
+                    return ("Error: a pattern node needs `asset` (a pattern of the media library, e.g. \"asset\": \"moroccan\"), "
+                            "`src` (an .svg tile in the workspace) or `svg` (the tile's markup).")
+                if not (n.get("w") and n.get("h")):
+                    if not top or W >= _NO_FRAME:
+                        return "Error: this pattern needs `w` and `h` — the box it fills."
+                    n["x"], n["y"] = n.get("x") or 0, n.get("y") or 0
+                    n["w"], n["h"] = n.get("w") or W - n["x"], n.get("h") or H - n["y"]
+                if bg and n.get("color") is None:
+                    n["color"] = _readable_on(bg)
+                if n.get("opacity") is None:
+                    n["opacity"] = _PATTERN_OPACITY
             elif n.get("type") in ("icon", "svg", "qr", "list", "chart", "table"):
                 kind = n["type"]
                 if kind == "icon" and not (isinstance(n.get("name"), str) and ":" in n["name"]):
@@ -167,7 +189,7 @@ def _prepare_spec(spec, brand, root=None):
             else:
                 return (f"Error: a node has type {n.get('type')!r} ({json.dumps(n)[:80]}) — "
                         f"every node needs a `type`: text, rect, ellipse, line, image, stack, list, "
-                        f"table, chart, icon, svg or qr.")
+                        f"table, chart, icon, svg, pattern or qr.")
             # outside the frame = laid out for another size; the renderer would pile it on the edge
             if top and n["type"] not in ("rect", "ellipse", "line") and ((n.get("x") or 0) >= W or (n.get("y") or 0) >= H):
                 what = repr(n.get("text"))[:40] if n["type"] == "text" else f"a{'n' if n['type'] == 'image' else ''} {n['type']}"
@@ -485,6 +507,9 @@ def _prepare_document(spec, brand, root):
     return spec, None, notes
 
 
+_NO_FRAME = 100000              # the side of the stand-in frame a node added by an edit is prepared in
+_PATTERN_OPACITY = 0.12         # a pattern is finish behind the text, unless it says otherwise
+
 _OP_NUMERIC = ("x", "y", "dx", "dy", "w", "h", "size", "radius", "opacity", "letterSpacing",
                "lineHeight", "strokeWeight", "frame")
 
@@ -513,7 +538,7 @@ def _prepare_ops(ops, root):
         elif op["op"] == "add":
             if not isinstance(op.get("node"), dict):
                 return None, f"Error: op {k}: `add` needs a `node` (a spec node, e.g. a text or a stack)."
-            spec, err, _ = _prepare_spec({"size": [100000, 100000], "nodes": [op["node"]]}, None, root)
+            spec, err, _ = _prepare_spec({"size": [_NO_FRAME, _NO_FRAME], "nodes": [op["node"]]}, None, root)
             if err:
                 return None, err.replace("Error: ", f"Error: op {k}: ", 1)
             op["node"] = spec["nodes"][0]

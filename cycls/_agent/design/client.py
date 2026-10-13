@@ -215,6 +215,32 @@ async def _export(fig, fmt, scale, width, user_id, every, page):
     return await _post("/export", body, user_id)
 
 
+async def assets(query="", kind=None, limit=None, user_id=None):
+    """What the service's media library holds that `query` names (a few words; none: all
+    of `kind`) → {"assets": [{id, kind, title, format, width, height, transparent,
+    colours, tags, use, licence, credit}], "total": how many match, "kinds": {kind: count}}."""
+    body = {"q": query or ""}
+    if kind:
+        body["kind"] = kind
+    if limit:
+        body["limit"] = int(limit)
+    data = await _post("/assets", body, user_id)
+    return {"assets": [dict(a) for a in data.get("assets") or [] if isinstance(a, dict)],
+            "total": int(data.get("total") or 0),
+            "kinds": {str(k): int(n) for k, n in (data.get("kinds") or {}).items()}}
+
+
+async def asset(name, kind=None, pick=0, user_id=None):
+    """One asset of the media library, whole → (its catalogue row, its bytes). `name` is
+    its id or a few words (the best match; `pick` 1 takes the next). One that isn't there
+    is a RuntimeError saying what the library holds."""
+    body = {"id": name, "pick": int(pick or 0)}
+    if kind:
+        body["kind"] = kind
+    data = await _post("/assets", body, user_id)
+    return dict(data.get("asset") or {}), base64.b64decode(data["data_base64"])
+
+
 async def evaluate(script, fmt="png", scale=2, user_id=None):
     """Escape hatch: run a raw plugin-API script (it must log `__FRAME__<id>`) → a Rendered."""
     return _decode(await _post("/eval", {"script": script, "format": fmt, "scale": scale, "preview": True}, user_id))

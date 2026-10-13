@@ -639,7 +639,7 @@ def test_unknown_node_type_is_an_error(tmp_path, monkeypatch):
     calls = _fake_render(monkeypatch)
     for node in ({"type": "circle", "w": 10}, {"x": 0, "y": 0, "w": 10, "h": 10}):
         out = asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [node]}}, _ws(tmp_path)))
-        assert out.startswith("Error") and "text, rect, ellipse, line, image, stack, list, table, chart, icon, svg or qr" in out
+        assert out.startswith("Error") and "text, rect, ellipse, line, image, stack, list, table, chart, icon, svg, pattern or qr" in out
     assert calls == {}                                                      # never rendered a silently-missing node
 
 
@@ -1715,6 +1715,209 @@ def test_an_edit_replaces_an_image_with_a_stock_photo(tmp_path, monkeypatch):
     op = calls["ops"][0]
     assert "stock" not in op and op.get("image")
     assert "Photo by Ana on Pexels" in _text(out)
+
+
+# ---- the media library: {"asset": "…"} is fetched from the service, saved, and placed as what it is ----
+
+_TILE = b'<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><circle cx="5" cy="5" r="3"/></svg>'
+_LIBRARY = [
+    {"id": "texture/a/paper-006", "kind": "texture", "title": "Paper 006", "format": "jpg", "width": 1024, "height": 1024,
+     "transparent": False, "colours": ["#c9a77c"], "tags": ["paper", "beige"], "licence": "CC0-1.0", "credit": None},
+    {"id": "emoji-3d/fluent/rocket", "kind": "emoji-3d", "title": "Rocket", "format": "png", "width": 256, "height": 256,
+     "transparent": True, "colours": ["#e23d55"], "tags": ["launch", "space"], "licence": "MIT", "credit": None},
+    {"id": "illustration/openpeeps/peep-2", "kind": "illustration", "title": "Peep 2", "format": "svg", "width": 240,
+     "height": 324, "transparent": None, "colours": ["#000000"], "tags": ["person", "hand-drawn"], "licence": "CC0-1.0", "credit": None},
+    {"id": "pattern/hero/moroccan", "kind": "pattern", "title": "Moroccan", "format": "svg", "width": 80, "height": 88,
+     "transparent": None, "colours": [], "tags": ["pattern", "repeatable"], "licence": "CC-BY-4.0",
+     "credit": "Pattern by Steve Schoger, heropatterns.com (CC BY 4.0)", "tileable": True}]
+
+
+def _fake_library(monkeypatch, rows=_LIBRARY, missing=None):
+    """The design service's media library faked (the two client calls); records them."""
+    calls = {"asset": [], "list": []}
+    data = {"jpg": _jpeg(1024, 1024), "png": _png(256, 256), "svg": _TILE}
+
+    def matching(name, kind):
+        words = name.lower().split()
+        hits = [r for r in rows if name.lower() == r["id"]
+                or all(w in f"{r['title']} {r['kind']} {' '.join(r['tags'])}".lower() for w in words)]
+        return [r for r in hits if not kind or r["kind"].startswith(kind)]
+
+    async def asset(name, kind=None, pick=0, user_id=None):
+        calls["asset"].append((name, kind, pick, user_id))
+        if missing:
+            raise RuntimeError(missing)
+        hits = matching(name, kind)
+        if not hits:
+            raise RuntimeError(f'no asset matches "{name}" — the library holds texture (1), emoji-3d (1), illustration (1), pattern (1)')
+        row = hits[min(pick, len(hits) - 1)]
+        return dict(row), data[row["format"]]
+
+    async def assets(query="", kind=None, limit=None, user_id=None):
+        calls["list"].append((query, kind))
+        if missing:
+            raise RuntimeError(missing)
+        hits = matching(query, kind) if query else [r for r in rows if not kind or r["kind"].startswith(kind)]
+        return {"assets": [dict(r) for r in hits], "total": len(hits),
+                "kinds": {"texture": 1, "emoji-3d": 1, "illustration": 1, "pattern": 1}}
+    monkeypatch.setattr("cycls._agent.design.client.asset", asset)
+    monkeypatch.setattr("cycls._agent.design.client.assets", assets)
+    return calls
+
+
+def _render_nodes(tmp_path, monkeypatch, nodes, fill="#0f172a", name="a"):
+    render = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "name": name, "spec": {"size": [1080, 1080], "fill": fill, "nodes": nodes}},
+                                   _ws(tmp_path)))
+    return out, render
+
+
+def test_an_asset_named_by_words_is_fetched_saved_and_said(tmp_path, monkeypatch):
+    calls = _fake_library(monkeypatch)
+    out, render = _render_nodes(tmp_path, monkeypatch, [{"type": "image", "asset": "paper texture", "x": 0, "y": 0, "w": 1080, "h": 1080}])
+    saved = tmp_path / "attachments" / "assets" / "texture-a-paper-006.jpg"
+    assert saved.read_bytes() == _jpeg(1024, 1024)
+    assert calls["asset"] == [("paper texture", None, 0, "org_1:user_1")]
+    node = render["spec"]["nodes"][0]
+    assert node["type"] == "image" and node["image"] and "asset" not in node and "fit" not in node     # a texture covers its box
+    assert '"paper texture" → the library\'s texture/a/paper-006 (Paper 006, texture).' in _text(out)
+
+
+def test_an_asset_named_by_its_id_is_fetched_once_and_needs_no_telling(tmp_path, monkeypatch):
+    calls = _fake_library(monkeypatch)
+    node = lambda: [{"type": "image", "asset": "texture/a/paper-006", "x": 0, "y": 0, "w": 1080, "h": 1080}]
+    out, _ = _render_nodes(tmp_path, monkeypatch, node(), name="a")
+    _render_nodes(tmp_path, monkeypatch, node(), name="b")
+    assert len(calls["asset"]) == 1 and "the library's" not in _text(out)
+
+
+def test_a_cut_out_asset_is_shown_whole_and_said_soft_when_drawn_too_large(tmp_path, monkeypatch):
+    _fake_library(monkeypatch)
+    out, render = _render_nodes(tmp_path, monkeypatch, [{"asset": "rocket", "x": 100, "y": 100, "w": 200, "h": 300}])
+    node = render["spec"]["nodes"][0]
+    assert node["type"] == "image" and (node["w"], node["h"]) == (200, 200)      # contain: the box takes the picture's shape
+    assert "look soft" not in _text(out)
+    out, _ = _render_nodes(tmp_path, monkeypatch, [{"type": "image", "asset": "rocket", "x": 0, "y": 0, "w": 640, "h": 640}], name="b")
+    assert "emoji-3d/fluent/rocket is 256×256 px and is drawn about 2.5× that — it will look soft" in _text(out)
+
+
+def test_an_illustration_is_an_svg_node_whatever_it_was_written_as(tmp_path, monkeypatch):
+    _fake_library(monkeypatch)
+    _, render = _render_nodes(tmp_path, monkeypatch, [{"type": "image", "asset": "peep", "x": 40, "y": 40, "w": 300, "fit": "contain"}])
+    node = render["spec"]["nodes"][0]
+    assert node["type"] == "svg" and node["svg"].startswith("<svg") and "src" not in node and "fit" not in node
+    assert (tmp_path / "attachments" / "assets" / "illustration-openpeeps-peep-2.svg").is_file()
+
+
+def test_a_pattern_fills_the_frame_faintly_in_an_ink_that_reads_and_is_credited(tmp_path, monkeypatch):
+    _fake_library(monkeypatch)
+    out, render = _render_nodes(tmp_path, monkeypatch, [{"type": "pattern", "asset": "moroccan"},
+                                                        {"type": "image", "asset": "pattern/hero/moroccan", "x": 0, "y": 540, "w": 1080, "h": 540,
+                                                         "color": "#f59e0b", "opacity": 0.4, "scale": 2}])
+    whole, band = render["spec"]["nodes"]
+    assert whole == {"type": "pattern", "svg": _TILE.decode(), "x": 0, "y": 0, "w": 1080, "h": 1080, "color": "#ffffff", "opacity": 0.12}
+    assert band["type"] == "pattern" and (band["color"], band["opacity"], band["scale"], band["h"]) == ("#f59e0b", 0.4, 2, 540)
+    text = _text(out)
+    assert text.count("credit it: Pattern by Steve Schoger, heropatterns.com (CC BY 4.0).") == 1       # said once for both
+    assert '"moroccan" → the library\'s pattern/hero/moroccan (Moroccan, pattern) — credit it' in text
+
+
+def test_a_pattern_takes_a_tile_from_the_workspace_too(tmp_path, monkeypatch):
+    (tmp_path / "brand").mkdir()
+    (tmp_path / "brand" / "tile.svg").write_bytes(_TILE)
+    _, render = _render_nodes(tmp_path, monkeypatch, [{"type": "pattern", "src": "brand/tile.svg", "x": 0, "y": 0, "w": 400, "h": 300}],
+                              fill="#ffffff")
+    node = render["spec"]["nodes"][0]
+    assert node["svg"] == _TILE.decode() and node["color"] == "#111111" and (node["w"], node["h"]) == (400, 300)
+    out, _ = _render_nodes(tmp_path, monkeypatch, [{"type": "pattern"}], name="b")
+    assert out.startswith("Error: a pattern node needs `asset`")
+
+
+def test_a_layouts_picture_takes_an_asset_but_not_a_pattern(tmp_path, monkeypatch):
+    _fake_library(monkeypatch)
+    render = _fake_render(monkeypatch, image=b"PPTX", previews=[b"J1", b"J2"])
+    deck = lambda asset: {"action": "render", "name": "pitch", "format": "pptx", "spec": {"deck": {"slides": [
+        {"layout": "title", "title": "Brewly", "image": {"asset": asset}}, {"layout": "closing", "title": "Thanks"}]}}}
+    asyncio.run(_exec_design(deck("paper"), _ws(tmp_path)))
+    slot = render["spec"]["deck"]["slides"][0]["image"]
+    assert slot["src"] == "attachments/assets/texture-a-paper-006.jpg" and slot["image"]
+    out = asyncio.run(_exec_design(deck("moroccan"), _ws(tmp_path)))
+    assert out.startswith("Error: pattern/hero/moroccan (Moroccan) is a pattern — it fills a box as a node")
+
+
+def test_a_documents_picture_stays_the_block_it_was(tmp_path, monkeypatch):
+    # A document's block is not a spec node: an illustration there is still its `image`,
+    # not an svg node — only what sits in `nodes` is read as what its asset is.
+    _fake_library(monkeypatch)
+    from cycls._agent.design import assets
+    spec = {"document": {"title": "T", "cover": {"image": {"asset": "paper"}}, "sections": [{"title": "S", "blocks": [
+        {"type": "image", "asset": "peep", "caption": "A reader"},
+        {"image": {"asset": "rocket", "kind": "emoji"}},
+        {"type": "nodes", "nodes": [{"type": "image", "asset": "peep", "x": 0, "y": 0, "w": 200}]}]}]}}
+    notes, err = asyncio.run(assets.resolve(spec, str(tmp_path)))
+    blocks = spec["document"]["sections"][0]["blocks"]
+    assert err is None and len(notes) == 3
+    assert blocks[0] == {"type": "image", "src": "attachments/assets/illustration-openpeeps-peep-2.svg", "caption": "A reader"}
+    assert blocks[1] == {"image": {"src": "attachments/assets/emoji-3d-fluent-rocket.png"}}
+    assert blocks[2]["nodes"][0]["type"] == "svg"                                   # a node, in a block of nodes
+    assert spec["document"]["cover"]["image"] == {"src": "attachments/assets/texture-a-paper-006.jpg"}
+
+
+def test_an_edit_takes_an_asset(tmp_path, monkeypatch):
+    _fake_library(monkeypatch)
+    calls, _ = _fake_apply(monkeypatch)
+    _design(tmp_path)
+    edit = lambda ops: asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": ops}, _ws(tmp_path)))
+    edit([{"op": "replace_image", "node": "hero", "asset": "paper"},
+          {"op": "add", "node": {"type": "pattern", "asset": "moroccan", "x": 0, "y": 0, "w": 1080, "h": 400}}])
+    swap, add = calls["ops"]
+    assert "asset" not in swap and swap["image"] and add["node"]["type"] == "pattern" and add["node"]["svg"]
+    assert edit([{"op": "replace_image", "node": "hero", "asset": "moroccan"}]).startswith(
+        "Error: pattern/hero/moroccan (Moroccan) is a pattern — replace_image takes a picture")
+    assert "this pattern needs `w` and `h`" in edit([{"op": "add", "node": {"type": "pattern", "asset": "moroccan"}}])
+
+
+def test_an_asset_goes_where_a_picture_goes_and_what_is_not_there_is_said(tmp_path, monkeypatch):
+    _fake_library(monkeypatch)
+    out, _ = _render_nodes(tmp_path, monkeypatch, [{"type": "rect", "asset": "paper", "x": 0, "y": 0, "w": 10, "h": 10}])
+    assert out.startswith("Error: `asset` goes on an image, svg or pattern node, not a rect")
+    out, _ = _render_nodes(tmp_path, monkeypatch, [{"type": "image", "asset": "zebra", "x": 0, "y": 0, "w": 10, "h": 10}])
+    assert out.startswith('Error: no asset matches "zebra" — the library holds texture (1)')
+    out, _ = _render_nodes(tmp_path, monkeypatch, [{"type": "image", "asset": "paper", "kind": "emoji", "x": 0, "y": 0, "w": 10, "h": 10}])
+    assert out.startswith('Error: no asset matches "paper"')                      # `kind` narrows the words
+
+
+def test_a_service_from_before_the_library_says_there_is_none(tmp_path, monkeypatch):
+    _fake_library(monkeypatch, missing="not found")
+    out, _ = _render_nodes(tmp_path, monkeypatch, [{"type": "image", "asset": "paper", "x": 0, "y": 0, "w": 10, "h": 10}])
+    assert out == "Error: this design service has no media library"
+    assert asyncio.run(_exec_design({"action": "assets", "query": "paper"}, _ws(tmp_path))) == "Error: this design service has no media library."
+
+
+def test_assets_lists_what_the_library_holds_and_makes_nothing(tmp_path, monkeypatch):
+    calls = _fake_library(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "assets", "query": "rocket", "kind": "Emoji"}, _ws(tmp_path)))
+    assert calls["list"] == [("rocket", "emoji")] and not calls["asset"]
+    assert out.startswith('The media library — 1 for "rocket" of kind emoji:\n  emoji-3d/fluent/rocket — Rocket · emoji-3d · PNG 256×256 · transparent · #e23d55 · launch, space')
+    assert "Nothing was made by this call." in out and not (tmp_path / "designs").exists()
+    everything = asyncio.run(_exec_design({"action": "assets"}, _ws(tmp_path)))
+    assert everything.startswith("The media library — 4 assets:") and "pattern/hero/moroccan — Moroccan · pattern · SVG 80×88" in everything
+    nothing = asyncio.run(_exec_design({"action": "assets", "query": "zebra"}, _ws(tmp_path)))
+    assert nothing.startswith('The media library has nothing for "zebra" — it holds texture (1), emoji-3d (1)')
+
+
+def test_the_library_calls_reach_the_service(monkeypatch):
+    monkeypatch.setenv("DESIGN_URL", "https://d.cycls.ai")
+    _mock(monkeypatch, _FakeResp(200, {"ok": True, "assets": [{"id": "texture/a/paper-006"}], "total": 3, "kinds": {"texture": 3}}))
+    assert asyncio.run(client.assets("paper", kind="texture", limit=5)) == {
+        "assets": [{"id": "texture/a/paper-006"}], "total": 3, "kinds": {"texture": 3}}
+    assert _FakeClient.last["url"] == "https://d.cycls.ai/assets" and _FakeClient.last["json"] == {"q": "paper", "kind": "texture", "limit": 5}
+    _mock(monkeypatch, _FakeResp(200, {"ok": True, "asset": {"id": "texture/a/paper-006"}, "data_base64": base64.b64encode(b"JPG").decode()}))
+    assert asyncio.run(client.asset("paper", pick=1)) == ({"id": "texture/a/paper-006"}, b"JPG")
+    assert _FakeClient.last["json"] == {"id": "paper", "pick": 1}
+    _mock(monkeypatch, _FakeResp(404, {"ok": False, "error": 'no asset matches "zebra" — the library holds texture (3)'}))
+    with pytest.raises(RuntimeError, match="no asset matches"):
+        asyncio.run(client.asset("zebra"))
 
 
 # ---- documents: content that flows over paper pages, saved as a PDF ----

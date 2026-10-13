@@ -43,6 +43,8 @@ _DESIGN_TOOL = {
         "    icon    {\"type\":\"icon\",\"name\":\"lucide:rocket\",\"x\":,\"y\":,\"size\":64,\"color\"?:}  any Iconify icon "
         "(sets: lucide, tabler, mdi, ph, heroicons, ri…)\n"
         "    svg     {\"type\":\"svg\",\"src\":\"brand/logo.svg\"|\"svg\":\"<svg…>\",\"x\":,\"y\":,\"w\":,\"h\"?:,\"color\"?:}  a logo or mark\n"
+        "    pattern {\"type\":\"pattern\",\"asset\":\"moroccan\",\"color\"?:,\"opacity\"?:0.12,\"scale\"?:1,\"x\"?:,\"y\"?:,\"w\"?:,\"h\"?:}  "
+        "one tile of the media library repeated over its box (no box: the whole frame) — FIRST in `nodes`, behind the text\n"
         "    qr      {\"type\":\"qr\",\"text\":\"https://…\",\"x\":,\"y\":,\"size\":240}\n"
         "    line    {\"type\":\"line\",\"from\":[x,y],\"to\":[x,y],\"color\":,\"width\"?:4,\"end\"?:\"arrow\",\"start\"?:\"arrow\"}  "
         "(a connector or pointer; the old x/y/w form is a divider)\n"
@@ -79,6 +81,18 @@ _DESIGN_TOOL = {
         "over the lower half (no hard edge across the photo) — and text with an explicit light "
         "`color` on top; the auto text colour only knows the frame's fill, not a photo. "
         "A round avatar = a square image with radius = w/2.\n"
+        "  Or NAME a picture of the MEDIA LIBRARY: \"asset\":\"paper texture\" in place of `src` — a few plain words, or "
+        "an id from {\"action\":\"assets\",\"query\":\"marble\"}, which lists what there is (`kind` narrows it). It "
+        "holds TEXTURES (over a thousand — paper, fabric, leather, marble, terrazzo, plaster, concrete, wood, metal, tiles, "
+        "sand…: a full-bleed image first in `nodes`, or over a colour at `opacity` 0.2–0.5 for grain); 3D EMOJI (nearly "
+        "every emoji, no country flags: rocket, trophy, gift, mosque, crescent, camel…) and 3D ICONS (120 objects, each also \"<name> clay\" — matt "
+        "white, sits with any brand colour — \"gradient\" and \"premium\", black and gold); these are cut-out PNGs only "
+        "256–400 px: ONE accent beside a headline, up to ~400 px, never a background; ILLUSTRATIONS (hand-drawn people and "
+        "scenes — an svg node); PATTERNS (a pattern node) and museum ORNAMENT (Islamic tiles, carpets, textiles, carved "
+        "panels — photos with their own background: `crop` them). A material alone can name an emoji (\"wood\" is a log): "
+        "say \"wood texture\". It is saved to attachments/assets/; the result says which asset was taken "
+        "and, when its licence asks one, the credit to keep with the design. `pick`:1 takes the next match. These are finish, "
+        "not content: at most one texture or pattern and one or two objects in a design.\n"
         "  `shadow` is true or {\"blur\":40,\"y\":16,\"opacity\":0.25,\"color\"?,\"x\"?,\"spread\"?} "
         "— a drop shadow that lifts a card or button off the background.\n"
         "  DESIGN — make it look intentional, not a wireframe: one clear idea, a strong "
@@ -172,7 +186,7 @@ _DESIGN_TOOL = {
         "bare string; takes **bold**, *italic*, [links](https://…)) · \"h2\" · \"h3\" · \"bullets\" / "
         "\"numbered\": [..] · \"callout\": {title?, text, tone?} · \"quote\" + \"by\" · \"stats\": "
         "[{value, label}] · \"chart\": {kind, data} + \"title\", \"caption\" · \"table\": {columns, rows} + \"title\" "
-        "/ \"caption\" · \"image\": \"path\" (or {\"stock\": \"query\"}) + \"caption\" — a photo is cropped "
+        "/ \"caption\" · \"image\": \"path\" (or {\"stock\": \"query\"} / {\"asset\": \"…\"}) + \"caption\" — a photo is cropped "
         "to a band, a diagram or screenshot shown whole (\"fit\": \"cover\"|\"contain\" to say) · "
         "\"columns\": [[blocks],[blocks]] · "
         "\"cards\": [{icon?, title, text}] · \"pairs\": [[label, value]] · \"note\" (a source) · "
@@ -295,8 +309,10 @@ _DESIGN_TOOL = {
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["render", "script", "edit", "inspect", "add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide",
                                               "add_section", "update_section", "move_section", "delete_section", "update_document", "extract",
-                                              "export", "rename", "duplicate", "delete", "versions", "restore", "comments"],
-                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes; a document's sections), `edit` it (checked, saved, replayed live in the editor), change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide, change a document: add_section / update_section / move_section / delete_section / update_document, `extract` an existing PDF's text and pictures, `export` a saved design as another file, handle a design as a file: rename / duplicate / delete / versions / restore, or read and answer the `comments` people pinned on it."},
+                                              "export", "rename", "duplicate", "delete", "versions", "restore", "comments", "assets"],
+                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes; a document's sections), `edit` it (checked, saved, replayed live in the editor), change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide, change a document: add_section / update_section / move_section / delete_section / update_document, `extract` an existing PDF's text and pictures, `export` a saved design as another file, handle a design as a file: rename / duplicate / delete / versions / restore, or read and answer the `comments` people pinned on it; `assets` lists the media library's pictures (`query`, `kind`) — nothing is made."},
+        "query": {"type": "string", "description": "For `assets`: words to look for in the media library (paper, marble, rocket, people…); none lists all of a `kind`."},
+        "kind": {"type": "string", "description": "For `assets`: one kind only — texture, pattern, emoji-3d, icon-3d, illustration or art."},
         "new_name": {"type": "string", "description": "For `rename`: the design's new name. For `duplicate`: the copy's name (default <name>-copy)."},
         "version": {"type": ["string", "integer"], "description": "For `restore`: the version to go back to — its id from `versions`, or its place there (1 = the newest)."},
         "section": {"type": "object", "description": "For add_section / update_section: the section {title, blocks: […]}. update_section takes just the keys that change — {blocks} rewrites it, {title} renames it."},
@@ -317,7 +333,7 @@ _DESIGN_TOOL = {
         "title": {"type": "string", "description": "For update_slide without `slide`: the slide's title (its name in the deck viewer)."},
         "transition": {"type": "string", "enum": ["fade", "slide", "none"], "description": "For update_slide without `slide`: how the slide enters when presented."},
         "ops": {"type": "array", "items": {"type": "object"},
-                "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?} (a stack's id moves the whole block; a node in a stack moved on its own leaves it); resize {node, w?, h?}; delete {node}; duplicate {node, dx?, dy?, id?} (in a stack, the copy is its next item); replace_image {node, src}; add {node:<spec node>, frame?}; background {fill, frame?} — the slide's OWN fill: a colour, {\"gradient\": [...]} or \"none\" (never cover a slide with a full-size rect). `frame` (slide index from 0) narrows a name to one slide. Pages: page_add {name, spec}; page_duplicate {page?, name?}; page_rename {page?, name}; page_delete {page?}."},
+                "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?} (a stack's id moves the whole block; a node in a stack moved on its own leaves it); resize {node, w?, h?}; delete {node}; duplicate {node, dx?, dy?, id?} (in a stack, the copy is its next item); replace_image {node, src} (or `stock` / `asset` in place of `src`); add {node:<spec node>, frame?}; background {fill, frame?} — the slide's OWN fill: a colour, {\"gradient\": [...]} or \"none\" (never cover a slide with a full-size rect). `frame` (slide index from 0) narrows a name to one slide. Pages: page_add {name, spec}; page_duplicate {page?, name?}; page_rename {page?, name}; page_delete {page?}."},
         "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}; several variants of one design as pages {pages:[{name, size, fill, nodes}]}; a document (a report or any PDF that flows over pages) {document:{title, sections:[{title, blocks:[…]}]}}; a presentation as a deck of layouts {deck:{theme, footer?, slides:[{layout, …slots, notes}]}} (the normal way for decks); or hand-built frames {frames:[...]} (one per slide, all one size, each with optional id/title/notes/transition; export pptx or pdf, or png for a carousel); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s). Scripts may use only `figma` (and `console`): no `this`, globals, network, eval/Function or `.constructor` — anything else is refused before it runs."},
@@ -398,7 +414,7 @@ def _design_short():
     props["action"]["description"] = (
         "guide — load this tool's full instructions (first). Then: render, edit, inspect, extract, script, "
         "add_slide, update_slide, move_slide, duplicate_slide, delete_slide, add_section, update_section, "
-        "move_section, delete_section, update_document, export, rename, duplicate, delete, versions, restore, comments.")
+        "move_section, delete_section, update_document, export, rename, duplicate, delete, versions, restore, comments, assets.")
     return {**{k: v for k, v in _DESIGN_TOOL.items() if k not in ("description", "input_schema")},
             "description": _DESIGN_SHORT,
             "input_schema": {"type": "object", "properties": props, "required": ["action"]}}

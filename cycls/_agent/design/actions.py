@@ -184,10 +184,10 @@ async def _exec_slides(action, inp, workspace, name):
     if not fig_path.is_file():
         return f"Error: {fig_rel} doesn't exist — slide actions work on a deck you rendered."
     doc = await asyncio.to_thread(decks.read_doc, deck_path)
-    credits = []   # {"stock": "…"} photos → saved workspace files
+    credits = []   # {"stock": "…"}, {"asset": "…"} pictures → saved workspace files
     if isinstance(inp.get("slide"), dict):
-        from cycls._agent.design import stock
-        credits, err = await stock.resolve(inp["slide"], root)
+        from cycls._agent.design import assets
+        credits, err = await assets.named(inp["slide"], root, subject)
         if err:
             return err
 
@@ -458,7 +458,7 @@ async def _render_document(inp, workspace, name):
     """Render a document to designs/<name>.pdf / .fig plus a "document" deck file, pages back for QA.
     `replace` re-renders under the same name, keeping the earlier .fig as a version."""
     from cycls._agent import design
-    from cycls._agent.design import stock
+    from cycls._agent.design import assets
     from cycls._agent.design.deck import lock
     from cycls._agent.design.store import write_fig
     from cycls._agent.design.store import version_of
@@ -469,10 +469,10 @@ async def _render_document(inp, workspace, name):
     edited = await _edits_since_render(workspace, name) if replacing else None
     if edited is not None and inp.get("discard_edits") is not True:
         return _edits_hold(name, edited)
-    credits, err = await stock.resolve(inp["spec"], workspace.root)
+    credits, err = await assets.named(inp["spec"], workspace.root, subject)
     if err:
         return err
-    source = json.loads(json.dumps(inp["spec"]["document"]))       # as written, stock photos resolved
+    source = json.loads(json.dumps(inp["spec"]["document"]))       # as written, stock photos and assets resolved
     spec, err, notes = await asyncio.to_thread(lambda: _prepare_document(inp["spec"], _load_brand(workspace.root), workspace.root))
     if err:
         return err

@@ -74,6 +74,9 @@ async def _exec_design(inp, workspace):
         return await _exec_design_file(action, inp, workspace, name)
     if action == "comments":
         return await _exec_comments(inp, workspace, name)
+    if action == "assets":                                  # what the media library holds
+        from cycls._agent.design import assets
+        return await assets.listing(inp, subject)
     if action in ("edit", "inspect"):
         rel = f"designs/{name}.fig"
         fig_path = pathlib.Path(workspace.root) / rel
@@ -102,8 +105,8 @@ async def _exec_design(inp, workspace):
                     "(Design inspect lists the node names) — or a raw `script`.")
         credits = []
         if ops:
-            from cycls._agent.design import stock
-            credits, err = await stock.resolve(ops, workspace.root)   # {"stock": "…"} → a saved photo
+            from cycls._agent.design import assets
+            credits, err = await assets.named(ops, workspace.root, subject)   # {"stock": "…"}, {"asset": "…"} → a saved picture
             if err:
                 return err
             ops, err = await asyncio.to_thread(_prepare_ops, ops, workspace.root)
@@ -195,9 +198,9 @@ async def _exec_design(inp, workspace):
             if isinstance(inp["spec"].get("document"), dict):
                 return await _render_document(inp, workspace, name)
             root = workspace.root   # reads the brand kit + any image files: off the loop
-            # {"stock": …} photos are saved first, so the spec sees ordinary files
-            from cycls._agent.design import stock
-            credits, err = await stock.resolve(inp["spec"], root)
+            # {"stock": …}, {"asset": …} pictures are saved first, so the spec sees ordinary files
+            from cycls._agent.design import assets
+            credits, err = await assets.named(inp["spec"], root, subject)
             if err:
                 return err
             spec, err, notes = await asyncio.to_thread(lambda: _prepare_spec(inp["spec"], _load_brand(root), root))
