@@ -69,7 +69,7 @@ def test_missing_key_refuses_to_store(tmp_path, monkeypatch):
 def test_private_slots_are_path_guarded(tmp_path):
     from cycls._agent.tools import _resolve_path
     from cycls._agent.web.routers import resolve_path
-    for name in (".secrets", ".connectors", ".settings"):
+    for name in (".secrets", ".connectors", ".settings", ".apps"):
         with pytest.raises(ValueError, match="managed by cycls"):
             _resolve_path(f"{name}/x", str(tmp_path))
         with pytest.raises(ValueError, match="managed by cycls"):

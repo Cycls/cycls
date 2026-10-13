@@ -12,7 +12,7 @@ from ..connectors import approval_key
 from ..logs import log
 from ..state import _exec_database, app_shelf, apps_db
 from .. import credentials, spill, trash
-from ..paths import _TMP_ERROR, _resolve_path, _safe_filename
+from ..paths import _TMP_ERROR, MANAGED, _resolve_path, _safe_filename
 # the Design tool lives in cycls/_agent/design; its names are re-exported here
 from ..design.tool import (DESIGN_LOADED, _DESIGN_SHORT, _DESIGN_TOOL, _DESIGN_TOOL_SHORT, _DESIGN_WORDS,
     _DESIGN_WORDS_AR, _GUIDE_LOADED, _GUIDE_NOT_RUN, _design_short, design_called, design_tool, design_wanted)
@@ -99,11 +99,15 @@ _DATABASE_TOOL = {
     "type": "custom",
     "name": "database",
     "description": (
-        "Persistent key-value store, PER USER — no other member of the workspace can see it, "
-        "and neither can an app. Your own memory across turns and chats: notes, preferences, "
-        "task progress. Atomic per-key writes, prefix scans.\n"
-        "Anything a teammate or an app must read goes in `apps/<slug>/data/` or a workspace "
-        "file instead.\n\n"
+        "Persistent key-value store with two shelves, picked by the key:\n"
+        "- Your own memory: any key not under `apps/`. PER USER — no other member and no app sees "
+        "it. Notes, preferences, task progress across turns and chats.\n"
+        "- An app's data: `apps/<slug>/<key>` is exactly what the app at apps/<slug>/ reads and "
+        "writes with `cycls.get`/`cycls.set`, shared by the workspace. This tool is the only way to "
+        "it — it is not a file, so bash and the file tools cannot reach it. "
+        "`scan` with prefix `apps/<slug>/` lists an app's keys.\n"
+        "Atomic per-key writes, prefix scans. Anything a teammate must read goes in a workspace "
+        "file or an app's data, not your memory.\n\n"
         "Commands:\n"
         "- get:    read a value at `key`. Returns the stored JSON or 'not found'.\n"
         "- put:    write `value` (any JSON-serializable type) at `key`.\n"
@@ -283,8 +287,9 @@ _BUILD_APP_TOOL = {
         "React 19.2.8 (`createRoot`), Tailwind v4 via `@import \"tailwindcss\"`, and: "
         "@base-ui/react, @dnd-kit/core, @dnd-kit/modifiers, @dnd-kit/sortable, @dnd-kit/utilities, @hookform/resolvers, @radix-ui/react-slot, @tanstack/react-table, @tanstack/react-virtual, class-variance-authority, clsx, cmdk, date-fns, embla-carousel-react, input-otp, lucide-react, motion, radix-ui, react-day-picker, react-dom, react-hook-form, recharts, sonner, tailwind-merge, tailwind-variants, tw-animate-css, vaul, zod. "
         "Nothing else — you cannot add a dependency.\n"
-        "In the app: `cycls.read`/`write` reach `data/` in its own folder, `cycls.get`/`set` are a "
-        "key-value store there, `cycls.save(name, content)` asks where to put a file anywhere, and "
+        "In the app: `cycls.read`/`write` reach files in `data/` in its own folder, `cycls.get`/`set` "
+        "a key-value store the workspace shares (you read and write it with `database` at "
+        "`apps/<slug>/<key>`), `cycls.save(name, content)` asks where to put a file anywhere, and "
         "`await cycls.connector(name).json(path, init)` calls a connected connector's REST API with "
         "the credential attached server-side — so a dashboard stays live and holds no key. Never put "
         "an API key in app source.\n"
@@ -425,16 +430,10 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
     shims = str(pathlib.Path(__file__).parent / "shims")
     env = {"PATH": f"{SHIMS_MOUNT}:{path}", "LANG": lang,
            "CYCLS_WORKSPACE": "/workspace", "CYCLS_TRASH": TRASH_MOUNT}
-    sb = (Sandbox()
-          .bind(cwd, "/workspace")
-          .tmpfs("/workspace/.db")        # cycls state (chat, shares); editor blocks via _resolve_path
-          .tmpfs("/workspace/.database")  # agent KV store; same blocking
-          .tmpfs("/workspace/.trash")
-          .tmpfs("/workspace/.versions")   # design versions
-          .tmpfs("/workspace/.comments")   # design comments
-          .tmpfs(f"/workspace/{credentials.USER}")
-          .tmpfs(f"/workspace/{credentials.SHARED}")
-          .tmpfs("/workspace/.settings")  # the person's tool settings: bash must not grant itself "allow"
+    sb = Sandbox().bind(cwd, "/workspace")
+    for name in MANAGED:   # chats, memory, app data, secrets, settings…: each reached only by its own tool
+        sb = sb.tmpfs(f"/workspace/{name}")
+    sb = (sb
           .bind(trash_dir, TRASH_MOUNT)
           .ro_bind(shims, SHIMS_MOUNT)
           .tmpfs("/app")
@@ -758,7 +757,9 @@ def app_catalog(root):
     except OSError:
         pass
     text = ("## Apps in this workspace\n"
-            "Their data is in apps/<slug>/data/. Read apps/<slug>/README.md before changing it.\n"
+            "Read apps/<slug>/README.md before changing one. What an app keeps with `cycls.get`/`set` "
+            "is reached only with `database` at `apps/<slug>/<key>` (scan `apps/<slug>/`); "
+            "its files are in apps/<slug>/data/.\n"
             + "\n".join(lines)) if lines else ""
     _apps_cache[root] = (time.monotonic() + _APPS_TTL, text)
     return text
@@ -834,9 +835,10 @@ async def _exec_build_app(inp, ws):
 
     kb = (result.get("bytes") or len(result["html"].encode())) / 1024
     out = (f"Installed apps/{slug}/index.html ({kb:.0f} KB). It is in the Apps tab.\n"
-           f"Now write apps/{slug}/README.md describing each file the app reads under "
-           f"apps/{slug}/data/ and its shape. A later session updates that data without "
-           f"you — and without it, the only way to learn the schema is to read the bundle.")
+           f"Now write apps/{slug}/README.md describing each `cycls.get`/`set` key (reached with "
+           f"`database` at apps/{slug}/<key>) and each file under apps/{slug}/data/, and their shape. "
+           f"A later session updates that data without you — and without it, the only way to learn "
+           f"the schema is to read the bundle.")
     if result.get("stray"):
         out += ("\nWARNING: these assets could not be inlined and will be blocked "
                 f"when the app runs: {', '.join(result['stray'])}")
@@ -1031,7 +1033,7 @@ _TOOLS = {
                        lambda inp: {"tool_name": "Reading", "step": inp.get("path", "")}),
     "edit":       Tool(lambda inp, ws, **_: asyncio.to_thread(_exec_edit, inp, ws.root),
                        lambda inp: {"tool_name": "Editing", "step": inp.get("path", "")}),
-    "database":   Tool(lambda inp, ws, **_: _exec_database(inp, ws),
+    "database":   Tool(lambda inp, ws, ctx=None, **_: _exec_database(inp, ws, getattr(ctx, "user", None)),
                        lambda inp: {"tool_name": "Database",
                                     "step": f"{inp.get('command', '')} {inp.get('key') or inp.get('prefix', '')}".strip()}),
     "canvas":     Tool(lambda inp, ws, **_: _exec_canvas(inp, ws.root),

@@ -2,6 +2,7 @@
 import unicodedata
 from pathlib import Path
 from fastapi import HTTPException
+from cycls._agent.paths import MANAGED
 
 from cycls._agent.design import refresh as design_refresh
 
@@ -16,14 +17,14 @@ _NO_CACHE = {"Cache-Control": "no-cache"}
 
 def resolve_path(workspace, rel):
     """Resolve *rel* inside *workspace*, raising ValueError on traversal or
-    access to the reserved `.db/` and `.database/` trees (framework-managed)."""
+    access to a slot cycls manages (MANAGED)."""
     workspace = Path(workspace)
     rel = unicodedata.normalize("NFC", rel)
     resolved = (workspace / rel).resolve()
     ws = workspace.resolve()
     if not resolved.is_relative_to(ws):
         raise ValueError("Path traversal denied")
-    for name in (".db", ".database", ".trash", ".versions", ".comments", ".secrets", ".connectors", ".settings"):
+    for name in MANAGED:
         reserved = ws / name
         if resolved == reserved or resolved.is_relative_to(reserved):
             raise ValueError(f"Reserved path: {name}/ is managed by cycls")

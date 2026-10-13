@@ -741,7 +741,22 @@ def _route(ws, key, *, prefix=False):
     return memory_db(ws), key
 
 
-async def _exec_database(inp, ws):
+async def _may_write_app(ws, user, key):
+    """The /apps route's rule, for the tool too: an app whose app.json says `write: admin` takes
+    shared writes from its workspace's owners and admins only. Personal workspaces are yours."""
+    if not key.startswith(APPS_ROOT) or not ws.ws or ws.ws.startswith("u-"):
+        return
+    slug = key[len(APPS_ROOT):].partition("/")[0]
+    try: manifest = json.loads((Path(ws.root) / "apps" / slug / "app.json").read_text())
+    except Exception: manifest = {}
+    if not isinstance(manifest, dict) or manifest.get("write") != "admin":
+        return
+    role = user and await resolve_role(user, ws.ws, org_db(org_of(user), ws.volume, ws.base))
+    if role not in ("owner", "admin"):
+        raise ValueError(f"only workspace admins can write {slug}'s shared data")
+
+
+async def _exec_database(inp, ws, user=None):
     """All returns are strings — Anthropic tool_result.content accepts
     str or content-blocks (each with a `type`); raw dicts/lists from JSON
     values would 400. JSON-encode the data ones."""
@@ -753,10 +768,12 @@ async def _exec_database(inp, ws):
             return json.dumps(v) if v is not None else f"Error: key {key!r} not found"
         if cmd == "put":
             db, k = _route(ws, key)
+            await _may_write_app(ws, user, key)
             await db.put(k, inp.get("value"))
             return f"Stored {key!r}"
         if cmd == "delete":
             db, k = _route(ws, key)
+            await _may_write_app(ws, user, key)
             await db.delete(k)
             return f"Deleted {key!r}"
         if cmd == "scan":

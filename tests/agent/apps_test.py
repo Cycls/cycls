@@ -218,6 +218,7 @@ class TestBuildAppHardening:
         self._stub(monkeypatch, {"ok": True, "html": "x", "bytes": 1, "stray": []})
         out = self._build({"slug": "burnup", "source": "apps/burnup/src"}, tmp_path)
         assert "apps/burnup/README.md" in out and "apps/burnup/data/" in out
+        assert "`database` at apps/burnup/<key>" in out
 
     def test_an_oversized_file_is_refused_here_and_named(self, tmp_path):
         (tmp_path / "index.html").write_text("<html>")
@@ -233,6 +234,7 @@ class TestAppCatalog:
         (d / "app.json").write_text(json.dumps({"name": "Burn-up", "description": "Sprint burn-up"}))
         text = tools.app_catalog(str(tmp_path))
         assert "- burnup: Burn-up — Sprint burn-up" in text and "README.md" in text
+        assert "`database` at `apps/<slug>/<key>`" in text   # app data is not a file
 
     def test_a_workspace_with_no_apps_costs_nothing(self, tmp_path):
         tools._apps_cache.clear()

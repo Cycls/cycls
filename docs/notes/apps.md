@@ -283,6 +283,13 @@ A standup board keeps its entries in the first and each person's unsent draft in
 `state.app_shelf()` is the only thing that builds either, so both the tool and the route obey one
 set of rules.
 
+**The agent reaches it through `database` only**, at `apps/<slug>/<key>` — the same rows the app's
+`cycls.get`/`set` sees. `.apps` is in `MANAGED` (`cycls/_agent/paths.py`), so bash sees an empty
+folder, the file tools refuse it and `/files` answers 403, as for chats and memory. The tool keeps
+the route's `write: admin` rule too. Until 2026-10-13 it was in none of those lists, and the
+`database` description still said no app could see it: an agent found `/workspace/.apps/`, rewrote
+two apps' rows with `json.dump`, and told its user no tool existed.
+
 ### Three verbs, and the route decides what each may do
 
 ```js
