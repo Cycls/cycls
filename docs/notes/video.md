@@ -115,9 +115,9 @@ Measured on the dev L4 (cycls-video `docs/quirks.md`, P5 and phase 8): a 10 s cl
 own voices); word times within 20–30 ms; music with nobody speaking gives no transcript. A render
 with footage runs at about 2.2× the video's length (204 s for 90 s) and peaks at 9.4 GB of 16.
 
-Not done: the recogniser has not been compared with Cohere Transcribe Arabic on real Gulf speech
-(the plan's bake-off; needs the user's clips, and that model is gated on Hugging Face); real Safari;
-a clip's used stretch alone being sent to a renderer (the whole mezzanine goes, once a container).
+Decided (2026-10-13): Whisper large-v3-turbo stays, and the comparison with Cohere Transcribe Arabic is dropped; a transcript is
+corrected by hand where it matters. Not done: real speech (every spoken test clip was read by the service's own voices); real
+Safari; a clip's used stretch alone being sent to a renderer (the whole mezzanine goes, once a container).
 
 ## The tool
 
