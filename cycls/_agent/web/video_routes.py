@@ -6,9 +6,11 @@
      "version": <the composition's version>, "render": {"path": "videos/<name>.mp4", "exists": bool}}
 
 The page is built by the cycls-video service (its bundler, the pinned player, the catalogue's fonts
-and the composition's images inlined, nothing loaded from anywhere) and kept under `.cache/video/`,
-keyed by the composition's bytes, each image it names (path, time, size) and the service's bundle
-version — so an edit, a changed image or a new engine is a fresh page, and an unchanged one is free.
+and the composition's images inlined, each piece of footage carried as a cut of its small proxy,
+nothing loaded from anywhere) and kept under `.cache/video/`, keyed by the composition's bytes, each
+image it names (path, time, size), each clip (the hash of its bytes, and what is said in it) and the
+service's bundle version — so an edit, a changed image or clip or a new engine is a fresh page, and
+an unchanged one is free.
 When the service cannot build it (not configured, unreachable, the composition has errors), `html`
 is null and `reason` says why; the canvas then shows the MP4 if there is one, else a download card.
 
@@ -18,6 +20,7 @@ as a download (routers.py). To share a video, share its MP4.
 import asyncio
 import hashlib
 import json
+import re
 import types
 from pathlib import Path
 
@@ -61,11 +64,16 @@ async def _video_response(root, file_path, subject):
         return out
     images, image_files, problems = await asyncio.to_thread(media.collect, html, root)
     audio, audio_files, words, more = await asyncio.to_thread(media.collect_audio, html, root)
-    problems += more
+    footage, clips = await asyncio.to_thread(media.collect_footage, html, root)
+    problems += more + clips
     if problems:
         out["reason"] = problems[0]
         return out
     stat = {}
+    # A clip by the hash of its bytes, and what is said in it: a corrected word is a fresh page.
+    for path, clip in footage.items():
+        said = hashlib.sha256(json.dumps(clip.get("words") or {}, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+        stat[f"clip:{path}"] = f"{clip['sha']}-{said}"
     for path in [*images, *audio]:
         try:
             st = (root / path).stat() if not path.startswith("../") else None
@@ -86,7 +94,8 @@ async def _video_response(root, file_path, subject):
             pass
     ws = types.SimpleNamespace(subject=subject)
     try:
-        r = await video.compile(ws, html, images, {**image_files, **audio_files}, preview=True, audio=audio, words=words)
+        r = await video.compile(ws, html, images, {**image_files, **audio_files}, preview=True, audio=audio, words=words,
+                                footage=footage)
     except video.Unavailable as e:
         out["reason"] = f"The video service is unavailable: {e}"
         return out
@@ -104,10 +113,23 @@ async def _video_response(root, file_path, subject):
     return out
 
 
+_CACHE_PAGES = 40
+_CACHE_BYTES = 200 * 1024 * 1024
+
+
 def _store(cache, key, payload):
     cache.mkdir(parents=True, exist_ok=True)
-    for old in sorted(cache.glob("*.json"), key=lambda p: p.stat().st_mtime)[:-40]:
-        old.unlink(missing_ok=True)   # a few dozen pages at most; each is a few MB
     tmp = cache / f".{key}.part"
     tmp.write_text(json.dumps(payload), encoding="utf-8")
     tmp.replace(cache / f"{key}.json")
+    # A few dozen pages at most, and no more than 200 MB of them: a page is a few MB, and one that
+    # carries footage up to about 30. The oldest go first. Only pages go (a page's name is its key,
+    # 32 hex characters): this folder also holds what each chat remembers and the clips' hashes
+    # (files.py), which the count used to sweep away with the pages.
+    pages = sorted((p for p in cache.glob("*.json") if re.fullmatch(r"[0-9a-f]{32}", p.stem)),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
+    total = 0
+    for i, page in enumerate(pages):
+        total += page.stat().st_size
+        if i >= _CACHE_PAGES or (total > _CACHE_BYTES and i > 0):
+            page.unlink(missing_ok=True)

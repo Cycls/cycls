@@ -5,12 +5,19 @@ Off by default:
     set -a && source ~/.cycls/cycls-video-dev.env && set +a      # VIDEO_URL, VIDEO_SECRET
     uv run pytest tests/agent/scenarios/test_video_live.py --live
 
+The footage test needs a short clip with speech in it, named by VIDEO_LIVE_CLIP (cycls-video's
+scripts/footage_check.py leaves one at out/footage_check/talk-en.mp4); without it that test is skipped.
+
 Skipped unless --live AND video.configured(). Checks shapes, not pixels. A cold renderer takes a
 minute or more (longer when Modal is short of L4s); a render of the 5 s fixture costs about a cent.
 """
 import asyncio
 import base64
+import json
+import os
+import shutil
 import types
+from pathlib import Path
 
 import pytest
 
@@ -63,7 +70,9 @@ def _ws(tmp_path):
 def test_the_contract_verifies():
     c = asyncio.run(contract.get(30))
     assert "fallback" not in c, c.get("fallback")
-    assert c["version"] == "v1" and "Web Animations" in c["text"] and c["formats"]["reel"] == [1080, 1920]
+    # The contract for this SDK's protocol: v3 teaches footage, and sound with it.
+    assert c["version"] == "v3" and "Web Animations" in c["text"] and c["formats"]["reel"] == [1080, 1920]
+    assert "FOOTAGE" in c["text"] and "SOUND" in c["text"] and c["data"]["voices"]
 
 
 def test_compile_lints_and_builds_the_preview(tmp_path):
@@ -102,3 +111,48 @@ def test_a_template_through_the_tool(tmp_path):
     assert isinstance(out, dict), out
     assert "from the stats-reel template" in out["_model"][-1]["text"] and "Lint clean" in out["_model"][-1]["text"]
     assert "Q3 in numbers" in (tmp_path / "videos" / "q3.video.html").read_text(encoding="utf-8")
+
+
+def test_footage_through_the_tool(tmp_path):
+    """A clip of the person's, end to end: sent and made ready, described with a sheet of its frames
+    and what is said in it, then a piece of it with captions written, checked and rendered."""
+    clip = os.environ.get("VIDEO_LIVE_CLIP")
+    if not clip or not Path(clip).is_file():
+        pytest.skip("set VIDEO_LIVE_CLIP to a short clip with speech in it")
+    (tmp_path / "uploads").mkdir()
+    shutil.copy(clip, tmp_path / "uploads" / "talk.mp4")
+    VIDEO_LOADED.set(True)
+    ctx = types.SimpleNamespace(chat_id="live-footage")
+    out = asyncio.run(vrun._exec_video({"action": "footage", "path": "uploads/talk.mp4"}, _ws(tmp_path), ctx))
+    assert isinstance(out, dict), out
+    text = out["_model"][-1]["text"]
+    assert "ade ready: uploads/talk.mp4" in text and "What is said in it" in text, text
+    sheet = next(b for b in out["_model"] if b.get("type") == "image")
+    assert base64.b64decode(sheet["source"]["data"])[:3] == b"\xff\xd8\xff"
+    said = json.loads((tmp_path / "uploads" / "talk.words.json").read_text(encoding="utf-8"))
+    first = said["sentences"][0]
+    start, length = round(max(0, first["start"] - 0.15), 2), round(first["end"] - first["start"] + 0.4, 2)
+    total = max(3, round(length + 0.5, 1))
+    html = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=1920, height=1080">
+<style>body {{ margin: 0 }} #root {{ position: relative; width: 1920px; height: 1080px; overflow: hidden; background: #000 }}
+video {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover }}
+.cap {{ position: absolute; left: 160px; right: 160px; bottom: 90px; font-family: "Inter", sans-serif; font-size: 60px; color: #fff; text-align: center }}</style>
+</head><body>
+<div id="root" data-composition-id="main" data-no-timeline data-start="0" data-duration="{total}" data-width="1920" data-height="1080">
+<video id="a" src="uploads/talk.mp4" data-start="0" data-media-start="{start}" data-duration="{length}" data-track-index="0"></video>
+<div class="cap" data-captions="a" data-cap-style="word"></div>
+</div>
+<script>document.querySelector("#root").animate([{{opacity: 1}}, {{opacity: 1}}], {{duration: 100, fill: "both"}}).pause();</script>
+</body></html>"""
+    out = asyncio.run(vrun._exec_video({"action": "write", "name": "live-cut", "html": html}, _ws(tmp_path), ctx))
+    assert isinstance(out, dict), out
+    text = out["_model"][-1]["text"]
+    assert "Lint clean" in text and "Footage:\n- a (uploads/talk.mp4)" in text and first["text"][:20] in text, text
+    out = asyncio.run(vrun._exec_video({"action": "render", "name": "live-cut", "quality": "draft"}, _ws(tmp_path), ctx))
+    assert isinstance(out, dict), out
+    mp4 = (tmp_path / "videos" / "live-cut.mp4").read_bytes()
+    assert mp4[4:8] == b"ftyp" and len(mp4) > 50_000 and "Sound:" in out["_model"]
+    # Asked after again, it is answered from the service's store: no upload, no GPU.
+    again = asyncio.run(vrun._exec_video({"action": "footage", "path": "uploads/talk.mp4"}, _ws(tmp_path), ctx))
+    assert "Already made ready" in again["_model"][-1]["text"]

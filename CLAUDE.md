@@ -62,9 +62,9 @@ cycls/
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
     ├── browser/            # cycls Browser tool — thin CDP client to a shared real-Chrome service (Steel); docs/notes/browser.md
     ├── video/              # cycls Video tool, over a thin client to the cycls-video service on Modal GPUs (HyperFrames compositions → MP4); docs/notes/video.md
-    │   ├── client.py       # the door's API (contract, warm, compile, jobs, long-poll, the MP4 streamed to disk)
+    │   ├── client.py       # the door's API (contract, warm, compile, jobs, long-poll, the MP4 streamed to disk; a clip sent in pieces, ingest)
     │   ├── contract.py     # the signed contract, verified (fallback.py: the built-in copy); tool.py — short and whole forms
-    │   └── run.py          # the executor (guide, write, edit, look, render, restore); files.py, media.py, report.py
+    │   └── run.py          # the executor (guide, write, edit, look, render, restore, voice, music, footage); files.py, media.py, report.py, stock.py (Pexels clips)
     ├── design/             # cycls Design tool, over a thin HTTP client to a shared OpenPencil service (posts, carousels, decks, documents); docs/notes/design.md
     │   ├── tool.py         # the tool as the model is given it (and the short form a chat carries until it designs)
     │   ├── run.py          # the executor (_exec_design): render, script, edit, inspect, extract

@@ -1,6 +1,6 @@
 """The Video tool's executor. `_exec_video(inp, workspace, ctx)` reads a call and makes it:
-guide, write, edit, template, look, render, restore, and for sound voice and music. Registered in
-cycls/_agent/tools as the `video` tool.
+guide, write, edit, template, look, render, restore, for sound voice and music, and for the
+person's clips and stock video footage. Registered in cycls/_agent/tools as the `video` tool.
 
 The SDK owns the schema, the argument checks, every write to the workspace and the report; the
 service owns the contract, the checks, the frames, the preview and the render.
@@ -22,7 +22,7 @@ from .tool import ACTIONS, VIDEO_LOADED
 
 # How long a call waits for the service before it answers anyway. The harness has no per-tool
 # limit, so the client keeps its own: a save with its frames, a look, a render.
-BUDGET = {"check": 300, "look": 180, "render": 900, "voice": 300}
+BUDGET = {"check": 300, "look": 180, "render": 900, "voice": 300, "send": 240, "footage": 420}
 MAX_HTML = 400_000
 
 _LOADED_NOTE = ("\n\nVideo's full instructions were not loaded when you made this call; they are now in this tool's "
@@ -72,22 +72,27 @@ def apply_changes(html, changes):
     return out, None
 
 
-def _sha(html, images_files, words=None):
+def _sha(html, images_files, words=None, footage=None):
     """What makes two jobs the same: the composition, the files it sends (hashed names carry their
-    bytes), and the word timings its captions and ducking are made from."""
+    bytes), the word timings its captions and ducking are made from, and its clips (each by the
+    hash of its bytes, with what is said in it)."""
     h = hashlib.sha256(html.encode("utf-8"))
     for name in sorted(images_files):
         h.update(name.encode())
     if words:
         h.update(json.dumps(words, sort_keys=True).encode("utf-8"))
+    if footage:
+        h.update(json.dumps(footage, sort_keys=True).encode("utf-8"))
     return h.hexdigest()
 
 
 def _media(html, root):
-    """The images and audio a composition names, ready to send. → (images, audio, files, words, problems)."""
+    """The images, audio and footage a composition names, ready to send.
+    → (images, audio, files, words, footage, problems)."""
     images, image_files, problems = media.collect(html, root)
     audio, audio_files, words, more = media.collect_audio(html, root)
-    return images, audio, {**image_files, **audio_files}, words, problems + more
+    footage, clips = media.collect_footage(html, root)
+    return images, audio, {**image_files, **audio_files}, words, footage, problems + more + clips
 
 
 async def _save(root, chat, name, html, reason):
@@ -115,14 +120,15 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
     → (text, sheet blocks, lint passed)."""
     from cycls._agent import video
 
-    images, audio, sent, words, problems = _media(html, root)
+    images, audio, sent, words, footage, problems = await asyncio.to_thread(_media, html, root)
     if problems:
-        return "The images and sound could not all be sent:\n" + "\n".join(f"- {p}" for p in problems), [], False
+        return "The images, sound and clips could not all be sent:\n" + "\n".join(f"- {p}" for p in problems), [], False
     # Keyed, so a retry after a dropped connection is the same job, not a second one.
-    key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|{kind}|{_sha(html, sent, words)}|"
+    key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|{kind}|{_sha(html, sent, words, footage)}|"
                          f"{json.dumps(params or {}, sort_keys=True)}".encode()).hexdigest()
     try:
-        job = await video.submit(workspace, kind, html, images, sent, params=params, key=key, audio=audio, words=words)
+        job = await video.submit(workspace, kind, html, images, sent, params=params, key=key, audio=audio, words=words,
+                                 footage=footage)
     except video.Refused as e:
         text = report.findings_text(e.findings, title="Lint")
         sound = report.sound_text(e.sound)
@@ -232,10 +238,10 @@ async def _render(workspace, root, chat, name, quality):
         html = (root / rel).read_text(encoding="utf-8")
     except FileNotFoundError:
         return _err(f"there is no {rel} to render; `write` it first.")
-    images, audio, sent, words, problems = _media(html, root)
+    images, audio, sent, words, footage, problems = await asyncio.to_thread(_media, html, root)
     if problems:
-        return _err("the images and sound could not all be sent:\n" + "\n".join(f"- {p}" for p in problems))
-    sha = _sha(html, sent, words)
+        return _err("the images, sound and clips could not all be sent:\n" + "\n".join(f"- {p}" for p in problems))
+    sha = _sha(html, sent, words, footage)
     pending = files.render_pending(root, chat, name)
     collected = bool(pending and pending.get("sha") == sha and pending.get("quality") == quality)
     if collected:
@@ -244,7 +250,7 @@ async def _render(workspace, root, chat, name, quality):
         key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|{name}|{sha}|{quality}".encode()).hexdigest()
         try:
             job = await video.submit(workspace, "render", html, images, sent, params={"quality": quality}, key=key,
-                                     audio=audio, words=words)
+                                     audio=audio, words=words, footage=footage)
         except video.Refused as e:
             return report.findings_text(e.findings, title="Not rendered — lint") + "\nFix them with `edit`, then render."
         token = job["token"]
@@ -339,6 +345,104 @@ async def _voice(workspace, root, chat, name, text, voice_id, language):
     return report.voice_text(words, rel, warnings=r.get("warnings") or [], voice_id=voice_id)
 
 
+async def _footage(workspace, root, chat, inp, again=True):
+    """A clip made ready for video: sent to the service once (by the hash of its bytes, in pieces,
+    going on from where an earlier call stopped), read there on the organisation's GPU, and
+    described back — its shots, a sheet of its frames, what is said in it and when. The transcript
+    is written beside the clip, where a misheard word can be corrected. A clip already made ready
+    costs nothing to ask after again."""
+    from cycls._agent import video
+
+    from . import stock
+
+    credit, others = None, []
+    path = inp.get("path")
+    if inp.get("stock"):
+        try:
+            pick = inp.get("pick")
+            path, credit, others = await stock.find(root, inp["stock"], orientation=inp.get("orientation"),
+                                                    pick=int(pick) if isinstance(pick, (int, float)) and pick >= 0 else 0)
+        except ValueError as e:
+            return _err(str(e))
+        except Exception as e:  # noqa: BLE001 - the network, or the stock service
+            return _err(f"the stock clip could not be fetched ({type(e).__name__}); try again, or put a clip in the workspace.")
+    if not isinstance(path, str) or not path.strip():
+        return _err("footage needs path (a clip in the workspace) or stock (a few words to find one).")
+    language = inp.get("language")
+    if language not in (None, "", "ar", "en"):
+        return _err("language: ar or en, or leave it out to have it found.")
+    try:
+        full = _resolve_path(path.strip(), root)
+    except ValueError as e:
+        return _err(str(e))
+    if not full.is_file():
+        return _err(f"{path} is not a file in the workspace.")
+    rel = full.relative_to(Path(root).resolve()).as_posix()
+    if full.suffix.lower().lstrip(".") not in media.FOOTAGE_TYPES:
+        return _err(f"{rel} is not a video file this tool reads ({', '.join(sorted(media.FOOTAGE_TYPES))}).")
+    size = full.stat().st_size
+    if size > media.MAX_FOOTAGE_BYTES:
+        return _err(f"{rel} is {size / 1048576:.0f} MB; a clip is at most {media.MAX_FOOTAGE_BYTES // 1048576} MB. "
+                    "Cut it shorter, or export it smaller.")
+    sha = await asyncio.to_thread(files.clip_sha, root, rel, full)
+    state = await video.clip_state(workspace, sha, sheet=True)
+    info, sheet, reused = None, None, False
+    if state.get("state") == "ready":
+        info, sheet, reused = state["info"], state.get("sheet"), True
+    else:
+        if state.get("state") != "uploaded":
+            try:
+                at, whole = await video.send_clip(workspace, full, sha, budget=BUDGET["send"],
+                                                  at=int(state.get("at") or 0) if state.get("state") == "partial" else 0)
+            except video.Refused as e:
+                return _err(f"the clip was not taken: {e}")
+            if not whole:
+                return (f"Still sending {rel} ({at / 1048576:.0f} of {size / 1048576:.0f} MB so far). Call footage again "
+                        "with the same path: it goes on from there.")
+        pending = files.footage_pending(root, chat, sha)
+        token = pending["token"] if pending else None
+        if token is None:
+            key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|ingest|{sha}|{language or ''}".encode()).hexdigest()
+            try:
+                job = await video.ingest(workspace, sha, language=language or None, key=key)
+            except video.Refused as e:
+                return _err(f"the clip was not made ready: {e}")
+            if job.get("ready"):
+                info, sheet = job["info"], job.get("sheet")
+            else:
+                token = job["token"]
+                files.footage_started(root, chat, sha, token)
+        if info is None:
+            r = await video.wait(workspace, token, BUDGET["footage"])
+            if r.get("state") == "pending":
+                return (f"Still reading {rel} (about {r.get('eta_s', 60)} s more: it is being made ready and listened "
+                        "to). Call footage again with the same path to collect it.")
+            files.footage_done(root, chat, sha)
+            if r.get("state") in ("gone", "expired") and again:     # the service restarted under the job: once more
+                return await _footage(workspace, root, chat, inp, again=False)
+            if r.get("state") != "done":
+                return _err(f"the clip could not be made ready: {r.get('error') or r.get('state')}")
+            info, sheet = r["info"], r.get("sheet")
+    # What is said, beside the clip. A transcript already there for these same bytes is the one to
+    # keep: someone may have corrected it.
+    words_rel = None
+    if info.get("transcript"):
+        words_rel = media.words_path(full).relative_to(Path(root).resolve()).as_posix()
+        kept = media.clip_words(full, sha)
+        if kept is None:
+            said = {**info["transcript"], "sha": sha, "clip": rel}
+            async with lock(root / words_rel):
+                await write_fig(root, words_rel, json.dumps(said, ensure_ascii=False, indent=1).encode("utf-8"),
+                                by="agent", reason="video-footage")
+        else:
+            info = {**info, "transcript": kept}
+    text = report.footage_text(rel, info, words_rel=words_rel, reused=reused, credit=credit)
+    if others:
+        text += ("\nOther clips that search found (footage {\"stock\": \"…\", \"pick\": n} fetches one): "
+                 + "; ".join(others) + ".")
+    return _result(text, report.sheet_blocks(sheet, info.get("sheet_times"), rel))
+
+
 def _music(query):
     """The library's tracks that fit the words asked for (all of them when none), from the signed
     contract's data."""
@@ -387,6 +491,13 @@ async def _exec_video(inp, workspace, ctx=None):
             return await _guide(workspace, root, loaded)
         if action == "music":
             return _music(inp.get("query") or inp.get("mood")) + note
+        if action == "footage":
+            out = await _footage(workspace, root, chat, inp)
+            if isinstance(out, str):
+                return out + note
+            if note:
+                out["_model"][-1]["text"] += note
+            return out
         name = files.clean_name(inp.get("name"))
         if not name:
             return _err("name is required: the video's name, e.g. launch-reel.")

@@ -14,13 +14,14 @@ import contextvars
 # harness swaps it in after this call), None when no harness swaps it (a custom loop): then `guide`
 # answers with the instructions themselves.
 VIDEO_LOADED = contextvars.ContextVar("video_loaded", default=None)
-ACTIONS = ("guide", "write", "edit", "template", "look", "render", "restore", "voice", "music")
+ACTIONS = ("guide", "write", "edit", "template", "look", "render", "restore", "voice", "music", "footage")
 
 _PURPOSE = (
     "Video: make short videos that move — explainers, reels and stories, announcements, animated stats and "
     "charts, a deck or a design turned into a video, on-screen text and captions — with a voice-over in Arabic "
-    "or English and music when the person wants sound. Generated, not filmed: no footage yet. Stills, posters, "
-    "slides and documents are Design, not Video. "
+    "or English and music when the person wants sound. It also cuts the person's own clips (an interview, a "
+    "phone video) and stock footage into a video, captioned from what is said. "
+    "Stills, posters, slides and documents are Design, not Video. "
     "Each video is one file, videos/<name>.video.html; `render` makes videos/<name>.mp4 and opens it for the user."
 )
 
@@ -40,20 +41,22 @@ _ACTIONS_TEXT = """ACTIONS
 - restore {name}: put back the version before the last save.
 - voice {name, text, voice?: "default" | "saudi", language?: "ar" | "en"}: read the script aloud as videos/voice/<name>.m4a, with when each sentence and word is spoken; the reply gives the <audio> line to use. Call it before writing the scenes. The same name and text again is the same take; a changed text replaces it (the old take kept as a version). If the reply says it is still reading, call it again to collect it.
 - music {query?}: the library's tracks for a mood or a few words ("calm piano", "upbeat"), each with the id to use as src="music:<id>".
+- footage {path} or {stock: "a few words", pick?, orientation?}: make a clip ready for video — one of the person's, by its workspace path (MP4, MOV, WebM; up to 512 MB and 10 minutes), or a stock clip found for those words and saved in the workspace. The reply is what you cannot see or hear: the clip's length and shape, where its shots change, a sheet of its frames, what is said in it sentence by sentence with times, and the <video> line to use. Call it before writing a video that uses the clip; calling it again for the same clip is free. A long clip takes a minute or two: if the reply says it is still sending or reading, call footage again with the same path.
 
-A reply shows lint errors with their fixes, or the browser check and ONE sheet of frames, each labelled with its time, and the sound map when there is sound. Look at the sheet before you render."""
+A reply shows lint errors with their fixes, or the browser check and ONE sheet of frames, each labelled with its time, the pieces of footage as you placed them, and the sound map when there is sound. Look at the sheet before you render."""
 
 
 def _schema():
     return {"type": "object", "properties": {
         "action": {"type": "string", "enum": list(ACTIONS),
-                   "description": "guide (first), write, edit, template, look, render, restore, voice, music."},
+                   "description": "guide (first), write, edit, template, look, render, restore, voice, music, footage."},
         "name": {"type": "string",
                  "description": "The video's name: videos/<name>.video.html, rendered to videos/<name>.mp4. "
                                 "Lowercase words and hyphens, e.g. launch-reel."},
         "html": {"type": "string", "description": "write: the whole composition, a full HTML document."},
         "path": {"type": "string",
-                 "description": "write: a composition already in the workspace to adopt instead of passing html."},
+                 "description": "write: a composition already in the workspace to adopt instead of passing html. "
+                                "footage: the clip's workspace path, e.g. uploads/interview.mp4."},
         "changes": {"type": "array", "description": "edit: exact replacements, applied in order.",
                     "items": {"type": "object", "properties": {
                         "old": {"type": "string", "description": "Text that occurs exactly once (or set all)."},
@@ -70,8 +73,14 @@ def _schema():
         "text": {"type": "string", "description": "voice: the script to read aloud; figures, prices and dates are read out."},
         "voice": {"type": "string", "enum": ["default", "saudi"],
                   "description": "voice: default (any language) or saudi (Saudi dialect)."},
-        "language": {"type": "string", "enum": ["ar", "en"], "description": "voice: the script's language, when not plain from it."},
+        "language": {"type": "string", "enum": ["ar", "en"],
+                     "description": "voice: the script's language, when not plain from it. footage: the language spoken "
+                                    "in the clip, when you know it."},
         "query": {"type": "string", "description": "music: a mood or a few words, e.g. calm piano."},
+        "stock": {"type": "string", "description": "footage: a few words to find a stock clip, e.g. waves at sunset."},
+        "pick": {"type": "integer", "description": "footage with stock: which result to fetch (0 is the first)."},
+        "orientation": {"type": "string", "enum": ["landscape", "portrait", "square"],
+                        "description": "footage with stock: the shape of clip to look for."},
     }, "required": ["action"]}
 
 
@@ -116,5 +125,7 @@ VIDEO_PROMPT = (
     "Video and Design: anything that moves — a reel, a story, an animated explainer, a deck or a design turned "
     "into a video — is Video; still images, posters, slides and documents are Design. To turn a deck into a "
     "video, export its slides as JPEG with Design first, then write a video that shows those files. Video can "
-    "add a voice-over (Arabic or English) and music; add sound only when the person asks for it or agrees."
+    "add a voice-over (Arabic or English) and music; add sound only when the person asks for it or agrees. "
+    "A video file the person attaches (an interview, a product clip) is cut, captioned and titled with Video too: "
+    "its `footage` action reads the clip first."
 )

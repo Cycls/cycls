@@ -27,8 +27,11 @@ from pathlib import Path
 
 import httpx
 
-PROTO = 2          # 2: sound (audio files with word timings, voice-overs, the sound map)
+PROTO = 3          # 2: sound (audio files with word timings, voice-overs, the sound map); 3: footage
 _TIMEOUT = httpx.Timeout(60.0, connect=15.0)
+# A clip goes to the door in pieces of this size (the door takes up to 40 MiB). Small enough that a
+# slow link finishes one well inside its timeout and a call that runs out of time has lost little.
+_PIECE = 8 * 1024 * 1024
 _WAIT = 25                  # seconds the door holds a poll open; it never holds one longer than 30
 # A deploy of the service swaps its containers under requests in flight: a dropped connection or a
 # front-end 502/503 is tried again, twice. Only for calls that change nothing when made twice
@@ -189,9 +192,18 @@ def _parts(meta, files):
     return parts
 
 
-async def compile(workspace, html, images=None, files=None, *, preview=False, audio=None, words=None):
+def _footage_meta(footage):
+    """`footage` is {workspace path: {"sha", "words"?}} (media.collect_footage): what the door is told."""
+    if not footage:
+        return {}
+    said = {path: f["words"] for path, f in footage.items() if f.get("words")}
+    return {"footage": {path: f["sha"] for path, f in footage.items()}, **({"footage_words": said} if said else {})}
+
+
+async def compile(workspace, html, images=None, files=None, *, preview=False, audio=None, words=None, footage=None):
     """Prepare and lint on CPU; with `preview`, the page the canvas plays."""
-    meta = {"html": html, "images": images or {}, "preview": preview, "audio": audio or {}, "words": words or {}}
+    meta = {"html": html, "images": images or {}, "preview": preview, "audio": audio or {}, "words": words or {},
+            **_footage_meta(footage)}
     resp = await _request("POST", "/v1/compile", workspace=workspace, retry=True, files=_parts(meta, files),
                           timeout=httpx.Timeout(120.0, connect=15.0))
     if resp.status_code != 200:
@@ -199,10 +211,11 @@ async def compile(workspace, html, images=None, files=None, *, preview=False, au
     return resp.json()
 
 
-async def submit(workspace, kind, html, images=None, files=None, *, params=None, key=None, audio=None, words=None):
+async def submit(workspace, kind, html, images=None, files=None, *, params=None, key=None, audio=None, words=None,
+                 footage=None):
     """Start a review, look or render. → {token, eta_s, times, sound}. A repeated `key` returns the same job."""
     meta = {"kind": kind, "html": html, "images": images or {}, "params": params or {}, "audio": audio or {},
-            "words": words or {}}
+            "words": words or {}, **_footage_meta(footage)}
     headers = {"Idempotency-Key": key} if key else {}
     resp = await _request("POST", "/v1/jobs", workspace=workspace, retry=bool(key), files=_parts(meta, files),
                           headers=headers, timeout=httpx.Timeout(120.0, connect=15.0))
@@ -230,6 +243,73 @@ async def voice(workspace, text, *, language=None, voice_id=None, key=None):
     if resp.status_code != 200:
         raise _error(resp)
     return resp.json()
+
+
+async def clip_state(workspace, sha, *, sheet=False):
+    """Does the door hold this clip (named by the sha256 of its bytes)? → {"state": none | partial |
+    uploaded | ready, "at": bytes it has, "info": its facts when ready, "sheet": its frames when asked for}."""
+    resp = await _request("GET", f"/v1/assets/{sha}", workspace=workspace, retry=True, params={"sheet": 1} if sheet else None)
+    if resp.status_code != 200:
+        raise _error(resp)
+    return resp.json()
+
+
+def _read_piece(path, at, size):
+    with open(path, "rb") as f:
+        f.seek(at)
+        return f.read(size)
+
+
+async def send_clip(workspace, path, sha, *, at=0, budget=240):
+    """Send a clip to the door in pieces, in order, from byte `at`; a piece the door says does not
+    follow on is resumed from where the door is. Stops when `budget` seconds have passed.
+    → (bytes the door has, whether that is all of it)."""
+    size = Path(path).stat().st_size
+    deadline, gaps = time.monotonic() + budget, 0
+    while at < size:
+        if time.monotonic() > deadline:
+            return at, False
+        data = await asyncio.to_thread(_read_piece, path, at, _PIECE)
+        last = at + len(data) >= size
+        resp = await _request("PUT", f"/v1/assets/{sha}", workspace=workspace, retry=True, content=data,
+                              params={"offset": at, "last": int(last)}, headers={"Content-Type": "application/octet-stream"},
+                              timeout=httpx.Timeout(300.0, connect=15.0))
+        if resp.status_code == 409 and gaps < 5:
+            at, gaps = int((_body(resp) or {}).get("at") or 0), gaps + 1
+            continue
+        if resp.status_code in (413, 422):
+            raise Refused((_body(resp) or {}).get("error") or "the clip was refused", [])
+        if resp.status_code != 200:
+            raise _error(resp)
+        body = resp.json()
+        if body.get("state") in ("uploaded", "ready"):
+            return size, True
+        at = int(body.get("at") or at + len(data))
+    return at, True
+
+
+async def ingest(workspace, sha, *, language=None, key=None):
+    """Have a clip the door holds made ready (read on the organisation's GPU). → {token, eta_s}, or
+    {ready: True, info} when it already is."""
+    meta = {"kind": "ingest", "asset": sha, "language": language}
+    headers = {"Idempotency-Key": key} if key else {}
+    resp = await _request("POST", "/v1/jobs", workspace=workspace, retry=bool(key), files=_parts(meta, {}),
+                          headers=headers, timeout=httpx.Timeout(60.0, connect=15.0))
+    if resp.status_code == 422:
+        raise Refused((_body(resp) or {}).get("error") or "the clip was refused", [])
+    if resp.status_code == 429 and _ours(resp):
+        raise OverAllowance(_body(resp)["error"])
+    if resp.status_code != 200:
+        raise _error(resp)
+    return resp.json()
+
+
+async def forget_clip(workspace, sha):
+    """Have the door drop its copy of a clip. Never raises: the door drops it by itself in time."""
+    try:
+        await _request("DELETE", f"/v1/assets/{sha}", workspace=workspace, retry=True)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def poll(workspace, token, wait=_WAIT):

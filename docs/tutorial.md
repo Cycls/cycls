@@ -456,7 +456,9 @@ Let an agent **make short videos that move** — reels and stories, explainers, 
 animated stats, a deck turned into a video — and show them on the canvas, with no video engine in
 the image. The agent writes a video as one HTML composition (the HyperFrames format, animated with
 the Web Animations API); a shared service on Modal GPUs checks it, shows the model its frames and
-renders the MP4. Silent and generated for now: no footage or sound.
+renders the MP4. A video can have a voice-over (Arabic or English), music from a bundled library and
+captions on the spoken words, and it can be cut from the person's own clips or stock footage, which
+the service reads first (shots, a sheet of frames, what is said and when).
 
 ```python
 llm = cycls.LLM().model(...).max_tokens(64_000).allowed_tools(["Editor", "Canvas", "Video"])
@@ -469,7 +471,8 @@ VIDEO_ORGS=org_123,org_456                                 # who may use it; "*"
 
 The model calls one `video` tool: `guide` first (its instructions load into the tool, and a GPU
 starts warming), then `write {name, html}`, `edit {name, changes}`, `look {name, at}`,
-`render {name}` and `restore {name}`. A save comes back with lint errors to fix, or with the
+`render {name}` and `restore {name}`; for sound `voice {name, text}` and `music {query}`; for
+footage `footage {path}` or `footage {stock}`. A save comes back with lint errors to fix, or with the
 browser check and one sheet of frames labelled with their times; the composition plays live on
 the canvas in a sandboxed player and refreshes as the agent edits it; `render` writes
 `videos/<name>.mp4` and opens it. See `docs/notes/video.md`.

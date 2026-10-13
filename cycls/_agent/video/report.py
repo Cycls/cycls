@@ -63,9 +63,20 @@ def _t(x):
 def sound_text(sound):
     """The sound map, as the model reads it in place of hearing: the tracks, when each sentence is
     spoken, and the notes (a scene starting inside a word). '' for a silent video."""
-    if not sound or not sound.get("tracks"):
+    if not sound or not (sound.get("tracks") or sound.get("clips")):
         return ""
-    lines = ["Sound map:"]
+    lines = []
+    # The pieces of footage, as placed: the model reads its cuts back, since it cannot watch them.
+    for c in sound.get("clips") or []:
+        if not lines:
+            lines.append("Footage:")
+        shows = (f"{_t(c.get('media_start'))}–{_t(c.get('media_end'))} s of its clip" if c.get("media_end") is not None
+                 else f"its clip from {_t(c.get('media_start'))} s")
+        lines.append(f"- {c.get('id') or '(no id)'} ({c.get('src')}): {_t(c.get('start'))}–{_t(c.get('end'))} s of the video "
+                     f"shows {shows} ({_t(c.get('of'))} s long)" + ("" if c.get("sound") else ", silent"))
+    if not sound.get("tracks"):
+        return "\n".join(lines)
+    lines.append("Sound map:")
     for t in sound["tracks"]:
         what = f"music {t['music']}" if t.get("music") else f"{t.get('kind', 'audio')}, {t.get('src')}"
         bits = [f"{_t(t.get('start'))}–{_t(t.get('end'))} s" if t.get("end") is not None else f"from {_t(t.get('start'))} s"]
@@ -117,6 +128,72 @@ def voice_text(words, rel, *, warnings=(), reused=False, voice_id="default"):
         f"with nothing to hear, unless music plays under all of it.")
     if name:
         lines.append(f"To change the script, call voice again with name {name}: the old take is kept as a version.")
+    return "\n".join(lines)
+
+
+_LANGUAGES = {"ar": "Arabic", "en": "English"}
+MAX_SENTENCES = 60
+MAX_SHOTS = 24
+
+
+def footage_text(rel, info, *, words_rel=None, reused=False, credit=None):
+    """A clip made ready, as the model reads it in place of watching: what the clip is, where its
+    shots change, what is said in it and when, and the lines that put a piece of it in a video."""
+    d, w, h = info.get("duration"), info.get("width"), info.get("height")
+    sound = "no sound"
+    if info.get("has_audio"):
+        sound = "with sound" + (f" at {info['lufs']:.0f} LUFS" if isinstance(info.get("lufs"), (int, float)) else "")
+    lines = [f"{'Already made ready' if reused else 'Made ready'}: {rel} ({_t(d)} s, {w}x{h}, {sound})."]
+    src = info.get("source") or {}
+    changed = []
+    if src.get("width") and (src.get("width"), src.get("height")) != (w, h):
+        changed.append(f"{src['width']}x{src['height']}")
+    if src.get("fps") and abs(src["fps"] - 30) > 0.5:
+        changed.append(f"{src['fps']:g} fps")
+    if src.get("hdr"):
+        changed.append("HDR")
+    if changed:
+        lines.append(f"The file is {', '.join(changed)}; a video uses it at {w}x{h}, 30 fps, in standard colour.")
+    if credit:
+        lines.append(credit)
+    shots = info.get("shots") or []
+    if len(shots) > 1:
+        lines.append("Shots (seconds into the clip): " + ", ".join(f"{_t(a)}–{_t(b)}" for a, b in shots[:MAX_SHOTS])
+                     + (f" … ({len(shots)} in all)" if len(shots) > MAX_SHOTS else "") + ".")
+    else:
+        lines.append("One shot, with no cut in it.")
+    said = info.get("transcript") or {}
+    sentences = said.get("sentences") or []
+    first = None
+    if sentences:
+        lang = _LANGUAGES.get(said.get("language"), said.get("language") or "language not known")
+        lines.append(f"What is said in it ({lang}; seconds into the clip):")
+        for s in sentences[:MAX_SENTENCES]:
+            lines.append(f"- {_t(s['start'])}–{_t(s['end'])}: {s['text']}")
+        if len(sentences) > MAX_SENTENCES:
+            lines.append(f"(and {len(sentences) - MAX_SENTENCES} more sentences" + (f", in {words_rel}" if words_rel else "") + ")")
+        lines.append("A recogniser wrote this down: names, brands and dialect words may be misheard. Check a word that "
+                     "matters with the person before it goes in a caption.")
+        first = sentences[0]
+    elif info.get("has_audio"):
+        why = f" ({info['transcript_note']})" if info.get("transcript_note") else ""
+        lines.append(f"Nobody is heard speaking in it{why}: its sound is ambience or music.")
+    start = round(max(0.0, first["start"] - 0.15), 2) if first else 0
+    length = round(first["end"] + 0.25 - start, 2) if first else round(min(d or 5, 5), 2)
+    lines.append(
+        "Put a piece of it in the composition as a direct child of the root, never inside a scene:\n"
+        f"  <video id=\"a\" src=\"{rel}\" data-start=\"0\" data-media-start=\"{_t(start)}\" data-duration=\"{_t(length)}\" "
+        "data-track-index=\"0\"></video>\n"
+        "data-media-start is where in the clip the piece begins, data-duration how long it shows"
+        + (": that example is the first sentence, begun 0.15 s before its first word and ended 0.25 s after its last. "
+           "Captions for it: <div class=\"cap\" data-captions=\"a\" data-cap-style=\"phrase\"></div>."
+           if first else "."))
+    if info.get("sheet_times"):
+        lines.append("The sheet shows the clip at " + ", ".join(f"{_t(t)}" for t in info["sheet_times"]) + " s: look at it "
+                     "to choose what to show.")
+    if words_rel and sentences:
+        lines.append(f"The words and their times are in {words_rel}. To correct a misheard word, change its text there "
+                     "and leave its times: the captions follow.")
     return "\n".join(lines)
 
 
