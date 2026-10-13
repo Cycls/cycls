@@ -123,3 +123,73 @@ def collect_audio(html, root, base_dir="videos"):
             except ValueError:
                 errors.append(f"{sidecar.name} is not readable word timings; make the voice-over again.")
     return audio, files, words, errors
+
+
+# Footage (protocol 3): the clips a composition names in <video>, by workspace path. A clip is far
+# too large to send with each check: it is named by the sha256 of its bytes, which the service
+# already holds once the `footage` action has made the clip ready. What is said in it travels as
+# words, like a voice-over's: the transcript the action wrote beside the clip (<name>.words.json),
+# so a word corrected there is the word the captions show.
+FOOTAGE_TYPES = {"mp4", "mov", "m4v", "webm", "mkv"}
+MAX_FOOTAGE_BYTES = 512 * 1024 * 1024
+MAX_FOOTAGE = 8
+_VIDEO_TAG = re.compile(r"<video\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*>", re.I)
+
+
+def words_path(full):
+    """Where a clip's transcript is kept: beside it, as a voice-over's word timings are."""
+    return full.with_name(full.name.rsplit(".", 1)[0] + ".words.json")
+
+
+def clip_words(full, sha):
+    """The transcript beside a clip, when it is this clip's (its bytes may have been replaced since)."""
+    import json
+
+    try:
+        w = json.loads(words_path(full).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(w, dict) or not isinstance(w.get("words"), list) or w.get("sha") not in (None, sha):
+        return None
+    return w
+
+
+def resolve_clip(path, root, base_dir="videos"):
+    """A clip's path as a composition writes it → (workspace-relative path, the file). ValueError
+    when it leaves the workspace."""
+    rel = posixpath.normpath(posixpath.join(base_dir, path)) if path.startswith("../") else path
+    return rel, _resolve_path(rel, root)
+
+
+def collect_footage(html, root, base_dir="videos"):
+    """→ (footage {path as written: {"sha", "words"?}}, errors [str]). A path that is not a file is
+    left out: the service names it in its findings."""
+    from . import files as files_mod
+
+    footage, errors = {}, []
+    for tag in _VIDEO_TAG.finditer(html):
+        m = _SRC.search(tag.group(0))
+        path = _local(m.group(2)) if m else None
+        if path is None or path in footage:
+            continue
+        ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        if ext not in FOOTAGE_TYPES:
+            continue
+        try:
+            rel, full = resolve_clip(path, root, base_dir)
+        except ValueError as e:
+            errors.append(f"{path}: {e}")
+            continue
+        if not full.is_file():
+            continue
+        if full.stat().st_size > MAX_FOOTAGE_BYTES:
+            errors.append(f"{path} is {full.stat().st_size / 1048576:.0f} MB; a clip in a video is at most "
+                          f"{MAX_FOOTAGE_BYTES // 1048576} MB. Cut it shorter, or export it smaller.")
+            continue
+        if len(footage) >= MAX_FOOTAGE:
+            errors.append(f"A video uses at most {MAX_FOOTAGE} clips.")
+            break
+        sha = files_mod.clip_sha(root, rel, full)
+        said = clip_words(full, sha)
+        footage[path] = {"sha": sha, **({"words": said} if said else {})}
+    return footage, errors

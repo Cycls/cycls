@@ -129,6 +129,54 @@ def voice_done(root, chat_id, name):
     save(root, chat_id, data)
 
 
+# Footage: a clip is named to the service by the sha256 of its bytes. Hashing a few hundred
+# megabytes on every check would be seconds each time, so a clip's hash is remembered by its
+# path, size and time (.cache/video/clips.json), and read again only when one of those changed.
+def clip_sha(root, rel, full=None):
+    import hashlib
+
+    full = Path(full) if full is not None else Path(root) / rel
+    st = full.stat()
+    index_path = Path(root) / SIDECAR / "clips.json"
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        index = {}
+    hit = index.get(rel)
+    if isinstance(hit, dict) and hit.get("size") == st.st_size and hit.get("mtime") == st.st_mtime_ns and hit.get("sha"):
+        return hit["sha"]
+    h = hashlib.sha256()
+    with open(full, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    index[rel] = {"size": st.st_size, "mtime": st.st_mtime_ns, "sha": h.hexdigest()}
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = index_path.with_suffix(".part")
+    tmp.write_text(json.dumps(index), encoding="utf-8")
+    tmp.replace(index_path)
+    return index[rel]["sha"]
+
+
+def footage_started(root, chat_id, sha, token):
+    data = load(root, chat_id)
+    data.setdefault("footage", {})[sha] = {"token": token, "at": time.time()}
+    save(root, chat_id, data)
+
+
+def footage_pending(root, chat_id, sha):
+    return (load(root, chat_id).get("footage") or {}).get(sha)
+
+
+def footage_done(root, chat_id, sha):
+    data = load(root, chat_id)
+    (data.get("footage") or {}).pop(sha, None)
+    save(root, chat_id, data)
+
+
+# A stock clip the tool fetched: videos/footage/<name>.mp4.
+FOOTAGE_DIR = f"{DIR}/footage"
+
+
 def rendered_by_me(root, chat_id, name):
     return name in (load(root, chat_id).get("rendered") or {})
 

@@ -68,11 +68,63 @@ production agent is taught nothing it cannot make until it runs this SDK.
   from the voice's words, line by line, on its clock), and gives music a length, a fade and a level. The
   preview plays one mixed track kept in step with the player; the canvas needs no change (proof P1).
 
+## Footage (protocol 3; built 2026-10-13, on the dev service — not in production)
+
+Version 2's second half: the person's own clips, and stock video, cut into a video. The SDK speaks
+protocol 3; the service still answers 1 and 2 as before and serves contract v3 (the FOOTAGE section)
+only to an agent that speaks 3.
+
+- `footage {path}` makes a clip ready. The SDK names the clip by the sha256 of its bytes (remembered
+  by path, size and time in `.cache/video/clips.json`, so a 400 MB file is hashed once), asks the
+  service whether it holds it, and if not sends it **in pieces of 8 MiB**, in order, going on from
+  wherever the service says it is (`client.send_clip`; a call that runs out of its four minutes says
+  so, and the next one goes on). Then one `ingest` job on the organisation's GPU: the clip becomes a
+  mezzanine every render reads (H.264, exactly 30 fps, a key frame a second, at most 1920 on its long
+  side, standard colour; a phone's HEVC, 60 fps, HDR and sideways flag all handled) and a 640 px
+  proxy the preview reads; its shots are found, its loudness measured, and what is said in it is
+  written down and timed word by word (Whisper large-v3-turbo, then the service's own aligner).
+- The reply is what the model cannot see or hear (`report.footage_text`): length and shape, the
+  shots, **a sheet of the clip's frames**, each sentence with its times, and the `<video>` line for
+  the first sentence. Asking after a clip already made ready costs no GPU and shows the same sheet.
+- The transcript is written **beside the clip**, `<name>.words.json` (the shape of a voice-over's
+  word timings, plus the clip's hash). It is the workspace's: a misheard word corrected there is the
+  word the captions show, and a transcript for these same bytes is never written over. Replace the
+  clip's bytes and the old transcript is no longer its.
+- `footage {stock: "a few words", pick?, orientation?}` finds a clip on Pexels (`video/stock.py`,
+  the key Design's stock photos use), saves it as `videos/footage/<words>-<id>.mp4`, makes it ready
+  the same way, credits the filmmaker and lists the search's other results by number.
+- In a composition a piece of a clip is `<video src="uploads/interview.mp4" data-start
+  data-media-start data-duration>` at the root. Every check and render sends
+  `footage: {path: sha}` and the transcripts (`media.collect_footage`), never the clip. The service
+  points the element at its copy, adds the length and the `muted` or `data-has-audio` the model left
+  out, and refuses a clip inside a timed scene, `loop`, or a start past the clip's end. A clip's
+  sound is a track in the sound map; what is said in it feeds `data-captions` (one id, or several
+  for the pieces of an interview) and `data-duck` exactly as a voice-over's words do. A cut that
+  lands inside a word is pointed out with where to cut instead.
+- Every reply reads the cuts back (`report.sound_text`, "Footage:"): which seconds of the video show
+  which seconds of which clip. The check's sheet shows the footage itself.
+- The preview page carries each piece as a cut of the clip's proxy (a `data:` address, muted; the
+  sound is the one mixed track), up to about 20 MB of proxy a page; past that the canvas says to
+  render a draft. `video_routes.py` keys its cache on each clip's hash and transcript, and now keeps
+  at most 200 MB of pages (and no longer sweeps the chats' own sidecars, which share the folder).
+- Limits: a clip up to 512 MB and 10 minutes, 8 clips a video; a rendered MP4 up to 256 MiB (was
+  64: 90 s of footage came to 62 MB in proof P5).
+
+Measured on the dev L4 (cycls-video `docs/quirks.md`, P5 and phase 8): a 10 s clip made ready in
+9–16 s; English heard word for word and Arabic with 2 words in 22 wrong (both read by the service's
+own voices); word times within 20–30 ms; music with nobody speaking gives no transcript. A render
+with footage runs at about 2.2× the video's length (204 s for 90 s) and peaks at 9.4 GB of 16.
+
+Not done: the recogniser has not been compared with Cohere Transcribe Arabic on real Gulf speech
+(the plan's bake-off; needs the user's clips, and that model is gated on Hugging Face); real Safari;
+a clip's used stretch alone being sent to a renderer (the whole mezzanine goes, once a container).
+
 ## The tool
 
 | Action | Input | What comes back |
 |---|---|---|
 | `guide` | — | Loads the contract, starts the GPU, lists formats, fonts and the videos already here. |
+| `footage` | `path`, or `stock` (+ `pick`, `orientation`); `language?` | The clip made ready: its facts, shots, a sheet of its frames, what is said with times, the `<video>` line. |
 | `write` | `name`, `html` (or `path` to adopt a file) | Saved even with errors. Lint errors with fixes; when clean, the browser check and one sheet. Opens the composition when clean. |
 | `edit` | `name`, `changes: [{old, new, all?}]` | Every change or none; a miss names the closest line. Same report. Refreshes the canvas. |
 | `look` | `name`, `at?: [s]`, `zoom?` | Frames at those times (up to 9); no times: the file checked again. |

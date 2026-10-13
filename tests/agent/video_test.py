@@ -76,7 +76,7 @@ def test_headers_carry_the_key_and_hashes_never_the_names(monkeypatch, tmp_path)
     seen = _transport(monkeypatch, lambda r: httpx.Response(200, json={"started": True}))
     asyncio.run(video.warm(_ws(tmp_path)))
     h = seen[0].headers
-    assert h["x-video-key"] == "k" * 40 and h["x-video-proto"] == "2"
+    assert h["x-video-key"] == "k" * 40 and h["x-video-proto"] == "3"
     assert "org1" not in h["x-video-tenant"] and len(h["x-video-tenant"]) == 32
     assert h["x-video-user"] != h["x-video-tenant"]
     assert str(seen[0].url) == "https://video.test/v1/warm"
@@ -310,9 +310,10 @@ class FakeService:
             raise video.Refused("no template 'nope'", [])
         return COMP.replace("Hi", variables.get("title", "Hi"))
 
-    async def submit(self, ws, kind, html, images=None, files=None, *, params=None, key=None, audio=None, words=None):
+    async def submit(self, ws, kind, html, images=None, files=None, *, params=None, key=None, audio=None, words=None,
+                     footage=None):
         self.submitted.append({"kind": kind, "html": html, "images": images, "params": params, "key": key,
-                               "audio": audio, "words": words, "files": files})
+                               "audio": audio, "words": words, "files": files, "footage": footage})
         if self.refuse:
             raise video.Refused("fix first", self.refuse)
         if self.over:
@@ -557,7 +558,7 @@ def test_the_player_route_builds_once_and_says_why_when_it_cannot(monkeypatch, t
     _on(monkeypatch)
     built = []
 
-    async def compile_(ws, html, images=None, files=None, *, preview=False, audio=None, words=None):
+    async def compile_(ws, html, images=None, files=None, *, preview=False, audio=None, words=None, footage=None):
         built.append(preview)
         return {"preview": "<!doctype html><html><head></head><body>PLAYER</body></html>", "findings": []}
 
@@ -571,7 +572,7 @@ def test_the_player_route_builds_once_and_says_why_when_it_cannot(monkeypatch, t
     asyncio.run(_video_response(tmp_path, f, "org1:u"))
     assert built == [True, True]                                                                    # an edit is a new page
 
-    async def errors(ws, html, images=None, files=None, *, preview=False, audio=None, words=None):
+    async def errors(ws, html, images=None, files=None, *, preview=False, audio=None, words=None, footage=None):
         return {"preview": None, "findings": [{"severity": "error", "code": "x"}]}
 
     monkeypatch.setattr(video, "compile", errors)
@@ -778,3 +779,264 @@ def test_a_v2_contract_signs_its_data_and_a_changed_list_does_not_verify(monkeyp
     assert contract.verify(env)
     assert not contract.verify({**env, "data": {**data, "music": [{"id": "someone-elses"}]}})
     assert not contract.verify({k: v for k, v in env.items() if k != "data"})
+
+
+# ---- footage (protocol 3) ----------------------------------------------------------------------
+
+SAID = {"version": 1, "kind": "footage", "language": "en", "duration": 40.0, "text": "We opened in March. It went well.",
+        "sentences": [{"i": 0, "start": 12.4, "end": 14.0, "text": "We opened in March."},
+                      {"i": 1, "start": 20.0, "end": 21.5, "text": "It went well."}],
+        "words": [{"text": "We", "start": 12.4, "end": 12.6, "score": 0.9}, {"text": "opened", "start": 12.65, "end": 13.1, "score": 0.9},
+                  {"text": "in", "start": 13.15, "end": 13.3, "score": 0.9}, {"text": "March.", "start": 13.35, "end": 14.0, "score": 0.9},
+                  {"text": "It", "start": 20.0, "end": 20.2, "score": 0.9}, {"text": "went", "start": 20.25, "end": 20.7, "score": 0.9},
+                  {"text": "well.", "start": 20.75, "end": 21.5, "score": 0.9}]}
+INFO = {"duration": 40.0, "width": 1920, "height": 1080, "fps": 30, "has_audio": True, "lufs": -19.2,
+        "shots": [[0, 11.8], [11.8, 40.0]], "sheet_times": [0.5, 12.3], "mezz_sha": "m" * 64,
+        "source": {"width": 3840, "height": 2160, "fps": 59.94, "duration": 40.0, "codec": "hevc", "hdr": True},
+        "transcript": SAID}
+
+
+class FakeFootage:
+    """Stands in for the door's footage routes: what it holds, what was sent, what was asked."""
+
+    def __init__(self, monkeypatch, state="none"):
+        self.state, self.sent, self.ingests, self.at, self.whole = state, [], [], 0, True
+        monkeypatch.setattr(video, "clip_state", self.clip_state)
+        monkeypatch.setattr(video, "send_clip", self.send_clip)
+        monkeypatch.setattr(video, "ingest", self.ingest)
+
+    async def clip_state(self, ws, sha, *, sheet=False):
+        if self.state == "ready":
+            return {"state": "ready", "info": INFO, **({"sheet": SHEET} if sheet else {})}
+        return {"state": self.state, "at": self.at}
+
+    async def send_clip(self, ws, path, sha, *, at=0, budget=240):
+        self.sent.append({"path": Path(path).name, "sha": sha, "at": at})
+        size = Path(path).stat().st_size
+        return (size, True) if self.whole else (size // 2, False)
+
+    async def ingest(self, ws, sha, *, language=None, key=None):
+        self.ingests.append({"sha": sha, "language": language, "key": key})
+        return {"token": f"i{len(self.ingests)}", "eta_s": 60}
+
+
+def _clip(root, rel="uploads/interview.mp4", data=b"\x00\x00\x00\x18ftypmp42" + b"clip" * 200):
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return hashlib.sha256(data).hexdigest()
+
+
+def test_a_clip_is_sent_made_ready_and_described_with_its_words_beside_it(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    ff = FakeFootage(monkeypatch)
+    sha = _clip(tmp_path)
+    svc.result = {"state": "done", "kind": "ingest", "info": INFO, "sheet": SHEET}
+    out = _run({"action": "footage", "path": "uploads/interview.mp4", "language": "en"}, _ws(tmp_path))
+    assert ff.sent == [{"path": "interview.mp4", "sha": sha, "at": 0}]
+    assert ff.ingests[0]["sha"] == sha and ff.ingests[0]["language"] == "en"
+    text = _text(out)
+    assert "Made ready: uploads/interview.mp4 (40 s, 1920x1080, with sound at -19 LUFS)." in text
+    assert "The file is 3840x2160, 59.94 fps, HDR" in text
+    assert "Shots (seconds into the clip): 0–11.8, 11.8–40." in text
+    assert "- 12.4–14: We opened in March." in text and "English" in text
+    # The first sentence, begun 0.15 s before its first word and ended 0.25 s after its last.
+    assert '<video id="a" src="uploads/interview.mp4" data-start="0" data-media-start="12.25" data-duration="2"' in text
+    assert out["_model"][1]["type"] == "image"                                      # the clip's sheet of frames
+    words = json.loads((tmp_path / "uploads" / "interview.words.json").read_text(encoding="utf-8"))
+    assert words["sha"] == sha and words["clip"] == "uploads/interview.mp4" and len(words["words"]) == 7
+    assert "uploads/interview.words.json" in text
+
+
+def test_a_clip_already_made_ready_is_asked_after_for_free_and_a_corrected_word_is_kept(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+    ff = FakeFootage(monkeypatch, state="ready")
+    sha = _clip(tmp_path)
+    fixed = {**SAID, "sha": sha, "sentences": [{**SAID["sentences"][0], "text": "We opened in Marsh."}, SAID["sentences"][1]]}
+    (tmp_path / "uploads" / "interview.words.json").write_text(json.dumps(fixed), encoding="utf-8")
+    out = _run({"action": "footage", "path": "uploads/interview.mp4"}, _ws(tmp_path))
+    assert ff.sent == [] and ff.ingests == []
+    text = _text(out)
+    assert text.startswith("Already made ready") and "We opened in Marsh." in text   # the person's correction, not the door's
+    kept = json.loads((tmp_path / "uploads" / "interview.words.json").read_text(encoding="utf-8"))
+    assert kept["sentences"][0]["text"] == "We opened in Marsh."
+
+
+def test_a_long_upload_and_a_long_read_are_each_gone_on_with_by_the_next_call(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    ff = FakeFootage(monkeypatch)
+    _clip(tmp_path)
+    ff.whole = False
+    out = _run({"action": "footage", "path": "uploads/interview.mp4"}, _ws(tmp_path))
+    assert "Still sending uploads/interview.mp4" in out and ff.ingests == []
+    ff.whole, ff.state, ff.at = True, "partial", 404
+    svc.state = "pending"
+    out = _run({"action": "footage", "path": "uploads/interview.mp4"}, _ws(tmp_path))
+    assert ff.sent[-1]["at"] == 404 and "Still reading uploads/interview.mp4" in out   # went on from where the door was
+    ff.state, svc.state = "uploaded", "done"
+    svc.result = {"state": "done", "kind": "ingest", "info": {**INFO, "transcript": None, "has_audio": False}, "sheet": SHEET}
+    out = _run({"action": "footage", "path": "uploads/interview.mp4"}, _ws(tmp_path))
+    assert len(ff.ingests) == 1 and svc.polls == ["i1", "i1"]                         # collected, not read twice
+    assert "no sound" in _text(out) and not (tmp_path / "uploads" / "interview.words.json").exists()
+
+
+def test_what_cannot_be_footage_says_why(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    FakeFootage(monkeypatch)
+    ws = _ws(tmp_path)
+    assert _run({"action": "footage"}, ws).startswith("Error: footage needs path")
+    assert "not a file in the workspace" in _run({"action": "footage", "path": "uploads/nope.mp4"}, ws)
+    _clip(tmp_path, "notes/readme.txt")
+    assert "not a video file" in _run({"action": "footage", "path": "notes/readme.txt"}, ws)
+    assert "language" in _run({"action": "footage", "path": "notes/readme.txt", "language": "fr"}, ws)
+    _clip(tmp_path)
+    svc.result = {"state": "failed", "error": "That file has no picture a video can use.", "refused": "footage_not_video"}
+    out = _run({"action": "footage", "path": "uploads/interview.mp4"}, ws)
+    assert out.startswith("Error: the clip could not be made ready") and "no picture" in out
+    monkeypatch.setattr(media, "MAX_FOOTAGE_BYTES", 100)
+    assert "at most" in _run({"action": "footage", "path": "uploads/interview.mp4"}, ws)
+    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
+    assert "stock footage isn't set up" in _run({"action": "footage", "stock": "waves at sunset"}, ws)
+
+
+def test_a_composition_names_its_clips_by_hash_with_what_is_said_and_the_reply_reads_the_cuts_back(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    sha = _clip(tmp_path)
+    (tmp_path / "uploads" / "interview.words.json").write_text(json.dumps({**SAID, "sha": sha}), encoding="utf-8")
+    _clip(tmp_path, "uploads/broll.mov", b"other bytes")
+    html = COMP.replace("Hi", '<video id="a" src="uploads/interview.mp4" data-start="0" data-media-start="12.25" data-duration="2"></video>'
+                              '<video id="b" src="uploads/broll.mov" data-start="2" muted></video>'
+                              '<video id="x" src="uploads/gone.mp4" data-start="0"></video>')
+    footage, errors = media.collect_footage(html, tmp_path)
+    assert errors == [] and set(footage) == {"uploads/interview.mp4", "uploads/broll.mov"}       # one not there is the service's to name
+    assert footage["uploads/interview.mp4"] == {"sha": sha, "words": {**SAID, "sha": sha}} and "words" not in footage["uploads/broll.mov"]
+    # The hash is remembered by the clip's size and time, and read again when its bytes change.
+    assert json.loads((tmp_path / ".cache" / "video" / "clips.json").read_text())["uploads/interview.mp4"]["sha"] == sha
+    new_sha = _clip(tmp_path, data=b"\x00\x00\x00\x18ftypmp42" + b"new!" * 300)
+    again, _ = media.collect_footage(html, tmp_path)
+    assert again["uploads/interview.mp4"] == {"sha": new_sha}                                     # the old transcript is not this clip's
+    svc.result = {"state": "done", "kind": "review", "findings": [], "sheet": SHEET}
+
+    async def submit(ws, kind, html, images=None, files=None, **kw):
+        svc.submitted.append({"kind": kind, **kw})
+        return {"token": "t1", "times": [0.5], "root": {"duration": 4, "width": 1920, "height": 1080},
+                "sound": {"tracks": [{"id": "a", "kind": "footage", "src": "uploads/interview.mp4", "start": 0, "end": 2,
+                                      "media_start": 12.25, "volume": 1}],
+                          "speech": [{"track": "a", "start": 0.15, "end": 1.75, "text": "We opened in March."}], "notes": [],
+                          "clips": [{"id": "a", "src": "uploads/interview.mp4", "start": 0, "end": 2, "media_start": 12.25,
+                                     "media_end": 14.25, "of": 40, "sound": True},
+                                    {"id": "b", "src": "uploads/broll.mov", "start": 2, "end": 4, "media_start": 0,
+                                     "media_end": 2, "of": 8, "sound": False}]}}
+    monkeypatch.setattr(video, "submit", submit)
+    out = _run({"action": "write", "name": "cut", "html": html}, _ws(tmp_path))
+    sent = svc.submitted[0]["footage"]
+    assert sent["uploads/interview.mp4"]["sha"] == new_sha and set(sent) == {"uploads/interview.mp4", "uploads/broll.mov"}
+    text = _text(out)
+    assert "Footage:\n- a (uploads/interview.mp4): 0–2 s of the video shows 12.25–14.25 s of its clip (40 s long)" in text
+    assert "- b (uploads/broll.mov): 2–4 s of the video shows 0–2 s of its clip (8 s long), silent" in text
+    assert "Sound map:" in text and "- a (footage, uploads/interview.mp4)" in text
+
+
+def test_the_client_sends_a_clip_in_pieces_and_goes_on_from_where_the_door_says(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    monkeypatch.setattr(client, "_PIECE", 1000)
+    data = bytes(range(256)) * 10                                                   # 2,560 bytes: three pieces
+    sha = _clip(tmp_path, data=data)
+    got, calls = bytearray(), []
+
+    def door(request):
+        at, last = int(request.url.params["offset"]), request.url.params["last"] == "1"
+        calls.append((at, last))
+        if len(calls) == 2:                                                         # the door lost its place once
+            return httpx.Response(409, json={"error": "That piece does not follow on.", "at": len(got)})
+        assert at == len(got)
+        got.extend(request.content)
+        return httpx.Response(200, json={"state": "uploaded" if last else "partial", "at": len(got)})
+    seen = _transport(monkeypatch, door)
+    at, whole = asyncio.run(video.send_clip(_ws(tmp_path), tmp_path / "uploads" / "interview.mp4", sha))
+    assert whole and at == len(data) and bytes(got) == data
+    assert calls == [(0, False), (1000, False), (1000, False), (2000, True)]
+    assert seen[0].url.path == f"/v1/assets/{sha}" and seen[0].headers["x-video-proto"] == "3"
+
+    seen = _transport(monkeypatch, lambda request: httpx.Response(200, json={"token": "t", "eta_s": 5}))
+    asyncio.run(video.submit(_ws(tmp_path), "render", "<html>", footage={"uploads/a.mp4": {"sha": sha, "words": SAID},
+                                                                         "uploads/b.mp4": {"sha": "b" * 64}}))
+    body = seen[0].content.decode("utf-8", "replace")
+    sent = json.loads(body[body.index("{"):body.rindex("}") + 1])
+    assert sent["footage"] == {"uploads/a.mp4": sha, "uploads/b.mp4": "b" * 64} and list(sent["footage_words"]) == ["uploads/a.mp4"]
+
+
+def test_stock_footage_is_fetched_once_credited_and_lists_the_other_results(monkeypatch, tmp_path):
+    from cycls._agent.video import stock
+
+    real_download = stock._download
+    monkeypatch.setenv("PEXELS_API_KEY", "pexels-key")
+    mp4 = lambda w, h, link: {"file_type": "video/mp4", "width": w, "height": h, "link": link}  # noqa: E731
+    found = {"videos": [
+        {"id": 11, "duration": 14, "width": 3840, "height": 2160, "url": "https://www.pexels.com/video/waves-at-sunset-11/",
+         "user": {"name": "Ana"}, "video_files": [mp4(3840, 2160, "https://videos.pexels.com/video-files/11/uhd.mp4"),
+                                                  mp4(1920, 1080, "https://videos.pexels.com/video-files/11/hd.mp4"),
+                                                  mp4(640, 360, "https://videos.pexels.com/video-files/11/sd.mp4")]},
+        {"id": 12, "duration": 9, "width": 1920, "height": 1080, "url": "https://www.pexels.com/video/calm-sea-12/",
+         "user": {"name": "Bo"}, "video_files": [mp4(1920, 1080, "https://videos.pexels.com/video-files/12/hd.mp4")]},
+        {"id": 13, "duration": 600, "width": 1920, "height": 1080, "url": "https://www.pexels.com/video/too-long-13/",
+         "video_files": [mp4(1920, 1080, "https://videos.pexels.com/x.mp4")]}]}
+    searched, fetched = [], []
+
+    async def search(query, orientation, per_page):
+        searched.append((query, orientation))
+        return found
+
+    async def download(url, dest):
+        fetched.append(url)
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        Path(dest).write_bytes(b"stock clip")
+        return 10
+    monkeypatch.setattr(stock, "_search", search)
+    monkeypatch.setattr(stock, "_download", download)
+    rel, credit, others = asyncio.run(stock.find(tmp_path, "Waves at  sunset", orientation="landscape"))
+    assert rel == "videos/footage/waves-at-sunset-11.mp4" and fetched == ["https://videos.pexels.com/video-files/11/hd.mp4"]
+    assert credit == "Video by Ana on Pexels (https://www.pexels.com/video/waves-at-sunset-11/)."
+    assert others == ["1: calm sea (9 s, 1920x1080)"]                               # the ten-minute one is not offered
+    asyncio.run(stock.find(tmp_path, "waves at sunset", orientation="landscape"))
+    assert len(searched) == 1 and len(fetched) == 1                                 # remembered, not fetched again
+    rel2, _, _ = asyncio.run(stock.find(tmp_path, "waves at sunset", orientation="landscape", pick=1))
+    assert rel2 == "videos/footage/waves-at-sunset-12.mp4"
+    with pytest.raises(ValueError, match="unexpected video host"):                  # only ever Pexels' own hosts
+        asyncio.run(real_download("https://evil.example/x.mp4", tmp_path / "x.mp4"))
+
+
+def test_the_player_route_sends_the_clips_and_keeps_only_pages_in_bounds(monkeypatch, tmp_path):
+    from cycls._agent.web import video_routes
+    from cycls._agent.web.video_routes import _video_response
+
+    _on(monkeypatch)
+    sha = _clip(tmp_path)
+    f = tmp_path / "videos" / "cut.video.html"
+    f.parent.mkdir(parents=True)
+    f.write_text(COMP.replace("Hi", '<video id="a" src="uploads/interview.mp4" data-start="0"></video>'), encoding="utf-8")
+    built = []
+
+    async def compile_(ws, html, images=None, files=None, *, preview=False, audio=None, words=None, footage=None):
+        built.append(footage)
+        return {"preview": "<!doctype html><html><body>PLAYER</body></html>", "findings": []}
+    monkeypatch.setattr(video, "compile", compile_)
+    asyncio.run(_video_response(tmp_path, f, "org1:u"))
+    asyncio.run(_video_response(tmp_path, f, "org1:u"))
+    assert built == [{"uploads/interview.mp4": {"sha": sha}}]                         # built once
+    (tmp_path / "uploads" / "interview.words.json").write_text(json.dumps({**SAID, "sha": sha}), encoding="utf-8")
+    asyncio.run(_video_response(tmp_path, f, "org1:u"))
+    assert len(built) == 2 and built[1]["uploads/interview.mp4"]["words"]["text"]     # a transcript is a fresh page
+    # The cache holds pages within its bounds, and never sweeps what a chat remembers or the clips' hashes.
+    cache = tmp_path / ".cache" / "video"
+    (cache / "chat-1.json").write_text("{}")
+    monkeypatch.setattr(video_routes, "_CACHE_PAGES", 2)
+    for i in range(4):
+        video_routes._store(cache, f"{i:032x}", {"html": "x", "reason": None})
+    pages = [p for p in cache.glob("*.json") if len(p.stem) == 32]
+    assert len(pages) == 2 and (cache / "chat-1.json").exists() and (cache / "clips.json").exists()
