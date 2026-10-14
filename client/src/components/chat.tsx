@@ -905,6 +905,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           initialTab={connectorsOpen.tab}
           onClose={() => setConnectorsOpen(null)}
           onUsePrompt={(text, c) => { setInput(text); addPill(c, "prompt"); textareaRef.current?.focus(); }}
+          onAsk={(text) => { setInput(text); textareaRef.current?.focus(); }}
         />
       )}
       <div className="flex h-full min-w-0 flex-1 flex-col">

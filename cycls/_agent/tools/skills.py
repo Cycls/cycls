@@ -252,7 +252,7 @@ def prepare(files, name=None):
     return name
 
 
-def store(root, name, files, *, by=None):
+def store(root, name, files, *, by=None, who=None):
     """A new version of `name` under root/.skills, made the one that loads; returns its number. The files
     land first and the pointer last, so a reader sees the old version or the new, never half of one."""
     d = Path(root) / SLOT / name
@@ -261,18 +261,36 @@ def store(root, name, files, *, by=None):
     for rel, data in files.items():
         (d / f"v{v}" / rel).parent.mkdir(parents=True, exist_ok=True)
         (d / f"v{v}" / rel).write_bytes(data)
-    versions.append({"v": v, "at": datetime.now(timezone.utc).isoformat(), "by": by})
+    versions.append({"v": v, "at": datetime.now(timezone.utc).isoformat(), "by": by, "who": who})
     (d / "meta.json").write_text(json.dumps({"default": v, "versions": versions}, indent=1))
     _slot_cache.pop(str(root), None)
     return v
 
 
-def remove(root, name):
-    """Out of every catalog. Its versions stay, so publishing it again carries on from them."""
+def point(root, name, v):
+    """Make version `v` the one that loads: a rollback. None takes the skill out of every catalog, its
+    versions kept, so publishing it again carries on from them."""
     d = Path(root) / SLOT / name
-    if meta := _meta(d):
-        (d / "meta.json").write_text(json.dumps({**meta, "default": None}, indent=1))
+    meta = _meta(d) or {}
+    if v is not None and not any(x["v"] == v for x in meta.get("versions", [])):
+        raise ValueError(f"{name} has no version {v}")
+    if meta:
+        (d / "meta.json").write_text(json.dumps({**meta, "default": v}, indent=1))
     _slot_cache.pop(str(root), None)
+
+
+def versions(skill):
+    """A kept skill's versions, newest first; the image's have none."""
+    return [] if skill.source == "dev" else sorted((_meta(skill.dir.parent) or {}).get("versions", []), key=lambda x: -x["v"])
+
+
+def files_in(d):
+    return sorted(p.relative_to(d).as_posix() for p in Path(d).rglob("*") if p.is_file())
+
+
+def skill_md(name, description, body):
+    """A SKILL.md from the three fields a person fills in."""
+    return f"---\nname: {name}\ndescription: {' '.join(description.split())}\n---\n\n{body.strip()}\n".encode()
 
 
 def bundle(skill):
@@ -362,7 +380,7 @@ SKILL_TOOL = {
         "path": {"type": "string", "description": "load: a support file relative to the skill directory. "
                                                   f"publish: the folder to publish (default {DRAFTS}/<name>)."},
         "scope": {"type": "string", "enum": ["org", "workspace", "me"],
-                  "description": "publish: who it is for. Default: the workspace you are in."},
+                  "description": "publish: who it is for. Default: the person alone; they share it from the Skills tab."},
     }, "required": ["name"]},
 }
 
@@ -391,7 +409,7 @@ async def _exec_skill(inp, ws, ctx=None):
 
 async def _publish(inp, ws, ctx, name):
     places = roots(ws)
-    scope = inp.get("scope") or next(s for s, root in places.items() if root == Path(ws.root))
+    scope = inp.get("scope") or ("me" if "me" in places else next(iter(places)))   # one's own until shared
     if scope not in places:
         return f"Error: scope {scope} is not available here; use {' or '.join(places)}."
     try:
@@ -403,7 +421,8 @@ async def _publish(inp, ws, ctx, name):
     if not await may_publish(ws, user, scope):
         return ("Error: an org's skills are published by its admins and a team workspace's by its owners and "
                 "admins; scope `me` keeps it for this person.")
-    v = await asyncio.to_thread(store, places[scope], name, files, by=getattr(user, "id", None) or ws.subject)
+    v = await asyncio.to_thread(store, places[scope], name, files, by=getattr(user, "id", None) or ws.subject,
+                                who=getattr(user, "name", None))
     log("skill", user=user, chat_id=getattr(ctx, "chat_id", None), action="published", skill=name, scope=scope, v=v)
     who = {"org": "everyone in the organization", "workspace": "everyone in this workspace", "me": "you"}[scope]
     return f"Published {name} v{v} for {who}. It loads from the next message."

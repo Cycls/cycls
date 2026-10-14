@@ -73,7 +73,7 @@ export function openAuth(url: string, done: () => void) {
   setTimeout(() => clearInterval(timer), 5 * 60 * 1000);
 }
 
-export function ConnectorsDialog({ api, items, reload, initial, initialTab = "connectors", onClose, onUsePrompt }: {
+export function ConnectorsDialog({ api, items, reload, initial, initialTab = "connectors", onClose, onUsePrompt, onAsk }: {
   api: ChatApi["api"];
   items: Connector[] | null;
   reload: () => void;
@@ -81,6 +81,7 @@ export function ConnectorsDialog({ api, items, reload, initial, initialTab = "co
   initialTab?: Tab;
   onClose: () => void;
   onUsePrompt: (text: string, c: Connector) => void;
+  onAsk: (text: string) => void;   // a chat started from the dialog
 }) {
   const isAr = useLang() === "ar";
   const [tab, setTab] = useState(initialTab);
@@ -222,7 +223,7 @@ export function ConnectorsDialog({ api, items, reload, initial, initialTab = "co
           </aside>
 
           <div className="min-w-0 flex-1 overflow-y-auto px-5 py-5 sm:px-8 sm:py-6">
-            {tab === "skills" ? <SkillsPanel api={api} /> : detail ? (
+            {tab === "skills" ? <SkillsPanel api={api} onAsk={(text) => { onAsk(text); onClose(); }} /> : detail ? (
               <Detail c={detail} api={api} onBack={() => setOpen(null)} onConnect={connect} onSaveKey={saveKey} onDisconnect={disconnect} onAllow={allow} onUse={use} onPrompt={usePrompt} />
             ) : (
               <>

@@ -316,9 +316,10 @@ def test_publish_refuses_what_the_loader_would_not_read_links_and_too_much(tmp_p
 def test_only_a_teams_owners_and_admins_publish_for_it(tmp_path):
     team = _ws(tmp_path, "t-1")
     _draft_folder(team.root)
-    assert "owners and admins" in _run({"action": "publish", "name": "brief"}, team, _ctx())
+    inp = {"action": "publish", "name": "brief", "scope": "workspace"}
+    assert "owners and admins" in _run(inp, team, _ctx())
     asyncio.run(state.org_db("org", tmp_path, f"file://{tmp_path}").put("members/t-1/alice", {"role": "admin"}))
-    assert "for everyone in this workspace" in _run({"action": "publish", "name": "brief"}, team, _ctx())
+    assert "for everyone in this workspace" in _run(inp, team, _ctx())
     assert skills.discover(team)["brief"].source == "workspace"
 
 
@@ -376,13 +377,14 @@ def test_a_member_adds_switches_downloads_and_removes_their_own(tmp_path):
     assert client.post("/skills?scope=workspace", content=BRIEF).status_code == 403
     assert client.post("/skills?scope=me", content=BRIEF).json() == {"name": "brief", "version": 1}
     listed = client.get("/skills").json()
-    assert listed["scopes"] == ["me"] and listed["skills"] == [
-        {"name": "brief", "description": "Writes briefs.", "source": "me", "version": 1, "on": True, "allowed": True, "manage": True}]
+    assert listed["scopes"] == ["me"] and [{k: s[k] for k in ("name", "source", "version", "on", "allowed", "manage", "yours")}
+                                           for s in listed["skills"]] == [
+        {"name": "brief", "source": "me", "version": 1, "on": True, "allowed": True, "manage": True, "yours": True}]
     client.patch("/skills/brief", json={"on": False})
     assert client.get("/skills").json()["skills"][0]["on"] is False and asyncio.run(skills.available(ws)) == {}
     assert zipfile.ZipFile(io.BytesIO(client.get("/skills/brief/download").content)).namelist() == ["brief/SKILL.md"]
     assert client.patch("/skills/brief", json={"allowed": False}).status_code == 403
-    client.delete("/skills/brief?scope=me")
+    client.delete("/skills/brief")
     assert client.get("/skills").json()["skills"] == []
     assert client.post("/skills?scope=me", content=BRIEF).json()["version"] == 2    # its versions stayed
 
@@ -398,6 +400,27 @@ def test_an_org_admin_adds_for_everyone_and_switches_one_off_for_everyone(tmp_pa
     admin.patch("/skills/brief", json={"allowed": False})
     assert member.get("/skills").json()["skills"] == []
     assert admin.get("/skills").json()["skills"][0]["allowed"] is False
+
+
+def test_a_skill_written_in_the_form_has_a_page_files_versions_and_a_place_it_moves_to(tmp_path):
+    from cycls._app.auth import User
+    asyncio.run(state.org_db("org", tmp_path, f"file://{tmp_path}").put("members/t-1/a", {"role": "admin"}))
+    client, ws = _client(tmp_path, User(id="a", org_id="org", org_role="member", name="Amal"))
+    form = {"description": "Weekly\nupdates.", "body": "Wins, blockers, next steps."}
+    assert client.put("/skills/Weekly status report", json=form).json() == {"name": "weekly-status-report", "version": 1}
+    client.put("/skills/weekly-status-report", json={**form, "body": "Three bullets."})
+    page = client.get("/skills/weekly-status-report").json()
+    assert (page["source"], page["version"], page["who"], page["files"]) == ("me", 2, "Amal", ["SKILL.md"])
+    assert [x["v"] for x in page["versions"]] == [2, 1]
+    assert "Three bullets." in client.get("/skills/weekly-status-report/file?path=SKILL.md").text
+    assert "Wins, blockers" in client.get("/skills/weekly-status-report/file?path=SKILL.md&v=1").text
+    assert client.get("/skills/weekly-status-report/file?path=../../x").status_code == 404
+    client.post("/skills/weekly-status-report/current", json={"v": 1})
+    assert client.get("/skills/weekly-status-report").json()["version"] == 1
+    assert client.post("/skills/weekly-status-report/move", json={"to": "org"}).status_code == 403
+    client.post("/skills/weekly-status-report/move", json={"to": "workspace"})
+    assert skills.discover(ws)["weekly-status-report"].source == "workspace"
+    assert "Wins, blockers" in client.get("/skills/weekly-status-report/file?path=SKILL.md").text
 
 
 def test_an_upload_the_loader_would_not_read_is_refused(tmp_path):

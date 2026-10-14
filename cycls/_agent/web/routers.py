@@ -2091,7 +2091,7 @@ def tools_router(ws_dep, user_dep):
 
 def skills_router(ws_dep, user_dep):
     """The Skills tab (docs/notes/skills.md): every skill a person's chats may load, with their own switch and
-    the org's, and the places they may add to."""
+    the org's; a skill's page, its files and versions; and making, sharing and removing where they may."""
     r = APIRouter()
 
     def _org(ws):
@@ -2102,15 +2102,50 @@ def skills_router(ws_dep, user_dep):
             raise HTTPException(status_code=403, detail="You can't change the skills there")
         return places[scope]
 
-    @r.get("/skills")
-    async def list_skills(ws: Workspace = ws_dep, user: Any = user_dep):
+    async def _skill(ws, name):
+        if not (skill := (await asyncio.to_thread(skills.discover, ws)).get(name)):
+            raise HTTPException(status_code=404, detail="No such skill")
+        return skill
+
+    async def _row(ws, user, skill, scopes, blocked, off):
+        latest = (await asyncio.to_thread(skills.versions, skill) or [{}])[0]
+        return {"name": skill.name, "description": skill.description, "source": skill.source, "version": skill.version,
+                "updated": latest.get("at"), "who": latest.get("who"), "yours": latest.get("by") == getattr(user, "id", None),
+                "on": skill.name not in off, "allowed": skill.name not in blocked, "manage": skill.source in scopes}
+
+    async def _rows(ws, user):
         admin, blocked = _is_org_admin(user), (await _org(ws).get("skills") or {}).get("blocked", [])
         off = (await state.settings_db(ws).get("skills") or {}).get("off", [])
         scopes = [s for s in skills.roots(ws) if await skills.may_publish(ws, user, s)]
+        return admin, scopes, blocked, off
+
+    @r.get("/skills")
+    async def list_skills(ws: Workspace = ws_dep, user: Any = user_dep):
+        admin, scopes, blocked, off = await _rows(ws, user)
+        catalog = await asyncio.to_thread(skills.discover, ws)
         return {"scopes": scopes, "org_admin": admin, "skills": [
-            {"name": n, "description": s.description, "source": s.source, "version": s.version,
-             "on": n not in off, "allowed": n not in blocked, "manage": s.source in scopes}
-            for n, s in (await asyncio.to_thread(skills.discover, ws)).items() if admin or n not in blocked]}
+            await _row(ws, user, s, scopes, blocked, off) for n, s in catalog.items() if admin or n not in blocked]}
+
+    @r.get("/skills/{name}")
+    async def skill_page(name: str, v: Optional[int] = None, ws: Workspace = ws_dep, user: Any = user_dep):
+        """A skill's row, its versions, and the files of the version asked for (the one that loads by default)."""
+        skill, (_, scopes, blocked, off) = await _skill(ws, name), await _rows(ws, user)
+        d = skill.dir.parent / f"v{v}" if v and skill.source != "dev" else skill.dir
+        return {**await _row(ws, user, skill, scopes, blocked, off), "versions": await asyncio.to_thread(skills.versions, skill),
+                "files": await asyncio.to_thread(skills.files_in, d) if d.is_dir() else []}
+
+    @r.get("/skills/{name}/file")
+    async def skill_file(name: str, path: str, v: Optional[int] = None, ws: Workspace = ws_dep):
+        skill = await _skill(ws, name)
+        base = (skill.dir.parent / f"v{v}" if v and skill.source != "dev" else skill.dir).resolve()
+        target = (base / path).resolve()
+        if not target.is_relative_to(base) or not target.is_file():
+            raise HTTPException(status_code=404, detail="No such file")
+        try:
+            text, cut = await asyncio.to_thread(skills._read_text, target, skills.MAX_SKILL_BYTES)
+        except ValueError:
+            raise HTTPException(status_code=415, detail="A binary file")
+        return Response(text + ("\n… (truncated)" if cut else ""), media_type="text/plain; charset=utf-8")
 
     @r.patch("/skills/{name}")
     async def switch(name: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
@@ -2127,32 +2162,76 @@ def skills_router(ws_dep, user_dep):
         log("skill", user=user, action="switched", skill=name, **{field: value})
         return {"ok": True}
 
+    async def _keep(ws, user, scope, files, name=None):
+        root = await _place(ws, user, scope)
+        try:
+            name = skills.prepare(files, name)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        v = await asyncio.to_thread(skills.store, root, name, files, by=getattr(user, "id", None), who=getattr(user, "name", None))
+        log("skill", user=user, action="published", skill=name, scope=scope, v=v)
+        return {"name": name, "version": v}
+
     @r.post("/skills")
     async def upload(request: Request, scope: str = "me", ws: Workspace = ws_dep, user: Any = user_dep):
         """A .skill or .zip as the body: a new skill, or the next version of one."""
-        root, data = await _place(ws, user, scope), b""
+        data = b""
         async for chunk in request.stream():
             if len(data := data + chunk) > skills.MAX_PUBLISH:
                 raise HTTPException(status_code=413, detail=f"A skill is at most {skills.MAX_PUBLISH >> 20} MB")
         try:
             files = skills.unzip(data)
-            name = skills.prepare(files)
         except (ValueError, zipfile.BadZipFile) as e:
             raise HTTPException(status_code=400, detail=str(e))
-        v = await asyncio.to_thread(skills.store, root, name, files, by=getattr(user, "id", None))
-        log("skill", user=user, action="published", skill=name, scope=scope, v=v)
-        return {"name": name, "version": v}
+        return await _keep(ws, user, scope, files)
+
+    @r.put("/skills/{name}")
+    async def write(name: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        """A skill from the form: its SKILL.md written from name, description and instructions. One that is
+        already there keeps its other files and gets the next version."""
+        data = await request.json()
+        scope = data.get("scope") or "me"
+        name = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+        old = (await asyncio.to_thread(skills.discover, ws)).get(name)
+        files = {p: (old.dir / p).read_bytes() for p in await asyncio.to_thread(skills.files_in, old.dir)} \
+            if old and old.source == scope else {}
+        files["SKILL.md"] = skills.skill_md(name, data.get("description") or "", data.get("body") or "")
+        return await _keep(ws, user, scope, files, name)
+
+    @r.post("/skills/{name}/move")
+    async def move(name: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        """Who a skill is for: its current version kept in the new place, then out of the old."""
+        skill, to = await _skill(ws, name), (await request.json()).get("to")
+        if to == skill.source:
+            return {"name": name, "version": skill.version}
+        old = await _place(ws, user, skill.source)
+        files = {p: (skill.dir / p).read_bytes() for p in await asyncio.to_thread(skills.files_in, skill.dir)}
+        kept = await _keep(ws, user, to, files, name)
+        await asyncio.to_thread(skills.point, old, name, None)
+        return kept
+
+    @r.post("/skills/{name}/current")
+    async def current(name: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        """A rollback: version `v` becomes the one that loads."""
+        skill, v = await _skill(ws, name), (await request.json()).get("v")
+        try:
+            await asyncio.to_thread(skills.point, await _place(ws, user, skill.source), name, v)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        log("skill", user=user, action="current", skill=name, v=v)
+        return {"ok": True}
 
     @r.delete("/skills/{name}")
-    async def remove(name: str, scope: str, ws: Workspace = ws_dep, user: Any = user_dep):
-        await asyncio.to_thread(skills.remove, await _place(ws, user, scope), name)
-        log("skill", user=user, action="removed", skill=name, scope=scope)
+    async def remove(name: str, ws: Workspace = ws_dep, user: Any = user_dep):
+        skill = await _skill(ws, name)
+        await asyncio.to_thread(skills.point, await _place(ws, user, skill.source), name, None)
+        log("skill", user=user, action="removed", skill=name, scope=skill.source)
         return {"ok": True}
 
     @r.get("/skills/{name}/download")
     async def download(name: str, ws: Workspace = ws_dep):
-        skill = (await asyncio.to_thread(skills.discover, ws)).get(name)
-        if not skill or skill.source == "dev":   # the image's are the agent's own, not the person's to take
+        skill = await _skill(ws, name)
+        if skill.source == "dev":   # the image's are the agent's own, not the person's to take
             raise HTTPException(status_code=404, detail="No such skill to download")
         return Response(await asyncio.to_thread(skills.bundle, skill), media_type="application/zip",
                         headers={"Content-Disposition": f'attachment; filename="{name}.zip"'})

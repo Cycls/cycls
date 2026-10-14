@@ -2,7 +2,7 @@
 
 > **Status (2026-10-14):** built: the store, the loader, both switches, the `skill` tool's `publish`
 > (`cycls/_agent/tools/skills.py`) and the Skills tab (`skills_router`, `client/src/components/skills-panel.tsx`).
-> Not yet: the library, versions and rollback in the tab, the skill creator, the import. Until the
+> Not yet: the library, the skill creator, the import. Until the
 > import runs, a workspace's old `skills/` folders no longer load.
 
 A skill is a folder with a `SKILL.md`: frontmatter (`name`, `description`) and the instructions,
@@ -85,21 +85,25 @@ A switched-off skill is out of the catalog, and the `skill` tool refuses it.
 
 ## The Skills tab
 
-Beside *Connectors* in the same window, opened from the **+** menu or Settings → General. One row
-per skill: its name, description, where it comes from (*Built-in*, *Organization*, *Workspace*,
-*Just me*) and version, and:
+Beside *Connectors* in the same window, opened from the **+** menu or Settings → General, laid out like
+Claude's. The list: search, and **Add** with *Upload a skill* (a `.skill` or `.zip`), *Create a skill*
+(a form: name, description, instructions) and *Create with Cycls* (a chat that writes one). One row per
+skill: where it comes from, its description, when it was updated, and the person's switch.
 
-- everyone: their own switch; **Download** (not the agent's built-in ones)
-- org admins: **Off for everyone** / **On for everyone**
-- whoever may publish where it is kept: **Remove** (asks twice; its versions stay)
+A skill's page: who made it and when, the switch, and two tabs. *Overview* is the description, who it is
+available to, who made it and the version. *Contents* is its files and each one shown, Markdown
+formatted or raw, with a picker over its versions and *Make this the current version* (a rollback).
+The **⋮** menu: *Edit* (the same form, saving the next version), *Download*, *Available to* (*Just me*,
+*Workspace*, *Organization*: moving it keeps its current version in the new place), *Off for everyone*
+for an org admin, and *Remove* (asks twice; its versions stay).
 
-**Add skill** at the top takes a `.skill` or `.zip`, for whichever place the person may publish to
-(a picker when there is more than one). A name already there becomes its next version.
+**A new skill is the person's own**, made in the form, uploaded, or published by the agent; sharing it
+with the workspace or the org is a step on its page, as in Claude.
 
-Routes: `GET /skills`, `PATCH /skills/{name}` (`on`, or `allowed` for an org admin),
-`POST /skills?scope=` (the archive as the body), `DELETE /skills/{name}?scope=`,
-`GET /skills/{name}/download`. To come: versions and rollback, and **Create with Cycls** (a chat
-with the skill creator).
+Routes: `GET /skills`, `GET /skills/{name}?v=`, `GET /skills/{name}/file?path=&v=`, `PATCH /skills/{name}`
+(`on`, or `allowed` for an org admin), `POST /skills?scope=` (an archive as the body),
+`PUT /skills/{name}` (the form), `POST /skills/{name}/move`, `POST /skills/{name}/current`,
+`DELETE /skills/{name}`, `GET /skills/{name}/download`.
 
 ## Getting a skill in
 
