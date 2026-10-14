@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { motion } from "framer-motion";
 import type { Part, Message, Source } from "../hooks/use-chat";
 import { TextPart } from "./parts/text-part";
 import { ThinkingPart } from "./parts/thinking-part";
@@ -262,29 +261,25 @@ export function MessageBubble({
   );
 }
 
-function Star({ size, className }: { size: number; className?: string }) {
+// The Cycls logo's two stars, their paths as the logo draws them: the solid one, and the one with a star cut out.
+const SOLID = "M12.0452 3.47365C12.9493 6.62348 15.4284 9.0963 18.5783 10.0089L22.0488 11.0096L18.5783 12.0106C15.4284 12.9232 12.9493 15.396 12.0452 18.5458L11.0245 22.0488L10.0036 18.5752C9.09945 15.4254 6.62051 12.9525 3.47072 12.0399L0 11.0392L3.47072 10.0382C6.62048 9.12563 9.09945 6.65294 10.0036 3.50318L11.0245 0L12.0452 3.47365Z";
+const HOLLOW = "M37.5137 24.2766C38.4311 27.4728 40.9467 29.9819 44.1428 30.9079L47.6645 31.9235L44.1428 32.9391C40.9467 33.8651 38.4311 36.3742 37.5137 39.5704L36.4779 43.125L35.4421 39.6003C34.5247 36.4041 32.0092 33.8949 28.813 32.9689L25.2915 31.9534L28.813 30.9378C32.0092 30.0118 34.5247 27.5027 35.4421 24.3065L36.4779 20.7519L37.5137 24.2766ZM36.5076 27.6818C36.1965 28.7572 33.4214 31.4699 32.262 31.9534C33.4214 32.1974 36.226 35.1495 36.5076 36.2248C36.8369 35.129 39.764 32.2019 40.753 31.9534C39.764 31.5917 36.7892 28.7572 36.5076 27.6818Z";
+
+function Star({ size, className, hollow }: { size: number; className?: string; hollow?: boolean }) {
   return (
-    <svg viewBox="0 0 10.5 10.5" width={size} height={size} className={className} fill="currentColor">
-      <path d="M 5.248 0 L 5.734 1.654 C 6.164 3.153 7.345 4.33 8.844 4.765 L 10.496 5.241 L 8.844 5.718 C 7.345 6.152 6.164 7.329 5.734 8.829 L 5.248 10.496 L 4.762 8.843 C 4.332 7.343 3.152 6.166 1.652 5.732 L 0 5.255 L 1.652 4.779 C 3.152 4.344 4.332 3.167 4.762 1.668 L 5.248 0 Z" />
+    <svg viewBox={hollow ? "25.29 20.75 22.38 22.38" : "0 0 22.05 22.05"} width={size} height={size} className={className} fill="currentColor">
+      <path fillRule="evenodd" d={hollow ? HOLLOW : SOLID} />
     </svg>
   );
 }
 
+// Three Cycls stars while the reply has not begun: two still, the hollow third turning.
 function Loader() {
   return (
-    <div className="flex items-center gap-1.5 py-3">
-      <motion.div
-        animate={{ scale: [1, 0.5, 1], opacity: [1, 0.2, 1] }}
-        transition={{ duration: 0.9, repeat: Infinity, ease: "easeInOut" }}
-      >
-        <Star size={12} className="text-foreground/60" />
-      </motion.div>
-      <motion.div
-        animate={{ scale: [0.5, 1, 0.5], opacity: [0.2, 1, 0.2] }}
-        transition={{ duration: 0.9, repeat: Infinity, ease: "easeInOut" }}
-      >
-        <Star size={8} className="text-foreground/60" />
-      </motion.div>
+    <div className="flex items-center gap-0.5 py-3 text-foreground/70">
+      <Star size={16} />
+      <Star size={16} />
+      <Star size={16} hollow className="animate-[spin_1.8s_linear_infinite]" />
     </div>
   );
 }
