@@ -418,7 +418,7 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
 
 # ---- Tool execution ----
 
-async def _exec_bash(command, cwd, timeout=600, network=False):
+async def _exec_bash(command, cwd, timeout=600, network=False, catalog=None):
     from cycls._app.sandbox import Sandbox
     path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     lang = os.environ.get("LANG", "C.UTF-8")
@@ -440,9 +440,9 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
           .chdir("/workspace")
           .setenv(**env)
           .network(network).timeout(timeout))
-    for src, dst in skills.dev_mounts():   # dev skill scripts/templates, read-only
-        # a missing mount point would fail every bash command — skip it instead
-        if os.path.isdir(dst):
+    if (binds := skills.mounts(catalog)) and os.path.isdir(skills.MOUNT):   # a missing mount point fails every command
+        sb = sb.tmpfs(skills.MOUNT)   # each skill's files, read-only, wherever it is kept
+        for src, dst in binds:
             sb = sb.ro_bind(src, dst)
     # bwrap's own environ stays PATH/LANG; the trash vars reach only the inner shell (--setenv).
     result = await sb.run(["bash", "-c", command], env={"PATH": env["PATH"], "LANG": lang})
@@ -568,8 +568,8 @@ async def _exec_web_fetch(inp):
     return (text[:limit] + "\n... (truncated)") if len(text) > limit else (text or "(no readable text)")
 
 
-async def _exec_read(inp, workspace):
-    try: path = skills.resolve_dev_path(inp["path"]) or _resolve_path(inp["path"], workspace)
+async def _exec_read(inp, workspace, catalog=None):
+    try: path = skills.resolve_path(inp["path"], catalog) or _resolve_path(inp["path"], workspace)
     except ValueError as e: return f"Error: {e}"
     if not path.exists(): return f"Error: {inp['path']} does not exist"
     if path.is_dir(): return f"Error: {inp['path']} is a directory"
@@ -901,9 +901,10 @@ class Tool(NamedTuple):
     interrupted: str = ""
 
 
-def _run_bash(inp, workspace, *, timeout, network, **_):
+def _run_bash(inp, workspace, *, timeout, network, ctx=None, **_):
     t = inp.get("timeout")
-    return _exec_bash(inp.get("command", ""), workspace.root, timeout=t / 1000 if t else timeout, network=network)
+    return _exec_bash(inp.get("command", ""), workspace.root, timeout=t / 1000 if t else timeout, network=network,
+                      catalog=getattr(ctx, "skills", None))
 
 
 def _ask_step(inp):
@@ -1029,7 +1030,7 @@ _TOOLS = {
     "design":     Tool(lambda inp, ws, **_: _exec_design(inp, ws), _design_step),
     "bash":       Tool(_run_bash,
                        lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
-    "read":       Tool(lambda inp, ws, **_: _exec_read(inp, ws.root),
+    "read":       Tool(lambda inp, ws, ctx=None, **_: _exec_read(inp, ws.root, getattr(ctx, "skills", None)),
                        lambda inp: {"tool_name": "Reading", "step": inp.get("path", "")}),
     "edit":       Tool(lambda inp, ws, **_: asyncio.to_thread(_exec_edit, inp, ws.root),
                        lambda inp: {"tool_name": "Editing", "step": inp.get("path", "")}),
@@ -1045,8 +1046,8 @@ _TOOLS = {
                        once=True, terminal=True, prompt=ASK_GUIDANCE),
     "build_app":  Tool(lambda inp, ws, **_: _exec_build_app(inp, ws),
                        lambda inp: {"tool_name": "Building app", "step": inp.get("slug", "")}),
-    "skill":      Tool(lambda inp, ws, **_: skills._exec_skill(inp, ws.root),
-                       lambda inp: {"tool_name": "Skill", "step": inp.get("name", "")}),
+    "skill":      Tool(lambda inp, ws, ctx=None, **_: skills._exec_skill(inp, ws, ctx),
+                       lambda inp: {"tool_name": "Skill", "step": " ".join(x for x in (inp.get("action"), inp.get("name")) if x and x != "load")}),
     "web_search": Tool(lambda inp, ws, **_: _exec_web_search(inp),
                        lambda inp: {"tool_name": "Web Search", "step": inp.get("query", "")}),
     "web_fetch":  Tool(lambda inp, ws, **_: _exec_web_fetch(inp),
@@ -1166,7 +1167,7 @@ def risk(name, inp):
         return "destructive" if _DESTRUCTIVE_CMD.search(cmd) else None if _reads(cmd) else "write"
     if name == "database":
         return {"delete": "destructive", "put": "write"}.get(inp.get("command"))
-    return "write" if name in ("edit", "build_app") else None
+    return "write" if name in ("edit", "build_app") or (name == "skill" and inp.get("action") == "publish") else None
 
 
 def _gate(name, inp, ctx, step):
@@ -1197,6 +1198,7 @@ class ToolContext:
     approvals: frozenset = frozenset()   # approval keys from the confirm card, this turn only
     auto: bool = True                    # the composer's switch: writes run on their own, destructive ones still ask
     modes: dict = None                   # the person's own allow/ask per builtin, read once a turn
+    skills: dict = None                  # the turn's skill catalog: what `skill` loads and bash mounts
 
     async def secret(self, name):
         return await credentials.get(self.workspace, name)

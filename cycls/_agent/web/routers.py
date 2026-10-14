@@ -18,7 +18,7 @@ from cycls._agent import connectors as oauth, credentials, spill, state, trash
 from cycls._agent.web import office
 from cycls._agent.design import refresh as design_refresh
 from cycls._agent.logs import log
-from cycls._agent.tools import tool_step, detailed, excerpt
+from cycls._agent.tools import tool_step, detailed, excerpt, skills
 from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, resolve_path
 from cycls._agent.web.design_routes import _DESIGN_AS, _design_doc, _design_response, design_router
 
@@ -2089,6 +2089,77 @@ def tools_router(ws_dep, user_dep):
     return r
 
 
+def skills_router(ws_dep, user_dep):
+    """The Skills tab (docs/notes/skills.md): every skill a person's chats may load, with their own switch and
+    the org's, and the places they may add to."""
+    r = APIRouter()
+
+    def _org(ws):
+        return state.org_db(ws.subject.partition(":")[0], ws.volume, ws.base)
+
+    async def _place(ws, user, scope):
+        if scope not in (places := skills.roots(ws)) or not await skills.may_publish(ws, user, scope):
+            raise HTTPException(status_code=403, detail="You can't change the skills there")
+        return places[scope]
+
+    @r.get("/skills")
+    async def list_skills(ws: Workspace = ws_dep, user: Any = user_dep):
+        admin, blocked = _is_org_admin(user), (await _org(ws).get("skills") or {}).get("blocked", [])
+        off = (await state.settings_db(ws).get("skills") or {}).get("off", [])
+        scopes = [s for s in skills.roots(ws) if await skills.may_publish(ws, user, s)]
+        return {"scopes": scopes, "org_admin": admin, "skills": [
+            {"name": n, "description": s.description, "source": s.source, "version": s.version,
+             "on": n not in off, "allowed": n not in blocked, "manage": s.source in scopes}
+            for n, s in (await asyncio.to_thread(skills.discover, ws)).items() if admin or n not in blocked]}
+
+    @r.patch("/skills/{name}")
+    async def switch(name: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        """`on` is the person's own, in every workspace; `allowed` an org admin's, for everyone."""
+        data = await request.json()
+        if "on" in data:
+            db, field, value = state.settings_db(ws), "off", not data["on"]
+        elif _is_org_admin(user):
+            db, field, value = _org(ws), "blocked", not data.get("allowed")
+        else:
+            raise HTTPException(status_code=403, detail="Only org admins can switch a skill off for everyone")
+        row = await db.get("skills") or {}
+        await db.put("skills", {**row, field: sorted((set(row.get(field, [])) - {name}) | ({name} if value else set()))})
+        log("skill", user=user, action="switched", skill=name, **{field: value})
+        return {"ok": True}
+
+    @r.post("/skills")
+    async def upload(request: Request, scope: str = "me", ws: Workspace = ws_dep, user: Any = user_dep):
+        """A .skill or .zip as the body: a new skill, or the next version of one."""
+        root, data = await _place(ws, user, scope), b""
+        async for chunk in request.stream():
+            if len(data := data + chunk) > skills.MAX_PUBLISH:
+                raise HTTPException(status_code=413, detail=f"A skill is at most {skills.MAX_PUBLISH >> 20} MB")
+        try:
+            files = skills.unzip(data)
+            name = skills.prepare(files)
+        except (ValueError, zipfile.BadZipFile) as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        v = await asyncio.to_thread(skills.store, root, name, files, by=getattr(user, "id", None))
+        log("skill", user=user, action="published", skill=name, scope=scope, v=v)
+        return {"name": name, "version": v}
+
+    @r.delete("/skills/{name}")
+    async def remove(name: str, scope: str, ws: Workspace = ws_dep, user: Any = user_dep):
+        await asyncio.to_thread(skills.remove, await _place(ws, user, scope), name)
+        log("skill", user=user, action="removed", skill=name, scope=scope)
+        return {"ok": True}
+
+    @r.get("/skills/{name}/download")
+    async def download(name: str, ws: Workspace = ws_dep):
+        skill = (await asyncio.to_thread(skills.discover, ws)).get(name)
+        if not skill or skill.source == "dev":   # the image's are the agent's own, not the person's to take
+            raise HTTPException(status_code=404, detail="No such skill to download")
+        return Response(await asyncio.to_thread(skills.bundle, skill), media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="{name}.zip"'})
+
+    return r
+
+
 # ---- Mount ----
 
 def install_routers(cycls_app, app, required_auth, volume, base):
@@ -2100,6 +2171,7 @@ def install_routers(cycls_app, app, required_auth, volume, base):
     ws_dep = Depends(_build_ws)
     app.include_router(chats_router(ws_dep))
     app.include_router(tools_router(ws_dep, required_auth))
+    app.include_router(skills_router(ws_dep, required_auth))
     app.include_router(files_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(design_router(ws_dep, required_auth, _catalog_drop))
     app.include_router(apps_router(cycls_app, ws_dep, required_auth, volume, base))

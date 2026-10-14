@@ -41,10 +41,11 @@ const dateLocale = () => (getLang() === "ar" ? "ar" : "en");
 const fmtDate = (d: string | Date) => new Date(d).toLocaleDateString(dateLocale(), { month: "short", day: "numeric", year: "numeric" });
 const fmtDateTime = (d: string | Date) => new Date(d).toLocaleString(dateLocale(), { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
-export function SettingsDialog({ account, onClose, onOpenConnectors }: {
+export function SettingsDialog({ account, onClose, onOpenConnectors, onOpenSkills }: {
   account: AccountInfo;
   onClose: () => void;
   onOpenConnectors?: () => void;
+  onOpenSkills?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("account");
   const lang = useLang();
@@ -116,7 +117,7 @@ export function SettingsDialog({ account, onClose, onOpenConnectors }: {
 
           <div className="min-w-0 flex-1 overflow-y-auto px-5 py-5 sm:px-8">
             <h2 className="mb-4 hidden text-lg font-semibold text-foreground sm:block">{t(tab)}</h2>
-            {tab === "general" && <GeneralTab onOpenConnectors={onOpenConnectors} />}
+            {tab === "general" && <GeneralTab onOpenConnectors={onOpenConnectors} onOpenSkills={onOpenSkills} />}
             {tab === "account" && <AccountTab account={account} />}
             {tab === "organization" && <OrganizationTab account={account} isAdmin={isAdmin} />}
             {tab === "members" && <MembersTab isAdmin={isAdmin} />}
@@ -612,7 +613,7 @@ function MemorySection() {
   );
 }
 
-function GeneralTab({ onOpenConnectors }: { onOpenConnectors?: () => void }) {
+function GeneralTab({ onOpenConnectors, onOpenSkills }: { onOpenConnectors?: () => void; onOpenSkills?: () => void }) {
   const [mode, setMode] = useState<ThemeMode>(getThemeMode());
   const [followUps, setFollowUps] = useState(followUpsEnabled);
   const [askOn, setAskOn] = useState(askEnabled);
@@ -623,6 +624,9 @@ function GeneralTab({ onOpenConnectors }: { onOpenConnectors?: () => void }) {
     <ListCard>
       {onOpenConnectors && (
         <Row label={t("connectors")} sub={t("connectorsSub")} control={<Icon name="chevron-right" className="size-4 rtl:rotate-180" />} onClick={onOpenConnectors} />
+      )}
+      {onOpenSkills && (
+        <Row label={t("skills")} sub={t("skillsSub")} control={<Icon name="chevron-right" className="size-4 rtl:rotate-180" />} onClick={onOpenSkills} />
       )}
       <Row
         label={t("appearance")}

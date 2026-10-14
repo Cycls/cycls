@@ -594,9 +594,9 @@ description: Generate branded PDF reports from CSV data. Use when the user asks 
 # Full instructions... (up to 48KB loaded on demand)
 ```
 
-`name` is lowercase-hyphen (falls back to the folder name); `description` decides when the model reaches for it, so say *when to use* (max 1KB). Support files (scripts, templates, reference docs) live beside `SKILL.md`.
+`name` is lowercase-hyphen, at most 64 characters (falls back to the folder name); `description` decides when the model reaches for it, so say *when to use* (max 1KB). Support files (scripts, templates, reference docs) live beside `SKILL.md`.
 
-Skills come from two places:
+Skills come from four places:
 
 - **Shipped with the agent**: put a `skills/` dir in your project, include it in the image, and register it:
 
@@ -607,7 +607,11 @@ Skills come from two places:
 
   Shipped skills are read-only; each mounts at `/skills/<name>/` inside the bash sandbox, so the model runs `python /skills/pdf-reports/scripts/render.py` and scripts read their own templates from there. They version with your deploys.
 
-- **User-created**: any `skills/<name>/SKILL.md` in a user's workspace joins the catalog automatically (rescanned every ~30s) and wins name collisions with shipped skills.
+- **The org's own**: its admins publish them for every workspace in the org.
+- **A team workspace's own**: its owners and admins publish them for every member.
+- **A person's own**: they publish them for themselves, and they follow them into every workspace.
+
+  The agent writes a skill in `skill-drafts/<name>/` and publishes it with the `skill` tool (`action: publish`, `scope: org`, `workspace` or `me`), which keeps it as a new version in the workspace's `.skills` slot (hidden from bash and the file tools). A person's own wins a name collision over the workspace's, which wins over the org's, which wins over a shipped one. An org admin can switch a skill off for everyone, and each person for themselves (docs/notes/skills.md). Every skill mounts at `/skills/<name>/`, wherever it is kept. Plain `skills/` folders in a workspace no longer load.
 
 ---
 

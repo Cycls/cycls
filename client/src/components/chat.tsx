@@ -199,7 +199,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   const [confirm, setConfirm] = useState<{ tool: string; key: string; connector?: string; label: string; args: unknown } | null>(null);
   // The directory: what the deployment offers, refreshed whenever a grant changes.
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
-  const [connectorsOpen, setConnectorsOpen] = useState<{ name?: string } | null>(null);
+  const [connectorsOpen, setConnectorsOpen] = useState<{ name?: string; tab?: "skills" } | null>(null);
   // @-pills: connectors this message is about. They ride the request and clear on send.
   const [pills, setPills] = useState<Connector[]>([]);
   const pillsRef = useRef<Connector[]>([]);
@@ -216,10 +216,10 @@ export function Chat({ chat, onShare, files, account, config }: {
     if (account) api("/connectors", { silent: true }).then((r) => r.json()).then(setConnectors).catch(() => setConnectors([]));
   }, [account?.activeOrg?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadConnectors(); }, [loadConnectors]);
-  const openConnectors = (source: string, name?: string) => {
-    track("connector_directory_opened", { source });
+  const openConnectors = (source: string, name?: string, tab?: "skills") => {
+    track("connector_directory_opened", { source, tab: tab ?? "connectors" });
     loadConnectors();
-    setConnectorsOpen({ name });
+    setConnectorsOpen({ name, tab });
   };
   useEffect(() => {   // the callback tab reports success: the card goes away, the directory refreshes
     const done = (e: MessageEvent) => {
@@ -878,6 +878,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     connectors: connectors?.filter((c) => c.connected),
     approveSwitch: !!connectors?.length,
     onOpenConnectors: account && connectors?.length ? () => openConnectors("plus") : undefined,
+    onOpenSkills: account ? () => openConnectors("plus", undefined, "skills") : undefined,
     onToggleConnector: (c: Connector, on: boolean) => {
       setConnectors((prev) => prev?.map((x) => (x.name === c.name ? { ...x, on } : x)) ?? prev);
       track("connector_toggled", { connector: c.name, to: on ? "on" : "off", level: "user" });
@@ -901,6 +902,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           items={connectors}
           reload={loadConnectors}
           initial={connectorsOpen.name}
+          initialTab={connectorsOpen.tab}
           onClose={() => setConnectorsOpen(null)}
           onUsePrompt={(text, c) => { setInput(text); addPill(c, "prompt"); textareaRef.current?.focus(); }}
         />
@@ -1279,7 +1281,8 @@ export function Chat({ chat, onShare, files, account, config }: {
       )}
       {settingsOpen && account && (
         <SettingsDialog account={account} onClose={() => setSettingsOpen(false)}
-                        onOpenConnectors={connectors?.length ? () => { setSettingsOpen(false); openConnectors("settings"); } : undefined} />
+                        onOpenConnectors={connectors?.length ? () => { setSettingsOpen(false); openConnectors("settings"); } : undefined}
+                        onOpenSkills={() => { setSettingsOpen(false); openConnectors("settings", undefined, "skills"); }} />
       )}
       </div>
       <div className={cn(

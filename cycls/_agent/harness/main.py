@@ -6,6 +6,7 @@ body forwards as-is. `Turn` is loop-internal (the last event a provider
 stream emits) — never reaches the body.
 """
 import asyncio, json, os, random, re, time, uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -300,14 +301,16 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             yield _user_warn(user, session.chat_id,
                              f"Couldn't load {instructions} — your instructions weren't applied this turn.",
                              f"couldn't load {instructions}: {e}")
-    skill_catalog = {}
+    skill_catalog = None
     if skills is not None:
         try:
             skills_mod.configure(skills)
-            skill_catalog = await asyncio.to_thread(skills_mod.discover, workspace.root)
-            if skill_catalog: system_text += "\n\n" + skills_mod.catalog_text(skill_catalog)
-        except Exception:
+            skill_catalog = await skills_mod.available(workspace)
+        except Exception as e:
             skill_catalog = {}
+            log("warn", user=user, chat_id=session.chat_id, message=f"skills unavailable this turn: {e}")
+        if skill_catalog: system_text += "\n\n" + skills_mod.catalog_text(skill_catalog)
+        ctx = replace(ctx, skills=skill_catalog)
     for _ in vendor_skips(allowed_tools, vendor, web_search):
         log("warn", user=user, chat_id=session.chat_id,
                  message=f"native web search unavailable on {vendor}/* — use .web_search('brave') or an anthropic model")
@@ -319,7 +322,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             if t is design_tool(True):
                 tools_list[i], design_loaded = design_tool(False), False
     DESIGN_LOADED.set(design_loaded)
-    if skill_catalog and not any(t.get("name") == "skill" for t in tools_list):
+    if skill_catalog is not None and not any(t.get("name") == "skill" for t in tools_list):   # even with none yet: it is how the first is made
         tools_list.append(skills_mod.SKILL_TOOL)
     owners = {}   # tool name -> the OAuth2 it acts with, for the audit line
     mcp_names = set()   # a server's results are the model's, never the chat's

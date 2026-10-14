@@ -71,6 +71,7 @@ export function InputBox({
   onMentionSearch,
   connectors,
   onOpenConnectors,
+  onOpenSkills,
   onToggleConnector,
   approveSwitch,
   onAddConnector,
@@ -105,6 +106,7 @@ export function InputBox({
   onMentionSearch?: (query: string) => Promise<MentionHit[]>;
   connectors?: Connector[];
   onOpenConnectors?: () => void;
+  onOpenSkills?: () => void;
   onToggleConnector?: (c: Connector, on: boolean) => void;   // the person's own on/off, kept across chats
   approveSwitch?: boolean;   // the deployment has connectors: show Auto / Manual
   onAddConnector?: (c: Connector) => void;
@@ -369,7 +371,7 @@ export function InputBox({
       <div className="flex items-center justify-between px-1 pt-1" dir="ltr">
         <div className="relative flex items-center gap-0.5">
           {(onOpenFilePicker || onOpenFiles) && (
-            <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} connectors={connectors} onOpenConnectors={onOpenConnectors} onToggleConnector={onToggleConnector} disabled={isStreaming} />
+            <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} connectors={connectors} onOpenConnectors={onOpenConnectors} onOpenSkills={onOpenSkills} onToggleConnector={onToggleConnector} disabled={isStreaming} />
           )}
           {approveSwitch && <ApproveMode disabled={isStreaming} />}
           <button
@@ -486,8 +488,8 @@ function ApproveMode({ disabled }: { disabled?: boolean }) {
   );
 }
 
-function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnectors, onToggleConnector, disabled }: {
-  onOpenFilePicker?: () => void; onOpenFiles?: () => void; connectors?: Connector[]; onOpenConnectors?: () => void;
+function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnectors, onOpenSkills, onToggleConnector, disabled }: {
+  onOpenFilePicker?: () => void; onOpenFiles?: () => void; connectors?: Connector[]; onOpenConnectors?: () => void; onOpenSkills?: () => void;
   onToggleConnector?: (c: Connector, on: boolean) => void; disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -495,7 +497,7 @@ function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnector
   const item = "flex w-full items-center gap-2.5 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer";
   const pick = (fn?: () => void) => (e: React.MouseEvent) => { e.stopPropagation(); setOpen(false); fn?.(); };
 
-  if (!onOpenFiles && !onOpenConnectors) {
+  if (!onOpenFiles && !onOpenConnectors && !onOpenSkills) {
     return onOpenFilePicker ? (
       <button type="button" onClick={(e) => { e.stopPropagation(); onOpenFilePicker(); }} disabled={disabled} className={btnClass} aria-label="Attach file">
         <Icon name="paperclip" className="size-5" />
@@ -529,6 +531,11 @@ function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnector
                   <Icon name="link" className="size-4" />{t("manageConnectors")}<Icon name="chevron-right" className="ms-auto size-3.5" />
                 </button>
               </>
+            )}
+            {onOpenSkills && (
+              <button onClick={pick(onOpenSkills)} className={item}>
+                <Icon name="star" className="size-4" />{t("skills")}<Icon name="chevron-right" className="ms-auto size-3.5" />
+              </button>
             )}
           </div>
         </>
