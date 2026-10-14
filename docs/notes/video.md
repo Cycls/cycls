@@ -68,7 +68,7 @@ production agent is taught nothing it cannot make until it runs this SDK.
   from the voice's words, line by line, on its clock), and gives music a length, a fade and a level. The
   preview plays one mixed track kept in step with the player; the canvas needs no change (proof P1).
 
-## Footage (protocol 3; built 2026-10-13, on the dev service — not in production)
+## Footage (protocol 3; in production on super-dev since 2026-10-13, revision `super-dev-00073-qh9`, SDK `57357c8e`)
 
 Version 2's second half: the person's own clips, and stock video, cut into a video. The SDK speaks
 protocol 3; the service still answers 1 and 2 as before and serves contract v3 (the FOOTAGE section)
@@ -118,6 +118,21 @@ with footage runs at about 2.2× the video's length (204 s for 90 s) and peaks a
 Decided (2026-10-13): Whisper large-v3-turbo stays, and the comparison with Cohere Transcribe Arabic is dropped; a transcript is
 corrected by hand where it matters. Not done: real speech (every spoken test clip was read by the service's own voices); real
 Safari; a clip's used stretch alone being sent to a renderer (the whole mezzanine goes, once a container).
+
+In production since 2026-10-13: the service from cycls-video `acb8a16`, then super-dev on SDK `57357c8e`
+(production's `12cd826e` plus the four footage commits, from a deploy tree that holds nothing else).
+Checked through the real agent on 2026-10-14 (the Cycls organisation, Personal workspace): a 10.5 s
+clip attached in the chat, cut with a Pexels shot over its second sentence, word-lit captions, a title
+and ducked music — guide, `footage` (37 s), `music`, `footage` stock (19 s), write, edit, render (45 s),
+canvas; 5.6 minutes, $0.26 of model calls; the MP4 (7.8 s, 1920x1080) played with its sound in Chrome.
+Two things seen on the way:
+
+- Video is per organisation (`VIDEO_ORGS`). In the app, "Personal" in the organisation menu is the
+  person's own account, not the Cycls organisation's Personal workspace; there the tool is not
+  offered, and the model tried to do the same brief in its sandbox (ffmpeg, `pip install faster-whisper`).
+- `_ingest` (harness/main.py) answers an attachment `read` cannot take with "too large… use bash…
+  propose a way to extract its content". With Video offered the model still went to `footage`, but
+  for a clip or a sound file the note could name `footage` instead.
 
 ## The tool
 
