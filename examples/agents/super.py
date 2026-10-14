@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import os
 
 import cycls
-from catalog import ALL, SERVERS, posthog_mcp
+from catalog import ALL, APIS, SERVERS, posthog_mcp
 
 FREE_MONTHLY_LIMIT = 5
 EXEMPT_USERS = {
@@ -24,7 +24,7 @@ EXEMPT_USERS = {
 image = cycls.Image().copy(".providers.env", ".env")#.rebuild()
 
 # The connectors. Every declaration — endpoints, scopes, what a key looks like, which grant is
-# shareable — is `catalog.py` beside this file: eleven of them, OAuth apps registered by hand,
+# shareable — is `catalog.py` beside this file: OAuth apps registered by hand,
 # servers that register themselves, a pasted key and a pasted address.
 
 # What cannot live in catalog.py is code. cloudpickle pickles a function defined in the file you deploy
@@ -154,6 +154,7 @@ llm = (
     # .skills("examples/agents/skills")  # ship skill folders (<name>/SKILL.md) with the agent
     # .instructions("AGENT.md")  # workspace instructions file in the system prompt — this is the default
     .mcp(*SERVERS, posthog_server)  # remote MCP, any provider; tools are `{label}_*`, e.g. `drive_*`
+    .connectors(*APIS)  # a connector with a REST base and no server: one `{name}_request` tool each
     # .mcp(cycls.MCP("https://x/mcp").name("x").connector(o))  # one server on its own, wired to its connector
     # .mcp(cycls.MCP("https://x/mcp").name("x").token("…").server_side())  # let the Anthropic connector run it instead (anthropic/* only)
     # .sandbox(network=False)  # opt out of network access for the LLM bash

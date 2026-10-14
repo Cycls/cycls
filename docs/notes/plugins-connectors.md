@@ -226,7 +226,7 @@ is the dominant productivity platform in Saudi organisations (~48% of enterprise
 | | kind | setup gate |
 |---|---|---|
 | **Salla** | MCP | `mcp.salla.dev/mcp`, OAuth — **paid Salla plans only**. An App Store listing via the Partners platform is a separate distribution play, not a prerequisite |
-| **Microsoft 365** | MCP | publisher verification. Mail, Calendar, Files, Excel, Teams in one consent |
+| **Microsoft 365** | REST | one publisher-verified multitenant Entra app, five connectors over Graph — Outlook, OneDrive & SharePoint, Teams, OneNote, Planner & To Do — each consenting only to its own scopes. Microsoft's MCP server (Work IQ) is not the path: admin consent plus a Copilot Credits billing plan in every customer tenant. Many tenants still need an admin to consent once; Teams always does |
 | **PostHog, Canva, Slack, Notion, Linear, Figma** | MCP | none — hosted, OAuth, free |
 | **Zoho / Odoo** | MCP | none, but per-user endpoints (15). Strong MENA SME presence |
 | **Meta / TikTok / Google / Amazon Ads** | MCP + plugin | Meta is read+write, free in beta. Google's server reads only, so writes go through plugin tools on the Ads API (decision 4) — a developer token at **Basic** access already allows production writes, 15,000 ops/day; Standard lifts the cap |
@@ -697,7 +697,7 @@ happened to also spell out.
 **Code owns behaviour, the CMS owns copy.** `name`, `kind`, `scope`, `hint`, the OAuth endpoints and the
 servers stay in the agent file — nothing a CMS edit can reach may change what a connector is able to do.
 The CMS owns `title`, `description`, `category`, `story`, `prompts`, `icon`, `showcase`, `gallery`,
-`gradient`, `links`, `developer`. `examples/agents/catalog.py` is the worked example: eleven connectors,
+`gradient`, `links`, `developer`. `examples/agents/catalog.py` is the worked example: every connector,
 not one line of copy among them, and a test that keeps it that way.
 
 **The showcase leads the content**, with no heading over it: prompts on their gradient, or the gallery

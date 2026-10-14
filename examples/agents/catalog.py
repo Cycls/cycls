@@ -122,6 +122,32 @@ slack = cycls.OAuth2("slack",
     scope="user", api="https://slack.com/api")
 slack_mcp = cycls.MCP("https://mcp.slack.com/mcp").name("slack").connector(slack)
 
+# Microsoft 365 over Graph's REST API, one `{name}_request` tool per product. Microsoft's own MCP server
+# (Work IQ) needs admin consent plus a Copilot Credits billing plan in every customer tenant; Graph needs
+# neither. One Entra app, "Cycls" in the cyclsai tenant — multitenant, publisher-verified, its publisher
+# domain proven by cycls.com/.well-known/microsoft-identity-association.json — and every scope below
+# listed on it, so an admin's tenant-wide consent covers them all. Split by product for the reason Gmail
+# is apart from Drive: a consent screen asks only for what that product needs. Entra puts every scope a
+# person has consented to into each token, so the split is ours to keep, not Graph's. `organizations`
+# keeps personal Outlook.com accounts out. All `scope="user"`: a delegated token is the person.
+_graph = dict(
+    authorize="https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize",
+    token="https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
+    client_id=cycls.env("MICROSOFT_CLIENT_ID"), secret=cycls.env("MICROSOFT_CLIENT_SECRET"),
+    api="https://graph.microsoft.com/v1.0", scope="user")
+_me = ["offline_access", "User.Read"]
+
+outlook = cycls.OAuth2("outlook", **_graph,
+    scopes=[*_me, "Mail.ReadWrite", "Mail.Send", "Calendars.ReadWrite", "Contacts.ReadWrite", "MailboxSettings.Read"],
+    api_headers={"Prefer": 'outlook.body-content-type="text"'})   # mail bodies as text, not pages of HTML
+onedrive = cycls.OAuth2("onedrive", **_graph,   # Word, Excel and PowerPoint files too, and Excel's workbook API
+    scopes=[*_me, "Files.ReadWrite.All", "Sites.Read.All"])
+teams = cycls.OAuth2("teams", **_graph,   # ChannelMessage.Read.All always needs an admin's consent
+    scopes=[*_me, "Chat.ReadWrite", "Team.ReadBasic.All", "Channel.ReadBasic.All",
+            "ChannelMessage.Read.All", "ChannelMessage.Send"])
+onenote = cycls.OAuth2("onenote", **_graph, scopes=[*_me, "Notes.ReadWrite"])
+planner = cycls.OAuth2("planner", **_graph, scopes=[*_me, "Tasks.ReadWrite"])   # Planner and To Do
+
 # ---- A pasted key, and a pasted address ----
 
 posthog = cycls.Key("posthog", hint="phx_…", scope="either", api="https://us.posthog.com")
@@ -147,7 +173,9 @@ posthog_mcp = (
 Use `info <tool>` only for a tool not covered above, at most once per chat, and answer with one query rather than several small ones. Results are already in the project's timezone.""")
 )
 
-# What a deploy file wires up. `.connectors(*ALL)` is the directory; `.mcp(*SERVERS)` is the tools.
+# What a deploy file wires up. `.connectors(*ALL)` is the directory; `.mcp(*SERVERS)` is the tools;
+# `LLM().connectors(*APIS)` is the tools of a connector with no server.
 # `posthog_mcp` is deliberately out of SERVERS — it needs its classifier attached first.
-ALL = [posthog, salla, notion, apify, zid, github, hubspot, slack]
+APIS = [outlook, onedrive, teams, onenote, planner]
+ALL = [posthog, salla, notion, apify, zid, github, hubspot, slack, *APIS]
 SERVERS = [salla_mcp, notion_mcp, apify_mcp, zid_mcp, github_mcp, hubspot_mcp, slack_mcp]

@@ -22,8 +22,16 @@ def catalog():
 def test_every_declaration_constructs(catalog):
     """Every connector and its servers, built. A bad scope or a non-https api base raises here."""
     assert [o.name for o in catalog.ALL] == \
-        ["posthog", "salla", "notion", "apify", "zid", "github", "hubspot", "slack"]
+        ["posthog", "salla", "notion", "apify", "zid", "github", "hubspot", "slack",
+         "outlook", "onedrive", "teams", "onenote", "planner"]
     assert all(isinstance(o, Connector) for o in catalog.ALL)
+
+
+def test_every_api_connector_is_offered_and_has_a_base(catalog):
+    """A connector with no server reaches the loop only through `LLM().connectors(*APIS)`: one missing
+    from ALL can never be connected, and one without `api` contributes no tool."""
+    listed = {o.name for o in catalog.ALL}
+    assert all(o.name in listed and o.api and not o.servers for o in catalog.APIS)
 
 
 def test_google_is_declared_but_not_offered(catalog):

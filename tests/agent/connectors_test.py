@@ -744,6 +744,20 @@ def test_the_relay_presents_the_credential_the_api_asks_for(key, tmp_path, auth,
     assert check(got["headers"], got["params"])
 
 
+@pytest.mark.parametrize("inp,ctype", [
+    ({"method": "POST", "path": "me/sendMail", "body": '{"message": {}}'}, "application/json"),
+    ({"path": "me/messages"}, None)])
+def test_the_api_tool_says_a_body_is_json(key, tmp_path, inp, ctype):
+    """The schema promises a JSON string; Graph refuses one that arrives without saying so."""
+    o = cycls.Key("svc", api="https://svc.dev")
+    ws = workspace("org:u1", tmp_path, base=f"file://{tmp_path}")
+    asyncio.run(credentials.put(ws, "svc", {"key": "tok"}))
+    got = {}
+    with patch.dict(sys.modules, {"httpx2": _fake_httpx(got)}):
+        asyncio.run(c.api_tool(o)[1](inp, SimpleNamespace(workspace=ws)))
+    assert got["headers"].get("content-type") == ctype
+
+
 def test_an_unknown_auth_style_is_refused_at_declaration(key):
     with pytest.raises(ValueError, match="auth must be one of"):
         cycls.Key("x", api="https://x.dev", auth="magic")
