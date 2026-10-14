@@ -85,8 +85,7 @@ A switched-off skill is out of the catalog, and the `skill` tool refuses it.
 
 ## The Skills tab
 
-Beside *Connectors* in the same window, opened from the **+** menu or Settings → General, laid out like
-Claude's. The list: search, and **Add** with *Upload a skill* (a `.skill` or `.zip`), *Create a skill*
+Beside *Connectors* in the same window, opened from the **+** menu or Settings → General. The list: search, and **Add** with *Upload a skill* (a `.skill` or `.zip`), *Create a skill*
 (a form: name, description, instructions) and *Create with Cycls* (a chat that writes one). One row per
 skill: where it comes from, its description, when it was updated, and the person's switch.
 
@@ -98,7 +97,7 @@ The **⋮** menu: *Edit* (the same form, saving the next version), *Download*, *
 for an org admin, and *Remove* (asks twice; its versions stay).
 
 **A new skill is the person's own**, made in the form, uploaded, or published by the agent; sharing it
-with the workspace or the org is a step on its page, as in Claude.
+with the workspace or the org is a step on its page.
 
 Routes: `GET /skills`, `GET /skills/{name}?v=`, `GET /skills/{name}/file?path=&v=`, `PATCH /skills/{name}`
 (`on`, or `allowed` for an org admin), `POST /skills?scope=` (an archive as the body),
