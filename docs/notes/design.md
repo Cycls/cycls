@@ -3,15 +3,15 @@
 **Status: implemented.** A Cycls agent can **create social-media posts, slide decks
 and documents** (reports, CVs, newsletters — flowing pages, as a PDF) and show them
 on the canvas — with **no design engine in the agent image**.
-The heavy part ([OpenPencil](https://github.com/open-pencil/open-pencil), a
-headless vector engine on Skia/CanvasKit) runs **once, in a shared service**; the
+The heavy part (the design engine, a headless vector engine on
+Skia/CanvasKit) runs **once, in a shared service**; the
 SDK ships only a thin client (`cycls/_agent/design`) and the built-in `Design`
 tool. Same split as office-render and the browser tool: the heavy dependency lives
 in one service, not in every image.
 
 The agent and the human meet at one shared file — `designs/<name>.fig`. The agent
 **generates** it (and can **edit** it live), and the human **hand-edits** the same
-file in an OpenPencil editor embedded in the canvas — see
+file in the editor embedded in the canvas — see
 [Editing](#editing--the-in-canvas-editor) below.
 
 Enable it by putting `"Design"` in an agent's `allowed_tools` and pointing
@@ -25,12 +25,12 @@ agent's live `edit` changed it under their cursor.
 
 ## Why this shape
 
-- **Generate programmatically, NOT from HTML.** OpenPencil's HTML `import` is a
+- **Generate programmatically, NOT from HTML.** The engine's HTML `import` is a
   structural converter, not a browser — in testing it dropped gradients and didn't
   lay out CSS (a 1080² post came back near-blank). The **Figma plugin API** path
   (explicit geometry + fills + fonts) renders faithfully headless. So the service
   compiles a declarative spec to plugin-API calls; it does not import HTML.
-- **The engine is heavy and Bun-native.** OpenPencil's CLI uses Bun globals and
+- **The engine is heavy and Bun-native.** Its CLI uses Bun globals and
   pulls `canvaskit-wasm` (~8 MB); baking that into every agent image would tax
   100% of turns for a <5% capability (the office-render argument). → a **service**.
 - **The SDK ships the client; the service is deployed once.** → the office-render
@@ -53,7 +53,7 @@ agent's live `edit` changed it under their cursor.
 ```
    agent container (tiny)                   shared cycls-design service
    ─────────────────────                    ───────────────────────────
-   Design tool + client (httpx)             Bun + OpenPencil (headless,
+   Design tool + client (httpx)             Bun + the engine (headless,
         │                                    CanvasKit-WASM, no display)
         │  POST /render {spec}  ───────────▶  compile spec → Figma plugin API
         │  POST /eval   {script}             → export png/jpg/webp/svg/pptx/pdf
@@ -102,7 +102,7 @@ as fill alpha (setting a text node's own opacity collapses its auto-width box).
 
 **Fonts: any Google Font.** A text `font` is a family plus a style —
 `"Playfair Display Bold"`, `"Montserrat Extra Bold Italic"` — or `{family, style}`,
-with optional `weight` (100–900) and `italic`. The renderer (OpenPencil core) takes
+with optional `weight` (100–900) and `italic`. The renderer (the engine's core) takes
 Inter and Noto Naskh Arabic from its bundle and everything else from Google Fonts /
 Fontsource at export; the editor in a browser loads the same families from
 Fontsource. The service's `fonts.ts` makes that dependable before every render:
@@ -111,7 +111,7 @@ Fontsource. The service's `fonts.ts` makes that dependable before every render:
   family and `"Black Ops One"` keeps its "Black". (The old builder split at the first
   space — `"Playfair Display Bold"` became family "Playfair" — which is why every
   multi-word family rendered blank and fonts were wrongly believed to be Inter-only.)
-- **Figma style names, with spaces.** OpenPencil's `fontName` setter maps only
+- **Figma style names, with spaces.** The engine's `fontName` setter maps only
   `"Semi Bold"` / `"Extra Bold"` / `"Extra Light"`; `"SemiBold"` silently became 400.
   Every resolved style is the spaced form, in the service and the builder.
 - **Open twins.** Arial / Helvetica → Arimo, Times → Tinos, Courier → Cousine,
@@ -261,7 +261,7 @@ not acted on.
 ```
 
 - `format: "pptx"` — one PowerPoint file, a slide per frame. Each slide's speaker
-  `notes` and `transition` are written in (OpenPencil's exporter writes neither; the
+  `notes` and `transition` are written in (the engine's exporter writes neither; the
   service post-processes the file). Text, rects, ellipses and lines stay native and
   editable; **charts and tables are PowerPoint's own** — the builder keeps each one's
   data on its frame, and the export swaps the drawn shapes for a native chart (its
@@ -335,7 +335,7 @@ version, "Before a slide change: add a slide", not as an agent edit).
 ## Pages
 
 A design's **pages** are its variants — a post, a story and a banner of one campaign; a
-light and a dark version — in one `.fig`. They are OpenPencil's own pages (the editor's
+light and a dark version — in one `.fig`. They are the engine's own pages (the editor's
 Pages panel), and Cycls works on **one page at a time**, named by its name:
 
 - **Making them.** `render {spec: {pages: [{name, size, fill, nodes}, …]}}` makes one
@@ -634,9 +634,9 @@ link that isn't a deck has no poll. A shared deck presents its poll slides as dr
 ## Editing — the in-canvas editor
 
 Generation is half of it. When `DESIGN_EDITOR_URL` is set, a `.fig` on the canvas
-opens the **OpenPencil editor embedded in an iframe** (`DesignEditorView`), so the
+opens the **editor embedded in an iframe** (`DesignEditorView`), so the
 human edits the exact design the agent rendered. The editor is a static app on its
-**own origin** (a patched OpenPencil build, loaded with `?embed=cycls`); the SDK
+**own origin** (a patched editor build, loaded with `?embed=cycls`); the SDK
 ships only the small React embed component and threads the `design_editor_url`
 config value to it. Two directions meet at the shared `designs/<name>.fig`:
 
@@ -646,7 +646,7 @@ config value to it. Two directions meet at the shared `designs/<name>.fig`:
   no service call. The agent picks up the human's edits on its next turn. One editor
   edits **one design** — see "One design, in the workspace" below.
 - **Agent edits** — the `edit` action first runs the script on the saved
-  `designs/<name>.fig` through the service's `POST /apply` (the same OpenPencil
+  `designs/<name>.fig` through the service's `POST /apply` (the same engine
   plugin API, headless). A script that throws — a node it looks up isn't there —
   is the model's error, verbatim, and nothing changes; a success is written back
   to the `.fig` and its image re-exported (`design/refresh`), whether or not an
@@ -766,7 +766,7 @@ Cycls tab opened, and everything it makes lands in the workspace.
   canvas expanded over the chat) the host posts `fit`, and the editor fits the design
   again unless the person has zoomed or panned since the last fit (an editor that
   lists the `fit` feature; before it the design stayed small in a corner). A fit is
-  to what the editor's own bars leave of the canvas: OpenPencil fits a page to the
+  to what the editor's own bars leave of the canvas: the editor fits a page to the
   whole canvas with a margin that shrinks as it zooms out, and its toolbar floats
   over the foot of it — in a docked pane (its narrow layout, with a drawer under the
   toolbar) a page as tall as paper ended beneath them (the bridge's `fitPage`). **Esc leaves
@@ -846,22 +846,20 @@ Cycls tab opened, and everything it makes lands in the workspace.
   source, desktop and the narrow (mobile) layout alike. Kept: the Code tab,
   Variables, Split view.
 
-The embedded editor is a **patched** OpenPencil build: replacements for its app
+The embedded editor is a **patched** open-source build: replacements for its app
 shell (`main.ts`, `App.vue`, `WorkspaceView.vue`, `pwa.ts`, `aliases.ts`), the
 bridge (`cycls-bridge.ts` + `host.ts`), stubs aliased over upstream modules (save,
 export, tabs, menus, AI), and exact edits (`edits.json`) — each must match, and the
-upstream files they rely on are pinned by hash, so a new OpenPencil version fails
+upstream files they rely on are pinned by hash, so a new upstream version fails
 the build until it is reviewed. The patches, the build and their tests live in the
 service repo (`cycls-design/editor/`); [the hand-off note](design-editor-handoff.md)
 is the short reference for what Cycls and the editor say to each other.
-(`design-editor-patch/` beside it is a snapshot of the patches from 5 October 2026,
-from before they had a repo of their own: not what is built.)
 
 ### Together — several people in one design
 
 Two or three people of a team workspace open the same design; each sees the others'
 cursors with their names, what they have selected, and their changes as they make
-them. Built on the editor's own co-editing (OpenPencil's: one shared document, a map
+them. Built on the editor's own co-editing (one shared document, a map
 a node, "awareness" for cursors and selections), which the Cycls build had switched
 off — carried by a relay Cycls runs instead of the peer-to-peer room upstream uses
 (public brokers and a public TURN server are not somewhere a team's design should
@@ -954,7 +952,7 @@ on a spot of a slide, a thread under it — replies, resolve and reopen, the wor
 or removed by their author — and a list of every thread. The agent reads them, answers
 and resolves (`comments`), so "address the comments on the deck" is one request.
 
-- **Kept by Cycls, not in the `.fig`** (`cycls/_agent/design/comments.py`). OpenPencil
+- **Kept by Cycls, not in the `.fig`** (`cycls/_agent/design/comments.py`). The editor
   grew comments of its own a day before this was built (upstream #981: threads as plugin
   data on the document, so they travel in the file). Not taken: there a comment is a
   save of the design — a version kept, the image exported again, one more thing for the
@@ -1134,16 +1132,16 @@ A limit a test overrides is patched where it is read — `design.run._DESIGN_QA_
 
 - **The `.fig` codec renumbers node ids on save.** The builder logs an in-memory
   `__FRAME__<id>` only as a "script ran" sentinel — the service resolves the real
-  export id from the *saved* fig via `openpencil find --type frame … --json`, then
+  export id from the *saved* fig via the engine CLI's `find --type frame … --json`, then
   exports `--node <id>` for raster/vector (a `pptx` export is whole-document, so it
   needs no id). Relying on the logged id exported the wrong node.
 - **Whole-document pptx = only the design.** The builder drops the scratch base
   doc's pages so a deck's `.pptx` contains exactly the design frames (N frames → N
   slides), not the loadable-base scratch page.
-- **OpenPencil 0.14.0 packaging fix.** Every `@open-pencil/*` package's `exports`
+- **Engine 0.14.0 packaging fix.** Every engine package's `exports`
   map declares a `bun` condition pointing at unpublished `./src/**/*.ts`; the
   service strips those on install so Bun falls back to the shipped `dist` builds.
-- **Nodes join their frame before they're positioned.** OpenPencil's `appendChild`
+- **Nodes join their frame before they're positioned.** The engine's `appendChild`
   keeps a node's page position, so a node placed first and appended after landed
   outside any frame not at the origin — every deck slide after the first rendered
   blank until the builder switched the order (golden `deck.2`).
@@ -1151,7 +1149,7 @@ A limit a test overrides is patched where it is read — `design.run._DESIGN_QA_
   (a Figma-style `{value, unit}` object saved as NaN); a `figma-compat` prelude runs
   ahead of every script — service `eval` and the editor bridge alike — so an agent's
   Figma-style edit works too. Radial gradients take `center` + `radius`.
-- The service keeps a registry of every OpenPencil quirk, its guard and the test that
+- The service keeps a registry of every engine quirk, its guard and the test that
   pins it: `cycls-design/docs/quirks.md`. Goldens (Linux renders) cover each one.
 - **Stacks and the layout check.** The service measures text while the builder runs
   (one `job.ts` process per render), so a `stack` node lays its children out from
@@ -1161,7 +1159,7 @@ A limit a test overrides is patched where it is read — `design.run._DESIGN_QA_
   as one in the editor, a line typed longer pushes the rest down, `move`/`duplicate`
   take the stack's id, and a child moved on its own leaves it. A stack holding a
   frame — a list, icon, chart, table, QR or another stack — is laid out as separate
-  nodes, because after a load OpenPencil keeps a frame child where it was saved while
+  nodes, because after a load the engine keeps a frame child where it was saved while
   the text around it reflows (quirks #27); and every save drops the loaded file's copy
   of the auto-layout fields, which the .fig writer would otherwise write back over an
   edit (#28 — the service before a save, the editor bridge on `save`). Every render
@@ -1254,7 +1252,7 @@ A limit a test overrides is patched where it is read — `design.run._DESIGN_QA_
 | `DESIGN_LIVE_URL`   | the live relay, e.g. `https://cycls-design-live.cycls.ai` — with `DESIGN_LIVE_SECRET`, people of a team workspace work in one design together. Unset → every design opens alone. |
 | `DESIGN_LIVE_SECRET`| the relay's secret (its `LIVE_SECRET`): signs room passes and lets the agent speak into a room. |
 | `DESIGN_INSTRUCTIONS` | `on-demand`: a chat carries a short form of the Design tool until it designs (below). Unset: the whole definition with every request, as always. |
-| `DESIGN_EDITOR_URL` | the embedded editor's own origin (a static OpenPencil build). Injected into `/config` as `design_editor_url`. Unset → `.fig` files show the download card and there is no open editor for `edit` to drive; generation (`render` / `script`) is unaffected. |
+| `DESIGN_EDITOR_URL` | the embedded editor's own origin (a static editor build). Injected into `/config` as `design_editor_url`. Unset → `.fig` files show the download card and there is no open editor for `edit` to drive; generation (`render` / `script`) is unaffected. |
 
 Unset `DESIGN_URL` and `design.configured()` is false: the `Design` tool is never
 offered and the feature is simply absent — **no regression**, exactly the
@@ -1265,7 +1263,7 @@ there is simply no open editor for the command to reach.)
 ## The service
 
 Lives in its own repo (`cycls-design`), deployed once — the SDK ships only the
-client. It's a Bun HTTP server wrapping the OpenPencil headless CLI:
+client. It's a Bun HTTP server wrapping the engine's headless CLI:
 
 - `GET  /health`
 - `POST /render { spec, format?, scale?, preview?, every? }` — the primary, safe path (declarative)
