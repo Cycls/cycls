@@ -1,7 +1,13 @@
 """The Design tool's definition, and the short form a chat carries until it designs
 (`DESIGN_INSTRUCTIONS=on-demand`). The executor is run.py."""
 import contextvars, re
+from .skill import SKILLS, catalog
 
+_SKILLS_TEXT = (
+    "SKILLS — this tool carries its own: how to choose a look that isn't the same every time, and how to lay out "
+    "each kind of work well in few calls. Before the FIRST design of a kind in a chat, load what it needs in ONE "
+    "call — the look and the kind: {\"action\": \"skill\", \"skill\": [\"design-direction\", \"graphic-design\"]} "
+    "(nothing is made; the text stays with the chat):\n" + catalog() + "\n\n")
 
 # offered only when the design service is configured — else silently absent
 _DESIGN_TOOL = {
@@ -11,6 +17,7 @@ _DESIGN_TOOL = {
         "Create a visual design — a social-media post or a slide — and show it to "
         "the user on the canvas. You describe the design; the service renders it to "
         "an image and to an editable design file saved in the workspace.\n\n"
+        + _SKILLS_TEXT +
         "Two ways to call:\n"
         "- render {spec, name, format?} — the normal way. `spec` is a JSON design:\n"
         "    {\"size\": [W, H] | \"<preset>\", \"fill\": <paint>, \"nodes\": [ ... ]}\n"
@@ -98,7 +105,7 @@ _DESIGN_TOOL = {
         "not content: at most one texture or pattern and one or two objects in a design.\n"
         "  `shadow` is true or {\"blur\":40,\"y\":16,\"opacity\":0.25,\"color\"?,\"x\"?,\"spread\"?} "
         "— a drop shadow that lifts a card or button off the background.\n"
-        "  DESIGN — make it look intentional, not a wireframe: one clear idea, a strong "
+        "  DESIGN — the floor, not a style (`design-direction` has real ones) — make it look intentional, not a wireframe: one clear idea, a strong "
         "hierarchy (a big bold headline 72–120px, a small letter-spaced eyebrow ~24px "
         "with letterSpacing 4–6, a muted subtitle ~32px), a tight palette (a gradient "
         "or one background colour + white / near-white text + ONE accent), generous "
@@ -312,8 +319,9 @@ _DESIGN_TOOL = {
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["render", "script", "edit", "inspect", "add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide",
                                               "add_section", "update_section", "move_section", "delete_section", "update_document", "extract",
-                                              "export", "rename", "duplicate", "delete", "versions", "restore", "comments", "assets"],
-                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes; a document's sections), `edit` it (checked, saved, replayed live in the editor), change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide, change a document: add_section / update_section / move_section / delete_section / update_document, `extract` an existing PDF's text and pictures, `export` a saved design as another file, handle a design as a file: rename / duplicate / delete / versions / restore, or read and answer the `comments` people pinned on it; `assets` lists the media library's pictures (`query`, `kind`) — nothing is made."},
+                                              "export", "rename", "duplicate", "delete", "versions", "restore", "comments", "assets", "skill"],
+                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes; a document's sections), `edit` it (checked, saved, replayed live in the editor), change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide, change a document: add_section / update_section / move_section / delete_section / update_document, `extract` an existing PDF's text and pictures, `export` a saved design as another file, handle a design as a file: rename / duplicate / delete / versions / restore, or read and answer the `comments` people pinned on it; `assets` lists the media library's pictures (`query`, `kind`) and `skill` loads this tool's skills (`skill`) — nothing is made."},
+        "skill": {"type": ["string", "array"], "items": {"type": "string"}, "description": f"For `skill`: the skills to load, in one call — {', '.join(SKILLS)}."},
         "query": {"type": "string", "description": "For `assets`: words to look for in the media library — a thing (paper, marble, rocket, people…), an occasion (ramadan, national day…) or a mood (luxury, minimal…); none lists all of a `kind`."},
         "kind": {"type": "string", "description": "For `assets`: one kind only — texture, pattern, emoji-3d, icon-3d, illustration or art."},
         "new_name": {"type": "string", "description": "For `rename`: the design's new name. For `duplicate`: the copy's name (default <name>-copy)."},
@@ -365,7 +373,8 @@ _DESIGN_SHORT = (
     "This is the SHORT form of the tool — how a design is written is not in it. Before your first use of it "
     "in a chat, call it with {\"action\": \"guide\"}: its full instructions load into this description. Then "
     "make the call you meant. (A call made before that is not run — it loads the instructions and asks you "
-    "to call again.)"
+    "to call again.) Its skills — " + ", ".join(SKILLS) + " — load with {\"action\": \"skill\", \"skill\": "
+    "[…]}, which loads the full instructions too."
 )
 _GUIDE_LOADED = ("Design's instructions are loaded: this tool's description now holds them in full — how a "
                  "design is written, deck layouts and themes, documents, edits and the rest. Read them, then "
@@ -417,7 +426,8 @@ def _design_short():
     props["action"]["description"] = (
         "guide — load this tool's full instructions (first). Then: render, edit, inspect, extract, script, "
         "add_slide, update_slide, move_slide, duplicate_slide, delete_slide, add_section, update_section, "
-        "move_section, delete_section, update_document, export, rename, duplicate, delete, versions, restore, comments, assets.")
+        "move_section, delete_section, update_document, export, rename, duplicate, delete, versions, restore, comments, assets, "
+        "skill (loads this tool's skills, and its instructions with them).")
     return {**{k: v for k, v in _DESIGN_TOOL.items() if k not in ("description", "input_schema")},
             "description": _DESIGN_SHORT,
             "input_schema": {"type": "object", "properties": props, "required": ["action"]}}

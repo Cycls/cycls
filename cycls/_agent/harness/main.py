@@ -180,7 +180,7 @@ async def _unwind(session, blocks, tasks, reason, handlers, mcp_names, workspace
             failed = isinstance(out, BaseException)
             if failed: out = f"Error: {_cause(out)}"
             content, _, _ = _shape(block, out, not failed, handlers, mcp_names)
-        if isinstance(content, str) and block["name"] not in ("read", "skill"):
+        if isinstance(content, str) and block["name"] != "read" and not skills_mod.loads_skill(block):
             content = spill.spill(content, workspace.root, session.chat_id,
                                   f"{block['name']}-{block['id'][-6:]}")
         results.append({"type": "tool_result", "tool_use_id": block["id"],
@@ -608,7 +608,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 if waits:
                     waiting = True   # the person has to answer before anything else can happen
                     cards += [e for e in evs if isinstance(e, dict) and e.get("type") == "ui"]
-                if isinstance(content, str) and block["name"] not in ("read", "skill"):
+                if isinstance(content, str) and block["name"] != "read" and not skills_mod.loads_skill(block):
                     content = spill.spill(content, workspace.root, session.chat_id, f"{block['name']}-{block['id'][-6:]}")
                 results.append({"type": "tool_result", "tool_use_id": block["id"], "content": content})
                 if block["name"] in mcp_names or detailed(block["name"]):   # the step shows the outcome, bounded; a card (a ui dict) is its own outcome

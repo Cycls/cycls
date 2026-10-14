@@ -2010,3 +2010,30 @@ def test_the_guide_asked_for_when_everything_is_loaded_says_so(agent_env, monkey
     with _mock_anthropic(client):
         asyncio.run(_drain(_run(context=ctx, allowed_tools=["Design"])))
     assert "already" in _results(ctx)[0] and not made
+
+
+def test_design_skills_reach_the_model_whole_and_are_never_cleared(agent_env, monkeypatch):
+    """Design's own skills are instructions, as the `skill` tool's are: two of them run past the
+    size a tool result is spilled to a file at, and still come back whole — and compaction keeps them."""
+    from cycls._agent.harness.compact import clear
+    from cycls._agent.design import skill
+    from cycls._agent.spill import SPILL_AT
+    _design_env(monkeypatch, mode=None)
+    ws, ctx = agent_env
+    _say(ctx, "make me a poster")
+    want = ["design-direction", "graphic-design"]
+    assert sum(len(skill.SKILLS[n][1]) for n in want) > SPILL_AT
+    client, calls = _capturing_client([
+        _make_response([_tool_use_block("t1", name="design", inp={"action": "skill", "skill": want})], stop_reason="tool_use"),
+        _make_response([_text_block("Ready.")])])
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Design"])))
+    said = _results(ctx)[0]
+    assert all(skill.SKILLS[n][1] in said for n in want) and not said.startswith("Saved ")
+    history = _read_history(ctx)
+    kept = [b.get("content") for m in clear(history) if isinstance(m.get("content"), list) for b in m["content"]
+            if isinstance(b, dict) and b.get("type") == "tool_result"]
+    assert kept == [said]
+    render = [{"role": "assistant", "content": [{"type": "tool_use", "id": "t2", "name": "design", "input": {"action": "render"}}]},
+              {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t2", "content": "Design saved"}]}]
+    assert clear(render)[1]["content"][0]["content"] == "[Old tool result cleared]"     # a design made is history, as before

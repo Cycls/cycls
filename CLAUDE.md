@@ -63,6 +63,7 @@ cycls/
     ├── browser/            # cycls Browser tool — thin CDP client to a shared real-Chrome service (Steel); docs/notes/browser.md
     ├── design/             # cycls Design tool, over a thin HTTP client to a shared design service (posts, carousels, decks, documents); docs/notes/design.md
     │   ├── tool.py         # the tool as the model is given it (and the short form a chat carries until it designs)
+    │   ├── skill.py        # the tool's own skills (skills/*.md: design-direction, graphic-design, deck-design, document-design), loaded by `skill`
     │   ├── run.py          # the executor (_exec_design): render, script, edit, inspect, extract
     │   ├── actions.py      # slide, section and file actions; a document rendered
     │   ├── prepare.py      # what the model wrote, made ready: spec, pages, deck, document, slide, ops (brand.py, images.py)
@@ -149,7 +150,7 @@ tests/
 │   ├── chat_test.py             # to_ui_messages (FE projection) + _valid_prefix repair
 │   ├── harness_test.py          # build_tools, web search/fetch, cost math, _resolve_path, LLM builder
 │   ├── browser_test.py          # Browser tool: client config/providers, steel session parse, executor dispatch, gating
-│   ├── design_test.py           # Design tool: client, spec/deck prep (images, brand theme), decks + carousels, slide actions, refresh, gating
+│   ├── design_test.py           # Design tool: client, spec/deck prep (images, brand theme), decks + carousels, slide actions, refresh, gating, its skills (every example goes through)
 │   ├── design_comments_test.py  # comments on a design: the workspace's record, the routes, rename/trash, the agent's `comments`
 │   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
 │   ├── events_test.py           # to_ui wire shapes for the typed events

@@ -212,6 +212,14 @@ SKILL_TOOL = {
 }
 
 
+def loads_skill(block):
+    """Is this tool call a skill being loaded — the `skill` tool, or the Design tool's own `skill`
+    action? Its result is instructions, not history: never spilled to a file, never cleared."""
+    if block.get("name") == "skill":
+        return True
+    return block.get("name") == "design" and str((block.get("input") or {}).get("action") or "").lower() == "skill"
+
+
 def _locator(skill, workspace_root):
     """Where the skill's files are, in paths the sandbox/read tool understand:
     /skills/<name> for dev skills, workspace-relative skills/<name> for user."""

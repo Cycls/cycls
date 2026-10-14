@@ -2,6 +2,7 @@
 import asyncio, json, re
 from .events import Turn
 from .prompts import COMPACT_PROMPT
+from ..tools.skills import loads_skill
 
 COMPACT_AT = 0.7          # compact past this share of the window
 KEEP_RECENT = 0.3         # keep this share of the window verbatim
@@ -90,7 +91,7 @@ def clear(messages):
     """Copies with tool results and long tool arguments stubbed — the transcript keeps the originals.
     A loaded skill is instructions, not history, so its result stays."""
     skills = {b.get("id") for m in messages if isinstance(m.get("content"), list) for b in m["content"]
-              if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "skill"}
+              if isinstance(b, dict) and b.get("type") == "tool_use" and loads_skill(b)}
     return [{**m, "content": [b if isinstance(b, dict) and b.get("tool_use_id") in skills else _stub(b)
                               for b in m["content"]]} if isinstance(m.get("content"), list) else m
             for m in messages]

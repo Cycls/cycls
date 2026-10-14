@@ -1046,6 +1046,40 @@ who only have a share link, mentions and notifications, a pin dragged to another
 (the route takes `move`; the app has no handle for it yet). In the editor's split view
 the pins are drawn for its first pane, as the cursor names are.
 
+## Skills — how to design well, carried by the tool
+
+The tool's description says how a design is WRITTEN; it said one thing about how it should
+LOOK — a gradient, a big headline, one accent, a soft ellipse — so every design came out
+alike, and the calls that failed in production were mostly the same few slips (a guessed
+node name, `backdropBlur: true`, a re-render where an edit was meant, a document's section
+change held because the agent had edited its pages first). The tool now carries skills of
+its own, markdown files in `cycls/_agent/design/skills/`, so every agent that has Design has
+them and none needs its own copy:
+
+| skill | what it holds |
+|---|---|
+| `design-direction` | the four decisions before a render (the idea, a direction, its system, one signature move); ten directions with their palettes, fonts (Latin and Arabic — each name checked to render) and the media-library finish that suits them; colour and type rules; showing two or three directions as the pages of one design |
+| `graphic-design` | sizes and safe areas, a copy budget, ten compositions with coordinates, Arabic posts, carousels, a campaign in several sizes; working fast (one render with every part named, one edit with every fix, `export` for another format) and the shapes that cost a refused call |
+| `deck-design` | built-in themes and a theme of one's own (every key the service's `themes.js` takes), rhythm and action titles, which layout for which content, slot budgets, custom slides on the deck's grid, charts, notes, Arabic decks; one render for the deck, slide actions after it |
+| `document-design` | the settings each kind takes (report, proposal, white paper, guide, newsletter, brochure, CV, letter, invoice), which block for which content, screenshots, a page budget (~400–450 words an A4 page, measured); sections first, page `edit`s last — the hand-edit hold explained |
+
+`design {"action": "skill", "skill": ["design-direction", "graphic-design"]}` returns the
+skills asked for (`skill.load`); the description lists each with its one line (`skill.catalog`,
+from the file's frontmatter), first the look, then each kind. It runs on the short form too
+(`DESIGN_INSTRUCTIONS=on-demand`) and then says the whole instructions are loaded — any
+Design call makes the chat's next request carry them. Like the `skill` tool's, its result is
+instructions, not history (`tools.skills.loads_skill`): never spilled to a file (two skills
+run past `SPILL_AT`) and never stubbed by compaction.
+
+Every ```json example in a skill is a test (`design_test.py`): it goes through
+`_exec_design` as written, the media library and the service faked, so an example can't drift
+from what the tool takes. Written against the local service, each was rendered and looked at.
+Two service changes came with them (cycls-design `builder-lib.js` `faint`, `lint.ts`): text at
+under 35% strength is decoration — a watermark word, a numeral cut by the frame's edge — so the
+builder no longer pulls it inside the frame and the layout check no longer reports it. Not in
+the skills, because they don't work: a `stroke` on text outlines its box, not its letters; a
+`shadow` on a cut-out 3D picture is a dark square.
+
 ## Where the code is
 
 The Design tool was written into `cycls/_agent/tools/__init__.py` (it grew to two thirds
@@ -1055,6 +1089,7 @@ every name is still importable from where it used to be.
 | In `cycls/_agent/design/` | |
 |---|---|
 | `tool.py` | The tool as the model is given it — its definition, and the short form a chat carries until it designs. |
+| `skill.py` · `skills/` | The tool's own skills (markdown, one a file) and the `skill` action that loads them. |
 | `run.py` | The executor, `_exec_design`: render, script, edit, inspect, extract. Registered in `tools/` as the `design` tool. |
 | `actions.py` | Slide actions, a document's section actions, the file actions (export, rename, copy, delete, versions), and a document rendered. |
 | `prepare.py` | What the model wrote, made ready for the service: a spec and its pages, a deck of layouts, a document, a slide, an edit's ops. With `brand.py` (colours, the brand kit) and `images.py` (a workspace image placed; the bounds on what is sent and shown). |

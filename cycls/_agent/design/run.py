@@ -2,6 +2,7 @@
 file and comment actions in actions.py."""
 import asyncio, base64, json, os, pathlib, re
 from ..paths import _safe_filename
+from . import skill
 from .tool import DESIGN_LOADED, _GUIDE_LOADED, _GUIDE_NOT_RUN
 from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES, _DESIGN_QA_TYPES
@@ -18,6 +19,9 @@ async def _exec_design(inp, workspace):
     from cycls._agent import design
     # the model saw only the short form: this call loads the full one, and runs nothing made blind
     asked = str(inp.get("action") or "render").lower()
+    if asked == "skill":                                    # text only: it runs on the short form too, and loads the whole
+        text = skill.load(inp.get("skill") if inp.get("skill") is not None else inp.get("name"))
+        return text if DESIGN_LOADED.get() or text.startswith("Error") else f"{text}\n\n{_GUIDE_LOADED}"
     if not DESIGN_LOADED.get():
         return _GUIDE_LOADED if asked == "guide" else _GUIDE_NOT_RUN
     if asked == "guide":

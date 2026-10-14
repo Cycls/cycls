@@ -3019,3 +3019,90 @@ def test_the_design_tool_lives_in_its_package_and_is_still_reached_through_tools
     # …and what a tool was given as a path is in a module of its own, which both use.
     assert tools._resolve_path is paths._resolve_path and tools._safe_filename is paths._safe_filename
     assert paths._resolve_path.__module__ == "cycls._agent.paths"
+
+
+# ---- the tool's own skills: how to choose a look and lay out each kind of work, loaded by `skill` ----
+
+def test_skills_load_in_one_call_and_say_nothing_was_made(tmp_path):
+    from cycls._agent.design import skill
+    out = asyncio.run(_exec_design({"action": "skill", "skill": ["design-direction", "graphic-design"]}, _ws(tmp_path)))
+    assert out.index('<design-skill name="design-direction">') < out.index('<design-skill name="graphic-design">')
+    assert skill.SKILLS["graphic-design"][1] in out and "Nothing was made" in out
+    # names in one string, repeated, any case — and `name` when that's where they came
+    one = asyncio.run(_exec_design({"action": "skill", "skill": "Deck-Design, deck-design"}, _ws(tmp_path)))
+    assert one.count("<design-skill ") == 1 and skill.SKILLS["deck-design"][1] in one
+    assert "<design-skill name=\"document-design\">" in asyncio.run(_exec_design({"action": "skill", "name": "document-design"}, _ws(tmp_path)))
+    assert not list(tmp_path.iterdir())                                       # nothing written
+
+
+def test_an_unknown_skill_is_one_error_naming_them_all(tmp_path):
+    out = asyncio.run(_exec_design({"action": "skill", "skill": ["graphic-design", "poster-magic"]}, _ws(tmp_path)))
+    assert out.startswith("Error: no skill named 'poster-magic'")
+    assert all(n in out for n in ("design-direction", "graphic-design", "deck-design", "document-design"))
+    assert asyncio.run(_exec_design({"action": "skill"}, _ws(tmp_path))).startswith("Error: `skill` names the skills")
+
+
+def test_the_tool_says_what_its_skills_are_whole_and_short(monkeypatch):
+    from cycls._agent.design import skill, tool
+    whole, short = tool._DESIGN_TOOL, tool._DESIGN_TOOL_SHORT
+    assert list(skill.SKILLS)[:4] == ["design-direction", "graphic-design", "deck-design", "document-design"]
+    for name, (description, _) in skill.SKILLS.items():
+        assert f"· {name} — {description}" in whole["description"]
+        assert name in short["description"] and name in whole["input_schema"]["properties"]["skill"]["description"]
+    assert "skill" in whole["input_schema"]["properties"]["action"]["enum"]
+    assert short["input_schema"]["properties"]["skill"]["type"] == ["string", "array"]
+
+
+def test_a_skill_loaded_on_the_short_form_loads_the_instructions_too(tmp_path):
+    from cycls._agent.design.tool import DESIGN_LOADED
+    token = DESIGN_LOADED.set(False)
+    try:
+        out = asyncio.run(_exec_design({"action": "skill", "skill": "graphic-design"}, _ws(tmp_path)))
+        bad = asyncio.run(_exec_design({"action": "skill", "skill": "nope"}, _ws(tmp_path)))
+    finally:
+        DESIGN_LOADED.reset(token)
+    assert '<design-skill name="graphic-design">' in out and "instructions are loaded" in out
+    assert bad.startswith("Error: no skill named")
+
+
+def test_the_skill_files_are_read_as_the_harness_reads_a_skill_and_fit_its_limits():
+    import pathlib
+    from cycls._agent.design import skill
+    from cycls._agent.tools.skills import MAX_DESCRIPTION, MAX_SKILL_BYTES, parse_frontmatter
+    files = sorted(pathlib.Path(skill.__file__).with_name("skills").glob("*.md"))
+    assert len(files) == len(skill.SKILLS) >= 4
+    for f in files:
+        raw = f.read_bytes()
+        meta, body = parse_frontmatter(raw.decode("utf-8").replace("\r\n", "\n"))
+        assert skill.SKILLS[meta["name"]] == (meta["description"], body.strip()), f.name
+        assert meta["name"] == f.stem and len(meta["description"]) <= MAX_DESCRIPTION and len(raw) <= MAX_SKILL_BYTES
+
+
+def _skill_examples():
+    import pathlib, re
+    from cycls._agent.design import skill
+    for f in sorted(pathlib.Path(skill.__file__).with_name("skills").glob("*.md")):
+        for i, block in enumerate(re.findall(r"```json\n(.*?)\n```", f.read_text("utf-8"), re.S)):
+            yield pytest.param(block, id=f"{f.stem}-{i + 1}")
+
+
+@pytest.mark.parametrize("block", list(_skill_examples()))
+def test_every_example_in_the_skills_is_a_design_the_tool_takes(tmp_path, monkeypatch, block):
+    """What a skill shows is copied: each example must go through the tool as written."""
+    from cycls._agent.design.prepare import _prepare_document
+    spec = json.loads(block)
+    if "document" in spec:
+        _, err, _ = _prepare_document(spec, None, tmp_path)
+        assert err is None, err
+        return
+
+    async def asset(name, kind=None, pick=0, user_id=None):            # any name finds a picture of the kind it says
+        pattern, texture = "moroccan" in name or "pattern" in name, "texture" in name
+        row = {"id": f"x/{name}", "kind": "pattern" if pattern else "texture" if texture else "icon-3d", "title": name,
+               "format": "svg" if pattern else "jpg" if texture else "png", "width": 400, "height": 400,
+               "transparent": not (pattern or texture), "colours": [], "tags": [], "licence": "CC0-1.0", "credit": None}
+        return row, _TILE if pattern else _jpeg(400, 400) if texture else _png(400, 400)
+    monkeypatch.setattr("cycls._agent.design.client.asset", asset)
+    calls = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "name": "example", "spec": spec}, _ws(tmp_path)))
+    assert calls.get("renders") == 1, _text(out) if isinstance(out, dict) else out
