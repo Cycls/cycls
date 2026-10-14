@@ -123,6 +123,9 @@ def _prepare_spec(spec, brand, root=None):
                 if brand and brand["accent"] and n.get("fill") is None and not n.get("stroke"):
                     n["fill"], filled = brand["accent"], filled + 1
             elif n.get("type") == "image":
+                if n.pop("_frame", None) and top and W < _NO_FRAME:   # a library texture given no box
+                    n["x"], n["y"] = n.get("x") or 0, n.get("y") or 0
+                    n["w"], n["h"] = W - n["x"], H - n["y"]
                 try:
                     image_bytes += _place_image(n, root)
                 except ValueError as e:

@@ -90,7 +90,10 @@ _DESIGN_TOOL = {
         "256–400 px: ONE accent beside a headline, up to ~400 px, never a background; ILLUSTRATIONS (hand-drawn people and "
         "scenes — an svg node); PATTERNS (a pattern node) and museum ORNAMENT (Islamic tiles, carpets, textiles, carved "
         "panels — photos with their own background: `crop` them). A material alone can name an emoji (\"wood\" is a log): "
-        "say \"wood texture\". It is saved to attachments/assets/; the result says which asset was taken "
+        "say \"wood texture\". Words can also be what the design is FOR — an occasion (ramadan, eid, national day, founding "
+        "day, wedding, graduation), a subject (business, sale, education) or a mood (luxury, minimal, rustic) — and a row's "
+        "first tags say it; `inscription` (writing on it), `alcohol` and `pork` stay out of a brief for the Gulf. A texture "
+        "given no `w`/`h` fills the frame. It is saved to attachments/assets/; the result says which asset was taken "
         "and, when its licence asks one, the credit to keep with the design. `pick`:1 takes the next match. These are finish, "
         "not content: at most one texture or pattern and one or two objects in a design.\n"
         "  `shadow` is true or {\"blur\":40,\"y\":16,\"opacity\":0.25,\"color\"?,\"x\"?,\"spread\"?} "
@@ -311,7 +314,7 @@ _DESIGN_TOOL = {
                                               "add_section", "update_section", "move_section", "delete_section", "update_document", "extract",
                                               "export", "rename", "duplicate", "delete", "versions", "restore", "comments", "assets"],
                    "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes; a document's sections), `edit` it (checked, saved, replayed live in the editor), change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide, change a document: add_section / update_section / move_section / delete_section / update_document, `extract` an existing PDF's text and pictures, `export` a saved design as another file, handle a design as a file: rename / duplicate / delete / versions / restore, or read and answer the `comments` people pinned on it; `assets` lists the media library's pictures (`query`, `kind`) — nothing is made."},
-        "query": {"type": "string", "description": "For `assets`: words to look for in the media library (paper, marble, rocket, people…); none lists all of a `kind`."},
+        "query": {"type": "string", "description": "For `assets`: words to look for in the media library — a thing (paper, marble, rocket, people…), an occasion (ramadan, national day…) or a mood (luxury, minimal…); none lists all of a `kind`."},
         "kind": {"type": "string", "description": "For `assets`: one kind only — texture, pattern, emoji-3d, icon-3d, illustration or art."},
         "new_name": {"type": "string", "description": "For `rename`: the design's new name. For `duplicate`: the copy's name (default <name>-copy)."},
         "version": {"type": ["string", "integer"], "description": "For `restore`: the version to go back to — its id from `versions`, or its place there (1 = the newest)."},

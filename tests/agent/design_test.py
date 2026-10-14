@@ -1822,6 +1822,17 @@ def test_a_pattern_fills_the_frame_faintly_in_an_ink_that_reads_and_is_credited(
     assert '"moroccan" → the library\'s pattern/hero/moroccan (Moroccan, pattern) — credit it' in text
 
 
+def test_a_texture_given_no_box_fills_the_frame_and_an_object_still_needs_one(tmp_path, monkeypatch):
+    _fake_library(monkeypatch)
+    out, render = _render_nodes(tmp_path, monkeypatch, [{"type": "image", "asset": "paper texture"},
+                                                        {"type": "image", "asset": "paper texture", "y": 540, "opacity": 0.3}])
+    whole, lower = render["spec"]["nodes"]
+    assert (whole["x"], whole["y"], whole["w"], whole["h"]) == (0, 0, 1080, 1080) and "_frame" not in whole
+    assert (lower["y"], lower["w"], lower["h"]) == (540, 1080, 540) and "_frame" not in lower
+    out, _ = _render_nodes(tmp_path, monkeypatch, [{"type": "image", "asset": "rocket", "x": 40, "y": 40}], name="b")
+    assert out.startswith("Error: image 'attachments/assets/emoji-3d-fluent-rocket.png' needs `w` and/or `h`")
+
+
 def test_a_pattern_takes_a_tile_from_the_workspace_too(tmp_path, monkeypatch):
     (tmp_path / "brand").mkdir()
     (tmp_path / "brand" / "tile.svg").write_bytes(_TILE)

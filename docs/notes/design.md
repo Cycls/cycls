@@ -214,12 +214,24 @@ Patterns, the one source that asks a credit), 1,595 3D emoji (Microsoft Fluent �
 emoji it draws, a person in the default skin tone), 480 3D icons (3dicons' 120 objects
 in four finishes: `rocket`, `rocket-clay`, `rocket-gradient`, `rocket-premium`), 125
 illustrations (Open Peeps, Open Doodles) and 80 museum pieces (The Met's Islamic art,
-each looked at; nothing written, nothing of the Qur'an). Words are matched by the
+each looked at; nothing of the Qur'an, and the few with writing tagged `inscription`).
+Words are matched by the
 service (`src/assets.ts` there): the most words found, then where — the kind, a title,
 a tag — then the fuller title, then the catalogue's own order, which puts the likeliest
 first. Two things follow for the model, and the tool says both: a material alone can
 name an emoji (`"wood"` is the log emoji; `"wood texture"` is the texture), and a
 finish is a word (`"rocket clay"`).
+
+Since 2026-10-14 a row's tags BEGIN with what a brief asks for — an occasion (ramadan,
+eid, adha, national day, founding day, wedding, graduation …), a subject (business,
+sale, education …), a mood (luxury, minimal, rustic …) and the colours read from its
+pixels — hand-picked in the library's working copy (`scripts/uses.py` there), because
+the `assets` listing shows the model only a row's first six tags (`_row_line`). A
+picture carries an occasion only when it is a sign of it; `inscription`, `alcohol` and
+`pork` mark what stays out of a Gulf brief. The tool says the words can be an occasion
+or a mood. A texture named with no `w`/`h` fills its frame (`_place` marks it,
+`_prepare_spec` sizes it, like a pattern); a cut-out object with no box is still an
+error, since drawn frame-wide it would be soft and huge.
 
 A **`pattern`** node — `{type: "pattern", asset | src | svg, color?, opacity?, scale?,
 x?, y?, w?, h?}` — is one SVG tile the service repeats over the node's box and hands

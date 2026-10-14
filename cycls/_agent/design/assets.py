@@ -91,6 +91,8 @@ def _place(d, row, path, node):
         return None
     if row.get("transparent"):
         d.setdefault("fit", "contain")                      # a cut-out object is shown whole, never cropped to its box
+    if kind == "texture" and not d.get("w") and not d.get("h"):
+        d["_frame"] = True                                  # given no box, a texture fills its frame (prepare knows the frame)
     try:
         w, h = float(d.get("w") or 0), float(d.get("h") or 0)
         iw, ih = float(row.get("width") or 0), float(row.get("height") or 0)
