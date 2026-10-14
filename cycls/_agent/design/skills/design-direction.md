@@ -138,7 +138,8 @@ carousel, a campaign, one deck) share ONE direction; pieces that don't, shouldn'
 - **Glass card**: fill `#ffffff1a`, stroke `#ffffff33`, `"backdropBlur": 30`, over a photo or a glow.
 - **Pattern band**: a pattern node in a strip (its own x / y / w / h) at 10–15%, under the headline or along one edge.
 - **Duotone photo**: the photo, then a rect in the brand colour over it at opacity 0.55–0.7.
-- **Turned badge**: a short word on a pill or circle, `"rotation": -8` on both the shape and its text.
+- **Turned badge**: a short word on a pill or circle — the text in the shape's box with `"valign": "center"` —
+  and `"rotation": -8` on both.
 - **Giant mark**: a quotation mark or numeral in the accent at 300+ px, behind the text at opacity 0.15 (faint, so unchecked).
 - **Editorial header**: thin rules and small caps on one line ("ISSUE 04 —— RIYADH —— 2026").
 

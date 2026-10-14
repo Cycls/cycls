@@ -3,7 +3,7 @@ file and comment actions in actions.py."""
 import asyncio, base64, json, os, pathlib, re
 from ..paths import _safe_filename
 from . import skill
-from .tool import DESIGN_LOADED, _GUIDE_LOADED, _GUIDE_NOT_RUN
+from .tool import DESIGN_LOADED, DESIGN_SKILLED, _GUIDE_LOADED, _GUIDE_NOT_RUN
 from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES, _DESIGN_QA_TYPES
 from .prepare import _mend_json_tail, _prepare_ops, _prepare_spec
@@ -14,7 +14,47 @@ from .actions import (_DOCUMENT_ACTIONS, _FILE_ACTIONS, _SLIDE_ACTIONS, _comment
     _exec_design_file, _exec_document, _exec_slides, _render_document, _sections_text, _to_the_room)
 
 
+def _skill_for(spec):
+    """The skill for what a spec makes: a document, a deck (of layouts, or of slide-sized frames), else a graphic."""
+    if not isinstance(spec, dict):
+        return "graphic-design"
+    if isinstance(spec.get("document"), dict):
+        return "document-design"
+    frames = spec.get("frames")
+    wide = lambda f: isinstance(f, dict) and f.get("size") in ("slide", "wide", [1920, 1080], [1280, 720])
+    if isinstance(spec.get("deck"), dict) or (isinstance(frames, list) and frames and all(map(wide, frames))):
+        return "deck-design"
+    return "graphic-design"
+
+
+def _nudged(out, line):
+    """`out` — a string, or {_model: str | blocks} — with `line` added to what the model reads."""
+    if isinstance(out, str):
+        return f"{out}\n\n{line}"
+    m = out.get("_model")
+    if isinstance(m, str):
+        return {**out, "_model": f"{m}\n\n{line}"}
+    if isinstance(m, list):
+        at = max((i for i, b in enumerate(m) if b.get("type") == "text"), default=None)
+        blocks = [*m, {"type": "text", "text": line}] if at is None else \
+            [*m[:at], {**m[at], "text": f"{m[at]['text']}\n\n{line}"}, *m[at + 1:]]
+        return {**out, "_model": blocks}
+    return out
+
+
 async def _exec_design(inp, workspace):
+    """Run one Design call → `_model` (the ack the model reads) and `_ui` (what the canvas opens). A render
+    in a chat that hasn't loaded the tool's skills says which to load (DESIGN_SKILLED, set by the loop)."""
+    out = await _run_design(inp, workspace)
+    if str(inp.get("action") or "render").lower() == "render" and not DESIGN_SKILLED.get():
+        spec = inp.get("spec") if isinstance(inp.get("spec"), dict) else inp
+        want = json.dumps(["design-direction", _skill_for(spec)])
+        out = _nudged(out, f"No design skill is loaded in this chat: {{\"action\": \"skill\", \"skill\": {want}}} holds the "
+                           f"looks, the layouts and how to change this design in few calls — load it before the next change.")
+    return out
+
+
+async def _run_design(inp, workspace):
     """Run one Design call → `_model` (the ack the model reads) and `_ui` (what the canvas opens)."""
     from cycls._agent import design
     # the model saw only the short form: this call loads the full one, and runs nothing made blind
@@ -57,7 +97,7 @@ async def _exec_design(inp, workspace):
     action = (inp.get("action") or "render").lower()
     # a design written beside `spec` rather than under it
     if action == "render" and inp.get("spec") is None:
-        beside = {k: inp[k] for k in ("document", "deck", "pages", "frames", "nodes", "size", "fill") if inp.get(k) is not None}
+        beside = {k: inp[k] for k in ("document", "deck", "pages", "frames", "nodes", "size", "fill", "theme") if inp.get(k) is not None}
         if any(k in beside for k in ("document", "deck", "pages", "frames", "nodes")):
             inp["spec"] = beside
     fmt = (inp.get("format") or "png").lower()

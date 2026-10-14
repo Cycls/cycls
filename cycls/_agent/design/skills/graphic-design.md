@@ -97,6 +97,9 @@ Wrong shapes that cost a refused call:
 - An image needs `w` or `h` (a texture with neither fills the frame).
 - A library picture is named with `asset`, never by a guessed path under attachments/assets/.
 - An SVG logo goes in an svg node (`{"type": "svg", "src": "brand/logo.svg"}`), never an image node.
+- A label ON a shape (a button, a badge, a date chip) is the shape, then a text with the SAME x, y, w, h and
+  `"align": "center"`, `"valign": "center"`, both outside any stack. Never put them in a stack: it sets its
+  children side by side or one under the next, never on top of each other, and a child's own x / y isn't read.
 - A node may not START past the right or bottom edge. A word cut by the edge on purpose starts inside, or at a
   negative x / y, and is faint (alpha 30% or less, e.g. `#ffffff26`): the layout check leaves faint text alone.
 
@@ -114,8 +117,8 @@ Wrong shapes that cost a refused call:
     {"type": "text", "id": "subline", "text": "Cycls turns a function into a product your customers can use.",
      "size": 34, "lineHeight": 48, "font": "Inter Medium", "color": "#1a0a00"}]},
   {"type": "rect", "id": "cta-pill", "x": 96, "y": 850, "w": 330, "h": 84, "radius": 42, "fill": "#1a0a00"},
-  {"type": "text", "id": "cta", "text": "Start free", "x": 96, "y": 872, "w": 330, "size": 32, "align": "center",
-   "font": "Inter Bold", "color": "#ffffff"}
+  {"type": "text", "id": "cta", "text": "Start free", "x": 96, "y": 850, "w": 330, "h": 84, "valign": "center",
+   "align": "center", "size": 32, "font": "Inter Bold", "color": "#ffffff"}
 ]}
 ```
 

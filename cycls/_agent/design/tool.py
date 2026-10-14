@@ -37,7 +37,8 @@ _DESIGN_TOOL = {
         "\"font\"?:\"Playfair Display Bold\"|{\"family\":,\"style\":},\"weight\"?:100-900,\"italic\"?:bool,"
         "\"color\":<paint>,"
         "\"align\"?:\"left|center|right\",\"lineHeight\"?:px,\"letterSpacing\"?:px,\"opacity\"?:0-1,"
-        "\"h\"?:,\"fit\"?:\"shrink\"}  (with `h`, fit:\"shrink\" steps the size down until it fits the box)\n"
+        "\"h\"?:,\"fit\"?:\"shrink\",\"valign\"?:\"center|bottom\"}  (with `h`, fit:\"shrink\" steps the size down until it "
+        "fits the box, and valign sets the text in that box — a label on a shape)\n"
         "    rect    {\"type\":\"rect\",\"x\":,\"y\":,\"w\":,\"h\":,\"radius\"?:,\"fill\":<paint>,"
         "\"stroke\"?:\"#hex\",\"strokeWeight\"?:,\"opacity\"?:,\"shadow\"?:}\n"
         "    ellipse {\"type\":\"ellipse\",\"x\":,\"y\":,\"w\":,\"h\":,\"fill\":<paint>,\"stroke\"?:,\"shadow\"?:}  (a circle when w==h; "
@@ -111,7 +112,9 @@ _DESIGN_TOOL = {
         "or one background colour + white / near-white text + ONE accent), generous "
         "margins (~8–10% of the width), and a touch of depth (a shadow on the button or "
         "a card, or a big soft low-opacity ellipse bleeding off an edge for flair). "
-        "A pill button = a rect with radius = h/2 and centered text.\n"
+        "A pill button = a rect with radius = h/2, then a text with the SAME x, y, w, h and \"align\":\"center\", "
+        "\"valign\":\"center\" — two nodes in one box, never a stack (a stack sets its children one after another, "
+        "never on top of each other).\n"
         "  FONTS: any Google Font by its exact family name plus a style — \"Playfair Display "
         "Bold\", \"DM Sans Medium\", \"Montserrat Extra Bold Italic\", \"Bebas Neue\" — or "
         "{\"family\":\"Poppins\",\"style\":\"Semi Bold\"}; `weight` and `italic` work too; the "
@@ -363,6 +366,20 @@ _DESIGN_TOOL = {
 # DESIGN_LOADED is which form the model saw; `_exec_design` reads it.
 
 DESIGN_LOADED = contextvars.ContextVar("design_loaded", default=True)
+# Has this chat loaded the tool's skills? Set by the loop before its tools run; a render without
+# them says which to load. Unset (a test, a caller with no chat) counts as loaded: nothing is said.
+DESIGN_SKILLED = contextvars.ContextVar("design_skilled", default=True)
+
+
+def design_skills_loaded(messages):
+    """Has this chat loaded any of the Design tool's skills?"""
+    for m in messages:
+        if m.get("role") != "assistant" or not isinstance(m.get("content"), list):
+            continue
+        if any(isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "design"
+               and str((b.get("input") or {}).get("action") or "").lower() == "skill" for b in m["content"]):
+            return True
+    return False
 
 _DESIGN_SHORT = (
     "Design: make and change visual work, shown to the user on the canvas — a social post, a poster, a "

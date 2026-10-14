@@ -189,6 +189,16 @@ def _prepare_spec(spec, brand, root=None):
                         return f"Error: a stack's children are nodes, not {c!r}."
                     if err := prepare(c, False):
                         return err
+                # a child placed by hand: the stack lays it out after the one before — a label meant
+                # for the shape before it (a button) lands beside it (horizontal) or under it
+                placed = [str(c.get("id") or c.get("text") or c.get("type"))[:30] for c in kids
+                          if isinstance(c, dict) and (c.get("x") is not None or c.get("y") is not None)]
+                if placed and not any("are laid out one after another" in s for s in shapes):
+                    shapes.append(f"In stack {json.dumps(str(n.get('id') or 'stack'))}, {', '.join(placed)} "
+                                  f"{'has' if len(placed) == 1 else 'have'} its own x / y, which a stack doesn't read: its "
+                                  f"children are laid out one after another ({'side by side' if n.get('direction') == 'horizontal' else 'one under the next'}). "
+                                  f"To put a label ON a shape (a button, a badge), place both outside any stack in the same box — "
+                                  f"the shape, then the text with the same x, y, w, h and \"align\": \"center\", \"valign\": \"center\".")
             else:
                 return (f"Error: a node has type {n.get('type')!r} ({json.dumps(n)[:80]}) — "
                         f"every node needs a `type`: text, rect, ellipse, line, image, stack, list, "
@@ -245,6 +255,7 @@ def _prepare_pages(spec, brand, root):
 
 
 _DECK_THEMES = ("minimal-light", "minimal-dark", "bold-gradient", "editorial", "corporate", "tech-dark", "warm", "mono")
+_DECK_KEYS = {"theme", "size", "dir", "footer", "logo", "transition", "slides"}   # what layouts.js reads of a deck
 
 
 def _brand_theme(brand):
@@ -280,6 +291,25 @@ def _prepare_deck(spec, brand, root):
     except ValueError as e:
         return None, f"Error: {e}.", []
     notes, total = [], 0
+    moved = [k for k in sorted(_DECK_KEYS - {"slides"}) if spec.get(k) is not None and deck.get(k) is None]
+    for k in moved:                                         # written beside the deck, not in it
+        deck[k] = spec.pop(k)
+    if moved:
+        notes.append(f"{', '.join(f'`{k}`' for k in moved)} came beside `deck` and {'was' if len(moved) == 1 else 'were'} "
+                     f"read as the deck's own — {'it goes' if len(moved) == 1 else 'they go'} inside it: "
+                     f"{{\"deck\": {{\"theme\": …, \"slides\": […]}}}}.")
+    unread = [k for k in deck if k not in _DECK_KEYS]
+    if unread:
+        notes.append(f"A deck doesn't read {', '.join(f'`{k}`' for k in unread)} — it reads "
+                     f"{', '.join(sorted(_DECK_KEYS))}; colours and fonts go in `theme`.")
+    theme = deck.get("theme")
+    if isinstance(theme, dict):
+        own = [k for k in theme if k not in ("base", "name", "logo")]
+        notes.append(f"The deck's theme: {theme.get('base') or 'minimal-light'}"
+                     f"{' with your ' + ', '.join(own) if own else ''}.")
+    elif theme is None and not brand:
+        notes.append("The deck has no `theme`, so it is minimal-light, the default — a theme of its own goes in the "
+                     "deck: {\"deck\": {\"theme\": \"editorial\" or {\"base\": …, \"accent\": …, \"heading\": …}, \"slides\": […]}}.")
 
     def slot(value):
         nonlocal total
@@ -328,6 +358,10 @@ def _prepare_deck(spec, brand, root):
 
 
 _PAPER = {"a4": [1240, 1754], "letter": [1275, 1650], "a5": [874, 1240], "a3": [1754, 2480]}   # px at 150 dpi
+# a document's own keys (document.js), read as its own when written beside it
+_DOCUMENT_KEYS = ("title", "subtitle", "author", "date", "organization", "logo", "size", "landscape", "theme", "dir", "cover",
+                  "columns", "openers", "toc", "numbered", "numbering", "figures", "header", "footer", "sections", "max_pages",
+                  "kind", "meta", "contact", "back", "footnotes", "lang")
 
 
 _SHEET_ROWS = 2000      # max rows read from a spreadsheet
@@ -435,6 +469,9 @@ def _prepare_document(spec, brand, root):
     the brand kit as theme when there is one, hand-built nodes prepared → (spec, error, notes)."""
     spec = json.loads(json.dumps(spec))
     doc = spec["document"]
+    moved = [k for k in _DOCUMENT_KEYS if spec.get(k) is not None and doc.get(k) is None]
+    for k in moved:                                         # written beside the document, not in it
+        doc[k] = spec.pop(k)
     sections = doc.get("sections")
     if not isinstance(sections, list) or not sections:
         return None, ("Error: a document needs `sections` — a list of {title, blocks: […]} "
@@ -442,6 +479,10 @@ def _prepare_document(spec, brand, root):
     if not str(doc.get("title") or "").strip():
         return None, "Error: a document needs a `title`.", []
     notes, total = [], 0
+    if moved:
+        notes.append(f"{', '.join(f'`{k}`' for k in moved)} came beside `document` and {'was' if len(moved) == 1 else 'were'} "
+                     f"read as the document's own — {'it goes' if len(moved) == 1 else 'they go'} inside it: "
+                     f"{{\"document\": {{\"title\": …, \"sections\": […]}}}}.")
 
     def slot(value):
         nonlocal total

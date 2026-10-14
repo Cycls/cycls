@@ -19,7 +19,7 @@ from ..logs import log
 from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, interrupted_note, register_labels, detailed, excerpt, app_catalog, ToolContext
-from ..design.tool import DESIGN_LOADED, design_called, design_tool, design_wanted
+from ..design.tool import DESIGN_LOADED, DESIGN_SKILLED, design_called, design_skills_loaded, design_tool, design_wanted
 from ..tools import skills as skills_mod
 
 
@@ -571,6 +571,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 _discover(_owner_of(b.get("name") or ""))
             # One `seen` per batch; comprehensions run left to right, so the first call wins.
             seen = set()
+            DESIGN_SKILLED.set(design_skills_loaded(messages))   # this turn's calls count: a skill loaded beside a render
             pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network, seen=seen, ctx=ctx)
                      for b in blocks]
             for step, _ in pairs: yield step

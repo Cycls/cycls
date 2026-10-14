@@ -1080,6 +1080,27 @@ builder no longer pulls it inside the frame and the layout check no longer repor
 the skills, because they don't work: a `stroke` on text outlines its box, not its letters; a
 `shadow` on a cut-out 3D picture is a dark square.
 
+**What the first live test changed (2026-10-14, four real briefs on super-dev).** The skills
+were loaded unprompted in three chats of four; the report's wasn't (it rendered four pages
+for two). The deck wrote its own theme as `deck-design` shows and both its renders came out
+in the default — never reproduced (the same theme renders right locally and on production);
+the button of the post took six calls: it was a pill and its label in a horizontal stack (side
+by side, the label's `y` unread), then the label moved onto the pill was drawn under it.
+So now:
+- a deck's reply names its theme (`The deck's theme: editorial with your bg, accent, …`), or
+  says it has none and is minimal-light; keys a deck doesn't read are said; a `theme` (or any
+  deck key) written beside `deck` — in the spec or at the tool's level — is read as the deck's,
+  and a document's keys beside `document` (a `title`, failed twice in production) likewise;
+- a stack child given its own x / y is said, with how to put a label on a shape;
+- a text with `h` takes `"valign": "center" | "bottom"` (cycls-design `builder.js`), and the
+  tool text says a button is a rect and a text in the same box, never a stack;
+- a node moved out of a stack is drawn on top (cycls-design `ops.js` `__unstack` clears the
+  position key it kept from inside the stack — quirks #23);
+- a render in a chat that hasn't loaded a design skill ends with which to load (`_skill_for`:
+  document-design, deck-design or graphic-design, with design-direction). The loop sets
+  `DESIGN_SKILLED` from the transcript just before its tools run, so a skill loaded in the
+  same turn counts; unset — a test, a caller with no chat — counts as loaded.
+
 ## Where the code is
 
 The Design tool was written into `cycls/_agent/tools/__init__.py` (it grew to two thirds

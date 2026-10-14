@@ -3106,3 +3106,82 @@ def test_every_example_in_the_skills_is_a_design_the_tool_takes(tmp_path, monkey
     calls = _fake_render(monkeypatch)
     out = asyncio.run(_exec_design({"action": "render", "name": "example", "spec": spec}, _ws(tmp_path)))
     assert calls.get("renders") == 1, _text(out) if isinstance(out, dict) else out
+
+
+# ---- what a render says back: the deck's theme, keys written beside their place, a stack's
+# children placed by hand, and — in a chat that hasn't loaded them — the skills to load ----
+
+_SLIDES = [{"layout": "title", "title": "Qahwa House"}]
+_OWN = {"base": "editorial", "bg": "#f6f1e7", "accent": "#b4532a", "heading": "Fraunces Bold"}
+
+
+def test_a_deck_says_the_theme_it_is_laid_out_with(tmp_path):
+    spec, err, notes = _prepare_spec({"deck": {"theme": _OWN, "slides": _SLIDES}}, None, tmp_path)
+    assert err is None and spec["deck"]["theme"] == _OWN
+    assert any("editorial" in n and "accent" in n and "heading" in n for n in notes), notes
+    # none given and no brand kit: the default — said, so a theme that never arrived is seen at once
+    _, _, notes = _prepare_spec({"deck": {"slides": _SLIDES}}, None, tmp_path)
+    assert any("no `theme`" in n and "minimal-light" in n for n in notes), notes
+    # a named theme needs no word
+    assert _prepare_spec({"deck": {"theme": "mono", "slides": _SLIDES}}, None, tmp_path)[2] == []
+
+
+def test_a_theme_written_beside_the_deck_is_read_as_its_own(tmp_path, monkeypatch):
+    spec, err, notes = _prepare_spec({"deck": {"slides": _SLIDES}, "theme": _OWN}, None, tmp_path)
+    assert err is None and spec["deck"]["theme"] == _OWN and "theme" not in spec
+    assert any("beside `deck`" in n for n in notes), notes
+    # …and at the tool's own level, beside a deck written there too
+    calls = _fake_render(monkeypatch)
+    asyncio.run(_exec_design({"action": "render", "name": "d", "deck": {"slides": _SLIDES}, "theme": _OWN}, _ws(tmp_path)))
+    assert calls["spec"]["deck"]["theme"]["accent"] == "#b4532a"
+
+
+def test_keys_a_deck_does_not_read_are_said(tmp_path):
+    _, err, notes = _prepare_spec({"deck": {"theme": "mono", "palette": ["#000000"], "slides": _SLIDES}}, None, tmp_path)
+    assert err is None and any("`palette`" in n for n in notes), notes
+
+
+def test_a_documents_keys_written_beside_it_are_read_as_its_own(tmp_path):
+    from cycls._agent.design.prepare import _prepare_document
+    sections = [{"title": "Summary", "blocks": ["Fine."]}]
+    out, err, notes = _prepare_document({"document": {"sections": sections}, "title": "Weekly report", "theme": "corporate"},
+                                        None, tmp_path)
+    assert err is None and out["document"]["title"] == "Weekly report" and out["document"]["theme"] == "corporate"
+    assert any("beside `document`" in n for n in notes), notes
+    out, _, _ = _prepare_document({"document": {"title": "Mine", "sections": sections}, "title": "Other"}, None, tmp_path)
+    assert out["document"]["title"] == "Mine"                                  # set in both places: the document's own
+
+
+def test_a_stack_childs_own_place_is_said_with_how_to_put_a_label_on_a_shape(tmp_path):
+    spec = {"size": [1080, 1350], "nodes": [{"type": "stack", "id": "cta", "direction": "horizontal", "x": 96, "y": 1100, "children": [
+        {"type": "rect", "id": "pill", "w": 620, "h": 84, "radius": 42, "fill": "#b4532a"},
+        {"type": "text", "id": "label", "text": "1 November", "w": 620, "y": 24, "size": 32}]}]}
+    _, err, notes = _prepare_spec(spec, None, tmp_path)
+    assert err is None
+    said = [n for n in notes if "label" in n and "valign" in n]
+    assert len(said) == 1 and "side by side" in said[0], notes
+
+
+def test_a_render_in_a_chat_without_the_skills_says_which_to_load(tmp_path, monkeypatch):
+    from cycls._agent.design.tool import DESIGN_SKILLED
+    _fake_render(monkeypatch)
+    post = {"size": [1080, 1080], "nodes": [{"type": "text", "text": "Hi", "x": 100, "y": 100}]}
+    token = DESIGN_SKILLED.set(False)
+    try:
+        out = asyncio.run(_exec_design({"action": "render", "name": "a", "spec": post}, _ws(tmp_path)))
+        deck = asyncio.run(_exec_design({"action": "render", "name": "d", "format": "pptx", "spec": {"deck": {"slides": _SLIDES}}}, _ws(tmp_path)))
+        listing = asyncio.run(_exec_design({"action": "skill", "skill": "deck-design"}, _ws(tmp_path)))
+    finally:
+        DESIGN_SKILLED.reset(token)
+    assert '"skill": ["design-direction", "graphic-design"]' in _text(out)
+    assert '"skill": ["design-direction", "deck-design"]' in _text(deck)
+    assert "No design skill" not in listing
+    assert "No design skill" not in _text(asyncio.run(_exec_design({"action": "render", "name": "b", "spec": post}, _ws(tmp_path))))
+
+
+def test_the_skill_a_render_needs_follows_what_it_makes():
+    from cycls._agent.design.run import _skill_for
+    assert _skill_for({"document": {}}) == "document-design"
+    assert _skill_for({"deck": {}}) == "deck-design" and _skill_for({"frames": [{"size": "slide"}, {"size": "slide"}]}) == "deck-design"
+    assert _skill_for({"frames": [{"size": "post-portrait"}] * 3}) == "graphic-design"       # a carousel
+    assert _skill_for({"size": "square", "nodes": []}) == "graphic-design" and _skill_for({"pages": []}) == "graphic-design"

@@ -2037,3 +2037,24 @@ def test_design_skills_reach_the_model_whole_and_are_never_cleared(agent_env, mo
     render = [{"role": "assistant", "content": [{"type": "tool_use", "id": "t2", "name": "design", "input": {"action": "render"}}]},
               {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t2", "content": "Design saved"}]}]
     assert clear(render)[1]["content"][0]["content"] == "[Old tool result cleared]"     # a design made is history, as before
+
+
+def test_a_render_says_which_skill_to_load_until_the_chat_has_loaded_one(agent_env, monkeypatch):
+    _design_env(monkeypatch, mode=None)
+    _fake_design_render(monkeypatch)
+    ws, ctx = agent_env
+    _say(ctx, "make me a poster")
+    spec = {"size": [1080, 1080], "nodes": [{"type": "text", "text": "Launch", "x": 80, "y": 80}]}
+    render = lambda i: _tool_use_block(f"r{i}", name="design", inp={"action": "render", "name": f"p{i}", "spec": spec})
+    client, _ = _capturing_client([
+        _make_response([render(1)], stop_reason="tool_use"),                                  # no skill yet: said
+        _make_response([_tool_use_block("s", name="design", inp={"action": "skill", "skill": ["graphic-design"]}),
+                        render(2)], stop_reason="tool_use"),                                  # loaded beside it: not
+        _make_response([render(3)], stop_reason="tool_use"),                                  # loaded before: not
+        _make_response([_text_block("Done.")])])
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Design"])))
+    said = [r for r in _results(ctx) if "Design saved" in r]
+    assert len(said) == 3
+    assert '"skill": ["design-direction", "graphic-design"]' in said[0]
+    assert "No design skill" not in said[1] and "No design skill" not in said[2]
