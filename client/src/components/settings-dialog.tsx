@@ -92,7 +92,7 @@ export function SettingsDialog({ account, onClose, onOpenConnectors, onOpenSkill
         {/* Mobile header, context selector + pill tabs */}
         <div className="sm:hidden">
           <div className="flex items-center justify-between border-b border-border px-5 py-4">
-            <h2 className="text-lg font-semibold text-foreground">{t("settings")}</h2>
+            <h2 className="font-display text-lg font-semibold text-foreground">{t("settings")}</h2>
             <button onClick={onClose} className="cursor-pointer text-muted-foreground hover:text-foreground" aria-label="Close">
               <Icon name="x" className="size-5" />
             </button>
@@ -116,7 +116,7 @@ export function SettingsDialog({ account, onClose, onOpenConnectors, onOpenSkill
           </aside>
 
           <div className="min-w-0 flex-1 overflow-y-auto px-5 py-5 sm:px-8">
-            <h2 className="mb-4 hidden text-lg font-semibold text-foreground sm:block">{t(tab)}</h2>
+            <h2 className="font-display mb-4 hidden text-lg font-semibold text-foreground sm:block">{t(tab)}</h2>
             {tab === "general" && <GeneralTab onOpenConnectors={onOpenConnectors} onOpenSkills={onOpenSkills} />}
             {tab === "account" && <AccountTab account={account} />}
             {tab === "organization" && <OrganizationTab account={account} isAdmin={isAdmin} />}

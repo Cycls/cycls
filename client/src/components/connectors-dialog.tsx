@@ -228,7 +228,7 @@ export function ConnectorsDialog({ api, items, reload, initial, initialTab = "co
             ) : (
               <>
                 <div className="mb-5 hidden sm:block">
-                  <h2 className="text-lg font-semibold text-foreground">{t("connectors")}</h2>
+                  <h2 className="font-display text-lg font-semibold text-foreground">{t("connectors")}</h2>
                   <p className="text-sm text-muted-foreground">{t("connectorsSub")}</p>
                 </div>
                 <div className="mb-4">{search}</div>

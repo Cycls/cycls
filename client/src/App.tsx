@@ -515,7 +515,7 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
           {/* Card */}
           <div className="rounded-2xl border border-border bg-card p-8">
             <div className="text-center mb-6">
-              <h1 className="text-foreground text-xl font-semibold tracking-tight">
+              <h1 className="font-display text-foreground text-xl font-semibold tracking-tight">
                 {t("welcomeTo")}
               </h1>
               <p className="text-muted-foreground text-sm mt-1.5">

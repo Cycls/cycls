@@ -931,13 +931,13 @@ export function Chat({ chat, onShare, files, account, config }: {
               {config?.explore_enabled ? (
                 <button
                   onClick={openExplore}
-                  className="flex items-center gap-1 text-foreground font-medium capitalize hover:opacity-70 transition-opacity cursor-pointer"
+                  className="font-display flex items-center gap-1 text-foreground font-medium capitalize hover:opacity-70 transition-opacity cursor-pointer"
                 >
                   {meta?.name || name}
                   <Icon name="chevron-down" className="w-3 h-3 text-muted-foreground" />
                 </button>
               ) : (
-                <span className="text-foreground font-medium capitalize">{meta?.name || name}</span>
+                <span className="font-display text-foreground font-medium capitalize">{meta?.name || name}</span>
               )}
             </div>
           )}
@@ -1905,7 +1905,7 @@ export function EmptyHero({ meta, absolute }: {
       ) : (
         <img src={meta.logo} alt="" className="size-16 rounded-xl object-cover border border-border" />
       ))}
-      <h2 className="text-2xl font-semibold text-foreground">{meta.name}</h2>
+      <h2 className="font-display text-2xl font-semibold text-foreground">{meta.name}</h2>
       {meta.description && <p className="text-base text-muted-foreground max-w-lg">{meta.description}</p>}
     </motion.div>
   );

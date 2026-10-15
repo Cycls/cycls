@@ -61,7 +61,7 @@ export function SkillsPanel({ api, onAsk }: { api: Api; onAsk: (text: string) =>
   return (
     <>
       <div className="mb-5 flex items-center gap-3">
-        <h2 className="hidden text-lg font-semibold text-foreground sm:block">{t("skills")}</h2>
+        <h2 className="font-display hidden text-lg font-semibold text-foreground sm:block">{t("skills")}</h2>
         <div className="relative ms-auto min-w-0 flex-1 sm:max-w-xs">
           <Icon name="search" className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("searchSkills")} dir="auto"
