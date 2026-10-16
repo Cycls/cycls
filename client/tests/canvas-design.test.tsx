@@ -6,9 +6,9 @@ import { Canvas, addMenuLeft, type CanvasFile } from "../src/components/canvas";
 import { DESIGN_PRESETS } from "../src/components/canvas-utils";
 import { encPath } from "../src/hooks/use-files";
 
-// Designs in the canvas: a design editor whose tab is switched away from stays
-// mounted, hidden, until it has saved what's unsaved; "New design" is in the +
-// menu, with the server's sizes.
+// Designs in the canvas: every open tab stays mounted, hidden, and a design editor
+// whose tab is closed stays until it has saved what's unsaved; "New design" is in
+// the + menu, with the server's sizes.
 
 const EDITOR = "https://ed.example";
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
@@ -286,7 +286,7 @@ describe("designs in the canvas", () => {
   });
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-  it("keeps a switched-away editor until it has saved", async () => {
+  it("keeps a switched-away editor while its tab is open, and a closed one until it has saved", async () => {
     const { container, rerender } = render(canvas("designs/a.fig"));
     await flush();
     const frame = container.querySelector("iframe")!;
@@ -301,6 +301,14 @@ describe("designs in the canvas", () => {
     await flush();
     expect(container.querySelector("iframe")).toBe(frame);                 // still mounted…
     expect(frame.closest("[inert]")).toBeTruthy();                          // …hidden, out of reach
+    rerender(canvas("designs/a.fig"));
+    await flush();
+    expect(container.querySelector("iframe")).toBe(frame);                 // back to it: the same editor, not reloaded
+    expect(frame.closest("[inert]")).toBeNull();
+
+    rerender(canvas("notes.md", { tabs: [TABS[1]] }));                     // its tab closed
+    await flush();
+    expect(container.querySelector("iframe")).toBe(frame);                 // kept until it has saved
     const ask = post.mock.calls.map((c) => c[0] as Record<string, unknown>).find((m) => m.type === "flush");
     expect(ask).toBeTruthy();
     say("flushed", { id: ask!.id, ok: true });
@@ -369,5 +377,28 @@ describe("paths in URLs", () => {
     expect(encPath("designs/pitch.deck.json?as=slides")).toBe("designs/pitch.deck.json?as=slides");
     expect(encPath("حملة/صورة.png")).toBe(`${encodeURIComponent("حملة")}/${encodeURIComponent("صورة.png")}`);
     expect(encPath("a/b.pdf?download")).toBe("a/b.pdf?download");
+  });
+});
+
+describe("tabs in the canvas", () => {
+  it("going back to a tab finds it as it was; a hidden one catches up when it is shown", async () => {
+    const readFile = vi.fn(async (p: string) => `# ${p}`);
+    const openFile = async () => "blob:x";   // stable, as the app's are
+    const tabs = [{ path: "a.md", name: "a.md" }, { path: "b.md", name: "b.md" }];
+    const view = (active: string, reloadKey = 0) => canvas(active, { tabs, readFile, openFile, reloadKey });
+    const reads = () => readFile.mock.calls.map((c) => c[0]);
+    const { rerender } = render(view("a.md"));
+    await flush();
+    rerender(view("b.md"));
+    await flush();
+    rerender(view("a.md"));
+    await flush();
+    expect(reads()).toEqual(["a.md", "b.md"]);                    // each fetched once
+    rerender(view("a.md", 1));                                     // a turn ended
+    await flush();
+    expect(reads()).toEqual(["a.md", "b.md", "a.md"]);             // only the one in view refetches
+    rerender(view("b.md", 1));
+    await flush();
+    expect(reads()).toEqual(["a.md", "b.md", "a.md", "b.md"]);     // the other, once shown
   });
 });
