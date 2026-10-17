@@ -1,6 +1,6 @@
 ---
 name: document-design
-description: PDFs that read well and look made — reports, proposals, white papers, user guides and manuals, newsletters, brochures, CVs, letters, invoices — the settings each kind takes (cover, openers, columns, contents, page count), the theme as your own palette and fonts, which block for which content, screenshots and figures, a page budget; and how to build a long document in few calls and change it by section, without the hand-edit hold.
+description: PDFs that read well and look made — reports, proposals, white papers, user guides and manuals, newsletters, brochures, CVs, letters, invoices — the settings each kind takes (cover, openers, columns, contents, page count), the theme as your own palette and fonts and the look that composes the pages (editorial, swiss, bold, soft, minimal, classic), which block for which content, screenshots and figures, a page budget; and how to build a long document in few calls and change it by section, without the hand-edit hold.
 ---
 
 # document-design — content that flows over pages
@@ -11,17 +11,17 @@ and the block for each kind of content.
 
 ## Settings by kind
 
-| kind | settings |
-|---|---|
-| report, annual review | `cover` full (or split with a photo), `"openers": "band"`, contents (automatic past three sections), `"numbering": true` with several charts |
-| proposal, offer | `cover` split with a photo of the client's world; a `back` page with `title`, `text`, `contact`; pricing as a `table`; terms as `numbered` |
-| white paper, research | `cover` type; `"openers": "page"` with each section's `summary`; `footnotes`; `"figures": true` when it has many charts |
-| user guide, manual, how-to | `cover` band or type; `"openers": "page"`; each section is one task; steps as `numbered`; screenshots as `image` with `"fit": "contain"`; warnings as `callout` tone `warning` |
-| newsletter, bulletin | `"columns": 2` (3 for a dense bulletin), `cover` band; short sections that run on (`"break": "none"`) |
-| brochure, company profile | `cover` full with a photo; `cards` and `stats`; `pairs` for facts; a `back` page with contact and a QR |
-| CV | `"cover": false`, `"max_pages": 1` (or 2), `kind`, `meta` (the contact line); experience as `h3` + `aside` (the dates) + `bullets`; skills as `pairs` |
-| letter, memo | `"cover": false`, `"theme": "mono"` or the brand, `kind` "Letter", the body as `p` |
-| invoice, quotation | `"cover": false`, `pairs` (to / from / number / date), a `table` of lines, a `callout` tone `key` for the total |
+| kind | settings | looks that suit it |
+|---|---|---|
+| report, annual review | `cover` full (or split with a photo), `"openers": "band"`, contents (automatic past three sections), `"numbering": true` with several charts | editorial, bold, classic |
+| proposal, offer | `cover` split with a photo of the client's world; a `back` page with `title`, `text`, `contact`; pricing as a `table`; terms as `numbered` | bold, swiss |
+| white paper, research | `cover` type; `"openers": "page"` with each section's `summary`; `footnotes`; `"figures": true` when it has many charts | editorial, swiss |
+| user guide, manual, how-to | `cover` band or type; `"openers": "page"`; each section is one task; steps as `numbered`; screenshots as `image` with `"fit": "contain"`; warnings as `callout` tone `warning` | swiss, soft |
+| newsletter, bulletin | `"columns": 2` (3 for a dense bulletin), `cover` band; short sections that run on (`"break": "none"`) | editorial, soft |
+| brochure, company profile | `cover` full with a photo; `cards` and `stats`; `pairs` for facts; a `back` page with contact and a QR | bold, soft |
+| CV | `"cover": false`, `"max_pages": 1` (or 2), `kind`, `meta` (the contact line); experience as `h3` + `aside` (the dates) + `bullets`; skills as `pairs` | swiss, minimal, editorial |
+| letter, memo | `"cover": false`, `"theme": "mono"` or the brand, `kind` "Letter", the body as `p` | minimal |
+| invoice, quotation | `"cover": false`, `pairs` (to / from / number / date), a `table` of lines, a `callout` tone `key` for the total | swiss, classic |
 
 Paper: `"size": "a4"` (default), `"letter"` for the US, `"a5"` for a booklet, `"landscape": true` for a
 dashboard-like report.
@@ -38,6 +38,45 @@ the direction you chose becomes the document's: `{"base": "editorial", "accent":
 - `surface` paints the callouts and table bands.
 
 A serif body (`"Source Serif 4"`, Newsreader) suits long reading; a sans body suits a manual or a CV.
+
+## The look
+
+The theme is the colours and faces; the `look` is how the pages are composed. It is the larger half of what makes
+one PDF not look like the last: the measure and the margins, how a section opens, and what a heading, a callout,
+a quote, a figure, a card and a table look like.
+- `editorial`: the text at the left with a margin for notes at the right; paragraphs set like a book's, the
+  first line of each indented with no space between; a section opens under a hairline with its number in small
+  capitals; h2s under a rule; quotes as centred pull quotes; stats and cards under rules; callouts between
+  rules; tables with no header fill.
+- `swiss`: the text set in from the left, and the h2s hung in the margin beside the text they head; a section
+  opens under a heavy rule, its number hung in the margin; stats and cards under bars of the accent; nothing
+  filled.
+- `bold`: the text the full width of the page, a little larger; each section opens on a field of the accent
+  with its number large; h2s in the accent; stats on accent tiles, callouts filled, cards on the theme's dark
+  colour, tables with an accent header.
+- `soft`: a centred column; centred openers, the number on a pill; callouts as rounded panels with an icon;
+  quotes and stats on rounded cards; cards with their icon in a tinted disc.
+- `minimal`: wide margins and a centred column; small-capital h2s; outlined callouts and cards; quotes in
+  italic; no running head, the page number centred.
+- `classic`: the text set in beside a margin for notes; numbered openers over a short rule; callouts, stats
+  and cards on the surface.
+
+A look without a `cover` style gives its own (classic full, editorial and minimal minimal, swiss type, bold
+split, soft band); with no `look` the document takes its theme's (editorial → editorial, tech-dark → swiss, warm →
+soft, mono → minimal, bold-gradient → bold, any other → classic). The brand kit and custom themes on other bases
+come out classic unless you choose, so choose: match the look to the direction and the kind (the table above),
+and don't give every document the same one.
+
+`"openers": "band"` and `"page"` open a section the same way in every look; the default, `"plain"`, is the one
+the look draws. With a look other than classic, leave `openers` out unless the document wants chapter pages.
+
+A callout, quote, stats, cards or table block takes `style` to be drawn another way than its look, for one or
+two moments that should stand out:
+- `callout`: `box`, `rules`, `top`, `fill`, `soft` or `outline`;
+- `quote`: `bar`, `pull`, `big`, `card` or `plain`;
+- `stats`: `cards`, `ruled`, `tiles` or `plain`;
+- `cards`: `fill`, `ruled`, `dark`, `soft` or `outline`;
+- `table`: `band`, `rules`, `accent` or `zebra`.
 
 ## Blocks: which for what
 
@@ -104,7 +143,7 @@ still doesn't.
   "date": "October 2026", "organization": "Qahwa House",
   "theme": {"base": "editorial", "accent": "#0f5257", "hero": "#10302f", "heroAccent": "#e9c46a",
             "heading": "Fraunces Bold", "body": "Source Serif 4"},
-  "cover": {"style": "full", "eyebrow": "MARKET REVIEW"}, "openers": "band",
+  "look": "editorial", "cover": {"style": "full", "eyebrow": "MARKET REVIEW"},
   "sections": [
     {"title": "Specialty coffee doubled in three years", "blocks": [
       {"lead": "Specialty coffee is now a third of the city's café spend, up from a sixth in 2023, and the growth has moved from the centre to the new districts in the north and east."},
@@ -118,6 +157,6 @@ still doesn't.
       {"table": {"columns": ["District", "Households", "Specialty cafés", "Cafés per 10k"],
         "rows": [["Al Narjis", "41,000", "6", "1.5"], ["Al Arid", "28,000", "3", "1.1"], ["Qurtubah", "35,000", "7", "2.0"], ["Al Yasmin", "52,000", "14", "2.7"]]},
        "title": "Households and specialty cafés by district", "caption": "Under two cafés per 10,000 households marks a gap."},
-      {"callout": {"title": "Recommendation", "text": "Open in Al Narjis and Al Arid first: the deepest gaps, and rents a third below Al Yasmin's.", "tone": "key"}},
+      {"callout": {"title": "Recommendation", "text": "Open in Al Narjis and Al Arid first: the deepest gaps, and rents a third below Al Yasmin's.", "tone": "key"}, "style": "fill"},
       {"note": "Sources: GASTAT household counts 2025; Qahwa House café census, September 2026."}]}]}}
 ```

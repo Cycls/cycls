@@ -1467,7 +1467,7 @@ def test_a_deck_of_layouts_resolves_its_images(tmp_path, monkeypatch):
         {"layout": "team", "title": "Team", "people": [{"name": "Sara", "photo": "attachments/sara.png"}, {"name": "Omar"}]},
         {"layout": "custom", "nodes": [{"text": "hand-built", "x": 100, "y": 100}]}]}}
     spec, err, notes = _prepare_spec(deck, None, tmp_path)
-    assert err is None and notes == []
+    assert err is None and notes == ["The deck's look: editorial, its theme's — `look` composes it another way (classic, swiss, bold, soft, minimal)."]
     d = spec["deck"]
     assert d["size"] == [1920, 1080] and d["theme"] == "editorial"                  # the size a deck defaults to
     assert d["slides"][0]["image"]["src"] == "attachments/farm.png" and d["slides"][0]["image"]["focus"] == [0.3, 0.5]
@@ -1500,7 +1500,7 @@ def test_a_brand_kit_is_the_decks_default_theme(tmp_path):
     assert "brand kit as its theme" in notes[0]
     # An explicit theme is the model's choice — the brand kit doesn't override it.
     spec, _, notes = _prepare_spec({"deck": {"theme": "mono", "slides": [{"layout": "title", "title": "x"}]}}, _load_brand(tmp_path), tmp_path)
-    assert spec["deck"]["theme"] == "mono" and notes == []
+    assert spec["deck"]["theme"] == "mono" and [n for n in notes if "brand" in n] == []
 
 
 def test_the_brand_theme_keeps_text_readable():
@@ -1954,7 +1954,7 @@ def test_a_document_saves_its_pdf_and_opens_the_page_viewer(tmp_path, monkeypatc
     deck = json.loads((d / "coffee-report.deck.json").read_text(encoding="utf-8"))
     from cycls._agent.design.store import version_of
     assert deck == {"type": "cycls.deck", "version": 1, "kind": "document", "fig": "designs/coffee-report.fig",
-                    "size": [1240, 1754], "slides": 3, "exports": ["designs/coffee-report.pdf"], "document": _DOC,
+                    "size": [1240, 1754], "slides": 3, "exports": ["designs/coffee-report.pdf"], "document": {**_DOC, "look": "editorial"},
                     "rendered": version_of(b"FIGZ")}
     # The source is kept as it was written — paths, not the images' bytes.
     assert deck["document"]["sections"][0]["blocks"][2]["image"] == "attachments/beans.png"
@@ -2149,6 +2149,34 @@ def _saved_document(tmp_path, monkeypatch, name="report"):
 
 def _source(tmp_path, name="report"):
     return json.loads((tmp_path / "designs" / f"{name}.deck.json").read_text(encoding="utf-8"))["document"]
+
+
+def test_a_new_document_keeps_its_themes_look_and_one_from_before_looks_keeps_none(tmp_path, monkeypatch):
+    """A new document takes its theme's look, written into the source it keeps, so its section
+    changes keep it too; a document rendered before there were looks (a source with none) stays
+    classic through its section changes instead of changing shape."""
+    ws = _ws(tmp_path)
+    calls = _doc_render(monkeypatch)
+    doc = {"title": "T", "theme": "mono", "sections": [{"title": "A", "blocks": ["x"]}]}
+    out = asyncio.run(_exec_design({"action": "render", "name": "r", "spec": {"document": doc}}, ws))
+    assert calls["spec"]["document"]["look"] == "minimal" and _source(tmp_path, "r")["look"] == "minimal"
+    assert "look" not in doc                                                      # the call's own input is left as it came
+    assert "The document's look: minimal, its theme's" in out["_model"][-1]["text"]
+    asyncio.run(_exec_design({"action": "update_section", "name": "r", "number": 1, "section": {"blocks": ["y"]}}, ws))
+    assert calls["spec"]["document"]["look"] == "minimal"
+    asyncio.run(_exec_design({"action": "update_document", "name": "r", "document": {"look": "swiss"}}, ws))
+    assert calls["spec"]["document"]["look"] == "swiss" and _source(tmp_path, "r")["look"] == "swiss"
+    # from before looks: none in its source, none sent
+    path = tmp_path / "designs" / "r.deck.json"
+    deck = json.loads(path.read_text(encoding="utf-8"))
+    del deck["document"]["look"]
+    path.write_text(json.dumps(deck), encoding="utf-8")
+    asyncio.run(_exec_design({"action": "update_section", "name": "r", "number": 1, "section": {"blocks": ["z"]}}, ws))
+    assert "look" not in calls["spec"]["document"]
+    # one it doesn't know is refused before anything is drawn
+    calls.clear()
+    out = asyncio.run(_exec_design({"action": "render", "name": "q", "spec": {"document": {**doc, "look": "grunge"}}}, ws))
+    assert out.startswith("Error: unknown look \"grunge\"") and not calls.get("renders")
 
 
 def test_a_documents_sections_are_added_rewritten_moved_and_removed_in_place(tmp_path, monkeypatch):
@@ -3122,8 +3150,43 @@ def test_a_deck_says_the_theme_it_is_laid_out_with(tmp_path):
     # none given and no brand kit: the default — said, so a theme that never arrived is seen at once
     _, _, notes = _prepare_spec({"deck": {"slides": _SLIDES}}, None, tmp_path)
     assert any("no `theme`" in n and "minimal-light" in n for n in notes), notes
-    # a named theme needs no word
-    assert _prepare_spec({"deck": {"theme": "mono", "slides": _SLIDES}}, None, tmp_path)[2] == []
+    # a named theme needs no word (only its look, which it chose)
+    assert _prepare_spec({"deck": {"theme": "mono", "slides": _SLIDES}}, None, tmp_path)[2] == [
+        "The deck's look: minimal, its theme's — `look` composes it another way (classic, editorial, swiss, bold, soft)."]
+    assert _prepare_spec({"deck": {"theme": "mono", "look": "bold", "slides": _SLIDES}}, None, tmp_path)[2] == []
+
+
+# ---- a deck's or a document's look: how its slides or pages are composed, apart from its theme ----
+
+def test_a_deck_takes_its_themes_look_unless_it_names_one(tmp_path):
+    """Without a look every deck came out one shape whatever its colours. The look is written
+    into the deck (so its settings — and a slide added later — keep it); one it doesn't know is
+    refused, with the looks."""
+    look = lambda deck, brand=None: _prepare_spec({"deck": {**deck, "slides": _SLIDES}}, brand, tmp_path)[0]["deck"]["look"]
+    assert look({"theme": "editorial"}) == "editorial" and look({"theme": "tech-dark"}) == "swiss"
+    assert look({"theme": "bold-gradient"}) == "bold" and look({"theme": {"base": "warm", "accent": "#123456"}}) == "soft"
+    assert look({}) == "classic" and look({"theme": "corporate"}) == "classic"
+    assert look({"theme": "editorial", "look": " Swiss "}) == "swiss"                  # the model's own, written plainly
+    assert look({}, {"primary": "#0c2340", "accent": "#c9a227", "heading": None, "body": None}) == "classic"   # the brand kit's
+    _, err, _ = _prepare_spec({"deck": {"look": "brutalist", "slides": _SLIDES}}, None, tmp_path)
+    assert err == "Error: unknown look \"brutalist\" — a deck's look is one of: classic, editorial, swiss, bold, soft, minimal."
+    # written beside the deck, it is the deck's
+    spec, _, notes = _prepare_spec({"deck": {"slides": _SLIDES}, "look": "minimal"}, None, tmp_path)
+    assert spec["deck"]["look"] == "minimal" and "look" not in spec
+
+
+def test_a_decks_look_is_kept_for_its_later_slides(tmp_path, monkeypatch):
+    from cycls._agent.design.deck import settings_of
+    _fake_render(monkeypatch, image=b"PPTX", previews=[b"J1", b"J2"])
+    asyncio.run(_exec_design({"action": "render", "name": "pitch", "format": "pptx", "spec": {"deck": {
+        "theme": "warm", "slides": [{"layout": "title", "title": "Brewly"}, {"layout": "closing", "title": "Thanks"}]}}}, _ws(tmp_path)))
+    assert json.loads((tmp_path / "designs" / "pitch.deck.json").read_text())["settings"]["look"] == "soft"
+    assert settings_of({"theme": "mono", "look": "swiss", "slides": []}) == {"theme": "mono", "look": "swiss"}
+    # a look written beside `spec` is read with the design written there
+    calls = _fake_render(monkeypatch, image=b"PPTX", previews=[b"J1", b"J2"])
+    asyncio.run(_exec_design({"action": "render", "name": "beside", "format": "pptx", "look": "bold",
+                              "deck": {"slides": [{"layout": "title", "title": "x"}, {"layout": "closing", "title": "y"}]}}, _ws(tmp_path)))
+    assert calls["spec"]["deck"]["look"] == "bold"
 
 
 def test_a_theme_written_beside_the_deck_is_read_as_its_own(tmp_path, monkeypatch):

@@ -143,7 +143,7 @@ _DESIGN_TOOL = {
         "- A presentation DECK: pass a deck of LAYOUTS — the normal way. You fill each slide's "
         "slots; the service lays them out, so every slide shares margins, title position, type "
         "scale, footer and page numbers, and nothing is placed by hand:\n"
-        "    {\"deck\": {\"theme\": \"editorial\", \"footer\"?: {\"text\": \"Brewly · Seed 2026\"}, \"slides\": [\n"
+        "    {\"deck\": {\"theme\": \"editorial\", \"look\"?: \"swiss\", \"footer\"?: {\"text\": \"Brewly · Seed 2026\"}, \"slides\": [\n"
         "      {\"layout\": \"title\", \"eyebrow\"?:, \"title\":, \"subtitle\"?:, \"meta\"?:, \"image\"?: \"attachments/hero.jpg\", \"notes\": \"…\"},\n"
         "      {\"layout\": \"bullets\", \"title\":, \"bullets\": [\"…\"], \"image\"?:, \"notes\": \"…\"}, … ]}}\n"
         "  Layouts and slots: title {eyebrow?, title, subtitle?, meta?, image? (full-bleed), align?:\"center\"} · "
@@ -161,7 +161,18 @@ _DESIGN_TOOL = {
         "slide also takes notes, transition, id. Images are workspace paths.\n"
         "  Themes: minimal-light, minimal-dark, bold-gradient, editorial, corporate, tech-dark, warm, mono, "
         "\"brand\" (the workspace brand kit — the default when one exists), or overrides on a base: "
-        "{\"base\":\"minimal-dark\",\"accent\":\"#f59e0b\",\"heading\":\"Sora Bold\"}. An Arabic slide is laid out "
+        "{\"base\":\"minimal-dark\",\"accent\":\"#f59e0b\",\"heading\":\"Sora Bold\"}.\n"
+        "  LOOK — the theme is colours and faces; \"look\" is how the slides are COMPOSED, and it is what keeps "
+        "one deck from being the same shape as the last: classic (titles at the head, a list, figures on cards) · "
+        "editorial (large titles under a running head, hairlines, numbered rows, figures set as type, a centred "
+        "quote) · swiss (each title in a column of its own beside the content, heavy rules, big numbers) · bold "
+        "(big type, the accent laid on as fields: accent tiles, section and quote slides in the accent, a split "
+        "title slide) · soft (centred titles, rounded cards, pills) · minimal (small titles, wide margins, "
+        "hairlines, title slides on the paper). None given: it follows the theme (editorial, tech-dark → swiss, "
+        "warm → soft, mono → minimal, bold-gradient → bold, else classic). A slide's \"style\" draws it another way "
+        "than its look — vary them for rhythm: bullets list|rows|numbers|cards|plain · stats "
+        "dividers|ruled|tiles|plain · two-column cards|ruled|contrast · quote mark|center|big|panel|card · "
+        "agenda list|rows|tiles · timeline line|ruled|steps · table band|rules|soft. An Arabic slide is laid out "
         "right-to-left and an English one left-to-right, automatically; a slide mixing both (an Arabic "
         "headline over English bullets) follows the deck's `dir` — set \"dir\":\"rtl\" on an "
         "Arabic-first bilingual deck (else the language with more words decides). Keep slide text short — titles shrink to fit their place, "
@@ -190,7 +201,7 @@ _DESIGN_TOOL = {
         "  A DOCUMENT — a report, a proposal, a white paper, a guide, a brochure, a CV: anything that "
         "is read on paper-sized pages and comes out as a PDF — is spec = {\"document\": {\"title\", "
         "\"subtitle\"?, \"author\"?, \"date\"?, \"organization\"?, \"size\"?: \"a4\"|\"letter\"|\"a5\" "
-        "(\"landscape\": true), \"theme\"?, \"cover\"?: {\"style\": \"full\"|\"band\"|\"minimal\"|\"split\"|\"type\", "
+        "(\"landscape\": true), \"theme\"?, \"look\"?, \"cover\"?: {\"style\": \"full\"|\"band\"|\"minimal\"|\"split\"|\"type\", "
         "\"eyebrow\"?, \"image\"?}, \"openers\"?: \"plain\"|\"band\"|\"page\", \"columns\"?: 1|2|3, "
         "\"sections\": [{\"title\", \"summary\"?, \"blocks\": […]}], \"back\"?: {\"title\", "
         "\"text\", \"contact\"}}}. You write the CONTENT, in order; the pages make themselves: text flows "
@@ -214,9 +225,19 @@ _DESIGN_TOOL = {
         "limit?} (.csv, .tsv, .xlsx). A section opens a new page, or runs on under a few lines left over "
         "(\"break\": \"page\" forces one, \"none\" never). Write it as a real document: "
         "open each section with what it found, real numbers, a caption on every chart and table, short "
-        "paragraphs. The LOOK is yours to choose unless the user says: the workspace brand kit when "
-        "there is one (the default), else a theme that fits the subject — and its accent or fonts "
-        "overridden ({base, accent, heading, body}) when that fits better. The cover sets the tone: "
+        "paragraphs. The LOOK is yours to choose unless the user says: a theme — the workspace brand kit when "
+        "there is one (the default), else one that fits the subject, its accent or fonts "
+        "overridden ({base, accent, heading, body}) when that fits better — and a \"look\", how the pages are "
+        "composed (none given: it follows the theme, as a deck's does): classic (the text set in beside a margin "
+        "for notes; callouts, stats and cards on the surface) · editorial (paragraphs set like a book's, indented "
+        "with no space between; sections open under a hairline; pull quotes; figures and cards under rules) · swiss "
+        "(headings hang in the margin beside their text, the section's number in the margin under a heavy rule, "
+        "nothing filled) · bold (the text the full width, sections open on a field of the accent, accent tiles, "
+        "filled callouts, dark cards) · soft (a centred column, centred openers, rounded panels with icons) · "
+        "minimal (wide margins, small-capital headings, outlined callouts, no running head). A callout, quote, "
+        "stats, cards or table block takes \"style\" to be drawn another way: callout box|rules|top|fill|soft|outline "
+        "· quote bar|pull|big|card|plain · stats cards|ruled|tiles|plain · cards fill|ruled|dark|soft|outline · "
+        "table band|rules|accent|zebra. The cover sets the tone (the look's when none is given): "
         "\"full\" (the theme's dark colour — or a photo, \"image\" — the title at the foot), \"split\" (the "
         "title on a dark panel beside a full-height photo), \"type\" (the whole page in the accent, the "
         "title large: no photo needed), \"band\", \"minimal\" (quiet: a letterhead, a legal paper); and "
@@ -330,7 +351,7 @@ _DESIGN_TOOL = {
         "new_name": {"type": "string", "description": "For `rename`: the design's new name. For `duplicate`: the copy's name (default <name>-copy)."},
         "version": {"type": ["string", "integer"], "description": "For `restore`: the version to go back to — its id from `versions`, or its place there (1 = the newest)."},
         "section": {"type": "object", "description": "For add_section / update_section: the section {title, blocks: […]}. update_section takes just the keys that change — {blocks} rewrites it, {title} renames it."},
-        "document": {"type": "object", "description": "For update_document: the document's own keys that change — title, subtitle, author, date, theme, cover, size, footnotes, numbering… (null removes one). Not its sections."},
+        "document": {"type": "object", "description": "For update_document: the document's own keys that change — title, subtitle, author, date, theme, look, cover, size, footnotes, numbering… (null removes one). Not its sections."},
         "path": {"type": "string", "description": "For `extract`: the PDF in the workspace, e.g. attachments/report.pdf."},
         "page": {"type": ["string", "integer"], "description": "For `inspect` / `edit` on a design with several pages: the page's name (default: the first page). For `extract`: the PDF's page to look at, a number from 1."},
         "area": {"type": "array", "items": {"type": "number"}, "description": "For `extract` with `page`: the part of that page to cut out and save as a picture — [left, top, width, height], each a part of the page from 0 to 1."},
@@ -348,7 +369,7 @@ _DESIGN_TOOL = {
         "transition": {"type": "string", "enum": ["fade", "slide", "none"], "description": "For update_slide without `slide`: how the slide enters when presented."},
         "ops": {"type": "array", "items": {"type": "object"},
                 "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?} (a stack's id moves the whole block; a node in a stack moved on its own leaves it); resize {node, w?, h?}; delete {node}; duplicate {node, dx?, dy?, id?} (in a stack, the copy is its next item); replace_image {node, src} (or `stock` / `asset` in place of `src`); add {node:<spec node>, frame?}; background {fill, frame?} — the slide's OWN fill: a colour, {\"gradient\": [...]} or \"none\" (never cover a slide with a full-size rect). `frame` (slide index from 0) narrows a name to one slide. Pages: page_add {name, spec}; page_duplicate {page?, name?}; page_rename {page?, name}; page_delete {page?}."},
-        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}; several variants of one design as pages {pages:[{name, size, fill, nodes}]}; a document (a report or any PDF that flows over pages) {document:{title, sections:[{title, blocks:[…]}]}}; a presentation as a deck of layouts {deck:{theme, footer?, slides:[{layout, …slots, notes}]}} (the normal way for decks); or hand-built frames {frames:[...]} (one per slide, all one size, each with optional id/title/notes/transition; export pptx or pdf, or png for a carousel); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
+        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}; several variants of one design as pages {pages:[{name, size, fill, nodes}]}; a document (a report or any PDF that flows over pages) {document:{title, sections:[{title, blocks:[…]}]}}; a presentation as a deck of layouts {deck:{theme, look?, footer?, slides:[{layout, …slots, style?, notes}]}} (the normal way for decks); or hand-built frames {frames:[...]} (one per slide, all one size, each with optional id/title/notes/transition; export pptx or pdf, or png for a carousel); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s). Scripts may use only `figma` (and `console`): no `this`, globals, network, eval/Function or `.constructor` — anything else is refused before it runs."},
         "intent": {"type": "string",

@@ -255,7 +255,34 @@ def _prepare_pages(spec, brand, root):
 
 
 _DECK_THEMES = ("minimal-light", "minimal-dark", "bold-gradient", "editorial", "corporate", "tech-dark", "warm", "mono")
-_DECK_KEYS = {"theme", "size", "dir", "footer", "logo", "transition", "slides"}   # what layouts.js reads of a deck
+_DECK_KEYS = {"theme", "look", "size", "dir", "footer", "logo", "transition", "slides"}   # what layouts.js reads of a deck
+# How a deck's slides or a document's pages are composed (cycls-design looks.js) — apart from the
+# theme, its colours and faces. Without one, the look the theme is made for.
+_LOOKS = ("classic", "editorial", "swiss", "bold", "soft", "minimal")
+_THEME_LOOKS = {"editorial": "editorial", "tech-dark": "swiss", "warm": "soft", "mono": "minimal", "bold-gradient": "bold"}
+
+
+def _look_for(theme):
+    """The look a theme is made for: its own (a name) or its base's (overrides); else classic."""
+    base = theme if isinstance(theme, str) else theme.get("base") if isinstance(theme, dict) else None
+    return _THEME_LOOKS.get(str(base or "").strip().lower().replace(" ", "-").replace("_", "-"), "classic")
+
+
+def _settle_look(spec, what, notes, default=True):
+    """`spec`'s look checked and written plainly — or, with none and `default`, the theme's, written in
+    (so a later change keeps it) and said. → an error, or None."""
+    look = spec.get("look")
+    if look is None:
+        if default:
+            spec["look"] = look = _look_for(spec.get("theme"))
+            notes.append(f"The {what}'s look: {look}, its theme's — `look` composes it another way "
+                         f"({', '.join(x for x in _LOOKS if x != look)}).")
+        return None
+    key = str(look).strip().lower() if isinstance(look, str) else ""
+    if key not in _LOOKS:
+        return f"Error: unknown look {json.dumps(look, ensure_ascii=False)} — a {what}'s look is one of: {', '.join(_LOOKS)}."
+    spec["look"] = key
+    return None
 
 
 def _brand_theme(brand):
@@ -332,6 +359,8 @@ def _prepare_deck(spec, brand, root):
         fonts = " / ".join(f for f in (brand.get("heading"), brand.get("body")) if f)
         notes.append(f"The deck uses the workspace brand kit as its theme (primary {brand['primary']}, accent "
                      f"{brand['accent']}{', fonts ' + fonts if fonts else ''}{', logo ' + logo if logo else ''}).")
+    if err := _settle_look(deck, "deck", notes):
+        return None, err, []
     try:
         if deck.get("logo"):
             deck["logo"] = slot(deck["logo"])
@@ -361,7 +390,7 @@ _PAPER = {"a4": [1240, 1754], "letter": [1275, 1650], "a5": [874, 1240], "a3": [
 # a document's own keys (document.js), read as its own when written beside it
 _DOCUMENT_KEYS = ("title", "subtitle", "author", "date", "organization", "logo", "size", "landscape", "theme", "dir", "cover",
                   "columns", "openers", "toc", "numbered", "numbering", "figures", "header", "footer", "sections", "max_pages",
-                  "kind", "meta", "contact", "back", "footnotes", "lang")
+                  "kind", "meta", "contact", "back", "footnotes", "lang", "look")
 
 
 _SHEET_ROWS = 2000      # max rows read from a spreadsheet
@@ -529,6 +558,10 @@ def _prepare_document(spec, brand, root):
         fonts = " / ".join(f for f in (brand.get("heading"), brand.get("body")) if f)
         notes.append(f"The document uses the workspace brand kit as its theme (primary {brand['primary']}, accent "
                      f"{brand['accent']}{', fonts ' + fonts if fonts else ''}{', logo ' + logo if logo else ''}).")
+    # (Its look is settled before the source is kept — _render_document: a document rendered before
+    # there were looks keeps the one it had through its section changes.)
+    if err := _settle_look(doc, "document", notes, default=False):
+        return None, err, []
     size = doc.get("size") or "a4"
     paper = list(_PAPER.get(str(size).lower().replace("-landscape", "").replace(" landscape", ""), _PAPER["a4"])) \
         if isinstance(size, str) else size

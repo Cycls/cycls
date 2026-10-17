@@ -317,6 +317,20 @@ settings (images back to paths) in the deck document so a later slide matches. E
 frame keeps its layout `source` (image bytes out), which `inspect` shows. A test
 renders a compact deck in every theme and fails on any layout-check finding.
 
+**Looks.** A theme is colours and faces only, so every deck — and every document — came out
+the same shape whatever its theme ("the same style every time", the user's word,
+2026-10-18). `look` (cycls-design `looks.js`) composes the slides or pages: `classic` (as
+before, held by the service's golden images), `editorial`, `swiss`, `bold`, `soft`,
+`minimal`; a slide's or a block's `style` draws its kind another way. The SDK
+(`_settle_look` in `prepare.py`) checks the look and, when there is none, writes in the one
+the theme is made for (`_THEME_LOOKS`: editorial, tech-dark → swiss, warm → soft, mono →
+minimal, bold-gradient → bold, else classic) and says so in the reply. For a deck it lands
+in the deck document's `settings` (`settings_of`), so later slides match. For a document it
+is written into the kept source on a new render only (`_render_document`, not `kept`): a
+document rendered before there were looks has none in its source and stays classic through
+its section changes. The tool description and the `deck-design`, `document-design` and
+`design-direction` skills teach choosing one per piece.
+
 **Slide actions** change a deck's structure on the saved `.fig`, through the
 service's `/apply` like an `edit`: `add_slide {slide, at?}`, `update_slide {number,
 slide}` (or just `notes` / `title` / `transition`), `move_slide {number, to}`,
@@ -399,7 +413,8 @@ the pages make themselves.
 - **The look.** Open, by the user's choice: a theme named in the spec (or one with its
   accent or fonts overridden) stands; with none, the workspace **brand kit** is the
   theme and `brand/logo.*` the logo (`_prepare_document`, as a deck); with no kit, the
-  tool description tells the agent to pick a theme that fits the subject.
+  tool description tells the agent to pick a theme that fits the subject. The page's
+  composition is the `look` (see "Looks" above), its theme's when none is given.
 - **`_prepare_document`.** Reads every image from the workspace wherever it sits — the
   cover's, the logo, an `image` block's (also inside `columns`), a `nodes` area's and a
   hand-built page's — into slots that carry the image's own size (`w`, `h`: the page
@@ -1058,8 +1073,8 @@ them and none needs its own copy:
 |---|---|
 | `design-direction` | the four decisions before a render (the idea, a direction, its system, one signature move); ten directions with their palettes, fonts (Latin and Arabic — each name checked to render) and the media-library finish that suits them; colour and type rules; showing two or three directions as the pages of one design |
 | `graphic-design` | sizes and safe areas, a copy budget, ten compositions with coordinates, Arabic posts, carousels, a campaign in several sizes; working fast (one render with every part named, one edit with every fix, `export` for another format) and the shapes that cost a refused call |
-| `deck-design` | built-in themes and a theme of one's own (every key the service's `themes.js` takes), rhythm and action titles, which layout for which content, slot budgets, custom slides on the deck's grid, charts, notes, Arabic decks; one render for the deck, slide actions after it |
-| `document-design` | the settings each kind takes (report, proposal, white paper, guide, newsletter, brochure, CV, letter, invoice), which block for which content, screenshots, a page budget (~400–450 words an A4 page, measured); sections first, page `edit`s last — the hand-edit hold explained |
+| `deck-design` | built-in themes and a theme of one's own (every key the service's `themes.js` takes), the looks and slide styles, rhythm and action titles, which layout for which content, slot budgets, custom slides on the deck's grid, charts, notes, Arabic decks; one render for the deck, slide actions after it |
+| `document-design` | the settings each kind takes (report, proposal, white paper, guide, newsletter, brochure, CV, letter, invoice) and the looks that suit it, block styles, which block for which content, screenshots, a page budget (~400–450 words an A4 page, measured); sections first, page `edit`s last — the hand-edit hold explained |
 
 `design {"action": "skill", "skill": ["design-direction", "graphic-design"]}` returns the
 skills asked for (`skill.load`); the description lists each with its one line (`skill.catalog`,

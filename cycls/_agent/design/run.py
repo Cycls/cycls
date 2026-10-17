@@ -97,7 +97,7 @@ async def _run_design(inp, workspace):
     action = (inp.get("action") or "render").lower()
     # a design written beside `spec` rather than under it
     if action == "render" and inp.get("spec") is None:
-        beside = {k: inp[k] for k in ("document", "deck", "pages", "frames", "nodes", "size", "fill", "theme") if inp.get(k) is not None}
+        beside = {k: inp[k] for k in ("document", "deck", "pages", "frames", "nodes", "size", "fill", "theme", "look") if inp.get(k) is not None}
         if any(k in beside for k in ("document", "deck", "pages", "frames", "nodes")):
             inp["spec"] = beside
     fmt = (inp.get("format") or "png").lower()

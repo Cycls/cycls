@@ -105,6 +105,13 @@ the bank's colours. Young audiences take bold or playful, executives take corpor
 Arabic audience, set the Arabic first and choose its face before the Latin one. Pieces that belong together (a
 carousel, a campaign, one deck) share ONE direction; pieces that don't, shouldn't all share the same one.
 
+**A deck or a document** takes its direction twice: as its `theme` (the palette and the type pair) and as its
+`look`, how its slides or pages are composed. The look matters more, because two themes in one look are the same
+layout recoloured. Editorial → `editorial`. Swiss → `swiss`. Bold type → `bold`. Luxury → `minimal` (or
+`editorial`). Tech → `swiss` (or `bold` for a launch). Warm & human → `soft`. Playful → `soft` or `bold`. Gulf
+heritage → `editorial` or `soft`. Corporate → `classic` or `swiss`. Quiet minimal → `minimal`. Always write the
+look out: without one, a custom theme or the brand kit comes out `classic`, the same as last time.
+
 ## Colour
 
 - 60 / 30 / 10: the ground, the secondary areas, the accent. The accent marks the ONE thing to look at (a word,

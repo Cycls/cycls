@@ -26,7 +26,7 @@ def settings_of(deck):
         if isinstance(v, list):
             return [strip(x) for x in v]
         return v
-    return strip({k: deck.get(k) for k in ("theme", "size", "footer", "logo", "transition", "dir") if deck.get(k) is not None})
+    return strip({k: deck.get(k) for k in ("theme", "look", "size", "footer", "logo", "transition", "dir") if deck.get(k) is not None})
 
 
 def paths(root, name):

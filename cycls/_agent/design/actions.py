@@ -5,7 +5,7 @@ from .. import trash
 from ..paths import _safe_filename
 from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES
-from .prepare import _PAPER, _num, _prepare_document, _prepare_slide
+from .prepare import _PAPER, _num, _prepare_document, _prepare_slide, _settle_look
 from .report import _layout_check, _page_changes
 from .files import _DECK_EXTS, _DESIGN_EXTS, _dedupe_design_name, _designs_there, _rendered_copy, _write_beside
 
@@ -89,7 +89,7 @@ async def _exec_document(action, inp, workspace, name):
     except ValueError as e:
         return f"Error: {e}."
     return await _render_document({"spec": {"document": {**doc, "sections": sections}}, "replace": True,
-                                   "intent": inp.get("intent") or intent, "discard_edits": inp.get("discard_edits")}, workspace, name)
+                                   "intent": inp.get("intent") or intent, "discard_edits": inp.get("discard_edits")}, workspace, name, kept=True)
 
 
 async def _to_the_room(root, rel, ui):
@@ -454,9 +454,10 @@ def _seen_pages(deck_path):
     return [h for h in hashes if isinstance(h, str)] if isinstance(hashes, list) else []
 
 
-async def _render_document(inp, workspace, name):
+async def _render_document(inp, workspace, name, kept=False):
     """Render a document to designs/<name>.pdf / .fig plus a "document" deck file, pages back for QA.
-    `replace` re-renders under the same name, keeping the earlier .fig as a version."""
+    `replace` re-renders under the same name, keeping the earlier .fig as a version. `kept`: the
+    kept source changed by a section action — its look stays what it was (none: classic)."""
     from cycls._agent import design
     from cycls._agent.design import assets
     from cycls._agent.design.deck import lock
@@ -472,6 +473,17 @@ async def _render_document(inp, workspace, name):
     credits, err = await assets.named(inp["spec"], workspace.root, subject)
     if err:
         return err
+    looked = []
+    if not kept:
+        # a new document without a look takes its theme's, written into the source it keeps (on a copy:
+        # the call's own input stays as it came)
+        spec_in = dict(inp["spec"])
+        doc_in = spec_in["document"] = dict(spec_in["document"])
+        if doc_in.get("look") is None and spec_in.get("look") is not None:
+            doc_in["look"] = spec_in.pop("look")
+        if err := _settle_look(doc_in, "document", looked):
+            return err
+        inp = {**inp, "spec": spec_in}
     source = json.loads(json.dumps(inp["spec"]["document"]))       # as written, stock photos and assets resolved
     spec, err, notes = await asyncio.to_thread(lambda: _prepare_document(inp["spec"], _load_brand(workspace.root), workspace.root))
     if err:
@@ -484,7 +496,7 @@ async def _render_document(inp, workspace, name):
         return f"Error: design unavailable — {e}"
     except Exception as e:
         return f"Error: the document didn't render — {e}"
-    notes = [*notes, *(f"{c}." for c in credits), *r.notes]
+    notes = [*looked, *notes, *(f"{c}." for c in credits), *r.notes]
     if edited is not None:
         notes.append("The pages changed after the last render were laid out again from the source; they are kept in History.")
     await asyncio.to_thread(designs.mkdir, parents=True, exist_ok=True)
