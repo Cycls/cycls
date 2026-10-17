@@ -109,8 +109,9 @@ carousel, a campaign, one deck) share ONE direction; pieces that don't, shouldn'
 `look`, how its slides or pages are composed. The look matters more, because two themes in one look are the same
 layout recoloured. Editorial → `editorial`. Swiss → `swiss`. Bold type → `bold`. Luxury → `minimal` (or
 `editorial`). Tech → `swiss` (or `bold` for a launch). Warm & human → `soft`. Playful → `soft` or `bold`. Gulf
-heritage → `editorial` or `soft`. Corporate → `classic` or `swiss`. Quiet minimal → `minimal`. Always write the
-look out: without one, a custom theme or the brand kit comes out `classic`, the same as last time.
+heritage → `editorial` or `soft`. Corporate → `swiss` (or `classic` when the user wants it plain). Quiet minimal →
+`minimal`. Always write the look out: without one, the tool guesses from the title, which is a fallback, not a
+direction.
 
 ## Colour
 

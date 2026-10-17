@@ -62,10 +62,11 @@ a quote, a figure, a card and a table look like.
   and cards on the surface.
 
 A look without a `cover` style gives its own (classic full, editorial and minimal minimal, swiss type, bold
-split, soft band); with no `look` the document takes its theme's (editorial → editorial, tech-dark → swiss, warm →
-soft, mono → minimal, bold-gradient → bold, any other → classic). The brand kit and custom themes on other bases
-come out classic unless you choose, so choose: match the look to the direction and the kind (the table above),
-and don't give every document the same one.
+split, soft band); with no `look`, a theme named for one gives it (editorial → editorial, tech-dark → swiss, warm →
+soft, mono → minimal, bold-gradient → bold), else its `kind`, eyebrow or title decides (a proposal → bold, a report
+→ editorial, a guide, a CV or an invoice → swiss, a brochure → soft, a letter → minimal), then a custom theme's base,
+then its shape. That is a fallback: choose the look yourself, matching the direction and the kind (the table above),
+and don't give every document the same one. Classic only when the user wants the plain look.
 
 `"openers": "band"` and `"page"` open a section the same way in every look; the default, `"plain"`, is the one
 the look draws. With a look other than classic, leave `openers` out unless the document wants chapter pages.

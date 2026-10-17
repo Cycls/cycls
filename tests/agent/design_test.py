@@ -3165,14 +3165,47 @@ def test_a_deck_takes_its_themes_look_unless_it_names_one(tmp_path):
     look = lambda deck, brand=None: _prepare_spec({"deck": {**deck, "slides": _SLIDES}}, brand, tmp_path)[0]["deck"]["look"]
     assert look({"theme": "editorial"}) == "editorial" and look({"theme": "tech-dark"}) == "swiss"
     assert look({"theme": "bold-gradient"}) == "bold" and look({"theme": {"base": "warm", "accent": "#123456"}}) == "soft"
-    assert look({}) == "classic" and look({"theme": "corporate"}) == "classic"
     assert look({"theme": "editorial", "look": " Swiss "}) == "swiss"                  # the model's own, written plainly
-    assert look({}, {"primary": "#0c2340", "accent": "#c9a227", "heading": None, "body": None}) == "classic"   # the brand kit's
     _, err, _ = _prepare_spec({"deck": {"look": "brutalist", "slides": _SLIDES}}, None, tmp_path)
     assert err == "Error: unknown look \"brutalist\" — a deck's look is one of: classic, editorial, swiss, bold, soft, minimal."
     # written beside the deck, it is the deck's
     spec, _, notes = _prepare_spec({"deck": {"slides": _SLIDES}, "look": "minimal"}, None, tmp_path)
     assert spec["deck"]["look"] == "minimal" and "look" not in spec
+
+
+def test_with_no_look_and_a_theme_that_names_none_a_piece_gets_the_look_it_calls_for(tmp_path):
+    """On production (2026-10-17) a proposal written on a custom theme over minimal-light, with no
+    look, fell back to classic — the shape every document had. Now what the piece says it is
+    decides, then a custom theme's base, then its shape; classic only when it is asked for."""
+    from cycls._agent.design.prepare import _look_for, _settle_look
+    doc = lambda **d: _look_for({"title": "x", **d}, "document")
+    proposal = {"theme": {"base": "minimal-light", "accent": "#2e7d5b"}, "title": "A Healthier Team Builds Better Software",
+                "subtitle": "Corporate Employee Wellness Programme — Proposal for a Riyadh Software Company", "cover": False}
+    assert _look_for(proposal, "document") == ("bold", "for a proposal or a pitch")
+    assert doc(kind="CV", cover=False)[0] == "swiss" and doc(kind="Letter", cover=False)[0] == "minimal"
+    assert doc(cover={"eyebrow": "MARKET REVIEW"})[0] == "editorial" and doc(title="تقرير السوق السنوي")[0] == "editorial"
+    assert doc(kind="Company brochure")[0] == "soft" and doc(kind="User guide")[0] == "swiss"
+    # its kind outranks a theme of one's own on a look's base (a skill's example theme is on "editorial")…
+    assert doc(theme={"base": "editorial", "accent": "#123456"}, kind="Proposal")[0] == "bold"
+    # …but not a theme named for a look, nor the look it asks for
+    assert doc(theme="editorial", kind="Proposal") == ("editorial", "its theme's")
+    # nothing said: its shape, else one chosen by its title — the same one each time, never classic
+    assert doc(cover=False) == ("swiss", "for a document with no cover") and doc(columns=2)[0] == "editorial"
+    assert doc(theme={"base": "warm"}) == ("soft", "its theme's base")
+    titles = ["Qahwa House", "Q3 board update", "Nabta", "Brewly", "Oasis", "Atlas", "Dunes", "North star"]
+    picked = [_look_for({"slides": [{"layout": "title", "title": t}]}, "deck")[0] for t in titles]
+    assert picked == [_look_for({"slides": [{"layout": "title", "title": t}]}, "deck")[0] for t in titles]
+    assert "classic" not in picked and len(set(picked)) > 1
+    assert _look_for({"slides": [{"layout": "title", "eyebrow": "Investor update", "title": "Nabta"}]}, "deck")[0] == "bold"
+    assert _look_for({"slides": [{"layout": "title", "title": "Welcome to the team", "subtitle": "Onboarding week"}]}, "deck")[0] == "soft"
+    # the brand kit's theme names none: the piece decides
+    brand = {"primary": "#0c2340", "accent": "#c9a227", "heading": None, "body": None}
+    spec, _, notes = _prepare_spec({"deck": {"slides": [{"layout": "title", "title": "Annual report 2026"}]}}, brand, tmp_path)
+    assert spec["deck"]["look"] == "editorial" and any(n.startswith("The deck's look: editorial, for a report") for n in notes)
+    notes = []
+    assert _settle_look(dict(proposal), "document", notes) is None
+    assert notes == ["The document's look: bold, for a proposal or a pitch — `look` composes it another way "
+                     "(classic, editorial, swiss, soft, minimal)."]
 
 
 def test_a_decks_look_is_kept_for_its_later_slides(tmp_path, monkeypatch):

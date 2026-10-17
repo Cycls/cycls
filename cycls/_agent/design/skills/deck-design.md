@@ -53,10 +53,12 @@ The looks (`"look"` in the deck, beside `theme`):
   the dark colour. For luxury, fashion, architecture, a quiet statement.
 - `classic`: titles at the head, a bulleted list, figures on dividers. The plain default.
 
-Without a `look`, the deck takes its theme's (editorial → editorial, tech-dark → swiss, warm → soft, mono →
-minimal, bold-gradient → bold, any other → classic), so a custom theme on `minimal-light` or `corporate`, or the
-brand kit, comes out classic unless you choose. Match the look to the direction (`design-direction`), and don't
-give every deck the same one: the next deck on another subject should look different.
+Without a `look`, a theme named for one gives it (editorial → editorial, tech-dark → swiss, warm → soft, mono →
+minimal, bold-gradient → bold); otherwise the title slide decides (a pitch or a launch → bold, a report or a
+review → editorial, a technical or architecture deck → swiss, a training or an onboarding → soft), then a custom
+theme's base, then one picked by the title. That is a fallback, not a choice: match the look to the direction
+(`design-direction`) yourself, and don't give every deck the same one — the next deck on another subject should
+look different. Classic only when the user wants the plain look.
 
 Decide the theme and the look before the render, because changing them later means rendering the whole deck
 again.

@@ -1,6 +1,6 @@
 """The model's specs, decks, documents, slides and edit ops made ready for the design service.
 Every `_prepare_*` returns what to send, or an error the model can act on."""
-import json, pathlib, re
+import json, pathlib, re, zlib
 from ..paths import _resolve_path
 from .brand import _HEX, _contrast, _first_color, _load_brand, _norm_hex, _readable_on
 from .images import _BRAND_LOGOS, _DESIGN_IMAGES_MAX, _DESIGN_SVG_MAX, _image_slot, _place_image
@@ -257,25 +257,73 @@ def _prepare_pages(spec, brand, root):
 _DECK_THEMES = ("minimal-light", "minimal-dark", "bold-gradient", "editorial", "corporate", "tech-dark", "warm", "mono")
 _DECK_KEYS = {"theme", "look", "size", "dir", "footer", "logo", "transition", "slides"}   # what layouts.js reads of a deck
 # How a deck's slides or a document's pages are composed (cycls-design looks.js) — apart from the
-# theme, its colours and faces. Without one, the look the theme is made for.
+# theme, its colours and faces. Without one, the look the piece calls for (`_look_for`).
 _LOOKS = ("classic", "editorial", "swiss", "bold", "soft", "minimal")
 _THEME_LOOKS = {"editorial": "editorial", "tech-dark": "swiss", "warm": "soft", "mono": "minimal", "bold-gradient": "bold"}
+# What a piece says it is — its kind, eyebrow, title — and the look that kind is drawn in.
+_PIECE_LOOKS = (
+    ("bold", "a proposal or a pitch", r"proposal|\boffer\b|quotation|tender|\bbid\b|pitch|investor|fundrais|\bseed\b|series [a-d]\b"
+             r"|launch|\bsales\b|عرض|مقترح|إطلاق|مستثمر"),
+    ("editorial", "a report or a newsletter", r"report|review|research|\bstudy\b|white ?paper|insight|survey|annual|findings"
+                  r"|newsletter|bulletin|digest|magazine|تقرير|دراسة|بحث|نشرة"),
+    ("swiss", "a guide, a CV or an invoice", r"guide|manual|handbook|how[- ]to|playbook|instructions|procedure|policy|technical"
+              r"|architecture|engineering|roadmap|\bcv\b|r[ée]sum[ée]|curriculum|invoice|receipt|دليل|سيرة|فاتورة"),
+    ("soft", "a brochure or a training", r"brochure|profile|catalog|\bmenu\b|training|workshop|onboarding|\bcourse\b|lesson"
+             r"|welcome|orientation|كتيب|تدريب|ورشة"),
+    ("minimal", "a letter", r"\bletter\b|\bmemo\b|invitation|خطاب|رسالة|دعوة"),
+)
 
 
-def _look_for(theme):
-    """The look a theme is made for: its own (a name) or its base's (overrides); else classic."""
+def _theme_base(theme):
     base = theme if isinstance(theme, str) else theme.get("base") if isinstance(theme, dict) else None
-    return _THEME_LOOKS.get(str(base or "").strip().lower().replace(" ", "-").replace("_", "-"), "classic")
+    return str(base or "").strip().lower().replace(" ", "-").replace("_", "-")
+
+
+def _look_for(spec, what="deck"):
+    """The look a deck or a document gets when it names none → (look, why). A theme named for a look
+    gives it; else what the piece says it is (its kind, eyebrow, title: a proposal → bold, a report →
+    editorial, a guide or a CV → swiss, a brochure → soft, a letter → minimal); else a theme of one's own
+    on a look's base gives that; else its shape (columns or chapter pages → editorial, no cover →
+    swiss); else one chosen by its title. Never classic: that was every deck and every document, alike."""
+    theme = spec.get("theme")
+    if isinstance(theme, str) and _theme_base(theme) in _THEME_LOOKS:
+        return _THEME_LOOKS[_theme_base(theme)], "its theme's"
+    if what == "deck":
+        slides = spec.get("slides") if isinstance(spec.get("slides"), list) else []
+        first = next((s for s in slides if isinstance(s, dict)), {})
+        footer = spec.get("footer") if isinstance(spec.get("footer"), dict) else {}
+        said = [first.get("eyebrow"), first.get("title"), first.get("subtitle"), footer.get("text")]
+    else:
+        cover = spec.get("cover") if isinstance(spec.get("cover"), dict) else {}
+        said = [spec.get("kind"), spec.get("eyebrow"), cover.get("eyebrow"), spec.get("title"), spec.get("subtitle")]
+    for text in (t for t in said if isinstance(t, str) and t.strip()):
+        found = [(m.start(), look, why) for look, why, pattern in _PIECE_LOOKS for m in [re.search(pattern, text, re.I)] if m]
+        if found:
+            _, look, why = min(found)
+            return look, f"for {why}"
+    if _theme_base(theme) in _THEME_LOOKS:
+        return _THEME_LOOKS[_theme_base(theme)], "its theme's base"
+    if what == "document":
+        if str(spec.get("columns") or "1") in ("2", "3") or str(spec.get("openers") or "").lower() == "page":
+            return "editorial", "for its columns and chapter pages"
+        cover = spec.get("cover")
+        if cover is False or (isinstance(cover, str) and cover.strip().lower() == "none") \
+                or (isinstance(cover, dict) and str(cover.get("style") or "").strip().lower() == "none"):
+            return "swiss", "for a document with no cover"
+    choices = ("editorial", "swiss", "bold", "soft") if what == "deck" else ("editorial", "swiss", "bold")
+    title = next((t for t in said if isinstance(t, str) and t.strip()), "")
+    return choices[zlib.crc32(title.encode("utf-8")) % len(choices)], "chosen for it"
 
 
 def _settle_look(spec, what, notes, default=True):
-    """`spec`'s look checked and written plainly — or, with none and `default`, the theme's, written in
-    (so a later change keeps it) and said. → an error, or None."""
+    """`spec`'s look checked and written plainly — or, with none and `default`, the one it calls for,
+    written in (so a later change keeps it) and said. → an error, or None."""
     look = spec.get("look")
     if look is None:
         if default:
-            spec["look"] = look = _look_for(spec.get("theme"))
-            notes.append(f"The {what}'s look: {look}, its theme's — `look` composes it another way "
+            look, why = _look_for(spec, what)
+            spec["look"] = look
+            notes.append(f"The {what}'s look: {look}, {why} — `look` composes it another way "
                          f"({', '.join(x for x in _LOOKS if x != look)}).")
         return None
     key = str(look).strip().lower() if isinstance(look, str) else ""

@@ -323,8 +323,17 @@ the same shape whatever its theme ("the same style every time", the user's word,
 before, held by the service's golden images), `editorial`, `swiss`, `bold`, `soft`,
 `minimal`; a slide's or a block's `style` draws its kind another way. The SDK
 (`_settle_look` in `prepare.py`) checks the look and, when there is none, writes in the one
-the theme is made for (`_THEME_LOOKS`: editorial, tech-dark → swiss, warm → soft, mono →
-minimal, bold-gradient → bold, else classic) and says so in the reply. For a deck it lands
+the piece calls for (`_look_for`) and says why in the reply: a theme named for a look gives it
+(`_THEME_LOOKS`: editorial, tech-dark → swiss, warm → soft, mono → minimal, bold-gradient →
+bold); else what the piece says it is — a document's `kind`, eyebrow, title, subtitle; a deck's
+title slide and footer — matched against `_PIECE_LOOKS` (a proposal or pitch → bold, a report
+or newsletter → editorial, a guide, CV or invoice → swiss, a brochure or training → soft, a
+letter → minimal; English and Arabic words); else a custom theme's base; else a document's
+shape (columns or chapter pages → editorial, no cover → swiss); else one picked by the
+title's CRC. Never classic unless asked: the first version fell back to classic for
+`minimal-light`, `corporate` and the brand kit, and a live proposal on 2026-10-17 came out in
+the old shape that way. A custom theme's base ranks below the piece because the skills'
+example themes sit on `editorial`. For a deck it lands
 in the deck document's `settings` (`settings_of`), so later slides match. For a document it
 is written into the kept source on a new render only (`_render_document`, not `kept`): a
 document rendered before there were looks has none in its source and stays classic through
