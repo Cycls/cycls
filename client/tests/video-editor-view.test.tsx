@@ -108,6 +108,7 @@ describe("VideoEditorView", () => {
     await flush();
     await flush();
     expect(screen.getByTestId("video-conflict")).toBeTruthy();
+    expect(screen.queryByText("Saving…")).toBeNull();                       // seen behind the dialog in the two-editors walk
     expect(sent(post, "written").at(-1)).toMatchObject({ ok: false });
     fireEvent.click(screen.getByText("Keep mine"));
     await flush();

@@ -56,6 +56,14 @@ export function refreshVideoEditors(): Promise<void> {
   return Promise.all(handlesUnder(null).map((h) => h.refresh().catch(() => {}))).then(() => {});
 }
 export const videoEditorOpen = (path: string) => (editors.get(path)?.size ?? 0) > 0;
+// The canvas keeps an open editor's tab mounted while another tab is shown, and hears here when
+// editors open and close — after the commit, so a session reopened in place is not taken for a close.
+const watchers = new Set<() => void>();
+export function watchVideoEditors(fn: () => void): () => void {
+  watchers.add(fn);
+  return () => { watchers.delete(fn); };
+}
+const changed = () => queueMicrotask(() => watchers.forEach((w) => w()));
 
 // Where the editor makes sense: a pointer, and room for a timeline beside a preview.
 export function canEditVideo(): boolean {
@@ -174,6 +182,7 @@ export function VideoEditorView({ path, name, api, writeFile, onClose, onRendere
       } catch (err) {
         reply(false);
         if ((err as { status?: number }).status === 412) {
+          setStatus("ready");                              // not saving: the dialog says what happened
           setConflict({ pending: m });
           latest.current.onBack?.();                       // the person decides, so they must see it
           track("video_save_conflict", { choice: "shown" });
@@ -300,7 +309,8 @@ export function VideoEditorView({ path, name, api, writeFile, onClose, onRendere
     const set = editors.get(path) ?? new Set<Handle>();
     set.add(handle);
     editors.set(path, set);
-    return () => { set.delete(handle); if (!set.size) editors.delete(path); };
+    changed();
+    return () => { set.delete(handle); if (!set.size) editors.delete(path); changed(); };
   }, [path, session, post, load]);
 
   // ── Done / Escape: what is unsaved goes first ─────────────────────────────────────────────────

@@ -16,7 +16,7 @@ import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { DesignPresenceRow } from "./design-presence";
-import { VideoEditorView, canEditVideo } from "./video-editor-view";
+import { VideoEditorView, canEditVideo, flushVideoEditor, videoEditorOpen, watchVideoEditors } from "./video-editor-view";
 import { DesignEditorView, canFullscreen, designEditorComments, designPage, flushDesignEditor, fullscreenDesignEditor, showDesignPage, useDesignPages, type DesignHost } from "./design-editor-view";
 import { VersionHistory } from "./version-history";
 import { CommentButtons, CommentLayer, CommentsList } from "./comments";
@@ -555,27 +555,46 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   // A design editor left behind stays mounted, hidden, until it has flushed. Noted
   // during render, not in an effect, so it never leaves the tree.
   const [draining, setDraining] = useState<CanvasFile[]>([]);
+  // A video whose editor is open stays mounted too, hidden, while another tab is shown (the agent
+  // opened the MP4 it rendered, or a page it wrote): the editor is a full-page overlay of its own,
+  // still open — stepped aside, its Back to the editor still there — until Done. A video tab closed
+  // meanwhile drains like a design.
+  const [held, setHeld] = useState<CanvasFile[]>([]);
   const [shown, setShown] = useState<CanvasFile | null>(file);
   if ((file?.path ?? null) !== (shown?.path ?? null)) {
     setShown(file);
     if (shown && file && designEditorUrl && isDesignEditor(fileKind(shown))) {
       setDraining((d) => [...d.filter((x) => x.path !== shown.path), shown]);
     }
+    if (shown && file && videoEditorOpen(shown.path)) {
+      if (tabs.some((x) => x.path === shown.path)) setHeld((h) => [...h.filter((x) => x.path !== shown.path), shown]);
+      else setDraining((d) => [...d.filter((x) => x.path !== shown.path), shown]);
+    }
   }
+  const closed = held.filter((f) => !tabs.some((x) => x.path === f.path));
+  if (closed.length) {
+    setHeld((h) => h.filter((f) => tabs.some((x) => x.path === f.path)));
+    setDraining((d) => [...d.filter((x) => !closed.some((c) => c.path === x.path)), ...closed]);
+  }
+  useEffect(() => watchVideoEditors(() => setHeld((h) => {
+    const open = h.filter((f) => videoEditorOpen(f.path));
+    return open.length === h.length ? h : open;
+  })), []);
   const flushing = useRef(new Set<string>());
   useEffect(() => {
     for (const f of draining) {
       if (flushing.current.has(f.path)) continue;
       flushing.current.add(f.path);
-      void flushDesignEditor(f.path, 5000).finally(() => {
+      void Promise.all([flushDesignEditor(f.path, 5000), flushVideoEditor(f.path, 5000)]).finally(() => {
         flushing.current.delete(f.path);
         setDraining((d) => d.filter((x) => x.path !== f.path));
       });
     }
   }, [draining]);
-  // The last tab unmounts the canvas, leaving nothing to drain: flush before closing.
+  // The last tab unmounts the canvas, leaving nothing to drain: its design or video editor flushes first.
   const closeTab = (path: string) => {
-    if (tabs.length === 1 && designEditorUrl) void flushDesignEditor(path, 1500).then(() => onCloseTab(path));
+    if (tabs.length === 1 && (designEditorUrl || videoEditorOpen(path)))
+      void Promise.all([flushDesignEditor(path, 1500), flushVideoEditor(path, 1500)]).then(() => onCloseTab(path));
     else onCloseTab(path);
   };
   const { width, startResize, resizing } = usePaneWidth("cycls_canvas_width", 560, 380, 420, railWidth, undefined, 1, 0.25);
@@ -638,7 +657,8 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
         )}
       </div>
       <div className="relative flex min-h-0 flex-1 flex-col">
-        {[file, ...draining.filter((d) => d.path !== file.path)].map((f) => {
+        {[file, ...draining.filter((d) => d.path !== file.path),
+          ...held.filter((h) => h.path !== file.path && !draining.some((d) => d.path === h.path))].map((f) => {
           const on = f.path === file.path;
           return (
             <div key={f.path} inert={!on} aria-hidden={on ? undefined : true}

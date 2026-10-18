@@ -242,6 +242,10 @@ select something and **Ask Cycls** about it, or **Render**.
   covers, so Ask steps the editor aside: still open and loaded (saves kept, an agent edit reaches
   it), out of sight and click-through, with **Back to the editor** at the top of the page and on the
   video's Edit button. Escape does not close it while aside; a save conflict brings it back.
+  Another tab shown meanwhile (the agent opens the MP4 it rendered, or a page it wrote) leaves it
+  open: the canvas keeps the video's tab mounted, hidden, while its editor is open (`held` in
+  `Canvas`, told of opens and closes by `watchVideoEditors`); the video's tab closed meanwhile saves
+  what is unsaved first, as a design's does.
 - **Render.** `POST /video/render?path=&quality=` starts a render of the saved file (the editor
   waits for its saves first); `GET /video/render?path=` is its state; the MP4 replaces the one beside
   the composition (the old one to the Trash).
