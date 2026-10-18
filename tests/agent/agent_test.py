@@ -13,6 +13,7 @@ import pytest
 
 from cycls._agent.harness import providers as _providers
 from cycls._agent.harness.main import (_run, MAX_RETRIES, MAX_CONTINUATIONS, MAX_PAUSES,
+                                      REPEAT_WARN, REPEAT_STOP, STREAK_WARN, STREAK_STOP,
                                       _is_retryable, _ingest, DEFAULT_WINDOW, DEFAULT_MAX_TOKENS)
 
 
@@ -972,6 +973,56 @@ def test_pause_turn_resume_is_bounded(agent_env):
 
     assert calls["n"] == MAX_PAUSES + 1
     assert any(isinstance(i, dict) and "pause_turn" in str(i.get("callout", "")) for i in items)
+
+
+def _failing_rounds(ctx, command, out="Error: old_str not found in videos/a.video.html", good=lambda i: False):
+    """A model that keeps calling bash, round after round (up to 60): `command(i)` is the call,
+    `good(i)` whether it works. Returns (rounds the model was given, the turn's events, tool results)."""
+    calls = {"n": 0}
+    def stream(**kw):
+        calls["n"] += 1
+        i = calls["n"]
+        if i > 60: return FakeStream(_make_response([_text_block("gave up")]))
+        return FakeStream(_make_response([_tool_use_block(f"t{i}", inp={"command": command(i)})], stop_reason="tool_use"))
+    async def bash(*a, **k):
+        return "ok" if good(calls["n"]) else out
+    mock_client = MagicMock()
+    mock_client.messages.stream = stream
+    with _mock_anthropic(mock_client), patch("cycls._agent.tools._exec_bash", new=bash):
+        items = asyncio.run(_drain(_run(context=ctx)))
+    results = [b["content"] for m in _read_history(ctx) if m["role"] == "user" and isinstance(m["content"], list)
+               for b in m["content"] if b.get("type") == "tool_result"]
+    return calls["n"], items, results
+
+
+def test_the_same_failing_call_is_told_then_stops_the_turn(agent_env):
+    """A suite turn sent the same failing `edit` 394 times: the third time the model is told it
+    will keep failing, and at REPEAT_STOP the turn stops, with a word to the person."""
+    ws, ctx = agent_env
+    rounds, items, results = _failing_rounds(ctx, lambda i: "sed -i s/a/b/ a.html")
+    assert rounds == REPEAT_STOP
+    assert all("failed" not in r for r in results[:REPEAT_WARN - 1])
+    assert f"has now failed {REPEAT_WARN} times" in results[REPEAT_WARN - 1]
+    assert "The turn was stopped here" in results[-1]
+    assert any(isinstance(i, dict) and "kept failing" in str(i.get("callout", "")) for i in items)
+
+
+def test_failures_in_a_row_stop_the_turn_even_when_each_call_differs(agent_env):
+    ws, ctx = agent_env
+    rounds, items, results = _failing_rounds(ctx, lambda i: f"sed -i s/{i}/b/ a.html")
+    assert rounds == STREAK_STOP
+    assert "in a row have failed" not in results[STREAK_WARN - 2]
+    assert f"{STREAK_WARN} tool calls in a row have failed" in results[STREAK_WARN - 1]
+    assert "The turn was stopped here" in results[-1]
+
+
+def test_a_call_that_works_resets_the_failures_in_a_row(agent_env):
+    """Every fourth call works: a long, productive turn is not cut off."""
+    ws, ctx = agent_env
+    rounds, items, results = _failing_rounds(ctx, lambda i: f"sed -i s/{i}/b/ a.html", good=lambda i: i % 4 == 0)
+    assert rounds == 61                                   # ran until the model itself stopped
+    assert not any("in a row have failed" in r or "stopped here" in r for r in results)
+    assert not any(isinstance(i, dict) and "kept failing" in str(i.get("callout", "")) for i in items)
 
 
 def _seeded_env(agent_env):

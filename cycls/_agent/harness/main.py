@@ -36,6 +36,11 @@ _RETRYABLE_STATUSES = {429, 500, 502, 503, 504, 529}
 _FAILED = ("Error:", "Build failed:")   # how a tool says it failed — it returns, it does not raise
 MAX_CONTINUATIONS = 4         # auto-continue rounds after a max_tokens cut
 MAX_PAUSES = 8                # pause_turn resends before giving up
+# A model that sends a failing call again as it is gets the same failure back: one suite turn sent
+# the same `edit` 394 times. The same call failing the same way is told so from its third time and
+# stops the turn at its sixth; failed calls in a row, whatever they are, are told at 10, stop at 25.
+REPEAT_WARN, REPEAT_STOP = 3, 6
+STREAK_WARN, STREAK_STOP = 10, 25
 CANCEL_DRAIN = 2              # seconds a cancelled tool batch gets to unwind
 _CONTINUE = ("Your previous message was cut off at the output-token limit. "
              "Continue exactly from where you stopped. Do not repeat anything.")
@@ -141,6 +146,20 @@ def _with_selection(content, sel):
     line = f"{SELECTED}{where}: " + ", ".join(node(n) for n in sel["nodes"]) + "]"
     blocks = content if isinstance(content, list) else ([{"type": "text", "text": content}] if content else [])
     return [*blocks, {"type": "text", "text": line}]
+
+
+def _stuck_note(repeats, streak, stopped):
+    """What a failed call's result adds when the model is going round in circles (REPEAT_*, STREAK_*)."""
+    if stopped:
+        return ("\n\n[The turn was stopped here: this kept failing. Do not send it again as it is — work out "
+                "why it fails first, or tell the person what is in the way.]")
+    if repeats >= REPEAT_WARN:
+        return (f"\n\n[This exact call has now failed {repeats} times with the same result, and it will fail again "
+                "as it is. Look at why (read the file as it is now), change the call, or tell the person what is in the way.]")
+    if streak >= STREAK_WARN:
+        return (f"\n\n[{streak} tool calls in a row have failed. Stop and rethink the approach, "
+                "or tell the person what is in the way.]")
+    return ""
 
 
 def _shape(block, out, ok, handlers, mcp_names):
@@ -436,6 +455,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     continuations = 0
     pauses = 0
     overflowed = False
+    repeats, streak = {}, 0   # failed calls this run, by call and outcome; failures in a row
 
     def request():
         """Everything a call sends besides its messages. The summary sends it too, so its prefix is cached."""
@@ -605,7 +625,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                               handlers, mcp_names, workspace)
                 raise
 
-            results, terminal, waiting, cards = [], False, False, []
+            results, terminal, waiting, cards, stuck = [], False, False, [], False
             for block, (out, ms) in zip(blocks, timed):
                 # `ok` routes the result; `good` is the outcome, and a returned error is one
                 ok = not isinstance(out, BaseException)
@@ -624,7 +644,16 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     cards += [e for e in evs if isinstance(e, dict) and e.get("type") == "ui"]
                 if isinstance(content, str) and block["name"] != "read" and not skills_mod.loads_skill(block):
                     content = spill.spill(content, workspace.root, session.chat_id, f"{block['name']}-{block['id'][-6:]}")
-                results.append({"type": "tool_result", "tool_use_id": block["id"], "content": content})
+                note = ""
+                if good: streak = 0
+                else:
+                    streak += 1
+                    key = (block["name"], json.dumps(block.get("input"), sort_keys=True, default=str), str(out)[:300])
+                    repeats[key] = n = repeats.get(key, 0) + 1
+                    stuck = stuck or n >= REPEAT_STOP or streak >= STREAK_STOP
+                    note = _stuck_note(n, streak, stuck)
+                results.append({"type": "tool_result", "tool_use_id": block["id"],
+                                "content": content + note if note and isinstance(content, str) else content})
                 if block["name"] in mcp_names or detailed(block["name"]):   # the step shows the outcome, bounded; a card (a ui dict) is its own outcome
                     yield {"type": "step", "id": block["id"], "ok": good,
                            **({} if isinstance(out, dict) and out.get("type") == "ui" else {"result": excerpt(content)})}
@@ -637,6 +666,11 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             # approve. Ride it on the message the batch already writes.
             messages.append({"role": "user", "content": results, **({"cards": cards} if cards else {})})
             await session.checkpoint()
+            if stuck:
+                log("warn", user=user, chat_id=session.chat_id, model=bare_model,
+                    message=f"turn stopped: tool calls kept failing ({streak} in a row)")
+                yield events.callout("Stopped: the same step kept failing. Reply to go on, or say what to try instead.", "warning")
+                break
             if waiting:
                 terminal = True
             if terminal:
