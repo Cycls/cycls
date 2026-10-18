@@ -254,7 +254,8 @@ select something and **Ask Cycls** about it, or **Render**.
   when not). Edit is hidden on a shared page, on touch-only devices and below 900 px.
 - **Aside is see-through, never `visibility: hidden`.** Chrome stops drawing a cross-origin frame
   hidden that way, so an agent's change loaded into an aside editor never got its preview, and the
-  editor gave up after 45 s ("The preview did not reload"). Seen on production; fixed in `00df2208`.
+  editor gave up after 45 s ("The preview did not reload"). Seen on production; fixed in `00df2208`,
+  live as `super-dev-00080-l5q` and checked there (Ask, an agent change and render, Back after 112 s: the preview current).
 
 In production since 2026-10-18: the service from cycls-video `d6fdc9a` (the editor at
 `https://cycls--cycls-video-editor-serve.us-east.modal.run`), then super-dev revision
