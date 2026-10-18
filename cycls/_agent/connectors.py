@@ -254,19 +254,29 @@ def gated(fn, tool, label, connector, classify=None, hard=False):
     return call
 
 
+REFUSED_TTL = 600   # as long as a discovery is kept (mcp.DISCOVERY_TTL)
+_refused = {}       # url -> deadline: an OAuth server that would not list for someone not connected
+
+
 async def tools_for(server, ws):
     """One server's tools for the caller: discovered with their grant, then their policy — `never` drops a tool,
     `ask` gates it. A key connector with no key contributes nothing, silently; an OAuth server still lists
-    anonymously so the connect card can appear."""
+    anonymously so the connect card can appear. One that refused is not asked again for REFUSED_TTL: most
+    people have connected nothing, and six refused handshakes in a row were ~3.5 s before every turn."""
     o = server._connector
     token = await o.bearer(ws) if o else None
     url = await o.endpoint(ws) if o and o.addressed else None
     if o and o.kind == "key" and token is None and url is None:
         return [], {}, {}
+    at = url or getattr(server, "_url", None)
+    if o and token is None and at and _refused.get(at, 0) > time.monotonic():
+        return [], {}, {}
     try:
         schemas, fns, names = await server.discover(token=token, url=url)
     except Exception:
         if o and token is None:   # a server that only lists for the signed-in: nothing, until they connect
+            if at:
+                _refused[at] = time.monotonic() + REFUSED_TTL
             return [], {}, {}
         raise
     if not o or not schemas:

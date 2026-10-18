@@ -350,6 +350,33 @@ def test_discovery_is_silent_for_an_unconnected_server_that_only_lists_for_the_s
         asyncio.run(c.tools_for(server, ws))
 
 
+def test_a_refusal_to_list_anonymously_is_remembered_until_the_person_connects(tmp_path):
+    """Six OAuth servers refusing someone who had connected nothing cost ~3.5 s before every super-dev
+    turn. A refusal is remembered for REFUSED_TTL; connecting asks again at once; so does its expiry."""
+    from cycls._app.auth import User
+    ws = workspace(User(id="u1"), tmp_path, base=f"file://{tmp_path}")
+    server = SimpleNamespace(_connector=_google(), _url="https://refuses/mcp", discover=AsyncMock(side_effect=RuntimeError("401")))
+    assert asyncio.run(c.tools_for(server, ws)) == ([], {}, {})
+    assert asyncio.run(c.tools_for(server, ws)) == ([], {}, {})
+    assert server.discover.await_count == 1                                              # the next turn did not ask
+    c._refused["https://refuses/mcp"] = time.monotonic() - 1                             # remembered long enough
+    asyncio.run(c.tools_for(server, ws))
+    assert server.discover.await_count == 2
+    asyncio.run(credentials.put(ws, "google", {"access_token": "t", "refresh_token": "r", "expires_at": time.time() + 3600}))
+    server.discover = AsyncMock(return_value=([], {}, {}))
+    asyncio.run(c.tools_for(server, ws))                                                 # connected: asked with the grant
+    server.discover.assert_awaited_once_with(token="t", url=None)
+
+
+def test_a_server_that_lists_anonymously_is_not_taken_for_a_refusal(tmp_path):
+    from cycls._app.auth import User
+    ws = workspace(User(id="u1"), tmp_path, base=f"file://{tmp_path}")
+    server = SimpleNamespace(_connector=_google(), _url="https://lists/mcp", discover=AsyncMock(return_value=([], {}, {})))
+    asyncio.run(c.tools_for(server, ws))
+    asyncio.run(c.tools_for(server, ws))
+    assert server.discover.await_count == 2 and not c._refused                           # its own cache (mcp) keeps the list
+
+
 def test_a_builtin_allow_needs_no_secret_key(tmp_path, monkeypatch):
     """The card's *Always allow* and Settings write plain rows in the person's `.settings`; the gate
     reads them once a turn. Encrypted, they failed every message once a deployment lost its key."""

@@ -8,8 +8,9 @@ import pytest
 def _reset_provisioned():
     """Org names repeat across tests with fresh tmp_paths — clear the
     once-per-org provisioning cache."""
-    from cycls._agent import state
+    from cycls._agent import connectors, state
     state._provisioned.clear()
+    connectors._refused.clear()   # servers that refused to list anonymously, remembered per process
 
 
 # ---- Live LLM tests ----

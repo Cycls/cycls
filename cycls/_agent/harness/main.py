@@ -369,18 +369,21 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     # An org admin's switch and the person's own resolve the same way here: the tools never enter the turn.
     hidden = (await connectors.blocked(workspace) | await connectors.off(workspace)) if (any(s._connector for s in client_side) or api_connectors) else set()
     deferred, catalog, objs = {}, {}, {}   # a connector's schemas wait behind `find_tools`
-    for server in client_side:
-        if server._connector and server._connector.name in hidden:
-            continue
-        try:
-            schemas, fns, names = await connectors.tools_for(server, workspace)
-        except Exception as e:
-            said, label = _server_said(e), server._name or server._url
+    # Every server is asked at once — one after another, each grant read and handshake added up before the
+    # first model call; the results are taken in the order the servers were given.
+    asked = [s for s in client_side if not (s._connector and s._connector.name in hidden)]
+    found = await asyncio.gather(*(connectors.tools_for(s, workspace) for s in asked), return_exceptions=True)
+    for server, got in zip(asked, found):
+        if isinstance(got, Exception):
+            said, label = _server_said(got), server._name or server._url
             yield _user_warn(user, session.chat_id,
                              f"{label}'s tools are off this turn — {said}" if said
                              else f"Couldn't reach {label} — its tools are off this turn.",
-                             f"mcp discovery failed for {server._url}: {_cause(e)}")
+                             f"mcp discovery failed for {server._url}: {_cause(got)}")
             continue
+        if isinstance(got, BaseException):   # cancelled: the turn is going away
+            raise got
+        schemas, fns, names = got
         if not (server._connector and schemas):
             _mount(server, schemas, fns, names)
             continue

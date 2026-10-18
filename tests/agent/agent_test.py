@@ -1625,6 +1625,34 @@ def test_mcp_tools_reach_the_model_and_dispatch(agent_env):
     assert result["content"] == "3 orders"
 
 
+def test_mcp_servers_are_asked_at_once_and_keep_their_order(agent_env):
+    """Discovery runs for every server together — one after another, each handshake added up before the
+    first model call. Here each server waits for the other to have started, which one after another could
+    never do; a server that fails is still said, and the tools still come in the servers' order."""
+    from cycls._agent import mcp as m
+    ws, ctx = agent_env
+    m._discovered.clear()
+    started = {"a": asyncio.Event(), "b": asyncio.Event()}
+
+    async def listing(url, headers):
+        if "down" in url:
+            raise ConnectionError("unreachable")
+        me, other = ("a", "b") if "a.example" in url else ("b", "a")
+        started[me].set()
+        await asyncio.wait_for(started[other].wait(), 2)
+        return [types.SimpleNamespace(name=f"t{me}", description="d", input_schema={"type": "object"})]
+
+    client, calls = _capturing_client([_make_response([_text_block("done")])])
+    servers = [m.MCP("https://a.example/mcp").name("a"), m.MCP("https://down.example/mcp").name("down"),
+               m.MCP("https://b.example/mcp").name("b")]
+    with _mock_anthropic(client), patch.object(m, "_list", listing):
+        items = asyncio.run(_drain(_run(context=ctx, mcp_servers=servers)))
+    names = [t["name"] for t in calls[0]["tools"]]
+    assert "a_ta" in names and "b_tb" in names and names.index("a_ta") < names.index("b_tb")
+    warned = [str(i) for i in items if isinstance(i, dict) and "Couldn't reach" in str(i)]
+    assert len(warned) == 1 and "down" in warned[0]
+
+
 def test_connector_calls_are_attributable_in_the_log(agent_env):
     """A call through a connector logs which grant it acted with, its scope, and
     the tool_use id that joins the line to the transcript."""
